@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::prim {
 
@@ -15,16 +16,20 @@ ReduceDeviceOperation::program_factory_t ReduceDeviceOperation::select_program_f
     auto parallelization_strategy = get_parallelization_strategy(tensor_args, operation_attributes.dim);
 
     switch (parallelization_strategy) {
-        case ReduceOpParallelizationStrategy::MULTI_CORE_H: return ReduceMultiCoreHProgramFactory{};
-        case ReduceOpParallelizationStrategy::MULTI_CORE_W: return ReduceMultiCoreWProgramFactory{};
+        case ReduceOpParallelizationStrategy::MULTI_CORE_H:
+            return ReduceDeviceOperation::ReduceMultiCoreHProgramFactory{};
+        case ReduceOpParallelizationStrategy::MULTI_CORE_W:
+            return ReduceDeviceOperation::ReduceMultiCoreWProgramFactory{};
         case ReduceOpParallelizationStrategy::MULTI_CORE_HW:
-        case ReduceOpParallelizationStrategy::SINGLE_CORE_HW: return ReduceSingleCoreHwProgramFactory{};
+        case ReduceOpParallelizationStrategy::SINGLE_CORE_HW:
+            return ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory{};
         default: TT_THROW("Unsupported parallelization strategy");
     }
 }
 
 void ReduceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::tt_metal;
     TT_FATAL(
         tensor_args.storage_type() == StorageType::DEVICE,
         "Operands to reduce need to be on device! Got storage type: {}",
@@ -37,6 +42,86 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction - got {}",
         tensor_args.dtype());
     validate_reduce_sharded_buffer_types(tensor_args.memory_config(), operation_attributes.output_mem_config, "reduce");
+    const auto device_grid_size = tensor_args.device()->compute_with_storage_grid_size();
+    TT_FATAL(
+        device_grid_size.x > 0 && device_grid_size.y > 0,
+        "Device compute grid must be non-empty, got ({}, {})",
+        device_grid_size.x,
+        device_grid_size.y);
+    const CoreRangeSet device_grid =
+        num_cores_to_corerangeset(device_grid_size.x * device_grid_size.y, device_grid_size, false);
+
+    const CoreRangeSet program_grid = operation_attributes.sub_core_grids.value_or(device_grid);
+    TT_FATAL(!program_grid.ranges().empty(), "Program core grid must not be empty");
+    TT_FATAL(
+        device_grid.contains(program_grid),
+        "Program core grid {} must be contained in device grid {}",
+        program_grid,
+        device_grid);
+
+    if (tensor_args.shard_spec().has_value()) {
+        const auto& in_shard = tensor_args.shard_spec().value();
+        const auto& input_shard_grid = in_shard.grid;
+        TT_FATAL(
+            program_grid.contains(input_shard_grid),
+            "Input shard grid {} must be contained in program core grid {}",
+            input_shard_grid,
+            program_grid);
+        const uint32_t tile_height = tensor_args.tensor_spec().tile().get_height();
+        const uint32_t tile_width = tensor_args.tensor_spec().tile().get_width();
+        TT_FATAL(
+            in_shard.shape[0] > 0 && in_shard.shape[1] > 0,
+            "Sharded reduce input: shard face shape must be positive, got [{}, {}]",
+            in_shard.shape[0],
+            in_shard.shape[1]);
+        TT_FATAL(
+            in_shard.shape[0] % tile_height == 0,
+            "Sharded reduce input: shard_shape[0]={} must be tile-height-aligned ({} px per tile face row)",
+            in_shard.shape[0],
+            tile_height);
+        TT_FATAL(
+            in_shard.shape[1] % tile_width == 0,
+            "Sharded reduce input: shard_shape[1]={} must be tile-width-aligned ({} px per tile face col)",
+            in_shard.shape[1],
+            tile_width);
+    }
+
+    if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
+        const auto out_spec = compute_output_specs(operation_attributes, tensor_args);
+        const auto& output_nd_shard_spec = *out_spec.memory_config().nd_shard_spec();
+        const auto& output_shard_grid = output_nd_shard_spec.grid;
+        const uint32_t output_tile_height = out_spec.tile().get_height();
+        const uint32_t output_tile_width = out_spec.tile().get_width();
+
+        TT_FATAL(
+            program_grid.contains(output_shard_grid),
+            "Output shard grid {} must be contained in program core grid {}",
+            output_shard_grid,
+            program_grid);
+        TT_FATAL(
+            device_grid.contains(output_shard_grid),
+            "Output shard grid {} must be contained in device grid {}",
+            output_shard_grid,
+            device_grid);
+        if (output_nd_shard_spec.shard_shape.rank() >= 2) {
+            TT_FATAL(
+                output_nd_shard_spec.shard_shape[-2] > 0 && output_nd_shard_spec.shard_shape[-1] > 0,
+                "ND sharded output: last-2 shard dims must be positive, got [..., {}, {}] (height/width in "
+                "shard_shape)",
+                output_nd_shard_spec.shard_shape[-2],
+                output_nd_shard_spec.shard_shape[-1]);
+            TT_FATAL(
+                output_nd_shard_spec.shard_shape[-2] % output_tile_height == 0,
+                "ND sharded output: shard_shape[-2]={} must be tile-height-aligned ({}) for tilized output",
+                output_nd_shard_spec.shard_shape[-2],
+                output_tile_height);
+            TT_FATAL(
+                output_nd_shard_spec.shard_shape[-1] % output_tile_width == 0,
+                "ND sharded output: shard_shape[-1]={} must be tile-width-aligned ({}) for tilized output",
+                output_nd_shard_spec.shard_shape[-1],
+                output_tile_width);
+        }
+    }
 }
 
 ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output_specs(

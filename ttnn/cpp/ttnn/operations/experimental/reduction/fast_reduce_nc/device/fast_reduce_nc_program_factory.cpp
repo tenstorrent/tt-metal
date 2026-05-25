@@ -62,8 +62,11 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
-    const auto single_tile_size = tt::tile_size(cb_data_format);
+    // Input and output CBs may differ when the Sum precision chain requests FP32 packing.
+    const auto input_data_format = datatype_to_dataformat_converter(tensor_args.input.dtype());
+    const auto input_tile_size = tt::tile_size(input_data_format);
+    const auto output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
+    const auto output_tile_size = tt::tile_size(output_data_format);
     const auto cb_1_data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
     const auto cb_1_tile_size = tt::tile_size(cb_1_data_format);
 
@@ -141,15 +144,15 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     num_cols_per_core_group_1 *= shard_factor;
     num_cols_per_core_group_2 *= shard_factor;
 
-    const auto intermed_cb_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format;
-    const auto intermed_cb_single_tile_size = (fp32_dest_acc_en) ? single_tile_size * 2 : single_tile_size;
+    const auto intermed_cb_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : output_data_format;
+    const auto intermed_cb_single_tile_size = tt::tile_size(intermed_cb_data_format);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::CircularBufferConfig cb_scr0_config =
-        tt_metal::CircularBufferConfig(in0_t * single_tile_size, {{CBIndex::c_0, cb_data_format}})
-            .set_page_size(CBIndex::c_0, single_tile_size);
+        tt_metal::CircularBufferConfig(in0_t * input_tile_size, {{CBIndex::c_0, input_data_format}})
+            .set_page_size(CBIndex::c_0, input_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_scr0_config);
 
     tt_metal::CircularBufferConfig cb_scr1_config =
@@ -164,8 +167,8 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
     tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(out0_t * single_tile_size, {{CBIndex::c_16, cb_data_format}})
-            .set_page_size(CBIndex::c_16, single_tile_size);
+        tt_metal::CircularBufferConfig(out0_t * output_tile_size, {{CBIndex::c_16, output_data_format}})
+            .set_page_size(CBIndex::c_16, output_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     ////////////////////////////////////////////////////////////////////////////

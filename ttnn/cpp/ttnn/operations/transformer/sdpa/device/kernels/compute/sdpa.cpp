@@ -48,24 +48,22 @@ void kernel_main() {
     constexpr bool use_streaming_compute = get_compile_time_arg_val(30) == 1;
     constexpr uint32_t valid_Skt = get_compile_time_arg_val(31);
     constexpr bool uniform_dataformat = get_compile_time_arg_val(32) == 1;
+    constexpr uint32_t k_partial_col = get_compile_time_arg_val(33);
+    // Zigzag remap flag drives the external remap_q_index call on the flat B*NQH*q_num_chunks range.
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(34) == 1;
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
-    const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
-    const uint32_t local_batch_end = get_arg_val<uint32_t>(2);
-    const uint32_t local_nh_start = get_arg_val<uint32_t>(3);
-    const uint32_t local_nh_end = get_arg_val<uint32_t>(4);
-    const uint32_t local_q_start = get_arg_val<uint32_t>(5);
-    const uint32_t local_q_end = get_arg_val<uint32_t>(6);
-    // const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(7);
-    const uint32_t num_phases = get_arg_val<uint32_t>(7);
-    const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(8);
-    uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(9);
+    const uint32_t num_phases = get_arg_val<uint32_t>(1);
+    const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(2);
+    uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(3);
     uint32_t chunked_q_chunk_offset_phase_2 = 0;
     if (num_phases == 2) {
-        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(10);
+        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(4);
     }
 
-    const uint32_t q_chunks_per_core = local_q_end - local_q_start;
+    // Global Q scheduling args follow phase_2 slot.
+    const uint32_t global_q_start = get_arg_val<uint32_t>(5);
+    const uint32_t global_q_count = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -117,43 +115,67 @@ void kernel_main() {
         // Wait once for identity scale; v2 removes per-call waits inside reduce_c_row_group
         cb_wait_front(cb_identity_scale_in, 1);
 
-        for (uint32_t phase = 0; phase < num_phases; ++phase) {
-            for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-                for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-                    sdpa_standard_v2<
-                        Sq_chunk_t,
-                        Sk_chunk_t,
-                        valid_Skt,
-                        DHt,
-                        vDHt,
-                        scale_fp32,
-                        qk_subblock_h,
-                        qk_subblock_w,
-                        out_subblock_h,
-                        out_subblock_w,
-                        use_padded_mask,
-                        cb_q_in,
-                        cb_k_in,
-                        cb_v_in,
-                        cb_qk_im,
-                        cb_identity_scale_in,
-                        cb_exp_max_diff,
-                        cb_col_identity,
-                        cb_recip_scratch,
-                        cb_out,  // normalized output goes directly to output CB
-                        cb_mask_in,
-                        uniform_dataformat>(
-                        q_chunks_per_core,
-                        k_num_chunks,
-                        cb_out_im_A,
-                        cb_out_im_B,
-                        cb_max_A,
-                        cb_max_B,
-                        cb_sum_A,
-                        cb_sum_B);
-                }
-            }
+        // Lightweight-mask context: writer pre-generates [neginf(0), causal_diag?, k_partial?] tiles
+        // permanently fronted. Causal uses neginf + diag (2 tiles). Non-causal partial-tile K
+        // uses neginf + partial (2 tiles); the per-row stamp masks the partial col + trailing neginf.
+        LightweightMaskContext lw_mask;
+        if constexpr (is_causal) {
+            lw_mask.is_causal = true;
+            lw_mask.neginf_tile_idx = 0;
+            lw_mask.causal_diag_tile_idx = 1;
+            cb_wait_front(cb_mask_in, 2);
+        } else if constexpr (k_partial_col > 0) {
+            lw_mask.global_n_partial_col = k_partial_col;
+            lw_mask.global_n_partial_tile_idx = 1;  // [neginf(0), partial(1)]
+            // global_n_padded_tiles = Sk_chunk_t - valid_tiles_in_last_chunk
+            constexpr uint32_t last_chunk_first_tile =
+                (valid_Skt > Sk_chunk_t) ? ((valid_Skt - 1) / Sk_chunk_t) * Sk_chunk_t : 0u;
+            constexpr uint32_t valid_tiles_in_last_chunk = valid_Skt - last_chunk_first_tile;
+            lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles_in_last_chunk;
+            cb_wait_front(cb_mask_in, 2);
         }
+
+        // Global Q scheduling: sdpa_standard_v2 walks the per-core flat range over
+        // B*NQH*q_num_chunks chunks; the modulo inside its inner loop extracts the per-head q_chunk
+        // from each flat index. num_phases==1 is pinned for streaming, so the chunked offset comes
+        // from phase 1.
+        sdpa_standard_v2<
+            Sq_chunk_t,
+            Sk_chunk_t,
+            valid_Skt,
+            DHt,
+            vDHt,
+            scale_fp32,
+            qk_subblock_h,
+            qk_subblock_w,
+            out_subblock_h,
+            out_subblock_w,
+            use_padded_mask,
+            cb_q_in,
+            cb_k_in,
+            cb_v_in,
+            cb_qk_im,
+            cb_identity_scale_in,
+            cb_exp_max_diff,
+            cb_col_identity,
+            cb_recip_scratch,
+            cb_out,  // normalized output goes directly to output CB
+            cb_mask_in,
+            uniform_dataformat,
+            is_causal>(
+            global_q_count,
+            k_num_chunks,
+            cb_out_im_A,
+            cb_out_im_B,
+            cb_max_A,
+            cb_max_B,
+            cb_sum_A,
+            cb_sum_B,
+            global_q_start,
+            chunked_q_chunk_offset_phase_1,
+            lw_mask,
+            q_num_chunks,
+            use_zigzag_balancing);
     } else {
         // Standard SDPA path (causal, masked, chunked, etc.)
         constexpr bool use_lightweight_causal_mask = is_causal && !use_provided_mask && (sliding_window_size == 0);
@@ -173,64 +195,64 @@ void kernel_main() {
                 chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
             }
 
-            for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-                for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-                    sdpa_standard<
-                        cb_qk_im,
-                        cb_identity_scale_in,
-                        cb_attention_sink,
-                        Sq_chunk_t,
-                        Sk_chunk_t,
-                        DHt,
-                        vDHt,
-                        use_attention_sink,
-                        is_causal,
-                        use_provided_mask,
-                        use_padded_mask,
-                        is_chunked,
-                        scale_fp32,
-                        sliding_window_size,
-                        use_lightweight_causal_mask>(
-                        Skt,
-                        qk_in0_block_w,
-                        qk_subblock_w,
-                        qk_subblock_h,
-                        qk_in0_num_subblocks,
-                        qk_in1_num_subblocks,
-                        qk_num_blocks,
-                        out_in0_block_w,
-                        out_subblock_w,
-                        out_subblock_h,
-                        out_in0_num_subblocks,
-                        out_in1_num_subblocks,
-                        out_num_blocks,
-                        0,                  // iter_q_start
-                        q_chunks_per_core,  // iter_q_end
-                        q_num_chunks,
-                        local_q_start,
-                        chunked_q_chunk_offset,
-                        k_num_chunks,
-                        q_chunk_tiles,
-                        k_chunk_tiles,
-                        v_chunk_tiles,
-                        qk_chunk_tiles,
-                        out_chunk_tiles,
-                        cb_q_in,
-                        cb_k_in,
-                        cb_v_in,
-                        cb_mask_in,
-                        cb_col_identity,
-                        cb_out_im_A,
-                        cb_out_im_B,
-                        cb_max_A,
-                        cb_max_B,
-                        cb_sum_A,
-                        cb_sum_B,
-                        cb_exp_max_diff,
-                        cb_out,
-                        lw_mask);
-                }
-            }
+            // Global Q scheduling: sdpa_standard walks the per-core flat range over
+            // B*NQH*q_num_chunks chunks; the modulo inside its inner loop extracts the per-head
+            // q_chunk from each flat index.
+            sdpa_standard<
+                cb_qk_im,
+                cb_identity_scale_in,
+                cb_attention_sink,
+                Sq_chunk_t,
+                Sk_chunk_t,
+                DHt,
+                vDHt,
+                use_attention_sink,
+                is_causal,
+                use_provided_mask,
+                use_padded_mask,
+                is_chunked,
+                scale_fp32,
+                sliding_window_size,
+                use_lightweight_causal_mask>(
+                Skt,
+                qk_in0_block_w,
+                qk_subblock_w,
+                qk_subblock_h,
+                qk_in0_num_subblocks,
+                qk_in1_num_subblocks,
+                qk_num_blocks,
+                out_in0_block_w,
+                out_subblock_w,
+                out_subblock_h,
+                out_in0_num_subblocks,
+                out_in1_num_subblocks,
+                out_num_blocks,
+                /*iter_q_start=*/0,
+                /*iter_q_end=*/global_q_count,
+                q_num_chunks,
+                /*local_q_start=*/global_q_start,
+                chunked_q_chunk_offset,
+                k_num_chunks,
+                q_chunk_tiles,
+                k_chunk_tiles,
+                v_chunk_tiles,
+                qk_chunk_tiles,
+                out_chunk_tiles,
+                cb_q_in,
+                cb_k_in,
+                cb_v_in,
+                cb_mask_in,
+                cb_col_identity,
+                cb_out_im_A,
+                cb_out_im_B,
+                cb_max_A,
+                cb_max_B,
+                cb_sum_A,
+                cb_sum_B,
+                cb_exp_max_diff,
+                cb_out,
+                lw_mask,
+                use_zigzag_balancing);
         }
     }
 }

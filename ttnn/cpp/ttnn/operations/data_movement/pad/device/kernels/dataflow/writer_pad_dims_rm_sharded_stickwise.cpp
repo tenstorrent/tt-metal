@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <cstring>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 #define u16_l1_ptr volatile tt_l1_ptr uint16_t*
 #define u32_l1_ptr volatile tt_l1_ptr uint32_t*
@@ -15,7 +15,7 @@ inline __attribute__((always_inline)) void fill_cb_with_padding_value(
     const uint32_t cb_id, const uint32_t padding_value_as_u32) {
     constexpr uint32_t num_elts =
         num_bytes / padding_value_num_bytes;  // constexpr so that this division happens once on host
-    experimental::CircularBuffer cb(cb_id);
+    CircularBuffer cb(cb_id);
     uint32_t cb_write_addr = cb.get_write_ptr();
 
     if constexpr (padding_value_num_bytes == 4) {
@@ -43,8 +43,8 @@ void kernel_main() {
 
     constexpr auto output_shard_cb = get_compile_time_arg_val(4);
     constexpr auto padding_value_cb = get_compile_time_arg_val(5);
-    experimental::CircularBuffer cb_output_shard(output_shard_cb);
-    experimental::CircularBuffer cb_padding_value(padding_value_cb);
+    CircularBuffer cb_output_shard(output_shard_cb);
+    CircularBuffer cb_padding_value(padding_value_cb);
 
     cb_output_shard.reserve_back(padded_shard_height);
     uint32_t output_shard_base_addr = cb_output_shard.get_write_ptr();

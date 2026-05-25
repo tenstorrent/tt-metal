@@ -2,15 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <tt-metalium/bfloat8.hpp>
 #include <bit>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
+#include <random>
 #include <string>
 #include <variant>
 #include <vector>
@@ -19,9 +22,10 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -31,8 +35,10 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/packing.hpp"
+#include "tt_metal/test_utils/print_helpers.hpp"
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -93,9 +99,9 @@ bool single_core_reconfig(
     float in0_val = 1.0;
     float in1_val = 127.0;
     float in2_val = 0.0078125;
-    uint32_t single_tile_size_fp32 = 4 * 32 * 32;        // Single 32x32 tile size for Float32
-    uint32_t single_tile_size_bfp16b = 2 * 32 * 32;      // Single 32x32 tile size for Float16_b
-    uint32_t single_tile_size_bfp8b = (1 * 32 * 32) + 64;  // Single 32x32 tile size for Bfp8_b
+    uint32_t single_tile_size_fp32 = 4 * tt::constants::TILE_HW;
+    uint32_t single_tile_size_bfp16b = 2 * tt::constants::TILE_HW;
+    uint32_t single_tile_size_bfp8b = tt::constants::BFLOAT8_B_TILE_HW;
     uint32_t single_tile_size_out0 = test_config.fp32_dest_acc_en ? single_tile_size_fp32 : single_tile_size_bfp16b;
     const size_t dram_buffer_size_bfp16b = test_config.num_tiles * single_tile_size_bfp16b;
     const size_t dram_buffer_size_bfp8b = test_config.num_tiles * single_tile_size_bfp8b;
@@ -347,6 +353,339 @@ bool single_core_reconfig(
 
     return pass;
 }
+
+bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    // Three matmul_tiles ops with reconfig between pairs; see reconfig_quasar.cpp.
+    constexpr uint32_t kNumOps = 3;
+    const uint32_t f16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint32_t f32_tile_size = tt::tile_size(tt::DataFormat::Float32);
+    const uint32_t out_bytes = kNumOps * f16_tile_size;
+
+    const CoreCoord core = {0, 0};
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    const experimental::metal2_host_api::NodeCoord node{static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)};
+
+    distributed::DeviceLocalBufferConfig f16_dram_cfg{
+        .page_size = f16_tile_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false};
+    distributed::DeviceLocalBufferConfig f32_dram_cfg{
+        .page_size = f32_tile_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false};
+    distributed::ReplicatedBufferConfig f16_buf_cfg{.size = f16_tile_size};
+    distributed::ReplicatedBufferConfig f32_buf_cfg{.size = f32_tile_size};
+    distributed::ReplicatedBufferConfig out_buf_cfg{.size = out_bytes};
+
+    auto inp0_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
+    auto inp1_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
+    auto inp2_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, mesh_device.get());
+    auto inp3_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, mesh_device.get());
+    auto inp4_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
+    auto inp5_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
+    auto out_dram = distributed::MeshBuffer::create(out_buf_cfg, f16_dram_cfg, mesh_device.get());
+
+    constexpr const char* INP0_DFB = "in0";
+    constexpr const char* INP1_DFB = "in1";
+    constexpr const char* INP2_DFB = "in2";
+    constexpr const char* INP3_DFB = "in3";
+    constexpr const char* INP4_DFB = "in4";
+    constexpr const char* INP5_DFB = "in5";
+    constexpr const char* OUT_DFB = "out";
+    constexpr const char* READER = "reader";
+    constexpr const char* WRITER = "writer";
+    constexpr const char* COMPUTE = "compute";
+
+    auto make_f16_input_dfb = [&](const std::string& name) {
+        return experimental::metal2_host_api::DataflowBufferSpec{
+            .unique_id = name,
+            .entry_size = f16_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+            .disable_implicit_sync = true,
+        };
+    };
+    auto make_f32_input_dfb = [&](const std::string& name) {
+        return experimental::metal2_host_api::DataflowBufferSpec{
+            .unique_id = name,
+            .entry_size = f32_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::Float32,
+            .disable_implicit_sync = true,
+        };
+    };
+    experimental::metal2_host_api::DataflowBufferSpec inp0_dfb_spec = make_f16_input_dfb(INP0_DFB);
+    experimental::metal2_host_api::DataflowBufferSpec inp1_dfb_spec = make_f16_input_dfb(INP1_DFB);
+    experimental::metal2_host_api::DataflowBufferSpec inp2_dfb_spec = make_f32_input_dfb(INP2_DFB);
+    experimental::metal2_host_api::DataflowBufferSpec inp3_dfb_spec = make_f32_input_dfb(INP3_DFB);
+    experimental::metal2_host_api::DataflowBufferSpec inp4_dfb_spec = make_f16_input_dfb(INP4_DFB);
+    experimental::metal2_host_api::DataflowBufferSpec inp5_dfb_spec = make_f16_input_dfb(INP5_DFB);
+    experimental::metal2_host_api::DataflowBufferSpec out_dfb_spec{
+        .unique_id = OUT_DFB,
+        .entry_size = f16_tile_size,
+        .num_entries = kNumOps,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .disable_implicit_sync = true,
+    };
+
+    using DFBEndpoint = experimental::metal2_host_api::KernelSpec::DFBEndpointType;
+    using DFBAccess = experimental::metal2_host_api::DFBAccessPattern;
+    auto dfb_binding = [](const std::string& name, DFBEndpoint endpoint) {
+        return experimental::metal2_host_api::KernelSpec::DFBBinding{
+            .dfb_spec_name = name,
+            .local_accessor_name = name,
+            .endpoint_type = endpoint,
+            .access_pattern = DFBAccess::STRIDED,
+        };
+    };
+
+    experimental::metal2_host_api::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source =
+            experimental::metal2_host_api::KernelSpec::SourceFilePath{
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_six_input.cpp"},
+        .num_threads = 1,
+        .dfb_bindings =
+            {dfb_binding(INP0_DFB, DFBEndpoint::PRODUCER),
+             dfb_binding(INP1_DFB, DFBEndpoint::PRODUCER),
+             dfb_binding(INP2_DFB, DFBEndpoint::PRODUCER),
+             dfb_binding(INP3_DFB, DFBEndpoint::PRODUCER),
+             dfb_binding(INP4_DFB, DFBEndpoint::PRODUCER),
+             dfb_binding(INP5_DFB, DFBEndpoint::PRODUCER)},
+        .runtime_arguments_schema =
+            {.named_runtime_args =
+                 {"src0_addr",
+                  "src0_bank_id",
+                  "src1_addr",
+                  "src1_bank_id",
+                  "src2_addr",
+                  "src2_bank_id",
+                  "src3_addr",
+                  "src3_bank_id",
+                  "src4_addr",
+                  "src4_bank_id",
+                  "src5_addr",
+                  "src5_bank_id",
+                  "num_tiles"}},
+        .config_spec =
+            experimental::metal2_host_api::DataMovementConfiguration{
+                .gen2_data_movement_config =
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+    };
+
+    experimental::metal2_host_api::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source =
+            experimental::metal2_host_api::KernelSpec::SourceFilePath{"tt_metal/kernels/dataflow/writer_unary.cpp"},
+        .num_threads = 1,
+        .dfb_bindings = {{
+            .dfb_spec_name = OUT_DFB,
+            .local_accessor_name = "in",
+            .endpoint_type = DFBEndpoint::CONSUMER,
+            .access_pattern = DFBAccess::STRIDED,
+        }},
+        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
+        .config_spec =
+            experimental::metal2_host_api::DataMovementConfiguration{
+                .gen2_data_movement_config =
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+    };
+
+    experimental::metal2_host_api::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source =
+            experimental::metal2_host_api::KernelSpec::SourceFilePath{
+                "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_quasar.cpp"},
+        .num_threads = 1,
+        .dfb_bindings =
+            {dfb_binding(INP0_DFB, DFBEndpoint::CONSUMER),
+             dfb_binding(INP1_DFB, DFBEndpoint::CONSUMER),
+             dfb_binding(INP2_DFB, DFBEndpoint::CONSUMER),
+             dfb_binding(INP3_DFB, DFBEndpoint::CONSUMER),
+             dfb_binding(INP4_DFB, DFBEndpoint::CONSUMER),
+             dfb_binding(INP5_DFB, DFBEndpoint::CONSUMER),
+             dfb_binding(OUT_DFB, DFBEndpoint::PRODUCER)},
+        .config_spec =
+            experimental::metal2_host_api::ComputeConfiguration{
+                .math_fidelity = MathFidelity::HiFi4,
+                .fp32_dest_acc_en = true,
+                .unpack_to_dest_mode =
+                    {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
+                     {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
+            },
+    };
+
+    experimental::metal2_host_api::WorkUnitSpec wu{
+        .unique_id = "main",
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = node,
+    };
+
+    experimental::metal2_host_api::ProgramSpec spec{
+        .program_id = "reconfig_quasar",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers =
+            {inp0_dfb_spec, inp1_dfb_spec, inp2_dfb_spec, inp3_dfb_spec, inp4_dfb_spec, inp5_dfb_spec, out_dfb_spec},
+        .work_units = {wu},
+    };
+
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+
+    // Random stimulus: U(0, 1) per element (keep magnitudes small so matmul output
+    // stays in a sensible bfloat16 range; each output element is sum of 32 products).
+    // d0/d1, d4/d5 are bfloat16 (Float16_b tile); d2/d3 are float32 (Float32 tile).
+    constexpr int kRandMax = 1;
+    constexpr uint32_t elems_per_tile = tt::constants::TILE_HW;
+    auto src0 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1001);
+    auto src1 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1002);
+    auto gen_random_f32 = [&](uint32_t seed) {
+        std::vector<uint32_t> packed(elems_per_tile);
+        std::mt19937 rng(seed);
+        std::uniform_real_distribution<float> dist(0.0f, static_cast<float>(kRandMax));
+        for (uint32_t i = 0; i < elems_per_tile; ++i) {
+            packed[i] = std::bit_cast<uint32_t>(dist(rng));
+        }
+        return packed;
+    };
+    auto src2 = gen_random_f32(/*seed=*/0x1003);
+    auto src3 = gen_random_f32(/*seed=*/0x1004);
+    auto src4 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1005);
+    auto src5 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1006);
+
+    distributed::WriteShard(cq, inp0_dram, src0, zero_coord, false);
+    distributed::WriteShard(cq, inp1_dram, src1, zero_coord, false);
+    distributed::WriteShard(cq, inp2_dram, src2, zero_coord, false);
+    distributed::WriteShard(cq, inp3_dram, src3, zero_coord, false);
+    distributed::WriteShard(cq, inp4_dram, src4, zero_coord, false);
+    distributed::WriteShard(cq, inp5_dram, src5, zero_coord, false);
+
+    auto in0 = unpack_uint32_vec_into_bfloat16_vec(src0);
+    auto in1 = unpack_uint32_vec_into_bfloat16_vec(src1);
+    auto unpack_f32 = [](const std::vector<uint32_t>& packed) {
+        std::vector<float> out(packed.size());
+        for (size_t i = 0; i < packed.size(); ++i) {
+            out[i] = std::bit_cast<float>(packed[i]);
+        }
+        return out;
+    };
+    auto in2 = unpack_f32(src2);
+    auto in3 = unpack_f32(src3);
+    auto in4 = unpack_uint32_vec_into_bfloat16_vec(src4);
+    auto in5 = unpack_uint32_vec_into_bfloat16_vec(src5);
+
+    // Face-aware index for a 32x32 tile laid out as 4 faces of 16x16 (face-row-major,
+    // then row-major within face). Matches how the device sees a tile in DRAM/L1.
+    auto face_idx = [](uint32_t row, uint32_t col) -> uint32_t {
+        const uint32_t face = (row / tt::constants::FACE_HEIGHT) * 2 + (col / tt::constants::FACE_WIDTH);
+        const uint32_t r = row % tt::constants::FACE_HEIGHT;
+        const uint32_t c = col % tt::constants::FACE_WIDTH;
+        return face * tt::constants::FACE_HW + r * tt::constants::FACE_WIDTH + c;
+    };
+
+    // Matmul of two face-layout tiles. Inputs are converted to float for the
+    // sum; output is bfloat16-truncated (pack format is Float16_b).
+    auto matmul_face = [&](auto& A, auto& B) -> std::vector<bfloat16> {
+        std::vector<bfloat16> C(elems_per_tile);
+        for (uint32_t i = 0; i < tt::constants::TILE_HEIGHT; ++i) {
+            for (uint32_t j = 0; j < tt::constants::TILE_WIDTH; ++j) {
+                float sum = 0.0f;
+                for (uint32_t k = 0; k < tt::constants::TILE_WIDTH; ++k) {
+                    sum += static_cast<float>(A[face_idx(i, k)]) * static_cast<float>(B[face_idx(k, j)]);
+                }
+                C[face_idx(i, j)] = bfloat16(sum);
+            }
+        }
+        return C;
+    };
+
+    auto golden_op0 = matmul_face(in0, in1);
+    auto golden_op1 = matmul_face(in2, in3);
+    auto golden_op2 = matmul_face(in4, in5);
+    std::vector<bfloat16> golden(kNumOps * elems_per_tile);
+    for (uint32_t e = 0; e < elems_per_tile; ++e) {
+        golden[0 * elems_per_tile + e] = golden_op0[e];
+        golden[1 * elems_per_tile + e] = golden_op1[e];
+        golden[2 * elems_per_tile + e] = golden_op2[e];
+    }
+    auto packed_golden = pack_vector<uint32_t, bfloat16>(golden);
+
+    experimental::metal2_host_api::ProgramRunParams params;
+    params.kernel_run_params = {
+        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = READER,
+            .named_runtime_args =
+                {{.node = node,
+                  .args =
+                      {{"src0_addr", static_cast<uint32_t>(inp0_dram->address())},
+                       {"src0_bank_id", 0u},
+                       {"src1_addr", static_cast<uint32_t>(inp1_dram->address())},
+                       {"src1_bank_id", 0u},
+                       {"src2_addr", static_cast<uint32_t>(inp2_dram->address())},
+                       {"src2_bank_id", 0u},
+                       {"src3_addr", static_cast<uint32_t>(inp3_dram->address())},
+                       {"src3_bank_id", 0u},
+                       {"src4_addr", static_cast<uint32_t>(inp4_dram->address())},
+                       {"src4_bank_id", 0u},
+                       {"src5_addr", static_cast<uint32_t>(inp5_dram->address())},
+                       {"src5_bank_id", 0u},
+                       {"num_tiles", 1u}}}},
+        },
+        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = WRITER,
+            .named_runtime_args =
+                {{.node = node,
+                  .args =
+                      {{"dst_addr", static_cast<uint32_t>(out_dram->address())},
+                       {"bank_id", 0u},
+                       {"num_tiles", kNumOps}}}},
+        },
+        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = COMPUTE,
+        },
+    };
+    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+
+    auto* dev = mesh_device->get_devices()[0];
+    tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
+
+    std::vector<uint32_t> dest_buffer_data;
+    distributed::ReadShard(cq, dest_buffer_data, out_dram, zero_coord, false);
+
+    auto device_unpacked = unpack_vector<bfloat16, uint32_t>(dest_buffer_data);
+    auto golden_unpacked = unpack_vector<bfloat16, uint32_t>(packed_golden);
+
+    bool pass = true;
+    for (uint32_t t = 0; t < kNumOps; ++t) {
+        uint32_t mismatches = 0;
+        int first_mismatch_local = -1;
+        float worst_absdiff = 0.0f;
+        for (uint32_t e = 0; e < elems_per_tile; ++e) {
+            const bfloat16 a = device_unpacked[t * elems_per_tile + e];
+            const bfloat16 b = golden_unpacked[t * elems_per_tile + e];
+            if (!is_close(a, b, 0.0155f, 0.001f)) {
+                if (first_mismatch_local < 0) {
+                    first_mismatch_local = static_cast<int>(e);
+                }
+                ++mismatches;
+                const float absdiff = std::fabs(static_cast<float>(a) - static_cast<float>(b));
+                worst_absdiff = std::fmax(worst_absdiff, absdiff);
+            }
+        }
+        if (mismatches == 0) {
+            log_info(tt::LogTest, "OP[{}]: PASS", t);
+        } else {
+            pass = false;
+            log_error(
+                tt::LogTest,
+                "OP[{}]: FAIL ({}/{} mismatches; first idx {} (global {}); worst absdiff={:.4f})",
+                t,
+                mismatches,
+                elems_per_tile,
+                first_mismatch_local,
+                t * elems_per_tile + first_mismatch_local,
+                worst_absdiff);
+        }
+    }
+
+    return pass;
+}
 }  // namespace unit_tests::compute::reconfig
 
 ////////////////////////////////////////////////////////////////////////////
@@ -362,7 +701,7 @@ bool single_core_reconfig(
 // - pack_reconfig_l1_acc
 ////////////////////////////////////////////////////////////////////////////
 
-TEST_F(MeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
+TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
     for (bool explicit_reconfig : {true, false}) {
         for (bool split_src_reconfig : {true, false}) {
             for (bool fp32_dest_acc_en : {true, false}) {
@@ -399,7 +738,7 @@ TEST_F(MeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
+TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
     for (bool l1_acc : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "L1 accumulation is {}, DstSyncFull = {}", l1_acc ? "on." : "off.", dst_full_sync_en);
@@ -409,6 +748,12 @@ TEST_F(MeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
                 ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
             }
         }
+    }
+}
+
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReconfigQuasarDfb) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig_quasar(devices_.at(id)));
     }
 }
 

@@ -111,6 +111,7 @@ class Gemma4Model:
         num_layers=None,
         paged_attention_config=None,
         create_kv_cache=True,
+        precision=None,
         # Legacy parameters — ignored
         transformation_mats=None,
     ):
@@ -125,6 +126,23 @@ class Gemma4Model:
         self.max_seq_len = max_seq_len
         self.hidden_size_per_layer_input = getattr(hf_config, "hidden_size_per_layer_input", 0) or 0
         n_layers = num_layers or hf_config.num_hidden_layers
+
+        # Per-module dtype resolution. ``precision`` (Gemma4Precision) holds
+        # any overrides loaded from precision_overrides.json; modules without
+        # an override fall back to ``dtype`` (the model-wide default). Dtypes
+        # are then threaded explicitly through DecoderLayer / used directly
+        # for embedding + lm_head, so each weight loads at the right precision
+        # and lands in a cache file tagged with that dtype.
+        from models.demos.gemma4.tt.precision import Gemma4Precision
+
+        if precision is None:
+            precision = Gemma4Precision()
+        shared_mlp_dtype = precision.get("shared_mlp", dtype)
+        attention_dtype = precision.get("attention", dtype)
+        experts_dtype = precision.get("experts", dtype)
+        router_dtype = precision.get("router", dtype)
+        embedding_dtype = precision.get("embedding", dtype)
+        lm_head_dtype = precision.get("lm_head", dtype)
 
         # KV sharing map: layers after (full_n_layers - num_kv_shared_layers) share KV
         # from the last non-shared layer of the same type
@@ -159,6 +177,8 @@ class Gemma4Model:
         tp = mesh_config.tp if mesh_config else 1
         tp_suffix = f"_tp{tp}" if tp > 1 else ""
 
+        from models.demos.gemma4.tt.precision import dtype_to_str
+
         if state_dict and "model.language_model.embed_tokens.weight" in state_dict:
             embed_key = "model.language_model.embed_tokens.weight"
         elif state_dict and "model.embed_tokens.weight" in state_dict:
@@ -175,31 +195,35 @@ class Gemma4Model:
                 embed_mapper = mesh_config.column_parallel(mesh_device)
             else:
                 embed_mapper = replicate
+            embed_suffix = f"_{dtype_to_str(embedding_dtype)}"
             self.embedding_weight = ttnn.as_tensor(
                 embed_weight.unsqueeze(0).unsqueeze(0),
                 device=mesh_device,
-                dtype=ttnn.bfloat16,
+                dtype=embedding_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=embed_mapper,
-                cache_file_name=get_cache_file_name(tensor_cache_path, f"embed_tokens.weight{tp_suffix}"),
+                cache_file_name=get_cache_file_name(tensor_cache_path, f"embed_tokens.weight{tp_suffix}{embed_suffix}"),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
             # LM head (tied with embeddings): column-parallel (shard vocab dim)
             # Each device holds [hidden, vocab/TP]; all-gather logits after softcapping.
+            # Default is bfloat16 — bfloat8_b is generally too lossy for 262k-vocab
+            # argmax, but the override is exposed for systems that genuinely
+            # need the DRAM relief and can tolerate the precision loss.
             lm_head_weight = embed_weight.transpose(0, 1).unsqueeze(0).unsqueeze(0)
             if tp > 1:
                 lm_mapper = mesh_config.column_parallel(mesh_device)
             else:
                 lm_mapper = replicate
-            # Always bfloat16 for LM head — bfloat8_b is too lossy for 262k-vocab argmax
+            lm_head_suffix = f"_{dtype_to_str(lm_head_dtype)}"
             self.lm_head_weight = ttnn.as_tensor(
                 lm_head_weight,
                 device=mesh_device,
-                dtype=ttnn.bfloat16,
+                dtype=lm_head_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=lm_mapper,
-                cache_file_name=get_cache_file_name(tensor_cache_path, f"lm_head.weight{tp_suffix}"),
+                cache_file_name=get_cache_file_name(tensor_cache_path, f"lm_head.weight{tp_suffix}{lm_head_suffix}"),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
@@ -242,6 +266,10 @@ class Gemma4Model:
                 layer_idx=i,
                 ccl_manager=ccl_manager,
                 dtype=dtype,
+                shared_mlp_dtype=shared_mlp_dtype,
+                attention_dtype=attention_dtype,
+                experts_dtype=experts_dtype,
+                router_dtype=router_dtype,
                 tensor_cache_path=tensor_cache_path,
                 mesh_config=mesh_config,
                 max_seq_len=max_seq_len,
@@ -406,6 +434,7 @@ class Gemma4Model:
         pli_device_tensors=None,
         position_idx_cache=None,
         pli_combined=None,
+        get_last_token=-1,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -520,6 +549,18 @@ class Gemma4Model:
         # Final norm
         hidden_states = self.norm.forward(hidden_states)
 
+        # Slice to the last token tile before lm_head when caller only wants
+        # next-token logits (prefill). Keeps the 262k-vocab matmul output at
+        # 32 rows instead of seq_len rows — without this, prefill at seq_len
+        # >= 4k OOMs DRAM on smaller WH SKUs (lm_head logits = seq_len * vocab
+        # * 2B; at seq=4096 that's 2 GiB, doesn't fit in DRAM with weights).
+        if get_last_token != -1:
+            hidden_states = ttnn.slice(
+                hidden_states,
+                (0, 0, get_last_token, 0),
+                (1, 1, get_last_token + 32, hidden_states.shape[-1]),
+            )
+
         # LM head (column-parallel on vocab dim when TP > 1)
         if self.lm_head_weight is not None:
             logits = ttnn.linear(hidden_states, self.lm_head_weight)
@@ -527,7 +568,10 @@ class Gemma4Model:
         else:
             logits = hidden_states
 
-        # Softcapping: tanh(logits / cap) * cap — element-wise, works on sharded vocab
+        # Softcapping: tanh(logits / cap) * cap — element-wise, works on sharded vocab.
+        # ttnn.mul/ttnn.tanh return new tensors (not in-place), so capture the
+        # results — dropping them silently no-ops the cap and lets logits go
+        # well past ±30, which tanks PCC against the HF reference (which caps).
         if self.final_logit_softcapping and self.final_logit_softcapping > 0:
             cap = self.final_logit_softcapping
             logits = ttnn.mul(logits, 1.0 / cap)
@@ -608,6 +652,8 @@ class Gemma4Model:
     ):
         """Prefill forward — matches tt_transformers Generator interface."""
         seq_len = x.shape[-2]
+        # Pass get_last_token down so the slice happens BEFORE lm_head — the
+        # post-lm_head slice would still allocate full-seq logits first.
         logits = self(
             hidden_states=x,
             position_idx=None,
@@ -616,15 +662,8 @@ class Gemma4Model:
             is_decode=False,
             input_ids_torch=input_ids_torch,
             embeds_torch=embeds_torch,
+            get_last_token=get_last_token,
         )
-
-        # Extract last token tile for next-token prediction
-        if get_last_token != -1:
-            logits = ttnn.slice(
-                logits,
-                (0, 0, get_last_token, 0),
-                (1, 1, get_last_token + 32, logits.shape[-1]),
-            )
 
         return logits
 

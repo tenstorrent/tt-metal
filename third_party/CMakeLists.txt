@@ -416,6 +416,44 @@ CPMAddPackage(
 )
 
 ####################################################################################################################
+# CaDiCaL : https://github.com/arminbiere/cadical
+# Upstream has no CMakeLists.txt; after CPM download we build STATIC from the same sources as makefile.in
+# (src/*.cpp minus cadical/mobical, plus src/*.c). NBUILD avoids generated build.hpp; patch fixes vivify.hpp.
+####################################################################################################################
+CPMAddPackage(
+    NAME cadical
+    GITHUB_REPOSITORY arminbiere/cadical
+    GIT_TAG rel-2.2.1
+    DOWNLOAD_ONLY YES
+    PATCHES
+        cadical_vivify_include_tuple.patch
+)
+
+file(GLOB CADICAL_CXX CONFIGURE_DEPENDS "${cadical_SOURCE_DIR}/src/*.cpp")
+list(FILTER CADICAL_CXX EXCLUDE REGEX ".*/(cadical|mobical)\\.cpp$")
+file(GLOB CADICAL_C CONFIGURE_DEPENDS "${cadical_SOURCE_DIR}/src/*.c")
+add_library(
+    cadical
+    STATIC
+    ${CADICAL_CXX}
+    ${CADICAL_C}
+)
+add_library(cadical::cadical ALIAS cadical)
+target_include_directories(cadical SYSTEM PUBLIC "${cadical_SOURCE_DIR}/src")
+target_compile_definitions(
+    cadical
+    PRIVATE
+        NBUILD
+        $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
+)
+set_target_properties(
+    cadical
+    PROPERTIES
+        POSITION_INDEPENDENT_CODE
+            ON
+)
+
+####################################################################################################################
 # Cap'n Proto : https://github.com/capnproto/capnproto
 ####################################################################################################################
 CPMAddPackage(

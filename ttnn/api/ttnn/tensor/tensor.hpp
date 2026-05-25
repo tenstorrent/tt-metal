@@ -51,15 +51,6 @@ public:
     Tensor& operator=(Tensor&& other) noexcept;
     ~Tensor();
 
-    // Transitional constructor: use Tensor(HostTensor) instead.
-    //
-    // Accepts a pre-transition HostStorage (constructed without TensorSpec and
-    // TensorTopology) and assigns them during Tensor construction.
-    // Overrides any existing spec/topology in the HostStorage.
-    //
-    // TODO(#40348): Remove this.
-    [[nodiscard]] Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
-
     [[nodiscard]] explicit Tensor(DeviceStorage storage);
 
     [[nodiscard]] explicit Tensor(HostTensor tensor);

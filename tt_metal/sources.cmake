@@ -4,6 +4,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/bfloat16.hpp
     api/tt-metalium/bfloat4.hpp
     api/tt-metalium/bfloat8.hpp
+    api/tt-metalium/float8.hpp
     api/tt-metalium/buffer.hpp
     api/tt-metalium/buffer_distribution_spec.hpp
     api/tt-metalium/buffer_page_mapping.hpp
@@ -65,6 +66,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/metal2_host_api/program_run_params.hpp
     api/tt-metalium/experimental/metal2_host_api/program_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp
+    api/tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp
     api/tt-metalium/experimental/mock_device.hpp
     api/tt-metalium/experimental/noc_estimator/noc_estimator.hpp
     api/tt-metalium/experimental/noc_estimator/types.hpp
@@ -120,6 +122,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/mesh_event.hpp
     api/tt-metalium/mesh_trace_id.hpp
     api/tt-metalium/mesh_workload.hpp
+    api/tt-metalium/workload_descriptor.hpp
     api/tt-metalium/profiler_optional_metadata.hpp
     api/tt-metalium/profiler_types.hpp
     api/tt-metalium/program.hpp
@@ -186,6 +189,8 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_prefetch.hpp
     impl/dispatch/kernels/cq_relay.hpp
     impl/dispatch/kernels/cq_helpers.hpp
+    impl/dispatch/kernels/realtime_profiler.hpp
+    impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp
     soc_descriptors/blackhole_140_arch.yaml
     soc_descriptors/wormhole_b0_80_arch.yaml
     tools/profiler/kernel_profiler.hpp
@@ -197,7 +202,11 @@ set(JITAPI_FILES
     tools/profiler/cpp_device_analyses.json
     impl/dispatch/kernels/cq_dispatch.cpp
     impl/dispatch/kernels/cq_dispatch_subordinate.cpp
+    impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp
     impl/dispatch/kernels/cq_prefetch.cpp
+    impl/dispatch/kernels/cq_realtime_profiler.cpp
+    impl/dispatch/kernels/cq_realtime_profiler_push.cpp
+    impl/dispatch/kernels/device_print_dispatch.h
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
     fabric/impl/kernels/tt_fabric_mux.cpp
     kernels/compute/blank.cpp

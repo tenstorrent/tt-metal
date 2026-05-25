@@ -68,6 +68,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -386,10 +387,18 @@ def run(
     torch.manual_seed(0)
 
     is_mesh_device = hasattr(device, "get_num_devices")
-    input_a_tensor_placement = _kwargs.get("input_a_tensor_placement", None)
-    input_b_tensor_placement = _kwargs.get("input_b_tensor_placement", None)
-    input_c_tensor_placement = _kwargs.get("input_c_tensor_placement", None)
-    input_d_tensor_placement = _kwargs.get("input_d_tensor_placement", None)
+    input_a_tensor_placement = _kwargs.get("input_a_tensor_placement", None) or _kwargs.get(
+        "input_tensor_a_tensor_placement"
+    )
+    input_b_tensor_placement = _kwargs.get("input_b_tensor_placement", None) or _kwargs.get(
+        "input_tensor_b_tensor_placement"
+    )
+    input_c_tensor_placement = _kwargs.get("input_c_tensor_placement", None) or _kwargs.get(
+        "input_tensor_c_tensor_placement"
+    )
+    input_d_tensor_placement = _kwargs.get("input_d_tensor_placement", None) or _kwargs.get(
+        "input_tensor_d_tensor_placement"
+    )
     op_kwargs = build_op_kwargs(_kwargs, output_memory_config=output_memory_config)
 
     # Reconcile input_shape vs input_a_shape (V2 vectors provide input_a_shape)
@@ -561,14 +570,6 @@ def run(
         # Interleave back to original format
         torch_output_tensor = torch.stack([cos_part, sin_part], dim=-1).flatten(-2).to(torch.bfloat16)
 
-        # Decode shrinks shape_a to per-chip on the input shard axis, so the
-        # per-chip golden above is per-chip. mesh_tensor_to_torch later
-        # reassembles outputs by concatenating along that same shard axis.
-        # Tile to match the reassembled global shape.
-        if _rel_a_factor > 1 and _rel_a_axis is not None:
-            _ax_g = _rel_a_axis if _rel_a_axis >= 0 else _rel_a_axis + torch_output_tensor.ndim
-            if 0 <= _ax_g < torch_output_tensor.ndim:
-                torch_output_tensor = torch.cat([torch_output_tensor] * _rel_a_factor, dim=_ax_g)
     else:
         # For prefill mode. torch_input_tensor is GLOBAL (shape_a is unshrunk),
         # while torch_cos_cache / torch_sin_cache were generated at the per-chip
@@ -581,30 +582,43 @@ def run(
             torch_cos_cache.float(),
             torch_sin_cache.float(),
         ).to(torch.bfloat16)
-        # All chips have the same per-chip data; Shard(-1) topology causes
-        # mesh_tensor_to_torch to concatenate chip outputs along the shard
-        # axis, so tile the golden the same way.
-        if _rel_a_factor > 1 and _rel_a_axis is not None:
-            _ax_g = _rel_a_axis if _rel_a_axis >= 0 else _rel_a_axis + torch_output_tensor.ndim
-            if 0 <= _ax_g < torch_output_tensor.ndim:
-                torch_output_tensor = torch.cat([torch_output_tensor] * _rel_a_factor, dim=_ax_g)
 
     # --- Create TTNN Tensors ---
     if is_decode_mode:
         # --- Decode Mode: Create sharded tensors ---
-        # Get core grid for sharding
+        # Compute device-derived shard config first (used as fallback + for trans_mat).
         core_grid = device.compute_with_storage_grid_size()
         batch_grid = ttnn.num_cores_to_corerangeset(batch, core_grid, row_wise=True)
 
-        # Create sharded memory config for input, cos, sin
-        # Each shard has shape [TILE_HEIGHT=32, head_dim]
-        shard_mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, head_dim),
-            core_grid=batch_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
+        # Prefer master's traced memory_config when present so the recorded
+        # shard_spec.grid matches exactly (master may avoid dispatch cores in
+        # non-rectangular patterns).
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config as _d2mc
+
+        shard_mem_config = None
+        if isinstance(input_a_memory_config, dict):
+            try:
+                shard_mem_config = _d2mc(input_a_memory_config)
+                if not getattr(shard_mem_config, "is_sharded", lambda: False)():
+                    shard_mem_config = None
+            except Exception:
+                shard_mem_config = None
+        elif input_a_memory_config is not None and hasattr(input_a_memory_config, "is_sharded"):
+            try:
+                if input_a_memory_config.is_sharded():
+                    shard_mem_config = input_a_memory_config
+            except Exception:
+                # Best-effort: tolerate this failure so the sweep can continue.
+                pass
+
+        if shard_mem_config is None:
+            shard_mem_config = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, head_dim),
+                core_grid=batch_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
 
         # Create sharded memory config for transformation matrix
         # Each shard has shape [TILE_SIZE, TILE_SIZE]
@@ -754,6 +768,9 @@ def run(
     # TILE_LAYOUT.  Slice back to the logical shape before the PCC check.
     if is_decode_mode and len(output_tensor.shape) == 4 and output_tensor.shape[2] != torch_output_tensor.shape[2]:
         output_tensor = output_tensor[:, :, : torch_output_tensor.shape[2], :]
+
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
 
     # --- Check Results ---
     # Use high PCC threshold (0.9997) to match reference test expectations

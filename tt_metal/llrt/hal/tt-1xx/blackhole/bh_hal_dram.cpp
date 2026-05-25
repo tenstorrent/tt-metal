@@ -8,6 +8,7 @@
 #include "tt_align.hpp"
 #include "hostdev/dev_msgs.h"
 #include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdev/realtime_profiler_msgs.h"
 using namespace tt::tt_metal::blackhole::dram;
 
 #include <algorithm>
@@ -30,6 +31,10 @@ namespace dram_dev_msgs {
 
 namespace dram_fabric_telemetry {
 #include "hal/generated/fabric_telemetry_impl.hpp"
+}
+
+namespace dram_realtime_profiler_msgs {
+#include "hal/generated/realtime_profiler_msgs_impl.hpp"
 }
 
 HalCoreInfoType create_dram_mem_map() {
@@ -114,7 +119,8 @@ HalCoreInfoType create_dram_mem_map() {
         false /*supports_dfbs*/,
         false /*supports_receiving_multicast_cmds*/,
         dram_dev_msgs::create_factory(),
-        dram_fabric_telemetry::create_factory()};
+        dram_fabric_telemetry::create_factory(),
+        dram_realtime_profiler_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::blackhole

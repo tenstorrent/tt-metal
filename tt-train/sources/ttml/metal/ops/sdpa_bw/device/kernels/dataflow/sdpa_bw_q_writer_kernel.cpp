@@ -68,15 +68,15 @@ void kernel_main() {
         const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
         const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
 
-        // Write light row grad_query + u_scaler
-        const uint32_t light_start_idx = light_global_row * qWt;
-        write_tiles_by_row(cb_grad_query, grad_query_addr_generator, light_start_idx, qWt, tile_bytes, qWt);
-        write_u_scaler_for_row(light_global_row);
-
         // Write heavy row grad_query + u_scaler
         const uint32_t heavy_start_idx = heavy_global_row * qWt;
         write_tiles_by_row(cb_grad_query, grad_query_addr_generator, heavy_start_idx, qWt, tile_bytes, qWt);
         write_u_scaler_for_row(heavy_global_row);
+
+        // Write light row grad_query + u_scaler
+        const uint32_t light_start_idx = light_global_row * qWt;
+        write_tiles_by_row(cb_grad_query, grad_query_addr_generator, light_start_idx, qWt, tile_bytes, qWt);
+        write_u_scaler_for_row(light_global_row);
     }
 #else
     const uint32_t end_row = start_row + num_rows_to_process;

@@ -9,6 +9,7 @@
 
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary.h"
+#include "tensor_shape.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
@@ -19,13 +20,13 @@ using namespace ckernel::math;
  * @tparam BROADCAST_TYPE: Sets the broadcast type, values = [NONE, COL, ROW, SCALAR]
  * BROADCAST only operates on SRCB register
  * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when input is Tf32 format
- * @param tile_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ * @param tensor_shape: Face grid and face row/column dimensions for the operand tile
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
-inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TileShape& tile_shape)
+inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& tensor_shape)
 {
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
-    const std::uint32_t num_eltwise_instrn_per_face = (tile_shape.face_r_dim >> math_rows_log2(ELTWISE_MATH_ROWS));
+    const std::uint32_t num_eltwise_instrn_per_face = (tensor_shape.face_r_dim >> math_rows_log2(ELTWISE_MATH_ROWS));
 
     constexpr auto SRCB_BROADCAST_TYPE = (BROADCAST_TYPE == BroadcastType::COL)
                                              ? p_elwise::SRCB_BCAST_COL
@@ -34,7 +35,7 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TileShape& tile
     constexpr std::uint32_t EN_DST_ACC = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(EN_DST_ACC && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
 
-    const std::uint32_t MOP_OUTER_LOOP = tile_shape.num_faces;
+    const std::uint32_t MOP_OUTER_LOOP = tensor_shape.total_num_faces();
     const std::uint32_t MOP_INNER_LOOP = num_eltwise_instrn_per_face;
 
     const std::uint32_t eltwise_binary_op = eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, SRCB_BROADCAST_TYPE, ADDR_MOD_0>(EN_DST_ACC);
@@ -144,13 +145,13 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = [ELWADD, ELWSUB, ELWMUL]
  * @tparam BROADCAST_TYPE: Sets the broadcast type, values = [NONE, COL, ROW, SCALAR]
  * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when input is Tf32 format
- * @param tile_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ * @param tensor_shape: Face grid and face row/column dimensions for the operand tile
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
-inline void _llk_math_eltwise_binary_broadcast_init_(const TileShape& tile_shape)
+inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_shape)
 {
     _llk_math_eltwise_binary_broadcast_addrmod_<BROADCAST_TYPE, MATH_FIDELITY_TYPE>();
-    _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE, MATH_FIDELITY_TYPE>(tile_shape);
+    _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
 
     // Reset all counters
     _reset_counters_<p_setrwc::SET_ABD_F>();

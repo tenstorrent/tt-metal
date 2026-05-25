@@ -14,6 +14,14 @@ struct IndexedFillSharedVariables {
     tt::tt_metal::KernelHandle writer_kernel_id{};
     std::vector<CoreCoord> cores;
     uint32_t page_size = 0;
+    // When true, override_runtime_arguments must call UpdateDynamicCircularBufferAddress on
+    // cb_data_handle to keep the cached program's CB base in sync with the output buffer.
+    bool is_native = false;
+    // Like is_native the data CB is aliased to the output buffer, but the kernel iterates
+    // over all batches per core (WIDTH_SHARDED / BLOCK_SHARDED path).
+    bool is_shard_local = false;
+    bool is_tile = false;
+    tt::tt_metal::CBHandle cb_data_handle{};
 };
 
 struct IndexedFillProgramFactory {

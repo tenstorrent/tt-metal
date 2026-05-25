@@ -35,8 +35,8 @@ class TtTimesteps(LightweightModule):
         )
 
     def forward(self, timesteps):
-        emb = ttnn.multiply(ttnn.unsqueeze(timesteps, -1), ttnn.unsqueeze(self.emb, 0), use_legacy=False)
-        emb = ttnn.multiply(emb, self.scale, use_legacy=False)
+        emb = ttnn.multiply(ttnn.unsqueeze(timesteps, -1), ttnn.unsqueeze(self.emb, 0))
+        emb = ttnn.multiply(emb, self.scale)
 
         emb = ttnn.concat([ttnn.sin(emb), ttnn.cos(emb)], dim=-1)
 

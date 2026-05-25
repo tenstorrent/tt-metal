@@ -173,14 +173,9 @@ template <
     std::uint32_t row_num_datums     = TILE_C_DIM,
     std::uint32_t tile_dst_ct_offset = 0>
 inline void _llk_pack_untilize_(
-    const std::uint32_t address,
-    const std::uint32_t pack_dst_format,
-    const std::uint32_t face_r_dim                 = FACE_R_DIM,
-    [[maybe_unused]] const std::uint32_t num_faces = 4,
-    const std::uint32_t tile_dst_rt_offset         = 0)
+    const std::uint32_t address, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t tile_dst_rt_offset = 0)
 {
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
-    LLK_ASSERT(num_faces == 4, "num_faces: this parameter is unused");
 
     program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal, row_num_datums>(address, pack_dst_format);
 

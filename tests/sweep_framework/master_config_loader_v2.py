@@ -344,6 +344,10 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 per_core_N=int(cfg["per_core_N"]),
                 transpose_mcast=bool(cfg.get("transpose_mcast", False)),
                 fused_activation=fused_activation,
+                # Master-traced fuse_batch (default-False). Without this, the C++
+                # constructor defaults to True and the kernel asserts on the
+                # batch-shape requirement for any non-singleton-batch input_b.
+                fuse_batch=bool(cfg.get("fuse_batch", False)),
             )
             if cfg.get("out_block_h") is not None:
                 kwargs["out_block_h"] = int(cfg["out_block_h"])
@@ -599,12 +603,16 @@ def dict_to_memory_config(mem_cfg):
     if not grid_list or not shard_shape:
         return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type_ttnn)
 
-    core_ranges = set()
+    # Preserve insertion order so the kernel sees the same storage-core
+    # ordering master recorded (DRAM-sharded matmul asserts on it).
+    core_ranges = []
     for range_dict in grid_list:
         start = range_dict.get("start", {})
         end = range_dict.get("end", {})
         if "x" in start and "y" in start and "x" in end and "y" in end:
-            core_ranges.add(ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"])))
+            core_ranges.append(
+                ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"]))
+            )
 
     if not core_ranges:
         return ttnn.MemoryConfig(layout, buffer_type_ttnn)
@@ -1054,14 +1062,18 @@ class MasterConfigLoader:
             "DataType::INT32": ttnn.int32,
             "DataType::UINT32": ttnn.uint32,
             "DataType::BFLOAT8_B": ttnn.bfloat8_b,
+            "DataType::BFLOAT4_B": ttnn.bfloat4_b,
             "DataType::UINT16": ttnn.uint16,
+            "DataType::UINT8": ttnn.uint8,
             # V2 tracer format (dot-style)
             "DataType.BFLOAT16": ttnn.bfloat16,
             "DataType.FLOAT32": ttnn.float32,
             "DataType.INT32": ttnn.int32,
             "DataType.UINT32": ttnn.uint32,
             "DataType.BFLOAT8_B": ttnn.bfloat8_b,
+            "DataType.BFLOAT4_B": ttnn.bfloat4_b,
             "DataType.UINT16": ttnn.uint16,
+            "DataType.UINT8": ttnn.uint8,
         }
         return dtype_mapping.get(dtype_str, ttnn.bfloat16)
 

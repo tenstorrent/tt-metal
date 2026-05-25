@@ -7,6 +7,8 @@
 // Shared test utilities for Metal 2.0 Host API tests.
 // These helpers create minimal valid spec objects for testing.
 
+#include <cstdlib>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -15,6 +17,9 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 
 // This file contains shortcut helper functions to create minimal valid ProgramSpec
 // objects for unit tests. This cuts boilerplate in a unit testing context.
@@ -24,6 +29,36 @@
 // recommended patterns for constructing ProgramSpec objects in production code.
 
 namespace tt::tt_metal::experimental::metal2_host_api::test_helpers {
+
+// ============================================================================
+// Test environment helpers
+// ============================================================================
+
+// Saves and overrides TT_METAL_SLOW_DISPATCH_MODE on construction;
+// restores to its prior state (set or unset) on destruction.
+// (Unit test need SLOW_DISPATCH_MODE=1 to make a MeshDevice successfully.)
+class ScopedSlowDispatchOverride {
+public:
+    ScopedSlowDispatchOverride() {
+        if (const char* prev = std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+            prev_value_.emplace(prev);
+        }
+        setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", /*overwrite=*/1);
+    }
+    ~ScopedSlowDispatchOverride() {
+        if (prev_value_) {
+            setenv("TT_METAL_SLOW_DISPATCH_MODE", prev_value_->c_str(), /*overwrite=*/1);
+        } else {
+            unsetenv("TT_METAL_SLOW_DISPATCH_MODE");
+        }
+    }
+
+    ScopedSlowDispatchOverride(const ScopedSlowDispatchOverride&) = delete;
+    ScopedSlowDispatchOverride& operator=(const ScopedSlowDispatchOverride&) = delete;
+
+private:
+    std::optional<std::string> prev_value_;
+};
 
 // ============================================================================
 // Constants
@@ -114,6 +149,31 @@ inline void BindDFBToKernel(
         .local_accessor_name = accessor_name,
         .endpoint_type = endpoint_type,
         .access_pattern = access_pattern,
+    });
+}
+
+// Helper to create a minimal valid TensorParameter.
+// Default layout: BFLOAT16, ROW_MAJOR, interleaved, shape {1, 32}. Hardware-agnostic;
+// works on any mock device (alignment + virtualized cores resolved by MakeProgramFromSpec).
+// buffer_type defaults to DRAM; pass BufferType::L1 for an SRAM-resident parameter.
+inline TensorParameter MakeMinimalTensorParameter(
+    const std::string& name, tt::tt_metal::BufferType buffer_type = tt::tt_metal::BufferType::DRAM) {
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
+    auto memory_config = tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, buffer_type};
+    auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
+    auto spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 32}, tensor_layout);
+    return TensorParameter{
+        .unique_id = name,
+        .spec = std::move(spec),
+    };
+}
+
+// Helper to add a TensorBinding to a kernel.
+inline void BindTensorParameterToKernel(
+    KernelSpec& kernel, const std::string& tensor_parameter_name, const std::string& accessor_name) {
+    kernel.tensor_bindings.push_back(KernelSpec::TensorBinding{
+        .tensor_parameter_name = tensor_parameter_name,
+        .accessor_name = accessor_name,
     });
 }
 

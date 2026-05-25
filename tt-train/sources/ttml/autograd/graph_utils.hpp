@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <type_traits>
+#include <vector>
+
 #include "auto_context.hpp"
 #include "core/template_utils.hpp"
 #include "graph.hpp"
@@ -67,6 +70,7 @@ bool any_requires_grad(Tensors&&... tensors) {
  * through this operation. Note: ctx().add_backward_node adds a node unconditionally.
  */
 template <typename... Tensors>
+    requires(... && !std::is_same_v<std::remove_cvref_t<Tensors>, std::vector<TensorPtr>>)
 std::optional<NodeId> add_backward_node(GradFunction&& grad_function, const TensorPtr& output, Tensors&&... tensors) {
     static_assert(core::are_same_type<Tensors...>(), "All nodes must have the same type!");
 
@@ -82,6 +86,41 @@ std::optional<NodeId> add_backward_node(GradFunction&& grad_function, const Tens
 
     // Get links and add node normally
     auto links = detail::get_links(std::forward<Tensors>(tensors)...);
+    return ctx().add_backward_node(std::move(grad_function), links);
+}
+
+/**
+ * @brief Runtime-arity overload of add_backward_node.
+ *
+ * Same semantics as the variadic template version (branch pruning + link
+ * collection), but accepts a runtime-sized vector of TensorPtrs.
+ */
+inline std::optional<NodeId> add_backward_node(
+    GradFunction&& grad_function, const TensorPtr& output, const std::vector<TensorPtr>& inputs) {
+    bool needs_grad = false;
+    for (const auto& t : inputs) {
+        if (t != nullptr && t->get_requires_grad()) {
+            needs_grad = true;
+            break;
+        }
+    }
+
+    output->set_requires_grad(needs_grad);
+    if (!needs_grad) {
+        return std::nullopt;
+    }
+
+    std::vector<NodeId> links;
+    links.reserve(inputs.size());
+    for (const auto& t : inputs) {
+        if (t == nullptr) {
+            continue;
+        }
+        const auto& node = t->get_node();
+        if (node) {
+            links.push_back(node.value());
+        }
+    }
     return ctx().add_backward_node(std::move(grad_function), links);
 }
 

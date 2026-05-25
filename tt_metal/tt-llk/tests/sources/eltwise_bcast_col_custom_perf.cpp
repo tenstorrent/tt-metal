@@ -44,7 +44,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             FACE_R_DIM,
             4 /* num_faces */,
             4 /* num_faces */);
-        _llk_unpack_AB_sub_bcast_col_init_custom_<BROADCAST_TYPE>();
+        _llk_unpack_AB_sub_bcast_col_init_custom_();
         PROFILER_SYNC();
     }
     {
@@ -70,7 +70,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < static_cast<std::uint32_t>(LOOP_FACTOR); loop++)
             {
-                _llk_unpack_AB_sub_bcast_col_custom_<BROADCAST_TYPE>(PERF_ADDRESS(PERF_INPUT_A, 0), PERF_ADDRESS(PERF_INPUT_B, 0), CT_DIM);
+                _llk_unpack_AB_sub_bcast_col_custom_(PERF_ADDRESS(PERF_INPUT_A, 0), PERF_ADDRESS(PERF_INPUT_B, 0), CT_DIM);
             }
         }
         PROFILER_SYNC();
@@ -98,7 +98,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(4, 0);
+        _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE>(4);
         PROFILER_SYNC();
     }
     {
@@ -146,6 +146,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
@@ -161,8 +162,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         MEASURE_PERF_COUNTERS("INIT")
         ZONE_SCOPED("INIT")
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
-        _llk_pack_init_<false, false>(formats.pack_dst);
+        _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
@@ -180,7 +181,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t i = 0; i < CT_DIM; i++)
                 {
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(i, PERF_ADDRESS(PERF_OUTPUT, i));
+                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, PERF_ADDRESS(PERF_OUTPUT, i));
                 }
             }
         }
@@ -191,7 +192,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_packer_wait_for_math_done_();
                 for (std::uint32_t i = 0; i < CT_DIM; i++)
                 {
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(i, PERF_ADDRESS(PERF_OUTPUT, i));
+                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, PERF_ADDRESS(PERF_OUTPUT, i));
                 }
                 _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }

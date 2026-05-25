@@ -43,13 +43,21 @@ void tilize_in(
                                      : compute_kernel_lib::tilize_config::InitUninitMode::InitOnly)
                     : (uninit_tilize ? compute_kernel_lib::tilize_config::InitUninitMode::UninitOnly
                                      : compute_kernel_lib::tilize_config::InitUninitMode::Neither);
+    // Split-reader fires tilize_in twice back-to-back (first: init=true+uninit=false,
+    // second: init=false+uninit=true). The second call must NOT reconfig datatypes —
+    // doing so clobbers the bf16 SrcA override that fast_tilize_init installs for
+    // fp32 input on BH (see _llk_unpack_fast_tilize_init_), breaking the second
+    // tilize's MOP. Only reconfig on the init call; continuation reuses that state.
+    constexpr auto reconfig_mode =
+        init_tilize ? compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure
+                    : compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure;
     compute_kernel_lib::tilize<
         in_block_w,
         in_cb_id,
         out_cb_id,
         init_uninit_mode,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(in_num_subblocks);
+        reconfig_mode>(in_num_subblocks);
 }  // tilize_in()
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
@@ -155,7 +163,7 @@ inline void tilize_in_reuse_split_reader(
     // and trips the LLK bounds assert (see GH #42510).
     PACK((get_local_cb_interface(out_cb_id).fifo_wr_ptr = out_cb_addr_init));
     out_cb.push_back(out_cb_tiles);
-    fast_tilize_uninit(in2_cb_id, out_cb_id);
+    fast_tilize_uninit(in2_cb_id, out_cb_id, in_block_w);
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
@@ -219,21 +227,21 @@ void kernel_main() {
     constexpr uint32_t matmul_partials_cb = get_compile_time_arg_val(22);
     constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(23);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(24);
-    constexpr bool partials_cb_uses_output = get_compile_time_arg_val(26);
-    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(27);
-    constexpr bool check_skip_compute = get_compile_time_arg_val(28);
-    constexpr bool pack_relu = get_compile_time_arg_val(29);
-    constexpr bool packer_untilize = get_compile_time_arg_val(30);
-    constexpr bool packer_l1_acc = get_compile_time_arg_val(31);
-    constexpr bool fuse_bias = get_compile_time_arg_val(32);
-    constexpr bool split_reader = get_compile_time_arg_val(33);
-    constexpr bool activation_reuse = get_compile_time_arg_val(34);
+    constexpr bool partials_cb_uses_output = get_compile_time_arg_val(25);
+    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(26);
+    constexpr bool check_skip_compute = get_compile_time_arg_val(27);
+    constexpr bool pack_relu = get_compile_time_arg_val(28);
+    constexpr bool packer_untilize = get_compile_time_arg_val(29);
+    constexpr bool packer_l1_acc = get_compile_time_arg_val(30);
+    constexpr bool fuse_bias = get_compile_time_arg_val(31);
+    constexpr bool split_reader = get_compile_time_arg_val(32);
+    constexpr bool activation_reuse = get_compile_time_arg_val(33);
 
-    constexpr uint32_t image_width_in_tiles = get_compile_time_arg_val(35);
-    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(36);
-    constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(37);
-    constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(38);
-    constexpr bool split_reader_cb_shared = get_compile_time_arg_val(39) == 1;
+    constexpr uint32_t image_width_in_tiles = get_compile_time_arg_val(34);
+    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(35);
+    constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(36);
+    constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(37);
+    constexpr bool split_reader_cb_shared = get_compile_time_arg_val(38) == 1;
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;

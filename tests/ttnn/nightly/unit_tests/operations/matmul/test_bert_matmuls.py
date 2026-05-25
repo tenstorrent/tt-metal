@@ -13,7 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 )
 from models.common.utility_functions import is_wormhole_b0, is_blackhole
 from loguru import logger
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
@@ -148,7 +148,7 @@ def test_bert_linear_batch7(
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttnn.bfloat8_b)
 
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config_L1
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttnn.bfloat8_b)[0]
+    bias_t = torch2tt_tensor(bias, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttnn.bfloat8_b)
 
     if in0_sharded:
         in0_t = ttnn.interleaved_to_sharded(

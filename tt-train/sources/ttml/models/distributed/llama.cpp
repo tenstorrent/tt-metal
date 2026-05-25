@@ -114,8 +114,10 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     }
     ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
     if (use_tp) {
+        // LM head keeps its output vocab-sharded ([B,1,S,V/tp_size] per device); pair it
+        // with ttml::ops::distributed::vocab_parallel_cross_entropy_loss.
         fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-            embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ true, tp_axis);
+            embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ false, tp_axis);
     } else {
         fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* has_bias */ false);
     }

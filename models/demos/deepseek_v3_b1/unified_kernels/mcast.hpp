@@ -19,6 +19,52 @@ namespace deepseek_b1_ops {
 
 constexpr bool mcast_is_shared_write_cmd_buf = write_cmd_buf == write_reg_cmd_buf;
 
+template <uint32_t mcast_num_cores, bool loopback, bool is_part_of_receiver_grid, bool posted>
+FORCE_INLINE void mcast_increment_counters() {
+    constexpr uint32_t noc = noc_index;
+    constexpr uint32_t num_dests =
+        loopback ? mcast_num_cores : (is_part_of_receiver_grid ? mcast_num_cores - 1 : mcast_num_cores);
+
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        if constexpr (posted) {
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+        } else {
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
+        }
+    }
+
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        if constexpr (posted) {
+            noc_posted_writes_num_issued[noc] += 1;
+        } else {
+            noc_nonposted_writes_num_issued[noc] += 1;
+            noc_nonposted_writes_acked[noc] += num_dests;
+        }
+    }
+}
+
+template <bool posted>
+FORCE_INLINE void mcast_increment_counters_runtime(uint32_t num_dests, uint32_t count = 1, uint8_t noc = noc_index) {
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        if constexpr (posted) {
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, count);
+        } else {
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, count);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests * count);
+        }
+    }
+
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        if constexpr (posted) {
+            noc_posted_writes_num_issued[noc] += count;
+        } else {
+            noc_nonposted_writes_num_issued[noc] += count;
+            noc_nonposted_writes_acked[noc] += num_dests * count;
+        }
+    }
+}
+
 template <uint8_t noc>
 FORCE_INLINE uint64_t get_noc_multicast_addr(
     uint32_t noc_x_start, uint32_t noc_y_start, uint32_t noc_x_end, uint32_t noc_y_end, uint32_t addr) {
@@ -40,6 +86,57 @@ FORCE_INLINE uint64_t get_noc_multicast_addr(
 }
 
 template <
+    bool posted,
+    bool linked,
+    bool set_noc_coord,
+    bool set_addresses,
+    bool set_size,
+    bool increment_counters,
+    uint8_t cmd_buf>
+FORCE_INLINE void mcast_send_set_state_runtime(
+    uint32_t src_local_addr,
+    uint64_t dst_noc_addr,
+    uint32_t len_bytes,
+    uint32_t num_dests,
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_MULTICAST_WRITE_VC) {
+    constexpr bool multicast_path_reserve = true;
+
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (increment_counters) {
+        mcast_increment_counters_runtime<posted>(num_dests, 1, noc);
+    }
+
+    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
+                             (linked ? NOC_CMD_VC_LINKED : 0x0) | (multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) |
+                             NOC_CMD_BRCST_PACKET | (posted ? 0 : NOC_CMD_RESP_MARKED);
+
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    if constexpr (set_noc_coord) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & NOC_PCIE_MASK);
+        NOC_CMD_BUF_WRITE_REG(
+            noc,
+            cmd_buf,
+            NOC_RET_ADDR_COORDINATE,
+            (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_BRCST_EXCLUDE, 0);
+    if constexpr (set_size) {
+        ASSERT(len_bytes <= NOC_MAX_BURST_SIZE);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+    }
+    if constexpr (set_addresses) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr);
+    }
+}
+
+template <uint8_t cmd_buf>
+FORCE_INLINE void mcast_send_issue_txn(uint8_t noc = noc_index) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+}
+
+template <
     uint32_t mcast_num_cores,
     bool loopback,
     bool is_part_of_receiver_grid,
@@ -48,6 +145,7 @@ template <
     bool set_noc_coord,
     bool set_addresses,
     bool set_size,
+    bool increment_counters,
     uint8_t cmd_buf>
 FORCE_INLINE void mcast_send_set_state(uint32_t src_local_addr, uint64_t dst_noc_addr, uint32_t len_bytes = 0) {
     constexpr uint32_t noc = noc_index;
@@ -55,6 +153,10 @@ FORCE_INLINE void mcast_send_set_state(uint32_t src_local_addr, uint64_t dst_noc
     constexpr bool multicast_path_reserve = true;
 
     while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (increment_counters) {
+        mcast_increment_counters<mcast_num_cores, loopback, is_part_of_receiver_grid, posted>();
+    }
+
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
                              (linked ? NOC_CMD_VC_LINKED : 0x0) | (multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) |
                              (loopback ? NOC_CMD_BRCST_SRC_INCLUDE : 0) | NOC_CMD_BRCST_PACKET |
@@ -89,25 +191,22 @@ template <
     bool posted,
     bool set_addresses,
     bool set_size,
+    bool wait_cmd_buf_ready,
+    bool increment_counters,
     uint8_t cmd_buf>
 FORCE_INLINE void mcast_send_with_state(uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
     constexpr uint32_t noc = noc_index;
     if constexpr (loopback) {
         static_assert(is_part_of_receiver_grid, "Loopback mode is only supported for receiver grid");
     }
-    constexpr uint32_t num_dests =
-        loopback ? mcast_num_cores : (is_part_of_receiver_grid ? mcast_num_cores - 1 : mcast_num_cores);
 
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        if constexpr (posted) {
-            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
-        } else {
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
-        }
+    if constexpr (increment_counters) {
+        mcast_increment_counters<mcast_num_cores, loopback, is_part_of_receiver_grid, posted>();
     }
 
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (wait_cmd_buf_ready) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    }
 
     if constexpr (set_size) {
         ASSERT(len_bytes <= NOC_MAX_BURST_SIZE);
@@ -118,15 +217,6 @@ FORCE_INLINE void mcast_send_with_state(uint32_t src_local_addr, uint32_t dst_lo
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        if constexpr (posted) {
-            noc_posted_writes_num_issued[noc] += 1;
-        } else {
-            noc_nonposted_writes_num_issued[noc] += 1;
-            noc_nonposted_writes_acked[noc] += num_dests;
-        }
-    }
 }
 
 template <uint32_t mcast_num_cores, bool loopback, bool is_part_of_receiver_grid, bool linked, bool posted>
@@ -140,6 +230,7 @@ FORCE_INLINE void init_persistent_mcast_sender(uint64_t mcast_flag_noc_addr, uin
         true,
         false,
         false,
+        false,
         write_cmd_buf>(0, mcast_flag_noc_addr, 0);
     if constexpr (!mcast_is_shared_write_cmd_buf) {
         mcast_send_set_state<
@@ -148,6 +239,7 @@ FORCE_INLINE void init_persistent_mcast_sender(uint64_t mcast_flag_noc_addr, uin
             is_part_of_receiver_grid,
             linked,
             posted,
+            true,
             true,
             true,
             true,
@@ -160,6 +252,8 @@ FORCE_INLINE void init_persistent_mcast_sender(uint64_t mcast_flag_noc_addr, uin
         linked,
         posted,
         mcast_is_shared_write_cmd_buf,
+        mcast_is_shared_write_cmd_buf,
+        false,
         mcast_is_shared_write_cmd_buf,
         write_reg_cmd_buf>(data_sender_semaphore_addr, mcast_flag_noc_addr, 4);
     noc_async_posted_writes_flushed();
@@ -176,6 +270,7 @@ FORCE_INLINE void teardown_persistent_mcast_sender(uint32_t data_sender_semaphor
         false,
         false,
         false,
+        true,
         write_reg_cmd_buf>(0, 0, 0);
     mcast_send_with_state<
         mcast_num_cores,
@@ -185,6 +280,8 @@ FORCE_INLINE void teardown_persistent_mcast_sender(uint32_t data_sender_semaphor
         false,
         true,
         mcast_is_shared_write_cmd_buf,
+        false,
+        false,
         write_reg_cmd_buf>(data_sender_semaphore_addr, data_sender_semaphore_addr, 4);
     noc_async_write_barrier();
     riscv_wait(10000);  // This is just to guarantee safety due to posted mcast hw bug
@@ -345,6 +442,38 @@ struct Mcast {
     private:
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
         static void sender_impl(const SenderArgs& s) {
+            // Due to a HW bug, only mcast txns can be sent on the same NOC while linked, so it's safe to pre-increment
+            mcast_send_set_state<
+                CTArgsT::mcast_num_cores,
+                CTArgsT::loopback,
+                CTArgsT::is_part_of_receiver_grid,
+                linked,
+                posted,
+                false,
+                true,
+                true,
+                true,
+                write_cmd_buf>(s.input_data_addr, s.mcast_receiver_data_addr, s.data_size_bytes);
+            if constexpr (!mcast_is_shared_write_cmd_buf) {
+                mcast_send_set_state<
+                    CTArgsT::mcast_num_cores,
+                    CTArgsT::loopback,
+                    CTArgsT::is_part_of_receiver_grid,
+                    linked,
+                    posted,
+                    false,
+                    true,
+                    false,
+                    true,
+                    write_reg_cmd_buf>(s.data_sender_semaphore_addr, s.data_receiver_semaphore_addr, 4);
+            } else {
+                mcast_increment_counters<
+                    CTArgsT::mcast_num_cores,
+                    CTArgsT::loopback,
+                    CTArgsT::is_part_of_receiver_grid,
+                    posted>();
+            }
+
             cb_wait_front(s.src_cb, s.src_num_pages);
 
             mcast_send_with_state<
@@ -353,17 +482,21 @@ struct Mcast {
                 CTArgsT::is_part_of_receiver_grid,
                 linked,
                 posted,
-                true,
-                true,
-                write_cmd_buf>(s.input_data_addr, s.mcast_receiver_data_addr, s.data_size_bytes);
+                false,
+                false,
+                false,
+                false,
+                write_cmd_buf>(0, 0, 0);
             mcast_send_with_state<
                 CTArgsT::mcast_num_cores,
                 CTArgsT::loopback,
                 CTArgsT::is_part_of_receiver_grid,
                 linked,
                 posted,
-                true,
                 mcast_is_shared_write_cmd_buf,
+                mcast_is_shared_write_cmd_buf,
+                mcast_is_shared_write_cmd_buf,
+                false,
                 write_reg_cmd_buf>(s.data_sender_semaphore_addr, s.data_receiver_semaphore_addr, 4);
 
             noc_async_posted_writes_flushed();

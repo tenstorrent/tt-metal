@@ -1067,13 +1067,14 @@ def test_demo_text(
         if pcc_check:
             torch_output_logits = torch_output[0]
             logits = tt_out_logits_all_users[0, 0, :vocab_size]
-            does_pass, pcc_message = comp_pcc(
-                logits, torch_output_logits, 0.90 if not apc_test else demo_targets["prefill_pcc"]
-            )
+            expected_prefill_pcc = 0.90 if not apc_test else demo_targets["prefill_pcc"]
+            does_pass, pcc_message = comp_pcc(logits, torch_output_logits, expected_prefill_pcc)
             logger.info(f"PCC: {pcc_message}")
             logger.info(
                 f"Teacher forced token at prefill {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
             )
+            if not apc_test:
+                assert does_pass, f"Prefill PCC check failed: {pcc_message}, while expected >= {expected_prefill_pcc}."
         if apc_test:
             assert_message = (
                 f"Prefill PCC check failed: {pcc_message}, while expected {demo_targets['prefill_pcc']}.\n"
@@ -1197,8 +1198,8 @@ def test_demo_text(
 
                 if teacher_forcing:
                     out_tok = ref_tokens[max_encoded_prompt_len + iteration + 1]
-                elif pcc_check:
-                    out_tok = tt_out_tok.argmax(dim=-1)
+                elif pcc_check and tt_out_tok.shape[-1] >= vocab_size:
+                    out_tok = tt_out_tok.float().argmax(dim=-1)
                 else:
                     out_tok = tt_out_tok.reshape(-1).to(torch.long)
 
@@ -1211,14 +1212,18 @@ def test_demo_text(
                         torch_output_logits = torch_output[1]
                     else:
                         torch_output_logits = torch_output[iteration + 1]
-                    does_pass, pcc_message = comp_pcc(
-                        tt_out_logits_saved, torch_output_logits, 0.91 if not apc_test else demo_targets["decode_pcc"]
-                    )
+                    expected_decode_pcc = 0.91 if not apc_test else demo_targets["decode_pcc"]
+                    does_pass, pcc_message = comp_pcc(tt_out_logits_saved, torch_output_logits, expected_decode_pcc)
                     logger.info(f"PCC: {pcc_message}")
                     logger.info(
                         f"Teacher forced token at decode iteration {iteration} "
                         f"{'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
                     )
+                    if not apc_test:
+                        assert does_pass, (
+                            f"Decode PCC check failed at iteration {iteration}: {pcc_message}, "
+                            f"while expected >= {expected_decode_pcc}."
+                        )
 
                 if apc_test:
                     assert_message = (

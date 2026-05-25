@@ -102,6 +102,8 @@ def fused_decode_forward(
         ttnn.deallocate(topk_expert_indices)
     else:
         indices_rm = topk_expert_indices
+    if indices_rm.memory_config().buffer_type != ttnn.BufferType.L1:
+        indices_rm = ttnn.clone(indices_rm, memory_config=ttnn.L1_MEMORY_CONFIG)
     topk_expert_indices = ttnn.reshape(indices_rm, (tokens_per_device, 1, 1, K_sel))
 
     # Reshape scores for dispatch: same transformation
@@ -112,6 +114,8 @@ def fused_decode_forward(
         ttnn.deallocate(topk_expert_scores)
     else:
         scores_dispatch_rm = topk_expert_scores
+    if scores_dispatch_rm.memory_config().buffer_type != ttnn.BufferType.L1:
+        scores_dispatch_rm = ttnn.clone(scores_dispatch_rm, memory_config=ttnn.L1_MEMORY_CONFIG)
     topk_expert_scores = ttnn.reshape(scores_dispatch_rm, (tokens_per_device, 1, 1, K_sel))
 
     # Create zeroed combine output buffer before dispatch (dispatch is the cross-device barrier).
@@ -229,7 +233,7 @@ def fused_decode_forward(
 
     tt_output = ttnn.all_reduce(
         tt_sum,
-        num_links=4,
+        num_links=fused_config.num_links,
         topology=ttnn.Topology.Ring,
         cluster_axis=1,
         memory_config=ttnn.L1_MEMORY_CONFIG,

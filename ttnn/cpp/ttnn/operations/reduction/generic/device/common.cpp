@@ -4,6 +4,12 @@
 
 #include "common.hpp"
 
+#include <numeric>
+#include <tuple>
+
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/work_split.hpp>
+
 namespace ttnn::prim {
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     const tt::tt_metal::Tensor& input_tensor, tt::tt_metal::ReduceOpDim reduce_dim) {
@@ -125,4 +131,96 @@ void validate_reduce_sharded_buffer_types(
         input_mem_config.memory_layout(),
         input_mem_config.buffer_type());
 }
+
+bool h_reduce_negate_fits_in_l1(
+    const tt::tt_metal::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    using namespace tt::tt_metal;
+
+    const auto& shape = input_tensor.padded_shape();
+    const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+    const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    if (tile_height == 0 || tile_width == 0) {
+        return true;
+    }
+
+    const uint32_t W = shape[3];
+    const uint32_t H = shape[2];
+    const uint32_t NC = shape[1] * shape[0];
+    const uint32_t Wt = W / tile_width;
+    const uint32_t Ht = H / tile_height;
+
+    auto* device = input_tensor.device();
+    const bool use_width_sharding = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+
+    uint32_t num_cols_per_core_group_1 = 0;
+    uint32_t num_cols_per_core_group_2 = 0;
+    if (use_width_sharding) {
+        if (NC == 0 || !input_tensor.shard_spec().has_value()) {
+            return true;
+        }
+        num_cols_per_core_group_1 = NC * (input_tensor.shard_spec().value().shape[1] / tile_width);
+    } else {
+        const uint32_t num_cols = NC * Wt;
+        if (num_cols == 0) {
+            return true;
+        }
+        const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        if (sub_core_grids.has_value()) {
+            std::tie(
+                std::ignore,
+                std::ignore,
+                std::ignore,
+                std::ignore,
+                num_cols_per_core_group_1,
+                num_cols_per_core_group_2) = tt::tt_metal::split_work_to_cores(*sub_core_grids, num_cols);
+        } else {
+            std::tie(
+                std::ignore,
+                std::ignore,
+                std::ignore,
+                std::ignore,
+                num_cols_per_core_group_1,
+                num_cols_per_core_group_2) =
+                tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_cols);
+        }
+    }
+
+    // Match the kernel's per-core compute_Wt: width-sharded cores see shard_Wt,
+    // non-sharded cores see num_cols_per_core directly (NC=1 in the kernel).
+    const uint32_t compute_Wt_g1 =
+        use_width_sharding ? (NC == 0 ? 0 : num_cols_per_core_group_1 / NC) : num_cols_per_core_group_1;
+    const uint32_t compute_Wt_g2 = use_width_sharding ? 0 : num_cols_per_core_group_2;
+
+    uint32_t per_nc_advance;
+    if (compute_Wt_g1 == 0 && compute_Wt_g2 == 0) {
+        return true;
+    }
+    if (compute_Wt_g2 == 0) {
+        per_nc_advance = compute_Wt_g1;
+    } else if (compute_Wt_g1 == 0) {
+        per_nc_advance = compute_Wt_g2;
+    } else {
+        per_nc_advance = std::lcm(compute_Wt_g1, compute_Wt_g2);
+    }
+    const uint64_t negate_cb_tiles = static_cast<uint64_t>(Ht) * per_nc_advance;
+    if (negate_cb_tiles == 0) {
+        return true;
+    }
+
+    const tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    const uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
+    // Two CBs (cb_acc=c_4 and cb_ineg=c_5) are each sized at negate_cb_tiles.
+    const uint64_t negate_cb_bytes = 2ull * negate_cb_tiles * dst_single_tile_size;
+
+    const auto lowest_address = device->lowest_occupied_compute_l1_address();
+    uint64_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
+    const uint64_t base_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    if (max_l1_space <= base_addr) {
+        return false;
+    }
+    max_l1_space -= base_addr;
+
+    return negate_cb_bytes <= max_l1_space;
+}
+
 }  // namespace ttnn::prim

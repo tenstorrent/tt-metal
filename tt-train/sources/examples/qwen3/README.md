@@ -21,7 +21,6 @@ All three scripts load a pretrained HuggingFace Qwen3 model and accept the same 
 | `--model_path` | HuggingFace model (e.g. `Qwen/Qwen3-0.6B`, `Qwen/Qwen3-8B`) | required |
 | `--max_seq_len` | Maximum sequence length | `128` |
 | `--mesh_shape ROWS COLS` | Device mesh `[DP, TP]` | `1 1` |
-| `--sharded_loss` | Keep LM head output vocab-sharded (distributed cross-entropy) | off |
 | `--checkpoint` | Gradient checkpointing (activation recomputation) | off |
 | `--track_memory [N]` | Memory tracking (snapshot every N-th layer) | off |
 
@@ -50,10 +49,6 @@ python generate.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \
 # On-device sampling (no D2H logits transfer)
 python generate.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \
     --max_tokens 32 --max_seq_len 128 --mesh_shape 1 8 --no_logits
-
-# Sharded loss + on-device sampling
-python generate.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \
-    --max_tokens 32 --max_seq_len 128 --mesh_shape 1 8 --sharded_loss --no_logits
 
 # Batched generation
 python generate.py --model_path Qwen/Qwen3-0.6B --prompt "Once upon a time" \
@@ -155,7 +150,7 @@ python train.py --model_path Qwen/Qwen3-0.6B --max_seq_len 128 \
 | MLP gate/up | ColumnParallel | broadcast input |
 | MLP down | RowParallel | all-reduce output |
 | RMSNorm, QK-Norm | Replicated | None |
-| LM head | ColumnParallel + gather | broadcast + all-gather |
+| LM head | ColumnParallel (vocab-sharded output) | broadcast |
 
 **2 all-reduces per layer.** TP requires all head counts, hidden, and intermediate sizes divisible by `tp_size`.
 
@@ -189,7 +184,6 @@ qwen3/
     ├── model_factory.py         # Unified model creation (auto-selects single/distributed)
     ├── param_utils.py           # Weight mapping, permutation transforms
     ├── save_load.py             # Checkpoint save/load, HF export
-    ├── sharded_loss.py          # Distributed cross-entropy (vocab-sharded)
     └── tensor_utils.py          # Tensor creation, padding, mesh gather helpers
 ```
 
@@ -232,7 +226,8 @@ the [Distributed Training documentation](https://github.com/tenstorrent/tt-metal
 
 ## Nice-to-Have TODOs
 
-- **VocabParallelEmbedding & sharded loss** — `_vocab_parallel_embedding`
-  (`utils/distributed_ops.py`) and `sharded_cross_entropy_loss`
-  (`utils/sharded_loss.py`) are composite ops with NumPy host-side logic.
-  Implement as proper device kernels.
+- **VocabParallelEmbedding** — `_vocab_parallel_embedding`
+  (`utils/distributed_ops.py`) is a composite op with NumPy host-side logic.
+  Implement as a proper device kernel.  (The TP cross-entropy already runs
+  through the C++ `ttml.ops.distributed.vocab_parallel_cross_entropy_loss`
+  op, which `train.py` selects automatically when TP is enabled.)

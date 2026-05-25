@@ -114,7 +114,7 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     for (const auto& cfg : kernel_configs) { spec.kernels.push_back(cfg.spec); }
     spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, work_unit_kernel_names)};
 
-    Program program = MakeProgramFromSpec(spec);
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     uint32_t total_zeros = 0;
     for (const auto& cfg : kernel_configs) { total_zeros += cfg.layout.total_words; }

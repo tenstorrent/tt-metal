@@ -124,8 +124,17 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    # unsqueeze with dim as positional argument (no memory_config support)
-    output_tensor = ttnn.unsqueeze(input_tensor_a, dim, **op_kwargs)
+    # Master is inconsistent: 8/10 configs trace dim positionally ("arg1"),
+    # 2/10 use the "dim" kwarg.  Pass positional to match the majority.
+    # Reproduce master's call form: 2 cfgs used `dim=` named, 8 positional.
+    # Master used `dim=` named for some configs and positional `arg1` for others.
+    # The framework keeps absent keys in kwargs (as None), so use the
+    # __absent_keys__ set injected by execute_test to tell the two apart.
+    _absent = kwargs.get("__absent_keys__", set()) or set()
+    if "arg1" in _absent:
+        output_tensor = ttnn.unsqueeze(input_tensor_a, dim=dim, **op_kwargs)
+    else:
+        output_tensor = ttnn.unsqueeze(input_tensor_a, dim, **op_kwargs)
     mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)

@@ -114,7 +114,11 @@ static Tensor reduce_impl(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     const ttnn::SmallVector<int>& non_height_width_dims,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    // Sum precision chain: when active, intermediate stages stay FP32 and only
+    // the stage with is_last_in_chain=true packs the final bf16 result.
+    bool chain_active = false,
+    bool is_last_in_chain = false) {
     auto input_shape = input_tensor_arg.logical_shape();
     auto rank = input_shape.rank();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
@@ -161,6 +165,8 @@ static Tensor reduce_impl(
                         output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, pad_value);
                         reduce_dim = rank - 2;
                     }
+                    // Only the smallest-axis sub-step ends the chain; earlier sub-steps stay in fp32.
+                    const bool sub_is_last = chain_active && is_last_in_chain && (i_dim == min_reduce_axis);
                     if (use_reduce_type) {
                         output_tensor = reduce_impl<reduce_type>(
                             output_tensor,
@@ -170,7 +176,9 @@ static Tensor reduce_impl(
                             compute_kernel_config,
                             effective_scalar,
                             non_height_width_dims,
-                            sub_core_grids);
+                            sub_core_grids,
+                            chain_active,
+                            sub_is_last);
                     } else {
                         output_tensor = reduce_impl<reduction_common::ReduceType::Sum>(
                             output_tensor,
@@ -180,7 +188,9 @@ static Tensor reduce_impl(
                             compute_kernel_config,
                             effective_scalar,
                             non_height_width_dims,
-                            sub_core_grids);
+                            sub_core_grids,
+                            chain_active,
+                            sub_is_last);
                     }
                     if (transpose) {
                         output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, pad_value);
@@ -226,13 +236,19 @@ static Tensor reduce_impl(
                                          : input_tensor_arg;
 
         if constexpr (reduce_type == reduction_common::ReduceType::Sum) {
+            // In the chain, pack FP32 except on the last stage where we pack bf16.
+            std::optional<tt::tt_metal::DataType> sum_output_dtype;
+            if (chain_active) {
+                sum_output_dtype =
+                    is_last_in_chain ? tt::tt_metal::DataType::BFLOAT16 : tt::tt_metal::DataType::FLOAT32;
+            }
             output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::SUM,
                 reduce_op_dim,
                 scalar,
                 memory_config,
-                std::nullopt,
+                sum_output_dtype,
                 compute_kernel_config,
                 sub_core_grids);
         } else if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
@@ -486,7 +502,9 @@ Tensor non_height_width_reduce(
     ttnn::SmallVector<int> dims,
     const std::optional<MemoryConfig>& memory_config_arg,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<DataType>& output_dtype = std::nullopt,
+    bool fp32_intermediate_stages = false) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
     const auto& input_shape = input_tensor.logical_shape();
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
@@ -507,7 +525,14 @@ Tensor non_height_width_reduce(
             tensor_to_reduce, padded_shape, 0.0f, memory_config, std::nullopt, /*use_multicore=*/true, sub_core_grids);
     }
     Tensor output_tensor = ttnn::experimental::reduction::fast_reduce_nc(
-        tensor_to_reduce, dims, /*output=*/std::nullopt, memory_config, config, sub_core_grids);
+        tensor_to_reduce,
+        dims,
+        /*output=*/std::nullopt,
+        memory_config,
+        config,
+        sub_core_grids,
+        output_dtype,
+        fp32_intermediate_stages);
     auto [start, end, step] = get_slice_parameters(input_shape, output_tensor.logical_shape());
     output_tensor = ttnn::slice(output_tensor, start, end, step);
     return output_tensor;
@@ -548,6 +573,14 @@ Tensor reduce(
     bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
     auto input_tensor = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value) : input_tensor_arg;
 
+    // bf16 multi-axis Sum precision chain: carry FP32 between stages and pack bf16
+    // only on the final stage. Skipped for full-tensor reductions (dim covers every
+    // axis) since torch's bf16 reference is itself accumulated in bf16, so the
+    // legacy path already matches it there.
+    const bool chain_active = reduce_type == reduction_common::ReduceType::Sum && dim.size() > 1 &&
+                              input_tensor.dtype() == DataType::BFLOAT16 &&
+                              dim.size() < static_cast<size_t>(input_tensor.logical_shape().rank());
+
     // fast_reduce_nc ignores `scalar` so it can't be used when scalar != 1.0f.
     if (call_fast_nc<reduce_type>(input_tensor.dtype()) && scalar == 1.0f) {
         auto dims = split_height_width_dims(dim, input_tensor);
@@ -569,8 +602,22 @@ Tensor reduce(
                 return reduction_common::zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
             }
 
+            // Final fast_nc stage packs bf16 only when no H/W stage follows; inner
+            // stages stay FP32 (only relevant with multiple non-H/W axes).
+            std::optional<DataType> fast_nc_final_dtype;
+            bool fast_nc_intermediate_fp32 = false;
+            if (chain_active) {
+                fast_nc_final_dtype = height_width_dims.empty() ? DataType::BFLOAT16 : DataType::FLOAT32;
+                fast_nc_intermediate_fp32 = non_height_width_dims.size() > 1;
+            }
             input_tensor = non_height_width_reduce(
-                input_tensor, non_height_width_dims, memory_config_arg, compute_kernel_config, sub_core_grids);
+                input_tensor,
+                non_height_width_dims,
+                memory_config_arg,
+                compute_kernel_config,
+                sub_core_grids,
+                fast_nc_final_dtype,
+                fast_nc_intermediate_fp32);
 
             if (height_width_dims.empty()) {
                 return adjust_shape(
@@ -587,7 +634,9 @@ Tensor reduce(
         compute_kernel_config,
         scalar,
         non_height_width_dims,
-        sub_core_grids);
+        sub_core_grids,
+        /*chain_active=*/chain_active,
+        /*is_last_in_chain=*/chain_active);
 }
 
 Tensor pool_sum(

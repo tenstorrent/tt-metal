@@ -112,8 +112,19 @@ class VectorExportSource(VectorSource):
 
     def __init__(self, export_dir: pathlib.Path | None = None):
         if export_dir is None:
-            # Default to vectors_export directory relative to this file
-            self.export_dir = pathlib.Path(__file__).parent.parent / "vectors_export"
+            # Honor TTNN_VECTORS_EXPORT_DIR env var so the two-pass workflow
+            # can point at vectors_export_col / vectors_export_row without
+            # needing a new --vector-source arg-parser choice.
+            import os as _os
+
+            _env_dir = _os.environ.get("TTNN_VECTORS_EXPORT_DIR", "").strip()
+            if _env_dir:
+                self.export_dir = pathlib.Path(_env_dir)
+                if not self.export_dir.is_absolute():
+                    self.export_dir = pathlib.Path(__file__).parent.parent / self.export_dir.name
+            else:
+                # Default to vectors_export directory relative to this file
+                self.export_dir = pathlib.Path(__file__).parent.parent / "vectors_export"
         else:
             self.export_dir = export_dir
         self._cached_generation_manifest = None

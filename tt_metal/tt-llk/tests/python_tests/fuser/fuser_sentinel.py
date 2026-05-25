@@ -28,6 +28,7 @@ class FuserSentinel:
     _unpack_format: Optional[FormatConfig] = field(default=None, repr=False)
     _math_format: Optional[FormatConfig] = field(default=None, repr=False)
     _pack_format: Optional[FormatConfig] = field(default=None, repr=False)
+    golden_format: Optional[FormatConfig] = field(default=None, repr=False)
 
     @staticmethod
     def _find_format_node(
@@ -235,7 +236,7 @@ class FuserSentinel:
 
         if srca_changed:
             code += (
-                f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, false>(\n"
+                f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, p_dim_stride_target::IGNORE, false>(\n"
                 f"    {self._fmt(new_fmt.unpack_A_src)}, {self._fmt(new_fmt.unpack_A_dst)}, {compute_node.src_a.tile_size}\n"
                 f");\n"
             )
@@ -248,7 +249,7 @@ class FuserSentinel:
             )
             if srcb_tile_size is not None:
                 code += (
-                    f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, false>(\n"
+                    f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, p_dim_stride_target::IGNORE, false>(\n"
                     f"    {self._fmt(new_fmt.unpack_B_src)}, {self._fmt(new_fmt.unpack_B_dst)}, {srcb_tile_size}\n"
                     f");\n"
                 )
@@ -371,7 +372,7 @@ class FuserSentinel:
             pack_size = operation.output.tile_size
 
             code = (
-                f"_llk_pack_reconfig_data_format_<{dest_acc}, false>(\n"
+                f"_llk_pack_reconfig_data_format_<{dest_acc}>(\n"
                 f"    {self._fmt(fmt.pack_src)}, {self._fmt(fmt.pack_dst)}, {pack_size}\n"
                 f");\n"
             )
@@ -382,20 +383,51 @@ class FuserSentinel:
         self._pack_format = fmt
 
         dest_acc = config.dest_acc.cpp_enum_value
-        bh_tilize = operation.bh_tilize.cpp_enum_value
         pack_size = operation.output.tile_size
         face_r_dim = operation.output.tile_shape.face_r_dim
         num_faces = operation.output.tile_shape.total_num_faces()
 
         if config.architecture == ChipArchitecture.BLACKHOLE:
+            bh_pack_mode = operation.bh_tilize.pack_mode_value
             return (
-                f"_llk_pack_hw_configure_<{dest_acc}, false, {bh_tilize}>(\n"
+                f"_llk_pack_hw_configure_<{dest_acc}, {bh_pack_mode}>(\n"
                 f"    {self._fmt(fmt.pack_src)}, {self._fmt(fmt.pack_dst)}, {pack_size}, {face_r_dim}, TILE_C_DIM, {num_faces}\n"
                 f");\n"
             )
 
         return (
-            f"_llk_pack_hw_configure_<{dest_acc}, false>(\n"
+            f"_llk_pack_hw_configure_<{dest_acc}, PackMode::Default>(\n"
             f"    {self._fmt(fmt.pack_src)}, {self._fmt(fmt.pack_dst)}, {pack_size}, {face_r_dim}, {num_faces}\n"
             f");\n"
         )
+
+    def configure_golden(
+        self,
+        config: "GlobalConfig",
+        operation: "FusedOperation",
+        compute_node: "ComputeNode" = None,
+    ):
+        """Compute and store the FormatConfig for golden generation.
+
+        Called per compute node during golden computation. When called without
+        a compute_node (at operation start), initializes from the first format
+        node or from the output format. When called with a compute_node,
+        recomputes only if the node's formats differ from the current state.
+        """
+        if compute_node is None:
+            fmt_node = self._find_format_node(operation)
+            if fmt_node is not None:
+                self.golden_format = self._compute_format_config(
+                    config, operation, fmt_node
+                )
+            else:
+                self.golden_format = self._compute_format_config_from_output(
+                    config, operation
+                )
+            return
+
+        if compute_node.src_a is None and compute_node.src_b is None:
+            return
+
+        new_fmt = self._compute_format_config(config, operation, compute_node)
+        self.golden_format = new_fmt

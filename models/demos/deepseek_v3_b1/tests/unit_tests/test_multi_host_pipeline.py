@@ -18,7 +18,7 @@ from models.demos.deepseek_v3_b1.demo.pipeline import (
     create_passthrough_pipeline_configuration,
     create_single_galaxy_deepseek_pipeline_configuration,
 )
-from models.demos.deepseek_v3_b1.demo.stage import TOKEN_PAGE_SIZE_BYTES
+from models.demos.deepseek_v3_b1.demo.stage import TOKEN_META_PAGE_SIZE_BYTES
 from models.demos.deepseek_v3_b1.demo.weight_provider import SyntheticWeightProvider
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import (
     MeshWrapper,
@@ -78,6 +78,12 @@ def assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
     ],
     indirect=True,
 )
+# TODO(#43085): Root-cause this exact Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for "
+    "test_blitz_decode_pipeline_inter_mesh_exit_coords_distinct[blackhole-device_params0-mesh_device0] hit Fabric Router "
+    "Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085"
+)
 def test_blitz_decode_pipeline_inter_mesh_exit_coords_distinct(mesh_device):
     """Lightweight check: generate_blitz_decode_pipeline pairs distinct entry/exit chips per stage."""
     pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
@@ -118,6 +124,11 @@ def test_blitz_decode_pipeline_inter_mesh_exit_coords_distinct(mesh_device):
         }
     ],
     indirect=True,
+)
+# TODO(#43085): Root-cause this Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline cases hit Fabric Router "
+    "Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085"
 )
 def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode):
     """Test multi-stage pipeline with embedding: H2D receives token, looks up embedding, streams through all devices, D2H sends embedding row back."""
@@ -301,6 +312,11 @@ def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size,
         }
     ],
     indirect=True,
+)
+# TODO(#43085): Root-cause this Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for test_multi_host_loopback_pipeline_with_embedding cases hit "
+    "Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085"
 )
 def test_multi_host_loopback_pipeline_with_embedding(
     mesh_device, h2d_mode, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor
@@ -510,6 +526,11 @@ def test_multi_host_loopback_pipeline_with_embedding(
     ],
     indirect=True,
 )
+# TODO(#43085): Root-cause this Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for test_pipeline_block cases hit Fabric Router Sync timeout "
+    "after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085"
+)
 def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -616,6 +637,11 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
         }
     ],
     indirect=True,
+)
+# TODO(#43085): Root-cause this Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for test_pipeline_block_no_loopback cases hit Fabric Router "
+    "Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085"
 )
 def test_pipeline_block_no_loopback(mesh_device, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor):
     if not is_slow_dispatch():
@@ -744,6 +770,11 @@ def test_pipeline_block_no_loopback(mesh_device, vocab_size, embedding_dim, toke
         }
     ],
     indirect=True,
+)
+# TODO(#43085): Root-cause this Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for test_pipeline_block_host_loopback cases hit "
+    "Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085"
 )
 def test_pipeline_block_host_loopback(mesh_device, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor):
     """No-fabric loopback: last stage D2H sends embeddings back to rank 0 via host MPI."""
@@ -893,6 +924,11 @@ def _dispatch_merged_programs(all_entries, mesh_device):
         }
     ],
     indirect=True,
+)
+# TODO(#43085): Root-cause this Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for test_pipeline_block_parallel_devices cases hit Fabric "
+    "Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085"
 )
 def test_pipeline_block_parallel_devices(mesh_device, tensor_size_bytes, fifo_size, num_iterations, num_channels):
     """Test PipelineBlock with per-device parallel forwarding stages.
@@ -1057,6 +1093,11 @@ def test_pipeline_block_parallel_devices(mesh_device, tensor_size_bytes, fifo_si
         }
     ],
     indirect=True,
+)
+# TODO(#43085): Root-cause this Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for test_multi_host_multi_channel_parallel_loopback_pipeline "
+    "cases hit Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085"
 )
 def test_multi_host_multi_channel_parallel_loopback_pipeline(
     mesh_device, tensor_size_bytes, fifo_size, num_iterations, num_channels
@@ -1226,6 +1267,11 @@ def test_multi_host_multi_channel_parallel_loopback_pipeline(
     ],
     indirect=True,
 )
+# TODO(#43085): Root-cause this Blackhole FABRIC_2D mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for test_passthrough_pipeline_block hit Fabric Router Sync "
+    "timeout after 10000 ms on Device 3 with FABRIC_2D; expected 0xa2b2c2d2, got 0xa1b1c1d1. Issue: #43085"
+)
 def test_passthrough_pipeline_block(mesh_device):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -1305,6 +1351,11 @@ def test_passthrough_pipeline_block(mesh_device):
     ],
     indirect=True,
 )
+# TODO(#43085): Root-cause this Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for test_single_galaxy_deepseek_pipeline hit Fabric Router "
+    "Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085"
+)
 def test_single_galaxy_deepseek_pipeline(mesh_device, use_fp32, device_params):
     """
     4-stage 4x2 single-galaxy pipeline (Embed -> LMHead -> Passthrough(TOKEN) -> Passthrough(TOKEN)) with host loopback.
@@ -1331,11 +1382,11 @@ def test_single_galaxy_deepseek_pipeline(mesh_device, use_fp32, device_params):
         pipeline.setup_and_run()
 
         if pipeline.my_mesh_id == 0:
-            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+            torch_token = torch.zeros(1, TOKEN_META_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
             torch_token[0, 0] = 0
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
-                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
+                torch.zeros(1, TOKEN_META_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
@@ -1347,7 +1398,7 @@ def test_single_galaxy_deepseek_pipeline(mesh_device, use_fp32, device_params):
 
         elif pipeline.my_mesh_id == num_procs - 1:
             output_tensor = ttnn.from_torch(
-                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
+                torch.zeros(1, TOKEN_META_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )

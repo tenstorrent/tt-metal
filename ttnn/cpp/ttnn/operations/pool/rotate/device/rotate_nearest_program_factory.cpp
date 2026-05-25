@@ -8,9 +8,9 @@
 
 #include <cmath>
 #include <cstdint>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <ttnn/operations/cb_utils.hpp>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -32,14 +32,14 @@ static uint16_t nearest_float_to_bfloat16(float value) {
     return std::bit_cast<uint16_t>(bf16_value);
 }
 
-RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOperation::NearestProgramFactory::create(
+ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     const auto& input_tensor = tensor_args.input;
     auto& output_tensor = output;
 
-    tt::tt_metal::Program program{};
+    ProgramDescriptor desc;
     const bool is_sharded = input_tensor.is_sharded();
 
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -121,8 +121,6 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         logical_cores = corerange_to_cores(all_cores, num_cores, true);
     }
 
-    const uint32_t num_cores_y = device->compute_with_storage_grid_size().y;
-
     const bool any_sharded = is_sharded || is_nd_sharded;
     const uint32_t effective_channels = any_sharded ? shard_width : input_channels;
     const uint32_t aligned_input_stick_nbytes = any_sharded ? effective_channels * input_tensor.element_size()
@@ -149,30 +147,45 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t output_cb_page_size = aligned_input_stick_nbytes;
 
-    auto [fill_cb_index, fill_cb_handle] =
-        tt::tt_metal::create_cb(next_cb_index++, program, all_cores, output_cb_page_size, 1, output_cb_data_format);
+    const uint32_t fill_cb_index = next_cb_index++;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = output_cb_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(fill_cb_index),
+            .data_format = output_cb_data_format,
+            .page_size = output_cb_page_size,
+        }}},
+    });
 
-    tt::tt_metal::CBHandle input_cb_handle = 0;
     uint32_t input_cb_index = 0;
     if (any_sharded) {
-        std::tie(input_cb_index, input_cb_handle) = tt::tt_metal::create_cb(
-            next_cb_index++,
-            program,
-            all_cores,
-            aligned_input_stick_nbytes,
-            input_nsticks_per_core,
-            input_cb_data_format,
-            input_tensor.buffer());
+        input_cb_index = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = input_nsticks_per_core * aligned_input_stick_nbytes,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(input_cb_index),
+                .data_format = input_cb_data_format,
+                .page_size = aligned_input_stick_nbytes,
+            }}},
+            .buffer = input_tensor.buffer(),
+        });
     }
 
-    const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(
-        next_cb_index++,
-        program,
-        all_cores,
-        output_cb_page_size,
-        any_sharded ? output_nsticks_per_core : num_cb_pages * NEAREST_BUFFERING_FACTOR,
-        output_cb_data_format,
-        any_sharded ? output_tensor.buffer() : nullptr);
+    const uint32_t output_cb_index = next_cb_index++;
+    const uint32_t output_cb_num_pages =
+        any_sharded ? output_nsticks_per_core : num_cb_pages * NEAREST_BUFFERING_FACTOR;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = output_cb_num_pages * output_cb_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_cb_index),
+            .data_format = output_cb_data_format,
+            .page_size = output_cb_page_size,
+        }}},
+        .buffer = any_sharded ? output_tensor.buffer() : nullptr,
+    });
 
     const bool fill_is_zero = (fill_value_bf16 == 0);
 
@@ -207,19 +220,23 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     TT_FATAL(output_buffer != nullptr, "Output tensor must be allocated on device for rotate operation");
     tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
 
-    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/"
-        "reader_rotate_nearest_interleaved.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        "reader_rotate_nearest_interleaved.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/"
-        "writer_rotate_nearest_interleaved.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        "writer_rotate_nearest_interleaved.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
     if (any_sharded) {
         for (uint32_t i = 0; i < num_cores; i++) {
@@ -235,25 +252,26 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
                 start_stick_id = i * input_nsticks_per_core;
             }
 
-            std::vector<uint32_t> reader_runtime_args = {
-                input_tensor.buffer()->address(),
-                input_nsticks_per_core,
-                start_stick_id,
-                static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
-                static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
-                static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
-                static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
-                static_cast<uint32_t>(fill_value_bf16),
-            };
+            reader_desc.runtime_args.emplace_back(
+                core,
+                KernelDescriptor::CoreRuntimeArgs{
+                    input_tensor.buffer()->address(),
+                    input_nsticks_per_core,
+                    start_stick_id,
+                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
+                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
+                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
+                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
+                    static_cast<uint32_t>(fill_value_bf16),
+                });
 
-            std::vector<uint32_t> writer_runtime_args = {
-                output_tensor.buffer()->address(),
-                input_nsticks_per_core,
-                start_stick_id,
-            };
-
-            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+            writer_desc.runtime_args.emplace_back(
+                core,
+                KernelDescriptor::CoreRuntimeArgs{
+                    output_tensor.buffer()->address(),
+                    input_nsticks_per_core,
+                    start_stick_id,
+                });
         }
     } else {
         uint32_t sticks_processed = 0;
@@ -262,116 +280,35 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
             const uint32_t num_sticks =
                 core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
 
-            std::vector<uint32_t> reader_runtime_args = {
-                input_tensor.buffer()->address(),
-                num_sticks,
-                sticks_processed,
-                static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
-                static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
-                static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
-                static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
-                static_cast<uint32_t>(fill_value_bf16),
-            };
+            reader_desc.runtime_args.emplace_back(
+                core,
+                KernelDescriptor::CoreRuntimeArgs{
+                    input_tensor.buffer()->address(),
+                    num_sticks,
+                    sticks_processed,
+                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
+                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
+                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
+                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
+                    static_cast<uint32_t>(fill_value_bf16),
+                });
 
-            std::vector<uint32_t> writer_runtime_args = {
-                output_tensor.buffer()->address(),
-                num_sticks,
-                sticks_processed,
-            };
-
-            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+            writer_desc.runtime_args.emplace_back(
+                core,
+                KernelDescriptor::CoreRuntimeArgs{
+                    output_tensor.buffer()->address(),
+                    num_sticks,
+                    sticks_processed,
+                });
 
             sticks_processed += num_sticks;
         }
     }
 
-    return {
-        std::move(program),
-        {.reader_kernel_id = reader_kernel_id,
-         .writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = num_cores_y,
-         .is_sharded = is_sharded,
-         .logical_cores = logical_cores,
-         .input_cb_handle = input_cb_handle,
-         .output_cb_handle = output_cb_handle}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
 
-void RotateDeviceOperation::NearestProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& num_cores = cached_program.shared_variables.num_cores;
-    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
-    auto& is_sharded = cached_program.shared_variables.is_sharded;
-    auto& logical_cores = cached_program.shared_variables.logical_cores;
-    auto& input_cb_handle = cached_program.shared_variables.input_cb_handle;
-    auto& output_cb_handle = cached_program.shared_variables.output_cb_handle;
-
-    auto* src_buffer = tensor_args.input.buffer();
-    auto* dst_buffer = output.buffer();
-
-    TT_FATAL(src_buffer != nullptr, "Input tensor buffer must not be null in override_runtime_arguments");
-    TT_FATAL(dst_buffer != nullptr, "Output tensor buffer must not be null in override_runtime_arguments");
-
-    const float angle_rad = operation_attributes.angle * M_PI / 180.0f;
-    const float cos_angle = std::cos(angle_rad);
-    const float sin_angle = std::sin(angle_rad);
-
-    const auto& input_shape = tensor_args.input.padded_shape();
-    const uint32_t input_width = input_shape[2];
-    const uint32_t input_height = input_shape[1];
-
-    float center_x, center_y;
-    if (operation_attributes.center.has_value()) {
-        center_x = std::get<0>(operation_attributes.center.value()) - 0.5f;
-        center_y = std::get<1>(operation_attributes.center.value()) - 0.5f;
-    } else {
-        center_x = (static_cast<float>(input_width) - 1.0f) / 2.0f;
-        center_y = (static_cast<float>(input_height) - 1.0f) / 2.0f;
-    }
-
-    const uint16_t fill_value_bf16 = nearest_float_to_bfloat16(operation_attributes.fill);
-
-    if (is_sharded) {
-        tt::tt_metal::UpdateDynamicCircularBufferAddress(program, input_cb_handle, *src_buffer);
-        tt::tt_metal::UpdateDynamicCircularBufferAddress(program, output_cb_handle, *dst_buffer);
-
-        for (uint32_t i = 0; i < num_cores; i++) {
-            const CoreCoord& core = logical_cores[i];
-
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-            runtime_args[3] = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle));
-            runtime_args[4] = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle));
-            runtime_args[5] = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x));
-            runtime_args[6] = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y));
-            runtime_args[7] = static_cast<uint32_t>(fill_value_bf16);
-
-            auto& writer_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            writer_args[0] = dst_buffer->address();
-        }
-    } else {
-        for (uint32_t i = 0; i < num_cores; i++) {
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-            runtime_args[3] = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle));
-            runtime_args[4] = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle));
-            runtime_args[5] = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x));
-            runtime_args[6] = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y));
-            runtime_args[7] = static_cast<uint32_t>(fill_value_bf16);
-
-            auto& writer_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            writer_args[0] = dst_buffer->address();
-        }
-    }
+    return desc;
 }
 
 }  // namespace ttnn::operations::rotate

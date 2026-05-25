@@ -14,6 +14,7 @@ std::optional<std::string> get_mock_cluster_desc_name(tt::ARCH arch, uint32_t nu
                 case 2: return "wormhole_N300.yaml";
                 case 4: return "2x2_n300_cluster_desc.yaml";
                 case 8: return "t3k_cluster_desc.yaml";
+                case 32: return "6u_cluster_desc.yaml";  // Galaxy 6U, 4x8 grid
                 default: return std::nullopt;
             }
         case tt::ARCH::BLACKHOLE:

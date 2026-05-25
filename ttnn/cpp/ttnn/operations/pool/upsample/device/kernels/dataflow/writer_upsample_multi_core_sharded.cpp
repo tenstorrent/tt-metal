@@ -27,8 +27,8 @@ void kernel_main() {
     experimental::CB in_cb(in_cb_id);
     experimental::CB out_cb(out_cb_id);
     experimental::CB config_cb(config_cb_id);
-    experimental::Noc noc;
-    experimental::UnicastEndpoint remote_ep;
+    Noc noc;
+    UnicastEndpoint remote_ep;
 
     uint32_t l1_read_addr = in_cb.get_read_ptr();
     uint32_t write_offset = 0;

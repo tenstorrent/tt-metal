@@ -19,7 +19,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -211,7 +211,7 @@ void run_single_core_cumsum(
 }
 }  // namespace unit_tests::compute::cumsum
 
-TEST_F(MeshDeviceFixture, TensixComputeCumsumColumnwise) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeCumsumColumnwise) {
     for (int i = 1; i <= 3; i++) {
         for (int j = 1; j <= 3; j++) {
             for (int k = 1; k <= 3; k++) {
@@ -222,7 +222,7 @@ TEST_F(MeshDeviceFixture, TensixComputeCumsumColumnwise) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixComputeCumsumRowwise) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeCumsumRowwise) {
     for (int i = 1; i <= 3; i++) {
         for (int j = 1; j <= 3; j++) {
             for (int k = 1; k <= 3; k++) {

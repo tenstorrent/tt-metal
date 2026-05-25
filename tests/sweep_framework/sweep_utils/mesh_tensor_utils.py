@@ -111,9 +111,140 @@ def create_mesh_device(
 
     Returns:
         ttnn.MeshDevice instance
+
+    Dispatch axis selection (in priority order):
+      1. `TTNN_DISPATCH_AXIS=col|row` env var — explicit override. Used by
+         the two-pass workflow when a single op has master configs that
+         straddle both axes (e.g. linear has both y=9 and x=7 masters).
+      2. Auto-detect from master JSON (legacy behaviour) — works when an
+         op's masters all need the same axis.
+      3. Default to COL.
     """
-    # Create mesh device with just the mesh shape
-    # The API automatically selects available devices based on the mesh shape
+    # 1. Env-var override — but ETH dispatch overrides when 8x8 grid is needed.
+    _env_axis = os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower()
+
+    # Auto-discover master JSON if env var not set
+    if not os.environ.get("TTNN_MASTER_JSON_PATH"):
+        _auto_master = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..",
+            "..",
+            "model_tracer",
+            "traced_operations",
+            "ttnn_operations_master.json",
+        )
+        if os.path.isfile(_auto_master):
+            os.environ["TTNN_MASTER_JSON_PATH"] = os.path.abspath(_auto_master)
+
+    # 2. Auto-detect from master configs (legacy path).
+    # ROW dispatch gives compute_with_storage_grid_size = (8, 9): valid y in [0, 8].
+    # COL dispatch gives (7, 10): valid y in [0, 9], valid x in [0, 6].
+    # Master traces from deepseek_v3 use either layout depending on which dispatch
+    # was active when traced. Default to ROW; switch to COL only if any of the
+    # op's master shard_specs requires y=9 cores. Both cases: cores with x=7 fall
+    # outside COL but inside ROW — those configs need ROW.
+    needs_col = False
+    needs_row_only = False
+    try:
+        # Try to derive the op name from the runner's --module-name arg, e.g.
+        # "model_traced.linear_model_traced" -> "ttnn.linear"
+        op_name = os.environ.get("TTNN_SWEEP_OP_NAME", "")
+        if not op_name:
+            import sys as _sys_d
+
+            for _i, _a in enumerate(_sys_d.argv):
+                if _a == "--module-name" and _i + 1 < len(_sys_d.argv):
+                    _m = _sys_d.argv[_i + 1]
+                    if _m.startswith("model_traced."):
+                        _stem = _m.split(".", 1)[1].replace("_model_traced", "")
+                        # Check experimental + transformer prefixes by probing master json
+                        op_name = _stem  # bare; we'll match flexibly below
+                    break
+        master_json = os.environ.get("TTNN_MASTER_JSON_PATH", "")
+        if op_name and master_json and os.path.isfile(master_json):
+            import json as _json_d
+
+            with open(master_json) as _f:
+                _m = _json_d.load(_f)
+            # Try multiple forms: "ttnn.X", "ttnn.experimental.X", "ttnn.transformer.X"
+            _candidates = [
+                op_name,
+                f"ttnn.{op_name}",
+                f"ttnn.experimental.{op_name}",
+                f"ttnn.transformer.{op_name}",
+            ]
+            _matching_op = None
+            _ops_dict = _m.get("operations", {})
+            for _c in _candidates:
+                if _c in _ops_dict:
+                    _matching_op = _c
+                    break
+            if _matching_op is None:
+                _matching_op = op_name
+            for _cfg in _ops_dict.get(_matching_op, {}).get("configurations", []):
+                for _arg in _cfg.get("arguments", {}).values():
+                    if not isinstance(_arg, dict):
+                        continue
+                    _val = str(_arg.get("value", ""))
+                    if "compute_with_storage_grid_size=8-8" in _val:
+                        needs_row_only = True
+                    _ss = (_arg.get("memory_config") or {}).get("shard_spec")
+                    if not isinstance(_ss, dict):
+                        _ss = _arg.get("shard_spec")
+                    if not isinstance(_ss, dict):
+                        continue
+                    for _g in _ss.get("grid", []):
+                        for _key in ("start", "end"):
+                            _p = _g.get(_key, {})
+                            if _p.get("y") == 9:
+                                needs_col = True
+                            if _p.get("x") == 7:
+                                needs_row_only = True
+    except Exception:
+        needs_col = False
+        needs_row_only = False
+
+    # Default: COL (gives compute grid 7x10) since most lead_models traces use
+    # cores in the 7-wide pattern with y up to 9. Switch to ROW only if any of
+    # the op's master shard_specs uses x=7 (which COL excludes).
+    # When x=7 or 8-8 grid is needed, use ETH dispatch so all 8x8
+    # compute cores are available. ETH takes priority over the env-var
+    # because the op cannot run at all without the full grid.
+    if needs_row_only:
+        try:
+            return ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(*mesh_shape),
+                l1_small_size=l1_small_size,
+                dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
+            )
+        except Exception:
+            pass
+
+    # 3. Env-var override (when ETH not needed).
+    if _env_axis in ("col", "row"):
+        _override_axis = ttnn.DispatchCoreAxis.COL if _env_axis == "col" else ttnn.DispatchCoreAxis.ROW
+        try:
+            return ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(*mesh_shape),
+                l1_small_size=l1_small_size,
+                dispatch_core_config=ttnn.DispatchCoreConfig(axis=_override_axis),
+            )
+        except Exception:
+            pass
+
+    # 4. Default to COL.
+    use_axis = ttnn.DispatchCoreAxis.COL
+
+    try:
+        return ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(*mesh_shape),
+            l1_small_size=l1_small_size,
+            dispatch_core_config=ttnn.DispatchCoreConfig(axis=use_axis),
+        )
+    except Exception:
+        pass
+
     return ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(*mesh_shape),
         l1_small_size=l1_small_size,
@@ -354,12 +485,123 @@ def replicate_with_topology(
     return tensor
 
 
+def vector_required_axis(op_kwargs, named_mcs=None):
+    """Return 'col' / 'row' / None for the dispatch axis a single sweep
+    vector logically needs.
+
+    Detection scans every memory_config (kwarg or function-named param) and
+    looks at its shard_spec grid:
+      - any L1 shard_spec core at y=9 -> needs COL (only COL exposes y=9)
+      - any L1 shard_spec core at x=7 -> needs ROW (only ROW exposes x=7)
+      - program_config compute_with_storage_grid_size with x>=8 -> ROW
+      - program_config compute_with_storage_grid_size with y>=10 -> COL
+    Returns None if neither axis is required (vector fits both).
+    """
+    import re as _re_a
+
+    _y9_pat = _re_a.compile(r"""['"]y['"]\s*:\s*9(?!\d)""")
+    _x7_pat = _re_a.compile(r"""['"]x['"]\s*:\s*7(?!\d)""")
+    _grid_x_pat = _re_a.compile(r"x\s*=\s*(\d+)")
+    _grid_y_pat = _re_a.compile(r"y\s*=\s*(\d+)")
+
+    needs_y9 = False
+    needs_x7 = False
+
+    def _walk_mc(_obj):
+        nonlocal needs_y9, needs_x7
+        if _obj is None:
+            return
+        if isinstance(_obj, dict):
+            _bt = str(_obj.get("buffer_type", ""))
+            if "DRAM" in _bt:
+                return
+            _ss = _obj.get("shard_spec")
+            if not _ss or _ss == "None":
+                return
+            _r = repr(_ss)
+            if _y9_pat.search(_r):
+                needs_y9 = True
+            if _x7_pat.search(_r):
+                needs_x7 = True
+            return
+        _r = repr(_obj)
+        if "BufferType::DRAM" in _r:
+            return
+        if "shard_spec" not in _r:
+            return
+        if _y9_pat.search(_r):
+            needs_y9 = True
+        if _x7_pat.search(_r):
+            needs_x7 = True
+
+    _all_mcs = dict(op_kwargs) if op_kwargs else {}
+    for _name, _val in named_mcs or []:
+        if _val is not None:
+            _all_mcs[_name] = _val
+    for _key, _v in _all_mcs.items():
+        if "memory_config" not in _key:
+            continue
+        _walk_mc(_v)
+
+    # program_config grid (SDPA-style): x>=8 -> ROW, y>=10 -> COL.
+    _pc = (op_kwargs or {}).get("program_config")
+    if _pc is not None:
+        _pc_text = ""
+        if isinstance(_pc, dict):
+            _pc_text = str(_pc.get("value", "")) or str(_pc.get("repr", ""))
+        else:
+            _pc_text = repr(_pc)
+        if "compute_with_storage_grid_size" in _pc_text:
+            _idx = _pc_text.find("compute_with_storage_grid_size")
+            _section = _pc_text[_idx : _idx + 80]
+            _xm = _grid_x_pat.search(_section)
+            _ym = _grid_y_pat.search(_section)
+            if _xm and int(_xm.group(1)) >= 8:
+                needs_x7 = True
+            if _ym and int(_ym.group(1)) >= 10:
+                needs_y9 = True
+
+    if needs_y9:
+        return "col"
+    if needs_x7:
+        return "row"
+    return None
+
+
+def current_device_axis(device):
+    """Return 'col' / 'row' / None inferred from the device's
+    compute_with_storage_grid_size."""
+    try:
+        g = device.compute_with_storage_grid_size() if hasattr(device, "compute_with_storage_grid_size") else None
+    except Exception:
+        return None
+    if g is None:
+        return None
+    # COL -> (7, 10); ROW -> (8, 9). Other meshes (N150 etc.) return None.
+    if g.x == 7 and g.y == 10:
+        return "col"
+    if g.x == 8 and g.y == 9:
+        return "row"
+    return None
+
+
+def vector_axis_matches(device, op_kwargs, named_mcs=None):
+    """True if the vector either has no required axis or matches the device."""
+    required = vector_required_axis(op_kwargs, named_mcs)
+    if required is None:
+        return True
+    actual = current_device_axis(device)
+    if actual is None:
+        return True  # unknown / non-Galaxy mesh — let the test run.
+    return required == actual
+
+
 def create_tensor_on_mesh(
     torch_tensor: torch.Tensor,
     mesh_device: ttnn.MeshDevice,
     dtype: ttnn.DataType,
     layout: ttnn.Layout,
-    memory_config: ttnn.MemoryConfig,
+    memory_config,
     tensor_placement: Optional[Dict] = None,
 ) -> ttnn.Tensor:
     """
@@ -370,12 +612,16 @@ def create_tensor_on_mesh(
         mesh_device: Mesh device to create tensor on
         dtype: TTNN data type
         layout: TTNN layout (TILE/ROW_MAJOR)
-        memory_config: Memory configuration
+        memory_config: Memory configuration (MemoryConfig object or dict)
         tensor_placement: Optional placement info from traced config
 
     Returns:
         TTNN tensor on mesh device with proper placement
     """
+    if isinstance(memory_config, dict):
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config
+
+        memory_config = dict_to_memory_config(memory_config) or ttnn.DRAM_MEMORY_CONFIG
     # Trace-validation path: when placement has Shard, the master records the
     # per-chip .shape (which equals the torch input shape). Going through
     # ShardTensor2dMesh would re-shard the input and produce a smaller per-chip
@@ -568,9 +814,9 @@ def get_mesh_shape() -> Optional[Tuple[int, int]]:
     try:
         num_devices = ttnn.get_num_devices()
         if num_devices >= 32:
-            return (4, 8)  # Galaxy (32 Wormhole devices)
+            return (4, 8)  # Galaxy
         elif num_devices >= 8:
-            return (1, 8)  # T3000 (8 devices)
+            return (1, 8)  # T3000
         elif num_devices >= 2:
             return (1, num_devices)
     except Exception:
@@ -592,6 +838,64 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     auto-detects from available hardware so that the sweep device topology
     matches the trace topology.
     """
+    # Read mesh shape from master JSON matching current hardware.
+    # The master may contain configs from multiple devices (N300 + BH).
+    # Only use mesh shape from configs whose device_series matches this machine.
+    try:
+        _master_path = os.environ.get("TTNN_MASTER_JSON_PATH")
+        if not _master_path:
+            for _base in [
+                os.path.join(os.path.dirname(__file__), "..", "..", ".."),
+                os.environ.get("TT_METAL_HOME", ""),
+            ]:
+                if not _base:
+                    continue
+                _auto = os.path.join(
+                    _base,
+                    "model_tracer",
+                    "traced_operations",
+                    "ttnn_operations_master.json",
+                )
+                if os.path.isfile(_auto):
+                    _master_path = _auto
+                    break
+        if _master_path and os.path.isfile(_master_path):
+            import json as _json_ms
+
+            # Detect current arch to filter configs
+            _current_arch = os.environ.get("ARCH_NAME", "")
+            _is_bh = "blackhole" in _current_arch.lower()
+            _is_wh = "wormhole" in _current_arch.lower()
+
+            with open(_master_path) as _f_ms:
+                _m_ms = _json_ms.load(_f_ms)
+            for _op_ms in _m_ms.get("operations", {}).values():
+                for _cfg_ms in _op_ms.get("configurations", []):
+                    _mi_ms = _cfg_ms.get("traced_machine_info") or {}
+                    if not _mi_ms:
+                        _execs = _cfg_ms.get("executions", [])
+                        if _execs and isinstance(_execs[0], dict):
+                            _mi_ms = _execs[0].get("machine_info", {})
+                    # Filter: only use configs matching current arch
+                    _board = str(_mi_ms.get("board_type", "")).lower()
+                    if _is_bh and "blackhole" not in _board and "wormhole" not in _board:
+                        pass  # no board info, use anyway
+                    elif _is_bh and "wormhole" in _board:
+                        continue  # skip N300/WH configs on BH
+                    elif _is_wh and "blackhole" in _board:
+                        continue  # skip BH configs on WH
+
+                    _ms_val = _mi_ms.get("mesh_device_shape")
+                    if _ms_val:
+                        import ast as _ast_ms
+
+                        if isinstance(_ms_val, str):
+                            _ms_val = _ast_ms.literal_eval(_ms_val)
+                        if isinstance(_ms_val, list) and len(_ms_val) == 2:
+                            return tuple(_ms_val)
+    except Exception:
+        pass  # Intentionally ignored: master config parsing is best-effort, fall through to env var / auto-detect
+    # Env var override (used when master JSON is not available)
     shape = get_mesh_shape()
     if shape:
         return shape
@@ -601,9 +905,9 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     try:
         num_devices = ttnn.get_num_devices()
         if num_devices >= 32:
-            return (4, 8)  # Galaxy (32 Wormhole devices)
+            return (4, 8)  # Galaxy
         elif num_devices >= 8:
-            return (1, 8)  # T3000 (8 devices)
+            return (1, 8)  # T3000
         elif num_devices >= 2:
             return (1, num_devices)
     except Exception:
@@ -686,11 +990,27 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
 
     has_shard = any(_is_shard(p) for p in placements)
 
+    device_tensors = ttnn.get_device_tensors(ttnn_tensor)
+
     if not has_shard:
-        device_tensors = ttnn.get_device_tensors(ttnn_tensor)
         if device_tensors:
             return _to_torch_safe(device_tensors[0])
         return _to_torch_safe(ttnn_tensor)
+
+    # Validate shard dims against per-device tensor rank. A reshape may reduce
+    # rank below the topology's shard dim (e.g. 4D->2D with PlacementShard(dim=2)).
+    # When that happens the shard axis no longer exists, so each device already
+    # holds a full copy along that axis -- treat as replicated.
+    per_dev_ndim = None
+    if device_tensors:
+        try:
+            per_dev_ndim = len(device_tensors[0].shape)
+        except Exception:
+            pass  # Intentionally ignored: shape query may fail on deallocated tensors, treat as unknown
+
+    if per_dev_ndim is not None:
+        if any(_is_shard(p) and p.dim >= per_dev_ndim for p in placements):
+            return _to_torch_safe(device_tensors[0])
 
     if len(placements) == 2 and len(dist_dims) == 2 and all(_is_shard(p) for p in placements):
         try:
@@ -703,7 +1023,6 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
         except Exception:
             pass
 
-    device_tensors = ttnn.get_device_tensors(ttnn_tensor)
     if len(placements) == 2 and len(dist_dims) == 2:
         rows, cols = dist_dims[0], dist_dims[1]
         if _is_shard(placements[0]) and not _is_shard(placements[1]):
@@ -969,13 +1288,49 @@ def reconcile_golden_to_actual(
 ) -> torch.Tensor:
     """Tile a per-chip torch golden along sharded dims so it matches the gathered actual shape.
 
-    Iterates the supplied placements (typically input_a_tensor_placement and
-    input_b_tensor_placement). Each call to tile_torch_to_global tiles by Shard
-    factors. Stops as soon as the golden's shape matches the actual gathered
-    output. No-op when shapes already match or no Shard entries are present.
+    Try strategies in order:
+
+    1. Shapes already match: return as-is.
+    2. Per-dim integer-ratio tile: every dim of `actual` is an integer
+       multiple of the corresponding dim of `golden`, with at least one
+       dim > 1. This handles the common trace-validation case where the
+       inputs were produced via `replicate_with_topology` (so all chips
+       hold identical data) and the device op's mesh-aware stitching
+       only tiles along a subset of dims (e.g. concat-style ops that
+       reassemble along one mesh axis but not the other). Picking up the
+       actual's per-dim repeat factor works regardless of which mesh
+       axis the device chose to stitch along.
+    3. Original placement-driven tile via tile_torch_to_global: relies
+       on the master's recorded `placement` + `distribution_shape` to
+       repeat by the per-axis Shard factor. This is correct for genuine
+       sharded inputs (inputs split across the mesh, each chip computing
+       its slice) but produces the wrong shape when the mesh stitch
+       only fired along a subset of axes.
+
+    Strategy 2 is tried first because the trace-validation framework's
+    default is to replicate inputs and rely on stitch-driven tiling on
+    the output.
     """
     if torch_golden.shape == actual_global.shape:
         return torch_golden
+
+    # Strategy 2: per-dim integer-ratio tile.
+    if torch_golden.ndim == actual_global.ndim:
+        repeats = []
+        ok = True
+        for d in range(torch_golden.ndim):
+            g = torch_golden.shape[d]
+            a = actual_global.shape[d]
+            if g == 0 or a % g != 0:
+                ok = False
+                break
+            repeats.append(a // g)
+        if ok and any(r > 1 for r in repeats):
+            tiled = torch_golden.repeat(*repeats)
+            if tiled.shape == actual_global.shape:
+                return tiled
+
+    # Strategy 3: placement-driven tile (legacy path).
     out = torch_golden
     for plac in placements:
         if out.shape == actual_global.shape:

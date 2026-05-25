@@ -23,6 +23,7 @@
 
 #include <hostdevcommon/common_values.hpp>
 #include "context/context_types.hpp"
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
@@ -64,11 +65,13 @@ struct TraceDescriptor;
 
 namespace distributed {
 
+class D2HSocket;
 class MeshCommandQueue;
 class MeshDeviceView;
 struct MeshTraceBuffer;
 class MeshCommandQueueBase;
 class MeshDevice;
+class RealtimeProfilerManager;
 
 namespace multihost {
 class DistributedContext;
@@ -149,6 +152,11 @@ private:
     // Num Virtual Eth Cores == Max Number of Eth Cores across all opened devices (Issue #19729)
     std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
+
+    // Owns the real-time profiler subsystem (per-device sockets, receiver thread, Tracy
+    // handler). Constructed by init_realtime_profiler_socket() and torn down in close_impl()
+    // before the rest of the mesh shutdown so its receiver thread observes a live device.
+    std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
     // Recursively quiesce all submeshes.
@@ -279,6 +287,9 @@ public:
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
+    void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
+    void trigger_realtime_profiler_sync_check();
+    D2HSocket* get_realtime_profiler_socket() const;
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     void enable_program_cache() override;

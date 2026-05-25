@@ -15,6 +15,7 @@ from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
+from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
 from models.tt_dit.utils.video import export_to_video
 
 from ....utils.test import line_params, ring_params, ring_params_8k
@@ -124,20 +125,22 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, quant_config_name",
     [
         # FSDP is needed for 2x2 with encoder now on device
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True, None],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True, None],
         # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False, None],
         # WH on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True, None],
         # BH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params_8k, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params_8k, ttnn.Topology.Ring, False, None],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
-        [(4, 32), (4, 32), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params_8k}, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False, None],
+        [(4, 32), (4, 32), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params_8k}, ttnn.Topology.Ring, False, None],
+        # FSDP on 2x4 with bf8 weights+activations, LoFi linear, bf8 HiFi2 SDPA
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True, "all_bf8_lofi"],
     ],
     ids=[
         "2x2_sp0tp1",
@@ -147,6 +150,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
         "ring_bh_4x8_sp1tp0",
         "line_bh_4x8_sp1tp0",
         "bh_4x32sp1tp0",
+        "2x4_sp0tp1_bf8_lofi",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -184,6 +188,7 @@ def test_pipeline_performance(
     is_ci_env: bool,
     galaxy_type: str,
     is_fsdp: bool,
+    quant_config_name: str | None,
 ) -> None:
     """Performance test for Wan pipeline with detailed timing analysis."""
 
@@ -238,10 +243,14 @@ def test_pipeline_performance(
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
-        target_height=height,
-        target_width=width,
+        height=height,
+        width=width,
         num_frames=num_frames,
     )
+
+    if quant_config_name is not None:
+        qc = getattr(QuantConfig, quant_config_name)()
+        set_quant_config(pipeline, qc)
 
     # Warmup run (not timed)
     logger.info("Running warmup iteration...")
@@ -317,13 +326,22 @@ def test_pipeline_performance(
     if not is_ci_env:
         if int(ttnn.distributed_context_get_rank()) == 0:
             output_path = f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4"
-            export_to_video(frames, output_path, fps=16)
-            print(f"✓ Saved video to: {output_path}")
+            try:
+                export_to_video(frames, output_path, fps=16)
+                print(f"✓ Saved video to: {output_path}")
+            except ImportError:
+                print("Could not export video - imageio_ffmpeg not available")
         else:
             print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
 
     # Calculate statistics
     text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
+    prepare_latents_times = [benchmark_profiler.get_duration("prepare_latents", i) for i in range(num_perf_runs)]
+    vae_encode_times = (
+        [benchmark_profiler.get_duration("vae_encode", i) for i in range(num_perf_runs)]
+        if model_type == "i2v" and benchmark_profiler.contains_step("vae_encode")
+        else []
+    )
     denoising_times = [benchmark_profiler.get_duration("denoising", i) for i in range(num_perf_runs)]
     vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
     total_times = [benchmark_profiler.get_duration("run", i) for i in range(num_perf_runs)]
@@ -353,6 +371,9 @@ def test_pipeline_performance(
         )
 
     print_stats("Text Encoding", text_encoder_times)
+    if model_type == "i2v":
+        print_stats("Image Encoding (total)", prepare_latents_times)
+        print_stats("  VAE Encoder only", vae_encode_times)
     print_stats("Denoising", denoising_times)
     print_stats("VAE Decoding", vae_times)
     print_stats("Total Pipeline", total_times)
@@ -386,7 +407,7 @@ def test_pipeline_performance(
         }
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
-            run_type=device_name_map[mesh_shape],
+            run_type=device_name_map[mesh_shape] + ("_quant" if quant_config_name else ""),
             ml_model_name="Wan2.2",
             batch_size=1,
             config_params={

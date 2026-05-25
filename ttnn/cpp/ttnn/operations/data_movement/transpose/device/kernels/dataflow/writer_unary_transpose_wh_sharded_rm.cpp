@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t num_hw_blocks_per_core = get_compile_time_arg_val(0);
@@ -19,8 +19,8 @@ void kernel_main() {
 
     const uint32_t stick_size_bytes = H_size_bytes;
 
-    experimental::CircularBuffer cb_src(cb_out);
-    experimental::CircularBuffer cb_dst(cb_out0);
+    CircularBuffer cb_src(cb_out);
+    CircularBuffer cb_dst(cb_out0);
 
     uint32_t l1_write_addr = cb_dst.get_write_ptr();
     uint64_t write_noc_addr = get_noc_addr(l1_write_addr);

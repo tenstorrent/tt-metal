@@ -26,7 +26,11 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     FABRIC_HEADER_RB = 7,
     FABRIC_SYNC_STATUS = 8,
     DISPATCH_PROGRESS = 9,
-    UNRESERVED = 10,
+    // Real-time profiler control block (realtime_profiler_msgs::realtime_profiler_msg_t). Shared between the
+    // dispatch cores and the reserved RT-profiler tensix; allocated as a dispatch-core-local
+    // region rather than a per-core mailbox because no worker core touches it.
+    REALTIME_PROFILER_MSG = 10,
+    UNRESERVED = 11,
 };
 
 // likely only used in impl

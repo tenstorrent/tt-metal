@@ -11,33 +11,33 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 template <uint32_t t, typename AccessorType>
 void async_read_row_to_tile(
-    const experimental::Noc& noc, const AccessorType& accessor, uint32_t page_id, uint32_t L1_dst_addr) {
+    const Noc& noc, const AccessorType& accessor, uint32_t page_id, uint32_t L1_dst_addr) {
     // Read 64 bytes (32 bfloat16 elements) from the start of the page
-    noc.async_read(accessor, experimental::CoreLocalMem<uint32_t>(L1_dst_addr), 64, {.page_id = page_id}, {});
+    noc.async_read(accessor, CoreLocalMem<uint32_t>(L1_dst_addr), 64, {.page_id = page_id}, {});
 
     if constexpr (t == 0) {  // TILE LAYOUT
         // Read 64 bytes from offset 512 within the same page (second tile face)
         noc.async_read(
             accessor,
-            experimental::CoreLocalMem<uint32_t>(L1_dst_addr + 512),
+            CoreLocalMem<uint32_t>(L1_dst_addr + 512),
             64,
             {.page_id = page_id, .offset_bytes = 512},
             {});
     } else if constexpr (t == 1) {  // ROW MAJOR LAYOUT
         noc.async_read_barrier();
         // L1→L1 copy: rearrange 64 bytes from L1_dst_addr+32 into L1_dst_addr+512
-        experimental::UnicastEndpoint self;
+        UnicastEndpoint self;
         noc.async_read(
             self,
-            experimental::CoreLocalMem<uint32_t>(L1_dst_addr + 512),
+            CoreLocalMem<uint32_t>(L1_dst_addr + 512),
             64,
             {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = L1_dst_addr + 32},
             {});
@@ -104,14 +104,14 @@ void kernel_main() {
     const uint32_t eps = get_arg_val<uint32_t>(5);
     generate_bcast_col_scalar(cb_eps, eps);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_inp_buf(cb_inp);
-    experimental::CircularBuffer cb_stats_buf(cb_stats);
+    Noc noc;
+    CircularBuffer cb_inp_buf(cb_inp);
+    CircularBuffer cb_stats_buf(cb_stats);
 #ifdef FUSE_GAMMA
-    experimental::CircularBuffer cb_gamma_buf(cb_gamma);
+    CircularBuffer cb_gamma_buf(cb_gamma);
 #endif
 #ifdef FUSE_BETA
-    experimental::CircularBuffer cb_beta_buf(cb_beta);
+    CircularBuffer cb_beta_buf(cb_beta);
 #endif
 
     uint32_t inp_tile_idx = tile_offset;
@@ -135,8 +135,10 @@ void kernel_main() {
         }
         noc.async_read_barrier();
         cb_stats_buf.push_back(stats_tiles_cols);
-        uint32_t gamma_tile_count = 0;
-        uint32_t beta_tile_count = 0;
+        // In the 2D-core-grid path each core handles only a horizontal slice [y_offset, y_offset + Wt)
+        // of the gamma/beta tensors. The 1D path passes y_offset == 0 so this is a no-op there.
+        uint32_t gamma_tile_count = y_offset;
+        uint32_t beta_tile_count = y_offset;
         for (uint32_t i = 0; i < cb_iterations; i++) {
             for (uint32_t j = 0; j < cb_length; j++) {
                 cb_inp_buf.reserve_back(1);

@@ -4,11 +4,13 @@
 #pragma once
 
 #include "ema_device_operation_types.hpp"
-#include "ema_program_factory.hpp"
+
+#include "ttnn/device_operation.hpp"
+#include "ttnn/types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 #include <optional>
 #include <variant>
-#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 
@@ -17,6 +19,14 @@ struct EmaDeviceOperation {
     using tensor_args_t = EmaInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
+
+    struct EmaProgramFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
     using program_factory_t = std::variant<EmaProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);

@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_isin ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::IsIn ALIAS ttnn_op_experimental_isin)
 
@@ -19,24 +21,16 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_EXPERIMENTAL_ISIN_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/isin_device_operation.cpp
-        device/isin_program_factory.cpp
-        isin.cpp
+        ${TTNN_OP_EXPERIMENTAL_ISIN_SRCS}
 )
 
-target_include_directories(ttnn_op_experimental_isin PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_experimental_isin
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_experimental_isin PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -47,4 +41,4 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_experimental_isin LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_experimental_isin FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
