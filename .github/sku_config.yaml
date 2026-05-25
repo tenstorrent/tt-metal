@@ -216,7 +216,7 @@ skus:
     runs_on:
       - BH-QB-GE
       - pipeline-perf
-      - in-service
+      - qbge-metal-01
 
   bh_sp_single_galaxy:
     runs_on:
