@@ -6,6 +6,8 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <cstdint>
 #include <optional>
 #include <cmath>
 #include <string>
@@ -14,10 +16,11 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <hostdevcommon/common_values.hpp>
 #include "ttnn/operations/math.hpp"
-#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
@@ -39,8 +42,29 @@ void fabric_mux_connection_ct_args(
     worker_ct_args.push_back(num_workers_per_link);  // num_mux_clients
 }
 
+// Allocate a per-core semaphore on `worker_logical_core` by appending a
+// SemaphoreDescriptor to `desc.semaphores`. The semaphore ID is the first
+// available ID on that core (so this is the descriptor-pattern equivalent of
+// CreateSemaphore(program, {worker_logical_core}, 0)). Returns the assigned ID.
+uint32_t allocate_per_core_semaphore(
+    tt::tt_metal::ProgramDescriptor& desc, const CoreCoord& worker_logical_core, uint32_t initial_value = 0) {
+    const auto sem_id_opt = desc.find_available_semaphore_id(worker_logical_core, tt::CoreType::WORKER);
+    TT_FATAL(
+        sem_id_opt.has_value(),
+        "Ran out of semaphore IDs on core ({}, {}) — exceeded NUM_SEMAPHORES per core",
+        worker_logical_core.x,
+        worker_logical_core.y);
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = sem_id_opt.value(),
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = CoreRangeSet(CoreRange{worker_logical_core, worker_logical_core}),
+        .initial_value = initial_value,
+    });
+    return sem_id_opt.value();
+}
+
 // Appends 17 runtime args for a fabric MUX client worker.
-// Creates 5 semaphores on worker_logical_core for the connection state.
+// Allocates 5 per-core semaphores on worker_logical_core for the connection state.
 void fabric_mux_connection_rt_args(
     const bool mux_connection_valid,
     const bool is_termination_master,
@@ -48,7 +72,7 @@ void fabric_mux_connection_rt_args(
     const uint32_t worker_id,
     const CoreCoord& worker_logical_core,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramDescriptor& desc,
     const CoreCoord& termination_master_logical_core,
     tt::tt_metal::IDevice* device,
     std::vector<uint32_t>& worker_rt_args) {
@@ -61,46 +85,36 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(static_cast<uint32_t>(is_termination_master));
     worker_rt_args.push_back(mux_virtual_core.x);
     worker_rt_args.push_back(mux_virtual_core.y);
-    const uint8_t ch_id = static_cast<uint8_t>(worker_id);
+    const auto ch_id = static_cast<uint8_t>(worker_id);
     worker_rt_args.push_back(mux_kernel_config.get_channel_base_address(channel_type, ch_id));
     worker_rt_args.push_back(mux_kernel_config.get_connection_info_address(channel_type, ch_id));
     worker_rt_args.push_back(mux_kernel_config.get_connection_handshake_address(channel_type, ch_id));
     worker_rt_args.push_back(mux_kernel_config.get_flow_control_address(channel_type, ch_id));
     worker_rt_args.push_back(mux_kernel_config.get_buffer_index_address(channel_type, ch_id));
     worker_rt_args.push_back(mux_kernel_config.get_channel_credits_stream_id(channel_type, ch_id));
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // termination_sync_address
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_fabric_mux_status_address
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_flow_control_address
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_teardown_address
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_buffer_index_address
+    worker_rt_args.push_back(allocate_per_core_semaphore(desc, worker_logical_core));  // termination_sync_address
+    worker_rt_args.push_back(
+        allocate_per_core_semaphore(desc, worker_logical_core));  // local_fabric_mux_status_address
+    worker_rt_args.push_back(allocate_per_core_semaphore(desc, worker_logical_core));  // local_flow_control_address
+    worker_rt_args.push_back(allocate_per_core_semaphore(desc, worker_logical_core));  // local_teardown_address
+    worker_rt_args.push_back(allocate_per_core_semaphore(desc, worker_logical_core));  // local_buffer_index_address
     worker_rt_args.push_back(termination_master_virtual_core.x);
     worker_rt_args.push_back(termination_master_virtual_core.y);
 }
 
 }  // namespace
 
-ExpRingJointSDPAProgramFactory::cached_mesh_workload_t ExpRingJointSDPAProgramFactory::create_mesh_workload(
-    const ExpRingJointSDPAParams& args,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descriptor(
+    const ExpRingJointSDPAParams& operation_attributes,
     const ExpRingJointSDPAInputs& tensor_args,
-    ExpRingJointSDPAResult& output_tensors) {
-    tt::tt_metal::distributed::MeshWorkload mesh_workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
-
-    for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(args, coord, tensor_args, output_tensors);
-        mesh_workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_vars.emplace(ttnn::MeshCoordinateRange(coord), cached_program.shared_variables);
-    }
-
-    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_vars)};
-}
-
-ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory::create_at(
-    const ExpRingJointSDPAParams& args,
-    const ttnn::MeshCoordinate& coord,
-    const ExpRingJointSDPAInputs& tensor_args,
-    ExpRingJointSDPAResult& output_tensors) {
+    ExpRingJointSDPAResult& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    const auto& args = operation_attributes;
+    auto& output_tensors = tensor_return_value;
+    TT_FATAL(
+        mesh_dispatch_coordinate.has_value(),
+        "ExpRingJointSDPAProgramFactory::create_descriptor requires mesh_dispatch_coordinate");
+    const auto& coord = mesh_dispatch_coordinate.value();
     /*
     The QKV inputs are fractured on the sequence dimension across ring_size.
     The sequence length comes in padded such that it is divisible by `TILE_HEIGHT * ring_size`.
@@ -144,7 +158,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         - if this is not the first ring iteration, do the LSE update.
     */
 
-    log_debug(tt::LogOp, "DEBUG: create_at is called");
+    log_debug(tt::LogOp, "DEBUG: create_descriptor is called");
 
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& input_tensor_k = tensor_args.input_k;
@@ -164,7 +178,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     std::size_t q_chunk_size = args.get_q_chunk_size();
     std::size_t k_chunk_size = args.get_k_chunk_size();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor desc;
 
     auto* mesh_device = input_tensor_q.device();
     uint32_t device_index = ccl::get_linearized_index_from_physical_coord(
@@ -431,14 +445,11 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     class bfloat16 bfloat_identity_scalar(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
 
-    union {
-        float f;
-        uint32_t u;
-    } scale_union{};
-    scale_union.f = scale.value_or(1.0f);
+    const float scale_value = scale.value_or(1.0f);
+    const uint32_t scale_packed = std::bit_cast<uint32_t>(scale_value);
 
     // log scale
-    log_debug(tt::LogOp, "scale: {}", scale_union.f);
+    log_debug(tt::LogOp, "scale: {}", scale_value);
 
     std::vector<uint32_t> reader_compile_time_args = {
         B,
@@ -471,10 +482,31 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
 
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
+     * In the descriptor pattern, semaphore IDs are explicit sequential integers
+     * matching the order they are pushed into desc.semaphores below. Since these
+     * three cover the same sdpa_grid_range, they receive distinct IDs 0, 1, 2.
      */
-    auto sender_semaphore_id = CreateSemaphore(program, sdpa_grid_range, INVALID);
-    auto receiver_semaphore_id = CreateSemaphore(program, sdpa_grid_range, INVALID);
-    auto valid_semaphore_id = CreateSemaphore(program, sdpa_grid_range, VALID);
+    const uint32_t sender_semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = sender_semaphore_id,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = CoreRangeSet(sdpa_grid_range),
+        .initial_value = INVALID,
+    });
+    const uint32_t receiver_semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = receiver_semaphore_id,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = CoreRangeSet(sdpa_grid_range),
+        .initial_value = INVALID,
+    });
+    const uint32_t valid_semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = valid_semaphore_id,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = CoreRangeSet(sdpa_grid_range),
+        .initial_value = VALID,
+    });
 
     // Append semaphore ids to reader compile-time args (must match reader kernel expectations)
     const auto sem_args_offset = reader_compile_time_args.size();
@@ -501,12 +533,12 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         num_joint_k_chunks,
         num_q_chunks,
         packed_identity_scalar,
-        scale_union.u,
+        scale_packed,
         args.ring_size,
         global_n_partial_col,
         joint_l_partial_col,
-        (std::uint32_t)use_streaming_compute,
-        (std::uint32_t)out_out_subblock_h,
+        static_cast<std::uint32_t>(use_streaming_compute),
+        static_cast<std::uint32_t>(out_out_subblock_h),
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -550,11 +582,11 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         out_in0_num_subblocks,
         out_in1_num_subblocks,
         out_num_blocks,
-        scale_union.u,
-        (std::uint32_t)use_streaming_compute,
+        scale_packed,
+        static_cast<std::uint32_t>(use_streaming_compute),
         global_n_partial_col,
         joint_l_partial_col,
-        (std::uint32_t)uniform_dataformat,
+        static_cast<std::uint32_t>(uniform_dataformat),
     };
 
     std::map<std::string, std::string> defines;
@@ -565,8 +597,8 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
 
-    // NOTE: CreateKernel calls are deferred until after chain construction so that
-    // the mcast_enabled compile-time arg can be determined first.
+    // NOTE: KernelDescriptor construction is deferred until after chain construction
+    // so that the mcast_enabled compile-time arg can be determined first.
 
     // Create circular buffers
 
@@ -600,138 +632,279 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
 
-    // Q input
-    auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
-                            .set_page_size(tt::CBIndex::c_0, q_tile_size);
+    const auto sdpa_grid_set = CoreRangeSet(sdpa_grid_range);
 
-    CreateCircularBuffer(program, sdpa_grid_range, c_in0_config);
+    // Q input
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = q_tiles * q_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
+            .data_format = q_df,
+            .page_size = q_tile_size,
+        }}},
+    });
     // K and V input CBs with overlapping handles (c_1+c_14 for K, c_2+c_15 for V) so both
     // compute and MUX writer can pop independently from the same L1 address space.
-    {
-        uint32_t k_cbs[] = {tt::CBIndex::c_1, tt::CBIndex::c_14};
-        tt::tt_metal::create_cb(k_cbs, program, sdpa_grid_range, k_tile_size, k_tiles, k_df);
-    }
-    {
-        uint32_t v_cbs[] = {tt::CBIndex::c_2, tt::CBIndex::c_15};
-        tt::tt_metal::create_cb(v_cbs, program, sdpa_grid_range, v_tile_size, v_tiles, v_df);
-    }
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = k_tiles * k_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors =
+            {{CBFormatDescriptor{
+                  .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
+                  .data_format = k_df,
+                  .page_size = k_tile_size,
+              },
+              CBFormatDescriptor{
+                  .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_14),
+                  .data_format = k_df,
+                  .page_size = k_tile_size,
+              }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = v_tiles * v_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors =
+            {{CBFormatDescriptor{
+                  .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
+                  .data_format = v_df,
+                  .page_size = v_tile_size,
+              },
+              CBFormatDescriptor{
+                  .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_15),
+                  .data_format = v_df,
+                  .page_size = v_tile_size,
+              }}},
+    });
 
     // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
     if (needs_lightweight_mask) {
-        auto c_in3_config =
-            CircularBufferConfig(total_lightweight_mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
-                .set_page_size(tt::CB::c_in3, mask_tile_size);
-        CreateCircularBuffer(program, sdpa_grid_range, c_in3_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = total_lightweight_mask_tiles * mask_tile_size,
+            .core_ranges = sdpa_grid_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
+                .data_format = mask_df,
+                .page_size = mask_tile_size,
+            }}},
+        });
     }
 
     // scale input
-    auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_4, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_4, scalar_tile_size);
-    CreateCircularBuffer(program, sdpa_grid_range, c_in4_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = scale_tiles * scalar_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
+            .data_format = scalar_df,
+            .page_size = scalar_tile_size,
+        }}},
+    });
 
     // identity scale input
-    auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
-    CreateCircularBuffer(program, sdpa_grid_range, c_in5_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = scale_tiles * scalar_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
+            .data_format = scalar_df,
+            .page_size = scalar_tile_size,
+        }}},
+    });
 
     // stats input
-    auto c_in6_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}})
-                            .set_page_size(tt::CBIndex::c_6, im_tile_size);
-    CreateCircularBuffer(program, sdpa_grid_range, c_in6_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * im_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
+            .data_format = im_df,
+            .page_size = im_tile_size,
+        }}},
+    });
 
     // previous block output as input
-    auto c_in7_config = CircularBufferConfig(out_im_tiles * out_tile_size, {{tt::CBIndex::c_7, out_df}})
-                            .set_page_size(tt::CBIndex::c_7, out_tile_size);
-    CreateCircularBuffer(program, sdpa_grid_range, c_in7_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out_im_tiles * out_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_7),
+            .data_format = out_df,
+            .page_size = out_tile_size,
+        }}},
+    });
 
     // column identity input
-    auto c_in8_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_8, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_8, scalar_tile_size);
-    CreateCircularBuffer(program, sdpa_grid_range, c_in8_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = scale_tiles * scalar_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_8),
+            .data_format = scalar_df,
+            .page_size = scalar_tile_size,
+        }}},
+    });
 
     // cb_qk_im
-    auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CBIndex::c_24, im_df}})
-                                  .set_page_size(tt::CBIndex::c_24, im_tile_size);
-    CreateCircularBuffer(program, sdpa_grid_range, c_intermed0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = qk_tiles * im_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_24),
+            .data_format = im_df,
+            .page_size = im_tile_size,
+        }}},
+    });
 
     // cb_out_im
-    auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_25, im_df}})
-                                  .set_page_size(tt::CBIndex::c_25, im_tile_size);
-    CreateCircularBuffer(program, sdpa_grid_range, c_intermed1_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out_im_tiles * im_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_25),
+            .data_format = im_df,
+            .page_size = im_tile_size,
+        }}},
+    });
 
     // cb_out_accumulate_im
-    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_26, im_df}})
-                                  .set_page_size(tt::CBIndex::c_26, im_tile_size);
-    CreateCircularBuffer(program, sdpa_grid_range, c_intermed2_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out_im_tiles * im_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_26),
+            .data_format = im_df,
+            .page_size = im_tile_size,
+        }}},
+    });
 
     // cb_cur_max
-    auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_27, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_27, stats_tile_size);
-    CreateCircularBuffer(program, sdpa_grid_range, c_intermed3_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * stats_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_27),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
 
     // cb_prev_max
-    auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_28, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_28, stats_tile_size);
-    CreateCircularBuffer(program, sdpa_grid_range, c_intermed4_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * stats_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_28),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
 
     // cb_cur_sum
-    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_29, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_29, stats_tile_size);
-    CreateCircularBuffer(program, sdpa_grid_range, c_intermed5_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * stats_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
 
     // cb_prev_sum
-    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_30, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_30, stats_tile_size);
-    CreateCircularBuffer(program, sdpa_grid_range, c_intermed6_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * stats_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_30),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
 
     // cb_exp_max_diff
-    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_31, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_31, stats_tile_size);
-    CreateCircularBuffer(program, sdpa_grid_range, c_intermed7_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * stats_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_31),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
 
     // Output
-    auto c_out0_config = CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
-                             .set_page_size(tt::CBIndex::c_16, out_tile_size);
-    CreateCircularBuffer(program, sdpa_grid_range, c_out0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out0_t * out_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
+            .data_format = out_df,
+            .page_size = out_tile_size,
+        }}},
+    });
 
     // stats output
-    auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})
-                             .set_page_size(tt::CBIndex::c_17, im_tile_size);
-    CreateCircularBuffer(program, sdpa_grid_range, c_out1_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * im_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_17),
+            .data_format = im_df,
+            .page_size = im_tile_size,
+        }}},
+    });
 
     // Streaming compute v2: 1-tile recip scratch CB (c_9) for normalize_row_streaming.
     // c_4 is used by cb_scale_in in ring joint, so we use c_9 instead.
     if (use_streaming_compute) {
-        auto c_recip_scratch_config = CircularBufferConfig(1 * im_tile_size, {{tt::CBIndex::c_9, im_df}})
-                                          .set_page_size(tt::CBIndex::c_9, im_tile_size);
-        CreateCircularBuffer(program, sdpa_grid_range, c_recip_scratch_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 1 * im_tile_size,
+            .core_ranges = sdpa_grid_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_9),
+                .data_format = im_df,
+                .page_size = im_tile_size,
+            }}},
+        });
     }
 
     // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
     // cb_sum_out (c_10) = compute pushes sum for writer to save to DRAM.
     // cb_sum_in (c_11) = writer pushes restored sum from DRAM for compute to read.
     if (use_streaming_compute) {
-        auto c_sum_out_config =
-            CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_10, stats_df}})
-                .set_page_size(tt::CBIndex::c_10, stats_tile_size);
-        CreateCircularBuffer(program, sdpa_grid_range, c_sum_out_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = statistics_tiles * stats_tile_size,
+            .core_ranges = sdpa_grid_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_10),
+                .data_format = stats_df,
+                .page_size = stats_tile_size,
+            }}},
+        });
 
-        auto c_sum_in_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}})
-                                   .set_page_size(tt::CBIndex::c_11, stats_tile_size);
-        CreateCircularBuffer(program, sdpa_grid_range, c_sum_in_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = statistics_tiles * stats_tile_size,
+            .core_ranges = sdpa_grid_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_11),
+                .data_format = stats_df,
+                .page_size = stats_tile_size,
+            }}},
+        });
     }
 
-    uint32_t q_addr = input_tensor_q.buffer()->address();
-    uint32_t k_addr = input_tensor_k.buffer()->address();
-    uint32_t v_addr = input_tensor_v.buffer()->address();
-    uint32_t gathered_k_addr = gathered_input_tensor_k.buffer()->address();
-    uint32_t gathered_v_addr = gathered_input_tensor_v.buffer()->address();
-    uint32_t joint_q_addr = joint_tensor_q.buffer()->address();
-    uint32_t joint_k_addr = joint_tensor_k.buffer()->address();
-    uint32_t joint_v_addr = joint_tensor_v.buffer()->address();
-    uint32_t out_addr = output_tensor.buffer()->address();
-    uint32_t joint_out_addr = joint_output_tensor.buffer()->address();
-    uint32_t stats_addr = stats_output_tensor.buffer()->address();
+    auto* const q_buf = input_tensor_q.buffer();
+    auto* const k_buf = input_tensor_k.buffer();
+    auto* const v_buf = input_tensor_v.buffer();
+    auto* const gathered_k_buf = gathered_input_tensor_k.buffer();
+    auto* const gathered_v_buf = gathered_input_tensor_v.buffer();
+    auto* const joint_q_buf = joint_tensor_q.buffer();
+    auto* const joint_k_buf = joint_tensor_k.buffer();
+    auto* const joint_v_buf = joint_tensor_v.buffer();
+    auto* const out_buf = output_tensor.buffer();
+    auto* const joint_out_buf = joint_output_tensor.buffer();
+    auto* const stats_buf = stats_output_tensor.buffer();
 
     /**
      * Build chain selection for store-and-forward across cores per (batch, head).
@@ -1194,21 +1367,33 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         mux_buffer_size_bytes,
         l1_unreserved_base_address);
 
-    // Create kernels (deferred until after chain construction for mcast_enabled flag)
-    auto reader_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_reader.cpp",
-        sdpa_grid_range,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
+    // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
+    KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
+
+    // Build kernel descriptors locally so we can append per-core runtime args
+    // before pushing them into desc.kernels at the end. KernelDescriptor creation
+    // is deferred (just like the original CreateKernel calls were) until after chain
+    // construction, since the mcast_enabled compile-time arg is patched above.
+    KernelDescriptor reader_kernel{};
+    reader_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_reader.cpp";
+    reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel.core_ranges = CoreRangeSet(sdpa_grid_range);
+    reader_kernel.compile_time_args = reader_compile_time_args;
+    reader_kernel.defines = kernel_defines;
+    reader_kernel.config = ReaderConfigDescriptor{};
 
     // Non-fabric writer: columns 0..(sdpa_grid.x-3)
     // sdpa_grid.x-2 and sdpa_grid.x-1 are fabric MUX client columns
     CoreRange sdpa_writer_range({0, 0}, {sdpa_grid.x - 3, sdpa_grid.y - 1});
-    auto writer_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_writer.cpp",
-        sdpa_writer_range,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
+    KernelDescriptor writer_kernel{};
+    writer_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_writer.cpp";
+    writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel.core_ranges = CoreRangeSet(sdpa_writer_range);
+    writer_kernel.compile_time_args = writer_compile_time_args;
+    writer_kernel.defines = kernel_defines;
+    writer_kernel.config = WriterConfigDescriptor{};
 
     // Fabric writer: columns sdpa_grid.x-2 and sdpa_grid.x-1 (backward and forward MUX clients)
     CoreRange mux_writer_range({sdpa_grid.x - 2, 0}, {sdpa_grid.x - 1, sdpa_grid.y - 1});
@@ -1229,22 +1414,28 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
 
     auto writer_fabric_defines = defines;
     writer_fabric_defines["USE_MUX"] = "1";
-    auto writer_fabric_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_writer.cpp",
-        mux_writer_range,
-        tt::tt_metal::WriterDataMovementConfig(writer_fabric_compile_time_args, writer_fabric_defines));
+    KernelDescriptor::Defines writer_fabric_kernel_defines(writer_fabric_defines.begin(), writer_fabric_defines.end());
+    KernelDescriptor writer_fabric_kernel{};
+    writer_fabric_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_writer.cpp";
+    writer_fabric_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_fabric_kernel.core_ranges = CoreRangeSet(mux_writer_range);
+    writer_fabric_kernel.compile_time_args = writer_fabric_compile_time_args;
+    writer_fabric_kernel.defines = writer_fabric_kernel_defines;
+    writer_fabric_kernel.config = WriterConfigDescriptor{};
 
-    auto compute_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/exp_ring_joint_sdpa.cpp",
-        sdpa_grid_range,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = defines});
+    KernelDescriptor compute_kernel{};
+    compute_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/exp_ring_joint_sdpa.cpp";
+    compute_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel.core_ranges = CoreRangeSet(sdpa_grid_range);
+    compute_kernel.compile_time_args = compute_compile_time_args;
+    compute_kernel.defines = kernel_defines;
+    compute_kernel.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .math_approx_mode = math_approx_mode,
+    };
 
     // Build backward and forward termination master core sets (1 per link per direction)
     // Backward masters: row 0 of both MUX client columns (top half = backward direction).
@@ -1262,10 +1453,10 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     }
 
     // Pass the full direction-half range across both MUX client columns so that
-    // CreateSemaphore inside init_all_gather allocates the AG sync semaphore on ALL
-    // workers in each direction group.  This ensures every core (both term-masters
-    // and non-masters) has the same number of semaphores allocated before
-    // fabric_mux_connection_rt_args runs, keeping termination_sync IDs consistent.
+    // any AG sync semaphores would be allocated on ALL workers in each direction group.
+    // This ensures every core (both term-masters and non-masters) has the same number of
+    // semaphores allocated before fabric_mux_connection_rt_args runs, keeping
+    // termination_sync IDs consistent.
     CoreRange all_backward_clients({sdpa_grid.x - 2, 0}, {sdpa_grid.x - 1, args.num_workers_per_link - 1});
     CoreRange all_forward_clients({sdpa_grid.x - 2, args.num_workers_per_link}, {sdpa_grid.x - 1, sdpa_grid.y - 1});
     // K/V tensor shape info for all-gather RT args
@@ -1275,12 +1466,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     TT_ASSERT(!(ag_output_shape[3] % tt::constants::TILE_WIDTH));
     const uint32_t ag_output_Wt = ag_output_shape[3] / tt::constants::TILE_WIDTH;
     const uint32_t ag_output_Ht = ag_output_shape[2] / tt::constants::TILE_HEIGHT;
-
-    // Track the RT arg offset for all-gather args on fabric writer master cores
-    uint32_t writer_fabric_ag_rt_offset = 0;
-
-    // Track the RT arg offset for per-link semaphore addresses in reader args
-    uint32_t reader_per_link_sem_rt_offset = 0;
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_sdpa_cores; ++i) {
@@ -1300,18 +1485,17 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         log_debug(tt::LogOp, "global_q_start: {}", global_q_start);
         log_debug(tt::LogOp, "global_q_end: {}", global_q_end);
 
-        std::vector<uint32_t> reader_args = {
-            q_addr,
-            k_addr,
-            v_addr,
-            gathered_k_addr,
-            gathered_v_addr,
-            joint_q_addr,
-            joint_k_addr,
-            joint_v_addr,
-            global_q_start,
-            global_q_end,
-        };
+        KernelDescriptor::RTArgList reader_args;
+        reader_args.push_back(q_buf);
+        reader_args.push_back(k_buf);
+        reader_args.push_back(v_buf);
+        reader_args.push_back(gathered_k_buf);
+        reader_args.push_back(gathered_v_buf);
+        reader_args.push_back(joint_q_buf);
+        reader_args.push_back(joint_k_buf);
+        reader_args.push_back(joint_v_buf);
+        reader_args.push_back(global_q_start);
+        reader_args.push_back(global_q_end);
         // Append chain runtime args for store-and-forward
         const auto& chain = core_chain_info.at(i);
 
@@ -1366,28 +1550,26 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         reader_args.push_back(static_cast<uint32_t>(is_mux_writer_valid));
 
         // Per-link semaphore addresses for chunk-level sync
-        reader_per_link_sem_rt_offset = reader_args.size();
         reader_args.push_back(args.num_links);
         for (uint32_t lnk = 0; lnk < args.num_links; ++lnk) {
-            reader_args.push_back(args.semaphore[lnk].address());
+            reader_args.push_back(static_cast<uint32_t>(args.semaphore[lnk].address()));
         }
 
         // Inject fused-op synchronization RT args: ring_size, ring_index, direction (3 values)
-        reader_args.push_back(args.ring_size);
+        reader_args.push_back(static_cast<uint32_t>(args.ring_size));
         reader_args.push_back(device_index);
         reader_args.push_back(direction);
 
-        SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
+        reader_kernel.emplace_runtime_args(core, reader_args);
 
         // Writer args
-        std::vector<uint32_t> writer_args = {
-            out_addr,
-            joint_out_addr,
-            stats_addr,
-            global_q_start,
-            global_q_end,
-        };
-        writer_args.push_back(args.ring_size);
+        KernelDescriptor::RTArgList writer_args;
+        writer_args.push_back(out_buf);
+        writer_args.push_back(joint_out_buf);
+        writer_args.push_back(stats_buf);
+        writer_args.push_back(global_q_start);
+        writer_args.push_back(global_q_end);
+        writer_args.push_back(static_cast<uint32_t>(args.ring_size));
         writer_args.push_back(device_index);
         writer_args.push_back(direction);
 
@@ -1403,6 +1585,9 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
 
             const bool link_in_range = (link < args.num_links) && (link < mux_backward_logical_cores.size()) &&
                                        (link < mux_forward_logical_cores.size());
+            // fabric_mux_connection_rt_args appends to a std::vector<uint32_t>; collect mux args
+            // separately and then merge into the RTArgList so BufferBinding entries above are preserved.
+            std::vector<uint32_t> mux_writer_args;
             if (link_in_range) {
                 const CoreCoord& mux_core =
                     is_backward ? mux_backward_logical_cores[link] : mux_forward_logical_cores[link];
@@ -1414,38 +1599,35 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                     worker_idx,
                     core,
                     mux_kernel_config,
-                    program,
+                    desc,
                     termination_master_logical,
                     device,
-                    writer_args);
+                    mux_writer_args);
             } else {
                 // link index out of range or invalid direction — append a disconnected MUX connection
-                // Still need valid semaphore addresses for the 5 semaphore fields
-                writer_args.push_back(0);                                    // mux_connection_valid = false
-                writer_args.push_back(0);                                    // is_termination_master
-                writer_args.push_back(0);                                    // mux_x
-                writer_args.push_back(0);                                    // mux_y
-                writer_args.push_back(0);                                    // channel_base_address
-                writer_args.push_back(0);                                    // connection_info_address
-                writer_args.push_back(0);                                    // connection_handshake_address
-                writer_args.push_back(0);                                    // flow_control_address
-                writer_args.push_back(0);                                    // buffer_index_address
-                writer_args.push_back(0);                                    // channel_credits_stream_id
-                writer_args.push_back(CreateSemaphore(program, {core}, 0));  // termination_sync
-                writer_args.push_back(CreateSemaphore(program, {core}, 0));  // local_fabric_mux_status
-                writer_args.push_back(CreateSemaphore(program, {core}, 0));  // local_flow_control
-                writer_args.push_back(CreateSemaphore(program, {core}, 0));  // local_teardown
-                writer_args.push_back(CreateSemaphore(program, {core}, 0));  // local_buffer_index
-                writer_args.push_back(0);                                    // termination_master_noc_x
-                writer_args.push_back(0);                                    // termination_master_noc_y
+                // Still need valid semaphore IDs for the 5 semaphore fields
+                mux_writer_args.push_back(0);                                        // mux_connection_valid = false
+                mux_writer_args.push_back(0);                                        // is_termination_master
+                mux_writer_args.push_back(0);                                        // mux_x
+                mux_writer_args.push_back(0);                                        // mux_y
+                mux_writer_args.push_back(0);                                        // channel_base_address
+                mux_writer_args.push_back(0);                                        // connection_info_address
+                mux_writer_args.push_back(0);                                        // connection_handshake_address
+                mux_writer_args.push_back(0);                                        // flow_control_address
+                mux_writer_args.push_back(0);                                        // buffer_index_address
+                mux_writer_args.push_back(0);                                        // channel_credits_stream_id
+                mux_writer_args.push_back(allocate_per_core_semaphore(desc, core));  // termination_sync
+                mux_writer_args.push_back(allocate_per_core_semaphore(desc, core));  // local_fabric_mux_status
+                mux_writer_args.push_back(allocate_per_core_semaphore(desc, core));  // local_flow_control
+                mux_writer_args.push_back(allocate_per_core_semaphore(desc, core));  // local_teardown
+                mux_writer_args.push_back(allocate_per_core_semaphore(desc, core));  // local_buffer_index
+                mux_writer_args.push_back(0);                                        // termination_master_noc_x
+                mux_writer_args.push_back(0);                                        // termination_master_noc_y
             }
+            writer_args.append(mux_writer_args);
 
             // MUX writer RT args: out_ready_sem, injector coords, AG params, op signaler
             if (link_in_range) {
-                if (writer_fabric_ag_rt_offset == 0) {
-                    writer_fabric_ag_rt_offset = writer_args.size();
-                }
-
                 const uint32_t out_ready_sem_addr = args.semaphore[link].address();
                 writer_args.push_back(out_ready_sem_addr);
 
@@ -1475,28 +1657,34 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 }
                 writer_args.push_back(static_cast<uint32_t>(injector_physical.x));
                 writer_args.push_back(static_cast<uint32_t>(injector_physical.y));
-                writer_args.push_back(args.num_links);   // num_muxes_in_direction
-                writer_args.push_back(link);              // my_mux_index
+                writer_args.push_back(args.num_links);  // num_muxes_in_direction
+                writer_args.push_back(link);            // my_mux_index
                 writer_args.push_back(ag_output_Wt);
                 writer_args.push_back(ag_output_Ht);
-                writer_args.push_back(gathered_k_addr);
-                writer_args.push_back(gathered_v_addr);
+                writer_args.push_back(gathered_k_buf);
+                writer_args.push_back(gathered_v_buf);
             }
-            SetRuntimeArgs(program, writer_fabric_kernels_id, core, writer_args);
+            writer_fabric_kernel.emplace_runtime_args(core, writer_args);
         } else {
-            SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
+            writer_kernel.emplace_runtime_args(core, writer_args);
         }
 
         // Compute args
-        std::vector<uint32_t> compute_args = {
-            global_q_start,
-            global_q_end,
-        };
-        compute_args.push_back(args.ring_size);
+        KernelDescriptor::RTArgList compute_args;
+        compute_args.push_back(global_q_start);
+        compute_args.push_back(global_q_end);
+        compute_args.push_back(static_cast<uint32_t>(args.ring_size));
         compute_args.push_back(device_index);
         compute_args.push_back(direction);
-        SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
+        compute_kernel.emplace_runtime_args(core, compute_args);
     }
+
+    // Push the SDPA kernels into desc before building the fabric MUX kernel so its
+    // index is deterministic (kernels 0/1/2/3 = reader/writer/writer_fabric/compute).
+    desc.kernels.push_back(std::move(reader_kernel));
+    desc.kernels.push_back(std::move(writer_kernel));
+    desc.kernels.push_back(std::move(writer_fabric_kernel));
+    desc.kernels.push_back(std::move(compute_kernel));
 
     // ---- Fabric MUX cores ----
     std::vector<CoreRange> mux_core_ranges;
@@ -1510,135 +1698,42 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     }
     CoreRangeSet mux_core_range_set(mux_core_ranges);
 
-    tt::tt_metal::KernelHandle ccl_mux_kernel_id{};
     if (!mux_core_ranges.empty()) {
-        ccl_mux_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-            mux_core_range_set,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
-                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+        KernelDescriptor mux_kernel{};
+        mux_kernel.kernel_source = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
+        mux_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        mux_kernel.core_ranges = mux_core_range_set;
+        mux_kernel.compile_time_args = mux_kernel_config.get_fabric_mux_compile_time_args();
+        mux_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O3;
+        mux_kernel.config = DataMovementConfigDescriptor{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+        };
 
         const auto src_node_id = mesh_device->get_fabric_node_id(coord);
         for (uint32_t link = 0; link < args.num_links; ++link) {
             if (backward_coord.has_value()) {
                 const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                 auto mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link, program, {mux_backward_logical_cores[link]});
-                tt::tt_metal::SetRuntimeArgs(
-                    program, ccl_mux_kernel_id, {mux_backward_logical_cores[link]}, mux_rt_args);
+                    src_node_id, dst_node_id, link, desc, mux_backward_logical_cores[link]);
+                KernelDescriptor::RTArgList mux_args;
+                mux_args.append(mux_rt_args);
+                mux_kernel.emplace_runtime_args(mux_backward_logical_cores[link], mux_args);
             }
             if (forward_coord.has_value()) {
                 const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                 auto mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link, program, {mux_forward_logical_cores[link]});
-                tt::tt_metal::SetRuntimeArgs(
-                    program, ccl_mux_kernel_id, {mux_forward_logical_cores[link]}, mux_rt_args);
+                    src_node_id, dst_node_id, link, desc, mux_forward_logical_cores[link]);
+                KernelDescriptor::RTArgList mux_args;
+                mux_args.append(mux_rt_args);
+                mux_kernel.emplace_runtime_args(mux_forward_logical_cores[link], mux_args);
             }
         }
+
+        desc.kernels.push_back(std::move(mux_kernel));
     }
 
-    return cached_program_t{
-        std::move(program),
-        {.num_sdpa_cores = num_sdpa_cores,
-         .sdpa_grid = sdpa_grid,
-         .reader_kernels_id = reader_kernels_id,
-         .writer_kernels_id = writer_kernels_id,
-         .writer_fabric_kernels_id = writer_fabric_kernels_id,
-         .compute_kernels_id = compute_kernels_id,
-         .writer_fabric_ag_rt_offset = writer_fabric_ag_rt_offset,
-         .reader_per_link_sem_rt_offset = reader_per_link_sem_rt_offset,
-         .num_links = args.num_links}};
-}
-
-void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const ExpRingJointSDPAParams& args,
-    const ExpRingJointSDPAInputs& tensor_args,
-    ExpRingJointSDPAResult& output_tensors) {
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-
-        // Get addresses for regular tensors
-        auto* q_buffer = tensor_args.input_q.buffer();
-        auto* k_buffer = tensor_args.input_k.buffer();
-        auto* v_buffer = tensor_args.input_v.buffer();
-        auto* gathered_k_buffer = tensor_args.gathered_k.buffer();
-        auto* gathered_v_buffer = tensor_args.gathered_v.buffer();
-        auto* joint_q_buffer = tensor_args.joint_q.buffer();
-        auto* joint_k_buffer = tensor_args.joint_k.buffer();
-        auto* joint_v_buffer = tensor_args.joint_v.buffer();
-
-        // Get addresses for output tensors
-        auto* out_buffer = output_tensors[EXP_RING_JOINT_SDPA_OUTPUT_IDX].buffer();
-        auto* joint_out_buffer = output_tensors[EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX].buffer();
-        auto* stats_buffer = output_tensors[EXP_RING_JOINT_SDPA_STATS_OUTPUT_IDX].buffer();
-
-        uint32_t q_addr = q_buffer->address();
-        uint32_t k_addr = k_buffer->address();
-        uint32_t v_addr = v_buffer->address();
-        uint32_t gathered_k_addr = gathered_k_buffer->address();
-        uint32_t gathered_v_addr = gathered_v_buffer->address();
-        uint32_t joint_q_addr = joint_q_buffer->address();
-        uint32_t joint_k_addr = joint_k_buffer->address();
-        uint32_t joint_v_addr = joint_v_buffer->address();
-        uint32_t out_addr = out_buffer->address();
-        uint32_t joint_out_addr = joint_out_buffer->address();
-        uint32_t stats_addr = stats_buffer->address();
-
-        auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
-        auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
-        auto& writer_fabric_args_by_core = GetRuntimeArgs(program, shared_vars.writer_fabric_kernels_id);
-
-        for (uint32_t i = 0; i < shared_vars.num_sdpa_cores; ++i) {
-            CoreCoord core = {i % shared_vars.sdpa_grid.x, i / shared_vars.sdpa_grid.x};
-
-            auto& reader_args = reader_args_by_core[core.x][core.y];
-
-            // Update reader args
-            reader_args[0] = q_addr;
-            reader_args[1] = k_addr;
-            reader_args[2] = v_addr;
-            reader_args[3] = gathered_k_addr;
-            reader_args[4] = gathered_v_addr;
-            reader_args[5] = joint_q_addr;
-            reader_args[6] = joint_k_addr;
-            reader_args[7] = joint_v_addr;
-
-            // Update per-link semaphore addresses in reader args
-            if (shared_vars.reader_per_link_sem_rt_offset > 0) {
-                for (uint32_t lnk = 0; lnk < shared_vars.num_links; ++lnk) {
-                    reader_args[shared_vars.reader_per_link_sem_rt_offset + 1 + lnk] =
-                        args.semaphore[lnk].address();
-                }
-            }
-
-            // Update writer args — fabric clients (last 2 columns) use writer_fabric_kernels_id
-            const bool is_mux_writer = (core.x >= shared_vars.sdpa_grid.x - 2);
-            if (is_mux_writer) {
-                auto& writer_args = writer_fabric_args_by_core[core.x][core.y];
-                writer_args[0] = out_addr;
-                writer_args[1] = joint_out_addr;
-                writer_args[2] = stats_addr;
-                // Update addresses for MUX writers with link_in_range
-                if (shared_vars.writer_fabric_ag_rt_offset > 0 &&
-                    writer_args.size() > shared_vars.writer_fabric_ag_rt_offset) {
-                    const uint32_t link = (core.x == shared_vars.sdpa_grid.x - 1) ? 1 : 0;
-                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 0] = args.semaphore[link].address();
-                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 7] = gathered_k_addr;
-                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 8] = gathered_v_addr;
-                }
-            } else {
-                auto& writer_args = writer_args_by_core[core.x][core.y];
-                writer_args[0] = out_addr;
-                writer_args[1] = joint_out_addr;
-                writer_args[2] = stats_addr;
-            }
-        }
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim
