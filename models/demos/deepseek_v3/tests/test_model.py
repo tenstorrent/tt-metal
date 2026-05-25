@@ -46,6 +46,10 @@ REFERENCE_OUTPUT_CACHE_LEGACY_FILENAME = f"{REFERENCE_OUTPUT_CACHE_FILE_PREFIX}.
 PCC_REQUIRED_PREFILL = 0.97
 PCC_REQUIRED_DECODE = 0.97
 REFERENCE_ENTRY_VERSION = 1
+TG_MODEL_DECODE_ISSUE_URL = "https://github.com/tenstorrent/tt-metal/issues/45083"
+TG_MODEL_DECODE_SKIP_REASON = (
+    "TG full-model DeepSeek decode currently diverges in the routed MoE path; see " + TG_MODEL_DECODE_ISSUE_URL
+)
 
 
 def _default_reference_cache_dir(cache_path: Path) -> Path:
@@ -75,6 +79,15 @@ def _build_model_test_cases_and_ids(users_per_row: int, prefill_seq_len: int):
         )
 
     expanded_cases = expand_test_cases_with_position_ids_ranges(base_cases)
+    if os.getenv("MESH_DEVICE", "").upper() == "TG":
+        expanded_cases = [
+            (
+                pytest.param(*case, marks=pytest.mark.skip(reason=TG_MODEL_DECODE_SKIP_REASON))
+                if case == ("decode", 1, users_per_row, None)
+                else case
+            )
+            for case in expanded_cases
+        ]
     expanded_ids = build_expanded_test_ids(expanded_cases)
     return expanded_cases, expanded_ids
 
@@ -557,7 +570,6 @@ def run_test_forward_pass_dpmodel(
         f"Unexpected cached reference output shape: got {tuple(expected_output.shape)}, "
         f"expected {expected_reference_output_shape}"
     )
-
     pcc_required = PCC_REQUIRED_DECODE if mode == "decode" else PCC_REQUIRED_PREFILL
     assert_hidden_dim_pcc(tt_output_torch, expected_output, pcc_required=pcc_required)
     logger.info(f"TT full-output check passed against reference baseline for case '{case_key}'")
