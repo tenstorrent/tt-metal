@@ -1,6 +1,7 @@
 from typing import Optional, AsyncIterator, Iterator
 from dataclasses import dataclass, asdict
 from argparse import ArgumentParser
+from asyncio import StreamReader
 from dateutil import parser
 from enum import Enum, auto
 import fileinput
@@ -504,12 +505,36 @@ def print_results(runs: list[TestRun]):
     print_summary(runs)
 
 
+async def file_to_streamreader(path: str, chunk_size: int = 8192) -> StreamReader:
+    loop = asyncio.get_running_loop()
+    reader = StreamReader()
+
+    def feed_blocking():
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                data = chunk
+                loop.call_soon_threadsafe(reader.feed_data, data)
+        loop.call_soon_threadsafe(reader.feed_eof)
+
+    loop.run_in_executor(None, feed_blocking)
+    return reader
+
+
+async def parse_file(file: str) -> list[Event]:
+    sr = await file_to_streamreader(file)
+    return await parse_logs(sr)
+
+
 async def main():
     parser = ArgumentParser()
     parser.add_argument("-t", type=str, help="Comma separated list of tests to run")
     parser.add_argument("-l", action="store_true", help="List all of the available tests")
     parser.add_argument("-q", action="store_true", help="Don't print the logs as the tests run")
     parser.add_argument("-n", action="store_true", help="Don't print the summary")
+    parser.add_argument("-i", type=str, help="Input file to parse instead of running the tests")
     parser.add_argument("-o", type=str, help="Output path for the json file")
     opts = parser.parse_args()
 
@@ -530,18 +555,22 @@ async def main():
 
     if opts.t:
         tests = [TestCase(t) for t in opts.t.split(",")]
-    print("Running tests: ", ", ".join(t.value for t in tests))
 
     outfile = opts.o if opts.o else "out.json"
     print(f"Writing results to '{outfile}'")
 
-    filters = prepare_filter([t for t in tests])
-    program = "build/test/tt_metal/unit_tests_deployment"
-    args = [f"--gtest_filter={filters}"]
+    if opts.i:
+        evs = await parse_file(opts.i)
+    else:
+        print("Running tests: ", ", ".join(t.value for t in tests))
 
-    proc = await asyncio.create_subprocess_exec(program, *args, stdout=asyncio.subprocess.PIPE)
+        filters = prepare_filter([t for t in tests])
+        program = "build/test/tt_metal/unit_tests_deployment"
+        args = [f"--gtest_filter={filters}"]
 
-    p, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout))
+        proc = await asyncio.create_subprocess_exec(program, *args, stdout=asyncio.subprocess.PIPE)
+
+        p, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout))
 
     # pprint.pp(evs)
     runs = list(parse_evs(evs))
