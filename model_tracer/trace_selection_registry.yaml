@@ -55,6 +55,59 @@ targets:
         - whisper_3
       trace: [25, 17, 18, 19, 20, 28]
 
+    # N300 models (traces 60-90, n300 1-card)
+    - model:
+        - llama-3.2-1b-instruct
+        - llama-3.1-8b-instruct
+        - llama-3.2-3b-instruct_2
+        - llama-3.2-11b-vision-instruct
+        - mistral-7b-instruct-v0.2_2
+        - qwen3-8b
+        - qwen3-embedding-8b
+        - qwen3-embedding-4b
+        - qwen3-4b
+        - qwen2.5-7b-instruct
+        - whisper_4
+        - stable_diffusion_xl_base_3
+        - speecht5_tts_2
+        - efficientnetb0_2
+        - mobilenetv2_2
+        - segmentation_3
+        - vit_2
+        - bge_large_en_2
+        - distilbert
+        - bert_tiny
+        - metal_bert_large_11
+        - sentence_bert_3
+        - bge_m3
+        - owl_vit
+        - swin_v2
+        - swin_s
+        - resnet50_2
+        - vovnet
+        - vgg
+      trace: [62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90]
+
+    # N150 models (traces 41-59, n150 1-card)
+    - model:
+        - llama-3.2-1b_2
+        - llama-3.1-8b-instruct_2
+        - phi-3-mini-4k-instruct
+        - mistral-7b-instruct-v0.2
+        - gemma4
+        - whisper_4
+        - falcon7b_2
+        - functional_unet
+        - stable_diffusion_xl_base_2
+        - qwen25_vl
+        - speecht5_tts
+        - mobilenetv2
+        - resnet50
+        - bge_large_en
+        - segmentation_2
+        - vit_3
+      trace: [41, 42, 43, 44, 46, 47, 48, 49, 52, 53, 54, 55, 56, 57, 58, 59]
+
 registry:
   - trace_id: 1
     status: draft
