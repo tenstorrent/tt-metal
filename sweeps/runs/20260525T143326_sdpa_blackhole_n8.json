@@ -1,0 +1,177 @@
+{
+  "id": "20260525T143326_sdpa_blackhole_n8",
+  "ts": "2026-05-25T14:33:26Z",
+  "workers": 8,
+  "result": {
+    "wall_s": 210.95,
+    "passed": 38
+  },
+  "per_test": [
+    {
+      "id": "test_prefill_sweep[llama2_7b_mqa_2k-q256_k256-bf16]",
+      "call_s": 72.14
+    },
+    {
+      "id": "test_prefill_sweep[llama2_7b_mqa_2k-q256_k256-bfp8]",
+      "call_s": 70.11
+    },
+    {
+      "id": "test_prefill_sweep[llama2_7b_mqa_2k-q32_k128-bfp8]",
+      "call_s": 69.28
+    },
+    {
+      "id": "test_prefill_sweep[llama2_7b_mqa_2k-q128_k128-bfp8]",
+      "call_s": 68.57
+    },
+    {
+      "id": "test_prefill_sweep[llama2_7b_mqa_2k-q128_k128-bf16]",
+      "call_s": 68.57
+    },
+    {
+      "id": "test_prefill_sweep[llama2_7b_mqa_2k-q32_k128-bf16]",
+      "call_s": 62.08
+    },
+    {
+      "id": "test_prefill_sweep[whisper_enc_1536-q128_k128-bf16]",
+      "call_s": 45.05
+    },
+    {
+      "id": "test_prefill_sweep[whisper_enc_1536-q256_k256-bfp8]",
+      "call_s": 44.75
+    },
+    {
+      "id": "test_prefill_sweep[whisper_enc_1536-q128_k128-bfp8]",
+      "call_s": 43.12
+    },
+    {
+      "id": "test_prefill_sweep[whisper_enc_1536-q256_k256-bf16]",
+      "call_s": 42.99
+    },
+    {
+      "id": "test_decode_sweep[llama2_70b_mqa_32k-kv_bfp8]",
+      "call_s": 39.51
+    },
+    {
+      "id": "test_prefill_sweep[whisper_enc_1536-q32_k128-bf16]",
+      "call_s": 38.97
+    },
+    {
+      "id": "test_prefill_sweep[whisper_enc_1536-q32_k128-bfp8]",
+      "call_s": 37.23
+    },
+    {
+      "id": "test_decode_sweep[llama2_70b_mqa_32k-kv_bf16]",
+      "call_s": 32.75
+    },
+    {
+      "id": "test_decode_sweep[mistral_7b_32k-kv_bfp8]",
+      "call_s": 22.35
+    },
+    {
+      "id": "test_decode_sweep[mistral_7b_32k-kv_bf16]",
+      "call_s": 19.09
+    },
+    {
+      "id": "test_decode_sweep[gemma_7b_d256-kv_bf16]",
+      "call_s": 14.72
+    },
+    {
+      "id": "test_decode_sweep[llama2_7b_mha-kv_bf16]",
+      "call_s": 14.22
+    },
+    {
+      "id": "test_decode_sweep[llama2_7b_mha-kv_bfp8]",
+      "call_s": 12.22
+    },
+    {
+      "id": "test_decode_sweep[gemma_7b_d256-kv_bfp8]",
+      "call_s": 11.65
+    },
+    {
+      "id": "test_decode_sweep[qwen2_7b_gqa7-kv_bf16]",
+      "call_s": 9.72
+    },
+    {
+      "id": "test_decode_sweep[qwen2_7b_gqa7-kv_bfp8]",
+      "call_s": 9.2
+    },
+    {
+      "id": "test_decode_sweep[llama3_8b_gqa4-kv_bf16]",
+      "call_s": 8.0
+    },
+    {
+      "id": "test_decode_sweep[llama31_8b_n300-kv_bfp8]",
+      "call_s": 7.99
+    },
+    {
+      "id": "test_decode_sweep[llama31_8b_n300-kv_bf16]",
+      "call_s": 7.25
+    },
+    {
+      "id": "test_decode_sweep[llama3_8b_gqa4-kv_bfp8]",
+      "call_s": 6.36
+    },
+    {
+      "id": "test_decode_sweep[whisper_large__nh20-kv_bfp8]",
+      "call_s": 2.25
+    },
+    {
+      "id": "test_decode_sweep[gpt2_medium-kv_bf16]",
+      "call_s": 1.85
+    },
+    {
+      "id": "test_decode_sweep[whisper_large__nh20-kv_bf16]",
+      "call_s": 1.84
+    },
+    {
+      "id": "test_decode_sweep[gqa_ratio1_mha-kv_bf16]",
+      "call_s": 1.71
+    },
+    {
+      "id": "test_decode_sweep[gpt2_medium-kv_bfp8]",
+      "call_s": 1.5
+    },
+    {
+      "id": "test_decode_sweep[gqa_ratio2-kv_bfp8]",
+      "call_s": 1.35
+    },
+    {
+      "id": "test_decode_sweep[gqa_ratio1_mha-kv_bfp8]",
+      "call_s": 1.25
+    },
+    {
+      "id": "test_decode_sweep[gqa_ratio2-kv_bf16]",
+      "call_s": 1.14
+    },
+    {
+      "id": "test_decode_sweep[gqa_ratio4-kv_bfp8]",
+      "call_s": 0.91
+    },
+    {
+      "id": "test_decode_sweep[gqa_ratio8_mqa-kv_bfp8]",
+      "call_s": 0.66
+    },
+    {
+      "id": "test_decode_sweep[gqa_ratio4-kv_bf16]",
+      "call_s": 0.63
+    },
+    {
+      "id": "test_decode_sweep[gqa_ratio8_mqa-kv_bf16]",
+      "call_s": 0.63
+    }
+  ],
+  "op": "sdpa",
+  "arch": "blackhole",
+  "dist": "worksteal",
+  "test_path": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_sweep.py",
+  "pytest_args": [
+    "-m",
+    "not slow",
+    "-k",
+    "decode_sweep or (prefill_sweep and (1536 or mqa_2k))"
+  ],
+  "host": {
+    "cores": 32,
+    "hostname": "bgd-lab-t3003-special-mstaletovic-for-reservation-23194"
+  }
+}

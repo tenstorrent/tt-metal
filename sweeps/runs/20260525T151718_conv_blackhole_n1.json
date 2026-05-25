@@ -1,0 +1,400 @@
+{
+  "id": "20260525T151718_conv_blackhole_n1",
+  "ts": "2026-05-25T15:17:18Z",
+  "op": "conv",
+  "arch": "blackhole",
+  "workers": 1,
+  "dist": "worksteal",
+  "test_path": "tests/ttnn/unit_tests/operations/conv/test_conv2d_sweep.py",
+  "pytest_args": [
+    "-m",
+    "not slow"
+  ],
+  "host": {
+    "cores": 32,
+    "hostname": "bgd-lab-t3003-special-mstaletovic-for-reservation-23194"
+  },
+  "result": {
+    "wall_s": 371.46,
+    "passed": 88,
+    "failed": 6
+  },
+  "per_test": [
+    {
+      "id": "test_conv_sweep[sdxl_unet_640_16x16-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 16.82
+    },
+    {
+      "id": "test_conv_sweep[sdxl_unet_640_16x16-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 15.15
+    },
+    {
+      "id": "test_conv_sweep[sdxl_unet_320_32x32-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 15.07
+    },
+    {
+      "id": "test_conv_sweep[sdxl_unet_320_32x32-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 14.76
+    },
+    {
+      "id": "test_conv_sweep[convnext_depth2-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 10.81
+    },
+    {
+      "id": "test_conv_sweep[convnext_depth2-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 10.51
+    },
+    {
+      "id": "test_conv_sweep[yolo_head_3x3-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 6.92
+    },
+    {
+      "id": "test_conv_sweep[batch4_3x3-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 6.56
+    },
+    {
+      "id": "test_conv_sweep[convnext_depth1-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 6.15
+    },
+    {
+      "id": "test_conv_sweep[wide_pw_2048_512-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 6.05
+    },
+    {
+      "id": "test_conv_sweep[wide_pw_2048_512-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 6.0
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer2_3x3-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 5.95
+    },
+    {
+      "id": "test_conv_sweep[yolo_head_3x3-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 5.76
+    },
+    {
+      "id": "test_conv_sweep[batch4_3x3-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 5.73
+    },
+    {
+      "id": "test_conv_sweep[batch2_residual-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 5.57
+    },
+    {
+      "id": "test_conv_sweep[vgg_block2_3x3-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 5.56
+    },
+    {
+      "id": "test_conv_sweep[vgg_block2_3x3-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 5.39
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer3_3x3-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 5.21
+    },
+    {
+      "id": "test_conv_sweep[convnext_depth1-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 5.1
+    },
+    {
+      "id": "test_conv_sweep[vit_base_pw-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 4.86
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer2_reduce-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 4.81
+    },
+    {
+      "id": "test_conv_sweep[batch2_residual-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 4.68
+    },
+    {
+      "id": "test_conv_sweep[vgg_block1_3x3-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 4.67
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer1_reduce-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 4.48
+    },
+    {
+      "id": "test_conv_sweep[batch8_3x3-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 4.47
+    },
+    {
+      "id": "test_conv_sweep[sdxl_downsample_640_1280-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 4.46
+    },
+    {
+      "id": "test_conv_sweep[batch8_3x3-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 4.4
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer2_3x3-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 4.15
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer3_3x3-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 4.12
+    },
+    {
+      "id": "test_conv_sweep[vit_base_pw-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 4.09
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer4_3x3-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 4.08
+    },
+    {
+      "id": "test_conv_sweep[resnet50_downsample_s2-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 4.03
+    },
+    {
+      "id": "test_conv_sweep[vgg_block1_3x3-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 3.77
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer1_3x3-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 3.59
+    },
+    {
+      "id": "test_conv_sweep[pw_192_384-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 3.51
+    },
+    {
+      "id": "test_conv_sweep[resnet50_downsample_s2-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 3.51
+    },
+    {
+      "id": "test_conv_sweep[pw_384_192-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 3.45
+    },
+    {
+      "id": "test_conv_sweep[effnet_stage2_pw-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 3.31
+    },
+    {
+      "id": "test_conv_sweep[pw_384_192-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 3.27
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer4_3x3-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 3.25
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer2_expand-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 3.17
+    },
+    {
+      "id": "test_conv_sweep[mbnetv2_pw_mid-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 3.17
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer2_reduce-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 3.16
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer1_3x3-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 3.1
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer1_pw-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 3.07
+    },
+    {
+      "id": "test_conv_sweep[sdxl_downsample_640_1280-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 3.07
+    },
+    {
+      "id": "test_conv_sweep[mbnetv2_pw_expand-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 3.05
+    },
+    {
+      "id": "test_conv_sweep[unet_bottleneck-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.87
+    },
+    {
+      "id": "test_conv_sweep[k5x5_128_128-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.84
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer3_expand-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.84
+    },
+    {
+      "id": "test_conv_sweep[sdxl_downsample_320_640-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.83
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer1_reduce-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.81
+    },
+    {
+      "id": "test_conv_sweep[effnet_stage2_pw-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.65
+    },
+    {
+      "id": "test_conv_sweep[k5x5_128_128-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.64
+    },
+    {
+      "id": "test_conv_sweep[pw_768_192-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.62
+    },
+    {
+      "id": "test_conv_sweep[unet_deep_3x3-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.5
+    },
+    {
+      "id": "test_conv_sweep[yolo_neck_down-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.49
+    },
+    {
+      "id": "test_conv_sweep[sdxl_downsample_320_640-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.46
+    },
+    {
+      "id": "test_conv_sweep[pw_192_384-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.38
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer1_expand-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.37
+    },
+    {
+      "id": "test_conv_sweep[unet_encoder_3x3-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.35
+    },
+    {
+      "id": "test_conv_sweep[mbnetv2_pw_mid-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.31
+    },
+    {
+      "id": "test_conv_sweep[pw_768_192-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.28
+    },
+    {
+      "id": "test_conv_sweep[yolo_neck_pw-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.28
+    },
+    {
+      "id": "test_conv_sweep[unet_deep_3x3-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.28
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer3_expand-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.27
+    },
+    {
+      "id": "test_conv_sweep[wide_pw_1024-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.27
+    },
+    {
+      "id": "test_conv_sweep[mbnetv2_pw_expand-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.26
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer2_expand-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.21
+    },
+    {
+      "id": "test_conv_sweep[mbnetv2_pw_project-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.18
+    },
+    {
+      "id": "test_conv_sweep[yolo_neck_3x3-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.13
+    },
+    {
+      "id": "test_conv_sweep[unet_encoder_3x3-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.07
+    },
+    {
+      "id": "test_conv_sweep[yolo_neck_down-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.07
+    },
+    {
+      "id": "test_conv_sweep[k5x5_32_64-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.06
+    },
+    {
+      "id": "test_conv_sweep[vit_patch_proj_1x1-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.03
+    },
+    {
+      "id": "test_conv_sweep[unet_bottleneck-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 2.0
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer1_expand-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 1.99
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer1_pw-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 1.95
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer4_expand-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 1.87
+    },
+    {
+      "id": "test_conv_sweep[vit_patch_proj_1x1-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 1.87
+    },
+    {
+      "id": "test_conv_sweep[yolo_neck_pw-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 1.8
+    },
+    {
+      "id": "test_conv_sweep[effnet_stage1_pw-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 1.79
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer4_expand-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 1.74
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer3_pw_up-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 1.64
+    },
+    {
+      "id": "test_conv_sweep[yolo_neck_3x3-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 1.63
+    },
+    {
+      "id": "test_conv_sweep[mbnetv2_pw_project-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 1.61
+    },
+    {
+      "id": "test_conv_sweep[effnet_stage1_pw-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 1.6
+    },
+    {
+      "id": "test_conv_sweep[resnet50_layer3_pw_up-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 1.49
+    },
+    {
+      "id": "test_conv_sweep[wide_pw_1024-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 1.41
+    },
+    {
+      "id": "test_conv_sweep[k5x5_32_64-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 1.07
+    },
+    {
+      "id": "test_conv_sweep[whisper_conv2_s2-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 0.07
+    },
+    {
+      "id": "test_conv_sweep[whisper_conv2_s2-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 0.02
+    },
+    {
+      "id": "test_conv_sweep[whisper_conv1-bf16_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 0.02
+    },
+    {
+      "id": "test_conv_sweep[whisper_conv1-bfp8_bf16-device_params={'l1_small_size': 16384}]",
+      "call_s": 0.01
+    }
+  ]
+}

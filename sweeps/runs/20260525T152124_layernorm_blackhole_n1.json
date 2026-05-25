@@ -1,0 +1,327 @@
+{
+  "id": "20260525T152124_layernorm_blackhole_n1",
+  "ts": "2026-05-25T15:21:24Z",
+  "op": "layernorm",
+  "arch": "blackhole",
+  "workers": 1,
+  "dist": "worksteal",
+  "test_path": "tests/ttnn/unit_tests/operations/fused/test_layer_norm_sweep.py",
+  "pytest_args": [
+    "-m",
+    "not slow"
+  ],
+  "host": {
+    "cores": 32,
+    "hostname": "bgd-lab-t3003-special-mstaletovic-for-reservation-23194"
+  },
+  "result": {
+    "wall_s": 241.06,
+    "passed": 76
+  },
+  "per_test": [
+    {
+      "id": "test_layer_norm_sweep[stress_llama7b_4kx4k-naive-bf16]",
+      "call_s": 11.95
+    },
+    {
+      "id": "test_layer_norm_sweep[stress_llama7b_4kx4k-naive-fp32]",
+      "call_s": 11.64
+    },
+    {
+      "id": "test_layer_norm_sweep[stress_llama7b_4kx4k-welford-fp32]",
+      "call_s": 10.51
+    },
+    {
+      "id": "test_layer_norm_sweep[stress_llama7b_4kx4k-welford-bf16]",
+      "call_s": 10.27
+    },
+    {
+      "id": "test_layer_norm_sweep[llama13b_h2048-naive-fp32]",
+      "call_s": 7.54
+    },
+    {
+      "id": "test_layer_norm_sweep[llama13b_h2048-naive-bf16]",
+      "call_s": 7.49
+    },
+    {
+      "id": "test_layer_norm_sweep[llama7b_h2048-naive-bf16]",
+      "call_s": 7.26
+    },
+    {
+      "id": "test_layer_norm_sweep[llama13b_h2048-welford-fp32]",
+      "call_s": 6.71
+    },
+    {
+      "id": "test_layer_norm_sweep[llama7b_h2048-naive-fp32]",
+      "call_s": 6.36
+    },
+    {
+      "id": "test_layer_norm_sweep[llama7b_h2048-welford-fp32]",
+      "call_s": 6.34
+    },
+    {
+      "id": "test_layer_norm_sweep[llama65b_h1024-naive-fp32]",
+      "call_s": 6.27
+    },
+    {
+      "id": "test_layer_norm_sweep[llama13b_h2048-welford-bf16]",
+      "call_s": 6.16
+    },
+    {
+      "id": "test_layer_norm_sweep[llama7b_h2048-welford-bf16]",
+      "call_s": 5.9
+    },
+    {
+      "id": "test_layer_norm_sweep[llama65b_h1024-naive-bf16]",
+      "call_s": 5.81
+    },
+    {
+      "id": "test_layer_norm_sweep[llama65b_h1024-welford-bf16]",
+      "call_s": 5.13
+    },
+    {
+      "id": "test_layer_norm_sweep[llama65b_h1024-welford-fp32]",
+      "call_s": 5.12
+    },
+    {
+      "id": "test_layer_norm_sweep[non_aligned_w1023-welford-bf16]",
+      "call_s": 3.02
+    },
+    {
+      "id": "test_layer_norm_sweep[gpt2_xl_h128-welford-fp32]",
+      "call_s": 2.87
+    },
+    {
+      "id": "test_layer_norm_sweep[non_aligned_w519-welford-bf16]",
+      "call_s": 2.83
+    },
+    {
+      "id": "test_layer_norm_sweep[gpt2_xl_h128-naive-bf16]",
+      "call_s": 2.82
+    },
+    {
+      "id": "test_layer_norm_sweep[llama7b_h32-welford-fp32]",
+      "call_s": 2.79
+    },
+    {
+      "id": "test_layer_norm_sweep[non_aligned_w1023-welford-fp32]",
+      "call_s": 2.77
+    },
+    {
+      "id": "test_layer_norm_sweep[llama13b_h32-welford-fp32]",
+      "call_s": 2.66
+    },
+    {
+      "id": "test_layer_norm_sweep[non_aligned_w127-welford-bf16]",
+      "call_s": 2.51
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_large_h128-welford-bf16]",
+      "call_s": 2.47
+    },
+    {
+      "id": "test_layer_norm_sweep[llama7b_h32-naive-fp32]",
+      "call_s": 2.46
+    },
+    {
+      "id": "test_layer_norm_sweep[gpt2_xl_h128-naive-fp32]",
+      "call_s": 2.42
+    },
+    {
+      "id": "test_layer_norm_sweep[non_aligned_w519-welford-fp32]",
+      "call_s": 2.41
+    },
+    {
+      "id": "test_layer_norm_sweep[non_aligned_w1023-naive-fp32]",
+      "call_s": 2.41
+    },
+    {
+      "id": "test_layer_norm_sweep[llama7b_h32-welford-bf16]",
+      "call_s": 2.4
+    },
+    {
+      "id": "test_layer_norm_sweep[gpt2_xl_h128-welford-bf16]",
+      "call_s": 2.39
+    },
+    {
+      "id": "test_layer_norm_sweep[gpt2_large_h128-naive-bf16]",
+      "call_s": 2.38
+    },
+    {
+      "id": "test_layer_norm_sweep[llama65b_h32-naive-fp32]",
+      "call_s": 2.36
+    },
+    {
+      "id": "test_layer_norm_sweep[llama7b_h32-naive-bf16]",
+      "call_s": 2.33
+    },
+    {
+      "id": "test_layer_norm_sweep[llama65b_h32-welford-bf16]",
+      "call_s": 2.3
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_large_h128-welford-fp32]",
+      "call_s": 2.3
+    },
+    {
+      "id": "test_layer_norm_sweep[gpt2_large_h128-naive-fp32]",
+      "call_s": 2.28
+    },
+    {
+      "id": "test_layer_norm_sweep[non_aligned_w127-welford-fp32]",
+      "call_s": 2.21
+    },
+    {
+      "id": "test_layer_norm_sweep[gpt2_large_h128-welford-bf16]",
+      "call_s": 2.13
+    },
+    {
+      "id": "test_layer_norm_sweep[llama13b_h32-naive-bf16]",
+      "call_s": 2.1
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_large_h128-naive-bf16]",
+      "call_s": 2.08
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_base_h32-naive-fp32]",
+      "call_s": 2.07
+    },
+    {
+      "id": "test_layer_norm_sweep[gpt2_large_h128-welford-fp32]",
+      "call_s": 2.04
+    },
+    {
+      "id": "test_layer_norm_sweep[llama65b_h32-naive-bf16]",
+      "call_s": 2.03
+    },
+    {
+      "id": "test_layer_norm_sweep[llama13b_h32-naive-fp32]",
+      "call_s": 1.95
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_large_h128-naive-fp32]",
+      "call_s": 1.94
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_base_h32-naive-bf16]",
+      "call_s": 1.93
+    },
+    {
+      "id": "test_layer_norm_sweep[non_aligned_w1023-naive-bf16]",
+      "call_s": 1.93
+    },
+    {
+      "id": "test_layer_norm_sweep[llama13b_h32-welford-bf16]",
+      "call_s": 1.93
+    },
+    {
+      "id": "test_layer_norm_sweep[non_aligned_w519-naive-bf16]",
+      "call_s": 1.89
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_base_h32-welford-bf16]",
+      "call_s": 1.88
+    },
+    {
+      "id": "test_layer_norm_sweep[llama65b_h32-welford-fp32]",
+      "call_s": 1.87
+    },
+    {
+      "id": "test_layer_norm_sweep[non_aligned_w519-naive-fp32]",
+      "call_s": 1.78
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_base_h32-welford-fp32]",
+      "call_s": 1.74
+    },
+    {
+      "id": "test_layer_norm_sweep[non_aligned_w127-naive-bf16]",
+      "call_s": 1.68
+    },
+    {
+      "id": "test_layer_norm_sweep[non_aligned_w127-naive-fp32]",
+      "call_s": 1.58
+    },
+    {
+      "id": "test_layer_norm_sweep[vit_large_h196-welford-bf16]",
+      "call_s": 1.55
+    },
+    {
+      "id": "test_layer_norm_sweep[vit_large_h196-welford-fp32]",
+      "call_s": 1.54
+    },
+    {
+      "id": "test_layer_norm_sweep[vit_base_h196-welford-fp32]",
+      "call_s": 1.38
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_large_h1024-naive-bf16]",
+      "call_s": 1.33
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_large_h1024-welford-fp32]",
+      "call_s": 1.27
+    },
+    {
+      "id": "test_layer_norm_sweep[vit_base_h196-welford-bf16]",
+      "call_s": 1.21
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_large_h1024-welford-bf16]",
+      "call_s": 1.17
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_large_h1024-naive-fp32]",
+      "call_s": 1.11
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_base_h512-welford-bf16]",
+      "call_s": 1.03
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_base_h128-welford-fp32]",
+      "call_s": 0.95
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_base_h512-naive-fp32]",
+      "call_s": 0.92
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_base_h512-welford-fp32]",
+      "call_s": 0.89
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_base_h512-naive-bf16]",
+      "call_s": 0.77
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_base_h128-welford-bf16]",
+      "call_s": 0.75
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_base_h128-naive-bf16]",
+      "call_s": 0.71
+    },
+    {
+      "id": "test_layer_norm_sweep[bert_base_h128-naive-fp32]",
+      "call_s": 0.67
+    },
+    {
+      "id": "test_layer_norm_sweep[vit_base_h196-naive-fp32]",
+      "call_s": 0.66
+    },
+    {
+      "id": "test_layer_norm_sweep[vit_large_h196-naive-bf16]",
+      "call_s": 0.64
+    },
+    {
+      "id": "test_layer_norm_sweep[vit_base_h196-naive-bf16]",
+      "call_s": 0.52
+    },
+    {
+      "id": "test_layer_norm_sweep[vit_large_h196-naive-fp32]",
+      "call_s": 0.32
+    }
+  ]
+}
