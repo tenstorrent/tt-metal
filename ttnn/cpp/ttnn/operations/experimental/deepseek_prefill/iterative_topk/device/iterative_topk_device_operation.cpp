@@ -14,24 +14,36 @@ void IterativeTopkDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input.storage_type() == tt::tt_metal::StorageType::DEVICE, "Input tensor must be on device");
     TT_FATAL(input.buffer() != nullptr, "Input tensor must be allocated");
     TT_FATAL(input.dtype() == tt::tt_metal::DataType::FLOAT32, "Input tensor must be FLOAT32");
-    TT_FATAL(input.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be ROW_MAJOR layout");
+    TT_FATAL(
+        input.layout() == tt::tt_metal::Layout::ROW_MAJOR || input.layout() == tt::tt_metal::Layout::TILE,
+        "Input tensor must be ROW_MAJOR or TILE layout");
 
     const auto memory_layout = input.memory_config().memory_layout();
-    TT_FATAL(
-        memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED ||
-            memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        "Input tensor must be interleaved or height-sharded");
 
-    if (memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
-        TT_FATAL(input.shard_spec().has_value(), "Height-sharded input must have a shard spec");
-        const auto& shard_spec = input.shard_spec().value();
-        uint32_t width = input.logical_shape()[-1];
+    if (input.layout() == tt::tt_metal::Layout::TILE) {
         TT_FATAL(
-            shard_spec.shape[1] == width,
-            "Height-sharded input shard width ({}) must equal tensor width ({})",
-            shard_spec.shape[1],
-            width);
-        TT_FATAL(shard_spec.shape[0] > 0, "Shard height must be > 0");
+            memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED, "TILE layout input must be interleaved");
+        uint32_t width = input.logical_shape()[-1];
+        uint32_t num_rows = input.logical_shape().volume() / width;
+        TT_FATAL(width % 32 == 0, "TILE layout input width ({}) must be divisible by 32", width);
+        TT_FATAL(num_rows % 32 == 0, "TILE layout input num_rows ({}) must be divisible by 32", num_rows);
+    } else {
+        TT_FATAL(
+            memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED ||
+                memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+            "Input tensor must be interleaved or height-sharded");
+
+        if (memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
+            TT_FATAL(input.shard_spec().has_value(), "Height-sharded input must have a shard spec");
+            const auto& shard_spec = input.shard_spec().value();
+            uint32_t width = input.logical_shape()[-1];
+            TT_FATAL(
+                shard_spec.shape[1] == width,
+                "Height-sharded input shard width ({}) must equal tensor width ({})",
+                shard_spec.shape[1],
+                width);
+            TT_FATAL(shard_spec.shape[0] > 0, "Shard height must be > 0");
+        }
     }
 
     TT_FATAL(attributes.k > 0, "k must be > 0");
@@ -45,6 +57,9 @@ void IterativeTopkDeviceOperation::validate_on_program_cache_miss(
 
 IterativeTopkDeviceOperation::program_factory_t IterativeTopkDeviceOperation::select_program_factory(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
+    if (tensor_args.input.layout() == tt::tt_metal::Layout::TILE) {
+        return TiledProgramFactory{};
+    }
     if (tensor_args.input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
         return ShardedProgramFactory{};
     }
@@ -59,6 +74,22 @@ IterativeTopkDeviceOperation::spec_return_value_t IterativeTopkDeviceOperation::
     output_shape[-1] = attributes.k;
 
     auto output_mem_config = attributes.output_mem_config;
+
+    if (input.layout() == tt::tt_metal::Layout::TILE) {
+        return std::array<TensorSpec, 2>{
+            TensorSpec(
+                output_shape,
+                tt::tt_metal::TensorLayout(
+                    tt::tt_metal::DataType::FLOAT32,
+                    tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+                    output_mem_config)),
+            TensorSpec(
+                output_shape,
+                tt::tt_metal::TensorLayout(
+                    tt::tt_metal::DataType::UINT16,
+                    tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+                    output_mem_config))};
+    }
 
     if (input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
         const auto& input_shard_spec = input.shard_spec().value();
