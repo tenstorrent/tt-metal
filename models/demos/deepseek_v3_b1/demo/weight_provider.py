@@ -62,6 +62,9 @@ class WeightProvider(Protocol):
         ...
 
 
+DEFAULT_SYNTHETIC_SEED = 520
+
+
 def _layer_key(layer_id: int, suffix: str) -> str:
     """State dict key under model.layers.{layer_id}."""
     return f"model.layers.{layer_id}.{suffix}"
@@ -71,9 +74,10 @@ def _build_synthetic_moe_state_dict(
     layer_id: int,
     *,
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
+    seed: int = DEFAULT_SYNTHETIC_SEED,
 ) -> dict[str, torch.Tensor]:
     """Build a synthetic MoE layer state dict with HF tensor shapes (randn for weights, ones for norms)."""
-    g = torch.Generator().manual_seed(layer_id)
+    g = torch.Generator().manual_seed(seed + layer_id)
     state_dict: dict[str, torch.Tensor] = {}
     dtype = torch.bfloat16
 
@@ -142,9 +146,13 @@ def _build_synthetic_moe_state_dict(
     return state_dict
 
 
-def _build_synthetic_dense_state_dict(layer_id: int) -> dict[str, torch.Tensor]:
+def _build_synthetic_dense_state_dict(
+    layer_id: int,
+    *,
+    seed: int = DEFAULT_SYNTHETIC_SEED,
+) -> dict[str, torch.Tensor]:
     """Build a synthetic dense layer state dict with HF tensor shapes (randn for weights, ones for norms)."""
-    g = torch.Generator().manual_seed(layer_id)
+    g = torch.Generator().manual_seed(seed + layer_id)
     state_dict: dict[str, torch.Tensor] = {}
     dtype = torch.bfloat16
 
@@ -193,9 +201,13 @@ def _build_synthetic_dense_state_dict(layer_id: int) -> dict[str, torch.Tensor]:
     return state_dict
 
 
-def _build_synthetic_mtp_state_dict(mtp_layer_idx: int = _MTP_LAYER_IDX) -> dict[str, torch.Tensor]:
+def _build_synthetic_mtp_state_dict(
+    mtp_layer_idx: int = _MTP_LAYER_IDX,
+    *,
+    seed: int = DEFAULT_SYNTHETIC_SEED,
+) -> dict[str, torch.Tensor]:
     """Build a synthetic MTP state dict with the lightweight MTP projection/norm tensors and lm_head."""
-    g = torch.Generator().manual_seed(mtp_layer_idx)
+    g = torch.Generator().manual_seed(seed + mtp_layer_idx)
     dtype = torch.bfloat16
     H = LogicalModelDimensions.HIDDEN_SIZE
     V = LogicalModelDimensions.VOCAB_SIZE
@@ -323,25 +335,27 @@ class SyntheticWeightProvider:
     def __init__(
         self,
         *,
+        seed: int = DEFAULT_SYNTHETIC_SEED,
         sram_hot_experts: SramHotExpertConfig | None = None,
         sram_core_grids: SramExpertCoreGrids | None = None,
         sram_assigner: CompressedTensorAssigner | None = None,
         worker_l1_size: int | None = None,
     ) -> None:
+        self._seed = seed
         self._sram_hot_experts = sram_hot_experts
         self._sram_core_grids = sram_core_grids
         self._sram_assigner = sram_assigner
         self._worker_l1_size = worker_l1_size
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
-        g = torch.Generator().manual_seed(42)
+        g = torch.Generator().manual_seed(self._seed)
         emb_w = torch.randn(
             LogicalModelDimensions.VOCAB_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=torch.bfloat16
         )
         return prepare_embedding_weights({"model.embed_tokens.weight": emb_w}, device, move_to_device=True)
 
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
-        g = torch.Generator().manual_seed(42)
+        g = torch.Generator().manual_seed(self._seed)
         hidden = LogicalModelDimensions.HIDDEN_SIZE
         lm_w = torch.randn(LogicalModelDimensions.VOCAB_SIZE, hidden, generator=g, dtype=torch.bfloat16) / (
             hidden**0.5
@@ -357,7 +371,7 @@ class SyntheticWeightProvider:
         )
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
-        sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
+        sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS, seed=self._seed)
         return prepare_moe_layer_weights(
             device,
             sd,
@@ -371,15 +385,15 @@ class SyntheticWeightProvider:
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        sd = _build_synthetic_dense_state_dict(layer_id)
+        sd = _build_synthetic_dense_state_dict(layer_id, seed=self._seed)
         return prepare_dense_layer_weights(device, sd, layer_id, move_to_device=True)
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
-        sd = _build_synthetic_mtp_state_dict()
+        sd = _build_synthetic_mtp_state_dict(seed=self._seed)
         return prepare_mtp_weights(sd, device, move_to_device=True)
 
     def load_spec(self, device: ttnn.MeshDevice) -> DeepSeekV3SpecWeights:
-        sd = _build_synthetic_mtp_state_dict()
+        sd = _build_synthetic_mtp_state_dict(seed=self._seed)
         return prepare_spec_weights(sd, device, move_to_device=True)
 
 
