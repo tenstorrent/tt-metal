@@ -16,6 +16,7 @@ No torch tensors on device in the generation loop.
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
+import numpy as np
 import torch
 import ttnn
 
@@ -247,12 +248,9 @@ class TTVibeVoiceGenerator:
         prev_token = int(ttnn.to_torch(logits_pos)[0, 0, -1, :].argmax().item())
 
         for step in range(self.max_new_tokens):
-            # Get last generated token embedding
-            token_tensor = torch.tensor([[prev_token]], dtype=torch.long)
-            token_emb = self.lm._embed(token_tensor)  # [1, 1, 1, hidden]
-
+            token_ids_np = np.array([[prev_token]], dtype=np.int32)
             start_pos = prefill_len + step
-            logits = self.lm.decode_step(token_tensor, start_pos, kv_cache_pos)
+            logits = self.lm.decode_step(token_ids_np, start_pos, kv_cache_pos)
 
             # Check if we're in speech generation mode and apply constraint
             if in_speech and valid_tokens_tt is not None:

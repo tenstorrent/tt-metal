@@ -77,6 +77,7 @@ def _reference_semantic_encode(hf_state: dict, audio: torch.Tensor, vv_config) -
     return out  # [1, vae_dim, T_enc]
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_semantic_tokenizer_pcc(mesh_device, vv_config, sem_tok_state):
     torch.manual_seed(0)
