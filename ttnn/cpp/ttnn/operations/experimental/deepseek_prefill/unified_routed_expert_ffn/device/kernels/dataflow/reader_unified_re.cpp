@@ -473,14 +473,30 @@ void kernel_main() {
         for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
             const bool is_act_sender = (my_nt_d == kb);
 
-            // Pre-stage in1_down: receivers ack ready early, sender issues
-            // DRAM reads asynchronously so the read traffic overlaps with the
-            // activated L1 mcast that follows. Without this prefetch, in1_down
-            // sender's DRAM read (~30us) and activated mcast (~15us) ran
-            // back-to-back per K-block (11 K-blocks * 30us = 330us serialized
-            // DRAM time). With async reads here, the in1_down read overlaps
-            // the activated mcast NoC writes.
             cb_reserve_back(cb_in1_down, d_in1_block_num_tiles);
+            cb_reserve_back(cb_in0_down_full, d_in0_block_num_tiles);
+
+            // Step 1: receivers ack BOTH senders (in1_down and act) at the
+            // top of the K-block iter. The in1_down ack lets the in1_down
+            // sender immediately start DRAM reads; the act ack lets the act
+            // sender start mcasting as soon as compute pushes cb_activated.
+            // Without the early act ack the sender would only see receivers
+            // after the in1_down section finishes, serializing the two paths.
+            if (!is_in1_sender) {
+                *in1_valid_local = 0;
+                noc_semaphore_inc(in1_sender_ready_noc, 1);
+            }
+            if (!is_act_sender) {
+                *act_valid_local = 0;
+                const uint32_t sender_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 0);
+                const uint32_t sender_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 1);
+                const uint64_t sender_ready_noc = get_noc_addr(sender_nx, sender_ny, act_ready_sem_addr);
+                noc_semaphore_inc(sender_ready_noc, 1);
+            }
+
+            // Step 2: in1_down sender kicks off DRAM reads (NoC 0) without
+            // barriering — reads run concurrently with the activated mcast
+            // below on NoC 1.
             uint32_t in1_block_start = 0;
             if (is_in1_sender) {
                 noc_semaphore_wait(in1_ready_local, in1_num_receivers);
@@ -493,9 +509,6 @@ void kernel_main() {
                         const uint32_t col = my_nt_d * per_core_N_d + n;
                         if (row < K_down_tiles && col < N_down_tiles_full) {
                             const uint32_t tile_idx = row * N_down_tiles_full + col;
-                            // DRAM read on NoC 0 (BRISC default is NoC 1) so the
-                            // read traffic runs on a separate NoC channel from the
-                            // activated mcast that follows on NoC 1.
                             noc_async_read_tile(tile_idx, down_acc, l1_w, /*offset=*/0, /*noc=*/0);
                         } else {
                             volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
@@ -506,16 +519,11 @@ void kernel_main() {
                         l1_w += down_tile_bytes;
                     }
                 }
-                // DON'T barrier yet — reads continue (on NoC 0) while we do
-                // activated mcast (on NoC 1).
-            } else {
-                *in1_valid_local = 0;
-                noc_semaphore_inc(in1_sender_ready_noc, 1);
-                // DON'T wait_valid yet — wait after activated mcast.
             }
 
-            // Activated L1 mcast (runs concurrently with in1_down DRAM read).
-            cb_reserve_back(cb_in0_down_full, d_in0_block_num_tiles);
+            // Step 3: activated L1 mcast (sender for this K-block = gx==kb).
+            // act_sender starts as soon as compute pushes cb_activated AND
+            // the ready acks are in (already done in step 1).
             if (is_act_sender) {
                 cb_wait_front(cb_activated, d_in0_block_num_tiles);
                 noc_semaphore_wait(act_ready_local, GRID_X_NOC - 1);
@@ -536,20 +544,12 @@ void kernel_main() {
                 noc_semaphore_set_multicast_loopback_src(act_valid_sem_addr, valid_mcast_noc, GRID_X_NOC);
 
                 cb_pop_front(cb_activated, d_in0_block_num_tiles);
-            } else {
-                *act_valid_local = 0;
-                const uint32_t sender_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 0);
-                const uint32_t sender_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 1);
-                const uint64_t sender_ready_noc = get_noc_addr(sender_nx, sender_ny, act_ready_sem_addr);
-                noc_semaphore_inc(sender_ready_noc, 1);
-                noc_semaphore_wait(act_valid_local, ACT_VALID);
             }
-            cb_push_back(cb_in0_down_full, d_in0_block_num_tiles);
 
-            // Finish in1_down: sender barriers on the DRAM reads (which have
-            // been in flight during the activated mcast), then mcasts.
+            // Step 4: in1_down sender finishes — barrier on DRAM reads (NoC 0,
+            // in flight during step 3 activated mcast on NoC 1), then mcast.
             if (is_in1_sender) {
-                noc_async_read_barrier(/*noc=*/0);  // reads were on NoC 0
+                noc_async_read_barrier(/*noc=*/0);
                 const uint64_t mcast_data_noc = get_noc_multicast_addr(
                     in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, in1_block_start);
                 const uint32_t block_bytes = d_in1_block_num_tiles * down_tile_bytes;
@@ -559,7 +559,15 @@ void kernel_main() {
 
                 *in1_valid_local = IN1_VALID;
                 noc_semaphore_set_multicast(in1_valid_sem_addr, in1_mcast_valid_noc, in1_num_receivers);
-            } else {
+            }
+
+            // Step 5: receivers wait for both valid sems and push.
+            if (!is_act_sender) {
+                noc_semaphore_wait(act_valid_local, ACT_VALID);
+            }
+            cb_push_back(cb_in0_down_full, d_in0_block_num_tiles);
+
+            if (!is_in1_sender) {
                 noc_semaphore_wait(in1_valid_local, IN1_VALID);
             }
             cb_push_back(cb_in1_down, d_in1_block_num_tiles);
