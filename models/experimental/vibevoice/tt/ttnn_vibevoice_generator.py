@@ -310,12 +310,11 @@ class TTVibeVoiceGenerator:
         Returns [1, 1, 1, hidden_size].
         """
         cfg = self.lm.cfg
-        # Use average of last-layer value vectors as condition signal
-        last_v = kv_cache.values[-1]  # [1, n_kv, S, head_dim]
+        last_v = kv_cache.values[-1]  # ttnn tensor [1, n_kv, S, head_dim]
         if last_v is not None:
-            # Mean pool over sequence → [1, head_dim * n_kv]
-            last_v_mean = last_v[:, :, -1:, :].mean(dim=1)  # [1, 1, head_dim]
-            # Project to hidden_size using zero-padded broadcast (rough approximation)
+            # Bring to host for condition computation (small tensor, one-time transfer)
+            last_v_torch = ttnn.to_torch(last_v).to(torch.float32)  # [1, n_kv, S, head_dim]
+            last_v_mean = last_v_torch[:, :, -1:, :].mean(dim=1)  # [1, 1, head_dim]
             hidden = cfg.hidden_size
             cond_torch = torch.zeros(1, 1, 1, hidden, dtype=torch.bfloat16)
             kv_dim = last_v_mean.shape[-1] * cfg.num_key_value_heads
@@ -328,7 +327,6 @@ class TTVibeVoiceGenerator:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            # Zero conditioning fallback
             return ttnn.zeros(
                 (1, 1, 1, cfg.hidden_size),
                 dtype=ttnn.bfloat16,
