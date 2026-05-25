@@ -16,61 +16,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-namespace {
-
-constexpr std::uint64_t FNV_OFFSET_BASIS = 14695981039346656037ULL;
-constexpr std::uint64_t FNV_PRIME = 1099511628211ULL;
-
-std::uint64_t fnv1a_mix_u64(std::uint64_t hash, std::uint64_t value) {
-    for (int byte_index = 0; byte_index < 8; ++byte_index) {
-        hash ^= static_cast<std::uint8_t>((value >> (byte_index * 8)) & 0xFF);
-        hash *= FNV_PRIME;
-    }
-    return hash;
-}
-
-std::uint64_t hash_shape_descriptor(const Tensor& input_tensor, std::uint64_t tensor_index) {
-    std::uint64_t hash = FNV_OFFSET_BASIS;
-
-    const auto& logical_shape = input_tensor.logical_shape();
-    const auto& padded_shape = input_tensor.padded_shape();
-    const auto rank = logical_shape.rank();
-
-    hash = fnv1a_mix_u64(hash, tensor_index);
-    hash = fnv1a_mix_u64(hash, rank);
-
-    for (std::uint32_t dim = 0; dim < rank; ++dim) {
-        hash = fnv1a_mix_u64(hash, logical_shape[dim]);
-        hash = fnv1a_mix_u64(hash, padded_shape[dim]);
-    }
-
-    hash = fnv1a_mix_u64(hash, static_cast<std::uint64_t>(input_tensor.layout()));
-    hash = fnv1a_mix_u64(hash, static_cast<std::uint64_t>(input_tensor.dtype()));
-    return hash;
-}
-
-std::uint64_t hash_shape_descriptor(const TensorSpec& spec, std::uint64_t tensor_index) {
-    std::uint64_t hash = FNV_OFFSET_BASIS;
-
-    const auto& logical_shape = spec.logical_shape();
-    const auto& padded_shape = spec.padded_shape();
-    const auto rank = logical_shape.rank();
-
-    hash = fnv1a_mix_u64(hash, tensor_index);
-    hash = fnv1a_mix_u64(hash, rank);
-
-    for (std::uint32_t dim = 0; dim < rank; ++dim) {
-        hash = fnv1a_mix_u64(hash, logical_shape[dim]);
-        hash = fnv1a_mix_u64(hash, padded_shape[dim]);
-    }
-
-    hash = fnv1a_mix_u64(hash, static_cast<std::uint64_t>(spec.layout()));
-    hash = fnv1a_mix_u64(hash, static_cast<std::uint64_t>(spec.data_type()));
-    return hash;
-}
-
-}  // namespace
-
 ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensors.empty()) {
@@ -241,14 +186,28 @@ ttsl::hash::hash_t ConcatDeviceOperation::compute_program_hash(
         tensor_args.input_tensors.size());
 
     for (std::size_t tensor_index = 0; tensor_index < tensor_args.input_tensors.size(); ++tensor_index) {
-        hash = ttsl::hash::hash_objects(hash, tensor_args.input_tensors[tensor_index].memory_config());
+        const auto& tensor = tensor_args.input_tensors[tensor_index];
         hash = ttsl::hash::hash_objects(
             hash,
-            hash_shape_descriptor(tensor_args.input_tensors[tensor_index], static_cast<std::uint64_t>(tensor_index)));
+            tensor_index,
+            tensor.logical_shape().rank(),
+            tensor.logical_shape(),
+            tensor.padded_shape(),
+            tensor.layout(),
+            tensor.dtype(),
+            tensor.memory_config());
     }
 
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    hash = ttsl::hash::hash_objects(hash, hash_shape_descriptor(output_spec, tensor_args.input_tensors.size()));
+    hash = ttsl::hash::hash_objects(
+        hash,
+        tensor_args.input_tensors.size(),
+        output_spec.logical_shape().rank(),
+        output_spec.logical_shape(),
+        output_spec.padded_shape(),
+        output_spec.layout(),
+        output_spec.data_type(),
+        output_spec.memory_config());
 
     return hash;
 }
