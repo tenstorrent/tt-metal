@@ -1,54 +1,76 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Softmax compute kernel.
+// Softmax compute kernel — Refinement 1 (chunked, L1-budget-bounded).
 //
-// Reduces a strip of fp32 tiles (1×Wt for dim=-1, Ht×1 for dim=-2) to a
-// numerically-stable softmax strip, using the helper library:
+// Computes per-strip numerically-stable softmax in three passes over the input,
+// keeping per-core L1 CB usage bounded by a constant `BLOCK_SIZE` instead of
+// `reduce_dim_tiles`. The reader streams `x` `num_input_passes` times.
 //
-//   numeric_stable = True (default, 4 phases):
-//     Phase A: reduce<MAX, ReduceDim, WaitUpfrontNoPop>(cb_input_tiles,
-//              cb_max_scaler, cb_max)                         — keeps input resident
-//     Phase B: sub<BroadcastDim, WaitUpfrontPopAtEnd, WaitUpfrontPopAtEnd>(
-//              cb_input_tiles, cb_max, cb_exps,
-//              postop = exp_tile)                            — drains both inputs
-//     Phase C: reduce<SUM, ReduceDim, WaitUpfrontNoPop>(cb_exps,
-//              cb_sum_scaler, cb_inv_sum,
-//              postop = recip_tile)                          — keeps exps resident
-//     Phase D: mul<BroadcastDim, WaitUpfrontPopAtEnd, WaitUpfrontPopAtEnd>(
-//              cb_exps, cb_inv_sum, cb_output_tiles)         — drains both inputs
+//   numeric_stable = True (default, 3 reader passes / 3 compute passes):
+//     Pass 1 (MAX):
+//       reduce<MAX, REDUCE_DIM, WaitAndPopPerTile>(cb_input_tiles, cb_max_scaler,
+//                                                  cb_max, shape=(1,Wt) or (Ht,1))
+//       The reduce holds DST across all `reduce_dim_tiles` tiles internally and
+//       packs once at the end, so cb_input_tiles only needs to hold 1 tile at a
+//       time (we double-buffer to 2 for reader-pipelining headroom).
 //
-//   numeric_stable = False (3 phases — Phase B′ replaces A+B):
-//     Phase B′: sfpu_exp<cb_input_tiles>(cb_exps, reduce_dim_tiles)
-//     Phase C, D: as above.
+//     Pass 2 (SUM(exp(x - max))):
+//       for (b = 0..NUM_BLOCKS-1):
+//         sub<BCAST, WaitAndPopPerTile, WaitUpfrontNoPop>(
+//             cb_input_tiles, cb_max, cb_centered_exp, BLOCK_shape, exp_postop)
+//         accumulate_reduce_block<SUM, REDUCE_DIM>(
+//             cb_centered_exp, cb_sum_scaler, cb_inv_sum,
+//             BLOCK_shape, b, NUM_BLOCKS, partial=none, recip_postop)
+//       The wrapper applies the recip postop only on the LAST block, so
+//       cb_inv_sum ends Pass 2 holding `1 / Σ exp(x - max)`.
 //
-// Per (dim, helper) template choices:
-//     dim = -1 (REDUCE_ROW):
-//         ReduceDim    = REDUCE_ROW
-//         BroadcastDim = COL          (column-vector output from REDUCE_ROW,
-//                                      broadcast across the columns of each tile)
-//         block shape  = (1, Wt)
-//     dim = -2 (REDUCE_COL):
-//         ReduceDim    = REDUCE_COL
-//         BroadcastDim = ROW
-//         block shape  = (Ht, 1)
+//     Pass 3 (output = exp(x - max) * inv_sum):
+//       for (b = 0..NUM_BLOCKS-1):
+//         sub<BCAST, WaitAndPopPerTile, WaitUpfrontNoPop>(
+//             cb_input_tiles, cb_max, cb_centered_exp, BLOCK_shape, exp_postop)
+//         mul<BCAST, WaitAndPopPerTile, WaitUpfrontNoPop>(
+//             cb_centered_exp, cb_inv_sum, cb_output_tiles, BLOCK_shape)
+//       After Pass 3, pop cb_max (1) and cb_inv_sum (1) — the persistent CBs
+//       used across passes.
 //
-// CB sync (per strip):
-//   cb_input_tiles : reader pushes reduce_dim_tiles  → Phase A waits upfront
-//                    (NoPop)  → Phase B waits upfront (PopAtEnd) drains it.
-//   cb_max         : Phase A pushes 1 → Phase B PopAtEnd drains.
-//   cb_exps        : Phase B pushes reduce_dim_tiles → Phase C waits upfront
-//                    (NoPop) → Phase D PopAtEnd drains.
-//   cb_inv_sum     : Phase C pushes 1 → Phase D PopAtEnd drains.
-//   cb_output_tiles: Phase D pushes reduce_dim_tiles → writer drains.
+//   numeric_stable = False (2 reader passes / 2 compute passes):
+//     Pass 1 (SUM(exp(x))):
+//       for (b = 0..NUM_BLOCKS-1):
+//         sfpu_exp<cb_input_tiles>(cb_centered_exp, BLOCK_SIZE)
+//         accumulate_reduce_block<SUM, REDUCE_DIM>(
+//             cb_centered_exp, cb_sum_scaler, cb_inv_sum,
+//             BLOCK_shape, b, NUM_BLOCKS, partial=none, recip_postop)
+//     Pass 2 (output = exp(x) * inv_sum):
+//       for (b = 0..NUM_BLOCKS-1):
+//         sfpu_exp<cb_input_tiles>(cb_centered_exp, BLOCK_SIZE)
+//         mul<BCAST, WaitAndPopPerTile, WaitUpfrontNoPop>(
+//             cb_centered_exp, cb_inv_sum, cb_output_tiles, BLOCK_shape)
 //
-// Scaler CBs are one-shot at boot (reader-side) and the reduce helpers use
-// WaitUpfrontNoPop, so they remain populated for the entire kernel lifetime.
+// MAX + REDUCE_ROW + Accumulate::at is forbidden by the LLK (see
+// reduce_helpers_compute.inl:181 — the pack-reduce edge mask drops the running
+// accumulator on the reload pass). We sidestep the limitation by streaming the
+// full reduce dim through a single reduce<MAX, WaitAndPopPerTile> call.
+//
+// CB sync (per strip, numeric_stable=True):
+//   cb_input_tiles : reader pushes 3 × reduce_dim_tiles tiles (per-tile);
+//                    compute pops 3 × reduce_dim_tiles tiles (per-tile, via the
+//                    reduce/sub/sub helpers' WaitAndPopPerTile policy).
+//   cb_max         : Pass 1 pushes 1 (held by Pass 2 + Pass 3); after Pass 3
+//                    the kernel pops 1.
+//   cb_inv_sum     : Pass 2 pushes 1 (held by Pass 3); after Pass 3 the kernel
+//                    pops 1.
+//   cb_centered_exp: per block: sub pushes BLOCK_SIZE, reduce/mul pops BLOCK_SIZE.
+//                    Net balanced after each block.
+//   cb_output_tiles: per block (Pass 3): mul pushes BLOCK_SIZE; writer drains.
+//                    NUM_BLOCKS × BLOCK_SIZE = reduce_dim_tiles, matching writer.
+//   Scalers        : one-shot at boot, NoPop, persistent.
+//
+// `fp32_dest_acc_en=True` halves DEST capacity to 4 tiles. All helpers honor
+// `DEST_AUTO_LIMIT` automatically; the kernel never hand-codes a DEST loop.
 
 #include <cstdint>
 
-// compute_kernel_api.h brings `using namespace ckernel;` (via chlkc_list.h),
-// the LLK MATH/PACK/UNPACK macros, and the standard compute API surface.
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/exp.h"
@@ -57,6 +79,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/streaming_reduce_helpers.hpp"
 
 namespace {
 constexpr uint32_t cb_input_tiles = 0;
@@ -64,8 +87,8 @@ constexpr uint32_t cb_max_scaler = 8;
 constexpr uint32_t cb_sum_scaler = 9;
 constexpr uint32_t cb_output_tiles = 16;
 constexpr uint32_t cb_max = 24;
-constexpr uint32_t cb_exps = 25;
-constexpr uint32_t cb_inv_sum = 26;
+constexpr uint32_t cb_inv_sum = 25;
+constexpr uint32_t cb_centered_exp = 26;
 }  // namespace
 
 namespace ckl = compute_kernel_lib;
@@ -76,25 +99,28 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(2);
     constexpr uint32_t Wt = get_compile_time_arg_val(3);
     constexpr uint32_t reduce_dim_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t BLOCK_SIZE = get_compile_time_arg_val(5);
+    constexpr uint32_t NUM_BLOCKS = get_compile_time_arg_val(6);
     (void)Ht;
     (void)Wt;
+    (void)reduce_dim_tiles;
 
     const uint32_t num_strips = get_arg_val<uint32_t>(0);
 
     // ---- One-shot hardware startup (must come before any helper) ----
-    // Pair (cb_input_tiles, cb_max_scaler) for SrcA/SrcB and cb_output_tiles
-    // for the packer. Helpers reconfig as needed between phases via
-    // INPUT_AND_OUTPUT reconfig modes.
     compute_kernel_hw_startup(cb_input_tiles, cb_max_scaler, cb_output_tiles);
 
     // ---- Dim-dependent helper shape and template choices ----
-    // For dim=-1 (REDUCE_ROW): shape = (1, Wt), broadcast COL.
-    // For dim=-2 (REDUCE_COL): shape = (Ht, 1), broadcast ROW.
-    constexpr auto reduce_shape =
+    // Full-strip shape for Pass 1 (MAX over the full reduce dim).
+    constexpr auto pass1_reduce_shape =
         (dim_is_row != 0) ? ckl::ReduceInputBlockShape::of(1, Wt) : ckl::ReduceInputBlockShape::of(Ht, 1);
 
-    constexpr auto bin_shape =
-        (dim_is_row != 0) ? ckl::BinaryInputBlockShape::of(1, Wt) : ckl::BinaryInputBlockShape::of(Ht, 1);
+    // Per-block shape for Passes 2 and 3.
+    constexpr auto block_reduce_shape = (dim_is_row != 0) ? ckl::ReduceInputBlockShape::of(1, BLOCK_SIZE)
+                                                          : ckl::ReduceInputBlockShape::of(BLOCK_SIZE, 1);
+
+    constexpr auto block_bin_shape = (dim_is_row != 0) ? ckl::BinaryInputBlockShape::of(1, BLOCK_SIZE)
+                                                       : ckl::BinaryInputBlockShape::of(BLOCK_SIZE, 1);
 
     constexpr auto REDUCE_AXIS = (dim_is_row != 0) ? ckernel::ReduceDim::REDUCE_ROW : ckernel::ReduceDim::REDUCE_COL;
 
@@ -105,79 +131,113 @@ void kernel_main() {
     // ---- Strip loop ----
     for (uint32_t s = 0; s < num_strips; ++s) {
         if constexpr (NUMERIC_STABLE) {
-            // ----- Phase A: MAX reduce -----
-            // reduce<MAX, ReduceDim, WaitUpfrontNoPop>(cb_input_tiles,
-            //         cb_max_scaler, cb_max, shape)
-            // WaitUpfrontNoPop keeps cb_input_tiles populated for Phase B.
+            // ----- Pass 1: stream the full reduce dim, compute MAX -----
+            // WaitAndPopPerTile keeps cb_input_tiles bounded at 2 pages — the
+            // reduce holds DST across all reduce_dim_tiles tiles and packs once.
             ckl::reduce<
                 ckernel::PoolType::MAX,
                 REDUCE_AXIS,
-                ckl::ReduceInputPolicy::WaitUpfrontNoPop,
+                ckl::ReduceInputPolicy::WaitAndPopPerTile,
                 ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT>(
-                cb_input_tiles, cb_max_scaler, cb_max, reduce_shape);
+                cb_input_tiles, cb_max_scaler, cb_max, pass1_reduce_shape);
 
-            // ----- Phase B: sub(input, max) → exp postop -----
-            // sub<BroadcastDim, WaitUpfrontPopAtEnd, WaitUpfrontPopAtEnd>(
-            //     cb_input_tiles, cb_max, cb_exps, shape, exp_postop)
-            // Pops cb_input_tiles (the WaitUpfrontNoPop residue from Phase A)
-            // and cb_max at the end. The postop fuses exp into the dst-sync
-            // window before pack, so cb_exps holds exp(x - max).
-            ckl::sub<
-                BCAST_AXIS,
-                ckl::BinaryInputPolicy::WaitUpfrontPopAtEnd,
-                ckl::BinaryInputPolicy::WaitUpfrontPopAtEnd,
-                ckl::BinaryOutputPolicy::PerTile,
-                ckl::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
-                cb_input_tiles, cb_max, cb_exps, bin_shape, [](uint32_t dst_idx) {
-                    exp_tile_init();
-                    exp_tile(dst_idx);
-                });
+            // ----- Pass 2: stream x again, per-block sub+exp → SUM, recip on last -----
+            for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
+                // sub<BCAST>(x_block, cb_max) with exp fused into the dst-sync window.
+                // cb_input_tiles is consumed per-tile (reader streaming); cb_max
+                // is held across the whole strip (WaitUpfrontNoPop).
+                ckl::sub<
+                    BCAST_AXIS,
+                    ckl::BinaryInputPolicy::WaitAndPopPerTile,
+                    ckl::BinaryInputPolicy::WaitUpfrontNoPop,
+                    ckl::BinaryOutputPolicy::PerTile,
+                    ckl::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
+                    cb_input_tiles, cb_max, cb_centered_exp, block_bin_shape, [](uint32_t dst_idx) {
+                        exp_tile_init();
+                        exp_tile(dst_idx);
+                    });
+
+                // accumulate_reduce_block routes the recip postop ONLY to the
+                // last block (b == NUM_BLOCKS-1), so cb_inv_sum ends the loop
+                // holding `1 / Σ exp(x - max)`.
+                ckl::accumulate_reduce_block<ckernel::PoolType::SUM, REDUCE_AXIS>(
+                    cb_centered_exp,
+                    cb_sum_scaler,
+                    cb_inv_sum,
+                    block_reduce_shape,
+                    b,
+                    NUM_BLOCKS,
+                    ckl::ReducePartialScaler::none(),
+                    [](uint32_t dst_idx) {
+                        // legacy_compat=false picks the Newton-Raphson recip
+                        // (≤1 ulp with fp32 DEST); the default legacy path
+                        // empirically lost ~10-11 bits of precision here.
+                        recip_tile_init</*legacy_compat=*/false>();
+                        recip_tile</*legacy_compat=*/false>(dst_idx);
+                    });
+            }
+
+            // ----- Pass 3: stream x once more, per-block sub+exp → mul by inv_sum → output -----
+            for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
+                ckl::sub<
+                    BCAST_AXIS,
+                    ckl::BinaryInputPolicy::WaitAndPopPerTile,
+                    ckl::BinaryInputPolicy::WaitUpfrontNoPop,
+                    ckl::BinaryOutputPolicy::PerTile,
+                    ckl::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
+                    cb_input_tiles, cb_max, cb_centered_exp, block_bin_shape, [](uint32_t dst_idx) {
+                        exp_tile_init();
+                        exp_tile(dst_idx);
+                    });
+
+                ckl::mul<
+                    BCAST_AXIS,
+                    ckl::BinaryInputPolicy::WaitAndPopPerTile,
+                    ckl::BinaryInputPolicy::WaitUpfrontNoPop,
+                    ckl::BinaryOutputPolicy::PerTile,
+                    ckl::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
+                    cb_centered_exp, cb_inv_sum, cb_output_tiles, block_bin_shape);
+            }
+
+            // The persistent-across-strip CBs each hold exactly 1 tile after
+            // their final consumer (Pass 3 / mul). Drain so the next strip
+            // starts with empty cb_max / cb_inv_sum.
+            cb_pop_front(cb_max, 1);
+            cb_pop_front(cb_inv_sum, 1);
         } else {
-            // ----- Phase B′: sfpu_exp(input) → exps -----
-            // sfpu_exp<cb_input_tiles>(cb_exps, reduce_dim_tiles)
-            // Streams tiles from cb_input_tiles, applies SFPU exp, packs into
-            // cb_exps. The default policy WaitAndPopPerTile drains
-            // cb_input_tiles as it goes — no Phase A residue here.
-            ckl::sfpu_exp<cb_input_tiles>(cb_exps, reduce_dim_tiles);
+            // ----- Numeric_stable = False (2 passes) -----
+            // Pass 1: per-block sfpu_exp → SUM, recip on last.
+            for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
+                ckl::sfpu_exp<cb_input_tiles>(cb_centered_exp, BLOCK_SIZE);
+
+                ckl::accumulate_reduce_block<ckernel::PoolType::SUM, REDUCE_AXIS>(
+                    cb_centered_exp,
+                    cb_sum_scaler,
+                    cb_inv_sum,
+                    block_reduce_shape,
+                    b,
+                    NUM_BLOCKS,
+                    ckl::ReducePartialScaler::none(),
+                    [](uint32_t dst_idx) {
+                        recip_tile_init</*legacy_compat=*/false>();
+                        recip_tile</*legacy_compat=*/false>(dst_idx);
+                    });
+            }
+
+            // Pass 2: per-block sfpu_exp → mul by inv_sum → output.
+            for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
+                ckl::sfpu_exp<cb_input_tiles>(cb_centered_exp, BLOCK_SIZE);
+
+                ckl::mul<
+                    BCAST_AXIS,
+                    ckl::BinaryInputPolicy::WaitAndPopPerTile,
+                    ckl::BinaryInputPolicy::WaitUpfrontNoPop,
+                    ckl::BinaryOutputPolicy::PerTile,
+                    ckl::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
+                    cb_centered_exp, cb_inv_sum, cb_output_tiles, block_bin_shape);
+            }
+
+            cb_pop_front(cb_inv_sum, 1);
         }
-
-        // ----- Phase C: SUM reduce → recip postop -----
-        // reduce<SUM, ReduceDim, WaitUpfrontNoPop>(cb_exps, cb_sum_scaler,
-        //         cb_inv_sum, shape, ..., recip_postop)
-        // WaitUpfrontNoPop keeps cb_exps populated for Phase D. recip_postop
-        // turns Σexp into 1/Σexp so Phase D can multiply instead of divide.
-        ckl::reduce<
-            ckernel::PoolType::SUM,
-            REDUCE_AXIS,
-            ckl::ReduceInputPolicy::WaitUpfrontNoPop,
-            ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT>(
-            cb_exps,
-            cb_sum_scaler,
-            cb_inv_sum,
-            reduce_shape,
-            ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::NoAccumulation{},
-            [](uint32_t dst_idx) {
-                // legacy_compat=false dispatches to the newer Newton-Raphson recip
-                // (`_calculate_reciprocal_internal_`) which, paired with fp32 DEST,
-                // claims ≤1 ulp precision (recip.h comment in ckernel_sfpu_recip.h).
-                // The default legacy_compat=true path uses an older recip formulation
-                // that empirically lost ~10-11 bits of precision in this kernel.
-                recip_tile_init</*legacy_compat=*/false>();
-                recip_tile</*legacy_compat=*/false>(dst_idx);
-            });
-
-        // ----- Phase D: mul(exps, 1/Σexp) -----
-        // mul<BroadcastDim, WaitUpfrontPopAtEnd, WaitUpfrontPopAtEnd>(
-        //     cb_exps, cb_inv_sum, cb_output_tiles, shape)
-        // Drains cb_exps (the WaitUpfrontNoPop residue from Phase C) and
-        // cb_inv_sum. Result: softmax(x) tiles in cb_output_tiles, ready
-        // for the writer.
-        ckl::mul<
-            BCAST_AXIS,
-            ckl::BinaryInputPolicy::WaitUpfrontPopAtEnd,
-            ckl::BinaryInputPolicy::WaitUpfrontPopAtEnd,
-            ckl::BinaryOutputPolicy::PerTile,
-            ckl::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(cb_exps, cb_inv_sum, cb_output_tiles, bin_shape);
     }
 }

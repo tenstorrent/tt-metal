@@ -1,12 +1,15 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Softmax writer.
+// Softmax writer — Refinement 1 (chunked, per-tile streaming).
 //
-// Per-core work: for each of the `num_strips` strips assigned to this core,
-// wait for `reduce_dim_tiles` tiles to arrive in cb_output_tiles, then write
-// them back to DRAM at the tile ids that mirror the reader's input pattern
-// (output shape == input shape).
+// Per-core work: for each of the `num_strips` strips, wait for tiles to arrive
+// in cb_output_tiles ONE AT A TIME and write them back to DRAM at the tile ids
+// that mirror the reader's input pattern (output shape == input shape).
+//
+// Per-tile streaming (vs strip-at-a-time) is the partner-side change to the
+// reader's per-tile streaming: cb_output_tiles is sized at 2 pages
+// (double-buffered) so it does not scale with `reduce_dim_tiles`.
 //
 // Strip-to-tile mapping mirrors the reader; see softmax_reader.cpp.
 
@@ -47,14 +50,13 @@ void kernel_main() {
             stride = Wt;
         }
 
-        cb_wait_front(cb_output_tiles, reduce_dim_tiles);
-        uint32_t l1_read_addr = get_read_ptr(cb_output_tiles);
         for (uint32_t t = 0; t < reduce_dim_tiles; ++t) {
             const uint32_t tile_id = base_tile_id + t * stride;
+            cb_wait_front(cb_output_tiles, 1);
+            uint32_t l1_read_addr = get_read_ptr(cb_output_tiles);
             noc_async_write_tile(tile_id, accessor, l1_read_addr);
-            l1_read_addr += tile_bytes;
+            noc_async_write_barrier();
+            cb_pop_front(cb_output_tiles, 1);
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_output_tiles, reduce_dim_tiles);
     }
 }

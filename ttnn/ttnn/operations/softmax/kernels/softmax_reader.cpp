@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Softmax reader.
+// Softmax reader — Refinement 1 (chunked, multi-pass).
 //
 // Per-core work:
 //   1. One-shot at boot: emit one MAX scaler tile (value 1.0) into cb_max_scaler
@@ -10,15 +10,20 @@
 //      `calculate_and_prepare_reduce_scaler` so the tile fill pattern is
 //      correct for both REDUCE_ROW (col-0 fill for SUM/AVG, row-0 fill for MAX)
 //      and REDUCE_COL (row-0 fill).
-//   2. Strip loop: for each of `num_strips` strips assigned to this core,
-//      compute the per-strip tile-id pattern and push `reduce_dim_tiles`
-//      fp32 tiles into cb_input_tiles in the order the compute kernel expects.
+//   2. Strip loop: for each of `num_strips` strips, stream the strip into
+//      cb_input_tiles ONE TILE AT A TIME, `num_input_passes` times:
+//        - numeric_stable=True  → 3 passes: MAX → SUM(exp) → MUL.
+//        - numeric_stable=False → 2 passes: SUM(exp) → MUL.
+//
+// Per-tile streaming (vs the Phase-0 strip-at-a-time fill) is the key
+// L1-budget unlock: cb_input_tiles needs only 2 pages (double-buffered) instead
+// of `2 × reduce_dim_tiles` pages.
 //
 // Strip-to-tile mapping (input tiles are interleaved DRAM, row-major
 // indexed; tile index = nc*Ht*Wt + ht*Wt + wt):
 //   dim=-1 (REDUCE_ROW): strip = 1 × Wt tiles
 //       strip s spans nc = s / Ht, ht = s % Ht, wt = 0..Wt-1.
-//       Equivalently, starting tile id = s * Wt, stride = 1.
+//       Starting tile id = s * Wt, stride = 1.
 //   dim=-2 (REDUCE_COL): strip = Ht × 1 tiles
 //       strip s spans nc = s / Wt, wt = s % Wt, ht = 0..Ht-1.
 //       Starting tile id = (s / Wt) * Ht * Wt + (s % Wt), stride = Wt.
@@ -39,7 +44,8 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(1);
     constexpr uint32_t Wt = get_compile_time_arg_val(2);
     constexpr uint32_t reduce_dim_tiles = get_compile_time_arg_val(3);
-    constexpr auto src_args = TensorAccessorArgs<4>();
+    constexpr uint32_t num_input_passes = get_compile_time_arg_val(4);
+    constexpr auto src_args = TensorAccessorArgs<5>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_strips = get_arg_val<uint32_t>(1);
@@ -97,19 +103,18 @@ void kernel_main() {
             stride = Wt;
         }
 
-        // Read the whole strip into cb_input_tiles. Phase A in compute uses
-        // WaitUpfrontNoPop on this CB, so the entire strip must be resident
-        // before the reduce starts. The CB is sized to 2 × reduce_dim_tiles
-        // so the next strip's reader fill can pipeline against the current
-        // strip's compute.
-        cb_reserve_back(cb_input_tiles, reduce_dim_tiles);
-        uint32_t l1_write_addr = get_write_ptr(cb_input_tiles);
-        for (uint32_t t = 0; t < reduce_dim_tiles; ++t) {
-            const uint32_t tile_id = base_tile_id + t * stride;
-            noc_async_read_tile(tile_id, accessor, l1_write_addr);
-            l1_write_addr += tile_bytes;
+        // Stream the strip `num_input_passes` times. Each pass pushes the same
+        // `reduce_dim_tiles` tiles in the same order. Per-tile reserve/push
+        // keeps cb_input_tiles bounded at its 2-page double-buffer size.
+        for (uint32_t pass = 0; pass < num_input_passes; ++pass) {
+            for (uint32_t t = 0; t < reduce_dim_tiles; ++t) {
+                const uint32_t tile_id = base_tile_id + t * stride;
+                cb_reserve_back(cb_input_tiles, 1);
+                uint32_t l1_write_addr = get_write_ptr(cb_input_tiles);
+                noc_async_read_tile(tile_id, accessor, l1_write_addr);
+                noc_async_read_barrier();
+                cb_push_back(cb_input_tiles, 1);
+            }
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_input_tiles, reduce_dim_tiles);
     }
 }

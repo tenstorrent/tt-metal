@@ -4,23 +4,44 @@
 """
 Program descriptor for the softmax operation.
 
-Builds the CB layout, kernel descriptors, and runtime args described in
-``op_design.md``:
+Refinement 1 — L1-budget-bounded chunked design.
 
-    Numeric-stable=True (4 phases):
-        Phase A: reduce<MAX, ...,  WaitUpfrontNoPop>(cb_input_tiles, cb_max_scaler, cb_max)
-        Phase B: sub<bcast, ..., WaitUpfrontPopAtEnd>(cb_input_tiles, cb_max, cb_exps) + exp postop
-        Phase C: reduce<SUM, ..., WaitUpfrontNoPop>(cb_exps, cb_sum_scaler, cb_inv_sum) + recip postop
-        Phase D: mul<bcast, ..., WaitUpfrontPopAtEnd>(cb_exps, cb_inv_sum, cb_output_tiles)
+The Phase-0 kernel sized `cb_input_tiles` to `2 × reduce_dim_tiles` and `cb_exps`
+to `reduce_dim_tiles`, which OOMs at wide reduce dims (Wt = 128 / W = 4096
+gave ~2.6 MB on a 1.5 MB L1 budget). The new design's per-core CB footprint is
+bounded by a constant `BLOCK_SIZE` instead of scaling with `reduce_dim_tiles`.
 
-    Numeric-stable=False (2 phases):
-        Phase B′: sfpu_exp<cb_input_tiles>(cb_exps, reduce_dim_tiles)
-        Phase C, D: as above.
+Chunked algorithm (numeric_stable=True, 3 reader passes over `x`):
+    Pass 1: reduce<MAX, REDUCE_DIM, WaitAndPopPerTile>(cb_input_tiles, ...) → cb_max
+            (full strip streams through; CB only needs 2 tiles double-buffered)
+    Pass 2: for b in 0..NUM_BLOCKS-1:
+                sub<BCAST, WaitAndPopPerTile, WaitUpfrontNoPop>(
+                    cb_input_tiles, cb_max, cb_centered_exp, BLOCK_SIZE_shape,
+                    post_op=exp)
+                accumulate_reduce_block<SUM, REDUCE_DIM>(
+                    cb_centered_exp, cb_sum_scaler, cb_inv_sum, BLOCK_SIZE_shape,
+                    b, NUM_BLOCKS, post_op_final=recip)
+    Pass 3: for b in 0..NUM_BLOCKS-1:
+                sub<BCAST, WaitAndPopPerTile, WaitUpfrontNoPop>(
+                    cb_input_tiles, cb_max, cb_centered_exp, BLOCK_SIZE_shape,
+                    post_op=exp)
+                mul<BCAST, WaitAndPopPerTile, WaitUpfrontNoPop>(
+                    cb_centered_exp, cb_inv_sum, cb_output_tiles, BLOCK_SIZE_shape)
 
-Work distribution: one work-item = one "reduce strip" (1 × Wt for dim=-1,
-Ht × 1 for dim=-2). Strips are split across the full compute_with_storage
-grid via `ttnn.split_work_to_cores`. Per-core counts are passed via runtime
-args (so a single kernel binary handles both core groups).
+Numeric_stable=False (2 reader passes):
+    Pass 1: per-block sfpu_exp + accumulate_reduce_block<SUM> + recip on last
+    Pass 2: per-block sfpu_exp + mul by cb_inv_sum → cb_output_tiles
+
+MAX + REDUCE_ROW does not support `Accumulate::at` (LLK pack-reduce edge mask
+drops the running accumulator — see reduce_helpers_compute.inl:181). We sidestep
+the limitation by streaming the full reduce dim through a single
+`reduce<MAX, WaitAndPopPerTile>` call: the helper holds DST across all reduce-dim
+tiles internally, packing once at the end, so the input CB never needs to hold
+more than 1 tile (we double-buffer to 2 for reader-pipelining headroom).
+
+Work distribution: one work-item = one reduce strip (1 × Wt for dim=-1, Ht × 1
+for dim=-2). Strips are split across the full compute_with_storage grid via
+`ttnn.split_work_to_cores`. Per-core counts are passed via runtime args.
 """
 
 from pathlib import Path
@@ -30,6 +51,13 @@ import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE_DIM = 32
+
+# Largest BLOCK_SIZE to consider. The cap matters because BLOCK_SIZE tiles must
+# fit in `cb_centered_exp` (the per-block intermediate). At cap=16 and
+# fp32 tiles (4 KB each), cb_centered_exp tops out at 64 KB — leaves ~1.4 MB
+# of L1 headroom. Increasing the cap shrinks NUM_BLOCKS (fewer reduce-init
+# round trips) but grows the intermediate CB.
+BLOCK_SIZE_CAP = 16
 
 
 # CB index ranges:
@@ -44,8 +72,20 @@ CB_MAX_SCALER = 8
 CB_SUM_SCALER = 9
 CB_OUTPUT_TILES = 16
 CB_MAX = 24
-CB_EXPS = 25
-CB_INV_SUM = 26
+CB_INV_SUM = 25
+CB_CENTERED_EXP = 26  # per-block intermediate for exp(x - max) (or exp(x) on the unstable path)
+
+
+def _pick_block_size(reduce_dim_tiles: int, cap: int = BLOCK_SIZE_CAP) -> int:
+    """Pick the largest BLOCK_SIZE ≤ cap that divides reduce_dim_tiles.
+
+    Falls back to 1 if no divisor in [1, cap] divides — but every reduce_dim_tiles
+    is divisible by 1, so the function always returns ≥ 1.
+    """
+    for candidate in range(min(cap, reduce_dim_tiles), 0, -1):
+        if reduce_dim_tiles % candidate == 0:
+            return candidate
+    return 1
 
 
 def create_program_descriptor(
@@ -76,8 +116,15 @@ def create_program_descriptor(
     else:
         raise ValueError(f"softmax program descriptor: unsupported dim={dim}")
 
+    BLOCK_SIZE = _pick_block_size(reduce_dim_tiles)
+    NUM_BLOCKS = reduce_dim_tiles // BLOCK_SIZE
+
+    # numeric_stable=True → 3 reader passes (max, sum/exp, mul). False → 2 (sum/exp, mul).
+    num_input_passes = 3 if numeric_stable else 2
+
     input_page_size = input_tensor.buffer_page_size()  # fp32 tile = 4096 B
     output_page_size = output_tensor.buffer_page_size()  # fp32 tile = 4096 B
+
     # Advisory deviation from op_design.md: scaler CB is fp32, not bf16.
     # The design table says bf16 for the scaler, but with bf16 the reduce
     # LLK multiplies fp32 SrcA by bf16 SrcB which downcasts the product to
@@ -102,21 +149,27 @@ def create_program_descriptor(
     ) = ttnn.split_work_to_cores(grid, num_strips)
 
     # ------- Circular buffer descriptors -------
-    # See op_design.md "Circular Buffers" table for sizing rationale.
     #
-    #   cb_input_tiles : 2 × reduce_dim_tiles  → double-block, reader/compute pipelining.
-    #   cb_max_scaler  : 1                     → persistent, NoPop.
-    #   cb_sum_scaler  : 1                     → persistent, NoPop.
-    #   cb_output_tiles: 2 × reduce_dim_tiles  → double-block, compute/writer pipelining.
-    #   cb_max         : 2                     → single tile per strip, 2 pages for cross-strip overlap.
-    #   cb_exps        : reduce_dim_tiles      → must hold a full strip (Phase B→C sequential helpers).
-    #   cb_inv_sum     : 2                     → single tile per strip, 2 pages for cross-strip overlap.
+    # All sizes below are BOUNDED BY A CONSTANT — no `reduce_dim_tiles` term.
+    # That is the deliverable of /memory-budget-metal.
+    #
+    #   cb_input_tiles : 2                  → reader/compute double-buffer (per-tile streaming).
+    #   cb_max_scaler  : 1                  → persistent, NoPop.
+    #   cb_sum_scaler  : 1                  → persistent, NoPop.
+    #   cb_output_tiles: 2                  → compute/writer double-buffer (per-tile streaming).
+    #   cb_max         : 1                  → one tile per strip, held across passes 2 & 3.
+    #   cb_inv_sum     : 1                  → one tile per strip, held across pass 3.
+    #   cb_centered_exp: BLOCK_SIZE         → per-block intermediate (sub+exp output then reduce/mul input).
+    #
+    # cb_centered_exp must hold BLOCK_SIZE tiles because the sub helper pushes all
+    # BLOCK_SIZE tiles before the downstream reduce/mul starts consuming (sub and
+    # the next helper are sequential within compute; no real pipelining).
 
-    cb_input_tiles_pages = 2 * reduce_dim_tiles
-    cb_output_tiles_pages = 2 * reduce_dim_tiles
-    cb_max_pages = 2
-    cb_exps_pages = reduce_dim_tiles
-    cb_inv_sum_pages = 2
+    cb_input_tiles_pages = 2
+    cb_output_tiles_pages = 2
+    cb_max_pages = 1
+    cb_inv_sum_pages = 1
+    cb_centered_exp_pages = BLOCK_SIZE
 
     cbs = [
         ttnn.CBDescriptor(
@@ -175,22 +228,22 @@ def create_program_descriptor(
             ],
         ),
         ttnn.CBDescriptor(
-            total_size=cb_exps_pages * input_page_size,
+            total_size=cb_inv_sum_pages * input_page_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
-                    buffer_index=CB_EXPS,
+                    buffer_index=CB_INV_SUM,
                     data_format=input_tensor.dtype,
                     page_size=input_page_size,
                 )
             ],
         ),
         ttnn.CBDescriptor(
-            total_size=cb_inv_sum_pages * input_page_size,
+            total_size=cb_centered_exp_pages * input_page_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
-                    buffer_index=CB_INV_SUM,
+                    buffer_index=CB_CENTERED_EXP,
                     data_format=input_tensor.dtype,
                     page_size=input_page_size,
                 )
@@ -208,12 +261,14 @@ def create_program_descriptor(
     #   [1] Ht
     #   [2] Wt
     #   [3] reduce_dim_tiles
-    #   [4..] TensorAccessorArgs(input_tensor)
+    #   [4] num_input_passes       — 3 for numeric_stable, 2 otherwise
+    #   [5..] TensorAccessorArgs(input_tensor)
     reader_ct_args = [
         dim_is_row,
         Ht,
         Wt,
         reduce_dim_tiles,
+        num_input_passes,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -237,12 +292,16 @@ def create_program_descriptor(
     #   [2] Ht
     #   [3] Wt
     #   [4] reduce_dim_tiles
+    #   [5] BLOCK_SIZE
+    #   [6] NUM_BLOCKS
     compute_ct_args = [
         dim_is_row,
         numeric_stable_flag,
         Ht,
         Wt,
         reduce_dim_tiles,
+        BLOCK_SIZE,
+        NUM_BLOCKS,
     ]
 
     # ------- Runtime args (per-core: strip count + starting strip index) -------
