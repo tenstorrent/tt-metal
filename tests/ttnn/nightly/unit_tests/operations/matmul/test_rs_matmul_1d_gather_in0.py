@@ -5,8 +5,7 @@
 import pytest
 from loguru import logger
 import ttnn
-from models.common.utility_functions import is_wormhole_b0, is_blackhole
-from models.common.utility_functions import torch2tt_tensor, roundup32
+from models.common.utility_functions import is_blackhole
 import torch
 import itertools
 import os
