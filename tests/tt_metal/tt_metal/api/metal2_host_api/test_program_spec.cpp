@@ -581,10 +581,8 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingSelfLoopWithMatchingSidesSucceeds) 
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    // INTRA-tensix self-loop DFBs require implicit_sync disabled (a lower-layer constraint
-    // enforced in dataflow_buffer.cpp). This matches the pattern real self-loop DFBs use
-    // (e.g. ACC_DFB / INEG_DFB in the reduction op factory's negate path).
-    dfb.disable_implicit_sync = true;
+    // INTRA-tensix self-loop DFBs have no DM endpoint; the spec-to-impl translation produces
+    // enable_implicit_sync=false automatically (no DM kernel to vote for it).
 
     BindDFBToKernel(self_loop_1, "dfb", "p", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(self_loop_1, "dfb", "c", KernelSpec::DFBEndpointType::CONSUMER);
@@ -1536,7 +1534,6 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelInterScopeFails) {
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    dfb.disable_implicit_sync = true;
 
     BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -1589,7 +1586,6 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeReferencingUnknownDFBFails) {
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    dfb.disable_implicit_sync = true;
 
     BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -1645,7 +1641,6 @@ TEST_F(ProgramSpecTestQuasar, DuplicateSelfLoopScopeEntriesFails) {
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    dfb.disable_implicit_sync = true;
 
     BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -1689,8 +1684,8 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelImplicitIntraSucceeds) {
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    // INTRA requires implicit-sync OFF at the lower DFB layer.
-    dfb.disable_implicit_sync = true;
+    // INTRA-tensix self-loop: no DM endpoint, so the spec-to-impl translation produces
+    // enable_implicit_sync=false at the lower DFB layer automatically.
 
     BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -1717,7 +1712,6 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelExplicitIntraSucceeds) {
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    dfb.disable_implicit_sync = true;
 
     BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -2335,11 +2329,9 @@ TEST(AggregateSpecTypes, DataflowBufferSpecDesignatedInitializers) {
         .entry_size = 1024,
         .num_entries = 8,
         .borrowed_from = "input_tensor",
-        .disable_implicit_sync = true,
     };
 
     EXPECT_EQ(borrowed_dfb.borrowed_from, std::optional<TensorParameterName>{"input_tensor"});
-    EXPECT_TRUE(borrowed_dfb.disable_implicit_sync);
 }
 
 TEST(AggregateSpecTypes, WorkUnitSpecDesignatedInitializers) {

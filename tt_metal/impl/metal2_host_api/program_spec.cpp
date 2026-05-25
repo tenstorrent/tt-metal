@@ -841,6 +841,104 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             kernel.unique_id);
     }
 
+    // Validate DM kernel disable_implicit_sync entries.
+    //
+    // Implicit sync is a Gen2-only, DM-only mechanism (ISR-based credit posting from NoC
+    // transaction completion). Each DM kernel can opt out per-DFB via its
+    // Gen2DataMovementConfig::disable_implicit_sync vector. The entry's bool applies to the
+    // side(s) of the DFB this kernel binds (producer, consumer, or both for a self-loop).
+    //
+    // Per-kernel rules:
+    //   - Every entry references a DFB the kernel binds.
+    //   - No duplicate entries for the same DFB on a single kernel.
+    //
+    // Cross-kernel rules (per DFB):
+    //   - All DM producers must agree on the disable value for this DFB.
+    //   - All DM consumers must agree on the disable value for this DFB.
+    //   - Producer-side and consumer-side are checked independently — the underlying hardware
+    //     mechanism is per-side.
+    //
+    // Default (no entry, or entry false) is "implicit sync enabled" for this kernel's role on
+    // the DFB. So a kernel with no entry implicitly votes false; the validator treats this as
+    // a vote for false and checks all DM kernels on each side agree.
+    {
+        // Per-kernel pass: typo guards + duplicate guards.
+        for (const auto& kernel : spec.kernels) {
+            if (!kernel.is_dm_kernel()) {
+                continue;
+            }
+            const auto& dm_config = std::get<DataMovementConfiguration>(kernel.config_spec);
+            if (!dm_config.gen2_data_movement_config.has_value()) {
+                continue;
+            }
+            std::unordered_set<DFBSpecName> bound_dfbs;
+            for (const auto& binding : kernel.dfb_bindings) {
+                bound_dfbs.insert(binding.dfb_spec_name);
+            }
+            std::unordered_set<DFBSpecName> entries_seen;
+            for (const auto& [dfb_name, _value] : dm_config.gen2_data_movement_config->disable_implicit_sync) {
+                TT_FATAL(
+                    bound_dfbs.contains(dfb_name),
+                    "Kernel '{}' disable_implicit_sync entry references DFB '{}', which the kernel does not bind",
+                    kernel.unique_id,
+                    dfb_name);
+                TT_FATAL(
+                    entries_seen.insert(dfb_name).second,
+                    "Kernel '{}' has duplicate disable_implicit_sync entries for DFB '{}'",
+                    kernel.unique_id,
+                    dfb_name);
+            }
+        }
+
+        // Cross-kernel pass: per-DFB producer-side and consumer-side agreement.
+        auto resolve_vote = [](const KernelSpec* kernel, const DFBSpecName& dfb_name) -> bool {
+            const auto& dm_config = std::get<DataMovementConfiguration>(kernel->config_spec);
+            if (!dm_config.gen2_data_movement_config.has_value()) {
+                return false;
+            }
+            for (const auto& [name, val] : dm_config.gen2_data_movement_config->disable_implicit_sync) {
+                if (name == dfb_name) {
+                    return val;
+                }
+            }
+            return false;
+        };
+        auto check_side_agreement =
+            [&](const std::vector<CollectedSpecData::DFBEndpointInfo::EndpointRecord>& endpoints,
+                const DFBSpecName& dfb_name,
+                std::string_view side_label) {
+                const KernelSpec* canonical = nullptr;
+                bool canonical_vote = false;
+                for (const auto& ep : endpoints) {
+                    if (!ep.kernel->is_dm_kernel()) {
+                        continue;
+                    }
+                    const bool vote = resolve_vote(ep.kernel, dfb_name);
+                    if (canonical == nullptr) {
+                        canonical = ep.kernel;
+                        canonical_vote = vote;
+                        continue;
+                    }
+                    TT_FATAL(
+                        vote == canonical_vote,
+                        "DFB '{}' has disagreeing disable_implicit_sync votes on the {} side: "
+                        "kernel '{}' votes {}, kernel '{}' votes {}. All DM {} kernels of a DFB must "
+                        "agree (the hardware programs a single mask per side).",
+                        dfb_name,
+                        side_label,
+                        canonical->unique_id,
+                        canonical_vote,
+                        ep.kernel->unique_id,
+                        vote,
+                        side_label);
+                }
+            };
+        for (const auto& [dfb_name, endpoint_info] : collected.dfb_endpoints) {
+            check_side_agreement(endpoint_info.producers, dfb_name, "producer");
+            check_side_agreement(endpoint_info.consumers, dfb_name, "consumer");
+        }
+    }
+
     //////////////////////////////////
     // Validate DataflowBufferSpecs
     //////////////////////////////////
@@ -1932,6 +2030,36 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
                            : experimental::dfb::TensixScope::INTER;  // currently blocked in validation
     }
 
+    // Compute the per-side implicit-sync value by polling the bound DM kernels' Gen2 votes.
+    // Sides with no DM endpoints get implicit_sync=false (no DM endpoint to enable it for).
+    // Validator guarantees per-side agreement among DM kernels, so any DM kernel's vote works.
+    auto side_implicit_sync_enabled =
+        [&](const std::vector<CollectedSpecData::DFBEndpointInfo::EndpointRecord>& endpoints) -> bool {
+        bool any_dm = false;
+        bool disabled = false;
+        for (const auto& ep : endpoints) {
+            if (!ep.kernel->is_dm_kernel()) {
+                continue;
+            }
+            any_dm = true;
+            const auto& dm_config = std::get<DataMovementConfiguration>(ep.kernel->config_spec);
+            if (!dm_config.gen2_data_movement_config.has_value()) {
+                continue;
+            }
+            for (const auto& [name, val] : dm_config.gen2_data_movement_config->disable_implicit_sync) {
+                if (name == dfb_spec->unique_id) {
+                    disabled = val;
+                    break;
+                }
+            }
+        }
+        return any_dm && !disabled;
+    };
+    const bool producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers);
+    const bool consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers);
+    const std::optional<bool> override_consumer_implicit_sync =
+        (consumer_implicit_sync != producer_implicit_sync) ? std::make_optional(consumer_implicit_sync) : std::nullopt;
+
     return experimental::dfb::DataflowBufferConfig{
         .entry_size = dfb_spec->entry_size,
         .num_entries = dfb_spec->num_entries,
@@ -1941,7 +2069,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .consumer_risc_mask = consumer_risc_mask,
         .num_consumers = consumer->num_threads,
         .cap = consumer_access_pattern,
-        .enable_implicit_sync = !dfb_spec->disable_implicit_sync,
+        .enable_implicit_sync = producer_implicit_sync,
+        .override_consumer_implicit_sync = override_consumer_implicit_sync,
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
         .tensix_scope = tensix_scope,

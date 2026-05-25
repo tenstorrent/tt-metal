@@ -212,14 +212,14 @@ void run_single_dfb_program(
     const auto consumer_pattern = is_all ? experimental::metal2_host_api::DFBAccessPattern::ALL
                                          : experimental::metal2_host_api::DFBAccessPattern::STRIDED;
 
-    // enable_implicit_sync: true  -> default disable_implicit_sync = false (implicit sync ON)
-    // enable_implicit_sync: false -> disable_implicit_sync = true
+    // Per-DM-kernel disable_implicit_sync entries below mirror the boolean derived from
+    // dfb_config.enable_implicit_sync (the lower-level legacy config still drives the value;
+    // each DM endpoint votes per-DFB on the spec side).
     experimental::metal2_host_api::DataflowBufferSpec dfb_spec{
         .unique_id = DFB_NAME,
         .entry_size = entry_size,
         .num_entries = dfb_config.num_entries,
         .data_format_metadata = dfb_config.data_format,
-        .disable_implicit_sync = !dfb_config.enable_implicit_sync,
     };
 
     // DM kernel configs supply both Gen1 (BRISC for producer / NCRISC for consumer) and
@@ -326,6 +326,17 @@ void run_single_dfb_program(
             .compile_time_arg_bindings = {{"num_entries_per_consumer", num_entries_per_consumer}},
             .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
         };
+    }
+
+    // Each DM endpoint votes per-DFB on opting out of implicit sync.
+    const bool disable_isync = !dfb_config.enable_implicit_sync;
+    if (producer_type == DFBPorCType::DM) {
+        std::get<experimental::metal2_host_api::DataMovementConfiguration>(producer_spec.config_spec)
+            .gen2_data_movement_config->disable_implicit_sync.push_back({DFB_NAME, disable_isync});
+    }
+    if (consumer_type == DFBPorCType::DM) {
+        std::get<experimental::metal2_host_api::DataMovementConfiguration>(consumer_spec.config_spec)
+            .gen2_data_movement_config->disable_implicit_sync.push_back({DFB_NAME, disable_isync});
     }
 
     experimental::metal2_host_api::WorkUnitSpec wu{
@@ -639,8 +650,9 @@ void run_concurrent_dfbs_program(
             .entry_size = entry_size,
             .num_entries = entries_per_dfb,
             .data_format_metadata = dfb_config.data_format,
-            .disable_implicit_sync = !dfb_config.enable_implicit_sync,
         });
+
+        const bool disable_isync = !dfb_config.enable_implicit_sync;
 
         kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
             .unique_id = producer_name,
@@ -667,7 +679,8 @@ void run_concurrent_dfbs_program(
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
                     .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                            .disable_implicit_sync = {{dfb_name, disable_isync}}}},
         });
         kernel_names.push_back(producer_name);
 
@@ -696,7 +709,8 @@ void run_concurrent_dfbs_program(
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
                     .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                            .disable_implicit_sync = {{dfb_name, disable_isync}}}},
         });
         kernel_names.push_back(consumer_name);
     }
@@ -835,7 +849,6 @@ void run_concurrent_tensix_dm_dfbs_program(
             .entry_size = entry_size,
             .num_entries = entries_per_dfb,
             .data_format_metadata = dfb_config.data_format,
-            .disable_implicit_sync = !dfb_config.enable_implicit_sync,
         });
 
         tensor_parameters.push_back(experimental::metal2_host_api::TensorParameter{
@@ -867,7 +880,8 @@ void run_concurrent_tensix_dm_dfbs_program(
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
                     .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                            .disable_implicit_sync = {{dfb_name, !dfb_config.enable_implicit_sync}}}},
         });
         kernel_names.push_back(consumer_name);
     }
@@ -1072,8 +1086,12 @@ void run_sequential_dfbs_program(
             .entry_size = entry_size,
             .num_entries = num_entries,
             .data_format_metadata = configs[i].data_format,
-            .disable_implicit_sync = !configs[i].enable_implicit_sync,
         });
+        const bool disable_isync = !configs[i].enable_implicit_sync;
+        std::get<experimental::metal2_host_api::DataMovementConfiguration>(producer_spec.config_spec)
+            .gen2_data_movement_config->disable_implicit_sync.push_back({dfb_name, disable_isync});
+        std::get<experimental::metal2_host_api::DataMovementConfiguration>(consumer_spec.config_spec)
+            .gen2_data_movement_config->disable_implicit_sync.push_back({dfb_name, disable_isync});
         tensor_parameters.push_back(experimental::metal2_host_api::TensorParameter{
             .unique_id = in_tensor_name,
             .spec = in_tensors[i].tensor_spec(),
@@ -1206,14 +1224,12 @@ void run_in_dfb_out_dfb_program(
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = dm2tensix_config.data_format,
-        .disable_implicit_sync = !dm2tensix_config.enable_implicit_sync,
     };
     experimental::metal2_host_api::DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = tensix2dm_config.data_format,
-        .disable_implicit_sync = !tensix2dm_config.enable_implicit_sync,
     };
 
     experimental::metal2_host_api::KernelSpec producer_spec{
@@ -1242,7 +1258,8 @@ void run_in_dfb_out_dfb_program(
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync = {{IN_DFB, !dm2tensix_config.enable_implicit_sync}}}},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
@@ -1299,7 +1316,8 @@ void run_in_dfb_out_dfb_program(
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync = {{OUT_DFB, !tensix2dm_config.enable_implicit_sync}}}},
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
@@ -1898,7 +1916,6 @@ static void run_intra_tensix_dfb_program(
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = dfb_config.data_format,
-        .disable_implicit_sync = !dfb_config.enable_implicit_sync,
     };
 
     // Self-looped: register both PRODUCER and CONSUMER bindings on the same kernel.
@@ -2038,14 +2055,12 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = remapper_dfb_config.data_format,
-        .disable_implicit_sync = !remapper_dfb_config.enable_implicit_sync,
     };
     experimental::metal2_host_api::DataflowBufferSpec intra_dfb_spec{
         .unique_id = INTRA_DFB,
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = intra_dfb_config.data_format,
-        .disable_implicit_sync = !intra_dfb_config.enable_implicit_sync,
     };
 
     experimental::metal2_host_api::KernelSpec dm_producer_spec{
@@ -2074,7 +2089,8 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync = {{REMAPPER_DFB, !remapper_dfb_config.enable_implicit_sync}}}},
     };
 
     // Combined compute kernel: BLOCKED consumer of remapper DFB ("remapper_in"),

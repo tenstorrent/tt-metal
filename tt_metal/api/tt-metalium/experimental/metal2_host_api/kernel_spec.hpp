@@ -79,8 +79,31 @@ struct DataMovementConfiguration {
     std::optional<Gen1DataMovementConfig> gen1_data_movement_config = std::nullopt;
 
     struct Gen2DataMovementConfig {
-        // Currently, no configuration is needed for Gen2!
-        // The empty struct is still used to express a Gen2 DM kernel.
+        // Per-DFB-binding opt-out from ISR-based implicit sync.
+        //
+        // Implicit sync collapses the four-line DM-kernel dance
+        // (`reserve_back` → `noc.async_read` → `async_read_barrier` → `push_back`) into a
+        // single tagged call by tying NoC transaction completion to credit posting via an
+        // ISR. It is a Gen2-only mechanism (the per-NoC-transaction-ID interrupt-enable
+        // registers and ROCC ISR machinery do not exist on Gen1) and applies only to DM
+        // endpoints (the ISR fires on NoC-transaction completion; compute kernels have no
+        // NoC traffic).
+        //
+        // Default (no entry, or entry false) is to use implicit sync on Gen2 hardware for
+        // this kernel's role on the named DFB. An entry with value `true` opts this kernel
+        // out for that DFB. Each entry's bool applies to whichever side(s) of the DFB this
+        // kernel binds (producer, consumer, or both for a self-loop).
+        //
+        // Use cases for opting out:
+        //   - Performance tuning: ISR dispatch overhead in a tight inner loop.
+        //   - Debug bisect: disable on one endpoint to isolate a sync bug.
+        //   - Mixed kernel styles during porting.
+        //
+        // Validation: if multiple DM kernels are bound as producers (or as consumers) of
+        // the same DFB, they MUST agree on this setting for that DFB. Mismatch is a spec
+        // error. Producer-side and consumer-side are checked independently.
+        using DisableImplicitSyncEntry = std::pair<DFBSpecName, bool>;
+        std::vector<DisableImplicitSyncEntry> disable_implicit_sync;
     };
     std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
 };

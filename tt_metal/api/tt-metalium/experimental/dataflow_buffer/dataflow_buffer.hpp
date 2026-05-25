@@ -41,6 +41,15 @@ struct DataflowBufferConfig {
     uint8_t num_consumers = 1;
     AccessPattern cap = AccessPattern::STRIDED;
     bool enable_implicit_sync = false;
+    // Per-endpoint override for implicit sync. When std::nullopt, the consumer side follows
+    // enable_implicit_sync. When set, the consumer side follows this value; the producer
+    // side still follows enable_implicit_sync. This is the per-endpoint override that the
+    // Metal 2.0 spec-layer translation uses to express asymmetric setups.
+    //
+    // For per-endpoint queries, prefer the producer_implicit_sync_active(config) /
+    // consumer_implicit_sync_active(config) free functions below; read this field directly
+    // only at the host-side translation site.
+    std::optional<bool> override_consumer_implicit_sync = std::nullopt;
     DataFormat data_format = tt::DataFormat::Float16_b;
     std::optional<Tile> tile = std::nullopt;
     // Set only when both producer and consumer are the same compute kernel
@@ -50,6 +59,12 @@ struct DataflowBufferConfig {
     // supplied before launch via DataflowBufferImpl::set_borrowed_memory_base_addr.
     bool borrows_memory = false;
 };
+
+inline bool producer_implicit_sync_active(const DataflowBufferConfig& config) { return config.enable_implicit_sync; }
+
+inline bool consumer_implicit_sync_active(const DataflowBufferConfig& config) {
+    return config.override_consumer_implicit_sync.value_or(config.enable_implicit_sync);
+}
 
 // Note: This API and the DataflowBufferConfig are placeholder only, the final DataflowBuffer APIs will conform with
 // host API redesign. Returns logical DFB id
