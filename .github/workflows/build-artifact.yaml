@@ -581,6 +581,10 @@ jobs:
             cmake --build build --target tracy_profiler_wasm
           fi
 
+      - name: Smoke test Tracy CLI tools
+        if: ${{ inputs.tracy }}
+        run: ./tests/scripts/tracy/tracy_cli_smoke_test.sh
+
       - name: 🛠️ Profile
         if: ${{ inputs.profile }}
         run: |

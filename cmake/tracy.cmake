@@ -64,6 +64,10 @@ set(NO_FILESELECTOR ON)
 set(_tt_tracy_saved_build_shared_libs "${BUILD_SHARED_LIBS}")
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Create shared libraries" FORCE)
 
+# Tracy config.cmake adds -march=native by default; tt-metal uses -march=x86-64-v3 globally.
+# T3K CI VMs may lack BMI2/AVX2 subsets — build CLI + TracyServer for x86-64-v2 instead.
+set(NO_ISA_EXTENSIONS ON CACHE BOOL "Disable Tracy -march=native for portable CLI tools" FORCE)
+
 # Tracy code has warnings that the parent project's -Werror would make fatal.
 get_directory_property(_parent_compile_opts COMPILE_OPTIONS)
 add_compile_options(-Wno-error)
@@ -94,6 +98,37 @@ foreach(_tt_tracy_cli_target IN ITEMS tracy-capture tracy-csvexport tracy-captur
     )
 endforeach()
 unset(_tt_tracy_cli_output_dir)
+
+# Last -march on the link line wins; override tt-metal's x86-64-v3 for Tracy server + CLI deps.
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+    set(_tt_tracy_portable_march -march=x86-64-v2)
+    foreach(
+        _tt_tracy_portable_target
+        IN
+        ITEMS
+            TracyServer
+            tracy-capture
+            tracy-csvexport
+            tracy-capture-daemon
+            capstone
+            libzstd
+            libzstd_static
+            PPQSort
+            TracyGetOpt
+    )
+        if(NOT TARGET ${_tt_tracy_portable_target})
+            continue()
+        endif()
+        get_target_property(_tt_tracy_portable_target_type ${_tt_tracy_portable_target} TYPE)
+        if(_tt_tracy_portable_target_type STREQUAL "INTERFACE_LIBRARY")
+            continue()
+        endif()
+        target_compile_options(${_tt_tracy_portable_target} PRIVATE ${_tt_tracy_portable_march})
+    endforeach()
+    unset(_tt_tracy_portable_march)
+    unset(_tt_tracy_portable_target)
+    unset(_tt_tracy_portable_target_type)
+endif()
 
 add_custom_target(tracy_profiler_cli_tools ALL)
 add_dependencies(
