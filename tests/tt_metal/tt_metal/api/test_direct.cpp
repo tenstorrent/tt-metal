@@ -416,7 +416,7 @@ bool reader_datacopy_writer(
     constexpr const char* COMPUTE = "compute";
 
     // Implicit sync is enabled by default for both DFBs (no DM kernel opts out
-    // via Gen2DataMovementConfig::disable_implicit_sync). The program-level
+    // via Gen2DataMovementConfig::disable_implicit_sync_for). The program-level
     // reservation flag set below is independent of per-DFB sync mode.
     experimental::metal2_host_api::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,

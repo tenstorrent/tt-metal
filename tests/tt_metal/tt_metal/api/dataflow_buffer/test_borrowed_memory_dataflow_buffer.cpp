@@ -162,10 +162,10 @@ void run_borrowed_memory_dfb_program(
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
         std::get<DataMovementConfiguration>(producer_spec.config_spec)
-            .gen2_data_movement_config->disable_implicit_sync.push_back("borrowed_dfb");
+            .gen2_data_movement_config->disable_implicit_sync_for.push_back("borrowed_dfb");
         if (!cfg.tensix_consumer) {
             std::get<DataMovementConfiguration>(consumer_spec.config_spec)
-                .gen2_data_movement_config->disable_implicit_sync.push_back("borrowed_dfb");
+                .gen2_data_movement_config->disable_implicit_sync_for.push_back("borrowed_dfb");
         }
     }
 
@@ -311,9 +311,9 @@ void run_update_address_test(
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
         std::get<DataMovementConfiguration>(producer_spec.config_spec)
-            .gen2_data_movement_config->disable_implicit_sync.push_back("borrowed_dfb");
+            .gen2_data_movement_config->disable_implicit_sync_for.push_back("borrowed_dfb");
         std::get<DataMovementConfiguration>(consumer_spec.config_spec)
-            .gen2_data_movement_config->disable_implicit_sync.push_back("borrowed_dfb");
+            .gen2_data_movement_config->disable_implicit_sync_for.push_back("borrowed_dfb");
     }
 
     DataflowBufferSpec dfb_spec{

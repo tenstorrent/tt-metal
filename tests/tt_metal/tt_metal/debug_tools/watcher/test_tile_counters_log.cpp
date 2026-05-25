@@ -94,7 +94,7 @@ void RunTest(
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
-                        .disable_implicit_sync = {TILE_COUNTER_DFB}}},
+                        .disable_implicit_sync_for = {TILE_COUNTER_DFB}}},
     };
 
     // NEO compute consumer kernel (4 threads = 4 Neo clusters)

@@ -133,7 +133,7 @@ void run_single_core_copy_block_matmul_partials(
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
-                        .disable_implicit_sync = {SRC0_DFB}}},
+                        .disable_implicit_sync_for = {SRC0_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -157,7 +157,7 @@ void run_single_core_copy_block_matmul_partials(
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
-                        .disable_implicit_sync = {DST_DFB}}},
+                        .disable_implicit_sync_for = {DST_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines compute_defines;

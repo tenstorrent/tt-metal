@@ -79,31 +79,12 @@ struct DataMovementConfiguration {
     std::optional<Gen1DataMovementConfig> gen1_data_movement_config = std::nullopt;
 
     struct Gen2DataMovementConfig {
-        // Per-DFB-binding opt-out from ISR-based implicit sync.
-        //
-        // Implicit sync collapses the four-line DM-kernel dance
-        // (`reserve_back` → `noc.async_read` → `async_read_barrier` → `push_back`) into a
-        // single tagged call by tying NoC transaction completion to credit posting via an
-        // ISR. It is a Gen2-only mechanism (the per-NoC-transaction-ID interrupt-enable
-        // registers and ROCC ISR machinery do not exist on Gen1) and applies only to DM
-        // endpoints (the ISR fires on NoC-transaction completion; compute kernels have no
-        // NoC traffic).
-        //
-        // Default is implicit sync ENABLED on Gen2 for any DFB this kernel binds. List a
-        // DFB's name here to opt this kernel out of implicit sync for that DFB; the opt-out
-        // applies to whichever side(s) of the DFB this kernel binds (producer, consumer,
-        // or both for a self-loop).
-        //
-        // Use cases for opting out:
-        //   - Performance tuning: ISR dispatch overhead in a tight inner loop.
-        //   - Debug bisect: disable on one endpoint to isolate a sync bug.
-        //   - Mixed kernel styles during porting.
-        //
-        // Validation: if multiple DM kernels are bound as producers (or as consumers) of
-        // the same DFB, they MUST agree on this setting — either all list the DFB here, or
-        // none do. Mismatch is a spec error. Producer-side and consumer-side are checked
-        // independently.
-        std::vector<DFBSpecName> disable_implicit_sync;
+        // Opt-out of DFB implicit sync (on a per-DFB basis)
+        // Implicit sync enables streamlined kernel-side syntax, but triggers ISR handling.
+        // You may revert to the legacy explicit sync APIs for specific bound DFBs by
+        // listing their DFBSpecNames here. (This feature is mainly for debug purposes.)
+        // Any bound DFB not listed here will use implicit sync by default.
+        std::vector<DFBSpecName> disable_implicit_sync_for;
     };
     std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
 };
