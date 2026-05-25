@@ -1991,9 +1991,10 @@ class UnarySFPUGolden:
         return result
 
     def _reciprocal(self, x):
-        if x == 0.0:
-            return self.handle_infinite_numbers(float("inf"))
-        return 1 / x
+        result = torch.reciprocal(torch.tensor(x, dtype=torch.float32)).item()
+        if math.isinf(result) and not self.data_format.is_exponent_B():
+            return math.nan
+        return result
 
     def _sin(self, x):
         # Never not finite, values range from [-1, 1]
