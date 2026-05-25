@@ -31,6 +31,7 @@ from typing import FrozenSet, Optional, Tuple
 
 from transformers.configuration_utils import PretrainedConfig
 
+from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3Config as DSv3RefConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k26.configuration_deepseek import DeepseekV3Config as KimiRefConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k26.kimi_k26_config import KimiK26Config
@@ -136,9 +137,9 @@ class ModelVariant(ABC):
 
 
 class DSv3Variant(ModelVariant):
-    def build_reference_config(self) -> KimiRefConfig:
+    def build_reference_config(self) -> DSv3RefConfig:
         c = DeepSeekV3Config
-        return KimiRefConfig(
+        return DSv3RefConfig(
             hidden_size=c.EMB_SIZE,
             num_attention_heads=c.NUM_ATTENTION_HEADS,
             num_key_value_heads=c.NUM_ATTENTION_HEADS,

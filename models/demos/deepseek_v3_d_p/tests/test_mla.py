@@ -16,8 +16,8 @@ from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
 import ttnn
-from conftest import random_weights
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
+from models.demos.deepseek_v3_d_p.tests.conftest import random_weights
 from models.demos.deepseek_v3_d_p.tests.model_variants import MODEL_VARIANTS
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA

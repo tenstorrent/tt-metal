@@ -12,8 +12,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from conftest import random_weights
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
+from models.demos.deepseek_v3_d_p.tests.conftest import random_weights
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
 from models.demos.deepseek_v3_d_p.tt.mla.utils import reverse_reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
