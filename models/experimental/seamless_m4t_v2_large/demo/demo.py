@@ -57,22 +57,9 @@ OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
 T2ST_WAV = OUTPUT_DIR / "t2st_hindi_speech.wav"
 S2ST_WAV = OUTPUT_DIR / "s2st_spanish_speech.wav"
 
-# Full T2ST wav can exceed ~650 mel frames; S2TT/S2ST/ASR matmul programs overflow L1 past ~500.
-DEMO_MAX_SPEECH_SEC_FOR_S2X = 6.0
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _truncate_audio_for_speech_tasks(
-    audio: np.ndarray, sample_rate: int, max_seconds: float = DEMO_MAX_SPEECH_SEC_FOR_S2X
-) -> np.ndarray:
-    max_samples = int(max_seconds * sample_rate)
-    if audio.size <= max_samples:
-        return audio
-    return audio[:max_samples]
 
 
 def _weights_dir() -> Path:
@@ -310,14 +297,8 @@ def main() -> None:
         tt_model.clear_runtime_program_cache()
         ttnn.synchronize_device(device)
 
-        # The Hindi speech from T2ST becomes the input for tasks 3-5 (trimmed if very long).
-        hindi_for_s2x = _truncate_audio_for_speech_tasks(hindi_wav_np, sample_rate)
-        if hindi_for_s2x.size < hindi_wav_np.size:
-            print(
-                f"  Note: tasks 3–5 use the first {DEMO_MAX_SPEECH_SEC_FOR_S2X:.0f}s of T2ST audio "
-                f"({hindi_for_s2x.size} / {hindi_wav_np.size} samples) to stay within device L1."
-            )
-        audio_inputs = processor(audios=hindi_for_s2x, sampling_rate=sample_rate, return_tensors="pt")
+        # The Hindi speech from T2ST becomes the input for tasks 3-5.
+        audio_inputs = processor(audios=hindi_wav_np, sampling_rate=sample_rate, return_tensors="pt")
         input_features = audio_inputs["input_features"]
         input_speech_attn = audio_inputs["attention_mask"]
 
