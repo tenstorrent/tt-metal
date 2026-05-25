@@ -1,38 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""PCC: 5 Hz LM handler TTNN logits helpers vs PyTorch (bf16) references.
+"""PCC: 5 Hz LM handler TTNN logits helpers vs PyTorch (bf16).
 
-``LocalFiveHzLMHandler.set_ttnn_logits_device`` routes CFG combine, temperature scaling,
-repetition penalty, and dense logit masks through :mod:`ttnn_impl.lm_logits_ttnn` /
-:mod:`ttnn_impl.lm_constrained_logits_ttnn`.  These tests exercise the same kernels on
-synthetic tensors and require Pearson correlation ≥ 0.99 vs host PyTorch that mirrors
-the bf16 staging used on device.
-
-**TTNN causal LM** (default in ``run_prompt_to_wav.py`` /
-``torch_ref/run_ace_step_ttmetal_demo_torch_ref_lm.py``): compares
+Synthetic tensor tests require Pearson ≥ 0.99. Experimental causal LM tests compare
 :class:`~models.demos.ace_step_v1_5.ttnn_impl.five_hz_causal_lm_experimental.AceStepFiveHzExperimentalTtnnCausalLM`
-to HuggingFace ``AutoModelForCausalLM`` (bf16). PCC uses :func:`models.common.utility_functions.comp_pcc`:
-
-- **Prefill**: last-position logits only — the TTNN body emits valid logits only at the
-  real last-token position (other positions are zero by design; the stock
-  ``tt_transformers`` sharded LMHead produces a single TILE-row per call). The full-sequence
-  Pearson is logged as a diagnostic but is expected to be low.
-- **Decode**: full last-token comparison (only one position exists for a decode step).
-
-The default PCC floor is ``ACE_STEP_EXPERIMENTAL_LM_PCC`` (default ``0.98``). Override the
-env var if a checkpoint or silicon path is still below parity during bring-up.
-
-**Debug staged PCC** (which pipeline stage drifts vs HF):
-
-.. code-block:: bash
-
-   ACE_STEP_DEBUG_LM_LOGITS=1 \\
-   TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.textproto \\
-   pytest models/demos/ace_step_v1_5/tests/test_llm_handler_logits_pcc.py::test_llm_handler_experimental_causal_lm_prefill_decode_pcc_vs_torch -v -s
-
-Optional: ``ACE_STEP_DEBUG_LM_LOGITS_HF=1`` (rerun HF inside the bridge),
-``ACE_STEP_DEBUG_LM_LOGITS_LAYER_PCC=1`` (HF hidden-state stats per layer).
+to HuggingFace ``AutoModelForCausalLM``; prefill checks last-position logits only.
+Default floor: ``ACE_STEP_EXPERIMENTAL_LM_PCC`` (default ``0.98``). Optional staged
+debug via ``ACE_STEP_DEBUG_LM_LOGITS`` (and ``_HF`` / ``_LAYER_PCC``).
 """
 
 from __future__ import annotations
@@ -67,19 +42,8 @@ from models.demos.ace_step_v1_5.ttnn_impl.lm_postprocess_tt_transformers import 
 )
 
 _PCC = 0.99
-# Experimental causal LM vs HF (``comp_pcc``).
-#
-# The experimental TTNN causal LM (``QwenModelTtTransformers`` in ``qwen_tt_transformers_lm.py``)
-# cannot match HF's bf16 reference bit-exactly: TTNN's tile-based bf16 matmul rounds at different
-# boundaries than torch's BLAS GEMM, and that error compounds across 28 layers of Qwen3 1.7B.
-# With ``models/tt_transformers/model_params/acestep-5Hz-lm-1.7B/accuracy_decoder_config.json``
-# (Qwen2.5-style HiFi4 attention + BF16 MLP weights + BF16 activations), prefill last-token PCC on
-# P150 is typically ``~0.984``. Per-layer parity is ``~0.999+``; error compounds over 28 layers.
-# Strict ``0.99`` may require upstream LMHead / residual tweaks — use ``ACE_STEP_EXPERIMENTAL_LM_PCC``.
 _PCC_EXPERIMENTAL_LM = float(os.environ.get("ACE_STEP_EXPERIMENTAL_LM_PCC", "0.98"))
 
-
-# Prefer the default demo variant (``--lm_variant acestep-5Hz-lm-1.7B``), then 0.6B.
 _FIVE_HZ_LM_DIR_NAMES = ("acestep-5Hz-lm-1.7B", "acestep-5Hz-lm-0.6B")
 
 
@@ -294,7 +258,6 @@ def test_llm_handler_experimental_causal_lm_prefill_decode_pcc_vs_torch(device, 
     ids_pre = full[:, :L].contiguous()
     ids_next = full[:, L : L + 1].contiguous()
 
-    # --- PyTorch reference (same HF stack as ``LocalFiveHzLMHandler`` / ``QwenModelTtTransformers`` weights) ---
     hf = AutoModelForCausalLM.from_pretrained(
         str(lm_dir),
         torch_dtype=torch.bfloat16,
@@ -309,7 +272,6 @@ def test_llm_handler_experimental_causal_lm_prefill_decode_pcc_vs_torch(device, 
     del hf
     gc.collect()
 
-    # --- TTNN causal wrapper (production ``five_hz_lm`` + ``initialize(..., use_ttnn_causal_lm=True)``) ---
     try:
         exp = AceStepFiveHzExperimentalTtnnCausalLM(
             str(lm_dir),
@@ -357,26 +319,13 @@ def test_llm_handler_experimental_causal_lm_prefill_decode_pcc_vs_torch(device, 
             del exp
         gc.collect()
 
-    # IMPORTANT — prefill compares LAST-POSITION logits only.
-    #
-    # ``QwenModelTtTransformers`` runs prefill through ``Transformer.ttnn_prefill_forward``
-    # with ``get_last_token=(seq_len-1)//32*32`` so the stock sharded ``LMHead`` only
-    # produces a single TILE-row of logits (the row containing the real last token). The
-    # ``AceStepFiveHzExperimentalTtnnCausalLM`` bridge then scatters the real last-token
-    # row into a ``[1, seq_log, vocab]`` tensor with **zeros at positions 0..seq_log-2**.
-    # This matches what the downstream HF ``generate`` loop actually consumes
-    # (``outputs.logits[:, -1, :]``) but means per-position prefill PCC vs HF is only
-    # meaningful at position ``seq_log-1``.
     rp, gp = _align_logits_last_dims(ref_pre, tt_pre)
-    # Last-position slice — this is the only position the TTNN body actually computes.
     rp_last = rp[:, -1:, :].contiguous()
     gp_last = gp[:, -1:, :].contiguous()
     r_pre_last = _pearson(rp_last.numpy(), gp_last.numpy())
     if ace_step_debug_lm_logits_enabled():
         log_lm_pcc("test.prefill_last_pos", rp_last, gp_last, min_pcc=_PCC_EXPERIMENTAL_LM)
     ok_pre, pcc_pre = comp_pcc(rp_last, gp_last, pcc=_PCC_EXPERIMENTAL_LM)
-    # Diagnostic: full-sequence Pearson (will be much lower; expected because most positions
-    # in ``tt_pre`` are zero by design).
     r_pre_full_diag = _pearson(rp.numpy(), gp.numpy())
     print(
         f"[llm_handler_logits_pcc] experimental_causal_lm_prefill_last_pos "
@@ -388,8 +337,6 @@ def test_llm_handler_experimental_causal_lm_prefill_decode_pcc_vs_torch(device, 
     )
     assert ok_pre, f"prefill last-pos comp_pcc {float(pcc_pre):.6f} < {_PCC_EXPERIMENTAL_LM}"
 
-    # Decode: TTNN body returns valid last-token logits for the single new token, so
-    # full comparison is meaningful here.
     rd, gd = _align_logits_last_dims(ref_dec, tt_dec)
     r_dec = _pearson(rd.numpy(), gd.numpy())
     if ace_step_debug_lm_logits_enabled():
