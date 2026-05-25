@@ -178,4 +178,4 @@ def test_fused_relu_with_broadcast(device, dtype, broadcast_shape):
     tt_out = ttnn.add(tt_a, tt_b, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
     result = ttnn.to_torch(tt_out)
 
-    assert_with_pcc(golden, result, 0.999)
+    assert_equal(golden, result, max_ulp=1)
