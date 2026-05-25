@@ -42,17 +42,6 @@ class MLACase:
     v_head_dim: int
 
 
-@dataclass(frozen=True)
-class StageEstimate:
-    read_bytes: int = 0
-    write_bytes: int = 0
-    flops: int = 0
-
-    @property
-    def traffic_bytes(self) -> int:
-        return self.read_bytes + self.write_bytes
-
-
 CASES: dict[str, MLACase] = {
     # Existing test_deepseek.py parity shape. Fast smoke for validating the script.
     "smoke": MLACase("smoke", 2, 64, 64, 2, 32, 32, 32, 32, 32),
@@ -113,87 +102,6 @@ def _make_config(case: MLACase) -> DeepSeekConfig:
         max_seq_len=case.seq_len,
         rope_theta=10000.0,
     )
-
-
-def _bf16_bytes(elements: int) -> int:
-    return elements * 2
-
-
-def _matmul_flops(m: int, k: int, n: int, batch: int = 1) -> int:
-    return 2 * batch * m * k * n
-
-
-def _estimate_stages(case: MLACase) -> dict[str, StageEstimate]:
-    B = case.batch_size
-    S = case.seq_len
-    D = case.dim
-    H = case.n_heads
-    q_rank = case.q_lora_rank
-    kv_rank = case.kv_lora_rank
-    qk_nope = case.qk_nope_head_dim
-    qk_rope = case.qk_rope_head_dim
-    qk_head = qk_nope + qk_rope
-    v_dim = case.v_head_dim
-
-    estimates: dict[str, StageEstimate] = {}
-
-    # Matmul traffic is a lower-bound tensor-size estimate; actual kernel traffic
-    # depends on tiling/reuse. FLOPs use dense matmul convention: 2*M*K*N.
-    if q_rank == 0:
-        q_proj_flops = _matmul_flops(B * S, D, H * qk_head)
-        q_proj_read = _bf16_bytes(B * S * D + D * H * qk_head)
-    else:
-        q_proj_flops = _matmul_flops(B * S, D, q_rank) + _matmul_flops(B * S, q_rank, H * qk_head)
-        q_proj_read = _bf16_bytes(B * S * D + D * q_rank + B * S * q_rank + q_rank * H * qk_head)
-    estimates["q_projection"] = StageEstimate(q_proj_read, _bf16_bytes(B * S * H * qk_head), q_proj_flops)
-
-    kv_down_flops = _matmul_flops(B * S, D, kv_rank + qk_rope)
-    estimates["kv_down_split"] = StageEstimate(
-        read_bytes=_bf16_bytes(B * S * D + D * (kv_rank + qk_rope)),
-        write_bytes=_bf16_bytes(B * S * (kv_rank + qk_rope)),
-        flops=kv_down_flops,
-    )
-    estimates["k_rope"] = StageEstimate(
-        read_bytes=_bf16_bytes(B * S * qk_rope),
-        write_bytes=_bf16_bytes(B * S * qk_rope),
-        flops=B * S * qk_rope * 6,
-    )
-
-    kv_up_flops = _matmul_flops(B * S, kv_rank, H * (qk_nope + v_dim))
-    estimates["kv_up_projection"] = StageEstimate(
-        read_bytes=_bf16_bytes(B * S * kv_rank + kv_rank * H * (qk_nope + v_dim)),
-        write_bytes=_bf16_bytes(B * S * H * (qk_nope + v_dim)),
-        flops=kv_up_flops,
-    )
-    estimates["qkv_assemble"] = StageEstimate(
-        read_bytes=_bf16_bytes(B * S * H * (qk_head + qk_nope + v_dim) + B * S * qk_rope),
-        write_bytes=_bf16_bytes(B * S * H * (qk_head + qk_head + v_dim)),
-    )
-    estimates["q_rope"] = StageEstimate(
-        read_bytes=_bf16_bytes(B * S * H * qk_head),
-        write_bytes=_bf16_bytes(B * S * H * qk_head),
-        flops=B * S * H * qk_rope * 6,  # rough: sin/cos rotation as mul/sub/adds, caches excluded
-    )
-
-    # SDPA lower-bound FLOPs:
-    # QK^T and P@V are dense batched matmuls. Softmax FLOPs are approximate.
-    sdpa_flops = _matmul_flops(S, qk_head, S, batch=B * H) + _matmul_flops(S, S, v_dim, batch=B * H)
-    sdpa_flops += B * H * S * S * 5
-    estimates["sdpa"] = StageEstimate(
-        read_bytes=_bf16_bytes(B * H * S * (qk_head + qk_head + v_dim)),
-        write_bytes=_bf16_bytes(B * H * S * v_dim),
-        flops=sdpa_flops,
-    )
-    estimates["heads_fusion"] = StageEstimate(
-        read_bytes=_bf16_bytes(B * H * S * v_dim),
-        write_bytes=_bf16_bytes(B * S * H * v_dim),
-    )
-    estimates["output_projection"] = StageEstimate(
-        read_bytes=_bf16_bytes(B * S * H * v_dim + H * v_dim * D),
-        write_bytes=_bf16_bytes(B * S * D),
-        flops=_matmul_flops(B * S, H * v_dim, D),
-    )
-    return estimates
 
 
 def _make_inputs(case: MLACase, rng: np.random.Generator):
@@ -423,7 +331,6 @@ def _print_case(
 ) -> list[dict[str, str | float]]:
     rows: list[dict[str, str | float]] = []
     total_avg = sum(_stats(timings_us[name])["avg_us"] for name in STAGE_ORDER)
-    estimates = _estimate_stages(case)
 
     print(f"\nMLA case: {case.name}")
     print(
@@ -432,19 +339,13 @@ def _print_case(
         f"q_lora={case.q_lora_rank} kv_lora={case.kv_lora_rank} "
         f"qk=({case.qk_nope_head_dim}+{case.qk_rope_head_dim}) v={case.v_head_dim}"
     )
-    print("+-------------------+----------+----------+----------+--------+------------+-----------+")
-    print("| stage             | avg us   | p50 us   | min us   | pct    | est MiB    | est TF/s  |")
-    print("+-------------------+----------+----------+----------+--------+------------+-----------+")
+    print("+-------------------+----------+----------+----------+--------+")
+    print("| stage             | avg us   | p50 us   | min us   | pct    |")
+    print("+-------------------+----------+----------+----------+--------+")
     for name in STAGE_ORDER:
         s = _stats(timings_us[name])
         pct = 100.0 * s["avg_us"] / total_avg if total_avg > 0 else 0.0
-        estimate = estimates[name]
-        mib = estimate.traffic_bytes / (1024 * 1024)
-        tflops = estimate.flops / (s["avg_us"] * 1e-6) / 1e12 if estimate.flops > 0 and s["avg_us"] > 0 else 0.0
-        print(
-            f"| {name:<17} | {s['avg_us']:>8.0f} | {s['p50_us']:>8.0f} | {s['min_us']:>8.0f} | "
-            f"{pct:>5.1f}% | {mib:>10.2f} | {tflops:>9.2f} |"
-        )
+        print(f"| {name:<17} | {s['avg_us']:>8.0f} | {s['p50_us']:>8.0f} | {s['min_us']:>8.0f} | " f"{pct:>5.1f}% |")
         rows.append(
             {
                 "case": case.name,
@@ -454,12 +355,9 @@ def _print_case(
                 "min_us": s["min_us"],
                 "max_us": s["max_us"],
                 "pct_of_section_sum": pct,
-                "est_traffic_bytes": estimate.traffic_bytes,
-                "est_flops": estimate.flops,
-                "est_tflops_per_s": tflops,
             }
         )
-    print("+-------------------+----------+----------+----------+--------+------------+-----------+")
+    print("+-------------------+----------+----------+----------+--------+")
     print(f"section_sum_avg_us={total_avg:.0f}")
     if end_to_end_us:
         e2e = _stats(end_to_end_us)
@@ -473,9 +371,6 @@ def _print_case(
                 "min_us": e2e["min_us"],
                 "max_us": e2e["max_us"],
                 "pct_of_section_sum": 0.0,
-                "est_traffic_bytes": 0,
-                "est_flops": 0,
-                "est_tflops_per_s": 0.0,
             }
         )
     if backward_timings_us:
@@ -492,9 +387,6 @@ def _print_case(
                     "min_us": s["min_us"],
                     "max_us": s["max_us"],
                     "pct_of_section_sum": 0.0,
-                    "est_traffic_bytes": 0,
-                    "est_flops": 0,
-                    "est_tflops_per_s": 0.0,
                 }
             )
     if backward_section_timings_us:
@@ -518,9 +410,6 @@ def _print_case(
                     "min_us": s["min_us"],
                     "max_us": s["max_us"],
                     "pct_of_section_sum": pct,
-                    "est_traffic_bytes": 0,
-                    "est_flops": 0,
-                    "est_tflops_per_s": 0.0,
                 }
             )
         print("+-------------------+----------+----------+----------+--------+")
@@ -664,9 +553,6 @@ def main() -> int:
                     "min_us",
                     "max_us",
                     "pct_of_section_sum",
-                    "est_traffic_bytes",
-                    "est_flops",
-                    "est_tflops_per_s",
                 ],
             )
             writer.writeheader()
