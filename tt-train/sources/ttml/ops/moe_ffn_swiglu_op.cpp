@@ -107,7 +107,6 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             /*offsets_tensor=*/offsets,
             /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
             /*offsets_start_index=*/e,
-            /*in0_row_offset_tiles=*/0U,
             /*effective_M_tiles=*/t_cap_tiles);
         ttml::metal::variable_matmul(
             grouped_value,
@@ -120,7 +119,6 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             /*offsets_tensor=*/offsets,
             /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
             /*offsets_start_index=*/e,
-            /*in0_row_offset_tiles=*/0U,
             /*effective_M_tiles=*/t_cap_tiles);
     }
     // Bulk silu·multiply over the full shared tensors — pad rows compute silu(0)·0=0 so the
@@ -148,7 +146,6 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             /*offsets_tensor=*/offsets,
             /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
             /*offsets_start_index=*/e,
-            /*in0_row_offset_tiles=*/0U,
             /*effective_M_tiles=*/t_cap_tiles);
     }
     activated.deallocate();
@@ -203,7 +200,6 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 /*offsets_tensor=*/offsets,
                 /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
                 /*offsets_start_index=*/e,
-                /*in0_row_offset_tiles=*/0U,
                 /*effective_M_tiles=*/t_cap_tiles);
         }
 
@@ -278,7 +274,6 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 /*offsets_tensor=*/offsets,
                 /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
                 /*offsets_start_index=*/e,
-                /*in0_row_offset_tiles=*/0U,
                 /*effective_M_tiles=*/t_cap_tiles);
             ttml::metal::variable_matmul(
                 d_up_proj,
@@ -291,7 +286,6 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 /*offsets_tensor=*/offsets,
                 /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
                 /*offsets_start_index=*/e,
-                /*in0_row_offset_tiles=*/0U,
                 /*effective_M_tiles=*/t_cap_tiles);
         }
         d_gate_proj.deallocate();

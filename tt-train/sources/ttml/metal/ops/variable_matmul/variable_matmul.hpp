@@ -60,12 +60,11 @@ ttnn::Tensor variable_matmul(
     std::optional<ttnn::Tensor> offsets_tensor = std::nullopt,
     OffsetsRole offsets_role = OffsetsRole::None,
     uint32_t offsets_start_index = 0,
-    // Scalar (host-known) offsets — used only when offsets_tensor is std::nullopt or
-    // the role does not cover the relevant axis. EP path overrides these.
-    uint32_t in0_row_offset_tiles = 0,
+    // Scalar (host-known) offsets — used only when offsets_tensor is std::nullopt.
+    // effective_M_tiles is also honored for the host-side output_tensor bounds check
+    // even on the EP path (matters when token_capacity is non-tile-aligned).
     uint32_t effective_M_tiles = 0,
     uint32_t in0_k_offset_tiles = 0,
-    uint32_t in1_k_offset_tiles = 0,
-    uint32_t out_row_offset_tiles = 0);
+    uint32_t in1_k_offset_tiles = 0);
 
 }  // namespace ttml::metal

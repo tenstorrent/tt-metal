@@ -313,11 +313,9 @@ ttnn::Tensor ttml_variable_matmul(
     std::optional<ttnn::Tensor> offsets_tensor,
     ttml::metal::ops::variable_matmul::device::OffsetsRole offsets_role,
     uint32_t offsets_start_index,
-    uint32_t in0_row_offset_tiles,
     uint32_t effective_M_tiles,
     uint32_t in0_k_offset_tiles,
-    uint32_t in1_k_offset_tiles,
-    uint32_t out_row_offset_tiles) {
+    uint32_t in1_k_offset_tiles) {
     using OperationType = ttml::metal::ops::variable_matmul::device::VariableMatmulDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
@@ -333,11 +331,9 @@ ttnn::Tensor ttml_variable_matmul(
             .compute_kernel_config = kernel_config_val,
             .transpose_a = transpose_a,
             .transpose_b = transpose_b,
-            .in0_row_offset_tiles = in0_row_offset_tiles,
             .effective_M_tiles = effective_M_tiles,
             .in0_k_offset_tiles = in0_k_offset_tiles,
             .in1_k_offset_tiles = in1_k_offset_tiles,
-            .out_row_offset_tiles = out_row_offset_tiles,
             .offsets_role = offsets_role,
             .offsets_start_index = offsets_start_index,
         },

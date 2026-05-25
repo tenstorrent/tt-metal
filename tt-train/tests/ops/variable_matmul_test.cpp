@@ -218,7 +218,6 @@ TEST_F(VariableMatmulTest, OnDeviceOffsets_InputRow_PreZeroOutput_PadRowsStayZer
         /*offsets_tensor=*/offsets,
         /*offsets_role=*/ttml::metal::OffsetsRole::InputRow,
         /*offsets_start_index=*/1U,
-        /*in0_row_offset_tiles=*/0U,
         /*effective_M_tiles=*/upper_M_tiles);
 
     auto written = ttml::core::to_vector<float>(gate_proj);
@@ -274,7 +273,6 @@ TEST_F(VariableMatmulTest, OnDeviceOffsets_InputRow_ZeroPadRowsProduceZeroOutput
         /*offsets_tensor=*/offsets,
         /*offsets_role=*/ttml::metal::OffsetsRole::InputRow,
         /*offsets_start_index=*/2U,
-        /*in0_row_offset_tiles=*/0U,
         /*effective_M_tiles=*/upper_M_tiles);
 
     auto out = ttml::core::to_vector<float>(gate_proj);
@@ -476,7 +474,6 @@ TEST_F(VariableMatmulTest, MinimalParity_KOffset_In0_NoTranspose) {
         /*offsets_tensor=*/std::nullopt,
         /*offsets_role=*/ttml::metal::OffsetsRole::None,
         /*offsets_start_index=*/0,
-        /*in0_row_offset_tiles=*/0,
         /*effective_M_tiles=*/0,
         /*in0_k_offset_tiles=*/k_offset_tiles);
 
@@ -512,7 +509,6 @@ TEST_F(VariableMatmulTest, MinimalParity_KOffset_In1_NoTranspose) {
         /*offsets_tensor=*/std::nullopt,
         /*offsets_role=*/ttml::metal::OffsetsRole::None,
         /*offsets_start_index=*/0,
-        /*in0_row_offset_tiles=*/0,
         /*effective_M_tiles=*/0,
         /*in0_k_offset_tiles=*/0,
         /*in1_k_offset_tiles=*/k_offset_tiles);
@@ -753,7 +749,6 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputRow) {
         /*offsets_tensor=*/offsets,
         /*offsets_role=*/ttml::metal::OffsetsRole::InputRow,
         /*offsets_start_index=*/kStart,
-        /*in0_row_offset_tiles=*/0,
         /*effective_M_tiles=*/effective_M_tiles_upper);
 
     auto input_slice = ttnn::slice(
@@ -854,7 +849,6 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
         /*offsets_tensor=*/offsets,
         /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
         /*offsets_start_index=*/kStart,
-        /*in0_row_offset_tiles=*/0,
         /*effective_M_tiles=*/M_parent / 32U,
         /*in0_k_offset_tiles=*/  // upper bound = parent_M
         /*in0_k_offset_tiles=*/0);
