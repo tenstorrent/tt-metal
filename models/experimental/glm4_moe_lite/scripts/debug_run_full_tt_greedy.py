@@ -14,7 +14,11 @@ import torch
 from transformers import AutoTokenizer
 
 import ttnn
-from models.experimental.glm4_moe_lite.tt.layer0_tt import _alloc_contiguous_page_table, _round_up
+from models.experimental.glm4_moe_lite.tt.layer0_tt import (
+    _alloc_contiguous_page_table,
+    _alloc_paged_kvpe_cache,
+    _round_up,
+)
 from models.experimental.glm4_moe_lite.tt.model_tt import Glm4MoeLiteDenseOnlyTT
 from models.experimental.glm4_moe_lite.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
 
@@ -87,35 +91,6 @@ def _parse_tt_dtype(raw: str) -> ttnn.DataType:
     if raw in {"bf8", "bfloat8_b"}:
         return ttnn.bfloat8_b
     raise ValueError(f"Unsupported --kv-cache-dtype={raw!r} (expected bf16 or bf8)")
-
-
-def _alloc_paged_kvpe_cache_from_cpu(
-    *,
-    device: object,
-    max_num_blocks: int,
-    block_size: int,
-    kvpe_dim: int,
-    tt_dtype: ttnn.DataType,
-) -> ttnn.Tensor:
-    """Allocate a paged KVPE cache without `ttnn.zeros`.
-
-    `ttnn.zeros(..., device=MeshDevice)` has been observed to hang in some
-    environments; for bring-up we prefer staging a CPU zero tensor and uploading
-    it via `ttnn.as_tensor`.
-    """
-    torch_dtype = torch.bfloat16
-    host = torch.zeros((int(max_num_blocks), 1, int(block_size), int(kvpe_dim)), dtype=torch_dtype, device="cpu")
-    is_mesh_device = device.__class__.__name__ == "MeshDevice"
-    mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
-    return ttnn.as_tensor(
-        host,
-        device=device,
-        mesh_mapper=mesh_mapper,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        dtype=tt_dtype,
-        cache_file_name=None,
-    )
 
 
 def main() -> int:
@@ -307,12 +282,12 @@ def main() -> int:
         print(f"[DEBUG] Model created. num_layers_to_run={runner.num_layers_to_run}", flush=True)
         kvpe_dim = int(runner.hparams.kv_lora_rank + runner.hparams.qk_rope_head_dim)
         kv_cache = [
-            _alloc_paged_kvpe_cache_from_cpu(
+            _alloc_paged_kvpe_cache(
                 device=mesh_device,
                 max_num_blocks=int(batch_size * blocks_per_seq),
                 block_size=block_size,
                 kvpe_dim=kvpe_dim,
-                tt_dtype=kv_cache_dtype,
+                dtype=kv_cache_dtype,
             )
             for _ in range(int(runner.num_layers_to_run))
         ]

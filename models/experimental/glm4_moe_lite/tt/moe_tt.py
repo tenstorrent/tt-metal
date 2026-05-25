@@ -517,20 +517,14 @@ def moe_topk_tt(
     ttnn.deallocate(logits, force=False)
 
     # scores_for_choice = scores + e_score_correction_bias (broadcast over tokens)
-    if int(scores.shape[2]) == 1 and moe_w.e_score_correction_bias_tile is not None:
-        # Decode path (T=1): use pre-converted TILE bias directly (no to_layout overhead).
+    # Use pre-converted TILE bias [1,1,1,E] when available; ttnn.add broadcasts
+    # dim-2 automatically so no explicit repeat is needed regardless of T.
+    if moe_w.e_score_correction_bias_tile is not None:
         bias = moe_w.e_score_correction_bias_tile  # [1,1,1,E] TILE (weight tensor; must not deallocate)
         bias_owned = False
     else:
-        # Prefill path (T>1): repeat ROW_MAJOR bias then convert to TILE.
         bias_rm = moe_w.e_score_correction_bias  # [1,1,1,E] ROW_MAJOR (weight tensor; must not deallocate)
-        bias_rm_owned = False
-        if int(scores.shape[2]) != 1:
-            bias_rm = ttnn.repeat(bias_rm, ttnn.Shape((1, 1, scores.shape[2], 1)))
-            bias_rm_owned = True
         bias = ttnn.to_layout(bias_rm, ttnn.TILE_LAYOUT)
-        if bias_rm_owned:
-            ttnn.deallocate(bias_rm, force=False)
         bias_owned = True
 
     scores_with_bias = ttnn.add(scores, bias, dtype=ttnn.bfloat16, memory_config=mc)
