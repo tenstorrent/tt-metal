@@ -4,6 +4,7 @@
 import pytest
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
+from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats
 from helpers.test_config import TestConfig
 
@@ -21,7 +22,9 @@ def _force_device_print_enabled():
 def test_device_print():
     formats = input_output_formats([DataFormat.Int32])[0]
 
-    configuration = TestConfig("sources/device_print_test.cpp", formats)
+    configuration = TestConfig(
+        "sources/device_print_test.cpp", formats, dest_acc=DestAccumulation.Yes
+    )
     outcome = configuration.run()
     lines = outcome.device_print_lines
 
