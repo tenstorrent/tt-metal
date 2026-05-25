@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """TTNN Euler, CFG tiling, APG / ADG guidance for ACE-Step flow sampling.
 
-Latent ``x_t`` stays on device as FLOAT32 TILE; DiT consumes ROW_MAJOR BF16 ``x`` built per step.
+Latent ``x_t`` stays on device as FLOAT32 TILE; DiT consumes TILE BF16 L1 ``[B,T,C]`` activations per step.
 
 ADG matches ``apply_norm=False`` (demo default); ``apply_norm=True`` raises.
 """
@@ -17,7 +17,12 @@ import torch
 
 import ttnn
 
-from .math_perf_env import ace_step_reshape_kwargs
+from .math_perf_env import (
+    ace_step_ensure_dit_activation,
+    ace_step_from_torch_activation,
+    ace_step_linear_l1_memory_config,
+    ace_step_reshape_kwargs,
+)
 
 
 class TtnnMomentumBufferApg:
@@ -193,15 +198,18 @@ def stage_host_temb_tp_row(
     device: Any,
     dram: Any,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Upload host ``(temb, tp)`` as ROW_MAJOR BF16 (no ``to_layout`` — safe on BH mesh)."""
+    """Upload host ``(temb, tp)`` as TILE BF16 in L1 (matches ``compute_temb_tp`` / decoder AdaLN)."""
 
     def _to_f32_np(x) -> np.ndarray:
         if isinstance(x, np.ndarray):
             return np.asarray(x, dtype=np.float32)
         return np.asarray(x.detach().to(dtype=torch.float32).cpu().numpy(), dtype=np.float32)
 
-    temb_tt = bf16_row_from_numpy_bc(_to_f32_np(temb_host), device=device, dram=dram)
-    tp_tt = bf16_row_from_numpy_bc(_to_f32_np(tp_host), device=device, dram=dram)
+    l1_mc = ace_step_linear_l1_memory_config(ttnn) or dram
+    temb_tt = ace_step_from_torch_activation(
+        ttnn, _to_f32_np(temb_host), device=device, dtype=ttnn.bfloat16, l1_mc=l1_mc
+    )
+    tp_tt = ace_step_from_torch_activation(ttnn, _to_f32_np(tp_host), device=device, dtype=ttnn.bfloat16, l1_mc=l1_mc)
     return temb_tt, tp_tt
 
 
@@ -300,19 +308,26 @@ def precompute_dit_temb_steps(
     return temb_per_step_dev, tp_per_step_dev, False
 
 
-def bf16_row_from_numpy_bc(arr_f32_np: np.ndarray, *, device: Any, dram: Any) -> ttnn.Tensor:
+def bf16_tile_l1_from_numpy_bc(arr_f32_np: np.ndarray, *, device: Any, dram: Any) -> ttnn.Tensor:
+    """Upload ``[B,T,C]`` (or ``[B,S,D]``) host array as TILE BF16 in L1 for DiT activations."""
     from models.demos.ace_step_v1_5.tt_device import ace_step_device_num_chips, ace_step_synchronize_device
 
-    tt = ttnn.as_tensor(
+    l1_mc = ace_step_linear_l1_memory_config(ttnn) or dram
+    tt = ace_step_from_torch_activation(
+        ttnn,
         np.asarray(arr_f32_np, dtype=np.float32),
         device=device,
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=dram,
+        l1_mc=l1_mc,
     )
     if ace_step_device_num_chips(device) > 1:
         ace_step_synchronize_device(ttnn, device)
     return tt
+
+
+def bf16_row_from_numpy_bc(arr_f32_np: np.ndarray, *, device: Any, dram: Any) -> ttnn.Tensor:
+    """Deprecated alias: DiT path uses :func:`bf16_tile_l1_from_numpy_bc` (TILE+L1, not ROW_MAJOR DRAM)."""
+    return bf16_tile_l1_from_numpy_bc(arr_f32_np, device=device, dram=dram)
 
 
 def typecast_bf16_any_to_fp32_tile(tt_bf16: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
@@ -322,7 +337,15 @@ def typecast_bf16_any_to_fp32_tile(tt_bf16: ttnn.Tensor, *, dram: Any) -> ttnn.T
     return out
 
 
+def fp32_tile_to_bf16_tile_l1(x_f32_tile: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
+    """Cast Euler latents FP32 TILE → BF16 TILE in L1 (no ROW_MAJOR / ``Tilize`` before DiT)."""
+    l1_mc = ace_step_linear_l1_memory_config(ttnn) or dram
+    out = ttnn.typecast(x_f32_tile, ttnn.bfloat16, memory_config=l1_mc)
+    return ace_step_ensure_dit_activation(ttnn, out, l1_mc)
+
+
 def fp32_tile_to_row_bf16(x_f32_tile: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
+    """Legacy ROW_MAJOR path (VAE / host-only); DiT denoise uses :func:`fp32_tile_to_bf16_tile_l1`."""
     x_bf_tile = ttnn.typecast(x_f32_tile, ttnn.bfloat16, memory_config=dram)
     out = ttnn.to_layout(x_bf_tile, layout=ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(x_bf_tile)

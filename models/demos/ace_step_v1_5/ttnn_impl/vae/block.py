@@ -100,9 +100,7 @@ class TtOobleckDecoderBlock:
 
         Output: ``[B, T*stride, output_dim]`` row-major.
         """
-        ttnn = self.ttnn
         x = self.snake1(x)
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = self.conv_t1(x)
         x = self.res_unit1(x)
         x = self.res_unit2(x)

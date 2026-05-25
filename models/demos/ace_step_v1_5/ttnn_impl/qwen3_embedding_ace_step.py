@@ -54,8 +54,9 @@ from transformers import AutoConfig
 import ttnn
 from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, create_tt_model
 
+from .math_perf_env import ace_step_qwen3_optimizations
 from .qwen3_embedding_encoder import Qwen3EmbeddingEncoderConfig, TtQwen3EmbeddingEncoder
-from .qwen3_pcc_optimizations import qwen3_encoder_pcc_optimizations
+from .qwen_prefill_l1 import ace_step_apply_qwen_prefill_l1, ace_step_qwen_prefill_l1_op_context
 
 logger = logging.getLogger(__name__)
 
@@ -188,8 +189,8 @@ class AceStepQwen3Encoder:
             return
         opts = self._tt_optimizations
         if opts is None:
-            opts = lambda m: qwen3_encoder_pcc_optimizations(m.n_layers, m.model_name)
-        _qwen_debug("loading tt_transformers trace stack (separate from eager PCC path)")
+            opts = ace_step_qwen3_optimizations
+        _qwen_debug("loading tt_transformers trace stack (LoFi + bfloat8_b + L1 prefill)")
         with _hf_model_env(self._hf_model_dir):
             self.model_args, self.tt_model, self.tt_kv_cache, self.state_dict = create_tt_model(
                 self.device,
@@ -201,6 +202,7 @@ class AceStepQwen3Encoder:
                 dtype=self._tt_dtype,
                 use_hf_rope=self._use_hf_rope,
             )
+        ace_step_apply_qwen_prefill_l1(self.tt_model, self.model_args)
         self._trace_stack_ready = True
 
     @staticmethod
@@ -457,18 +459,19 @@ class AceStepQwen3Encoder:
         #    so every program-cache entry the trace will reference is already resident.
         device_payload_warm = copy_host_to_device(host_payload, mesh_device=self.device)
         transformed = self.tt_model.transform_and_embed_prefill_inputs_device(*device_payload_warm)
-        out_warm_hidden = self.tt_model.ttnn_prefill_forward(
-            x=transformed[0],
-            rot_mats_global=self._rot_mats_global,
-            rot_mats_local=self._rot_mats_local,
-            user_id=0,
-            page_table=transformed[1],
-            chunk_page_table=transformed[2],
-            chunk_start_idx=None,
-            get_last_token=-1,
-            kv_cache=self.tt_kv_cache,
-            batch_size=1,
-        )
+        with ace_step_qwen_prefill_l1_op_context():
+            out_warm_hidden = self.tt_model.ttnn_prefill_forward(
+                x=transformed[0],
+                rot_mats_global=self._rot_mats_global,
+                rot_mats_local=self._rot_mats_local,
+                user_id=0,
+                page_table=transformed[1],
+                chunk_page_table=transformed[2],
+                chunk_start_idx=None,
+                get_last_token=-1,
+                kv_cache=self.tt_kv_cache,
+                batch_size=1,
+            )
         out_warm_normed = self.tt_model.norm(out_warm_hidden, mode=Mode.PREFILL)
         ttnn.synchronize_device(self.device)
         for t in (out_warm_hidden, out_warm_normed):
@@ -497,18 +500,19 @@ class AceStepQwen3Encoder:
             self._persistent_page_table,
             self._persistent_chunk_page_table,
         )
-        hidden = self.tt_model.ttnn_prefill_forward(
-            x=transformed[0],
-            rot_mats_global=self._rot_mats_global,
-            rot_mats_local=self._rot_mats_local,
-            user_id=0,
-            page_table=transformed[1],
-            chunk_page_table=transformed[2],
-            chunk_start_idx=None,
-            get_last_token=-1,
-            kv_cache=self.tt_kv_cache,
-            batch_size=1,
-        )
+        with ace_step_qwen_prefill_l1_op_context():
+            hidden = self.tt_model.ttnn_prefill_forward(
+                x=transformed[0],
+                rot_mats_global=self._rot_mats_global,
+                rot_mats_local=self._rot_mats_local,
+                user_id=0,
+                page_table=transformed[1],
+                chunk_page_table=transformed[2],
+                chunk_start_idx=None,
+                get_last_token=-1,
+                kv_cache=self.tt_kv_cache,
+                batch_size=1,
+            )
         self._persistent_output = self.tt_model.norm(hidden, mode=Mode.PREFILL)
         ttnn.end_trace_capture(self.device, self._trace_id, cq_id=0)
         ttnn.synchronize_device(self.device)
