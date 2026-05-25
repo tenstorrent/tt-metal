@@ -237,24 +237,26 @@ def preprocess_semantic_tokenizer_weights(
 # ──────────────────────────────────────────────────────────────
 
 
-def _tile_linear(t: torch.Tensor, device) -> ttnn.Tensor:
+def _tile_linear(t: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
     """[out, in] → [1, 1, in, out] TILE for ttnn.linear (x @ w semantics)."""
+    tdtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
     return ttnn.as_tensor(
-        t.to(torch.bfloat16).t().unsqueeze(0).unsqueeze(0).contiguous(),
+        t.to(tdtype).t().unsqueeze(0).unsqueeze(0).contiguous(),
         device=device,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
 
-def _norm_w_tt(w: torch.Tensor, device) -> ttnn.Tensor:
+def _norm_w_tt(w: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
     """[C] norm weight → [1, 1, C//32, 32] ROW_MAJOR for ttnn.rms_norm."""
     C = w.shape[0]
+    tdtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
     return ttnn.as_tensor(
-        w.to(torch.bfloat16).view(1, 1, C // 32, 32).contiguous(),
+        w.to(tdtype).view(1, 1, C // 32, 32).contiguous(),
         device=device,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -272,8 +274,9 @@ class TTConv1d:
     then conv with stride, then output in [B, 1, T_out, out_ch] NHWC.
     """
 
-    def __init__(self, cw: ConvWeightsHost, device):
+    def __init__(self, cw: ConvWeightsHost, device, compute_dtype=ttnn.bfloat16):
         self.device = device
+        self.compute_dtype = compute_dtype
         self.stride = cw.stride
         self.groups = cw.groups
         self.causal_pad = cw.causal_pad
@@ -283,21 +286,22 @@ class TTConv1d:
         self.in_ch = in_per_group * cw.groups
         self.K = K
 
+        tdtype = torch.bfloat16 if compute_dtype == ttnn.bfloat16 else torch.float32
         # OIHW: [out_ch, in_ch//groups, H=1, K_W=K] for ttnn.conv2d
-        w4d = cw.weight.to(torch.bfloat16).unsqueeze(2).contiguous()
+        w4d = cw.weight.to(tdtype).unsqueeze(2).contiguous()
         self.weight = ttnn.as_tensor(
             w4d,
             device=device,
-            dtype=ttnn.bfloat16,
+            dtype=compute_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         if cw.bias is not None:
             # conv2d requires bias as [1, 1, 1, out_ch]
             self.bias = ttnn.as_tensor(
-                cw.bias.to(torch.bfloat16).view(1, 1, 1, -1).contiguous(),
+                cw.bias.to(tdtype).view(1, 1, 1, -1).contiguous(),
                 device=device,
-                dtype=ttnn.bfloat16,
+                dtype=compute_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -339,7 +343,7 @@ class TTConv1d:
             groups=self.groups,
             return_output_dim=True,
             return_weights_and_bias=True,
-            dtype=ttnn.bfloat16,
+            dtype=self.compute_dtype,
             compute_config=_HIFI4,
         )
         # Output from conv2d is [1, 1, B*w_out, out_ch]; reshape to [B, 1, T_out, out_ch]
@@ -359,25 +363,26 @@ class TTBlock1DDevice:
     FFN permute-to-TC is implicit in NHWC (already channels-last).
     """
 
-    def __init__(self, bw: Block1DWeightsHost, device):
+    def __init__(self, bw: Block1DWeightsHost, device, compute_dtype=ttnn.bfloat16):
         self.device = device
         self.eps = bw.eps
         self.dim = bw.dim
 
-        self.dw_conv = TTConv1d(bw.dw_conv, device)
-        self.norm_w = _norm_w_tt(bw.norm_w, device)
-        self.ffn_norm_w = _norm_w_tt(bw.ffn_norm_w, device)
+        tdtype = torch.bfloat16 if compute_dtype == ttnn.bfloat16 else torch.float32
+        self.dw_conv = TTConv1d(bw.dw_conv, device, compute_dtype=compute_dtype)
+        self.norm_w = _norm_w_tt(bw.norm_w, device, dtype=compute_dtype)
+        self.ffn_norm_w = _norm_w_tt(bw.ffn_norm_w, device, dtype=compute_dtype)
         # linear1_w is [ffn_dim, C] in PyTorch → _tile_linear transposes to [C, ffn_dim]
-        self.linear1_w = _tile_linear(bw.linear1_w, device)
-        self.linear2_w = _tile_linear(bw.linear2_w, device)
+        self.linear1_w = _tile_linear(bw.linear1_w, device, dtype=compute_dtype)
+        self.linear2_w = _tile_linear(bw.linear2_w, device, dtype=compute_dtype)
 
         def _bias(b: Optional[torch.Tensor]) -> Optional[ttnn.Tensor]:
             if b is None:
                 return None
             return ttnn.as_tensor(
-                b.to(torch.bfloat16).view(1, 1, 1, -1).contiguous(),
+                b.to(tdtype).view(1, 1, 1, -1).contiguous(),
                 device=device,
-                dtype=ttnn.bfloat16,
+                dtype=compute_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -387,9 +392,9 @@ class TTBlock1DDevice:
                 return None
             C = s.shape[0]
             return ttnn.as_tensor(
-                s.to(torch.bfloat16).view(1, 1, 1, C).contiguous(),
+                s.to(tdtype).view(1, 1, 1, C).contiguous(),
                 device=device,
-                dtype=ttnn.bfloat16,
+                dtype=compute_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )

@@ -26,7 +26,6 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import torch
-import torch.nn.functional as F
 import ttnn
 
 from models.experimental.vibevoice.tt.ttnn_semantic_tokenizer import (
@@ -193,14 +192,6 @@ def preprocess_acoustic_tokenizer_weights(
         decoder=decoder,
         config=config,
     )
-
-
-def _apply_conv_transpose1d(x: torch.Tensor, ctw: ConvTransposeWeightsHost) -> torch.Tensor:
-    """SConvTranspose1d (causal, trim_right_ratio=1) on [B, C, T] → [B, C_out, T*stride]."""
-    y = F.conv_transpose1d(x, ctw.weight, ctw.bias, stride=ctw.stride)
-    if ctw.trim_right > 0:
-        y = y[..., : -ctw.trim_right]
-    return y
 
 
 # ──────────────────────────────────────────────────────────────
