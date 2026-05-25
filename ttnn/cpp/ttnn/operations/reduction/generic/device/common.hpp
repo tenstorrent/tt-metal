@@ -6,12 +6,18 @@
 #pragma once
 
 #include <bit>
+#include <cstdint>
 #include <limits>
 #include <string_view>
+#include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
+
+namespace tt::tt_metal {
+class Buffer;
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -43,6 +49,61 @@ inline uint32_t dense_rm_padding_identity_bits(tt::DataFormat df, tt::tt_metal::
     const uint16_t bf16 = std::bit_cast<uint16_t>(bfloat16::truncate(v));
     return static_cast<uint32_t>(bf16);
 }
+
+// All RM-path locals derived from the input shape, tile geometry, and math op.
+// One instance is populated at the top of the RM branch in each factory and consumed
+// by the build_rm_*_ct_args helpers; both factories see the same field layout.
+struct RmPlan {
+    uint32_t H_logical;
+    uint32_t W_logical;
+    uint32_t Ht_rm;                  // ceil_div(H_logical, rm_rows_per_tile)
+    uint32_t Wt;                     // ceil_div(W_padded,   tile_width)
+    uint32_t rm_rows_per_tile;       // == tile_height
+    uint32_t wt_tiles_per_chunk;     // W-reduce: min(8, max(1, Wt)); H-reduce: 1
+    uint32_t ht_tiles_per_chunk;     // W-reduce: 1;                   H-reduce: min(8, max(1, Ht_rm))
+    uint32_t chunk_row_bytes;        // wt_tiles_per_chunk * tile_width * src_datum_size
+    uint32_t rm_staging_page_size;   // rm_rows_per_tile * chunk_row_bytes
+    uint32_t padding_identity_bits;  // dense_rm_padding_identity_bits(src_df, math_op)
+    uint32_t src_datum_size;
+    uint32_t dst_datum_size;
+};
+
+// Populate an RmPlan from the input's padded + logical shapes, tile geometry, data formats
+// and the dim being reduced. Dim picks which of {wt,ht}_tiles_per_chunk is the variable
+// chunk size and which is pinned to 1.
+RmPlan make_rm_plan(
+    const tt::tt_metal::Shape& padded_shape,
+    const tt::tt_metal::Shape& logical_shape,
+    uint32_t tile_height,
+    uint32_t tile_width,
+    tt::DataFormat src_cb_data_format,
+    tt::DataFormat dst_cb_data_format,
+    tt::tt_metal::ReduceOpMath math_op,
+    tt::tt_metal::ReduceOpDim dim);
+
+// The three factory-level RM preconditions: interleaved I/O, SUM only, no negate.
+// `dim_label` is "Reduce W" / "Reduce H" for the fatal messages.
+void validate_rm_preconditions(
+    const tt::tt_metal::Tensor& input,
+    const tt::tt_metal::Tensor& output,
+    tt::tt_metal::ReduceOpMath math_op,
+    bool negate,
+    std::string_view dim_label);
+
+// Build the reader compile-time args vector for the RM path (slots match
+// reader_unary_reduce_rm.cpp). Returns scalar slots followed by TensorAccessorArgs(src_buffer).
+std::vector<uint32_t> build_rm_reader_ct_args(
+    const RmPlan& plan, uint32_t scaler_bits, const tt::tt_metal::Buffer& src_buffer, tt::tt_metal::ReduceOpDim dim);
+
+// Build the writer compile-time args vector for the RM path (slots match
+// writer_reduce_rm_scalar.cpp). Returns scalar slots followed by TensorAccessorArgs(dst_buffer).
+std::vector<uint32_t> build_rm_writer_ct_args(
+    const RmPlan& plan, const tt::tt_metal::Buffer& dst_buffer, tt::tt_metal::ReduceOpDim dim);
+
+// Build the compute compile-time args vector for the RM path (slots match reduce_rm.cpp).
+// `Ht_arg` is the per-core ht count (W path) or the global Ht_rm (H path); the helper
+// keeps NC pinned at 1.
+std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits);
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     const tt::tt_metal::Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);

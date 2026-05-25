@@ -4,15 +4,123 @@
 
 #include "common.hpp"
 
+#include <algorithm>
 #include <numeric>
 #include <tuple>
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <ttnn/tensor/layout/page_config.hpp>
 
 namespace ttnn::prim {
+RmPlan make_rm_plan(
+    const tt::tt_metal::Shape& padded_shape,
+    const tt::tt_metal::Shape& logical_shape,
+    uint32_t tile_height,
+    uint32_t tile_width,
+    tt::DataFormat src_cb_data_format,
+    tt::DataFormat dst_cb_data_format,
+    tt::tt_metal::ReduceOpMath math_op,
+    tt::tt_metal::ReduceOpDim dim) {
+    RmPlan plan{};
+    plan.H_logical = logical_shape[2];
+    plan.W_logical = logical_shape[3];
+    plan.rm_rows_per_tile = tile_height;
+    plan.Wt = (padded_shape[3] + tile_width - 1) / tile_width;
+    plan.Ht_rm = (plan.H_logical + plan.rm_rows_per_tile - 1) / plan.rm_rows_per_tile;
+
+    // Only supports ReduceOpDim::W or ReduceOpDim::H
+    constexpr uint32_t k_rm_max_tiles_per_chunk = 8;
+    if (dim == tt::tt_metal::ReduceOpDim::W) {
+        plan.wt_tiles_per_chunk = std::min<uint32_t>(k_rm_max_tiles_per_chunk, std::max(1U, plan.Wt));
+        plan.ht_tiles_per_chunk = 1;
+    } else {
+        plan.wt_tiles_per_chunk = 1;
+        plan.ht_tiles_per_chunk = std::min<uint32_t>(k_rm_max_tiles_per_chunk, std::max(1U, plan.Ht_rm));
+    }
+
+    // The RM dense path is gated to BF16/FP32 at validate_rm_preconditions;
+    // so the unpacked-format byte sizes are always well-defined here.
+    plan.src_datum_size = tt::datum_size(src_cb_data_format);
+    plan.dst_datum_size = tt::datum_size(dst_cb_data_format);
+    plan.chunk_row_bytes = plan.wt_tiles_per_chunk * tile_width * plan.src_datum_size;
+    plan.rm_staging_page_size = plan.rm_rows_per_tile * plan.chunk_row_bytes;
+    plan.padding_identity_bits = dense_rm_padding_identity_bits(src_cb_data_format, math_op);
+
+    return plan;
+}
+
+void validate_rm_preconditions(
+    const tt::tt_metal::Tensor& input,
+    const tt::tt_metal::Tensor& output,
+    tt::tt_metal::ReduceOpMath math_op,
+    bool negate,
+    std::string_view dim_label) {
+    TT_FATAL(
+        input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+            output.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+        "{} RM path only supports interleaved tensors (input layout {}, output layout {})",
+        dim_label,
+        static_cast<int>(input.memory_config().memory_layout()),
+        static_cast<int>(output.memory_config().memory_layout()));
+    TT_FATAL(
+        math_op == tt::tt_metal::ReduceOpMath::SUM,
+        "{} RM path only supports SUM (mean lowered from AVG), got {}",
+        dim_label,
+        math_op);
+    TT_FATAL(!negate, "{} RM path does not currently support 'negate'", dim_label);
+}
+
+std::vector<uint32_t> build_rm_reader_ct_args(
+    const RmPlan& plan, uint32_t scaler_bits, const tt::tt_metal::MeshTensor src, tt::tt_metal::ReduceOpDim dim) {
+    // Slot 8 (H_logical) is only consumed by the reader's REDUCE_COL branch;
+    // the W kernel ignores it.
+    // Only supports ReduceOpDim::W or ReduceOpDim::H
+    std::vector<uint32_t> args = {
+        scaler_bits,
+        plan.W_logical,
+        plan.src_datum_size,
+        plan.padding_identity_bits,
+        plan.Wt,
+        plan.wt_tiles_per_chunk,
+        plan.rm_rows_per_tile,
+        plan.ht_tiles_per_chunk,
+        dim == tt::tt_metal::ReduceOpDim::H ? plan.H_logical : 0u,
+    };
+    tt::tt_metal::TensorAccessorArgs(src).append_to(args);
+    return args;
+}
+
+std::vector<uint32_t> build_rm_writer_ct_args(
+    const RmPlan& plan, const tt::tt_metal::MeshTensor dst, tt::tt_metal::ReduceOpDim dim) {
+    // Slots 1-3 (Wt, W_logical, wt_tiles_per_chunk) are only consumed by the writer's
+    // REDUCE_COL branch; the W kernel ignores them.
+    // Only supports ReduceOpDim::W or ReduceOpDim::H
+    const bool is_h = dim == tt::tt_metal::ReduceOpDim::H;
+    std::vector<uint32_t> args = {
+        plan.dst_datum_size,
+        is_h ? plan.Wt : 0u,
+        is_h ? plan.W_logical : 0u,
+        is_h ? plan.wt_tiles_per_chunk : 0u,
+    };
+    tt::tt_metal::TensorAccessorArgs(dst).append_to(args);
+    return args;
+}
+
+std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits) {
+    return {
+        Ht_arg,
+        plan.Wt,
+        1u,  // NC (kept literal-1 per the existing RM compute contract; not hoisted into the plan)
+        post_mul_scaler_bits,
+        plan.wt_tiles_per_chunk,
+        plan.ht_tiles_per_chunk,
+    };
+}
+
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     const tt::tt_metal::Tensor& input_tensor, tt::tt_metal::ReduceOpDim reduce_dim) {
     uint32_t num_tiles = input_tensor.physical_volume() / input_tensor.tensor_spec().tile().get_tile_hw();

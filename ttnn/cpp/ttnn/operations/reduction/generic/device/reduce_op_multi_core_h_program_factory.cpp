@@ -29,8 +29,6 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     const auto& shape = a.padded_shape();
     const auto& logical_shape = a.logical_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
-    const uint32_t H_logical = logical_shape[2];
-    const uint32_t W_logical = logical_shape[3];
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
     const uint32_t tile_hw = a.tensor_spec().tile().get_tile_hw();
@@ -39,14 +37,9 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     uint32_t Ht = (H + tile_height - 1) / tile_height;
     uint32_t HtWt = Ht * Wt;
 
-    // RM-only constants. wt_tiles_per_chunk is restricted to 1 for now but exposed as a
-    // named knob so the chunk size can be lifted later without re-threading through every site.
-    constexpr uint32_t k_rm_wt_tiles_per_chunk = 1;
-    constexpr uint32_t k_rm_max_ht_tiles_per_chunk = 8;
-    constexpr uint32_t k_rm_nc_per_reduce = 1;
-    const uint32_t rm_rows_per_tile = tile_height;
-    const uint32_t Ht_total_rm = (H_logical + rm_rows_per_tile - 1) / rm_rows_per_tile;
-    const uint32_t ht_tiles_per_chunk = std::min<uint32_t>(k_rm_max_ht_tiles_per_chunk, std::max(1U, Ht_total_rm));
+    if (rm_path) {
+        validate_rm_preconditions(a, output, operation_attributes.math_op, operation_attributes.negate, "Reduce H");
+    }
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device().arch(), operation_attributes.compute_kernel_config);
@@ -64,27 +57,22 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     bool use_width_sharding = a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
                               output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-    TT_FATAL(
-        !rm_path || (a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                     output.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED),
-        "Reduce H RM path only supports interleaved tensors (input layout {}, output layout {})",
-        static_cast<int>(a.memory_config().memory_layout()),
-        static_cast<int>(output.memory_config().memory_layout()));
-    TT_FATAL(
-        !rm_path || operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM,
-        "Reduce H RM path only supports SUM (mean lowered from AVG), got {}",
-        operation_attributes.math_op);
-    TT_FATAL(
-        !(rm_path && operation_attributes.negate),
-        "Reduce H RM path does not currently support 'negate' (CB index c_4/c_5 collision)");
-
-    // `tt::datum_size(...)` throws for block-float formats (BFP8/BFP4/BFP2). The RM dense path
-    // is gated to BF16/FP32 only, but the tile path can still arrive here with BFLOAT8_B input,
-    // so guard the unpacked-format byte-size calls behind `rm_path`.
-    const uint32_t src_datum_size_rm = rm_path ? tt::datum_size(src0_cb_data_format) : 0u;
-    const uint32_t dst_datum_size_rm = rm_path ? tt::datum_size(dst_cb_data_format) : 0u;
-    const uint32_t chunk_row_bytes_rm = k_rm_wt_tiles_per_chunk * tile_width * src_datum_size_rm;
-    const uint32_t rm_staging_page_size = rm_rows_per_tile * chunk_row_bytes_rm;
+    // Populate the RM-only locals (chunk sizes, page bytes, padding identity, datum sizes) into
+    // a single struct so the per-site formulas don't drift between this factory and the W one.
+    // tt::datum_size(...) inside make_rm_plan throws for block-float formats; guard the call
+    // behind rm_path since validate_rm_preconditions already gates the RM branch to BF16/FP32.
+    RmPlan plan{};
+    if (rm_path) {
+        plan = make_rm_plan(
+            shape,
+            logical_shape,
+            tile_height,
+            tile_width,
+            src0_cb_data_format,
+            dst_cb_data_format,
+            operation_attributes.math_op,
+            ReduceOpDim::H);
+    }
 
     uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
 
@@ -125,12 +113,12 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         constexpr uint32_t cb_rm = CBIndex::c_24;
         constexpr uint32_t num_rm_pages = 2;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = num_rm_pages * rm_staging_page_size,
+            .total_size = num_rm_pages * plan.rm_staging_page_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(cb_rm),
                 .data_format = src0_cb_data_format,
-                .page_size = rm_staging_page_size,
+                .page_size = plan.rm_staging_page_size,
             }}},
         });
 
@@ -148,7 +136,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         // reduce_rm.cpp accumulates partial reductions across H chunks into cb_acc (c_5).
         constexpr uint32_t cb_acc = CBIndex::c_5;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = k_rm_wt_tiles_per_chunk * dst_single_tile_size,
+            .total_size = plan.wt_tiles_per_chunk * dst_single_tile_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(cb_acc),
@@ -161,8 +149,9 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     uint32_t src0_cb_index = CBIndex::c_0;
     uint32_t src1_cb_index = CBIndex::c_1;
     if (rm_path) {
-        const uint32_t num_input_tiles =
-            std::max(2U, k_rm_wt_tiles_per_chunk * ht_tiles_per_chunk * k_rm_nc_per_reduce);
+        // RM compute kernel expects up to wt_tiles_per_chunk * ht_tiles_per_chunk tiles in flight
+        // (NC fan-out is pinned to 1 in the RM compute contract).
+        const uint32_t num_input_tiles = std::max(2U, plan.wt_tiles_per_chunk * plan.ht_tiles_per_chunk);
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_input_tiles * src0_single_tile_size,
             .core_ranges = all_cores,
@@ -221,7 +210,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
 
     uint32_t output_cb_index = CBIndex::c_3;
     if (rm_path) {
-        const uint32_t num_output_tiles = std::max(2U, k_rm_wt_tiles_per_chunk);
+        const uint32_t num_output_tiles = std::max(2U, plan.wt_tiles_per_chunk);
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_output_tiles * dst_single_tile_size,
             .core_ranges = all_cores,
@@ -361,20 +350,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     reader_desc.config = ReaderConfigDescriptor{};
 
     if (rm_path) {
-        const uint32_t padding_identity_bits =
-            dense_rm_padding_identity_bits(src0_cb_data_format, operation_attributes.math_op);
-        std::vector<uint32_t> reader_compile_time_args = {
-            scaler_bits,
-            W_logical,
-            src_datum_size_rm,
-            padding_identity_bits,
-            Wt,
-            k_rm_wt_tiles_per_chunk,
-            rm_rows_per_tile,
-            ht_tiles_per_chunk,
-            H_logical,
-        };
-        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+        std::vector<uint32_t> reader_compile_time_args =
+            build_rm_reader_ct_args(plan, scaler_bits, a, ReduceOpDim::H);
 
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -417,8 +394,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     writer_desc.config = WriterConfigDescriptor{};
 
     if (rm_path) {
-        std::vector<uint32_t> writer_compile_time_args = {dst_datum_size_rm, Wt, W_logical, k_rm_wt_tiles_per_chunk};
-        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+        std::vector<uint32_t> writer_compile_time_args = build_rm_writer_ct_args(plan, output, ReduceOpDim::H);
 
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -449,14 +425,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // reduce.cpp / reduce_h_neg.cpp expect {Ht, Wt, NC, post_mul_bits}.
     std::vector<uint32_t> compute_kernel_args_group_1;
     if (rm_path) {
-        compute_kernel_args_group_1 = {
-            Ht_total_rm,
-            Wt,
-            k_rm_nc_per_reduce,
-            post_mul_scaler_bits,
-            k_rm_wt_tiles_per_chunk,
-            ht_tiles_per_chunk,
-        };
+        compute_kernel_args_group_1 = build_rm_compute_ct_args(plan, plan.Ht_rm, post_mul_scaler_bits);
     } else {
         compute_kernel_args_group_1 = {
             Ht,                    // Ht
@@ -543,20 +512,17 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             } else {
                 TT_THROW("Core not in specified core ranges");
             }
-
-            // Concrete addresses (not Buffer*) keep buffer_bindings empty so mesh program-cache
-            // fast paths still re-apply per-core integer runtime args.
             reader_desc.emplace_runtime_args(
                 core,
                 {
-                    src0_buffer->address(),
+                    a,
                     num_output_tiles_local,
                     output_tiles_seen,
                 });
             writer_desc.emplace_runtime_args(
                 core,
                 {
-                    dst_buffer->address(),
+                    output,
                     num_output_tiles_local,
                     output_tiles_seen,
                 });
