@@ -33,11 +33,6 @@ function(ParseGitDescribe)
     if(NOT VERSION_HASH)
         set(VERSION_HASH ${fallbackHash})
     endif()
-    if(VERSION_HASH MATCHES "Format")
-        # In exported archives or containerized worktrees with unavailable Git metadata,
-        # fallbackHash may remain a literal "$Format:...$" token. Use a stable placeholder.
-        set(VERSION_HASH "0000000000")
-    endif()
     if(NOT version)
         set(version ${fallbackVersion})
         # A shallow Git clone will fail a git describe, but also will not have substituted the fallbackVersion
