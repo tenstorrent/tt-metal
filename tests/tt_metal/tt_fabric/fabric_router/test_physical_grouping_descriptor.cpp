@@ -21,6 +21,7 @@
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
+#include <tt-metalium/distributed_context.hpp>
 
 using namespace tt::tt_fabric;
 
@@ -1534,7 +1535,17 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Triple16x8PsdWi
     if (getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
         GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
     }
+    // create_psd_from_mock_cluster() is a collective MPI operation — all ranks must call it.
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    // The solver work below is CPU-intensive. On a 16-rank SP4 run, running all ranks
+    // simultaneously would saturate the test runner (16 concurrent solves per grouping).
+    // Only rank 0 performs the actual placement checks; other ranks skip after the collective.
+    const auto& dctx = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+    if (*dctx.rank() != 0) {
+        GTEST_SKIP() << "Solver-intensive test runs on rank 0 only";
+    }
+
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
 
     // Use find_any_in_psd (stops at first valid placement) instead of find_all_in_psd
