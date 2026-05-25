@@ -31,12 +31,20 @@ BATCH_SIZES = [1, 2, 4, 8, 16, 20, 24, 28, 30, 32]
 BASE_PROMPT = "Summarize the following document. "
 MAX_NEW_TOKENS = 128
 MESH_ROWS = 1
-MESH_COLS = 4
+MESH_COLS = 8
 PREFILL_CHUNK_SIZE = 32768
 SCRIPT_PATH = "models/experimental/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py"
 
 
-def run_one(isl: int, batch_size: int, repo_root: Path, dry_run: bool, timeout_s: int) -> dict:
+def run_one(
+    isl: int,
+    batch_size: int,
+    repo_root: Path,
+    dry_run: bool,
+    timeout_s: int,
+    mesh_rows: int = MESH_ROWS,
+    mesh_cols: int = MESH_COLS,
+) -> dict:
     """Run one (ISL, batch_size) combination; return metrics or error."""
     min_cache = isl + MAX_NEW_TOKENS
     cmd = [
@@ -53,9 +61,9 @@ def run_one(isl: int, batch_size: int, repo_root: Path, dry_run: bool, timeout_s
         "--batch-size",
         str(batch_size),
         "--mesh-rows",
-        str(MESH_ROWS),
+        str(mesh_rows),
         "--mesh-cols",
-        str(MESH_COLS),
+        str(mesh_cols),
         "--kv-cache-dtype",
         "bf16",
         "--phase",
@@ -554,6 +562,8 @@ def main() -> int:
         default=BATCH_SIZES,
         help="Batch sizes to sweep",
     )
+    ap.add_argument("--mesh-rows", type=int, default=MESH_ROWS, help="Mesh rows (default %(default)s)")
+    ap.add_argument("--mesh-cols", type=int, default=MESH_COLS, help="Mesh cols (default %(default)s)")
     args = ap.parse_args()
 
     if args.recover_from_log is not None:
@@ -617,7 +627,15 @@ def main() -> int:
                 results.append(r)
                 continue
             print(f"[{idx}/{total}] ISL={isl} batch={batch_size} ...", flush=True)
-            r = run_one(isl, batch_size, repo_root, args.dry_run, args.timeout)
+            r = run_one(
+                isl,
+                batch_size,
+                repo_root,
+                args.dry_run,
+                args.timeout,
+                mesh_rows=args.mesh_rows,
+                mesh_cols=args.mesh_cols,
+            )
             results.append(r)
             # Write CSV after each run so partial results survive if the process is killed
             write_csv(results, csv_path)
