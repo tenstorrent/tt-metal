@@ -520,9 +520,9 @@
   team: models
   model-name: wan2.2-t2v-a14b
 
-# ─── z-image-turbo ──────────────────────────────────────────────────────────
+# ─── Z-Image-Turbo ──────────────────────────────────────────────────────────
 
-- name: z-image-turbo text encoder
+- name: Z-Image-Turbo Text Encoder
   cmd: |
     set -e
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
@@ -534,7 +534,7 @@
   team: models
   model-name: z-image-turbo
 
-- name: z-image-turbo dit
+- name: Z-Image-Turbo DiT
   cmd: |
     set -e
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
@@ -546,11 +546,23 @@
   team: models
   model-name: z-image-turbo
 
-- name: z-image-turbo vae
+- name: Z-Image-Turbo VAE decoder
   cmd: |
     set -e
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     pytest models/demos/z_image_turbo/tests/test_vae.py --timeout=600
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U088VJ79WDB # Jonathan Su
+  team: models
+  model-name: z-image-turbo
+
+- name: Z-Image-Turbo full pipeline
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    pytest models/demos/z_image_turbo/tests/test_pipeline.py --timeout=600
   skus:
     bh_quietbox_2:
       timeout: 15
