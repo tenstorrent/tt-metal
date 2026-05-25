@@ -166,6 +166,17 @@ def _decode(tokenizer: Any, sequences_tt: ttnn.Tensor) -> str:
     return tokenizer.batch_decode(ids, skip_special_tokens=True)[0]
 
 
+def _tt_row_length(t: ttnn.Tensor) -> int:
+    """Logical length of a 1-D or ``[1, L]`` int sequence on device."""
+    return int(_readback_first_shard(t).long().reshape(-1).numel())
+
+
+def _valid_unit_frames(unit_tt: ttnn.Tensor, *, pad_id: int) -> int:
+    """Count non-pad unit ids in the vocoder input timeline."""
+    u = _readback_first_shard(unit_tt).long().reshape(-1)
+    return int((u != int(pad_id)).sum().item())
+
+
 def _print_header(idx: int, name: str, abbrev: str, src: str, tgt: str) -> None:
     print()
     print("=" * 78)
@@ -192,7 +203,14 @@ def main() -> None:
     sample_rate = int(getattr(cfg, "sampling_rate", 16000))
 
     # ---- Single English prompt drives the entire demo chain ----
-    src_text = "going along slushy country roads and speaking to damp audiences in draughty schoolrooms day after day for a fortnight he'll have to put in an appearance at some place of worship on sunday morning and he can come to us immediately afterwards"
+    src_text = """Maya lived in a small coastal town where every morning began with the sound of fishing boats leaving the harbor. She worked at her grandfather’s old bookstore, a narrow shop filled with dusty shelves, handwritten notes, and the smell of paper that had aged for decades. Most customers came looking for schoolbooks or travel guides, but Maya loved recommending forgotten stories hidden in the back corners of the store.
+
+One rainy evening, while organizing a stack of returned books, she discovered a small blue journal tucked between two novels. The cover had no title, only a silver compass symbol that shimmered faintly under the light. Curious, she opened it and found detailed sketches of places around the town along with cryptic messages about a hidden lighthouse path that only appeared during storms.
+
+At first, Maya thought someone was playing a prank. But the next night, as heavy clouds gathered over the sea, she noticed something unusual from the bookstore window. A narrow trail of lantern lights stretched along the cliffs where no road existed before. Holding the journal tightly, she followed the glowing path through the rain until she reached an abandoned lighthouse overlooking the crashing waves.
+
+Inside the lighthouse, she found old maps, letters, and photographs belonging to sailors who had once protected ships during dangerous storms. Among the papers was a letter written by her grandfather many years earlier. He explained that the journal was meant for the next person curious enough to search for the truth hidden in ordinary places. Maya smiled as thunder echoed outside. For the first time, she realized the bookstore had never only been about selling books. It had always been about discovering stories waiting quietly for someone brave enough to follow them.
+"""
     src_lang = "eng"
     tgt_translate = "hin"  # task 1, 2: translate eng → hin
     tgt_back_text = "eng"  # task 3: speech in hin → text in eng (back-translation)
@@ -211,7 +229,7 @@ def main() -> None:
         getattr(cfg, "max_new_tokens", None) or getattr(model.generation_config, "max_new_tokens", 128) or 128
     )
     gen_common = dict(
-        max_new_tokens=min(128, gen_max_new),
+        max_new_tokens=gen_max_new,
         do_sample=False,
         num_beams=1,
         pad_token_id=cfg.pad_token_id,
@@ -284,6 +302,7 @@ def main() -> None:
             return_intermediate_token_ids=True,
             tgt_lang=tgt_translate,
             speaker_id=0,
+            text_sequences=t2tt_out.sequences,
             **gen_common,
         )
         if not isinstance(t2st_out, TTSeamlessM4Tv2GenerationOutput):
@@ -291,7 +310,15 @@ def main() -> None:
         print(f"  Intermediate text ({tgt_translate}): {_decode(tokenizer, t2st_out.sequences)}")
         hindi_wav_np = _waveform_to_mono_fp32(t2st_out.waveform, t2st_out.waveform_lengths)
         _save_wav(T2ST_WAV, hindi_wav_np, sample_rate=sample_rate)
-        print(f"  Output audio ({tgt_translate}, {sample_rate} Hz, {hindi_wav_np.size} samples)")
+        t2u_pad = int(t2u_cfg.pad_token_id)
+        n_units = _valid_unit_frames(t2st_out.unit_sequences, pad_id=t2u_pad)
+        print(
+            f"  T2ST stats: text_tokens={_tt_row_length(t2st_out.sequences)}, "
+            f"unit_frames={n_units}, "
+            f"audio={hindi_wav_np.size} samples ({hindi_wav_np.size / sample_rate:.2f}s)"
+        )
+        if n_units >= 1536:
+            print("  Note: vocoder unit timeline capped at 1536 frames for BH L1 safety.")
         print(f"  Saved to: {T2ST_WAV}")
 
         tt_model.clear_runtime_program_cache()

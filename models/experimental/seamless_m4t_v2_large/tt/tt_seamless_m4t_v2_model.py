@@ -168,13 +168,36 @@ def _torch_int32_2d(flat: List[int], bsz: int, seq: int):
 
 
 def _read_int_row(scalars_tt: ttnn.Tensor) -> List[int]:
-    """Read a ``[B]`` int32 device tensor as a Python ``list[int]`` (scalar readback only)."""
+    """Read a ``[B]`` or ``[B, S]`` int32 device tensor as a Python ``list[int]`` (scalar readback only)."""
     import torch as _torch  # transport
 
     if scalars_tt.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
         scalars_tt = ttnn.to_layout(scalars_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    host = to_torch_replicated_first_shard(scalars_tt).to(_torch.int64).reshape(-1)
+    host = to_torch_replicated_first_shard(scalars_tt).to(_torch.int64)
+    if host.dim() >= 2:
+        host = host.reshape(host.shape[0], -1)[0]
+    else:
+        host = host.reshape(-1)
     return [int(x) for x in host.tolist()]
+
+
+def _trim_seq_host_for_speech(
+    seq_host: List[int],
+    *,
+    pad_token_id: int,
+    eos_id: int,
+    seed_len: int,
+) -> List[int]:
+    """Drop trailing pad and cut at first EOS after the lang seed (speech / T2U path only)."""
+    end = len(seq_host)
+    while end > seed_len and seq_host[end - 1] == pad_token_id:
+        end -= 1
+    seq_host = seq_host[:end]
+    tail = seq_host[seed_len:]
+    if eos_id in tail:
+        end = seed_len + tail.index(eos_id) + 1
+        seq_host = seq_host[:end]
+    return seq_host
 
 
 def _read_int_scalar(scalar_tt: ttnn.Tensor) -> int:
@@ -1305,6 +1328,7 @@ class TTSeamlessM4Tv2Model:
         tgt_lang: Optional[str] = None,
         speaker_id: int = 0,
         generate_speech: bool = True,
+        text_sequences: Optional[ttnn.Tensor] = None,
         **kwargs: Any,
     ) -> Union[TTSeamlessM4Tv2GreedySearchOutput, TTSeamlessM4Tv2GenerationOutput, Tuple[ttnn.Tensor, ttnn.Tensor]]:
         """Greedy (``num_beams=1``, ``do_sample=False``) analog of HF ``SeamlessM4Tv2Model.generate``.
@@ -1318,6 +1342,8 @@ class TTSeamlessM4Tv2Model:
             raise ValueError("`tgt_lang` is required when `generate_speech=True`.")
         if tgt_lang is not None:
             tgt_lang = tgt_lang.replace("__", "")
+        if text_sequences is not None and not generate_speech:
+            raise ValueError("`text_sequences` is only valid when `generate_speech=True`.")
         kwargs_text, kwargs_speech = format_speech_generation_kwargs(kwargs)
 
         if kwargs_text.get("num_beams", 1) != 1:
@@ -1356,25 +1382,34 @@ class TTSeamlessM4Tv2Model:
         else:
             enc_tt, enc_attn_tt, enc_attn_owned = self._encode_text(input_ids, attn_tt_text)  # type: ignore[arg-type]
 
-        # ---- Seed decoder sequence ----
-        # ``tgt_lang`` overrides ``decoder_input_ids`` (HF semantics in ``SeamlessM4Tv2Model.generate``).
-        # Either way, we end up owning ``seed_tt`` so the greedy loop's ``ttnn.deallocate`` is safe.
-        user_seed = kwargs_text.get("decoder_input_ids")
-        if tgt_lang is not None:
-            tid = int(self.generation_config.text_decoder_lang_to_code_id[tgt_lang])
-            ds = int(self.decoder_start_token_id)
-            seed_tt = _ttnn_ids_from_list([[ds, tid]], self.device)
-        elif user_seed is not None:
-            seed_tt = ttnn.clone(user_seed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        else:
-            raise ValueError("Provide `decoder_input_ids` or `tgt_lang` for TT generate.")
+        reuse_text_sequences = text_sequences is not None
+
+        # ---- Seed decoder sequence (skipped when reusing T2TT ``text_sequences``) ----
+        seed_tt: Optional[ttnn.Tensor] = None
+        if not reuse_text_sequences:
+            # ``tgt_lang`` overrides ``decoder_input_ids`` (HF semantics in ``SeamlessM4Tv2Model.generate``).
+            # Either way, we end up owning ``seed_tt`` so the greedy loop's ``ttnn.deallocate`` is safe.
+            user_seed = kwargs_text.get("decoder_input_ids")
+            if tgt_lang is not None:
+                tid = int(self.generation_config.text_decoder_lang_to_code_id[tgt_lang])
+                ds = int(self.decoder_start_token_id)
+                seed_tt = _ttnn_ids_from_list([[ds, tid]], self.device)
+            elif user_seed is not None:
+                seed_tt = ttnn.clone(user_seed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                raise ValueError("Provide `decoder_input_ids` or `tgt_lang` for TT generate.")
 
         # ---- Greedy decode loop (device decode; one scalar readback per step for EOS) ----
         # Track token ids on host to avoid per-step ``ttnn.concat`` reallocations; materialize
         # ``sequences_tt`` once after the loop (or for T2U / return).
-        seq_host: List[int] = _read_int_row(seed_tt)
-        ttnn.deallocate(seed_tt)
-        seed_len = len(seq_host)
+        if reuse_text_sequences:
+            sequences_tt = ttnn.clone(text_sequences, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            seq_host = _read_int_row(sequences_tt)
+            seed_len = 2
+        else:
+            seq_host = _read_int_row(seed_tt)
+            ttnn.deallocate(seed_tt)
+            seed_len = len(seq_host)
         use_kv_cache = bool(kwargs_text.get("use_kv_cache", True))
         # Metal trace replay for KV decode (requires ``trace_region_size`` in device params).
         use_decode_trace = bool(kwargs_text.get("use_decode_trace", False))
@@ -1386,7 +1421,9 @@ class TTSeamlessM4Tv2Model:
         gen_cross: Optional[ttnn.Tensor] = None
         gen_mask_key: Optional[Tuple[int, int, int]] = None
 
-        if use_kv_cache:
+        if reuse_text_sequences:
+            pass
+        elif use_kv_cache:
             if seed_len + max_new_tokens > self.max_text_seq_len:
                 raise ValueError(
                     f"seed_len ({seed_len}) + max_new_tokens ({max_new_tokens}) exceeds "
@@ -1514,6 +1551,16 @@ class TTSeamlessM4Tv2Model:
         # ---- Speech generation: re-encode for speech modality (HF parity), then T2U + vocoder ----
         gc = self.generation_config
         pad_token_id = int(gc.pad_token_id)
+        eos_id = int(getattr(gc, "eos_token_id", 3))
+        seq_host = _trim_seq_host_for_speech(
+            seq_host,
+            pad_token_id=pad_token_id,
+            eos_id=eos_id,
+            seed_len=seed_len,
+        )
+        if int(sequences_tt.shape[1]) != len(seq_host):
+            ttnn.deallocate(sequences_tt)
+            sequences_tt = _ttnn_ids_from_list([seq_host], self.device)
         attn_enc = kwargs_speech.get("attention_mask", attn_tt_text)
         if input_features is not None:
             ttnn.deallocate(enc_tt)
@@ -1525,9 +1572,9 @@ class TTSeamlessM4Tv2Model:
             enc_tt2, enc_attn_tt2, enc_attn_owned2 = enc_tt, enc_attn_tt, enc_attn_owned
 
         # T2U decoder hidden states come from running text-decoder on ``sequences[:, :-1]`` (HF
-        # trims the final EOS). Build a ttnn input slice (on device).
-        seq_len_full = int(sequences_tt.shape[1])
-        dec_in_tt = ttnn.slice(sequences_tt, [0, 0], [batch_size, seq_len_full - 1], (1, 1))
+        # trims the final EOS). Use logical ``seq_host`` length (not tile-padded tensor width).
+        logical_seq_len = len(seq_host)
+        dec_in_tt = ttnn.slice(sequences_tt, [0, 0], [batch_size, logical_seq_len - 1], (1, 1))
         dec_hidden_padded, padded_dec_seq = self._decoder_hidden(enc_tt2, enc_attn_tt2, dec_in_tt)
         ttnn.deallocate(dec_in_tt)
         ttnn.deallocate(enc_tt2)
@@ -1539,7 +1586,6 @@ class TTSeamlessM4Tv2Model:
         dec_in_ints = seq_full_ints[:-1]
         real_dec_len = sum(1 for x in dec_in_ints if x != pad_token_id)
         # ``t2u_input_ids = sequences[:, 2:-1]`` with the lang/EOS positions stripped + EOS→pad replaced.
-        eos_id = int(gc.eos_token_id)
         t2u_ids = [pad_token_id if t == eos_id else int(t) for t in seq_full_ints[2:-1]]
         subwords = _indices_to_subwords(gc, t2u_ids)
         cc_inner = _char_count_per_subword(t2u_ids, subwords, pad_token_id=pad_token_id)
@@ -1587,10 +1633,33 @@ class TTSeamlessM4Tv2Model:
         if int(padding_tt.shape[1]) != unit_seq:
             padding_tt = ttnn.slice(padding_tt, [0, 0], [pad_batch, unit_seq], (1, 1))
 
+        # Scale vocoder timeline with decoded text; cap avoids BH upsample L1 failures on
+        # pathological greedy loops while staying much longer than the old 256-unit cap.
+        _text_new_tokens = max(0, len(seq_host) - seed_len)
+        _vocoder_max_units = min(unit_seq, max(512, _text_new_tokens * 6), 1536)
+        if unit_seq > _vocoder_max_units:
+            unit_seq = _vocoder_max_units
+            padding_tt = ttnn.slice(padding_tt, [0, 0], [pad_batch, unit_seq], (1, 1))
+            t2u_logits_tt = ttnn.slice(
+                t2u_logits_tt,
+                [0, 0, 0],
+                [batch_size, unit_seq, int(t2u_logits_tt.shape[-1])],
+                (1, 1, 1),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         if t2u_logits_tt.get_layout() != ttnn.TILE_LAYOUT:
             t2u_tile = ttnn.to_layout(t2u_logits_tt, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(t2u_logits_tt)
             t2u_logits_tt = t2u_tile
+        if unit_seq < int(t2u_logits_tt.shape[-2]):
+            t2u_logits_tt = ttnn.slice(
+                t2u_logits_tt,
+                [0, 0, 0],
+                [batch_size, unit_seq, int(t2u_logits_tt.shape[-1])],
+                (1, 1, 1),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         unit_ids_argmax = ttnn.argmax(t2u_logits_tt, dim=-1)  # [B, unit_seq] int32
         ttnn.deallocate(t2u_logits_tt)
         if unit_ids_argmax.dtype != ttnn.uint32:
@@ -1665,6 +1734,9 @@ class TTSeamlessM4Tv2Model:
         # Drop cached conv1d/L1 programs from text decode + T2U before vocoder (long unit_seq
         # otherwise exceeds per-core L1 when programs accumulate in the demo's T2TT→T2ST flow).
         self.clear_runtime_program_cache()
+        self.vocoder._conv1d_prepared_cache.clear()
+        self.vocoder._matmul_pc_cache.clear()
+        ttnn.synchronize_device(self.device)
         wav_tt, lengths_tt = self.vocoder.forward(vocoder_input, spk_tt, voc_tt)
         ttnn.deallocate(vocoder_input)
         ttnn.deallocate(voc_tt)
