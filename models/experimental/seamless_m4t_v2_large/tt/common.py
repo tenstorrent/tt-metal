@@ -190,7 +190,8 @@ def matmul_program_config(
 ) -> ttnn.ProgramConfig:
     """Cached-friendly matmul PC factory: 1D multicast for short seq, 2D for long."""
     cg = device.compute_with_storage_grid_size()
-    k_tiles = max(1, in_dim // TILE)
+    # Match tile-padded K (``matmul_multicast_1d_program_config`` uses ``ceil``).
+    k_tiles = max(1, math.ceil(in_dim / TILE))
     in0_block_w = min(4, k_tiles)
     while in0_block_w > 1 and k_tiles % in0_block_w != 0:
         in0_block_w -= 1
@@ -298,7 +299,12 @@ def dram_matmul_shard_cores(device: ttnn.Device, k: int, n: int) -> int:
 
 
 def dram_linear_input_mem_config(device: ttnn.Device, m: int, k: int, n: int) -> ttnn.MemoryConfig:
-    """L1 WIDTH-sharded activation layout for ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``."""
+    """L1 WIDTH-sharded activation layout for ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``.
+
+    The DRAM-sharded matmul kernel is hard-coded to ``M == TILE`` (one input-tile row).
+    Long-seq callers (``m_actual > TILE``) must chunk the matmul into ``ceil(m_actual / TILE)``
+    calls of this kernel; see ``TTSeamlessM4Tv2Encoder._linear``.
+    """
     dram_cores = dram_matmul_shard_cores(device, k, n)
     if m > TILE:
         raise ValueError(f"dram_linear_input_mem_config expects m<={TILE}, got m={m} (chunk matmul instead)")

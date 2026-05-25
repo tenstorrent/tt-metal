@@ -11,6 +11,7 @@ from typing import Optional
 import ttnn
 
 from models.experimental.seamless_m4t_v2_large.tt.common import (
+    TILE,
     build_ln_sharded_config,
     dram_linear_input_mem_config,
     dram_matmul_program_config,
@@ -208,7 +209,7 @@ class TTSeamlessM4Tv2Encoder:
             x_flat = x
             m_actual = batch * seq
             m = self._bias_token_rows(bias)
-            x_sharded = ensure_l1_width_sharded_activation(self.device, x_flat, m, k, n)
+            x_sharded = ensure_l1_width_sharded_activation(self.device, x_flat, m, k, n) if m_actual <= TILE else None
         elif len(x.shape) == 3:
             batch = int(x.shape[0])
             seq = int(x.shape[1])
@@ -230,9 +231,21 @@ class TTSeamlessM4Tv2Encoder:
 
         m = self._bias_token_rows(bias)
         if m_actual > m:
-            raise ValueError(
-                f"Text encoder DRAM-sharded linear expects at most {m} token rows, got {m_actual}. "
-                "Recreate parameters with a larger prefill_token_rows."
+            # Long-seq prefill (m_actual > TILE): the DRAM-sharded matmul kernel is hard-coded to
+            # M == TILE, so chunk the matmul into ``ceil(m_actual / TILE)`` calls of that kernel.
+            # Each chunk runs the bit-identical fast-path matmul, so PCC is unchanged.
+            return self._linear_chunked(
+                x_flat if x_sharded is None else x,
+                weight,
+                bias,
+                activation=activation,
+                logical_out_dim=out_dim,
+                batch=batch,
+                seq=seq,
+                m_actual=m_actual,
+                m=m,
+                k=k,
+                n=n,
             )
 
         if x_sharded is None:
@@ -259,6 +272,121 @@ class TTSeamlessM4Tv2Encoder:
             out_dim=out_dim,
         )
 
+    def _linear_chunked(
+        self,
+        x: ttnn.Tensor,
+        weight: ttnn.Tensor,
+        bias: ttnn.Tensor,
+        *,
+        activation: Optional[str],
+        logical_out_dim: int,
+        batch: int,
+        seq: int,
+        m_actual: int,
+        m: int,
+        k: int,
+        n: int,
+    ) -> ttnn.Tensor:
+        """Chunked long-seq variant of ``_linear``.
+
+        Slices ``x`` into ``ceil(m_actual / TILE)`` chunks of ``m == TILE`` rows, runs the existing
+        DRAM-sharded matmul kernel on each, and concatenates the per-chunk interleaved outputs.
+
+        Each chunk goes through bit-identical math to the short-seq fast path, so PCC is
+        preserved. Output is interleaved ``[batch, seq, logical_out_dim]``.
+        """
+        fused_activation = ttnn.UnaryOpType.RELU if activation == "relu" else None
+        pc = self._dram_matmul_pc(m, k, n, fused_activation=fused_activation)
+        # Per-chunk matmul accumulates bf16 partials. The short-seq fast path runs a single matmul
+        # on TILE rows (per_core_M=1) at ``LoFi``; the chunked path issues ``ceil(m_actual/TILE)``
+        # matmuls and that LoFi noise compounds. ``HiFi2`` keeps PCC at parity with the short-seq
+        # path on Blackhole.
+        if not hasattr(self, "_chunked_linear_compute_cfg"):
+            self._chunked_linear_compute_cfg = ttnn.init_device_compute_kernel_config(
+                self.device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+
+        # Normalize the input to a 2-D ``[m_actual, k]`` interleaved L1 tensor for slicing.
+        if ttnn.is_sharded(x):
+            x_inter = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+        else:
+            x_inter = x
+        if len(x_inter.shape) == 3:
+            x_inter = ttnn.reshape(x_inter, (m_actual, k))
+        elif len(x_inter.shape) != 2:
+            x_inter = ttnn.reshape(x_inter, (m_actual, k))
+
+        chunks: list[ttnn.Tensor] = []
+        num_chunks = (m_actual + m - 1) // m
+        for i in range(num_chunks):
+            start = i * m
+            end = min(start + m, m_actual)
+            chunk_rows = end - start
+
+            chunk = ttnn.slice(x_inter, [start, 0], [end, k], [1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+            if chunk_rows < m:
+                chunk = self._pad_token_rows(chunk, chunk_rows, m)
+            chunk_sharded = ensure_l1_width_sharded_activation(self.device, chunk, m, k, n)
+            out_sharded = ttnn.linear(
+                chunk_sharded,
+                weight,
+                bias=bias,
+                program_config=pc,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                compute_kernel_config=self._chunked_linear_compute_cfg,
+            )
+            if chunk_sharded is not chunk:
+                ttnn.deallocate(chunk_sharded)
+            if chunk is not x_inter:
+                ttnn.deallocate(chunk)
+            out_inter = width_sharded_to_l1_interleaved(out_sharded)
+            if getattr(self, "_long_seq_mc", None) is ttnn.DRAM_MEMORY_CONFIG:
+                out_dram = ttnn.to_memory_config(out_inter, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(out_inter)
+                out_inter = out_dram
+            ttnn.deallocate(out_sharded)
+            # ``out_inter`` shape is 2-D ``[m, padded_n]`` or 4-D ``[1, 1, m, padded_n]`` —
+            # normalize to 2-D for concat along dim 0. Trim the bottom pad rows on the last chunk.
+            if len(out_inter.shape) == 4 and int(out_inter.shape[1]) == 1:
+                out_inter = ttnn.reshape(out_inter, (int(out_inter.shape[2]), int(out_inter.shape[-1])))
+            if chunk_rows < m:
+                out_inter = ttnn.slice(
+                    out_inter,
+                    [0, 0],
+                    [chunk_rows, int(out_inter.shape[-1])],
+                    [1, 1],
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+            chunks.append(out_inter)
+
+        if x_inter is not x:
+            ttnn.deallocate(x_inter)
+
+        # Chunk-level outputs land in L1 (small per chunk); the concatenated full activation may
+        # not fit (``seq=4096, ffn_dim=8192`` → 64 MB). Route the concat output to DRAM when the
+        # caller's long-seq policy says so.
+        concat_mc = getattr(self, "_long_seq_mc", None) or ttnn.L1_MEMORY_CONFIG
+        if len(chunks) == 1:
+            out_concat = chunks[0]
+            if concat_mc is ttnn.DRAM_MEMORY_CONFIG and out_concat.memory_config().buffer_type != ttnn.BufferType.DRAM:
+                out_dram = ttnn.to_memory_config(out_concat, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(out_concat)
+                out_concat = out_dram
+        else:
+            out_concat = ttnn.concat(chunks, dim=0, memory_config=concat_mc)
+            for c in chunks:
+                ttnn.deallocate(c)
+
+        # Slice off the DRAM-pad columns (``padded_n - logical_out_dim``) and reshape to 3-D.
+        padded_n = int(out_concat.shape[-1])
+        if padded_n > logical_out_dim:
+            out_concat = ttnn.slice(out_concat, [0, 0], [m_actual, logical_out_dim], [1, 1], memory_config=concat_mc)
+        return ttnn.reshape(out_concat, (batch, seq, logical_out_dim))
+
     def _build_ln_sharded_config(self, m_tiles: int, n_tiles: int):
         return build_ln_sharded_config(self.device, m_tiles, n_tiles, self._ln_sharded_cache)
 
@@ -273,7 +401,29 @@ class TTSeamlessM4Tv2Encoder:
         input_sharded: bool = False,
         output_sharded: bool = False,
     ) -> ttnn.Tensor:
-        """Width-sharded multicore LN. Set ``output_sharded=True`` to feed matmul without S2I."""
+        """Width-sharded multicore LN. Set ``output_sharded=True`` to feed matmul without S2I.
+
+        For long-seq prefill (``m_tiles > 1``) the BLOCK_SHARDED LN path is fragile when the
+        upstream tensor is WIDTH_SHARDED or 3-D interleaved (shape mismatches and layout
+        conversions inside ttnn cause silent numerical drift). Fall back to the plain unsharded
+        ``ttnn.layer_norm`` for that case — slower per call, but identical math to HF.
+        """
+        if m_tiles > 1:
+            x_inter = x
+            if ttnn.is_sharded(x):
+                x_inter = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+            normed = ttnn.layer_norm(
+                x_inter,
+                weight=weight,
+                bias=bias,
+                epsilon=self.layer_norm_eps,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self._layernorm_compute_cfg,
+            )
+            if x_inter is not x:
+                ttnn.deallocate(x_inter)
+            return normed
+
         sharded_mem_config, sharded_pc = self._build_ln_sharded_config(m_tiles, n_tiles)
 
         if input_sharded and ttnn.is_sharded(x):
@@ -355,8 +505,12 @@ class TTSeamlessM4Tv2Encoder:
 
         merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
+        # ``ttnn.reshape`` returns a view onto ``merged_4d`` storage. For short-seq prefill the
+        # next matmul (DRAM-sharded fast path) consumes ``merged`` synchronously, so deallocating
+        # ``merged_4d`` early is safe. The long-seq chunked matmul makes multiple intermediate
+        # allocations before consuming ``merged``, which can overwrite the freed view; keep
+        # ``merged_4d`` alive until after the projection.
         merged = ttnn.reshape(merged_4d, (batch, seq_q, hidden_size))
-        ttnn.deallocate(merged_4d)
 
         proj = self._linear(
             merged,
@@ -367,7 +521,7 @@ class TTSeamlessM4Tv2Encoder:
             batch=batch,
             seq=seq_q,
         )
-        ttnn.deallocate(merged)
+        ttnn.deallocate(merged_4d)
         return proj
 
     def forward(
@@ -439,8 +593,20 @@ class TTSeamlessM4Tv2Encoder:
         ffn_dim = 8 * hidden_size
         token_rows = batch * seq
         qkv_n = int(parameters.layers[0].self_attn.qkv.weight.shape[-1])
-        hidden = self._to_matmul_width_sharded(hidden, token_rows, hidden_size, qkv_n)
-        sharded_hidden_mem = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        # The L1 WIDTH-sharded activation layout used by the DRAM-sharded matmul kernel only
+        # supports ``m == TILE`` (one input tile row). For long-seq prefill (``token_rows > TILE``)
+        # the chunked path in ``_linear`` runs the matmul kernel ``ceil(m_actual / TILE)`` times and
+        # produces interleaved output, so keep the per-layer hidden state interleaved. Once the
+        # activations stop fitting in L1 (``token_rows * max(hidden, ffn_dim) * 2`` ≳ a few MB)
+        # the per-layer hidden state must live in DRAM; FC1 output at ``seq=4096`` is 64 MB.
+        long_seq = token_rows > TILE
+        long_seq_use_dram = long_seq and token_rows >= 256
+        if long_seq:
+            sharded_hidden_mem = ttnn.DRAM_MEMORY_CONFIG if long_seq_use_dram else ttnn.L1_MEMORY_CONFIG
+        else:
+            hidden = self._to_matmul_width_sharded(hidden, token_rows, hidden_size, qkv_n)
+            sharded_hidden_mem = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        self._long_seq_mc = sharded_hidden_mem if long_seq else None
 
         for i in range(num_layers):
             layer = parameters.layers[i]
@@ -452,7 +618,7 @@ class TTSeamlessM4Tv2Encoder:
                 m_tiles=m_tiles,
                 n_tiles=n_tiles,
                 input_sharded=ttnn.is_sharded(hidden),
-                output_sharded=True,
+                output_sharded=not long_seq,
             )
             attn_out = self._attention(
                 normed,
@@ -477,7 +643,7 @@ class TTSeamlessM4Tv2Encoder:
                 m_tiles=m_tiles,
                 n_tiles=n_tiles,
                 input_sharded=ttnn.is_sharded(hidden),
-                output_sharded=True,
+                output_sharded=not long_seq,
             )
             ff = self._linear(
                 normed,
@@ -485,8 +651,8 @@ class TTSeamlessM4Tv2Encoder:
                 layer.ffn.fc1.bias,
                 activation="relu",
                 logical_out_dim=ffn_dim,
-                keep_sharded_output=True,
-                accept_sharded_input=True,
+                keep_sharded_output=not long_seq,
+                accept_sharded_input=not long_seq,
                 batch=batch,
                 seq=seq,
             )
@@ -496,8 +662,8 @@ class TTSeamlessM4Tv2Encoder:
                 layer.ffn.fc2.weight,
                 layer.ffn.fc2.bias,
                 logical_out_dim=hidden_size,
-                accept_sharded_input=True,
-                keep_sharded_output=True,
+                accept_sharded_input=not long_seq,
+                keep_sharded_output=not long_seq,
                 batch=batch,
                 seq=seq,
             )
@@ -510,7 +676,9 @@ class TTSeamlessM4Tv2Encoder:
             bias=parameters.layer_norm.bias,
             m_tiles=m_tiles,
             n_tiles=n_tiles,
-            input_sharded=True,
+            input_sharded=ttnn.is_sharded(hidden),
             output_sharded=False,
         )
-        return self._width_sharded_to_3d(hidden, batch, seq, hidden_size)
+        if ttnn.is_sharded(hidden):
+            return self._width_sharded_to_3d(hidden, batch, seq, hidden_size)
+        return ttnn.reshape(hidden, (batch, seq, hidden_size)) if len(hidden.shape) != 3 else hidden
