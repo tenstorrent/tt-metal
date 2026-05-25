@@ -20,6 +20,7 @@ import ttnn
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.kokoro.reference.istftnet import TorchSTFT
+from models.experimental.kokoro.stft_xy_dump import reset_stft_xy_dump_counter
 from models.experimental.kokoro.tt.tt_torch_stft import TTTorchSTFT, preprocess_tt_torch_stft
 
 
@@ -362,3 +363,48 @@ def test_tt_torch_stft_forward_harmonic_no_fallback(device):
     _, pcc = comp_pcc(y_ref, y_h, pcc=0.0)
     print(f"[harmonic f0={f0:.0f}Hz amp={amplitude}, no fallback] forward PCC: {pcc:.6f}")
     assert pcc > 0.99, f"PCC too low: {pcc}"
+
+
+def test_tt_torch_stft_dump_xy_after_fp32_cast(device, monkeypatch):
+    """Reference ``TorchSTFT`` + TT conv dump ``xref``/``yref`` and ``xtt``/``ytt`` before atan2.
+
+    Enable globally for any STFT test::
+
+        KOKORO_DUMP_STFT_XY=1 pytest models/experimental/kokoro/tests/test_tt_torch_stft_pcc.py -k dump_xy -s
+
+    Overwrites ``/tmp/pytest-of-ubuntu/kokoro_stft_xy/{tag}_X_real.pt`` (and imag/meta).
+    See ``test_stft_atan2_correlation_proof.py`` for atan2 correlation analysis.
+    """
+    from models.experimental.kokoro.stft_xy_dump import stft_xy_dump_dir, stft_xy_dump_paths
+
+    monkeypatch.setenv("KOKORO_DUMP_STFT_XY", "1")
+    reset_stft_xy_dump_counter()
+    dump_dir = stft_xy_dump_dir()
+
+    x = _harmonic_signal(L=1500)
+    ref = _make_ref()
+
+    with torch.no_grad():
+        ref.transform(x)
+
+    params = preprocess_tt_torch_stft(
+        filter_length=_N_FFT, hop_length=_HOP, win_length=_WIN, input_length=x.shape[-1], device=device
+    )
+    tt_mod = TTTorchSTFT(device, params, use_torch_stft_fallback=False, use_torch_atan2_fallback=False)
+
+    x_tt = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    mag_tt, phase_tt = tt_mod.transform(x_tt)
+    ttnn.deallocate(mag_tt)
+    ttnn.deallocate(phase_tt)
+    ttnn.deallocate(x_tt)
+
+    ref_real, ref_imag, ref_meta = stft_xy_dump_paths("ref_torch_stft")
+    tt_real, tt_imag, tt_meta = stft_xy_dump_paths("magnitude_phase_fp32")
+    for p in (ref_real, ref_imag, ref_meta, tt_real, tt_imag, tt_meta):
+        assert p.exists(), f"missing {p}"
+
+    X_real = torch.load(tt_real, map_location="cpu", weights_only=True)
+    X_imag = torch.load(tt_imag, map_location="cpu", weights_only=True)
+    assert X_real.shape == X_imag.shape
+    assert X_real.dtype == torch.float32
+    print(f"dumped ref+tt xy -> {dump_dir}")
