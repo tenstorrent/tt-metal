@@ -42,6 +42,7 @@ export ARCH_NAME=wormhole_b0
 TTSIMD_BIN=""
 TTSIM_RPC_SRC=""
 for candidate in \
+    "$CRAQ_SIM/daemon/_out/ttsimd" \
     "$CRAQ_SIM/src/_out/release_wh/ttsimd" \
     "$CRAQ_SIM/daemon/ttsimd"; do
     if [ -x "$candidate" ]; then
@@ -50,6 +51,7 @@ for candidate in \
     fi
 done
 for candidate in \
+    "$CRAQ_SIM/client/_out/libttsim_rpc.so" \
     "$CRAQ_SIM/src/_out/release_wh/libttsim_rpc.so" \
     "$CRAQ_SIM/client/libttsim_rpc.so"; do
     if [ -f "$candidate" ]; then
@@ -124,6 +126,8 @@ log() {
 if [ "$use_daemon" -eq 1 ]; then
     start_ttsimd
     export TTSIMD_SOCKET
+    # tt-run auto-propagates TT_* vars to mpirun ranks; keep TTSIMD_SOCKET for direct runs.
+    export TT_TTSIMD_SOCKET="$TTSIMD_SOCKET"
     export TT_METAL_SIMULATOR="$WH_SIM_DIR/libttsim_rpc.so"
     trap stop_ttsimd EXIT INT TERM
     log "daemon mode: TT_METAL_SIMULATOR=$TT_METAL_SIMULATOR TTSIMD_SOCKET=$TTSIMD_SOCKET pid=$TTSIMD_PID"
