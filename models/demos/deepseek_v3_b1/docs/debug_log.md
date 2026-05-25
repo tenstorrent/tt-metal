@@ -793,3 +793,132 @@ flash_mla compute is **bank-asymmetric on every call**. Per-core SDPA output div
 My pick: **(1) 2c at position_id=127 with hash diagnostic** — single-line edit, validates whether 2c addresses the per-call asymmetry or just downstream visibility.
 
 ---
+
+## Attempt 20 — Experiment A: ZEROACC entire DEST at kernel boot
+
+**What.** At top of `kernel_main()` in `decoder_block_kernel.cpp`, immediately before the `iteration = 0; while (true) {}` loop, add a one-shot `TT_ZEROACC(CLR_ALL, ...)` on MATH (TRISC1). Clears all 64 tiles (both banks) before any iter runs.
+
+```cpp
+#if defined(COMPILE_FOR_TRISC)
+    MATH((TT_ZEROACC(p_zeroacc::CLR_ALL, 0, 0, ADDR_MOD_1, 0)));
+#endif
+```
+
+**Motivation.** SRAM doesn't necessarily power up to zero. If DEST bank 1 holds non-zero residual data from a prior test on the same device (or genuine power-on garbage), iter-1's `flash_mla` accumulating ops (`mm2 +=`, reduce_max's prev_max combine, reduce_sum's prev_sum accumulate) would pick up that residual as the "initial state" — producing bank-asymmetric output relative to iter-0 (which sees the bank-0 boot state). Clearing both banks at boot rules this hypothesis in/out.
+
+**Result.**
+
+| Metric | Baseline | Experiment A |
+|---|---|---|
+| MLP PCC @ pos=127 (`num_internal_iterations=2`) | 0.9901647631143314 | 0.9901647631143314 (same) |
+| MLP PCC @ pos=511 (`num_internal_iterations=2`) | 0.9916859209677518 | 0.9916859209677518 (same) |
+| Unique 0x30 hashes @ pos=127 | 32 / 32 | **28 / 32** |
+
+The unique-hash count drops from 32 → 28: 4 cores out of ~16 active now have iter-0 and iter-1 emitting **bit-identical** `sdpa_output_cb`. The other 12 cores still diverge across iters. MLP PCC unchanged.
+
+**Conclusion.** Residual DEST data is **partially** the story — for 4 cores, clearing bank state at boot is enough to make iter-0 and iter-1 outputs match. For the other 12 cores there's another mechanism. Residual data is not the dominant cause; clearing it doesn't fix the bug or change MLP PCC.
+
+**State.** Reverted.
+
+---
+
+## Attempt 21 — Experiment B: move `sdpa_custom_mm_block_uninit()` to before `cb_push_back`
+
+**What.** In `flash_mla.hpp:792-801`, move `sdpa_custom_mm_block_uninit()` from its original position (after `tile_regs_release()`) to before `cb_push_back(sdpa_output_cb, ...)`. The MM CFG state isn't read by `pack_block_contiguous` (which already ran above the move point), so the uninit can safely move earlier.
+
+```cpp
+// Before:
+cb_push_back(sdpa_output_cb, ...);
+hash_cb(...);
+tile_regs_commit/wait/release;
+sdpa_custom_mm_block_uninit();
+MATH(t6_semaphore_wait_on_max<...>(FPU_SFPU));
+
+// After:
+sdpa_custom_mm_block_uninit();           // moved here
+cb_push_back(sdpa_output_cb, ...);
+hash_cb(...);
+tile_regs_commit/wait/release;
+MATH(t6_semaphore_wait_on_max<...>(FPU_SFPU));
+```
+
+**Motivation.** The original ordering does CFG-pipe writes (`sdpa_custom_mm_block_uninit` tears down MOP config / replay buffer) *after* `tile_regs_release`. If those writes interfere with the bank-flip / ZEROACC issued at release (which dispatches on MATH/SFPU pipe), the resulting transient state might leak into the next chunk's compute and contribute to bank-asymmetric output.
+
+**Result.**
+
+| Metric | Baseline | Experiment B |
+|---|---|---|
+| MLP PCC @ pos=127 | 0.9901647631143314 | 0.9901647631143314 (same) |
+| MLP PCC @ pos=511 | 0.9916859209677518 | 0.9916859209677518 (same) |
+| Unique 0x30 hashes @ pos=127 | 32 / 32 | **31 / 32** |
+
+Effectively a no-op — only 1 pair of emissions now matches. MLP PCC unchanged.
+
+**Conclusion.** Uninit position is not a significant source of bank-asymmetric output. The CFG writes from `sdpa_custom_mm_block_uninit` after release don't meaningfully affect the next chunk's compute.
+
+**State.** Reverted.
+
+---
+
+## Updated handoff (post experiments A+B)
+
+Summary of hash-equality results at `position_id=127`:
+
+| Patch | Unique 0x30 / 32 | Effect |
+|---|---|---|
+| Baseline (no patch) | 32 | bug fully present per-core |
+| Experiment A (ZEROACC boot) | 28 | 4 cores fixed |
+| Experiment B (uninit early) | 31 | 1 core fixed |
+| 2c chunk-entry (Attempt 7, on MLP PCC) | n/a (haven't measured at pos=127 yet) | 20× collapse on MLP PCC |
+
+Neither A nor B fixes the bug. They each provide small signal — A is more interesting because it definitively shows that **for some cores, the bank state at function entry IS a contributor**, just not the dominant one.
+
+The remaining open puzzle: why do ~12 of 16 active cores still have iter-0 vs iter-1 output divergence even when DEST is fully cleared at boot? Possibilities:
+1. The boot ZEROACC is on TRISC1 (MATH) but not synced with TRISC2 (PACK); PACK's view of bank state may still hold stale data.
+2. Some non-DEST register (PACK_SEC GPR contents, ADC counters, MOP config) persists from one tile_regs cycle to the next in a bank-asymmetric way.
+3. The bug is in a HW op (MOVD2B / MVMUL / SFPLOAD with specific MATH_Offset values) that has bank-asymmetric numerical behavior independent of DEST contents.
+
+### Next move (back on the original plan)
+
+Run **2c at position_id=127 with hash diagnostic** — does 2c (cross-thread MATH+PACK MATH_Offset reset at chunk entry) make iter-0/iter-1 hashes match for all cores at 1 chunk? If yes, 2c addresses the per-call asymmetry directly. If still 32 unique, 2c only masks downstream propagation at multi-chunk and the per-call mechanism is independent.
+
+---
+
+## Planned next session — tt-exalens dump via `asm("ebreak")`
+
+The hash diagnostic shows **what** diverges (per-core SDPA output) but not **why**. To inspect actual Tensix state (DEST contents, CFG registers, GPRs, ADC counters, etc.) at the moment of divergence, halt the TRISC at a chosen PC and dump state with tt-exalens.
+
+### Plan
+
+1. **Insert `asm volatile("ebreak");`** in the kernel at the suspect transition point. Two interesting halt locations:
+   - **(A) Right before iter-1's `mla_body()` call** (gated by `iteration == 1`). Inspect state iter-1 sees at entry → compare to expected boot-clean state. Differences = whatever iter-0 left behind that iter-1 inherits.
+   - **(B) At the very top of `compute_sdpa_chunk`** (after gating on iter-0 vs iter-1 via a counter, so we can choose one or the other). Inspect state at the exact chunk-entry CFG position where 2c's SETC16 pair acts. Compare iter-0's halted state to iter-1's halted state to pin down exactly which register the cross-thread SETC16 is affecting.
+
+2. **Run the test** with `num_internal_iterations=2`, `position_id=127`. The TRISC executing the gated `ebreak` will halt. Other TRISCs / cores continue.
+
+3. **From a separate Python process** (not pytest, to avoid device ownership conflict): `init_ttexalens()` + `get_tensix_state(core_coord, device_id=…)` for each SDPA worker core that's halted. Save the `TensixState` (alu_config, pack_config, pack_dest_rd_ctrl, pack_edge_offset, pack_counters, pack_strides, gpr, register_window_counters, address_counters). Also use `read_riscv_memory` to read DEST contents directly if exposed, or `read_words_from_device` for L1.
+
+4. **Resume** by writing a 0 to the BRISC `mailbox`/`debug_resume` register (RISC-V debug interface), or by simply restarting the test for the next dump (we don't strictly need to resume — once we have the state snapshot we're done).
+
+5. **Compare** iter-0 dump vs iter-1 dump:
+   - Same MATH_Offset value? (expected: 0 for iter-0, HALF_SIZE for iter-1)
+   - Same PACK_SEC0..3 values? PACK_SEC GPRs (DEST_OFFSET_LO+0..3 / HI+0..3)?
+   - Same ADC counters? Pack_counters?
+   - Same DEST contents (the residual bank state we partially confirmed in Attempt 20)?
+   - Any unexpected register that *differs* and would explain bank-asymmetric numerical output.
+
+### Open questions to resolve before the session
+
+- Does tt-exalens cleanly attach to a device that ttnn already holds? (`init_ttexalens` may want exclusive UMD access. Likely need to release the ttnn mesh before attaching, or use a `mesh.synchronize_device()` + Python sleep to keep the device alive while we attach via exalens, then resume.)
+- What does `read_riscv_memory` see — L1 / TRISC private memory? DEST is not L1-addressable; we may need a debug-pack-DEST-to-L1 step before the ebreak to capture DEST contents.
+- Does `ebreak` on TRISC halt cleanly without taking down the rest of the program?
+
+### Cheaper warm-up before the exalens session
+
+If exalens-on-live-device proves fiddly, we can fall back to **kernel-self-dump**: pack both DEST banks to a debug L1 buffer right before the ebreak (or right before iter-1 starts), let the kernel complete normally, then read the L1 buffer from the test's host side. Same information as exalens for DEST contents, less for CFG registers. Simpler to wire up.
+
+### Why this is the right next step
+
+Every patch we've tried so far has been a *guess* at the bug location. The hash diagnostic narrows the bug to "per-call bank-asymmetric flash_mla compute", but to know which specific register or state element is the asymmetry source we need to *look*. The ebreak + exalens dump is the first experiment that produces direct evidence rather than indirect inference from PCC / hash signals.
+
+---
