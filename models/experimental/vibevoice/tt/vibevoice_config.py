@@ -35,6 +35,7 @@ class DiffusionHeadConfig:
 @dataclass
 class TokenizerConfig:
     vae_dim: int = 64
+    fix_std: float = 0.5
     causal: bool = True
     encoder_n_filters: int = 32
     encoder_ratios: List[int] = field(default_factory=lambda: [8, 5, 5, 4, 2, 2])
@@ -109,6 +110,7 @@ def load_vibevoice_model_config(model_path: str) -> VibeVoiceModelConfig:
         t = raw.get(raw_key, {})
         return TokenizerConfig(
             vae_dim=t.get("vae_dim", default_vae),
+            fix_std=t.get("fix_std", 0.5),
             causal=t.get("causal", True),
             encoder_n_filters=t.get("encoder_n_filters", 32),
             encoder_ratios=t.get("encoder_ratios", [8, 5, 5, 4, 2, 2]),
