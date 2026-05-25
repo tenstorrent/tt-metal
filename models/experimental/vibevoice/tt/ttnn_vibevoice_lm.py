@@ -536,15 +536,62 @@ class TTVibeVoiceLM:
     ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
         """Prefill: embed input_ids and run forward pass."""
         inputs_embeds = self._embed(input_ids)
-        return self.forward(inputs_embeds, start_pos=0, kv_cache=kv_cache, return_last_hidden=return_last_hidden)
+        return self.prefill_embeds(inputs_embeds, kv_cache=kv_cache, return_last_hidden=return_last_hidden)
+
+    def prefill_embeds(
+        self,
+        inputs_embeds: ttnn.Tensor,
+        kv_cache: Optional[KVCache] = None,
+        chunk_size: int = 256,
+        return_last_hidden: bool = False,
+    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
+        """Prefill with merged embeddings, chunked to fit L1 on long sequences."""
+        S = inputs_embeds.shape[2]
+        if S <= chunk_size:
+            return self.forward(
+                inputs_embeds,
+                start_pos=0,
+                kv_cache=kv_cache,
+                return_last_hidden=return_last_hidden,
+            )
+
+        logits = None
+        last_hidden = None
+        hidden_dim = inputs_embeds.shape[-1]
+        for start in range(0, S, chunk_size):
+            end = min(start + chunk_size, S)
+            chunk = ttnn.slice(
+                inputs_embeds,
+                [0, 0, start, 0],
+                [1, 1, end, hidden_dim],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            logits, last_hidden = self.forward(
+                chunk,
+                start_pos=start,
+                kv_cache=kv_cache,
+                return_last_hidden=return_last_hidden,
+            )
+        return logits, last_hidden
 
     def decode_step(
         self,
         input_id: torch.Tensor,
         start_pos: int,
         kv_cache: KVCache,
-    ) -> ttnn.Tensor:
-        """Single decode step returning logits [B, 1, 1, vocab]."""
+        return_last_hidden: bool = False,
+    ):
+        """Single decode step.
+
+        Returns logits [B, 1, 1, vocab], or (logits, last_hidden) when return_last_hidden=True.
+        """
         inputs_embeds = self._embed(input_id)
-        logits, _ = self.forward(inputs_embeds, start_pos=start_pos, kv_cache=kv_cache)
+        logits, last_hidden = self.forward(
+            inputs_embeds,
+            start_pos=start_pos,
+            kv_cache=kv_cache,
+            return_last_hidden=return_last_hidden,
+        )
+        if return_last_hidden:
+            return logits, last_hidden
         return logits
