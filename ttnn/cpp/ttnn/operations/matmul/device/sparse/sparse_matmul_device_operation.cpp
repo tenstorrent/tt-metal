@@ -99,46 +99,6 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.is_input_a_sparse || operation_attributes.is_input_b_sparse,
         "sparse_matmul requires at least one of is_input_a_sparse or is_input_b_sparse to be true");
 
-    const auto& a_shape = input_tensor_a.logical_shape();
-    const auto& b_shape = input_tensor_b.logical_shape();
-    const auto& sparsity_shape = sparsity.logical_shape();
-
-    TT_FATAL(sparsity_shape.rank() == 4, "sparsity tensor must have rank 4, got {}", sparsity_shape.rank());
-
-    TT_FATAL(b_shape.rank() >= 2, "sparse_matmul input B must have rank >= 2, got {}", b_shape.rank());
-    const uint32_t num_experts = b_shape[1];
-    TT_FATAL(
-        sparsity_shape[-1] == num_experts,
-        "sparsity last dimension ({}) must match num_experts from input B ({})",
-        sparsity_shape[-1],
-        num_experts);
-
-    if (operation_attributes.is_input_a_sparse && operation_attributes.is_input_b_sparse) {
-        TT_FATAL(
-            sparsity_shape[0] == 1 && sparsity_shape[1] == 1 && sparsity_shape[2] == 1,
-            "sparsity shape must be [1, 1, 1, num_experts] when both inputs are sparse, got {}",
-            sparsity_shape);
-    } else if (operation_attributes.is_input_a_sparse) {
-        TT_FATAL(
-            sparsity_shape[0] == 1 && sparsity_shape[1] == 1,
-            "sparsity shape must be [1, 1, A, E] when input A is sparse, got {}",
-            sparsity_shape);
-        TT_FATAL(
-            sparsity_shape[2] == a_shape[0] && sparsity_shape[3] == a_shape[1],
-            "sparsity shape[2] ({}) must match a_shape[0] ({}), and expert dim sparsity[3] ({}) must match a_shape[1] "
-            "({})",
-            sparsity_shape[2],
-            a_shape[0],
-            sparsity_shape[3],
-            a_shape[1]);
-    } else {
-        TT_FATAL(
-            sparsity_shape[0] == a_shape[0] && sparsity_shape[1] == a_shape[1] && sparsity_shape[2] == 1,
-            "sparsity shape must be [A0, A1, 1, num_experts] when input B is sparse, got sparsity_shape={} a_shape={}",
-            sparsity_shape,
-            a_shape);
-    }
-
     const auto& a_shape_padded = get_matmul_tensor_padded_shape(input_tensor_a, /*transpose=*/false);
     const auto& b_shape_padded = get_matmul_tensor_padded_shape(input_tensor_b, /*transpose=*/false);
     auto in0_tile = get_matmul_tile(input_tensor_a, /*transpose=*/false);
