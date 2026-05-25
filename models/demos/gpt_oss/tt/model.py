@@ -880,7 +880,6 @@ class Model:
         start_pos=0,
         page_table=None,
         chunk_page_table=None,
-        chunk_start_idx=None,
         trace_enabled=False,
         last_token_idx=None,
         global_user_id=None,
