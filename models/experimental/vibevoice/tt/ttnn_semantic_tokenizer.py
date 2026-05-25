@@ -28,10 +28,8 @@ Block1D (channels-first):
   x = x * ffn_gamma
   x = residual + x
 
-Note: ttnn.conv1d/conv2d has a Blackhole kernel bug (compile-time args OOB).
-All convolutions are run host-side via torch.nn.functional.conv1d.
-Linear and RMSNorm ops run on device via TTNN where applicable.
-The TTNN tensor interface (input/output) is preserved.
+All convolutions, norms, and linear ops run on device via TTConv1d / TTBlock1DDevice.
+Requires device opened with l1_small_size=32768 for conv support on Blackhole.
 """
 
 import math
@@ -296,6 +294,207 @@ def _block1d_forward(x: torch.Tensor, bw: Block1DWeightsHost) -> torch.Tensor:
 
 
 # ──────────────────────────────────────────────────────────────
+# Device-side TT helpers: weight converters
+# ──────────────────────────────────────────────────────────────
+
+
+def _tile_linear(t: torch.Tensor, device) -> ttnn.Tensor:
+    """[out, in] → [1, 1, in, out] TILE for ttnn.linear (x @ w semantics)."""
+    return ttnn.as_tensor(
+        t.to(torch.bfloat16).t().unsqueeze(0).unsqueeze(0).contiguous(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _norm_w_tt(w: torch.Tensor, device) -> ttnn.Tensor:
+    """[C] norm weight → [1, 1, C//32, 32] ROW_MAJOR for ttnn.rms_norm."""
+    C = w.shape[0]
+    return ttnn.as_tensor(
+        w.to(torch.bfloat16).view(1, 1, C // 32, 32).contiguous(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+# ──────────────────────────────────────────────────────────────
+# TTConv1d — SConv1d on device via ttnn.conv2d(H=1 NHWC)
+# ──────────────────────────────────────────────────────────────
+
+
+class TTConv1d:
+    """1D convolution on device via ttnn.conv2d with H=1 NHWC layout.
+
+    Replicates SConv1d._forward_non_streaming: left causal pad + extra right pad,
+    then conv with stride, then output in [B, 1, T_out, out_ch] NHWC.
+    """
+
+    def __init__(self, cw: ConvWeightsHost, device):
+        self.device = device
+        self.stride = cw.stride
+        self.groups = cw.groups
+        self.causal_pad = cw.causal_pad
+
+        out_ch, in_per_group, K = cw.weight.shape
+        self.out_ch = out_ch
+        self.in_ch = in_per_group * cw.groups
+        self.K = K
+
+        # OIHW: [out_ch, in_ch//groups, H=1, K_W=K] for ttnn.conv2d
+        w4d = cw.weight.to(torch.bfloat16).unsqueeze(2).contiguous()
+        self.weight = ttnn.as_tensor(
+            w4d,
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if cw.bias is not None:
+            # conv2d requires bias as [1, 1, 1, out_ch]
+            self.bias = ttnn.as_tensor(
+                cw.bias.to(torch.bfloat16).view(1, 1, 1, -1).contiguous(),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            self.bias = None
+
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """x: [B, 1, T, in_ch] NHWC → [B, 1, T_out, out_ch]"""
+        B, _, T, _ = x.shape
+
+        # Compute extra right-pad (matches get_extra_padding_for_conv1d)
+        if self.stride > 1:
+            n_frames = (T - self.K + self.causal_pad) / self.stride + 1
+            ideal_length = (math.ceil(n_frames) - 1) * self.stride + (self.K - self.causal_pad)
+            extra_pad = max(0, ideal_length - T)
+        else:
+            extra_pad = 0
+
+        T_padded = T + self.causal_pad + extra_pad
+        if self.causal_pad > 0 or extra_pad > 0:
+            # ttnn.pad front padding requires ROW_MAJOR layout
+            if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.pad(x, [(0, 0), (0, 0), (self.causal_pad, extra_pad), (0, 0)], value=0.0)
+
+        x_out, [_, w_out], [self.weight, self.bias] = ttnn.conv2d(
+            input_tensor=x,
+            weight_tensor=self.weight,
+            bias_tensor=self.bias,
+            device=self.device,
+            in_channels=self.in_ch,
+            out_channels=self.out_ch,
+            batch_size=B,
+            input_height=1,
+            input_width=T_padded,
+            kernel_size=(1, self.K),
+            stride=(1, self.stride),
+            padding=(0, 0),
+            groups=self.groups,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+            dtype=ttnn.bfloat16,
+            compute_config=_HIFI4,
+        )
+        # Output from conv2d is [1, 1, B*w_out, out_ch]; reshape to [B, 1, T_out, out_ch]
+        return ttnn.reshape(x_out, [B, 1, w_out, self.out_ch])
+
+
+# ──────────────────────────────────────────────────────────────
+# TTBlock1DDevice — Block1D fully on device in NHWC [B, 1, T, C]
+# ──────────────────────────────────────────────────────────────
+
+
+class TTBlock1DDevice:
+    """Block1D with all ops on device.
+
+    Input/output format: [B, 1, T, C] NHWC (TTNN native for conv2d).
+    ConvRMSNorm = ttnn.rms_norm over last dim (C) — matches reference semantics.
+    FFN permute-to-TC is implicit in NHWC (already channels-last).
+    """
+
+    def __init__(self, bw: Block1DWeightsHost, device):
+        self.device = device
+        self.eps = bw.eps
+        self.dim = bw.dim
+
+        self.dw_conv = TTConv1d(bw.dw_conv, device)
+        self.norm_w = _norm_w_tt(bw.norm_w, device)
+        self.ffn_norm_w = _norm_w_tt(bw.ffn_norm_w, device)
+        # linear1_w is [ffn_dim, C] in PyTorch → _tile_linear transposes to [C, ffn_dim]
+        self.linear1_w = _tile_linear(bw.linear1_w, device)
+        self.linear2_w = _tile_linear(bw.linear2_w, device)
+
+        def _bias(b: Optional[torch.Tensor]) -> Optional[ttnn.Tensor]:
+            if b is None:
+                return None
+            return ttnn.as_tensor(
+                b.to(torch.bfloat16).view(1, 1, 1, -1).contiguous(),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        def _scale(s: Optional[torch.Tensor]) -> Optional[ttnn.Tensor]:
+            if s is None:
+                return None
+            C = s.shape[0]
+            return ttnn.as_tensor(
+                s.to(torch.bfloat16).view(1, 1, 1, C).contiguous(),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        self.linear1_b = _bias(bw.linear1_b)
+        self.linear2_b = _bias(bw.linear2_b)
+        self.gamma = _scale(bw.gamma)
+        self.ffn_gamma = _scale(bw.ffn_gamma)
+
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """x: [B, 1, T, C] → [B, 1, T, C]"""
+        # Mixer (depthwise conv) path
+        residual = x
+        x = ttnn.rms_norm(
+            x, weight=self.norm_w, epsilon=self.eps, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        x = self.dw_conv(x)
+        if self.gamma is not None:
+            x = ttnn.mul(x, self.gamma, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(residual, x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # FFN path — linear ops on last dim (C), no explicit permute needed in NHWC
+        residual = x
+        x = ttnn.rms_norm(
+            x,
+            weight=self.ffn_norm_w,
+            epsilon=self.eps,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        x = ttnn.linear(
+            x, self.linear1_w, bias=self.linear1_b, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        x = ttnn.gelu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.linear(
+            x, self.linear2_w, bias=self.linear2_b, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        if self.ffn_gamma is not None:
+            x = ttnn.mul(x, self.ffn_gamma, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(residual, x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return x
+
+
+# ──────────────────────────────────────────────────────────────
 # TTSemanticTokenizer
 # ──────────────────────────────────────────────────────────────
 
@@ -303,55 +502,54 @@ def _block1d_forward(x: torch.Tensor, bw: Block1DWeightsHost) -> torch.Tensor:
 class TTSemanticTokenizer:
     """TTNN port of VibeVoiceSemanticTokenizerModel encoder.
 
-    Input:  TTNN tensor [B, 1, 1, T] or [B, 1, T, 1] (raw audio)
-    Output: TTNN tensor [B, 1, T_enc, vae_dim]
+    All convolutions, norms, and linear ops run on device via TTConv1d / TTBlock1DDevice.
+    Device must be opened with l1_small_size=32768 for conv support on Blackhole.
 
-    Note: Convolutions run host-side (Blackhole TTNN conv kernel bug).
+    Input:  [B, 1, 1, T] raw audio
+    Output: [B, 1, T_enc, vae_dim]
     """
 
     def __init__(self, weights: SemanticTokenizerWeights, device):
-        self.w = weights
         self.device = device
         self.eps = weights.eps
 
+        self._downsample_convs = [TTConv1d(cw, device) for cw in weights.downsample_convs]
+        self._stages = [[TTBlock1DDevice(bw, device) for bw in stage_blocks] for stage_blocks in weights.stages]
+
+        if weights.final_norm_w is not None:
+            C = weights.final_norm_w.shape[0]
+            self._final_norm_w = _norm_w_tt(weights.final_norm_w, device)
+        else:
+            self._final_norm_w = None
+
+        self._head_conv = TTConv1d(weights.head_conv, device)
+
     def forward(self, audio: ttnn.Tensor) -> ttnn.Tensor:
-        """Encode audio to semantic latents.
+        """Encode audio to semantic latents (all ops on device)."""
+        B = audio.shape[0]
+        T = audio.shape[-1]
 
-        audio: [B, 1, 1, T] TTNN tensor (raw waveform)
-        Returns: [B, 1, T_enc, vae_dim]
-        """
-        # Bring to host and reshape to [B, 1, T] (BCT format for conv1d)
-        x_host = ttnn.to_torch(audio).to(torch.float32)  # [B, 1, 1, T]
-        # audio is [B, dim1=1, H=1, T] → squeeze to [B, 1, T]
-        B = x_host.shape[0]
-        T = x_host.shape[-1]
-        x = x_host.view(B, 1, T)  # [B, C=1, T]
+        # [B, 1, 1, T] → [B, 1, T, 1] NHWC for TTConv1d
+        x = ttnn.reshape(audio, [B, 1, T, 1])
+        if x.dtype != ttnn.bfloat16:
+            x = ttnn.typecast(x, ttnn.bfloat16)
 
-        w = self.w
+        for i, stage_blocks in enumerate(self._stages):
+            x = self._downsample_convs[i](x)
+            for blk in stage_blocks:
+                x = blk(x)
 
-        # Process: downsample_layers[i] → stages[i] blocks
-        for i, blocks in enumerate(w.stages):
-            x = _apply_conv1d(x, w.downsample_convs[i])
-            for blk in blocks:
-                x = _block1d_forward(x, blk)
+        if self._final_norm_w is not None:
+            x = ttnn.rms_norm(
+                x,
+                weight=self._final_norm_w,
+                epsilon=self.eps,
+                compute_kernel_config=_HIFI4,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
-        # Final norm
-        if w.final_norm_w is not None:
-            x = _conv_rms_norm(x, w.final_norm_w, self.eps)
-
-        # Head conv
-        x = _apply_conv1d(x, w.head_conv)
-
-        # x: [B, vae_dim, T_enc] → [B, 1, T_enc, vae_dim] for TTNN
-        x = x.to(torch.bfloat16).permute(0, 2, 1).unsqueeze(1)  # [B, 1, T_enc, vae_dim]
-
-        return ttnn.as_tensor(
-            x,
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        x = self._head_conv(x)  # [B, 1, T_enc, vae_dim]
+        return x
 
     def __call__(self, audio: ttnn.Tensor) -> ttnn.Tensor:
         return self.forward(audio)
