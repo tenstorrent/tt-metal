@@ -25,9 +25,13 @@ from .._ttnn import get_ttnn
 from ..math_perf_env import (
     ace_step_init_vae_conv_compute_kernel_config,
     ace_step_reshape_kwargs,
+    ace_step_vae_activation_compute_dtype,
     ace_step_vae_activation_memory_config,
+    ace_step_vae_activation_storage_dtype,
     ace_step_vae_conv1d_memory_config,
     ace_step_vae_conv_weight_dtype,
+    ace_step_vae_host_weight_staging_dtype,
+    ace_step_vae_normalize_activation_output,
 )
 
 
@@ -81,10 +85,12 @@ class TtConv1d:
         self.padding = int(padding)
         self.dilation = int(dilation)
 
-        self.activation_dtype = activation_dtype or getattr(ttnn, "bfloat16", None)
-        self.weights_dtype = weights_dtype or getattr(ttnn, "bfloat16", None)
-        if self.activation_dtype is None or self.weights_dtype is None:
-            raise RuntimeError("TTNN build missing bfloat16; supply activation_dtype/weights_dtype")
+        self._storage_dtype = ace_step_vae_activation_storage_dtype(ttnn)
+        self._compute_dtype = ace_step_vae_activation_compute_dtype(ttnn)
+        if activation_dtype is not None:
+            self._storage_dtype = activation_dtype
+            self._compute_dtype = activation_dtype
+        self.weights_dtype = weights_dtype or ace_step_vae_host_weight_staging_dtype(ttnn)
         self._vae_conv_perf = True
         # L1 only for 1×1 projections; k>1 uses DRAM (L1 output OOM + static-CB clash on Blackhole).
         self._l1_mem = ace_step_vae_conv1d_memory_config(ttnn, kernel_size=self.kernel_size)
@@ -169,7 +175,7 @@ class TtConv1d:
             has_bias=self._has_bias,
             groups=1,
             device=self.device,
-            input_dtype=self.activation_dtype,
+            input_dtype=self._compute_dtype,
             conv_config=self.conv_config,
             compute_config=self.compute_config,
         )
@@ -188,7 +194,7 @@ class TtConv1d:
                 padding=(0, self.padding),
                 dilation=(1, self.dilation),
                 device=self.device,
-                input_dtype=self.activation_dtype,
+                input_dtype=self._compute_dtype,
                 groups=1,
                 conv_config=self.conv_config,
                 compute_config=self.compute_config,
@@ -211,6 +217,8 @@ class TtConv1d:
             raise ValueError(f"Conv1d input channels mismatch: got {c}, expected {self.in_channels}")
 
         x = self._maybe_l1(x)
+        if x.dtype != self._storage_dtype:
+            x = ttnn.typecast(x, self._storage_dtype, memory_config=self._input_memory_config())
         self._ensure_packed(b, t)
         ret = ttnn.conv1d(
             input_tensor=x,
@@ -230,15 +238,15 @@ class TtConv1d:
             groups=1,
             return_output_dim=True,
             return_weights_and_bias=False,
-            dtype=self.activation_dtype,
+            dtype=self._compute_dtype,
             memory_config=self._output_memory_config(),
         )
         out, out_length = ret
         out = ttnn.squeeze(out, 0)
         out = ttnn.reshape(out, (b, out_length, self.out_channels), **_sr)
-        # L1 conv returns TILE; normalize to ROW_MAJOR so time/channel dims match PyTorch semantics
-        # and residual / slice logic sees the true logical length.
-        return ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        return ace_step_vae_normalize_activation_output(
+            ttnn, out, storage_dtype=self._storage_dtype, compute_dtype=self._compute_dtype
+        )
 
 
 class TtConvTranspose1d:
@@ -274,10 +282,12 @@ class TtConvTranspose1d:
         self.stride = int(stride)
         self.padding = int(padding)
 
-        self.activation_dtype = activation_dtype or getattr(ttnn, "bfloat16", None)
-        self.weights_dtype = weights_dtype or getattr(ttnn, "bfloat16", None)
-        if self.activation_dtype is None or self.weights_dtype is None:
-            raise RuntimeError("TTNN build missing bfloat16; supply activation_dtype/weights_dtype")
+        self._storage_dtype = ace_step_vae_activation_storage_dtype(ttnn)
+        self._compute_dtype = ace_step_vae_activation_compute_dtype(ttnn)
+        if activation_dtype is not None:
+            self._storage_dtype = activation_dtype
+            self._compute_dtype = activation_dtype
+        self.weights_dtype = weights_dtype or ace_step_vae_host_weight_staging_dtype(ttnn)
         self._vae_conv_perf = True
         self._l1_mem = ace_step_vae_activation_memory_config(ttnn)
         # Conv-transpose kernels are always k>1 in Oobleck (``2 * stride``); use BFP8 weights for BW.
@@ -346,6 +356,8 @@ class TtConvTranspose1d:
             raise ValueError(f"ConvT1d input channels mismatch: got {c}, expected {self.in_channels}")
 
         x = self._maybe_l1(x)
+        if x.dtype != self._storage_dtype:
+            x = ttnn.typecast(x, self._storage_dtype, memory_config=self._output_memory_config())
         # TTNN conv_transpose2d expects [B, H, W, C] NHWC; map T -> W with H=1.
         x4 = ttnn.unsqueeze(x, 1)  # [B, 1, T, C]
 
@@ -369,9 +381,11 @@ class TtConvTranspose1d:
             compute_config=self.compute_config,
             return_weights_and_bias=True,
             mirror_kernel=True,
-            dtype=self.activation_dtype,
+            dtype=self._compute_dtype,
             memory_config=self._output_memory_config(),
         )
         # conv_transpose2d returns NHWC [B, 1, T_out, out_channels] (rank-4)
         out = ttnn.squeeze(out, 1)
-        return ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        return ace_step_vae_normalize_activation_output(
+            ttnn, out, storage_dtype=self._storage_dtype, compute_dtype=self._compute_dtype
+        )

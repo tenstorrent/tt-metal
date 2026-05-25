@@ -8,6 +8,12 @@ Each test builds a torch-reference module, derives the matching TTNN module
 from the same state dict, runs both, and checks PCC. The tests use small
 channel counts and short time axes to keep them cheap; the full-decoder test
 is gated to a reduced configuration so it can run on a single Wormhole.
+
+**Opt-in ``bfloat8_b`` activation compute:** set ``ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=1``
+and run ``test_*_pcc_bfloat8_activations`` (relaxed PCC floor — inter-op buffers stay BF16).
+
+Default VAE dtype policy: **BF16 ROW_MAJOR** inter-op buffers + **``bfloat8_b``** conv weights (``k>1``);
+with the env flag, conv im2col outputs and Snake TILE eltwise use **``bfloat8_b``** internally.
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+import pytest
 import torch
 
 import ttnn
@@ -202,3 +209,104 @@ def test_decoder_tiny_pcc(device, torch_seed):
     y_tt_torch = ttnn.to_torch(y_tt).float()
 
     assert_pcc_print("vae_decoder_tiny", y_ref_btc, y_tt_torch)
+
+
+_BFLOAT8_ACT_PCC = 0.99
+
+
+@pytest.fixture
+def vae_bfloat8_activations(monkeypatch):
+    """Enable opt-in VAE bfloat8 activation compute for one test."""
+    if not hasattr(ttnn, "bfloat8_b"):
+        pytest.skip("ttnn.bfloat8_b not available on this build")
+    monkeypatch.setenv("ACE_STEP_VAE_BFLOAT8_ACTIVATIONS", "1")
+    yield
+
+
+def test_snake1d_pcc_bfloat8_activations(device, torch_seed, vae_bfloat8_activations):
+    _ = vae_bfloat8_activations
+    _ = torch_seed
+    c = 64
+    t = 33
+    snake_t = Snake1d(c).eval()
+    with torch.no_grad():
+        snake_t.alpha.copy_(torch.randn_like(snake_t.alpha) * 0.5)
+        snake_t.beta.copy_(torch.randn_like(snake_t.beta) * 0.5)
+
+    x_bct = torch.randn(1, c, t, dtype=torch.bfloat16).float()
+    y_ref_bct = snake_t(x_bct)
+    y_ref_btc = _bct_to_btc(y_ref_bct)
+
+    sd = snake_t.state_dict()
+    tt_snake = TtSnake1d(
+        alpha_host=_param_to_f32_numpy(sd["alpha"]),
+        beta_host=_param_to_f32_numpy(sd["beta"]),
+        device=device,
+    )
+
+    x_btc = _bct_to_btc(x_bct)
+    x_tt = ttnn.from_torch(x_btc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    y_tt = tt_snake(x_tt)
+    y_tt = ttnn.to_layout(y_tt, ttnn.ROW_MAJOR_LAYOUT)
+    y_tt_torch = ttnn.to_torch(y_tt).float()
+
+    assert_pcc_print("vae_snake1d_bfloat8_act", y_ref_btc, y_tt_torch, pcc=_BFLOAT8_ACT_PCC)
+
+
+def test_residual_unit_pcc_bfloat8_activations(device, torch_seed, vae_bfloat8_activations):
+    _ = vae_bfloat8_activations
+    _ = torch_seed
+    c = 32
+    t = 64
+    mod = OobleckResidualUnit(c, dilation=3).eval()
+    x_bct = torch.randn(1, c, t, dtype=torch.bfloat16).float()
+    y_ref_bct = mod(x_bct)
+    y_ref_btc = _bct_to_btc(y_ref_bct)
+
+    tt_mod = TtOobleckResidualUnit(
+        weights=_residual_weights_dict(mod),
+        dimension=c,
+        dilation=3,
+        device=device,
+    )
+    x_tt = ttnn.from_torch(_bct_to_btc(x_bct), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    y_tt = tt_mod(x_tt)
+    y_tt_torch = ttnn.to_torch(y_tt).float()
+
+    assert_pcc_print("vae_residual_unit_bfloat8_act", y_ref_btc, y_tt_torch, pcc=_BFLOAT8_ACT_PCC)
+
+
+def test_decoder_tiny_pcc_bfloat8_activations(device, torch_seed, vae_bfloat8_activations):
+    _ = vae_bfloat8_activations
+    _ = torch_seed
+    cfg = TinyDecoderConfig()
+    torch_dec = OobleckDecoder(
+        channels=cfg.decoder_channels,
+        input_channels=cfg.decoder_input_channels,
+        audio_channels=cfg.audio_channels,
+        upsampling_ratios=cfg.upsampling_ratios,
+        channel_multiples=cfg.channel_multiples,
+    ).eval()
+
+    t_lat = 32
+    x_bct = torch.randn(1, cfg.decoder_input_channels, t_lat, dtype=torch.bfloat16).float()
+    with torch.inference_mode():
+        y_ref_bct = torch_dec(x_bct)
+    y_ref_btc = _bct_to_btc(y_ref_bct)
+
+    full_sd = {f"decoder.{k}": v for k, v in torch_dec.state_dict().items()}
+    tt_dec = TtOobleckDecoder(
+        state_dict=full_sd,
+        device=device,
+        decoder_prefix="decoder.",
+        channels=cfg.decoder_channels,
+        input_channels=cfg.decoder_input_channels,
+        audio_channels=cfg.audio_channels,
+        upsampling_ratios=cfg.upsampling_ratios,
+        channel_multiples=cfg.channel_multiples,
+    )
+    x_tt = ttnn.from_torch(_bct_to_btc(x_bct), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    y_tt = tt_dec(x_tt)
+    y_tt_torch = ttnn.to_torch(y_tt).float()
+
+    assert_pcc_print("vae_decoder_tiny_bfloat8_act", y_ref_btc, y_tt_torch, pcc=_BFLOAT8_ACT_PCC)
