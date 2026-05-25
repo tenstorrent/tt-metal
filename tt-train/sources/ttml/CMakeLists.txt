@@ -216,10 +216,6 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_fw/mla_qkv_assemble_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_fw/device/mla_qkv_assemble_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_fw/device/mla_qkv_assemble_fw_program_factory.cpp
-    # MLA QKV Assemble Backward (DeepSeek)
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_bw/mla_qkv_assemble_bw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_bw/device/mla_qkv_assemble_bw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_bw/device/mla_qkv_assemble_bw_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
