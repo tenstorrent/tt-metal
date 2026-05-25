@@ -538,8 +538,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     reader_sender.unique_id = K_READER_SENDER;
     reader_sender.source = m2::KernelSpec::SourceFilePath{kernel_paths.reader_sender};
     reader_sender.config_spec = m2::DataMovementConfiguration{
-        .gen1_data_movement_config = m2::DataMovementConfiguration::Gen1DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = reader_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC}};
+        .gen1_data_movement_config =
+            m2::DataMovementConfiguration::Gen1DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = reader_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC},
+        .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{}};
     reader_sender.compile_time_arg_bindings = reader_common_ctas;
     reader_sender.compile_time_arg_bindings.push_back({"is_all_to_all_worker", 1u});
     bind_reader_dfbs(reader_sender);
@@ -562,10 +564,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         reader_rcv_a2a.unique_id = K_READER_RCV_A2A;
         reader_rcv_a2a.source = m2::KernelSpec::SourceFilePath{kernel_paths.reader_receiver};
         reader_rcv_a2a.config_spec = m2::DataMovementConfiguration{
-            .gen1_data_movement_config = m2::DataMovementConfiguration::Gen1DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = reader_noc,
-                .noc_mode = NOC_MODE::DM_DEDICATED_NOC}};
+            .gen1_data_movement_config =
+                m2::DataMovementConfiguration::Gen1DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = reader_noc,
+                    .noc_mode = NOC_MODE::DM_DEDICATED_NOC},
+            .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{}};
         reader_rcv_a2a.compile_time_arg_bindings = reader_common_ctas;
         reader_rcv_a2a.compile_time_arg_bindings.push_back({"is_all_to_all_worker", 1u});
         bind_reader_dfbs(reader_rcv_a2a);
@@ -587,10 +591,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         reader_rcv.unique_id = K_READER_RCV;
         reader_rcv.source = m2::KernelSpec::SourceFilePath{kernel_paths.reader_receiver};
         reader_rcv.config_spec = m2::DataMovementConfiguration{
-            .gen1_data_movement_config = m2::DataMovementConfiguration::Gen1DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = reader_noc,
-                .noc_mode = NOC_MODE::DM_DEDICATED_NOC}};
+            .gen1_data_movement_config =
+                m2::DataMovementConfiguration::Gen1DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = reader_noc,
+                    .noc_mode = NOC_MODE::DM_DEDICATED_NOC},
+            .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{}};
         reader_rcv.compile_time_arg_bindings = reader_common_ctas;
         reader_rcv.compile_time_arg_bindings.push_back({"is_all_to_all_worker", 0u});
         bind_reader_dfbs(reader_rcv);
@@ -666,8 +672,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     writer_sender.unique_id = K_WRITER_SENDER;
     writer_sender.source = m2::KernelSpec::SourceFilePath{kernel_paths.writer};
     writer_sender.config_spec = m2::DataMovementConfiguration{
-        .gen1_data_movement_config = m2::DataMovementConfiguration::Gen1DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = writer_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC}};
+        .gen1_data_movement_config =
+            m2::DataMovementConfiguration::Gen1DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1, .noc = writer_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC},
+        .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{}};
     writer_sender.compile_time_arg_bindings = build_writer_ctas(true);
     bind_writer_dfbs(writer_sender);
     bind_writer_tensors(writer_sender);
@@ -685,10 +693,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         writer_rcv.unique_id = K_WRITER_RCV;
         writer_rcv.source = m2::KernelSpec::SourceFilePath{kernel_paths.writer};
         writer_rcv.config_spec = m2::DataMovementConfiguration{
-            .gen1_data_movement_config = m2::DataMovementConfiguration::Gen1DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = writer_noc,
-                .noc_mode = NOC_MODE::DM_DEDICATED_NOC}};
+            .gen1_data_movement_config =
+                m2::DataMovementConfiguration::Gen1DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = writer_noc,
+                    .noc_mode = NOC_MODE::DM_DEDICATED_NOC},
+            .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{}};
         writer_rcv.compile_time_arg_bindings = build_writer_ctas(false);
         bind_writer_dfbs(writer_rcv);
         bind_writer_tensors(writer_rcv);

@@ -45,8 +45,8 @@ void kernel_main() {
     constexpr uint32_t scaler0 = 0;
 
     constexpr uint32_t cb_in0 = dfb::cb_in0;
-    constexpr uint32_t cb_in1 = dfb::cb_inb;
 #ifdef FUSE_PRE_ADD
+    constexpr uint32_t cb_in1 = dfb::cb_inb;
     constexpr uint32_t cb_in = dfb::cb_in0_pre;  // c_14 in pre-allgather mode
 #else
     constexpr uint32_t cb_in = cb_in0;

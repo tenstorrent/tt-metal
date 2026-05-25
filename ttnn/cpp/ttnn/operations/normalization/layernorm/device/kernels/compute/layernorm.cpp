@@ -271,98 +271,94 @@ void kernel_main() {
         cb_ex2pe_obj.wait_front(1);
         for (auto block : generic::blocks(Wt, block_size)) {
             reconfig_data_format(cb_xmm, cb_ex2pe);
-            if constexpr (do_gamma == 0 && do_beta == 0) {
-                pack_reconfig_data_format(cb_out);
-            } else {
-                pack_reconfig_data_format(cb_fusion);
-            }
+#if defined FUSE_GAMMA || defined FUSE_BETA
+            pack_reconfig_data_format(cb_fusion);
+#else
+            pack_reconfig_data_format(cb_out);
+#endif
             cb_im_or_out_obj.reserve_back(block.full_block_size());
-#if defined RMSNORM and not defined FUSE_PRE_ADD
+#if defined RMSNORM and not defined FUSE_PRE_ADD && (defined FUSE_GAMMA || defined FUSE_BETA)
             reconfig_data_format_srca(cb_fusion, cb_xmm);
 #endif
             ACQ();
             mul_bcast_cols_init_short(cb_xmm, cb_ex2pe);
             for (auto i : block.local()) {
-                mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, block.to_global(i), 0, i);  // tile *= 1/(sum(exp(x)))
+                mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, block.to_global(i), 0, i);
 #ifdef SFPU_OP_INIT_ACTIVATION
-                // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
-                // activation will be applied after the gamma/beta multiplication/addition.
-                // Otherwise, we can apply the activation here.
                 if constexpr (!(do_gamma == 1 || do_beta == 1)) {
                     SFPU_OP_INIT_ACTIVATION
                     SFPU_OP_FUNC_ACTIVATION
                 }
 #endif
-                pack_tile(i, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
+                pack_tile(i, cb_im_or_out);
             }
-            cb_im_or_out_obj.push_back(
-                block.full_block_size());  // if no gamma/beta are provided, this will be passed on to the writer
+            cb_im_or_out_obj.push_back(block.full_block_size());
             REL();
 
-            if constexpr (!(do_gamma == 0 && do_beta == 0)) {
+#if defined FUSE_GAMMA || defined FUSE_BETA
 #if defined RMSNORM and not defined FUSE_PRE_ADD
-                reconfig_data_format_srca(cb_xmm, cb_fusion);
+            reconfig_data_format_srca(cb_xmm, cb_fusion);
 #endif
-            }
+#endif
 
-            if constexpr (do_gamma) {
-                if constexpr (do_beta == 0) {
-                    pack_reconfig_data_format(cb_out);
-                }
+#ifdef FUSE_GAMMA
+            {
+#ifndef FUSE_BETA
+                pack_reconfig_data_format(cb_out);
+#endif
                 reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
                 ACQ();
-                uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
+#ifdef FUSE_BETA
+                uint32_t cb_outg = cb_fusion;
+#else
+                uint32_t cb_outg = cb_out;
+#endif
                 DataflowBuffer cb_outg_obj(cb_outg);
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                 cb_outg_obj.reserve_back(block.full_block_size());
-                cb_gamma_obj.wait_front(
-                    block.start() + block.full_block_size());  // we don't pop, TODO: only wait on first ht
+                cb_gamma_obj.wait_front(block.start() + block.full_block_size());
                 cb_fusion_obj.wait_front(block.full_block_size());
                 for (auto i : block.local()) {
-                    mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
+                    mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, block.to_global(i), i);
 #ifdef SFPU_OP_INIT_ACTIVATION
-                    // Activation must be applied last. If do_beta != 0 then
-                    // activation will be applied after the beta addition.
-                    // Otherwise, we can apply the activation here.
                     if constexpr (!(do_beta == 1)) {
                         SFPU_OP_INIT_ACTIVATION
                         SFPU_OP_FUNC_ACTIVATION
                     }
 #endif
-                    pack_tile(i, cb_outg);  // pack either to intermediate (cb_fusion or out0)
+                    pack_tile(i, cb_outg);
                 }
                 cb_fusion_obj.pop_front(block.full_block_size());
-                // we don't pop gamma
                 cb_outg_obj.push_back(block.full_block_size());
-                // We don't pop gamma since it's 1,1,1,Wt and we reuse it for all NCHt
                 REL();
             }
-            if constexpr (do_beta) {
+#endif
+#ifdef FUSE_BETA
+            {
                 pack_reconfig_data_format(cb_out);
-                if constexpr (do_gamma) {
-                    reconfig_data_format_srcb(cb_gamma, cb_beta);
-                } else {
-                    reconfig_data_format_srcb(cb_ex2pe, cb_beta);
-                }
+#ifdef FUSE_GAMMA
+                reconfig_data_format_srcb(cb_gamma, cb_beta);
+#else
+                reconfig_data_format_srcb(cb_ex2pe, cb_beta);
+#endif
                 ACQ();
                 add_bcast_rows_init_short(cb_fusion, cb_beta);
                 cb_out_obj.reserve_back(block.full_block_size());
-                cb_beta_obj.wait_front(
-                    block.start() + block.full_block_size());  // TODO: optimization - only wait on first ht
+                cb_beta_obj.wait_front(block.start() + block.full_block_size());
                 cb_fusion_obj.wait_front(block.full_block_size());
                 for (auto i : block.local()) {
-                    add_tiles_bcast_rows(cb_fusion, cb_beta, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
+                    add_tiles_bcast_rows(cb_fusion, cb_beta, i, block.to_global(i), i);
 #ifdef SFPU_OP_INIT_ACTIVATION
                     SFPU_OP_INIT_ACTIVATION
                     SFPU_OP_FUNC_ACTIVATION
 #endif
-                    pack_tile(i, cb_out);  // pack either to intermediate (cb_fusion or out0)
+                    pack_tile(i, cb_out);
                 }
                 cb_fusion_obj.pop_front(block.full_block_size());
-                // We don't pop beta since it's 1,1,1,Wt and we reuse it for all NCHt
                 cb_out_obj.push_back(block.full_block_size());
                 REL();
             }
+#endif
         }
         cb_ex2pe_obj.pop_front(1);
         cb_xmm_obj.pop_front(total_buffer_size);

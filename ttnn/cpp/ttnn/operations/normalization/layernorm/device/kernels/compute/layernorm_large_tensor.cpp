@@ -41,21 +41,41 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
+    // DFB declarations gated to match host's conditional bindings.
     constexpr uint32_t cb_scaler = dfb::cb_scaler;
     constexpr uint32_t cb_eps = dfb::cb_eps;
     constexpr uint32_t cb_in = dfb::cb_in;
-    constexpr uint32_t cb_inb = dfb::cb_inb;
     constexpr uint32_t cb_out = dfb::cb_out;
-    constexpr uint32_t cb_gamma = dfb::cb_gamma;
-    constexpr uint32_t cb_beta = dfb::cb_beta;
     constexpr uint32_t cb_xmm = dfb::cb_xmm;
-    constexpr uint32_t cb_ex = dfb::cb_ex;
     constexpr uint32_t cb_ex2 = dfb::cb_ex2;
     constexpr uint32_t cb_xmm2 = dfb::cb_xmm2;
     constexpr uint32_t cb_ex2pe = dfb::cb_ex2pe;
-    uint32_t cb_fusion = dfb::cb_fusion;
     constexpr auto scaler0 = 0;
     constexpr uint32_t cb_accumulate = dfb::cb_accumulate;
+
+#ifndef RMSNORM
+    constexpr uint32_t cb_ex = dfb::cb_ex;
+    DataflowBuffer cb_ex_obj(cb_ex);
+#endif
+
+#ifdef FUSE_PRE_ADD
+    constexpr uint32_t cb_inb = dfb::cb_inb;
+    DataflowBuffer cb_inb_obj(cb_inb);
+#endif
+#ifdef FUSE_GAMMA
+    constexpr uint32_t cb_gamma = dfb::cb_gamma;
+    DataflowBuffer cb_gamma_obj(cb_gamma);
+#endif
+#ifdef FUSE_BETA
+    constexpr uint32_t cb_beta = dfb::cb_beta;
+    DataflowBuffer cb_beta_obj(cb_beta);
+#endif
+
+#if defined FUSE_GAMMA || defined FUSE_BETA
+    uint32_t cb_fusion = dfb::cb_fusion;
+#else
+    uint32_t cb_fusion = cb_out;
+#endif
 
 #ifdef TILIZE_IN
     constexpr uint32_t cb_in_rm = dfb::cb_in_rm;
@@ -73,12 +93,8 @@ void kernel_main() {
 
     DataflowBuffer cb_eps_obj(cb_eps);
     DataflowBuffer cb_in_obj(cb_in);
-    DataflowBuffer cb_inb_obj(cb_inb);
     DataflowBuffer cb_out_obj(cb_out);
-    DataflowBuffer cb_gamma_obj(cb_gamma);
-    DataflowBuffer cb_beta_obj(cb_beta);
     DataflowBuffer cb_xmm_obj(cb_xmm);
-    DataflowBuffer cb_ex_obj(cb_ex);
     DataflowBuffer cb_ex2_obj(cb_ex2);
     DataflowBuffer cb_xmm2_obj(cb_xmm2);
     DataflowBuffer cb_ex2pe_obj(cb_ex2pe);
@@ -334,9 +350,8 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
 
-            if constexpr (!(do_gamma == 1 or do_beta == 1)) {
-                cb_fusion = cb_out;
-            }
+            // When neither gamma nor beta is fused, cb_fusion already aliases cb_out
+            // from the top-level declaration block (so the host doesn't need to bind it).
             DataflowBuffer(cb_fusion).reserve_back(block.full_block_size());
             pack_reconfig_data_format(cb_fusion);
             for (auto i : block.local()) {
@@ -346,22 +361,20 @@ void kernel_main() {
             DataflowBuffer(cb_fusion).push_back(block.full_block_size());
             cb_xmm_obj.pop_front(block.full_block_size());
 
-            if constexpr (do_gamma == 1) {
+#ifdef FUSE_GAMMA
+            {
                 tile_regs_acquire();
                 tile_regs_wait();
                 reconfig_data_format(cb_fusion, cb_gamma);
-                if constexpr (!do_beta) {
-                    pack_reconfig_data_format(cb_out);
-                }
+#ifndef FUSE_BETA
+                pack_reconfig_data_format(cb_out);
+#endif
                 cb_gamma_obj.wait_front(block.full_block_size());
                 DataflowBuffer(cb_fusion).wait_front(block.full_block_size());
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, i, i);
 #ifdef SFPU_OP_INIT_ACTIVATION
-                    // Activation must be applied last. If do_beta != 0 then
-                    // activation will be applied after the beta addition.
-                    // Otherwise, we can apply the activation here.
                     if constexpr (!(do_beta == 1)) {
                         SFPU_OP_INIT_ACTIVATION
                         SFPU_OP_FUNC_ACTIVATION
@@ -371,23 +384,25 @@ void kernel_main() {
                 tile_regs_commit();
                 cb_gamma_obj.pop_front(block.full_block_size());
                 DataflowBuffer(cb_fusion).pop_front(block.full_block_size());
-                if constexpr (!do_beta) {
-                    cb_out_obj.reserve_back(block.full_block_size());
-                    for (auto i : block.local()) {
-                        pack_tile(i, cb_out);
-                    }
-                    cb_out_obj.push_back(block.full_block_size());
-                } else {
-                    DataflowBuffer(cb_fusion).reserve_back(block.full_block_size());
-                    for (auto i : block.local()) {
-                        pack_tile(i, cb_fusion);
-                    }
-                    DataflowBuffer(cb_fusion).push_back(block.full_block_size());
+#ifndef FUSE_BETA
+                cb_out_obj.reserve_back(block.full_block_size());
+                for (auto i : block.local()) {
+                    pack_tile(i, cb_out);
                 }
+                cb_out_obj.push_back(block.full_block_size());
+#else
+                DataflowBuffer(cb_fusion).reserve_back(block.full_block_size());
+                for (auto i : block.local()) {
+                    pack_tile(i, cb_fusion);
+                }
+                DataflowBuffer(cb_fusion).push_back(block.full_block_size());
+#endif
 
                 tile_regs_release();
             }
-            if constexpr (do_beta == 1) {
+#endif
+#ifdef FUSE_BETA
+            {
                 tile_regs_acquire();
                 tile_regs_wait();
                 reconfig_data_format(cb_fusion, cb_beta);
@@ -412,6 +427,7 @@ void kernel_main() {
                 tile_regs_release();
                 cb_out_obj.push_back(block.full_block_size());
             }
+#endif
 
 #ifdef UNTILIZE_OUT
             constexpr uint32_t cb_out_rm = dfb::cb_out_rm;
