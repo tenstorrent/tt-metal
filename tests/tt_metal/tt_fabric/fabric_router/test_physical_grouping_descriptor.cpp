@@ -1537,13 +1537,13 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Triple16x8PsdWi
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
     PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
 
-    // The algorithm must successfully enumerate all valid placements for each grouping size.
-    // Exact counts depend on cluster topology; we verify at least one valid placement exists.
+    // Use find_any_in_psd (stops at first valid placement) instead of find_all_in_psd
+    // (exhaustive enumeration) to avoid combinatorial explosion on a 256-ASIC SP4 cluster.
     {
         auto mesh_groupings = pgd.get_groupings_by_name("2x2_Mesh");
         ASSERT_FALSE(mesh_groupings.empty()) << "2x2_Mesh grouping not found";
 
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
+        auto asic_ids = pgd.find_any_in_psd(mesh_groupings[0], psd);
 
         EXPECT_FALSE(asic_ids.empty())
             << "Expected validation to pass: 2x2_Mesh grouping should map to mock cluster PSD";
@@ -1553,7 +1553,7 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Triple16x8PsdWi
         auto mesh_groupings = pgd.get_groupings_by_name("2x4_Mesh");
         ASSERT_FALSE(mesh_groupings.empty()) << "2x4_Mesh grouping not found";
 
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
+        auto asic_ids = pgd.find_any_in_psd(mesh_groupings[0], psd);
 
         EXPECT_FALSE(asic_ids.empty())
             << "Expected validation to pass: 2x4_Mesh grouping should map to mock cluster PSD";
@@ -1563,7 +1563,7 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Triple16x8PsdWi
         auto mesh_groupings = pgd.get_groupings_by_name("4x4_Mesh");
         ASSERT_FALSE(mesh_groupings.empty()) << "4x4_Mesh grouping not found";
 
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
+        auto asic_ids = pgd.find_any_in_psd(mesh_groupings[0], psd);
 
         EXPECT_FALSE(asic_ids.empty())
             << "Expected validation to pass: 4x4_Mesh grouping should map to mock cluster PSD";
