@@ -345,7 +345,7 @@ inline const UnwindContext UnwindContext::UNKNOWN {UINTPTR_MAX, UINTPTR_MAX};
 struct ThreadOutputContext
 {
     UnwindContext operation;
-    UnwindContext previous;
+    UnwindContext fsm;
     UnwindContext current;
     std::size_t context_depth = 0;
     std::size_t silent_depth  = 0;

@@ -444,73 +444,70 @@ void operation_uninit_impl(const ThreadOutputContext& context, OperationState& s
     state.expect_uninit = false;
 }
 
-static inline ct_string fsm_state_name(const FsmState state)
-{
-    switch (state)
-    {
-        case FsmState::INITIAL:
-            return CTSTR("initial");
-        case FsmState::CONFIGURED:
-            return CTSTR("configured");
-        case FsmState::INITIALIZED:
-            return CTSTR("initialized");
-        case FsmState::EXECUTED:
-            return CTSTR("executed");
-        case FsmState::UNINITIALIZED:
-            return CTSTR("uninitialized");
-        case FsmState::RECONFIGURED:
-            return CTSTR("reconfigured");
-    }
-    __builtin_unreachable();
-}
-
 template <FsmState next>
-void fsm_advance_impl(const ThreadOutputContext& context, FsmState& current, [[maybe_unused]] const OperationState& operation)
+void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_unused]] const OperationState& operation)
 {
-    ct_string next_name = fsm_state_name(next);
-
     if (!thread_silent_get_impl(context))
     {
-        const auto pc = context.current.pc;
+        fsm_assert(
+            current != FsmState::INITIAL || next == FsmState::CONFIGURED,
+            CTSTR("First transition must be INITIAL -> CONFIGURED"),
+            current,
+            next,
+            CTSTR("CONFIGURED"),
+            UnwindContext::UNKNOWN,
+            context.current);
 
-        LLK_SAN_ERROR_PANIC(
-            current == FsmState::INITIAL && next != FsmState::CONFIGURED, "{:#x} : initial -> {}, expected first operation to be configure", pc, next_name);
+        fsm_assert(
+            current != FsmState::CONFIGURED || next == FsmState::INITIALIZED,
+            CTSTR("Expected CONFIGURED -> INITIALIZED"),
+            current,
+            next,
+            CTSTR("INITIALIZED"),
+            context.fsm,
+            context.current);
 
-        LLK_SAN_ERROR_PANIC(
-            current == FsmState::CONFIGURED && next != FsmState::INITIALIZED, "{:#x} : configured -> {}, expected init after configure", pc, next_name);
+        fsm_assert(
+            current != FsmState::INITIALIZED || next == FsmState::EXECUTED,
+            CTSTR("Expected INITIALIZED -> EXECUTED"),
+            current,
+            next,
+            CTSTR("EXECUTED"),
+            context.fsm,
+            context.current);
 
-        LLK_SAN_ERROR_PANIC(
-            current == FsmState::INITIALIZED && next != FsmState::EXECUTED, "{:#x} : initialized -> {}, expected execute after init", pc, next_name);
+        fsm_assert(
+            current != FsmState::EXECUTED || !operation.expect_uninit || next == FsmState::UNINITIALIZED || next == FsmState::EXECUTED,
+            CTSTR("Operation UNINIT required, expected EXECUTED -> [UNINITIALIZED, EXECUTED]"),
+            current,
+            next,
+            CTSTR("UNINITIALIZED, EXECUTED"),
+            context.fsm,
+            context.current);
 
-        LLK_SAN_ERROR_PANIC(
-            current == FsmState::EXECUTED && operation.expect_uninit && (next != FsmState::UNINITIALIZED && next != FsmState::EXECUTED),
-            "{:#x} : executed -> {}, expected execute or uninit after execute",
-            pc,
-            next_name);
+        fsm_assert(
+            current != FsmState::EXECUTED || operation.expect_uninit || next == FsmState::EXECUTED || next == FsmState::INITIALIZED ||
+                next == FsmState::RECONFIGURED,
+            CTSTR("Operation UNINIT not required, expected EXECUTED -> [EXECUTED, INITIALIZED, RECONFIGURED]"),
+            current,
+            next,
+            CTSTR("EXECUTED, INITIALIZED, RECONFIGURED"),
+            context.fsm,
+            context.current);
 
-        // shouldn't be possible to trigger, sanity check
-        LLK_SAN_FAULT_PANIC(
-            current == FsmState::EXECUTED && !operation.expect_uninit && next == FsmState::UNINITIALIZED,
-            "{:#x} : executed -> {}, unexpected uninit after execute that doesn't require uninit",
-            pc,
-            next_name);
-
-        LLK_SAN_ERROR_PANIC(
-            current == FsmState::EXECUTED && !operation.expect_uninit &&
-                (next != FsmState::EXECUTED && next != FsmState::INITIALIZED && next != FsmState::RECONFIGURED),
-            "{:#x} : executed -> {}, expected execute, init or reconfig operation after execute",
-            pc,
-            next_name);
-
-        LLK_SAN_ERROR_PANIC(
-            current == FsmState::UNINITIALIZED && (next != FsmState::INITIALIZED && next != FsmState::RECONFIGURED),
-            "{:#x} : uninitialized -> {}, expected init or reconfigure after uninit",
-            pc,
-            next_name);
+        fsm_assert(
+            current != FsmState::UNINITIALIZED || next == FsmState::INITIALIZED || next == FsmState::RECONFIGURED,
+            CTSTR("Expected UNINITIALIZED -> [INITIALIZED, RECONFIGURED]"),
+            current,
+            next,
+            CTSTR("INITIALIZED, RECONFIGURED"),
+            context.fsm,
+            context.current);
     }
 
     // valid transition -> commit
     current = next;
+    context.fsm = context.current;
 }
 
 } // namespace llk::san
