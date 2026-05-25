@@ -13,7 +13,9 @@ import re
 timeregex = "\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+"
 teststart = re.compile("\[\s+RUN\s+\] (.*)")
 testend = re.compile("\[\s+([^ ]*)\s+\] (.*) \(.*\)")
-testdevices = re.compile(f"({timeregex}).*Test \| sender device id: (.*), receiver device id: (.*) .*")
+testdevices = re.compile(
+    f"({timeregex}).*Test \| sender device id: (.*) \((.*)\), receiver device id: (.*) \((.*)\) .*"
+)
 testcores = re.compile(f"({timeregex}).*Test \|   sender core: (.*), receiver core: (.*) .*")
 testprocs = re.compile(f"({timeregex}).*Test \|     running on (.*) .*")
 testruns = re.compile(f"({timeregex}).*Test \| Ran (\d+) tests .*")
@@ -28,7 +30,7 @@ testl1datacmp = re.compile(
     f"({timeregex}).*Test \|       \[device: (.*), core: (.*)\] (.*) "
     + "mismatched words starting at (.*), ending at (.*) .*"
 )
-locinfo = "sdev: \[(.*)\], rdev: \[(.*)\], score: \[(.*)\], rcore: \[(.*)\], processor: \[(.*)\]"
+locinfo = "sdev: \[(.*) \((.*)\)\], rdev: \[(.*) \((.*)\)\], score: \[(.*)\], rcore: \[(.*)\], processor: \[(.*)\]"
 testcheck = re.compile(f"({timeregex}).*Test \| core_check: {locinfo} .*")
 
 print_logs = True
@@ -46,9 +48,11 @@ class TestCase(str, Enum):
 @dataclass
 class TestedLink:
     src_dev: str
+    src_devbdf: str
     src_core: str
 
     dst_dev: str
+    dst_devbdf: str
     dst_core: str
 
     proc: str
@@ -135,10 +139,20 @@ def parse_testdevices(l: str) -> Optional[Event]:
         return None
 
     sdev = m.group(2)
-    rdev = m.group(3)
-    # print(f"\tDEVICES s: {sdev}, r: {rdev}")
+    sdevbdf = m.group(3)
+    rdev = m.group(4)
+    rdevbdf = m.group(5)
+    # print(f"\tDEVICES s: {sdev} ({sdevbdf}), r: {rdev} ({rdevbdf})")
 
-    return Event(EventType.DEVICES, {"sdev": sdev, "rdev": rdev})
+    return Event(
+        EventType.DEVICES,
+        {
+            "sdev": sdev,
+            "sdevbdf": sdevbdf,
+            "rdev": rdev,
+            "rdevbdf": rdevbdf,
+        },
+    )
 
 
 def parse_cores(l: str) -> Optional[Event]:
@@ -246,16 +260,20 @@ def parse_check(l: str) -> Optional[Event]:
         return None
 
     sdev = m.group(2)
-    rdev = m.group(3)
-    score = m.group(4)
-    rcore = m.group(5)
-    proc = m.group(6)
-    # print(f"\tTESTCHECK '{sdev}' '{rdev}' '{score}' '{rcore}' '{proc}'")
+    sdevbdf = m.group(3)
+    rdev = m.group(4)
+    rdevbdf = m.group(5)
+    score = m.group(6)
+    rcore = m.group(7)
+    proc = m.group(8)
+    # print(f"\tTESTCHECK '{sdev}' ({sdevbdf}), '{rdev}' ({rdevbdf}), '{score}' '{rcore}' '{proc}'")
     return Event(
         EventType.TESTCHECK,
         {
             "sdev": sdev,
+            "sdevbdf": sdevbdf,
             "rdev": rdev,
+            "rdevbdf": rdevbdf,
             "score": score,
             "rcore": rcore,
             "proc": proc,
@@ -321,7 +339,9 @@ async def parse_logs(inf: asyncio.StreamReader) -> list[Event]:
 def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
     test: str = ""
     sdev: str = ""
+    sdevbdf: str = ""
     rdev: str = ""
+    rdevbdf: str = ""
     score: str = ""
     rcore: str = ""
     proc: str = ""
@@ -339,13 +359,13 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
     for e in it:
         if e.typ == EventType.TESTSTART:
             test = e.extra["name"]
-            sdev = rdev = score = rcore = proc = ""
+            sdev = sdevbdf = rdev = rdevbdf = score = rcore = proc = ""
             links = []
             errors = []
             bw = {}
         elif e.typ == EventType.TESTEND:
             if proc != "":
-                links.append(TestedLink(sdev, score, rdev, rcore, proc, bw, errors))
+                links.append(TestedLink(sdev, sdevbdf, score, rdev, rdevbdf, rcore, proc, bw, errors))
             runs.append(TestRun(test, links, e.extra["status"]))
             test = sdev = rdev = score = rcore = proc = ""
             links = []
@@ -353,13 +373,15 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
             bw = {}
         elif e.typ == EventType.DEVICES:
             sdev = e.extra["sdev"]
+            sdevbdf = e.extra["sdevbdf"]
             rdev = e.extra["rdev"]
+            rdevbdf = e.extra["rdevbdf"]
             score = rcore = proc = ""
             errors = []
             bw = {}
         elif e.typ == EventType.CORES:
             if (test in noprocs and score != "") or proc != "":
-                links.append(TestedLink(sdev, score, rdev, rcore, proc, bw, errors))
+                links.append(TestedLink(sdev, sdevbdf, score, rdev, rdevbdf, rcore, proc, bw, errors))
             score = e.extra["score"]
             rcore = e.extra["rcore"]
             proc = ""
@@ -367,7 +389,7 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
             bw = {}
         elif e.typ == EventType.PROCS:
             if proc != "" and test != stresstest:
-                links.append(TestedLink(sdev, score, rdev, rcore, proc, bw, errors))
+                links.append(TestedLink(sdev, sdevbdf, score, rdev, rdevbdf, rcore, proc, bw, errors))
             proc = e.extra["proc"]
             bw = {}
             errors = []
@@ -380,15 +402,17 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
         elif e.typ == EventType.L1DATACMP:
             errors.append({"data": e.extra})
         elif e.typ == EventType.TESTSETUP:
-            sdev = rdev = score = rcore = proc = ""
+            sdev = sdevbdf = rdev = rdevbdf = score = rcore = proc = ""
             links = []
             errors = []
             bw = {}
         elif e.typ == EventType.TESTCHECK:
             if sdev != "":
-                links.append(TestedLink(sdev, score, rdev, rcore, proc, bw, errors))
+                links.append(TestedLink(sdev, sdevbdf, score, rdev, rdevbdf, rcore, proc, bw, errors))
             sdev = e.extra["sdev"]
+            sdevbdf = e.extra["sdevbdf"]
             rdev = e.extra["rdev"]
+            rdevbdf = e.extra["rdevbdf"]
             score = e.extra["score"]
             rcore = e.extra["rcore"]
             proc = e.extra["proc"]
@@ -493,7 +517,7 @@ def print_test_summary_per_chip(t: TestCase, runs: list[TestRun]):
 
         def ensure_dev(ch: str):
             if ch not in chips:
-                chips[ch] = {"tests": 0, "bws": [], "errors": 0}
+                chips[ch] = {"bdf": "", "tests": 0, "bws": [], "errors": 0}
 
         for l in r.links:
             ensure_dev(l.src_dev)
@@ -508,9 +532,11 @@ def print_test_summary_per_chip(t: TestCase, runs: list[TestRun]):
 
             chips[l.src_dev]["errors"] += len(l.errors)
             chips[l.dst_dev]["errors"] += len(l.errors)
+            chips[l.src_dev]["bdf"] = l.src_devbdf
+            chips[l.dst_dev]["bdf"] = l.dst_devbdf
 
         avg = lambda x: sum(x) / len(x)
-        headers = ["chip id", "tests"]
+        headers = ["chip id", "chip bdf", "tests"]
         if have_bws:
             headers += ["bw (min)", "bw (max)", "bw (avg)"]
         headers += ["errors", "status"]
@@ -518,11 +544,12 @@ def print_test_summary_per_chip(t: TestCase, runs: list[TestRun]):
         rows = []
         for c in sorted(chips.keys(), key=int):
             ch = chips[c]
+            bdf = ch["bdf"]
             bws = ch["bws"]
             err = ch["errors"]
             msg = "FAIL" if err > 0 else "OK"
 
-            row = [c, ch["tests"]]
+            row = [c, bdf, ch["tests"]]
             if have_bws:
                 row += [min(bws), max(bws), f"{avg(bws):.3f}"]
             row += [err, msg]

@@ -132,9 +132,11 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
 
             log_info(
                 tt::LogTest,
-                "sender device id: {}, receiver device id: {}",
+                "sender device id: {} ({}), receiver device id: {} ({})",
                 sender_device->id(),
-                receiver_device->id());
+                pci_bdf_for_device_id(sender_device->id()),
+                receiver_device->id(),
+                pci_bdf_for_device_id(receiver_device->id()));
 
             std::set<CoreCoord> tested;
 
@@ -166,11 +168,13 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
 
                 log_info(tt::LogTest, "    running on {}", processor);
                 string locinfo = fmt::format(
-                    "sdev: [{}], rdev: [{}]"
+                    "sdev: [{} ({})], rdev: [{} ({})]"
                     ", score: [{}], rcore: [{}]"
                     ", processor: [{}]",
                     sender_device->id(),
+                    pci_bdf_for_device_id(sender_device->id()),
                     receiver_device->id(),
+                    pci_bdf_for_device_id(receiver_device->id()),
                     sender_core,
                     receiver_core,
                     processor);

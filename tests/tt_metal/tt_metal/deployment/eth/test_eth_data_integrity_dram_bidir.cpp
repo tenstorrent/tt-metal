@@ -216,9 +216,11 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet04DataIntegrityDramBidir) {
 
             log_info(
                 tt::LogTest,
-                "sender device id: {}, receiver device id: {}",
+                "sender device id: {} ({}), receiver device id: {} ({})",
                 sender_device->id(),
-                receiver_device->id());
+                pci_bdf_for_device_id(sender_device->id()),
+                receiver_device->id(),
+                pci_bdf_for_device_id(receiver_device->id()));
 
             for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
                 auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
