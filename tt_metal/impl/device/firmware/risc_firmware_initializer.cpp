@@ -625,23 +625,43 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                                         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH);
                                     const uint32_t probe_size = hal_.get_dev_size(
                                         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH);
+                                    // FIX WX (#42429): UMD selects relay ERISCs in round-robin
+                                    // via active_eth_core_idx (max 8 per direction).  The original
+                                    // single probe only exercised relay ERISC[0]; after that probe
+                                    // the index advanced to 1, so initialize_and_launch_firmware
+                                    // started with ERISC[1..N-1] — none of which were probed.
+                                    // Those ERISCs' NOC write-forwarding was not yet ready →
+                                    // Phase2-NOC-ACK delta=3-4 on first firmware binary write.
+                                    //
+                                    // Fix: send kMaxRelayEriscs (=8, the UMD hard cap) consecutive
+                                    // probe writes so every relay ERISC in the vector is exercised.
+                                    // each write_core_immediate issues ONE write through the current
+                                    // ERISC and calls wait_for_non_mmio_flush() — so we know that
+                                    // ERISC's NOC write path is truly clear before advancing.
+                                    // If N < 8, the round-robin wraps and we re-test some ERISCs
+                                    // harmlessly. (#42429 FIX WX)
+                                    constexpr int kMaxRelayEriscs = 8;
+                                    std::vector<uint32_t> dummy(probe_size / sizeof(uint32_t), 0u);
                                     log_debug(
                                         tt::LogAlways,
-                                        "run_launch_phase: FIX UV diag — device {} probe_addr=0x{:x} "
-                                        "probe_size={} alignment={}B (#42429)",
+                                        "run_launch_phase: FIX WX diag — device {} probe_addr=0x{:x} "
+                                        "probe_size={} alignment={}B probing {} relay ERISCs (#42429)",
                                         device_id, probe_addr, probe_size,
-                                        static_cast<int>(probe_addr & 0x1Fu));
-                                    std::vector<uint32_t> dummy(probe_size / sizeof(uint32_t), 0u);
+                                        static_cast<int>(probe_addr & 0x1Fu),
+                                        kMaxRelayEriscs);
                                     try {
-                                        cluster_.write_core_immediate(
-                                            dummy.data(), probe_size,
-                                            {static_cast<size_t>(device_id), probe_tensix_virt},
-                                            probe_addr);
+                                        for (int probe_n = 0; probe_n < kMaxRelayEriscs; ++probe_n) {
+                                            cluster_.write_core_immediate(
+                                                dummy.data(), probe_size,
+                                                {static_cast<size_t>(device_id), probe_tensix_virt},
+                                                probe_addr);
+                                        }
                                         write_probe_ok = true;
                                     } catch (...) {
-                                        // Block-mode write-forwarding not ready yet. relay_broken
-                                        // was set by write_core_immediate; clear_relay_broken at
-                                        // top of loop resets it on the next iteration.
+                                        // At least one relay ERISC's block-mode write-forwarding
+                                        // is not ready yet. relay_broken was set by
+                                        // write_core_immediate; clear_relay_broken at top of loop
+                                        // resets it on the next iteration.
                                     }
                                 } else {
                                     // No Tensix grid — skip write probe, proceed on heartbeat alone.
@@ -655,7 +675,7 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                                             .count();
                                     log_info(
                                         tt::LogAlways,
-                                        "run_launch_phase: FIX RS/UV — device {} relay write path "
+                                        "run_launch_phase: FIX RS/WX — device {} relay write path "
                                         "ready in {}ms (heartbeat=0x{:08x}). (#42429)",
                                         device_id,
                                         rs_elapsed_ms,
@@ -667,7 +687,7 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                                 // Heartbeat live but write-forwarding not yet ready — retry.
                                 log_info(
                                     tt::LogAlways,
-                                    "run_launch_phase: FIX RS/UV — device {} heartbeat=0x{:08x} "
+                                    "run_launch_phase: FIX RS/WX — device {} heartbeat=0x{:08x} "
                                     "but block-mode write probe failed; retrying. (#42429)",
                                     device_id,
                                     hb_data[0]);
