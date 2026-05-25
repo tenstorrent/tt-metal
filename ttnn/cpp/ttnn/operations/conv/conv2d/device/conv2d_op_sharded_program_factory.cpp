@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <umd/device/types/xy_pair.hpp>
 #include <cstdint>
 #include <memory>
 #include <string>
