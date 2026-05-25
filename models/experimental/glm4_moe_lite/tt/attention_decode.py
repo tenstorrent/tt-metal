@@ -35,6 +35,41 @@ def _profile_add(profile: dict[str, float] | None, key: str, elapsed_s: float) -
     profile[key] = float(profile.get(key, 0.0)) + float(elapsed_s)
 
 
+# ---------------------------------------------------------------------------
+# FlashMLA → kv_b2 → w_o op-chain tuning constants
+# ---------------------------------------------------------------------------
+# Tunable in source. The defaults below implement the "fold post-FlashMLA"
+# optimization recommended in experiments/optimization_log.md:
+#   - kv_b2 reads attn_latent from L1 (was DRAM in the baseline; perf-tool
+#     flagged "input 0 in DEV_0_DRAM_INTERLEAVED" warning).
+#   - The post-kv_b2 head-flatten always uses ``ttnn.transformer.concatenate_heads``
+#     (1 op) instead of permute+reshape+permute (3 ops).
+#
+# Empirical tuning results (Blackhole 1×4, batch=1, decode):
+#
+#  _KVB2_INPUT_L1 = True   was ~+1ms wall regression. attn_latent is ~1.3 MB,
+#    so the DRAM→L1 copy costs more than the matmul's DRAM-read savings —
+#    the matmul kernel already pipelines DRAM reads well at 27% bandwidth
+#    utilization. Kept as a constant for re-tuning if activation size or
+#    kernel scheduling changes.
+#
+#  _USE_CONCATENATE_HEADS = True was ~+1.7ms wall regression. The legacy
+#    3-op permute+reshape+permute chain happens to map to lower-latency
+#    kernels for the [1,H,B,v_head_dim]→[1,1,B,H*v_head_dim] flatten on
+#    Blackhole than the single ``ttnn.transformer.concatenate_heads`` op.
+#    Likely cause: concatenate_heads produces a layout that forces an
+#    additional reformatting before the w_o matmul. Kept tunable so this
+#    can be re-tested when concatenate_heads is rewritten.
+_KVB2_INPUT_L1 = True
+_USE_CONCATENATE_HEADS = False
+
+# FlashMLA output memory config override. ``None`` = use ``cfg.decode_act_mc``
+# (i.e. L1 when DECODE_L1_ACT=1, DRAM otherwise) so the attn_latent ends up in
+# L1 *without* a follow-on DRAM→L1 copy. Set to ``ttnn.DRAM_MEMORY_CONFIG`` to
+# force the legacy DRAM output path.
+_FLASH_MLA_DEFAULT_MEMCFG: ttnn.MemoryConfig | None = None
+
+
 def _safe_slice(
     tensor: ttnn.Tensor,
     starts: list[int],
@@ -48,6 +83,26 @@ def _safe_slice(
         cloned = ttnn.clone(result, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return cloned
     return result
+
+
+def _flatten_heads(v: ttnn.Tensor, *, batch: int, flat_dim: int) -> ttnn.Tensor:
+    """Flatten per-head V output [1, H, B, v_head_dim] → [1, 1, B, H*v_head_dim].
+
+    Uses ``ttnn.transformer.concatenate_heads`` (2 ops: concatenate_heads +
+    reshape) instead of the legacy 3-op chain (permute + reshape + permute)
+    when ``_USE_CONCATENATE_HEADS = True``. Reduces 1 op per layer per token,
+    which adds up over 27 layers × N decode tokens. See
+    experiments/optimization_log.md "Op-count reduction" recommendation.
+    """
+    if _USE_CONCATENATE_HEADS:
+        # concatenate_heads: [1, H, B, D] → [1, B, H*D]; reshape to [1, 1, B, H*D].
+        v = ttnn.transformer.concatenate_heads(v)
+        v = ttnn.reshape(v, (1, 1, batch, flat_dim))
+        return v
+    v = ttnn.permute(v, (0, 2, 1, 3))
+    v = ttnn.reshape(v, (1, batch, 1, flat_dim))
+    v = ttnn.permute(v, (0, 2, 1, 3))
+    return v
 
 
 def kv_cache_update(
@@ -321,7 +376,16 @@ def flash_mla_and_output(
         exp_approx_mode=False,
     )
     compute_kernel_config = cfg.mla_compute_kernel_config()
-    flash_mla_memcfg = ttnn.DRAM_MEMORY_CONFIG
+    # FlashMLA output memcfg. When ``cfg.shard_q`` is on (Q is L1-sharded) we
+    # set this further below to a matching sharded L1 layout. Otherwise the
+    # default tracks ``cfg.decode_act_mc`` so that DECODE_L1_ACT=1 places the
+    # attn_latent in L1 directly — eliminating the otherwise-needed
+    # DRAM→L1 copy before kv_b2. Editable here for tuning.
+    flash_mla_memcfg = (
+        _FLASH_MLA_DEFAULT_MEMCFG
+        if _FLASH_MLA_DEFAULT_MEMCFG is not None
+        else (cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
+    )
 
     # Optional Q sharding
     if cfg.shard_q:
@@ -424,7 +488,14 @@ def flash_mla_and_output(
     )
     if not cfg.skip_defensive_clones:
         ttnn.deallocate(attn_latent_padded, force=False)
-    attn_latent = ttnn.permute(attn_latent, (0, 2, 1, 3))  # [1,H,B,kv_lora_rank]
+    # Fuse permute output into L1 so the downstream kv_b2 batched matmul reads
+    # input 0 from L1 instead of DRAM_INTERLEAVED (perf-tool flagged warning).
+    # See _KVB2_INPUT_L1 at top of file for tuning.
+    permute_mc = ttnn.L1_MEMORY_CONFIG if _KVB2_INPUT_L1 else None
+    if permute_mc is not None:
+        attn_latent = ttnn.permute(attn_latent, (0, 2, 1, 3), memory_config=permute_mc)  # [1,H,B,kv_lora_rank]
+    else:
+        attn_latent = ttnn.permute(attn_latent, (0, 2, 1, 3))  # [1,H,B,kv_lora_rank]
 
     # kv_b2 + output projection
     t0 = time.perf_counter() if profile is not None else 0.0
@@ -439,13 +510,7 @@ def flash_mla_and_output(
                 pass
         heads_per_dev = num_heads // cfg.tp_size
         flat_dim = heads_per_dev * int(hparams.v_head_dim)
-        if cfg.concat_heads:
-            v = ttnn.transformer.concatenate_heads(v)
-            v = ttnn.reshape(v, (1, 1, batch, flat_dim))
-        else:
-            v = ttnn.permute(v, (0, 2, 1, 3))
-            v = ttnn.reshape(v, (1, batch, 1, flat_dim))
-            v = ttnn.permute(v, (0, 2, 1, 3))
+        v = _flatten_heads(v, batch=batch, flat_dim=flat_dim)
         attn_out_partial = mlp_linear(v, w.w_o, device=device, cfg=cfg)
         ttnn.deallocate(v, force=False)
         attn_out = ttnn.all_reduce(
@@ -467,13 +532,7 @@ def flash_mla_and_output(
                 ttnn.deallocate(attn_latent_padded, force=False)
             except Exception:
                 pass
-        if cfg.concat_heads:
-            v = ttnn.transformer.concatenate_heads(v)
-            v = ttnn.reshape(v, (1, 1, batch, int(num_heads * hparams.v_head_dim)))
-        else:
-            v = ttnn.permute(v, (0, 2, 1, 3))
-            v = ttnn.reshape(v, (1, batch, 1, int(num_heads * hparams.v_head_dim)))
-            v = ttnn.permute(v, (0, 2, 1, 3))
+        v = _flatten_heads(v, batch=batch, flat_dim=int(num_heads * hparams.v_head_dim))
         attn_out = attn_wo_linear(v, w.w_o, device=device, cfg=cfg)
         ttnn.deallocate(v, force=False)
 
