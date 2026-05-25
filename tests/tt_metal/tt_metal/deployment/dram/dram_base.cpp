@@ -14,9 +14,7 @@
 #include <chrono>
 #include <thread>
 #include <algorithm>
-#include <fstream>
 #include <cctype>
-#include <dirent.h>
 #include <cstdlib>
 #include <umd/device/types/telemetry.hpp>
 
@@ -42,66 +40,6 @@ extern std::atomic<bool> g_watchdog_requested;
 
 using namespace std;
 using namespace tt;
-
-static std::string trim_copy(std::string s) {
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
-        s.erase(s.begin());
-    }
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
-        s.pop_back();
-    }
-    return s;
-}
-
-static std::string read_text_file_trimmed(const std::string& path) {
-    std::ifstream file(path);
-    std::string value;
-    std::getline(file, value);
-    return trim_copy(value);
-}
-
-static const std::vector<std::string>& get_tenstorrent_pci_bdfs_cached() {
-    static const std::vector<std::string> bdfs = []() {
-        std::vector<std::string> out;
-
-        DIR* dir = opendir("/sys/bus/pci/devices");
-        if (dir == nullptr) {
-            return out;
-        }
-
-        while (auto* entry = readdir(dir)) {
-            const std::string bdf = entry->d_name;
-            if (bdf.empty() || bdf[0] == '.') {
-                continue;
-            }
-
-            const std::string base = "/sys/bus/pci/devices/" + bdf;
-            std::string vendor = read_text_file_trimmed(base + "/vendor");
-            std::transform(
-                vendor.begin(), vendor.end(), vendor.begin(), [](unsigned char c) { return std::tolower(c); });
-
-            // Tenstorrent PCI vendor id. Sorted order gives a stable best-effort map:
-            // runtime bdf={} device_id=0 -> first Tenstorrent BDF, bdf={} device_id=1 -> second, etc.
-            if (vendor == "0x1e52") {
-                out.push_back(bdf);
-            }
-        }
-
-        closedir(dir);
-        std::sort(out.begin(), out.end());
-        return out;
-    }();
-
-    return bdfs;
-}
-
-static std::string pci_bdf_for_device_id(uint32_t device_id) {
-    const auto& bdfs = get_tenstorrent_pci_bdfs_cached();
-    if (device_id < bdfs.size()) {
-        return bdfs[device_id];
-    }
-    return "unknown";
-}
 
 static std::string device_log_prefix(IDevice* device) {
     const uint32_t device_id = device->id();
