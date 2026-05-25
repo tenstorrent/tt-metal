@@ -9,6 +9,10 @@ struct l1_allocator {
     uint32_t end;
 };
 
+std::string pci_bdf_for_device_id(uint32_t device_id);
+std::string trim_copy(std::string s);
+std::string read_text_file_trimmed(const std::string& path);
+
 #define ROUND_UP(x, a) ((((x) + (a) - 1) / (a)) * (a))
 #define ROUND_DOWN(x, a) (((x) / (a)) * (a))
 

@@ -21,7 +21,6 @@
 #include <fstream>
 #include <algorithm>
 #include <cctype>
-#include <dirent.h>
 
 #include <iomanip>
 #include <array>
@@ -34,23 +33,6 @@ using namespace tt;
 std::atomic<bool> g_stop_requested{false};
 std::atomic<bool> g_watchdog_requested{false};
 static std::atomic<bool> g_stop_message_printed{false};
-
-static std::string test_dram_trim_copy(std::string s) {
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
-        s.erase(s.begin());
-    }
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
-        s.pop_back();
-    }
-    return s;
-}
-
-static std::string test_dram_read_text_file_trimmed(const std::string& path) {
-    std::ifstream file(path);
-    std::string value;
-    std::getline(file, value);
-    return test_dram_trim_copy(value);
-}
 
 static std::vector<std::string> get_tenstorrent_pci_bdf_lines() {
     std::vector<std::string> lines;
@@ -67,7 +49,7 @@ static std::vector<std::string> get_tenstorrent_pci_bdf_lines() {
         }
 
         const std::string base = "/sys/bus/pci/devices/" + bdf;
-        std::string vendor = test_dram_read_text_file_trimmed(base + "/vendor");
+        std::string vendor = read_text_file_trimmed(base + "/vendor");
         std::transform(vendor.begin(), vendor.end(), vendor.begin(), [](unsigned char c) { return std::tolower(c); });
 
         // Tenstorrent PCI vendor id. This catches Blackhole/Galaxy boards exposed on PCIe.
@@ -75,7 +57,7 @@ static std::vector<std::string> get_tenstorrent_pci_bdf_lines() {
             continue;
         }
 
-        const std::string pci_device = test_dram_read_text_file_trimmed(base + "/device");
+        const std::string pci_device = read_text_file_trimmed(base + "/device");
         const std::string bus = (bdf.size() >= 7) ? bdf.substr(bdf.size() - 7, 2) : "??";
         const std::string device = (bdf.size() >= 4) ? bdf.substr(bdf.size() - 4, 2) : "??";
         const std::string function = (bdf.size() >= 1) ? bdf.substr(bdf.size() - 1, 1) : "?";
