@@ -1328,9 +1328,20 @@ def main() -> None:
                     flush=True,
                 )
             else:
-                act_dtype_vae = getattr(ttnn, "bfloat16", None)
-                if act_dtype_vae is None:
-                    raise RuntimeError("TTNN VAE needs ttnn.bfloat16; build may be incomplete.")
+                from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
+                    ace_step_vae_activation_storage_dtype,
+                    ace_step_vae_bfloat8_activations_enabled,
+                    ace_step_vae_host_weight_staging_dtype,
+                )
+
+                act_dtype_vae = ace_step_vae_activation_storage_dtype(ttnn)
+                w_dtype_vae = ace_step_vae_host_weight_staging_dtype(ttnn)
+                if ace_step_vae_bfloat8_activations_enabled():
+                    print(
+                        "[ace_step_v1_5] VAE: bfloat8 activation compute enabled "
+                        "(ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=1; inter-op buffers stay BF16 ROW_MAJOR)",
+                        flush=True,
+                    )
                 with perf.timed("vae_init", device=dev):
                     tt_vae = TtOobleckVaeDecoder.from_hf_vae_dir(
                         str(vae_dir),
@@ -1338,7 +1349,7 @@ def main() -> None:
                         latent_frames=int(frames),
                         batch_size=1,
                         activation_dtype=act_dtype_vae,
-                        weights_dtype=act_dtype_vae,
+                        weights_dtype=w_dtype_vae,
                     )
 
         _ensure_acestep_on_path()
@@ -1834,9 +1845,20 @@ def main() -> None:
                 momentum_ttnn.reset()
 
         if tt_vae is None and not bool(args.torch_vae):
-            act_dtype_vae = getattr(ttnn, "bfloat16", None)
-            if act_dtype_vae is None:
-                raise RuntimeError("TTNN VAE needs ttnn.bfloat16; build may be incomplete.")
+            from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
+                ace_step_vae_activation_storage_dtype,
+                ace_step_vae_bfloat8_activations_enabled,
+                ace_step_vae_host_weight_staging_dtype,
+            )
+
+            act_dtype_vae = ace_step_vae_activation_storage_dtype(ttnn)
+            w_dtype_vae = ace_step_vae_host_weight_staging_dtype(ttnn)
+            if ace_step_vae_bfloat8_activations_enabled():
+                print(
+                    "[ace_step_v1_5] VAE: bfloat8 activation compute enabled "
+                    "(ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=1; inter-op buffers stay BF16 ROW_MAJOR)",
+                    flush=True,
+                )
             if ace_step_device_num_chips(dev) > 1:
                 ace_step_synchronize_device(ttnn, dev)
             print("[ace_step_v1_5] VAE init starting …", flush=True)
@@ -1847,7 +1869,7 @@ def main() -> None:
                     latent_frames=int(frames),
                     batch_size=1,
                     activation_dtype=act_dtype_vae,
-                    weights_dtype=act_dtype_vae,
+                    weights_dtype=w_dtype_vae,
                 )
             print("[ace_step_v1_5] VAE init done", flush=True)
 
