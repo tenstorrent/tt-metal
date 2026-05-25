@@ -12,8 +12,11 @@ import ttnn
 from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
     ace_step_add_one,
     ace_step_binary_kwargs,
+    ace_step_dit_rms_norm_kwargs,
+    ace_step_dit_weight_dtype,
     ace_step_ensure_dram_activation,
     ace_step_ensure_l1_activation,
+    ace_step_ensure_tile_layout,
     ace_step_linear_l1_memory_config,
     ace_step_reshape_kwargs,
 )
@@ -63,6 +66,7 @@ class TtAceStepDiTOutputHead:
         if activation_dtype is None or weights_dtype is None:
             raise RuntimeError("TTNN build missing bfloat16 dtype; pass activation_dtype/weights_dtype explicitly.")
         self.activation_dtype = activation_dtype
+        weights_dtype = ace_step_dit_weight_dtype(ttnn, weights_dtype)
 
         norm_w_key = _maybe_get_state_dict_key(
             state_dict,
@@ -153,7 +157,7 @@ class TtAceStepDiTOutputHead:
         if int(temb.shape[0]) != b or int(temb.shape[1]) != self.hidden_size:
             raise ValueError(f"Expected temb shape ({b}, {self.hidden_size}), got {tuple(temb.shape)}")
 
-        x_tile = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+        x_tile = ace_step_ensure_tile_layout(ttnn, hidden_states)
         _sr = ace_step_reshape_kwargs(ttnn)
         _dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         if use_dram_activations:
@@ -170,30 +174,28 @@ class TtAceStepDiTOutputHead:
             def _l1(t):
                 return ace_step_ensure_l1_activation(ttnn, t, _el_mc)
 
+        _rms_kw = ace_step_dit_rms_norm_kwargs(ttnn, _el_mc, device=self.device)
         normed = ttnn.rms_norm(
             x_tile,
             weight=self.norm_weight,
             epsilon=self.eps,
-            memory_config=_el_mc,
+            **_rms_kw,
         )
         normed = _l1(normed)
 
         temb_u = _l1(ttnn.reshape(temb, (b, 1, self.hidden_size), **_sr))
-        temb_u = ttnn.to_layout(temb_u, ttnn.TILE_LAYOUT)
-        shift = ttnn.add(temb_u, self.shift_table, **_bin_kw)
-        scale = ttnn.add(temb_u, self.scale_table, **_bin_kw)
-
-        shift_t = _l1(ttnn.to_layout(shift, ttnn.TILE_LAYOUT))
-        scale_t = _l1(ttnn.to_layout(scale, ttnn.TILE_LAYOUT))
-        one_plus_scale = ace_step_add_one(ttnn, scale_t, **_bin_kw)
-        scaled = ttnn.multiply(normed, one_plus_scale, **_bin_kw)
-        modulated = ttnn.add(scaled, shift_t, **_bin_kw)
-        modulated_rm = ttnn.to_layout(modulated, ttnn.ROW_MAJOR_LAYOUT)
+        temb_u = ace_step_ensure_tile_layout(ttnn, temb_u)
+        shift = _l1(ttnn.add(temb_u, self.shift_table, **_bin_kw))
+        scale = _l1(ttnn.add(temb_u, self.scale_table, **_bin_kw))
+        one_plus_scale = _l1(ace_step_add_one(ttnn, scale, **_bin_kw))
+        scaled = _l1(ttnn.multiply(normed, one_plus_scale, **_bin_kw))
+        modulated = _l1(ttnn.add(scaled, shift, **_bin_kw))
+        modulated = _l1(modulated)
         if debug is not None and debug.get("enabled", False):
             debug["head.after_norm"] = normed
-            debug["head.modulated_patches"] = modulated_rm
+            debug["head.modulated_patches"] = modulated
 
-        out = self.depatchify.forward(modulated_rm, meta)
+        out = self.depatchify.forward(modulated, meta)
         if debug is not None and debug.get("enabled", False):
             debug["pipe.acoustic"] = out
         return out

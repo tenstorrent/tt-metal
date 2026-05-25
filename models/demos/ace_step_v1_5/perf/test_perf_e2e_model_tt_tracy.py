@@ -28,6 +28,11 @@ Optional environment variables:
 When weights are absent, this test pulls the same bundles as ``run_prompt_to_wav.py`` via ``huggingface_hub``
 (requires network on first run).
 
+**Important:** do **not** enable TTNN graph trace here (``ACE_STEP_USE_TRACE=1`` / default
+:class:`AceStepE2EModel` trace). Device Tracy + ``TT_METAL_DEVICE_PROFILER`` conflict with
+``begin_trace_capture`` (no host read/write or event sync during capture). This harness uses
+``use_trace=False`` on :class:`AceStepE2EModel` — same constraint as the DiT/cond/VAE Tracy tests.
+
 If Tracy's report step fails with ``Device data missing`` / CSV mismatch (known limitation when too many
 device ops are captured), prefer ``TT_METAL_DEVICE_PROFILER=1 pytest …`` followed by
 ``python tools/tracy/process_ops_logs.py --date``, or drop Tracy's ``-p`` merge flags for host-only timelines.
@@ -174,7 +179,8 @@ def test_perf_ace_step_e2e_model_tt_tracy_profile(device):
         except ImportError:
             pass
 
-    model = AceStepE2EModel(cfg, device)
+    # Eager E2E only — TTNN trace + Tracy/device profiler cannot share the command queue safely.
+    model = AceStepE2EModel(cfg, device, use_trace=False)
     _ = model.generate(prompt)
 
     profiler.end("ace_step_e2e_init_and_compile_pass", force_enable=True)
