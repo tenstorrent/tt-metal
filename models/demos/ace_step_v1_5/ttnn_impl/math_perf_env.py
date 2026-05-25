@@ -46,8 +46,8 @@ DiT linears are often DRAM-bound at HiFi4 without tuning (reference path only):
 - ``256×3072×3072`` — MLP ``gate_proj`` / ``up_proj`` / ``down_proj``
 
 VAE decode exposes large-M matmuls inside ``conv1d`` / ``conv_transpose2d`` im2col (e.g.
-``1920×512×512``, ``30720×128×128``, ``61440×128×128``). Production VAE uses **LoFi** conv
-compute + **BF16** everywhere.
+``1920×512×512``, ``30720×128×128``, ``61440×128×128``). Production VAE uses **LoFi** conv compute + **BF16** activations; **``bfloat8_b``** weights on
+``k>1`` conv / conv-transpose im2col (DRAM BW). ``k=1`` projections stay ``ttnn.conv1d`` (L1-safe CBs).
 
 Memory policy (VAE):
 
@@ -194,6 +194,13 @@ def ace_step_vae_conv1d_memory_config(ttnn: Any, *, kernel_size: int):
     if int(kernel_size) == 1:
         return ace_step_vae_activation_memory_config(ttnn)
     return getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+
+
+def ace_step_vae_conv_weight_dtype(ttnn: Any, default_dtype: Any, *, kernel_size: int) -> Any:
+    """VAE conv weights: ``bfloat8_b`` for ``k>1`` DRAM im2col (halves weight BW); BF16 for ``k==1``."""
+    if int(kernel_size) > 1:
+        return ace_step_linear_weight_dtype(ttnn, default_dtype)
+    return default_dtype
 
 
 def ace_step_vae_typecast_kwargs(ttnn: Any, l1_mc: Any | None = None) -> dict:

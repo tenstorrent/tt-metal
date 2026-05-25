@@ -163,7 +163,6 @@ class TtOobleckDecoder:
         for block in self.blocks:
             x = block(x)
         x = self.snake1(x)
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = self.conv2(x)
         return x
 

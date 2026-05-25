@@ -70,6 +70,8 @@ class TtOobleckResidualUnit:
             device=device,
             dtype=activation_dtype,
         )
+        # Keep 1×1 as ``TtConv1d`` (not ``ttnn.linear``): mcast L1 matmul CBs exceed Blackhole budget
+        # at production ``T×C`` (e.g. 512 ch × long audio frames); conv1d 1×1 L1 path is validated E2E.
         self.conv2 = TtConv1d(
             weight_host=weights["conv2.weight"],
             bias_host=weights.get("conv2.bias"),
@@ -91,12 +93,14 @@ class TtOobleckResidualUnit:
             raise ValueError(f"TtOobleckResidualUnit expects rank-3 [B,T,C], got {x.shape}")
 
         # Skip-connection trim uses ``x[:, pad:pad+y_T, :]`` → ``ttnn.slice``. TILE slices require
-        # 32-aligned starts/sizes on the last two dims; activations here are often TILE after convs.
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        # Keep the residual skip tensor in DRAM so it does not occupy L1 during conv1 (k=7).
-        # The k=7 conv program's static CB region extends to 139328; any live L1 buffer below
-        # that address causes a "CB clashes with L1 buffer" fatal error at program compile time.
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        # 32-aligned starts/sizes on the last two dims; upstream conv/snake already return ROW_MAJOR.
+        if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        # Keep the residual skip in DRAM during k=7 conv1 (static CB region on Blackhole). Skip when
+        # already DRAM (typical after snake / conv_t / prior residual — avoids ~25 μs dispatch).
+        dram_mc = ttnn.DRAM_MEMORY_CONFIG
+        if x.memory_config() != dram_mc:
+            x = ttnn.to_memory_config(x, dram_mc)
 
         y = self.snake1(x)
         y = self.conv1(y)

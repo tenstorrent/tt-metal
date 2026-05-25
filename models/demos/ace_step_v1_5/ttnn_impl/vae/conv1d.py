@@ -27,6 +27,7 @@ from ..math_perf_env import (
     ace_step_reshape_kwargs,
     ace_step_vae_activation_memory_config,
     ace_step_vae_conv1d_memory_config,
+    ace_step_vae_conv_weight_dtype,
 )
 
 
@@ -87,6 +88,7 @@ class TtConv1d:
         self._vae_conv_perf = True
         # L1 only for 1×1 projections; k>1 uses DRAM (L1 output OOM + static-CB clash on Blackhole).
         self._l1_mem = ace_step_vae_conv1d_memory_config(ttnn, kernel_size=self.kernel_size)
+        self._conv_weight_dtype = ace_step_vae_conv_weight_dtype(ttnn, self.weights_dtype, kernel_size=self.kernel_size)
 
         w = _to_float32_numpy(weight_host)
         if w.ndim != 3 or w.shape[0] != self.out_channels or w.shape[1] != self.in_channels:
@@ -97,6 +99,7 @@ class TtConv1d:
         if int(w.shape[2]) != self.kernel_size:
             raise ValueError(f"Conv1d kernel mismatch: got {w.shape[2]}, expected {self.kernel_size}")
 
+        # Host staging: BF16 ROW_MAJOR (``prepare_conv_weights``); ``conv_config.weights_dtype`` packs BFP8.
         self._weight_host_tt = ttnn.as_tensor(w, dtype=self.weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
         if bias_host is None:
             self._bias_host_tt = None
@@ -108,8 +111,11 @@ class TtConv1d:
 
         # Low-channel layers tolerate act_block_h=64 (fewer weight passes); wide layers stay at 32 for L1 CB budget.
         _act_block_h = 64 if self.in_channels <= 512 else 32
+        # TTNN only frees the conv input when deallocate_activation=True *and* input is L1
+        # (see conv2d.cpp: should_deallocate_act = deallocate_activation && !is_dram). k>1 convs
+        # use DRAM activations so this is a no-op there; 1×1 L1 projections get input freed.
         self.conv_config = ttnn.Conv1dConfig(
-            weights_dtype=self.weights_dtype,
+            weights_dtype=self._conv_weight_dtype,
             shard_layout=None,
             deallocate_activation=bool(self._vae_conv_perf),
             act_block_h_override=_act_block_h,
@@ -137,6 +143,8 @@ class TtConv1d:
     def _maybe_l1(self, x):
         # Place activations in the conv program's expected buffer (L1 for 1×1, DRAM for k>1).
         target = self._l1_mem if self._l1_mem is not None else self.ttnn.DRAM_MEMORY_CONFIG
+        if x.memory_config() == target:
+            return x
         return self.ttnn.to_memory_config(x, target)
 
     def _ensure_packed(self, batch_size: int, input_length: int) -> None:
@@ -272,6 +280,8 @@ class TtConvTranspose1d:
             raise RuntimeError("TTNN build missing bfloat16; supply activation_dtype/weights_dtype")
         self._vae_conv_perf = True
         self._l1_mem = ace_step_vae_activation_memory_config(ttnn)
+        # Conv-transpose kernels are always k>1 in Oobleck (``2 * stride``); use BFP8 weights for BW.
+        self._conv_weight_dtype = ace_step_vae_conv_weight_dtype(ttnn, self.weights_dtype, kernel_size=self.kernel_size)
 
         w = _to_float32_numpy(weight_host)
         if w.ndim != 3 or w.shape[0] != self.in_channels or w.shape[1] != self.out_channels:
@@ -293,8 +303,9 @@ class TtConvTranspose1d:
             self._has_bias = True
 
         _act_block_h = 64 if self.in_channels <= 512 else 32
+        # Same L1-only input free as Conv1d (conv_transpose2d.cpp mirrors conv2d dealloc path).
         self.conv_config = ttnn.Conv2dConfig(
-            weights_dtype=self.weights_dtype,
+            weights_dtype=self._conv_weight_dtype,
             shard_layout=None,
             deallocate_activation=bool(self._vae_conv_perf),
             act_block_h_override=_act_block_h,
@@ -314,8 +325,9 @@ class TtConvTranspose1d:
         return ttnn.DRAM_MEMORY_CONFIG
 
     def _maybe_l1(self, x):
-        # Always move to the target memory — same rationale as TtConv1d._maybe_l1.
         target = self._l1_mem if self._l1_mem is not None else self.ttnn.DRAM_MEMORY_CONFIG
+        if x.memory_config() == target:
+            return x
         return self.ttnn.to_memory_config(x, target)
 
     def __call__(self, x):
