@@ -498,6 +498,8 @@ def moe_topk_tt(
     use_l1 = os.environ.get("GLM4_MOE_LITE_ROUTER_L1", "1").strip() == "1" and int(x.shape[2]) <= 32
     mc = ttnn.L1_MEMORY_CONFIG if use_l1 else None
 
+    # Tuned 1D multicast program config (compute_1d_prog_cfg) + LoFi/fp32-acc for decode/small-batch router.
+    # Skipped for m_total>1024 (large prefill) to avoid L1 circular buffer clash with the explicit program config.
     m_total = 1
     for i in range(len(x.shape) - 1):
         m_total *= int(x.shape[i])

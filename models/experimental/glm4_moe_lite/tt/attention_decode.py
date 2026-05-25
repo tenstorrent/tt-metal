@@ -38,9 +38,6 @@ def _profile_add(profile: dict[str, float] | None, key: str, elapsed_s: float) -
 # FlashMLA → kv_b2 → w_o op-chain tuning constants (edit to retune without touching function bodies).
 _KVB2_INPUT_L1 = True
 
-# FlashMLA output memcfg override: None = use cfg.decode_act_mc; set DRAM_MEMORY_CONFIG to force legacy path.
-_FLASH_MLA_DEFAULT_MEMCFG: ttnn.MemoryConfig | None = None
-
 
 def _safe_slice(
     tensor: ttnn.Tensor,
@@ -329,12 +326,8 @@ def flash_mla_and_output(
         exp_approx_mode=False,
     )
     compute_kernel_config = cfg.mla_compute_kernel_config()
-    # FlashMLA output memcfg: tracks cfg.decode_act_mc by default; overridden below when shard_q is on.
-    flash_mla_memcfg = (
-        _FLASH_MLA_DEFAULT_MEMCFG
-        if _FLASH_MLA_DEFAULT_MEMCFG is not None
-        else (cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
-    )
+    # If DECODE_L1_ACT=1 → decode_act_mc is L1_MEMORY_CONFIG → FlashMLA output goes to L1; otherwise DRAM.
+    flash_mla_memcfg = cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG
 
     # Optional Q sharding
     if cfg.shard_q:
