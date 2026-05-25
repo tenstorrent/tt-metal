@@ -38,6 +38,8 @@ Weight loading:
 from __future__ import annotations
 
 
+import os
+
 import torch
 
 import ttnn
@@ -49,7 +51,6 @@ from models.experimental.mistral_small_4_119b.constants import (
     NUM_EXPERTS,
     SHARED_EXPERT_INTERMEDIATE_SIZE,
 )
-
 
 # ── Weight loading helpers ─────────────────────────────────────────────────
 
@@ -373,7 +374,7 @@ class TtMistral4MoELayer(LightweightModule):
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,  # Optimize for P150: disable L1 packing overhead
+            packer_l1_acc=True,
         )
         # LoFi is safe for bf4 expert weights: quantization error (~0.0625) dominates
         # HiFi2's extra FPU precision, so halving FPU cycles has no meaningful PCC cost.
@@ -382,7 +383,7 @@ class TtMistral4MoELayer(LightweightModule):
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,  # Optimize for P150: disable L1 packing overhead
+            packer_l1_acc=True,
         )
 
         mlp_prefix = layer_prefix + "mlp."
@@ -485,6 +486,9 @@ class TtMistral4MoELayer(LightweightModule):
         # after grid auto-shrink for N=128 tiles).
         # DRAM cost: same as stacked (slice-then-dealloc-stacked is net zero).
         self._is_blackhole = ttnn.device.is_blackhole(self.mesh_device)
+        self._prefill_bf8_routing = os.environ.get("MISTRAL4_MOE_BF8_ROUTING", "0") == "1"
+        self._expert_sharding_mode = os.environ.get("MISTRAL4_MOE_SHARDING", "off").lower()
+        self._preshard_expert_weights = os.environ.get("MISTRAL4_MOE_PRESHARD_WEIGHTS", "0") == "1"
         if self._is_blackhole:
             H = HIDDEN_SIZE
             I = EXPERT_INTERMEDIATE_SIZE
@@ -511,10 +515,47 @@ class TtMistral4MoELayer(LightweightModule):
             self.expert_gate_up = None
             self.expert_down = None
             self._expert_pc_cache: dict = {}
+
+            # Pre-build WIDTH_SHARDED L1 memory configs for weight staging.
+            # For N=128 tiles (gate_up [H,2I]=[4096,4096], down [I,H]=[2048,4096]),
+            # the largest rectangle within the device grid dividing 128 exactly is 8×8=64.
+            # Each core shard: gate_up [H, 64]=144 KB in BFP4; down [I, 64]=72 KB in BFP4.
+            _shard_gx, _shard_gy = 8, 8
+            _shard_nc = _shard_gx * _shard_gy  # 64
+            _shard_cr = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_shard_gx - 1, _shard_gy - 1))}
+            )
+            self._gu_shard_mem = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(_shard_cr, [H, (2 * I) // _shard_nc], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            self._d_shard_mem = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(_shard_cr, [I, H // _shard_nc], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            # per_core_N in tiles: 128 N-tiles / 64 cores = 2 tiles per core
+            self._shard_per_core_N = (2 * I // 32) // _shard_nc  # = 2
+            if self._preshard_expert_weights:
+                self.expert_gate_up_sharded_list = [
+                    ttnn.to_memory_config(weight, self._gu_shard_mem) for weight in self.expert_gate_up_list
+                ]
+                self.expert_down_sharded_list = [
+                    ttnn.to_memory_config(weight, self._d_shard_mem) for weight in self.expert_down_list
+                ]
+            else:
+                self.expert_gate_up_sharded_list = None
+                self.expert_down_sharded_list = None
         else:
             self.expert_gate_up_list = None
             self.expert_down_list = None
+            self.expert_gate_up_sharded_list = None
+            self.expert_down_sharded_list = None
             self._expert_pc_cache: dict = {}
+            self._gu_shard_mem = None
+            self._d_shard_mem = None
+            self._shard_per_core_N = None
 
         # Gate matmul program config for decode: [1,4096]×[4096,128].
         # Uses 1D-mcast to share in0 across the 4 output-tile cores, avoiding
@@ -535,23 +576,29 @@ class TtMistral4MoELayer(LightweightModule):
     def _expert_1d_mcast_pc(self, m_tiles: int, k_tiles: int, n_tiles: int):
         """1D-mcast program config for a single non-batched expert matmul on Blackhole.
 
-        Caches by (m, k, n). Uses the full P150 compute grid (auto-shrunk by the
-        helper logic if N is smaller than the grid).
+        Caches by (m, k, n). Finds the largest rectangle within the device grid
+        whose core-count exactly divides n_tiles, eliminating idle cores and
+        reducing mcast fan-out overhead.
         """
         key = (m_tiles, k_tiles, n_tiles)
         cached = self._expert_pc_cache.get(key)
         if cached is not None:
             return cached
         grid_full = self.mesh_device.compute_with_storage_grid_size()
-        grid_x, grid_y = grid_full.x, grid_full.y
-        num_cores = grid_x * grid_y
-        # If N-tiles < num_cores, shrink Y so we still get even per-core_N.
-        if n_tiles < num_cores:
-            new_y = max(1, n_tiles // grid_x)
-            grid_y = new_y
-            num_cores = grid_x * grid_y
+        max_x, max_y = grid_full.x, grid_full.y
+
+        # Find the largest num_cores (as a rectangle within max_x×max_y) that
+        # divides n_tiles exactly, so every selected core has a full tile share.
+        best_nc, best_x, best_y = 1, 1, 1
+        for py in range(1, max_y + 1):
+            for px in range(1, max_x + 1):
+                nc = px * py
+                if n_tiles % nc == 0 and nc > best_nc:
+                    best_nc, best_x, best_y = nc, px, py
+
+        grid_x, grid_y = best_x, best_y
         per_core_M = m_tiles
-        per_core_N = max(1, (n_tiles + num_cores - 1) // num_cores)
+        per_core_N = n_tiles // best_nc
         # in0_block_w: largest divisor of K that fits, capped at 8.
         in0_block_w = 1
         for cand in (8, 4, 2):
@@ -575,6 +622,45 @@ class TtMistral4MoELayer(LightweightModule):
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
             per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        self._expert_pc_cache[key] = pc
+        return pc
+
+    def _expert_sharded_pc(self, m_tiles: int, k_tiles: int):
+        """Program config for expert matmul with WIDTH_SHARDED in1 on 8×8=64 core grid.
+
+        per_core_N = self._shard_per_core_N (2 tiles for N=128).
+        """
+        per_core_N = self._shard_per_core_N
+        key = ("sharded", m_tiles, k_tiles)
+        cached = self._expert_pc_cache.get(key)
+        if cached is not None:
+            return cached
+        in0_block_w = 1
+        for cand in (8, 4, 2):
+            if k_tiles % cand == 0:
+                in0_block_w = cand
+                break
+        out_subblock_w = 1
+        for cand in (4, 2, 1):
+            if per_core_N % cand == 0:
+                out_subblock_w = cand
+                break
+        out_subblock_h = 1
+        for cand in (4, 2, 1):
+            if m_tiles % cand == 0 and cand * out_subblock_w <= 8:
+                out_subblock_h = cand
+                break
+        pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=m_tiles,
             per_core_N=per_core_N,
             fuse_batch=True,
             fused_activation=None,
@@ -615,7 +701,7 @@ class TtMistral4MoELayer(LightweightModule):
             x,
             self.gate_weight,
             compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b if self._prefill_bf8_routing else ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self._gate_pc if seq_len == 1 else None,
         )
@@ -658,7 +744,7 @@ class TtMistral4MoELayer(LightweightModule):
             dense_routing_tt,
             self.routing_shard_proj,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b if self._prefill_bf8_routing else ttnn.bfloat16,
         )
         ttnn.deallocate(dense_routing_tt)
         return routing_local
@@ -716,22 +802,39 @@ class TtMistral4MoELayer(LightweightModule):
         H = HIDDEN_SIZE
 
         if self._is_blackhole:
-            # ── Per-expert loop (Blackhole) ────────────────────────────────
             _mem = ttnn.L1_MEMORY_CONFIG
             m_tiles = (seq_len + 31) // 32
-            gu_pc = self._expert_1d_mcast_pc(m_tiles, H // 32, 2 * I // 32)
-            d_pc = self._expert_1d_mcast_pc(m_tiles, I // 32, H // 32)
+            use_sharded_weight_staging = self._expert_sharding_mode == "on" or (
+                self._expert_sharding_mode == "auto" and seq_len >= 64
+            )
+            if use_sharded_weight_staging:
+                gu_pc = self._expert_sharded_pc(m_tiles, H // 32)
+                d_pc = self._expert_sharded_pc(m_tiles, I // 32)
+            else:
+                gu_pc = self._expert_1d_mcast_pc(m_tiles, H // 32, 2 * I // 32)
+                d_pc = self._expert_1d_mcast_pc(m_tiles, I // 32, H // 32)
 
             partial = None
             for i in range(self.experts_per_device):
+                if use_sharded_weight_staging and self.expert_gate_up_sharded_list is not None:
+                    gate_up_weight = self.expert_gate_up_sharded_list[i]
+                    deallocate_gate_up_weight = False
+                elif use_sharded_weight_staging:
+                    gate_up_weight = ttnn.to_memory_config(self.expert_gate_up_list[i], self._gu_shard_mem)
+                    deallocate_gate_up_weight = True
+                else:
+                    gate_up_weight = self.expert_gate_up_list[i]
+                    deallocate_gate_up_weight = False
                 gate_up_i = ttnn.matmul(
                     x,
-                    self.expert_gate_up_list[i],
+                    gate_up_weight,
                     compute_kernel_config=self.expert_compute_kernel_config,
                     dtype=ttnn.bfloat8_b,
-                    memory_config=_mem,  # Optimize for P150: use L1 instead of DRAM
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG if use_sharded_weight_staging else _mem,
                     program_config=gu_pc,
                 )
+                if deallocate_gate_up_weight:
+                    ttnn.deallocate(gate_up_weight)
                 gate_i = ttnn.slice(gate_up_i, [0, 0, 0, 0], [1, 1, seq_len, I], memory_config=_mem)
                 up_i = ttnn.slice(gate_up_i, [0, 0, 0, I], [1, 1, seq_len, 2 * I], memory_config=_mem)
                 ttnn.deallocate(gate_up_i)
@@ -742,14 +845,25 @@ class TtMistral4MoELayer(LightweightModule):
                 ttnn.deallocate(silu_i)
                 ttnn.deallocate(up_i)
 
+                if use_sharded_weight_staging and self.expert_down_sharded_list is not None:
+                    down_weight = self.expert_down_sharded_list[i]
+                    deallocate_down_weight = False
+                elif use_sharded_weight_staging:
+                    down_weight = ttnn.to_memory_config(self.expert_down_list[i], self._d_shard_mem)
+                    deallocate_down_weight = True
+                else:
+                    down_weight = self.expert_down_list[i]
+                    deallocate_down_weight = False
                 out_i = ttnn.matmul(
                     hidden_i,
-                    self.expert_down_list[i],
+                    down_weight,
                     compute_kernel_config=self.expert_compute_kernel_config,
                     dtype=ttnn.bfloat8_b,
-                    memory_config=_mem,  # Optimize for P150: use L1 instead of DRAM
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG if use_sharded_weight_staging else _mem,
                     program_config=d_pc,
                 )
+                if deallocate_down_weight:
+                    ttnn.deallocate(down_weight)
                 ttnn.deallocate(hidden_i)
 
                 w_i = ttnn.slice(
