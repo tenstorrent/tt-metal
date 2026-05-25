@@ -130,6 +130,8 @@ class Gemma4Attention:
         keep_kv=False,
         is_kv_shared=False,
         position_idx_cache=None,
+        batch_size=1,
+        user_id=0,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -180,6 +182,8 @@ class Gemma4Attention:
                 ccl_manager=self.ccl_manager,
                 shared_kv=shared_kv,
                 keep_kv=keep_kv,
+                batch_size=batch_size,
+                user_id=user_id,
             )
             self._last_kv = kept_kv
             return tt_out
