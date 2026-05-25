@@ -83,7 +83,7 @@ static void run_pack_relu_test(
         .unique_id = READER,
         .source =
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp"},
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp"},
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = INPUT_DFB,
@@ -91,7 +91,6 @@ static void run_pack_relu_test(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .compile_time_arg_bindings = {{"use_dfbs", 1u}},
         .runtime_arguments_schema =
             {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec =
@@ -104,7 +103,7 @@ static void run_pack_relu_test(
         .unique_id = WRITER,
         .source =
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp"},
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp"},
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUTPUT_DFB,
@@ -112,7 +111,6 @@ static void run_pack_relu_test(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .compile_time_arg_bindings = {{"use_dfbs", 1u}},
         .runtime_arguments_schema =
             {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec =
@@ -125,7 +123,7 @@ static void run_pack_relu_test(
         .unique_id = COMPUTE,
         .source =
             experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp"},
+                "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp"},
         .num_threads = 1,
         .compiler_options = {.defines = {{"PACK_RELU", "1"}}},
         .dfb_bindings =
@@ -141,7 +139,7 @@ static void run_pack_relu_test(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = {{"per_core_tile_cnt", num_tiles}, {"use_dfbs", 1u}},
+        .compile_time_arg_bindings = {{"per_core_tile_cnt", num_tiles}},
         .runtime_arguments_schema = {.named_runtime_args = {"relu_config"}},
         .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
     };

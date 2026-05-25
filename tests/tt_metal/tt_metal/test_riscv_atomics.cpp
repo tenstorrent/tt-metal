@@ -40,7 +40,6 @@ protected:
     IDevice* device_{nullptr};
     uint32_t num_dms_{0};
     std::vector<uint32_t> result;
-    std::vector<uint32_t> runtime_args;
     uint32_t word_count_32b{0};
 
     void SetUp() override {
@@ -62,79 +61,83 @@ protected:
         word_count_32b = is_quasar ? 2 : 1;
     }
 
-    void set_rtas() {
-        if (!runtime_args.empty()) {
-            return;
-        }
-        runtime_args.push_back(l1_unreserved_base);
-        runtime_args.push_back(iterations);
-    }
-
     void run_riscv_atomics_test(const std::map<std::string, std::string>& dm_defines) {
         distributed::MeshWorkload workload;
         Program program;
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-        set_rtas();
+        experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines defines_vec(
+            dm_defines.begin(), dm_defines.end());
 
-        // Same Kernel is launched on all DMs
-        if (arch_ == tt::ARCH::QUASAR) {
-            constexpr const char* DM_KERNEL = "dm_kernel";
+        // Quasar: one multi-threaded DM kernel spans the user DMs (DM2..DM7).
+        // Gen1 (BH): one KernelSpec per DM processor (BRISC, NCRISC), each single-threaded with its
+        // own NOC binding. The kernel itself picks its role via mhartid (Quasar) or COMPILE_FOR_BRISC
+        // (Gen1) — see riscv_atomics.cpp.
+        std::vector<experimental::metal2_host_api::KernelSpec> kernel_specs;
+        std::vector<experimental::metal2_host_api::KernelSpecName> kernel_names;
+        std::vector<experimental::metal2_host_api::ProgramRunParams::KernelRunParams> kernel_run_params;
+        const auto make_run_params = [&](const std::string& name) {
+            return experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+                .kernel_spec_name = name,
+                .named_runtime_args =
+                    {{.node = core,
+                      .args = {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
+            };
+        };
 
-            experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines defines_vec(
-                dm_defines.begin(), dm_defines.end());
-
-            experimental::metal2_host_api::KernelSpec dm_kernel_spec{
+        if (is_quasar) {
+            const std::string DM_KERNEL = "dm_kernel";
+            kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
                 .unique_id = DM_KERNEL,
                 .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
                 .num_threads = static_cast<uint8_t>(num_dms_),
                 .compiler_options = {.defines = defines_vec},
-                .runtime_arguments_schema =
-                    {
-                        .named_runtime_args = {"l1_counter_addr", "increment_times"},
-                    },
+                .runtime_arguments_schema = {.named_runtime_args = {"l1_counter_addr", "increment_times"}},
                 .config_spec =
                     experimental::metal2_host_api::DataMovementConfiguration{
                         .gen2_data_movement_config =
                             experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
-            };
-
-            experimental::metal2_host_api::WorkUnitSpec main_wu{
-                .unique_id = "main",
-                .kernels = {DM_KERNEL},
-                .target_nodes = core,
-            };
-
-            experimental::metal2_host_api::ProgramSpec spec{
-                .program_id = "riscv_atomics",
-                .kernels = {dm_kernel_spec},
-                .work_units = {main_wu},
-            };
-            program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device_, spec);
-
-            experimental::metal2_host_api::ProgramRunParams params;
-            params.kernel_run_params = {{
-                .kernel_spec_name = DM_KERNEL,
-                .named_runtime_args =
-                    {{.node = core,
-                      .args = {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
-            }};
-            experimental::metal2_host_api::SetProgramRunParameters(program, params);
+            });
+            kernel_names.push_back(DM_KERNEL);
+            kernel_run_params.push_back(make_run_params(DM_KERNEL));
         } else {
-            // BH:
             for (uint32_t dm_id = 0; dm_id < num_dms_; dm_id++) {
-                auto kernel = CreateKernel(
-                    program,
-                    kernel_path,
-                    core,
-                    DataMovementConfig{
-                        .processor = static_cast<tt_metal::DataMovementProcessor>(dm_id),
-                        .noc = (dm_id == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default),
-                        .defines = dm_defines});
-                SetRuntimeArgs(program, kernel, core, runtime_args);
+                const std::string name = "dm_kernel_" + std::to_string(dm_id);
+                kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+                    .unique_id = name,
+                    .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
+                    .num_threads = 1,
+                    .compiler_options = {.defines = defines_vec},
+                    .runtime_arguments_schema = {.named_runtime_args = {"l1_counter_addr", "increment_times"}},
+                    .config_spec =
+                        experimental::metal2_host_api::DataMovementConfiguration{
+                            .gen1_data_movement_config =
+                                experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+                                    .processor = static_cast<tt_metal::DataMovementProcessor>(dm_id),
+                                    .noc = (dm_id == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default),
+                                }},
+                });
+                kernel_names.push_back(name);
+                kernel_run_params.push_back(make_run_params(name));
             }
         }
+
+        experimental::metal2_host_api::WorkUnitSpec main_wu{
+            .unique_id = "main",
+            .kernels = kernel_names,
+            .target_nodes = core,
+        };
+        experimental::metal2_host_api::ProgramSpec spec{
+            .program_id = "riscv_atomics",
+            .kernels = kernel_specs,
+            .work_units = {main_wu},
+        };
+        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device_, spec);
+
+        experimental::metal2_host_api::ProgramRunParams params;
+        params.kernel_run_params = std::move(kernel_run_params);
+        experimental::metal2_host_api::SetProgramRunParameters(program, params);
 
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
