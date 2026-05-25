@@ -55,6 +55,9 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model impor
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
 T2ST_WAV = OUTPUT_DIR / "t2st_hindi_speech.wav"
+# Speech-encoder L1 on BH: chain tasks use a short prefix of T2ST audio (full WAV is still saved).
+# 22s matched the pre-cap demo mel length; 24s can L1-clash after a ~43s vocoder run on BH.
+MAX_CHAIN_AUDIO_SEC = 22.0
 S2ST_WAV = OUTPUT_DIR / "s2st_spanish_speech.wav"
 
 # ---------------------------------------------------------------------------
@@ -317,15 +320,23 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
             f"unit_frames={n_units}, "
             f"audio={hindi_wav_np.size} samples ({hindi_wav_np.size / sample_rate:.2f}s)"
         )
-        if n_units >= 1536:
-            print("  Note: vocoder unit timeline capped at 1536 frames for BH L1 safety.")
         print(f"  Saved to: {T2ST_WAV}")
 
         tt_model.clear_runtime_program_cache()
         ttnn.synchronize_device(device)
 
+        # Tasks 3–5 reuse T2ST audio; trim for the speech encoder L1 budget (full WAV kept above).
+        max_chain_samples = int(sample_rate * MAX_CHAIN_AUDIO_SEC)
+        hindi_wav_chain = hindi_wav_np
+        if hindi_wav_np.size > max_chain_samples:
+            hindi_wav_chain = hindi_wav_np[:max_chain_samples]
+            print(
+                f"  Note: S2TT/S2ST/ASR use first {MAX_CHAIN_AUDIO_SEC:.0f}s of T2ST audio "
+                f"({max_chain_samples} samples); speech encoder L1 limit on BH."
+            )
+
         # The Hindi speech from T2ST becomes the input for tasks 3-5.
-        audio_inputs = processor(audios=hindi_wav_np, sampling_rate=sample_rate, return_tensors="pt")
+        audio_inputs = processor(audios=hindi_wav_chain, sampling_rate=sample_rate, return_tensors="pt")
         input_features = audio_inputs["input_features"]
         input_speech_attn = audio_inputs["attention_mask"]
 
