@@ -168,8 +168,17 @@ def test_single_routed_expert(
     [
         (4096, 2048, 7168, 2048),
         (25 * 1024, 2048, 7168, 2048),
+        (25 * 1024, 4096, 7168, 2048),
+        (16384, 2048, 7168, 2048),
+        (16384, 4096, 7168, 2048),
     ],
-    ids=["ds-v3-4k-alloc-2k-active", "ds-v3-25k-alloc-2k-active"],
+    ids=[
+        "ds-v3-4k-alloc-2k-active",
+        "ds-v3-25k-alloc-2k-active",
+        "ds-v3-25k-alloc-4k-active",
+        "ds-v3-16k-alloc-2k-active",
+        "ds-v3-16k-alloc-4k-active",
+    ],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
