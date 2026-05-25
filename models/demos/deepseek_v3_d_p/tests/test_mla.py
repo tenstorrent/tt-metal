@@ -175,6 +175,9 @@ def test_mla(
         mesh_device: Mesh device fixture
         seq_len: Sequence length
     """
+    if variant.supported_meshes is not None and tuple(mesh_device.shape) not in variant.supported_meshes:
+        pytest.skip(f"{variant.name!r} not validated on mesh {tuple(mesh_device.shape)}")
+
     if use_pretrained and not variant.supports_pretrained:
         pytest.skip(f"{variant.name!r}: pretrained weights not available")
 
