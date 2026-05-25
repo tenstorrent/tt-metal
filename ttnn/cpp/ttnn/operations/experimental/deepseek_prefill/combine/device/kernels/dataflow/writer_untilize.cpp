@@ -229,9 +229,11 @@ void kernel_main() {
                                        : (expert_tokens - batch_token_start);
 
             // Wait for compute to finish untilizing this batch and for reader_untilize to land
-            // the corresponding metadata pages.
+            // the corresponding metadata pages.  cb_metadata_batch_id is pushed/popped in
+            // fixed read_batch_size chunks (only the first batch_count entries are valid),
+            // so its fifo pointers wrap cleanly even when batch_count < read_batch_size.
             cb_wait_front(cb_untilize_id, read_batch_size);
-            cb_wait_front(cb_metadata_batch_id, batch_count);
+            cb_wait_front(cb_metadata_batch_id, read_batch_size);
 
             uint32_t untilize_read_ptr = get_read_ptr(cb_untilize_id);
             uint32_t metadata_read_ptr = get_read_ptr(cb_metadata_batch_id);
@@ -294,7 +296,7 @@ void kernel_main() {
             // writes).
             noc_async_write_barrier();
 
-            cb_pop_front(cb_metadata_batch_id, batch_count);
+            cb_pop_front(cb_metadata_batch_id, read_batch_size);
             cb_pop_front(cb_untilize_id, read_batch_size);
         }
         start_page_tiled += ((expert_tokens + tile_height - 1) / tile_height) * tiles_per_batch;

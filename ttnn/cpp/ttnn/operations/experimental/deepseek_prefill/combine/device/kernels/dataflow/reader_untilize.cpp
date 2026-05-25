@@ -187,7 +187,12 @@ void kernel_main() {
 
             {
                 uint32_t metadata_batch_start = start_token + batch_token_start;
-                cb_reserve_back(cb_metadata_batch_id, batch_count);
+                // Always reserve/push read_batch_size pages so cb_metadata_batch_id wraps
+                // cleanly (tt-metal CBs require fifo_wr_ptr to hit fifo_limit exactly to
+                // wrap).  Only the first batch_count pages contain valid metadata read from
+                // DRAM; the trailing (read_batch_size - batch_count) pages are unused and
+                // will not be read by the consumer.
+                cb_reserve_back(cb_metadata_batch_id, read_batch_size);
                 uint32_t metadata_base = get_write_ptr(cb_metadata_batch_id);
                 {
                     // DeviceZoneScopedN("METADATA-read");
@@ -199,7 +204,7 @@ void kernel_main() {
                     }
                     noc_async_read_barrier();
                 }
-                cb_push_back(cb_metadata_batch_id, batch_count);
+                cb_push_back(cb_metadata_batch_id, read_batch_size);
             }
 
             // 2. Read tiles for this batch in block_ct_dim-sized chunks so each push matches one
