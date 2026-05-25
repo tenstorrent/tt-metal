@@ -776,6 +776,19 @@ struct FlashMLADecode {
                     !sdpa_output_is_final && last_chunk,
                     mask_last_chunk && last_chunk);
             }
+            // PROBE B (#43563 debug): pack mm2 (P*V accumulator at tile 0)
+            // to cb_out_in (unused in 1-chunk test path: num_cores_to_wait=0),
+            // hash with scalar hash_cb, then pop. Tests whether mm2 contents
+            // at end of chunk loop are bit-identical between iter-0 and iter-1
+            // on the same core. If hash differs → MM2 (or upstream ops feeding mm1)
+            // are bank-asymmetric on identical inputs. If hash matches → bug is
+            // downstream in the tail (compute_sdpa_recip + final pack).
+            // Uses cb_out_in because it has matching format (stats_df 8x32) so
+            // no PACK re-init needed.
+            pack_block_contiguous(mm2_dst_tile_offset, cb_out_in, 1);
+            cb_push_back(cb_out_in, 1);
+            hash_cb(cb_out_in, 1, 0x40);
+            cb_pop_front(cb_out_in, 1);
             if (!sdpa_output_is_final) {
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
                 pack_block_contiguous(max_dst_tile_offset, sdpa_ms_cb, 1);

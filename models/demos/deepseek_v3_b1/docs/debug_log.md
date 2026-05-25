@@ -1028,3 +1028,55 @@ The exalens plan looks at *state* (registers, GPRs); the SFPU hash bisection loo
 If both agree, we've nailed both ends of the divergence. If they disagree, the discrepancy itself is informative.
 
 ---
+
+## Attempt 23 — Probe B: hash mm2 after chunk loop (scalar hash via cb_out_in)
+
+**What.** Took the simpler route (avoid host-side new-CB plumbing): pack the mm2 P·V accumulator tile (at `mm2_dst_tile_offset=0`) to `cb_out_in` after the chunk loop ends but before the tail, hash with scalar `hash_cb`, then pop:
+
+```cpp
+// In flash_mla.hpp, after the chunk for-loop ends, before the !sdpa_output_is_final branch:
+pack_block_contiguous(mm2_dst_tile_offset, cb_out_in, 1);
+cb_push_back(cb_out_in, 1);
+hash_cb(cb_out_in, 1, 0x40);
+cb_pop_front(cb_out_in, 1);
+```
+
+`cb_out_in` chosen as scratch because (a) it has the same `stats_df` (bf16) 8x32 tile format as the existing PACK setup, so no `pack_reconfig` needed; (b) it's an input CB to `sdpa_tail` which only runs when `num_cores_to_wait > 0` — at `position_id=127` (1 chunk total, `num_active_s_blocks=1`, no tree-reduce partners) it's unused.
+
+**Motivation.** Probe whether MM2's output (the running P·V accumulator) is bit-identical between iter-0 and iter-1 on the same core. If yes → MM2 (and all of MM1 / reduce_max / bcast_sub / fast_approx_exp) are bank-symmetric on identical inputs, and the divergence is downstream in the tail (`compute_sdpa_recip` + final pack). If no → MM2 or upstream is bank-asymmetric.
+
+**Caveat hit on first attempt.** Initially tried with both `position_id=127` and `=511` in the parametrize. **Pos=511 hung** because `num_cores_to_wait > 0` there, so `sdpa_tail` actually runs and tries to `cb_wait_front(cb_out_in, ...)`. Our `cb_pop_front` had drained the CB, so sdpa_tail waits forever. Killed and restricted parametrize to pos=127 only.
+
+**Result @ pos=127, num_internal_iterations=2.**
+
+Hash distribution:
+
+| Probe | Total emissions | Unique values | Pattern |
+|---|---|---|---|
+| `0x40` (mm2 hash, post-chunk-loop) | 32 | 20 | **12 paired (24 emissions) + 8 singletons (4 cores × 2 hashes)** → 12/16 cores match, 4/16 diverge at mm2 |
+| `0x30` (final sdpa_output_cb hash, end of flash_mla) | 32 | **16** | **All 16 values appear exactly twice** → **16/16 cores match at final output!** |
+
+Baseline reminder (Attempt 19 @ pos=127, no probe B): `0x30` was 32 unique / 32 emissions — **0/16 cores matched**.
+
+Cross-check on one diverging core (dev 6, x=0, y=1):
+
+```
+hash[0x40] = 0x87537656   ←  iter-0 mm2
+hash[0x30] = 0xaa6fc356   ←  iter-0 final output
+hash[0x40] = 0xc74bc945   ←  iter-1 mm2 (DIFFERENT from iter-0)
+hash[0x30] = 0xaa6fc356   ←  iter-1 final output (IDENTICAL to iter-0)
+```
+
+mm2 differs between iters; final output is bit-identical. The tail (`compute_sdpa_recip`'s `mm2 *= 1/sum`) cancelled the bank-asymmetric scale factor for that core.
+
+**Conclusion (two parts).**
+
+**A.** Mathematically, flash-attention is scale-invariant: if MM1 / SFPU-exp / MM2 produce `mm2_iter1 = c * mm2_iter0` and correspondingly `sum_iter1 = c * sum_iter0` for some scalar `c`, then `mm2/sum` is bit-identical. The 4 cores that diverge at mm2 but match at the final output are exhibiting exactly this: bank-asymmetric scale factor cancelling through the recip normalize. Compute_sdpa_recip is doing its job.
+
+**B.** Adding probe B (`pack + cb_push_back + hash_cb + cb_pop_front` of `cb_out_in`) inadvertently **masked the final-output bug for ALL 16 cores at pos=127**. Baseline had 0/16 matching; with probe B in place, 16/16 match. The probe doesn't touch the bug's actual mechanism — it's a stealth side-effect, similar to 2c's masking, but acting at a different layer.
+
+This is the **strongest masking** we've seen so far in any patch. 2c only collapsed gap at multi-chunk MLP PCC (not at per-core 1-chunk hashes); probe B fully fixes per-core 1-chunk output. Worth bisecting probe B's components to find the active ingredient.
+
+**State.** Probe B left in place; test parametrize narrowed to pos=127 only (multi-chunk hangs sdpa_tail; needs a different scratch CB).
+
+---
