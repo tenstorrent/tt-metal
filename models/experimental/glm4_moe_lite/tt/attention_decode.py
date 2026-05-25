@@ -38,30 +38,12 @@ def _profile_add(profile: dict[str, float] | None, key: str, elapsed_s: float) -
 # ---------------------------------------------------------------------------
 # FlashMLA → kv_b2 → w_o op-chain tuning constants
 # ---------------------------------------------------------------------------
-# Tunable in source. The defaults below implement the "fold post-FlashMLA"
-# optimization recommended in experiments/optimization_log.md:
-#   - kv_b2 reads attn_latent from L1 (was DRAM in the baseline; perf-tool
-#     flagged "input 0 in DEV_0_DRAM_INTERLEAVED" warning).
-#   - The post-kv_b2 head-flatten always uses ``ttnn.transformer.concatenate_heads``
-#     (1 op) instead of permute+reshape+permute (3 ops).
-#
-# Empirical tuning results (Blackhole 1×4, batch=1, decode):
-#
-#  _KVB2_INPUT_L1 = True   was ~+1ms wall regression. attn_latent is ~1.3 MB,
-#    so the DRAM→L1 copy costs more than the matmul's DRAM-read savings —
-#    the matmul kernel already pipelines DRAM reads well at 27% bandwidth
-#    utilization. Kept as a constant for re-tuning if activation size or
-#    kernel scheduling changes.
-#
-#  _USE_CONCATENATE_HEADS = True was ~+1.7ms wall regression. The legacy
-#    3-op permute+reshape+permute chain happens to map to lower-latency
-#    kernels for the [1,H,B,v_head_dim]→[1,1,B,H*v_head_dim] flatten on
-#    Blackhole than the single ``ttnn.transformer.concatenate_heads`` op.
-#    Likely cause: concatenate_heads produces a layout that forces an
-#    additional reformatting before the w_o matmul. Kept tunable so this
-#    can be re-tested when concatenate_heads is rewritten.
+# _KVB2_INPUT_L1 = True was ~+1ms wall regression on Blackhole 1×4 batch=1.
+# attn_latent is ~1.3 MB; the DRAM→L1 copy costs more than the matmul's
+# DRAM-read savings (27% bandwidth utilization; kernel pipelines DRAM reads
+# well). Kept as a constant for re-tuning if activation size or kernel
+# scheduling changes.
 _KVB2_INPUT_L1 = True
-_USE_CONCATENATE_HEADS = False
 
 # FlashMLA output memory config override. ``None`` = use ``cfg.decode_act_mc``
 # (i.e. L1 when DECODE_L1_ACT=1, DRAM otherwise) so the attn_latent ends up in
@@ -83,26 +65,6 @@ def _safe_slice(
         cloned = ttnn.clone(result, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return cloned
     return result
-
-
-def _flatten_heads(v: ttnn.Tensor, *, batch: int, flat_dim: int) -> ttnn.Tensor:
-    """Flatten per-head V output [1, H, B, v_head_dim] → [1, 1, B, H*v_head_dim].
-
-    Uses ``ttnn.transformer.concatenate_heads`` (2 ops: concatenate_heads +
-    reshape) instead of the legacy 3-op chain (permute + reshape + permute)
-    when ``_USE_CONCATENATE_HEADS = True``. Reduces 1 op per layer per token,
-    which adds up over 27 layers × N decode tokens. See
-    experiments/optimization_log.md "Op-count reduction" recommendation.
-    """
-    if _USE_CONCATENATE_HEADS:
-        # concatenate_heads: [1, H, B, D] → [1, B, H*D]; reshape to [1, 1, B, H*D].
-        v = ttnn.transformer.concatenate_heads(v)
-        v = ttnn.reshape(v, (1, 1, batch, flat_dim))
-        return v
-    v = ttnn.permute(v, (0, 2, 1, 3))
-    v = ttnn.reshape(v, (1, batch, 1, flat_dim))
-    v = ttnn.permute(v, (0, 2, 1, 3))
-    return v
 
 
 def kv_cache_update(
@@ -153,6 +115,7 @@ def kv_cache_update(
         kv = None
         qkv = None
         w_q_kv_a = getattr(w, "w_q_kv_a", None)
+        # Tuned 21-core kv_a helper (per_core_N=2, out_subblock_w=2) replaces the default 64-core SLOW path.
         if w_q_kv_a is not None:
             qkv = attn_kva_linear(x, w_q_kv_a, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
             q_a = _safe_slice(
@@ -510,7 +473,9 @@ def flash_mla_and_output(
                 pass
         heads_per_dev = num_heads // cfg.tp_size
         flat_dim = heads_per_dev * int(hparams.v_head_dim)
-        v = _flatten_heads(v, batch=batch, flat_dim=flat_dim)
+        v = ttnn.permute(v, (0, 2, 1, 3))
+        v = ttnn.reshape(v, (1, batch, 1, flat_dim))
+        v = ttnn.permute(v, (0, 2, 1, 3))
         attn_out_partial = mlp_linear(v, w.w_o, device=device, cfg=cfg)
         ttnn.deallocate(v, force=False)
         attn_out = ttnn.all_reduce(
@@ -532,7 +497,11 @@ def flash_mla_and_output(
                 ttnn.deallocate(attn_latent_padded, force=False)
             except Exception:
                 pass
-        v = _flatten_heads(v, batch=batch, flat_dim=int(num_heads * hparams.v_head_dim))
+        flat_dim = int(num_heads * hparams.v_head_dim)
+        v = ttnn.permute(v, (0, 2, 1, 3))
+        v = ttnn.reshape(v, (1, batch, 1, flat_dim))
+        v = ttnn.permute(v, (0, 2, 1, 3))
+        # Tuned 32-core w_o helper: WIDTH_SHARDED L1 output + act-in-L1 cuts the 83%-DRAM-util baseline penalty.
         attn_out = attn_wo_linear(v, w.w_o, device=device, cfg=cfg)
         ttnn.deallocate(v, force=False)
 

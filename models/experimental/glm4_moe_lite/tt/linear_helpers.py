@@ -295,6 +295,7 @@ def mlp_linear(
         for i in range(len(b.shape) - 2):
             b_batch *= int(b.shape[i])
         if m_total <= ttnn.TILE_SIZE and b_batch == 1:
+            # Thread fp32-DST into the subblock heuristic so out_subblock_w respects the 4-tile DST budget.
             kwargs["program_config"] = compute_1d_prog_cfg(device, b, m_total, fp32_dest_acc_en=cfg.moe_fp32_acc)
     return ttnn.linear(a, b, **kwargs)
 

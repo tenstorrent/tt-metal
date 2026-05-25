@@ -145,6 +145,7 @@ def mtp_forward_eager(
 
     # 6. shared_head: norm + LM head
     x = mtp_shared_head_norm(x, mode="decode")
+    # Tuned LM-head helper pins HiFi4+fp32-DST to block the implicit HiFi2→LoFi drop from setting program_config.
     logits_tt = lm_head_linear(x, mtp_shared_head_w, device=device)
     ttnn.deallocate(x, force=False)
 
