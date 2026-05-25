@@ -30,7 +30,7 @@ BATCH_SIZES = [1, 2, 4, 8, 16, 20, 24, 28, 30, 32]
 # Short prompt; script will use --simulate-context-len to repeat to target ISL
 BASE_PROMPT = "Summarize the following document. "
 MAX_NEW_TOKENS = 128
-MESH_ROWS = 1
+MESH_ROWS = 4
 MESH_COLS = 8
 PREFILL_CHUNK_SIZE = 32768
 SCRIPT_PATH = "models/experimental/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py"
