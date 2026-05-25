@@ -36,8 +36,9 @@ struct TensorParameter {
     // EXACTLY match the TensorParameter's declared TensorSpec. The advanced
     // options below relax this match requirement in particular ways.
     //
-    // NOTE: These options are all default-unsafe; most kernels will NOT function
+    // NOTE: These options are UNSAFE if set to true; most kernels will not function
     // correctly if the tensor argument's spec deviates from the declared spec.
+    // Use with caution and ensure that your kernel logic is compatible.
 
     // Permit tensor arguments whose logical_shape differs from the declared shape.
     // The argument's padded_shape must still match exactly.
@@ -54,6 +55,8 @@ struct TensorParameter {
     //  - For a sharded tensor, the TensorAccessor configuration dynamically reflects the
     //    argument's actual shape. (Shape becomes an implicit runtime argument.)
     bool dynamic_tensor_shape = false;
+
+    // Additional relaxation options will be added in the future.
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api
