@@ -114,7 +114,9 @@ class MultiHeadLatentAttention(AbstractModuleBase):
         k_full = autograd_concat([k_nope, k_pe], dim=3)  # [B, H, S, qk_head]
 
         # ── Attention ──
-        attn = ttml.ops.attention.scaled_dot_product_attention(q_full, k_full, v, mask)
+        # MLA uses a causal mask; passing None lets the fused SDPA kernels generate it on chip
+        # and select their causal/balanced path instead of loading a materialized arbitrary mask.
+        attn = ttml.ops.attention.scaled_dot_product_attention(q_full, k_full, v, None)
 
         # ── Output ──
         attn = ttml.ops.multi_head_utils.heads_fusion(attn)  # [B, 1, S, n_heads * v_dim]
