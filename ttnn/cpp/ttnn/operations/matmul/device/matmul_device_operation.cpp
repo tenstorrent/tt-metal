@@ -2112,7 +2112,8 @@ MatmulParams create_matmul_attributes(
         parameters.transpose_b,
         output_tile,
         parameters.global_cb,
-        parameters.sub_device_id};
+        parameters.sub_device_id,
+        parameters.global_semaphore};
 }
 
 MatmulDeviceOperation::tensor_return_value_t matmul(

@@ -315,7 +315,8 @@ Tensor matmul(
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     std::optional<Tensor> optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -340,7 +341,8 @@ Tensor matmul(
         transpose_b,
         output_tile,
         global_cb,
-        sub_device_id};
+        sub_device_id,
+        global_semaphore};
 
     return bound_matmul(
         input_tensor_a,

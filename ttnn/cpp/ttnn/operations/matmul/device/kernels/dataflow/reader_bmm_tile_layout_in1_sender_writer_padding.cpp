@@ -13,6 +13,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/debug/device_print.h"
 
 void kernel_main() {
     // READER
@@ -699,4 +700,79 @@ void kernel_main() {
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
     noc.async_write_barrier();
+
+    // Leader-completion sync. The host appended these 5 trailing runtime args
+    // to every writer-core's runtime args (see Mcast2D program factory).
+    // rt_args_idx has already advanced past every existing read above, so the
+    // first read below picks up the first trailing arg.
+    const uint32_t is_leader_arg = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t leader_noc_x_arg = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t leader_noc_y_arg = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t leader_sem_id_arg = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t num_non_leader_arg = get_arg_val<uint32_t>(rt_args_idx++);
+    // 7 trailing args for the global-sem multicast inc. Only consumed on the leader path.
+    const uint32_t has_global_sem_arg = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t global_sem_mcast_start_x_arg = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t global_sem_mcast_start_y_arg = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t global_sem_mcast_end_x_arg = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t global_sem_mcast_end_y_arg = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t global_sem_num_dests_arg = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t global_sem_l1_addr_arg = get_arg_val<uint32_t>(rt_args_idx++);
+
+    DEVICE_PRINT(
+        "LSYNC sender_writer enter is_leader={} leader_noc=({},{}) sem_id={} num_non_leader={} has_global_sem={} "
+        "mcast=({},{})-({},{}) n_dests={} gsem_l1={}\n",
+        is_leader_arg,
+        leader_noc_x_arg,
+        leader_noc_y_arg,
+        leader_sem_id_arg,
+        num_non_leader_arg,
+        has_global_sem_arg,
+        global_sem_mcast_start_x_arg,
+        global_sem_mcast_start_y_arg,
+        global_sem_mcast_end_x_arg,
+        global_sem_mcast_end_y_arg,
+        global_sem_num_dests_arg,
+        global_sem_l1_addr_arg);
+
+    const uint32_t leader_sem_l1 = get_semaphore(leader_sem_id_arg);
+    volatile tt_l1_ptr uint32_t* leader_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(leader_sem_l1);
+
+    if (is_leader_arg == 0) {
+        // Non-leader: signal the leader's sem and wait for the inc to be acked.
+        const uint64_t leader_noc_addr = get_noc_addr(leader_noc_x_arg, leader_noc_y_arg, leader_sem_l1);
+        noc_semaphore_inc(leader_noc_addr, 1);
+        noc_async_atomic_barrier();
+        DEVICE_PRINT("LSYNC sender_writer non-leader inc done\n");
+    } else {
+        // Leader: block until every non-leader has signaled.
+        DEVICE_PRINT(
+            "LSYNC sender_writer LEADER waiting for {} sem_val_now={}\n",
+            num_non_leader_arg,
+            (uint32_t)(*leader_sem_ptr));
+        if (num_non_leader_arg > 0) {
+            noc_semaphore_wait(leader_sem_ptr, num_non_leader_arg);
+        }
+        DEVICE_PRINT("LSYNC sender_writer LEADER unblocked sem_val_now={}\n", (uint32_t)(*leader_sem_ptr));
+
+        // After the wait succeeds, multicast-inc every instance of the global sem.
+        if (has_global_sem_arg) {
+            const uint64_t gsem_mcast_noc_addr = get_noc_multicast_addr(
+                global_sem_mcast_start_x_arg,
+                global_sem_mcast_start_y_arg,
+                global_sem_mcast_end_x_arg,
+                global_sem_mcast_end_y_arg,
+                global_sem_l1_addr_arg);
+            noc_semaphore_inc_multicast(gsem_mcast_noc_addr, 1, global_sem_num_dests_arg);
+            noc_async_atomic_barrier();
+            DEVICE_PRINT(
+                "LSYNC sender_writer LEADER global_sem mcast_inc done mcast=({},{})-({},{}) n_dests={} addr={}\n",
+                global_sem_mcast_start_x_arg,
+                global_sem_mcast_start_y_arg,
+                global_sem_mcast_end_x_arg,
+                global_sem_mcast_end_y_arg,
+                global_sem_num_dests_arg,
+                global_sem_l1_addr_arg);
+        }
+    }
 }

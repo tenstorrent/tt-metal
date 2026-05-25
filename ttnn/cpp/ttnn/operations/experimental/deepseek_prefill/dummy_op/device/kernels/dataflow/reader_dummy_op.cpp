@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/device_print.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 constexpr uint32_t READ_BATCH = 8;  // tiles per NOC barrier; must be <= CB depth.
@@ -48,6 +49,12 @@ void kernel_main() {
             // Wait for host to signal completion of iter `iter` of the simulated
             // routed-expert workload. Semaphore is a monotonic counter of
             // completed iterations: initial 0, host bumps to 1, 2, ..., num_iter.
+            DEVICE_PRINT(
+                "DUMMY_OP reader core_id={} iter={} waiting for sem>={} sem_val_now={}\n",
+                core_id,
+                iter,
+                iter + 1,
+                (uint32_t)(*sem_ptr));
             noc_semaphore_wait_min(sem_ptr, iter + 1);
         }
 

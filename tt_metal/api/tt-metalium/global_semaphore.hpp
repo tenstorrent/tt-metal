@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <tuple>
+#include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -52,6 +53,10 @@ public:
     DeviceAddr address() const;
 
     void reset_semaphore_value(uint32_t reset_value) const;
+
+    // Read back the current per-shard semaphore values from device. Returns one
+    // uint32 per core in cores_, in the order cores_ enumerates them.
+    std::vector<uint32_t> read_semaphore_values() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("cores", "buffer_type");
     auto attribute_values() const { return std::make_tuple(this->cores_, this->buffer_.get_buffer()->buffer_type()); }

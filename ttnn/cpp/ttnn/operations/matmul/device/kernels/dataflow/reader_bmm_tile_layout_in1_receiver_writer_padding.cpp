@@ -11,6 +11,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
+#include "api/debug/device_print.h"
 
 void kernel_main() {
     // READER
@@ -235,4 +236,40 @@ void kernel_main() {
     cb_out.wait_front(
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
+
+    // Leader-completion sync — see matching block in the in1_sender_writer kernel.
+    const uint32_t is_leader_arg = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t leader_noc_x_arg = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t leader_noc_y_arg = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t leader_sem_id_arg = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t num_non_leader_arg = get_arg_val<uint32_t>(rt_args_idx++);
+    // 7 unused trailing args — kept so writer kernels share an arg layout.
+    rt_args_idx += 7;
+
+    DEVICE_PRINT(
+        "LSYNC receiver_writer enter is_leader={} leader_noc=({},{}) sem_id={} num_non_leader={}\n",
+        is_leader_arg,
+        leader_noc_x_arg,
+        leader_noc_y_arg,
+        leader_sem_id_arg,
+        num_non_leader_arg);
+
+    const uint32_t leader_sem_l1 = get_semaphore(leader_sem_id_arg);
+    volatile tt_l1_ptr uint32_t* leader_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(leader_sem_l1);
+
+    if (is_leader_arg == 0) {
+        const uint64_t leader_noc_addr = get_noc_addr(leader_noc_x_arg, leader_noc_y_arg, leader_sem_l1);
+        noc_semaphore_inc(leader_noc_addr, 1);
+        noc_async_atomic_barrier();
+        DEVICE_PRINT("LSYNC receiver_writer non-leader inc done\n");
+    } else {
+        DEVICE_PRINT(
+            "LSYNC receiver_writer LEADER waiting for {} sem_val_now={}\n",
+            num_non_leader_arg,
+            (uint32_t)(*leader_sem_ptr));
+        if (num_non_leader_arg > 0) {
+            noc_semaphore_wait(leader_sem_ptr, num_non_leader_arg);
+        }
+        DEVICE_PRINT("LSYNC receiver_writer LEADER unblocked sem_val_now={}\n", (uint32_t)(*leader_sem_ptr));
+    }
 }
