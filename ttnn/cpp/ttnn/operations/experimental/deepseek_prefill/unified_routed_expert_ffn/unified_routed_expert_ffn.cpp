@@ -24,24 +24,6 @@ ttnn::Tensor unified_routed_expert_ffn(
     uint32_t local_expert_id,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& output) {
-    // Small-M fallback: when this FFN is called in the single-expert path
-    // (num_routed_experts == 1, region_offset == 0, count == M), and the
-    // workload is small enough that the unified op's per-K-block mcast
-    // overhead exceeds the production block-sharded matmul pipeline, defer
-    // to the production routed_expert_ffn. This matches main's per-op
-    // kernel times at sub-block-size workloads (ds-v3-1k/1.6k/2k) without
-    // changing the multi-expert composite (which still routes via the
-    // unified custom kernel for the 4k+ band where it wins by 13-31%).
-    //
-    // Detection: num_routed_experts == 1 (= single-expert test invocation).
-    // The composite path always has num_routed_experts > 1.
-    const uint32_t num_routed_experts = static_cast<uint32_t>(counts.logical_shape()[-1]);
-    const uint32_t small_M_threshold_tiles = 64;  // ds-v3-2k (M_tiles=64) and below
-    const uint32_t M_tiles_check = x.padded_shape()[-2] / 32;
-    if (num_routed_experts == 1 && M_tiles_check <= small_M_threshold_tiles) {
-        return ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::routed_expert_ffn(
-            x, gate_proj, up_proj, down_proj, compute_kernel_config, output);
-    }
     // Single-op fused routed-expert FFN. One device Program runs gate matmul,
     // up matmul, silu, multiply, down matmul as four phases inside the same
     // kernel. The kernel reads counts[global_expert_idx_table[local_expert_id]]
