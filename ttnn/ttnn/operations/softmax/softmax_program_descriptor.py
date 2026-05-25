@@ -78,7 +78,16 @@ def create_program_descriptor(
 
     input_page_size = input_tensor.buffer_page_size()  # fp32 tile = 4096 B
     output_page_size = output_tensor.buffer_page_size()  # fp32 tile = 4096 B
-    scaler_page_size = ttnn.tile_size(ttnn.bfloat16)  # bf16 tile = 2048 B
+    # Advisory deviation from op_design.md: scaler CB is fp32, not bf16.
+    # The design table says bf16 for the scaler, but with bf16 the reduce
+    # LLK multiplies fp32 SrcA by bf16 SrcB which downcasts the product to
+    # bf16 precision (~3e-3 relative). At fp32 input precision this
+    # produces softmax sums that miss 1.0 by ~2e-3 (atol=1e-3 in the test).
+    # The scaler dataflow helper (`prepare_reduce_scaler`) explicitly
+    # supports both Float16_b and Float32 formats, so making the CB fp32
+    # preserves the full SrcA precision through the multiply-accumulate.
+    scaler_dtype = ttnn.float32
+    scaler_page_size = ttnn.tile_size(scaler_dtype)  # fp32 tile = 4096 B
 
     # ------- Core grid + work distribution -------
     device = input_tensor.device()
@@ -127,7 +136,7 @@ def create_program_descriptor(
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_MAX_SCALER,
-                    data_format=ttnn.bfloat16,
+                    data_format=scaler_dtype,
                     page_size=scaler_page_size,
                 )
             ],
@@ -138,7 +147,7 @@ def create_program_descriptor(
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_SUM_SCALER,
-                    data_format=ttnn.bfloat16,
+                    data_format=scaler_dtype,
                     page_size=scaler_page_size,
                 )
             ],
