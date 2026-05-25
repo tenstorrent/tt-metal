@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <bit>
 #include <functional>
 #include <limits>
@@ -844,23 +845,19 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate DM kernel disable_implicit_sync entries.
     //
     // Implicit sync is a Gen2-only, DM-only mechanism (ISR-based credit posting from NoC
-    // transaction completion). Each DM kernel can opt out per-DFB via its
-    // Gen2DataMovementConfig::disable_implicit_sync vector. The entry's bool applies to the
-    // side(s) of the DFB this kernel binds (producer, consumer, or both for a self-loop).
+    // transaction completion). Each DM kernel can opt out per-DFB by listing the DFB's name
+    // in its Gen2DataMovementConfig::disable_implicit_sync vector. The opt-out applies to
+    // the side(s) of the DFB this kernel binds (producer, consumer, or both for a self-loop).
     //
     // Per-kernel rules:
-    //   - Every entry references a DFB the kernel binds.
-    //   - No duplicate entries for the same DFB on a single kernel.
+    //   - Every listed name references a DFB the kernel binds.
+    //   - No duplicate names in a single kernel's vector.
     //
     // Cross-kernel rules (per DFB):
-    //   - All DM producers must agree on the disable value for this DFB.
-    //   - All DM consumers must agree on the disable value for this DFB.
+    //   - All DM producers must agree: either all list the DFB, or none do.
+    //   - All DM consumers must agree the same way.
     //   - Producer-side and consumer-side are checked independently — the underlying hardware
     //     mechanism is per-side.
-    //
-    // Default (no entry, or entry false) is "implicit sync enabled" for this kernel's role on
-    // the DFB. So a kernel with no entry implicitly votes false; the validator treats this as
-    // a vote for false and checks all DM kernels on each side agree.
     {
         // Per-kernel pass: typo guards + duplicate guards.
         for (const auto& kernel : spec.kernels) {
@@ -876,7 +873,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 bound_dfbs.insert(binding.dfb_spec_name);
             }
             std::unordered_set<DFBSpecName> entries_seen;
-            for (const auto& [dfb_name, _value] : dm_config.gen2_data_movement_config->disable_implicit_sync) {
+            for (const auto& dfb_name : dm_config.gen2_data_movement_config->disable_implicit_sync) {
                 TT_FATAL(
                     bound_dfbs.contains(dfb_name),
                     "Kernel '{}' disable_implicit_sync entry references DFB '{}', which the kernel does not bind",
@@ -896,12 +893,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (!dm_config.gen2_data_movement_config.has_value()) {
                 return false;
             }
-            for (const auto& [name, val] : dm_config.gen2_data_movement_config->disable_implicit_sync) {
-                if (name == dfb_name) {
-                    return val;
-                }
-            }
-            return false;
+            const auto& vec = dm_config.gen2_data_movement_config->disable_implicit_sync;
+            return std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
         };
         auto check_side_agreement =
             [&](const std::vector<CollectedSpecData::DFBEndpointInfo::EndpointRecord>& endpoints,
@@ -921,15 +914,15 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     }
                     TT_FATAL(
                         vote == canonical_vote,
-                        "DFB '{}' has disagreeing disable_implicit_sync votes on the {} side: "
-                        "kernel '{}' votes {}, kernel '{}' votes {}. All DM {} kernels of a DFB must "
-                        "agree (the hardware programs a single mask per side).",
+                        "DFB '{}' has disagreeing disable_implicit_sync state on the {} side: "
+                        "kernel '{}' {} list the DFB, kernel '{}' {}. All DM {} kernels of a DFB "
+                        "must agree (the hardware programs a single mask per side).",
                         dfb_name,
                         side_label,
                         canonical->unique_id,
-                        canonical_vote,
+                        canonical_vote ? "does" : "does not",
                         ep.kernel->unique_id,
-                        vote,
+                        vote ? "does" : "does not",
                         side_label);
                 }
             };
@@ -2046,11 +2039,9 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
             if (!dm_config.gen2_data_movement_config.has_value()) {
                 continue;
             }
-            for (const auto& [name, val] : dm_config.gen2_data_movement_config->disable_implicit_sync) {
-                if (name == dfb_spec->unique_id) {
-                    disabled = val;
-                    break;
-                }
+            const auto& vec = dm_config.gen2_data_movement_config->disable_implicit_sync;
+            if (std::find(vec.begin(), vec.end(), dfb_spec->unique_id) != vec.end()) {
+                disabled = true;
             }
         }
         return any_dm && !disabled;

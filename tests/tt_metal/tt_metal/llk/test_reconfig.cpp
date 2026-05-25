@@ -465,13 +465,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
-                        .disable_implicit_sync =
-                            {{INP0_DFB, true},
-                             {INP1_DFB, true},
-                             {INP2_DFB, true},
-                             {INP3_DFB, true},
-                             {INP4_DFB, true},
-                             {INP5_DFB, true}}}},
+                        .disable_implicit_sync = {INP0_DFB, INP1_DFB, INP2_DFB, INP3_DFB, INP4_DFB, INP5_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -490,7 +484,7 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
-                        .disable_implicit_sync = {{OUT_DFB, true}}}},
+                        .disable_implicit_sync = {OUT_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{

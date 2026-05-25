@@ -89,10 +89,10 @@ struct DataMovementConfiguration {
         // endpoints (the ISR fires on NoC-transaction completion; compute kernels have no
         // NoC traffic).
         //
-        // Default (no entry, or entry false) is to use implicit sync on Gen2 hardware for
-        // this kernel's role on the named DFB. An entry with value `true` opts this kernel
-        // out for that DFB. Each entry's bool applies to whichever side(s) of the DFB this
-        // kernel binds (producer, consumer, or both for a self-loop).
+        // Default is implicit sync ENABLED on Gen2 for any DFB this kernel binds. List a
+        // DFB's name here to opt this kernel out of implicit sync for that DFB; the opt-out
+        // applies to whichever side(s) of the DFB this kernel binds (producer, consumer,
+        // or both for a self-loop).
         //
         // Use cases for opting out:
         //   - Performance tuning: ISR dispatch overhead in a tight inner loop.
@@ -100,10 +100,10 @@ struct DataMovementConfiguration {
         //   - Mixed kernel styles during porting.
         //
         // Validation: if multiple DM kernels are bound as producers (or as consumers) of
-        // the same DFB, they MUST agree on this setting for that DFB. Mismatch is a spec
-        // error. Producer-side and consumer-side are checked independently.
-        using DisableImplicitSyncEntry = std::pair<DFBSpecName, bool>;
-        std::vector<DisableImplicitSyncEntry> disable_implicit_sync;
+        // the same DFB, they MUST agree on this setting — either all list the DFB here, or
+        // none do. Mismatch is a spec error. Producer-side and consumer-side are checked
+        // independently.
+        std::vector<DFBSpecName> disable_implicit_sync;
     };
     std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
 };

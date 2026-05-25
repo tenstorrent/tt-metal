@@ -40,16 +40,21 @@ struct DataflowBufferConfig {
     uint16_t consumer_risc_mask = 0x0;  // bits 0-7 = DM riscs, bits 8-15 = Tensix riscs
     uint8_t num_consumers = 1;
     AccessPattern cap = AccessPattern::STRIDED;
+
+    // Implicit sync:
+    // When true, both producer and consumer kernels use the streamlined implicit sync syntax
+    // (This ONLY applies to DM riscs; Tensix riscs always require explicit sync.)
     bool enable_implicit_sync = false;
-    // Per-endpoint override for implicit sync. When std::nullopt, the consumer side follows
-    // enable_implicit_sync. When set, the consumer side follows this value; the producer
-    // side still follows enable_implicit_sync. This is the per-endpoint override that the
-    // Metal 2.0 spec-layer translation uses to express asymmetric setups.
-    //
-    // For per-endpoint queries, prefer the producer_implicit_sync_active(config) /
-    // consumer_implicit_sync_active(config) free functions below; read this field directly
-    // only at the host-side translation site.
+
+    // By default, the producer and consumer sides share the same implicit sync setting
+    // However, you can "flip" the behavior of the consumer side to create
+    //  - explicit producer + implicit consumer
+    //  - implicit producer + explicit consumer)
+    // This is rarely (if ever) useful, hence why it's a std::optional rather than plain bool.
+    // The option exists primarily to simplify legality check coupling in Metal 2.0.
     std::optional<bool> override_consumer_implicit_sync = std::nullopt;
+
+    // Data format and tile formats for LLKs
     DataFormat data_format = tt::DataFormat::Float16_b;
     std::optional<Tile> tile = std::nullopt;
     // Set only when both producer and consumer are the same compute kernel

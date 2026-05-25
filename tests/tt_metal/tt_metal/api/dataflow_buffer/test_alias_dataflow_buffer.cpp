@@ -117,15 +117,13 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
         .gen1_data_movement_config =
             DataMovementConfiguration::Gen1DataMovementConfig{.processor = DataMovementProcessor::RISCV_0},
         .gen2_data_movement_config =
-            DataMovementConfiguration::Gen2DataMovementConfig{
-                .disable_implicit_sync = {{"dfb_a", true}, {"dfb_b", true}}},
+            DataMovementConfiguration::Gen2DataMovementConfig{.disable_implicit_sync = {"dfb_a", "dfb_b"}},
     };
     const DataMovementConfiguration consumer_cfg{
         .gen1_data_movement_config =
             DataMovementConfiguration::Gen1DataMovementConfig{.processor = DataMovementProcessor::RISCV_1},
         .gen2_data_movement_config =
-            DataMovementConfiguration::Gen2DataMovementConfig{
-                .disable_implicit_sync = {{"dfb_a", true}, {"dfb_b", true}}},
+            DataMovementConfiguration::Gen2DataMovementConfig{.disable_implicit_sync = {"dfb_a", "dfb_b"}},
     };
 
     DataflowBufferSpec dfb_a{
@@ -320,15 +318,13 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
         .gen1_data_movement_config =
             DataMovementConfiguration::Gen1DataMovementConfig{.processor = DataMovementProcessor::RISCV_0},
         .gen2_data_movement_config =
-            DataMovementConfiguration::Gen2DataMovementConfig{
-                .disable_implicit_sync = {{"dfb_borrowed", true}, {"dfb_alias", true}}},
+            DataMovementConfiguration::Gen2DataMovementConfig{.disable_implicit_sync = {"dfb_borrowed", "dfb_alias"}},
     };
     const DataMovementConfiguration consumer_cfg{
         .gen1_data_movement_config =
             DataMovementConfiguration::Gen1DataMovementConfig{.processor = DataMovementProcessor::RISCV_1},
         .gen2_data_movement_config =
-            DataMovementConfiguration::Gen2DataMovementConfig{
-                .disable_implicit_sync = {{"dfb_borrowed", true}, {"dfb_alias", true}}},
+            DataMovementConfiguration::Gen2DataMovementConfig{.disable_implicit_sync = {"dfb_borrowed", "dfb_alias"}},
     };
 
     // dfb_borrowed: backed by ring_tensor (L1)
