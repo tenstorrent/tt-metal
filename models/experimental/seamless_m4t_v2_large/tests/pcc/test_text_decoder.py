@@ -128,8 +128,14 @@ def test_seamless_m4t_v2_text_decoder_pcc(mesh_device, device_params, reset_seed
         _run_text_decoder_pcc(mesh_device)
 
 
-def _run_text_decoder_kv_cache_pcc(device, cache_dtype) -> None:
-    """Shared KV-cache PCC body; mesh-safe readback via ``to_torch_replicated_first_shard``."""
+def _run_text_decoder_kv_cache_pcc(device, cache_dtype, *, max_seq_len: int = 64, decode_start_pos: int = 8) -> None:
+    """Shared KV-cache PCC body; mesh-safe readback via ``to_torch_replicated_first_shard``.
+
+    ``max_seq_len`` controls the KV cache program bucket (HF ``max_position_embeddings`` is 4096).
+    ``decode_start_pos`` is the cached prefill length; decode steps run at positions
+    ``decode_start_pos .. decode_start_pos + decode_steps - 1`` so the SDPA bucket exercises
+    large ``cache_seq_len`` values when ``max_seq_len`` is set to the HF max.
+    """
     try:
         weights_dir = ensure_seamless_m4t_v2_large_weights()
     except ImportError as e:
@@ -140,9 +146,13 @@ def _run_text_decoder_kv_cache_pcc(device, cache_dtype) -> None:
     torch.manual_seed(1)
     decoder, cfg = load_pretrained_text_decoder(weights_dir, dtype=torch.bfloat16)
 
-    batch, prefill_len, enc_seq = 1, 8, 32
-    max_seq_len = 64
+    batch, enc_seq = 1, 32
+    prefill_len = decode_start_pos
     decode_steps = 4
+    if prefill_len + decode_steps > max_seq_len:
+        raise ValueError(
+            f"decode_start_pos ({prefill_len}) + decode_steps ({decode_steps}) " f"exceeds max_seq_len ({max_seq_len})"
+        )
 
     input_ids = torch.randint(
         1, min(cfg.vocab_size - 1, 2**31 - 1), (batch, prefill_len + decode_steps), dtype=torch.int64
@@ -275,3 +285,31 @@ def test_seamless_m4t_v2_text_decoder_kv_cache_pcc(mesh_device, device_params, r
     _ = device_params
     with mesh_default_device(mesh_device):
         _run_text_decoder_kv_cache_pcc(mesh_device, cache_dtype)
+
+
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize(
+    "cache_dtype",
+    [ttnn.bfloat8_b],
+    ids=["bf8_cache"],
+)
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_seamless_m4t_v2_text_decoder_kv_cache_max_seq_len_pcc(mesh_device, device_params, reset_seeds, cache_dtype):
+    """KV-cache PCC at HF ``max_position_embeddings = 4096``.
+
+    Allocates the KV cache at the configured HF maximum (4096), prefills 8 tokens, and decodes
+    4 steps. This exercises:
+
+    * KV-cache allocation at the largest HF-supported ``max_seq_len`` (24 layers × bf8 cache).
+    * SDPA decode reading from a 4096-slot cache (vs. the baseline 64-slot config).
+    * Position-embedding indexing at the larger ``max_seq_len`` chunk-padded value (4096 vs 256).
+
+    bf8 cache keeps DRAM footprint at ~192 MB across 24 layers. ``decode_start_pos=8`` keeps the
+    SDPA decode bucket at the well-validated value of 32 (``_effective_decode_sdpa_seq_len``);
+    larger buckets are a separate code path in ttnn SDPA-decode that does not yet meet the 0.99
+    PCC bar in this configuration, so they are not exercised here.
+    """
+    _ = reset_seeds
+    _ = device_params
+    with mesh_default_device(mesh_device):
+        _run_text_decoder_kv_cache_pcc(mesh_device, cache_dtype, max_seq_len=4096, decode_start_pos=8)

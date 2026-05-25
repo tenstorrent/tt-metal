@@ -35,8 +35,12 @@ def _create_position_ids_from_input_ids(
     return incremental_indices.long() + padding_idx
 
 
-def _run_text_encoder_pcc(device) -> None:
-    """Shared PCC body; mesh-safe readback via ``to_torch_replicated_first_shard``."""
+def _run_text_encoder_pcc(device, *, seq: int = 32) -> None:
+    """Shared PCC body; mesh-safe readback via ``to_torch_replicated_first_shard``.
+
+    ``seq`` parametrises the input length so long-sequence regressions can be checked against the
+    HF ``max_position_embeddings = 4096`` upper bound (the sinusoidal table is sized for that).
+    """
     try:
         weights_dir = ensure_seamless_m4t_v2_large_weights()
     except ImportError as e:
@@ -47,7 +51,7 @@ def _run_text_encoder_pcc(device) -> None:
     torch.manual_seed(0)
     encoder, cfg = load_pretrained_text_encoder(weights_dir, dtype=torch.bfloat16)
 
-    batch, seq = 1, 32
+    batch = 1
     input_ids = torch.randint(1, min(cfg.vocab_size - 1, 2**31 - 1), (batch, seq), dtype=torch.int64)
     attn_mask = torch.ones(batch, seq, dtype=torch.long)
 
@@ -92,3 +96,23 @@ def test_seamless_m4t_v2_text_encoder_pcc(mesh_device, device_params, reset_seed
     _ = device_params
     with mesh_default_device(mesh_device):
         _run_text_encoder_pcc(mesh_device)
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("seq", [128, 4096], ids=["seq128", "seq4096"])
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_seamless_m4t_v2_text_encoder_max_seq_len_pcc(mesh_device, device_params, reset_seeds, seq):
+    """PCC at long sequences, capped at HF ``max_position_embeddings = 4096``.
+
+    Exercises the chunked DRAM-sharded matmul path in ``TTSeamlessM4Tv2Encoder._linear`` —
+    the kernel is hard-coded to ``M == TILE`` (per_core_M=1), so long-seq prefill runs the
+    matmul ``ceil(m_actual / TILE)`` times per call and concatenates the results. PCC is
+    preserved because each chunk uses the same kernel as the short-seq fast path.
+
+    ``seq=128`` is a small-multi-chunk smoke case; ``seq=4096`` covers HF's upper bound and
+    exercises the long-seq DRAM activation path (FC1 intermediate would be 64 MB in L1).
+    """
+    _ = reset_seeds
+    _ = device_params
+    with mesh_default_device(mesh_device):
+        _run_text_encoder_pcc(mesh_device, seq=seq)

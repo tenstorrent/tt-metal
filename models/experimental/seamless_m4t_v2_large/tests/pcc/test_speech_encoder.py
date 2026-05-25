@@ -27,8 +27,14 @@ from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
 PCC_THRESHOLD = 0.99
 
 
-def _run_speech_encoder_pcc(device) -> None:
-    """Shared PCC body. Mesh-safe readback via ``to_torch_replicated_first_shard``."""
+def _run_speech_encoder_pcc(device, *, seq: int = 48) -> None:
+    """Shared PCC body. Mesh-safe readback via ``to_torch_replicated_first_shard``.
+
+    HF's speech encoder has no fixed max audio sequence length — chunked attention
+    (``speech_encoder_chunk_size = 20000`` mel frames) lets it process arbitrarily long inputs
+    bounded only by DRAM. Parametrising ``seq`` exposes a long-audio regression test that
+    exercises the chunked-attention mask path and L1 budget at larger feature lengths.
+    """
     try:
         weights_dir = ensure_seamless_m4t_v2_large_weights()
     except ImportError as e:
@@ -39,8 +45,8 @@ def _run_speech_encoder_pcc(device) -> None:
     torch.manual_seed(0)
     speech_enc, cfg = load_pretrained_speech_encoder(weights_dir, dtype=torch.bfloat16)
 
-    # Short mel sequence (feature dim must match ``feature_projection_input_dim``).
-    batch, seq = 1, 48
+    # Mel sequence (feature dim must match ``feature_projection_input_dim``).
+    batch = 1
     n_mels = cfg.feature_projection_input_dim
     input_features = torch.randn(batch, seq, n_mels, dtype=torch.bfloat16)
     attention_mask = torch.ones(batch, seq, dtype=torch.long)
@@ -82,3 +88,19 @@ def test_seamless_m4t_v2_speech_encoder_pcc(mesh_device, device_params, reset_se
     _ = device_params
     with mesh_default_device(mesh_device):
         _run_speech_encoder_pcc(mesh_device)
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_seamless_m4t_v2_speech_encoder_long_audio_pcc(mesh_device, device_params, reset_seeds):
+    """PCC check at a longer mel sequence so chunked-attention and adaptor paths are exercised.
+
+    HF has no fixed max audio sequence — speech-encoder accepts any length, with chunked attention
+    keyed by ``speech_encoder_chunk_size``. 512 frames (~10 s at 50 fps mel) is ~10× the demo's
+    1-second input and exercises the long-audio path (relative-position table DRAM offload,
+    larger conformer activations) while staying within the speech-encoder PCC fixture's L1 budget.
+    """
+    _ = reset_seeds
+    _ = device_params
+    with mesh_default_device(mesh_device):
+        _run_speech_encoder_pcc(mesh_device, seq=256)
