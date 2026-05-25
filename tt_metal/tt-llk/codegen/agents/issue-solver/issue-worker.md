@@ -105,11 +105,19 @@ Do not revert unrelated work.
    | `ENV_ERROR` | missing venv, missing sim, lock/env issue | stop; not a code bug |
 
 2. Check `.claude/references/common-errors.md`.
-3. Inspect the smallest relevant file set.
-4. If a targeted code fix is clear, edit it.
-5. If the failure reveals missing scope, update `codegen/artifacts/issue_<number>_fix_plan.md` and apply the added scope.
-6. If the failure refutes the primary hypothesis, write a `## Hypothesis Refutation` section and return `HYPOTHESIS_REFUTED`.
-7. Run a narrow compile check only when `TEST_BACKEND=local`, fast, and relevant. For `TEST_BACKEND=ttsim`, do not run compile or pytest commands directly; the orchestrator will re-run `tester.md`.
+3. When `TEST_BACKEND=local` and inspecting generated assembly or resolving a crash address is helpful:
+
+   ```bash
+   SFPI_BIN="$WORKTREE_DIR/tt_metal/tt-llk/tests/sfpi/compiler/bin"
+   $SFPI_BIN/riscv-tt-elf-objdump -d <elf>        # disassemble
+   $SFPI_BIN/riscv-tt-elf-addr2line -e <elf> <addr>  # resolve address
+   ```
+
+4. Inspect the smallest relevant file set.
+5. If a targeted code fix is clear, edit it.
+6. If the failure reveals missing scope, update `codegen/artifacts/issue_<number>_fix_plan.md` and apply the added scope.
+7. If the failure refutes the primary hypothesis, write a `## Hypothesis Refutation` section and return `HYPOTHESIS_REFUTED`.
+8. Run a narrow compile check only when `TEST_BACKEND=local`, fast, and relevant. For `TEST_BACKEND=ttsim`, do not run compile or pytest commands directly; the orchestrator will re-run `tester.md`.
 
 ## Plan Artifact
 

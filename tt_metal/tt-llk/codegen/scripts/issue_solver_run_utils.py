@@ -25,7 +25,7 @@ def _atomic_write(path: Path, text: str) -> None:
     try:
         with os.fdopen(fd, "w") as f:
             f.write(text)
-        os.chmod(tmp, 0o664)
+        os.chmod(tmp, 0o644)
         os.replace(tmp, path)
     except Exception:
         if os.path.exists(tmp):

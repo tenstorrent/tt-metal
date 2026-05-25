@@ -323,6 +323,7 @@ def test_init_accepts_sibling_runs(tmp_path):
 
 
 def test_init_accepts_single_run_multi_arch_patch(tmp_path):
+    """init with a multi-arch patch-json stores target_arches, arch_results, and multi_arch_run."""
     arch_results = {
         "wormhole": {"status": "pending"},
         "blackhole": {"status": "pending"},
@@ -359,6 +360,7 @@ def test_init_accepts_single_run_multi_arch_patch(tmp_path):
 
 
 def test_metric_merges_nested_arch_results(tmp_path):
+    """metric deep-merges per-arch entries so updating one arch does not wipe the others."""
     _run(
         tmp_path,
         "init",
@@ -407,6 +409,7 @@ def test_metric_merges_nested_arch_results(tmp_path):
 
 
 def test_metric_accepts_dotted_keys_as_nested_compatibility(tmp_path):
+    """metric expands dotted keys (e.g. arch_results.wormhole.verdict) into nested dicts."""
     _run(
         tmp_path,
         "init",
@@ -458,6 +461,7 @@ def test_link_siblings_replaces_sibling_runs(tmp_path):
 
 
 def test_link_siblings_sets_issue_run_id(tmp_path):
+    """link-siblings --issue-run-id sets the shared issue_run_id used for dashboard grouping."""
     _run(
         tmp_path,
         "init",
