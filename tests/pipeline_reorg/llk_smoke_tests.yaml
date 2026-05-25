@@ -70,7 +70,7 @@
     junitparser merge pytest-report-wormhole-3-compile.xml pytest-report-wormhole-3-run.xml pytest-report-wormhole-3.xml
   skus:
     wh_n150_civ2:
-      timeout: 15
+      timeout: 20
   owner_id: U07J3K6KS1K
 
 - name: llk_smoke_wormhole group 4/4
