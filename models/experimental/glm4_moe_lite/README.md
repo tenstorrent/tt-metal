@@ -3,7 +3,8 @@
 **Model:** zai-org/GLM-4.7-Flash (47 layers, MLA attention, MoE, 4.7B params)
 **Hardware (T3K):** 8 Wormhole devices; tested with mesh shapes 1x4 (4 devices), 1x8 (8 devices), and 2x4 (8 devices, matching T3K physical topology)
 **Hardware (Galaxy):** 32 Wormhole B0 devices; 4x8 mesh
-**Dispatch:** `DispatchCoreType.ETH` (all 64 Tensix cores per device available for compute)
+**Hardware (Blackhole QB-2):** 4 Blackhole devices; 1x4 mesh; `DispatchCoreType.WORKER` (ETH dispatch not supported on Blackhole)
+**Dispatch:** `DispatchCoreType.ETH` on Wormhole (all 64 Tensix cores for compute); `DispatchCoreType.WORKER` on Blackhole
 
 **Current best decode latency (Galaxy, batch=1):** ~74.8 ms @ ISL=128, ~75.4 ms @ ISL=512, ~77.3 ms @ ISL=1024 (~13.4 tok/s)
 **Current best aggregate TPS (Galaxy, batch=32):** ~367 tok/s @ ISL=128, ~358 tok/s @ ISL=512, ~350 tok/s @ ISL=1024
@@ -108,7 +109,7 @@ python models/experimental/glm4_moe_lite/scripts/run_sweep_isl_batch.py \
   --batch 1
 ```
 
-> **Note:** The sweep script (`run_sweep_isl_batch.py`) already sets `EXPERTS_TT_DTYPE=bf4`, `TP=1`, `FUSE_MLP_MOE_REDUCE=1`, and `SKIP_TYPECAST=1` internally — no need to pass them on the command line.
+> **Note:** The sweep script (`run_sweep_isl_batch.py`) already sets `EXPERTS_TT_DTYPE=bf4`, `TP=1`, `FUSE_MLP_MOE_REDUCE=1`, and `SKIP_TYPECAST=1` internally — no need to pass them on the command line. On Blackhole QB-2, add `--mesh-rows 1 --mesh-cols 4 --timeout 3600` (longer timeout needed due to avoid timeout error).
 
 ---
 
