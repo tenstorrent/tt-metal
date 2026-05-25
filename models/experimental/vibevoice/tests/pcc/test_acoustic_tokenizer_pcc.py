@@ -169,7 +169,9 @@ def test_acoustic_tokenizer_decode_pcc(mesh_device, ac_tok_state, vv_config, ac_
     ref_compare = ref_dec.to(torch.float32).squeeze()  # [T_audio]
     T_min = min(ref_compare.shape[-1], tt_dec_torch.shape[-1])
 
-    # Decoder uses 6 transposed convolutions in bfloat16 (vs float32 reference);
-    # fp32 accumulation (HiFi4) is used but bf16 activations limit PCC to ~0.989.
+    # The decoder runs 6 large-stride transposed convolutions in bfloat16; fp32
+    # accumulation (HiFi4) is used but bfloat16 intermediate activations cap
+    # PCC vs a float32 reference at ~0.989.  ttnn.conv2d does not support
+    # dtype=float32 on Blackhole, so the floor cannot be raised further.
     passed, pcc_val = comp_pcc(ref_compare[:T_min], tt_dec_torch[:T_min], pcc=0.98)
     assert passed, f"Acoustic tokenizer decode PCC {pcc_val:.6f} < 0.98"

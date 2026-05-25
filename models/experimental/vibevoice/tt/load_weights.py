@@ -112,6 +112,17 @@ def remap_lm_keys_to_tt_transformers(vv_lm_dict: Dict[str, torch.Tensor]) -> Dic
     return remap
 
 
+def load_speech_scale_bias(state_dict: Dict[str, torch.Tensor]):
+    """Return (scaling_factor, bias_factor) from checkpoint, or (None, None) if unset."""
+    sf = state_dict.get("model.speech_scaling_factor")
+    bf = state_dict.get("model.speech_bias_factor")
+    if sf is None or bf is None:
+        return None, None
+    if torch.isnan(sf).any() or torch.isnan(bf).any():
+        return None, None
+    return float(sf.item()), float(bf.item())
+
+
 def fold_weight_norm(state: Dict[str, torch.Tensor], prefix: str = "") -> Dict[str, torch.Tensor]:
     """Fold weight_norm parametrization (weight_g + weight_v → weight) for conv layers.
 
