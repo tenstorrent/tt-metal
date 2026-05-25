@@ -7,6 +7,7 @@
 #include <circular_buffer_config.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>
+#include <tt-metalium/internal/service/service_core_manager.hpp>
 #include <enchantum/enchantum.hpp>
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "impl/buffers/semaphore.hpp"
@@ -1485,11 +1486,34 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
 
 void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* device) {
     auto grid_size = device->compute_with_storage_grid_size();
+    // Service cores live outside `compute_with_storage_grid_size()` by design
+    // (they are dispatch-column cores excluded from the worker grid). Allow
+    // CBs whose CoreRange lies entirely on cores currently claimed via
+    // ServiceCoreManager — the runtime CB allocation path still needs to be
+    // taught about service-core L1 (the worker-grid base address is wrong),
+    // but the up-front shape check shouldn't reject these ranges outright.
+    const auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+    const auto claimed_on_device = svc.claimed_cores(device->id());
+    auto entirely_on_service_cores = [&](const CoreRange& cr) {
+        if (claimed_on_device.empty()) {
+            return false;
+        }
+        for (uint32_t x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
+            for (uint32_t y = cr.start_coord.y; y <= cr.end_coord.y; ++y) {
+                if (claimed_on_device.count(CoreCoord{x, y}) == 0) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
     for (const auto& cb : circular_buffers_) {
         for (const auto& cr : cb->core_ranges().ranges()) {
+            const bool in_worker_grid = cr.end_coord.x < grid_size.x && cr.end_coord.y < grid_size.y;
             TT_FATAL(
-                cr.end_coord.x < grid_size.x && cr.end_coord.y < grid_size.y,
-                "Circular buffer core range {} in program {} exceeds device compute grid ({}x{})",
+                in_worker_grid || entirely_on_service_cores(cr),
+                "Circular buffer core range {} in program {} exceeds device compute grid ({}x{}) and is "
+                "not entirely on cores claimed via ServiceCoreManager",
                 cr.str(),
                 this->id,
                 grid_size.x,

@@ -157,7 +157,15 @@ DeviceAddr ServiceCoreManager::allocate_l1(IDevice* device, CoreCoord core, size
         dit != impl_->devices.end() && dit->second.cores.contains(core),
         "internal::ServiceCoreManager::allocate_l1 called on unclaimed core {}",
         core);
-    auto addr = dit->second.cores.at(core).alloc->allocate(size);
+    // Allocate top-down (`bottom_up=false`) to mirror the worker-grid convention:
+    // CBs grow up from DEFAULT_UNRESERVED (allocate_circular_buffers in program.cpp
+    // stacks bottom-up from `get_base_allocator_addr(L1)`), and L1 user buffers grow
+    // down from L1_END (Buffer's default for L1). Service-core kernels run programs
+    // that use the same CB allocator, so allocating service-core L1 bottom-up here
+    // would put service buffers at the exact same DEFAULT_UNRESERVED address the CB
+    // allocator picks — clobbering each other on the same core. Top-down keeps the
+    // two zones disjoint until OOM, just like a normal worker core.
+    auto addr = dit->second.cores.at(core).alloc->allocate(size, /*bottom_up=*/false);
     TT_FATAL(addr.has_value(), "internal::ServiceCoreManager: L1 OOM on core {} ({} bytes requested)", core, size);
     return *addr;
 }

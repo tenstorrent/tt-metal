@@ -24,6 +24,7 @@
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
 #include "../../../unified_kernels/termination.hpp"
+#include "api/debug/dprint.h"
 
 // CT-arg layout (must stay in sync with build_persistent_h2d_program in
 // ttnn/core/tensor/socket_services.cpp). termination_semaphore_addr is placed
@@ -72,6 +73,14 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
 
     bool terminated = false;
+    DPRINT << "Number of socket pages: " << num_socket_pages << ENDL();
+    DPRINT << "Socket Page Size: " << socket_page_size << ENDL();
+    DPRINT << "Bytes Sent Address: " << receiver_socket.bytes_sent_addr << ENDL();
+    DPRINT << "Bytes sent value: " << *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_socket.bytes_sent_addr) << ENDL();
+    DPRINT << "Is H2D: " << receiver_socket.is_h2d << ENDL();
+    DPRINT << "PCIe XY Enc: " << pcie_xy_enc << ENDL();
+    DPRINT << "Socket Config Address: " << socket_config_addr << ENDL();
+    DPRINT << "CB L1 Address: " << cb_l1_addr << ENDL();
     while (!terminated) {
         // Drain exactly one full tensor's worth of data: num_socket_pages chunks.
         for (uint32_t chunk = 0; chunk < num_socket_pages; ++chunk) {

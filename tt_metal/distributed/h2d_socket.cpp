@@ -4,6 +4,7 @@
 
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/internal/service/service_core_manager.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
@@ -202,12 +203,16 @@ void H2DSocket::write_socket_metadata(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const PinnedBufferInfo& bytes_acked_info,
     const PinnedBufferInfo& data_info) {
-    const auto& core_to_core_id = config_buffer_->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
-
+    // init_config_buffer hardcodes num_cores = 1, so the config buffer always
+    // has exactly one slot at index 0. The previous lookup through
+    // `get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id` was a
+    // no-op dance — and it segfaults on the explicit-address service-core path,
+    // since MeshBuffer::create with an address doesn't construct a backing
+    // buffer (see mesh_buffer.cpp's address-provided branch).
     std::vector<receiver_socket_md> config_data(
         config_buffer_->size() / sizeof(receiver_socket_md), receiver_socket_md());
 
-    auto& md = config_data[core_to_core_id.at(recv_core_.core_coord)];
+    auto& md = config_data[0];
     md.bytes_sent = 0;
     md.bytes_acked = 0;
     md.read_ptr = aligned_data_buf_start_;
@@ -220,8 +225,28 @@ void H2DSocket::write_socket_metadata(
     md.h2d.data_addr_hi = data_info.addr_hi;
     md.h2d.pcie_xy_enc = bytes_acked_info.pcie_xy_enc;
 
-    distributed::WriteShard(
-        mesh_device->mesh_command_queue(0), config_buffer_, config_data, recv_core_.device_coord, true);
+    std::cout << "Bytes Acked Address: " << md.h2d.bytes_acked_addr_hi << " " << md.h2d.bytes_acked_addr_lo << std::endl;
+    std::cout << "Data Address: " << md.h2d.data_addr_hi << " " << md.h2d.data_addr_lo << std::endl;
+    std::cout << "PCIe Enc: " << md.h2d.pcie_xy_enc << std::endl;
+    if (svc_config_l1_addr_.has_value()) {
+        // Service-core path: MeshCommandQueue dispatch has no context of
+        // service cores, so WriteShard would silently miss. Write directly
+        // to the receiver core's L1 via the synchronous WriteToDeviceL1
+        // helper. The receiver_socket_md is a POD; reinterpret as raw bytes
+        // for WriteToDeviceL1's span overload.
+        //
+        // NB: pull the address from `config_buffer_` directly — the ctor only
+        // assigns `config_buffer_address_` AFTER write_socket_metadata returns,
+        // so it's still 0 here. The previous WriteShard path didn't notice
+        // because it used `config_buffer_` (the shared_ptr) directly.
+        auto* device = mesh_device->get_device(recv_core_.device_coord);
+        std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(&md), sizeof(md));
+        tt::tt_metal::detail::WriteToDeviceL1(
+            device, recv_core_.core_coord, static_cast<uint32_t>(config_buffer_->address()), bytes);
+    } else {
+        distributed::WriteShard(
+            mesh_device->mesh_command_queue(0), config_buffer_, config_data, recv_core_.device_coord, true);
+    }
 }
 
 void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id) {
@@ -232,27 +257,27 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
 
     const auto& cluster = MetalContext::instance().get_cluster();
 
-    if (mesh_device) {
+    // if (mesh_device) {
         recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
         recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core_.core_coord);
         receiver_core_tlb_ = cluster.get_driver()
                                  ->get_chip(recv_device_id)
                                  ->get_tlb_manager()
                                  ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
-    } else {
-        recv_device_id = device_id.value();
-        recv_virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
-            recv_device_id, recv_core_.core_coord, CoreType::TENSIX);
-    }
-    auto arch = MetalContext::instance().hal().get_arch();
-    if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
-        // This process owns a mesh_device and hence has statically initialized TLBs.
-        // Entire device address space for Blackhole is statically mapped.
-        // Safe to use static TLBs without requiring the driver to do a reconfig.
-        pcie_writer = [&](void* data, uint32_t num_bytes, uint64_t device_addr) {
-            receiver_core_tlb_->write_block(device_addr, data, num_bytes);
-        };
-    } else {
+    // } else {
+        // recv_device_id = device_id.value();
+        // recv_virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+        //     recv_device_id, recv_core_.core_coord, CoreType::TENSIX);
+    // }
+    // auto arch = MetalContext::instance().hal().get_arch();
+    // if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
+    //     // This process owns a mesh_device and hence has statically initialized TLBs.
+    //     // Entire device address space for Blackhole is statically mapped.
+    //     // Safe to use static TLBs without requiring the driver to do a reconfig.
+    //     pcie_writer = [&](void* data, uint32_t num_bytes, uint64_t device_addr) {
+    //         receiver_core_tlb_->write_block(device_addr, data, num_bytes);
+    //     };
+    // } else {
         // Mesh Device not owned - use dynamic TLBs through UMD.
         // Wormhole B0 may require the driver to do a reconfig of the TLB for each write,
         // since the device address space is not statically mapped.
@@ -260,7 +285,7 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
             const auto& cluster = MetalContext::instance().get_cluster();
             cluster.write_core(data, num_bytes, tt_cxy_pair(recv_device_id, recv_virtual_core), device_addr);
         };
-    }
+    // }
 }
 
 H2DSocket::H2DSocket(
