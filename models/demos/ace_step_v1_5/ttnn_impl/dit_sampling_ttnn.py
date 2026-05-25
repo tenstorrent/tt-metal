@@ -22,6 +22,7 @@ from .math_perf_env import (
     ace_step_from_torch_activation,
     ace_step_linear_l1_memory_config,
     ace_step_reshape_kwargs,
+    ace_step_to_layout_kwargs,
 )
 
 
@@ -331,7 +332,10 @@ def bf16_row_from_numpy_bc(arr_f32_np: np.ndarray, *, device: Any, dram: Any) ->
 
 
 def typecast_bf16_any_to_fp32_tile(tt_bf16: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
-    tt = ttnn.to_layout(tt_bf16, layout=ttnn.TILE_LAYOUT)
+    # Place the intermediate tile in L1 so the TilizeWithValPadding kernel reads/writes
+    # L1 rather than DRAM (eliminates TypecastDeviceOperation + TilizeWithValPadding
+    # appearing as ``in0:dram_interleaved`` in Tracy perf reports).
+    tt = ttnn.to_layout(tt_bf16, layout=ttnn.TILE_LAYOUT, **ace_step_to_layout_kwargs(ttnn))
     out = ttnn.typecast(tt, ttnn.float32, memory_config=dram)
     ttnn.deallocate(tt)
     return out
