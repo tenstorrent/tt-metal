@@ -162,7 +162,9 @@ FORCE_INLINE void init_expert_activation_buffer_async(Noc& noc, CircularBuffer& 
         // Copy rows from start to current position
         uint32_t dest_addr = l1_write_addr + rows_filled * aligned_row_size_bytes;
         uint32_t bytes_to_copy = rows_to_copy * aligned_row_size_bytes;
-        noc.async_read(src_noc_addr, {.offset_bytes = dest_addr}, bytes_to_copy);
+        // Device 2.0 migration: legacy primitive retained: src is a precomposed uint64_t
+        // self-loopback NoC address (L1->L1 broadcast-doubling). #45003 item 4.
+        noc_async_read(src_noc_addr, dest_addr, bytes_to_copy);
         noc.async_read_barrier();  // Must barrier before next doubling iteration
 
         rows_filled += rows_to_copy;
@@ -176,7 +178,9 @@ FORCE_INLINE void init_expert_activation_buffer_async(Noc& noc, CircularBuffer& 
         // Dispatch all full chunks in parallel
         while (rows_filled + chunk_rows <= tokens) {
             uint32_t dest_addr = l1_write_addr + rows_filled * aligned_row_size_bytes;
-            noc.async_read(src_noc_addr, {.offset_bytes = dest_addr}, chunk_bytes);
+            // Device 2.0 migration: legacy primitive retained: src is a precomposed uint64_t
+            // self-loopback NoC address (L1->L1 broadcast-doubling). #45003 item 4.
+            noc_async_read(src_noc_addr, dest_addr, chunk_bytes);
             rows_filled += chunk_rows;
         }
 
@@ -185,7 +189,9 @@ FORCE_INLINE void init_expert_activation_buffer_async(Noc& noc, CircularBuffer& 
             uint32_t remainder_rows = tokens - rows_filled;
             uint32_t remainder_bytes = remainder_rows * aligned_row_size_bytes;
             uint32_t dest_addr = l1_write_addr + rows_filled * aligned_row_size_bytes;
-            noc.async_read(src_noc_addr, {.offset_bytes = dest_addr}, remainder_bytes);
+            // Device 2.0 migration: legacy primitive retained: src is a precomposed uint64_t
+            // self-loopback NoC address (L1->L1 broadcast-doubling). #45003 item 4.
+            noc_async_read(src_noc_addr, dest_addr, remainder_bytes);
         }
     }
 
@@ -533,14 +539,13 @@ void kernel_main() {
         // NOC read indices and scores for this core's token range
 
         if (num_tokens_this_core > 0) {
-            noc_obj.async_read(
-                drain_indices_noc_addr,
-                {.offset_bytes = local_indices_addr},
-                num_tokens_this_core * aligned_indices_page_size);
-            noc_obj.async_read(
-                drain_scores_noc_addr,
-                {.offset_bytes = local_scores_addr},
-                num_tokens_this_core * aligned_scores_page_size);
+            // Device 2.0 migration: legacy primitive retained: src is a precomposed uint64_t
+            // cross-core NoC address from get_noc_addr(x,y,addr). #45003 item 4.
+            noc_async_read(
+                drain_indices_noc_addr, local_indices_addr, num_tokens_this_core * aligned_indices_page_size);
+            // Device 2.0 migration: legacy primitive retained: src is a precomposed uint64_t
+            // cross-core NoC address from get_noc_addr(x,y,addr). #45003 item 4.
+            noc_async_read(drain_scores_noc_addr, local_scores_addr, num_tokens_this_core * aligned_scores_page_size);
         }
     }
 
@@ -702,7 +707,7 @@ void kernel_main() {
             // Device 2.0 migration: legacy primitive retained: get_noc_addr(local_l1_addr) is used
             // to form a self-loopback NoC source for local L1->L1 copy. #45003 item 4.
             uint64_t src_noc_addr = get_noc_addr(brisc_e_t_src_addr);
-            noc_obj.async_read(src_noc_addr, {.offset_bytes = e_t_dst_addr}, brisc_count * e_t_entry_size);
+            noc_async_read(src_noc_addr, e_t_dst_addr, brisc_count * e_t_entry_size);
         }
 
         // Update total count for this expert
@@ -717,9 +722,9 @@ void kernel_main() {
         // Device 2.0 migration: legacy primitive retained: get_noc_addr(local_l1_addr) is used
         // to form a self-loopback NoC source for local L1->L1 copy. #45003 item 4.
         uint64_t brisc_activation_src_noc_addr = get_noc_addr(brisc_expert_activation_base);
-        noc_obj.async_read(
+        noc_async_read(
             brisc_activation_src_noc_addr,
-            {.offset_bytes = expert_activation_dst_addr},
+            expert_activation_dst_addr,
             brisc_activated_count * aligned_activation_row_bytes);
     }
 
@@ -776,8 +781,9 @@ void kernel_main() {
                         uint32_t local_e_t_dst =
                             e_t_buffer_base + (e * (tokens + 1) + num_activated_tokens_per_expert[e]) * e_t_entry_size;
 
-                        noc_obj.async_read(
-                            remote_e_t_noc_addr, {.offset_bytes = local_e_t_dst}, remote_count * e_t_entry_size);
+                        // Device 2.0 migration: legacy primitive retained: src is a precomposed
+                        // uint64_t cross-core NoC address from get_noc_addr(x,y,addr). #45003 item 4.
+                        noc_async_read(remote_e_t_noc_addr, local_e_t_dst, remote_count * e_t_entry_size);
 
                         // Update drain's count for this expert
                         num_activated_tokens_per_expert[e] += remote_count;
@@ -795,9 +801,11 @@ void kernel_main() {
                     uint32_t local_activation_dst =
                         expert_activation_base + num_activated_tokens * aligned_activation_row_bytes;
 
-                    noc_obj.async_read(
+                    // Device 2.0 migration: legacy primitive retained: src is a precomposed
+                    // uint64_t cross-core NoC address from get_noc_addr(x,y,addr). #45003 item 4.
+                    noc_async_read(
                         remote_activation_noc_addr,
-                        {.offset_bytes = local_activation_dst},
+                        local_activation_dst,
                         remote_activated_count * aligned_activation_row_bytes);
 
                     // Update drain's total activated count
@@ -838,8 +846,9 @@ void kernel_main() {
         uint32_t expert_activation_write_size = num_activated_tokens * aligned_activation_row_bytes;
         uint64_t expert_activation_dram_addr = get_noc_addr(0, expert_activation_output_tensor_addr_gen);
         if (num_activated_tokens > 0) {
-            noc_obj.async_write(
-                {.offset_bytes = expert_activation_base}, expert_activation_dram_addr, expert_activation_write_size);
+            // Device 2.0 migration: legacy primitive retained: dst is a precomposed uint64_t DRAM
+            // NoC address from get_noc_addr(0, accessor). #45003 item 4.
+            noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
         }
         // Barrier for this write is at the very end of the kernel
 
@@ -974,7 +983,9 @@ void kernel_main() {
         counts_ptr[experts_per_device] = num_activated_tokens;
 
         // Write counts to drain core's remote_counts_cb
-        noc_obj.async_write({.offset_bytes = local_counts_addr}, drain_counts_noc_addr, remote_counts_entry_size);
+        // Device 2.0 migration: legacy primitive retained: dst is a precomposed uint64_t
+        // cross-core NoC address from get_noc_addr(x,y,addr). #45003 item 4.
+        noc_async_write(local_counts_addr, drain_counts_noc_addr, remote_counts_entry_size);
         noc_obj.async_write_barrier();
 
         // Signal drain core via semaphore increment
