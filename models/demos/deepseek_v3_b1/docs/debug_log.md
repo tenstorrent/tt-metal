@@ -959,3 +959,72 @@ If exalens-on-live-device proves fiddly, we can fall back to **kernel-self-dump*
 Every patch we've tried so far has been a *guess* at the bug location. The hash diagnostic narrows the bug to "per-call bank-asymmetric flash_mla compute", but to know which specific register or state element is the asymmetry source we need to *look*. The ebreak + exalens dump is the first experiment that produces direct evidence rather than indirect inference from PCC / hash signals.
 
 ---
+
+## Parallel track — SFPU hash bisection (PR #43060)
+
+### Setup (done — files installed)
+
+Pulled in [PR #43060](https://github.com/tenstorrent/tt-metal/pull/43060) which adds `hash_cb_sfpu(in_cb, num_tiles, out_cb, label)` — an SFPU-accelerated CB hasher with ~32× throughput vs the scalar `hash_cb`. Five files installed (`ad2269bb` snapshot of pr43060):
+
+- `tt_metal/tt-llk/tt_llk_blackhole/llk_lib/experimental/llk_math_hash_cb.h`
+- `tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/experimental/llk_math_hash_cb.h`
+- `tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_math_hash_cb_api.h`
+- `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/experimental/llk_math_hash_cb_api.h`
+- `tt_metal/hw/inc/api/compute/debug/cb_hash_sfpu.h`
+
+### Caveats — read before using
+
+1. **"Best-effort draft, not hardware-validated"** (from the LLK header). The reduction-tree `SFPSHFT2` ordering and DEST addressing have not been tested on silicon. May need iteration on the LLK before it produces stable hashes.
+2. **23-bit FNV variant** ("FNV23"), not bit-equal to the scalar `hash_cb` (FNV-1a-32). Only compare SFPU hashes to SFPU hashes.
+3. **Uses DEST + SFPU state** — the very machinery we suspect of being bank-asymmetric. This is both the caveat the PR explicitly notes and *the feature* we want: if the SFPU hash of `cb_q_in` (whose L1 content scalar `hash_cb` already proved bit-identical between iter-0 and iter-1 in Attempt 18) differs across iters under `hash_cb_sfpu`, we have direct evidence that the SFPU pipeline produces bank-asymmetric output on identical input.
+4. **Requires a host-allocated output CB** (1 tile, INT32 format) to receive the hash result. The decoder block kernel does not currently allocate one — this is a non-trivial host-side change in `attention_block/op.py` or similar to add a debug CB to the descriptor.
+
+### Bisection plan
+
+User-defined strategy: at each probe point, hash the same logical state across iter-0 and iter-1. Decision tree per point:
+
+- **Hash differs on SOME cores** → race condition or L1 data-movement corruption. Hunt down dataflow kernels (BRISC/NCRISC) writing the wrong bytes / colliding broadcasts.
+- **Hash differs on ALL cores** → compute leftover state (DEST or L1). Hunt down compute kernel state that carries across iters.
+- **Hash matches on ALL cores** → state at this point is deterministic across iters. Move to next probe point downstream.
+
+Probe points to consider, ordered earliest-to-latest within flash_mla:
+
+| Probe | Where | What it tests |
+|---|---|---|
+| A1 | `flash_mla.hpp:746`, hash `cb_q_in` | SFPU hash of an L1 input we already know is bit-identical (scalar Attempt 18). Direct test of "is the SFPU pipeline itself bank-asymmetric on identical input?" |
+| A2 | `sdpa.h:269` (chunk top), hash `cb_k_in` | Same idea, for K input on every chunk. |
+| B | After MM1 in `compute_sdpa_chunk`: pack mm1 tile (or specific row) to a debug CB, hash the debug CB | First DEST-write under suspicion; if hashes match here, MM1 (FPU) is OK. |
+| C | After reduce_max (PACK-SFPU) | Tests SFPU reduce + cumulative max-DEST tile. |
+| D | After bcast_sub (FPU) | Tests FPU broadcast subtract. |
+| E | After fast_approx_exp (SFPU, per-tile loop) | Tests SFPU exp pipeline. |
+| F | After MM2 (sdpa_custom_mm_reuse_dest_srcb_block, FPU+MOVD2B) | The DEST-via-SRCB read path — strong suspect. |
+| G | After reduce_sum (PACK-SFPU) | Tests cumulative sum-DEST tile. |
+| H | `flash_mla.hpp:792`, hash `sdpa_output_cb` (we already have this with scalar; would compare SFPU hash too) | End of flash_mla. We already know scalar hash differs here. |
+
+Probes B–G require a "pack DEST → debug CB → hash debug CB" pattern. Each adds invasive code inside the `tile_regs_acquire→release` block. Cleanest implementation:
+
+1. Allocate a per-core 1-tile debug CB in host code (free at all relevant points).
+2. Add a helper `pack_and_hash_dest(dest_tile_idx, debug_cb, hash_out_cb, label)` that issues `pack_block_contiguous(dest_tile_idx, debug_cb, 1)` then `hash_cb_sfpu(debug_cb, 1, hash_out_cb, label)` then `cb_pop_front(debug_cb, 1)`.
+3. Call it at chosen probes.
+
+### Recommended first run (when resuming)
+
+**Probe A1 only** — install hash_cb_sfpu host-side CB plumbing, place a single `hash_cb_sfpu(cb_q_in, q_chunk_tiles, cb_hash_out, 0x40)` at `flash_mla.hpp:746` (alongside the existing scalar `hash_cb(cb_q_in, ..., 0x10)`), and run with `position_id=127`, `num_internal_iterations=2`.
+
+Expected outcomes:
+- **SFPU hash matches across iters for all cores** → SFPU pipeline is deterministic on identical input. Bug is in some FPU or downstream path. Move to probe B.
+- **SFPU hash differs on all cores** → SFPU itself is bank-asymmetric on identical input. The bug zone is the SFPU dispatch within compute_sdpa_chunk; bisect via probes B–G.
+- **SFPU hash differs on SOME cores** → some race or partial-data effect; investigate dataflow kernels feeding cb_q_in.
+
+This is the cleanest first signal.
+
+### Why this is worth doing alongside the exalens plan
+
+The exalens plan looks at *state* (registers, GPRs); the SFPU hash bisection looks at *computed output* of a known-bank-using op on bit-identical input. They're complementary:
+
+- exalens tells us *what* register/cell differs at a halt point.
+- SFPU hash tells us *which dispatch* first produces a bank-asymmetric output.
+
+If both agree, we've nailed both ends of the divergence. If they disagree, the discrepancy itself is informative.
+
+---
