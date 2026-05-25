@@ -1468,29 +1468,138 @@ template <class... Es> struct chain_has_duplicate_upfront_cbs<EltwiseChain<Es...
 template <class... Es> struct chain_pack_writes_collide<EltwiseChain<Es...>>
     : detail::any_writer_dup<Es...> {};
 
-// `chain_is_hoist_safe` — generic N-element fold (item 7 + lessons §3.4).
-// Hoist init() out of the per-tile loop iff:
-//   1. No element with `clashes_with_fpu == true` outside the CopyTile family
-//      (BinaryFpu / DestReuseBinary / UnaryBcast reprogram unpack MOP per iter).
-//   2. All CopyTile elements share a single srca CB (or ≤1 CopyTile in chain).
+// `chain_is_hoist_safe` — encodes the FPU-init hoisting decision tree from
+// `ttnn/cpp/ttnn/kernel_lib/docs/fpu_init_hoisting.html` §6. The chain is an
+// "inner loop" (per-tile body); hoisting means running each element's init()
+// once at boot rather than per tile.
 //
-// **Disabled (always false).** The previous predicate assumed SFPU ops were always
-// hoist-safe as a group, but multiple distinct SFPU `*_tile_init` calls done up front
-// leave only the LAST init's MOP programmed — so subsequent execs reuse the wrong
-// SFPU state. Symptoms seen on this branch:
-//   - mish_kernel.cpp FP32 path: Exp/Log1p/Tanh chain produced tanh-saturated output
-//     (last init clobbered). PCC dropped to 0.988 vs golden.
-//   - logit_kernel.cpp stage-2 chain (Rsub → DivBinary → Log): 21 bfloat16 logit
-//     tests with ATOL deltas of 9-12 (expected 0.04).
+// Eltwise-only scope: matmul / reduce are not modeled as chain elements, so
+// gates G2 / G4 / G5 (matmul-specific ADDR_MOD_6 collisions, welford_reinit-
+// style UNPACK/MATH reconfig, matmul + binary CLR_DVALID mixing) are
+// vacuously satisfied.
 //
-// Until the predicate is rewritten to detect SFPU-init heterogeneity (e.g. fingerprint
-// init member types and require ≤ 1 unique), force per-tile init for every chain. The
-// per-tile init cost is small relative to the SFPU op cost; correctness > micro-perf.
+// Active gates:
+//
+//   G1. Per-side CB consistency — across all chain elements, every element
+//       that programs a side (srcA / srcB) must use the SAME CB id. The
+//       boot-time fold programs each side once; if two elements declare
+//       different CBs on the same side, the LAST reconfig wins and earlier
+//       elements read with the wrong format at per-tile exec time.
+//
+//   G3. MATH-MOP uniformity — across all `is_math_mop_op_v` elements
+//       (`CopyTile`, `BinaryFpu`, `DestReuseBinary`, `UnaryBcast`), all
+//       instantiated types must be identical. Each one's init programs
+//       MATH MOP / ADDR_MOD_0..3 in a kind-specific way (different FPU
+//       ops, different CB args, different bcast modes, the CopyTile vs
+//       binary-op init clash from the old `chain_has_non_copy_tile_fpu_clash`
+//       check); hoisting more than one type leaves only the last init's
+//       MOP programmed and earlier elements run with the wrong MOP.
+//
+//   SFPU. SFPU-init uniqueness — across all `is_sfpu_op_v` elements, all
+//       instantiated types must be identical. This is the regression fix:
+//       multiple distinct SFPU `*_tile_init` calls done at boot leave only
+//       the LAST MOP programmed. Production failures that drove this gate:
+//         - mish_kernel.cpp FP32 path: Exp/Log1p/Tanh chain → tanh saturation,
+//           PCC 0.988.
+//         - logit_kernel.cpp stage-2: Rsub/DivBinary/Log → ATOL deltas 9–12.
+//
+// "Identical type" uses `std::is_same_v` per user direction (fpu_init_hoisting
+// integration thread). This rejects some chains the doc would consider safe
+// (e.g. two `Exp<...>` instances differing only in `Dst::Slot`), but the false
+// negatives only cost a per-tile init — never correctness.
+
+namespace detail {
+
+// G1 helper: per-side fold. Collect every element's `cb_for_side<S, E>()`;
+// require all non-NO_PREV_CB values are equal.
+template <Side S, class... Es>
+constexpr bool per_side_cbs_consistent_v = []() {
+    if constexpr (sizeof...(Es) == 0) {
+        return true;
+    } else {
+        const uint32_t cbs[] = {cb_for_side<S, Es>()...};
+        uint32_t seen = NO_PREV_CB;
+        for (auto cb : cbs) {
+            if (cb == NO_PREV_CB) continue;
+            if (seen == NO_PREV_CB) seen = cb;
+            else if (seen != cb) return false;
+        }
+        return true;
+    }
+}();
+
+// Trait wrappers (Pred<E>::value form) — `is_sfpu_op_v` / `is_math_mop_op_v`
+// are `inline constexpr bool` variable templates; wrap them so they fit the
+// `Pred<E>::value` interface used by the uniformity fold.
+template <class E>
+struct is_sfpu_op_t : std::bool_constant<is_sfpu_op_v<E>> {};
+template <class E>
+struct is_math_mop_op_t : std::bool_constant<is_math_mop_op_v<E>> {};
+
+// G3 / SFPU helper: across all `Es...` satisfying `Pred<E>`, require every
+// instantiated type to be `std::is_same_v` with every other (≤ 1 distinct).
+//
+// Strategy: find the first `E` in `Es...` with `Pred<E>::value == true`;
+// call it `Rep`. Then every other `E` with `Pred<E>::value == true` must
+// satisfy `std::is_same_v<Rep, E>`. If no element matches, the chain is
+// vacuously uniform (returns true).
+template <template <class> class Pred, class... Es>
+struct first_match { using type = void; };
+
+template <template <class> class Pred, class First, class... Rest>
+struct first_match<Pred, First, Rest...> {
+    using type = std::conditional_t<Pred<First>::value, First,
+                                    typename first_match<Pred, Rest...>::type>;
+};
+
+template <template <class> class Pred, class Rep, class... Es>
+struct all_match_rep
+    : std::bool_constant<(((!Pred<Es>::value) || std::is_same_v<Rep, Es>) && ...)> {};
+
+// Empty `Rep == void` short-circuits to `true` (no element matched Pred at all,
+// so the "must equal Rep" condition is vacuously satisfied).
+template <template <class> class Pred, class... Es>
+constexpr bool chain_all_pred_uniform_v = []() {
+    using Rep = typename first_match<Pred, Es...>::type;
+    if constexpr (std::is_same_v<Rep, void>) {
+        return true;
+    } else {
+        return all_match_rep<Pred, Rep, Es...>::value;
+    }
+}();
+
+}  // namespace detail
+
+template <class Chain>
+struct chain_per_side_cbs_consistent : std::true_type {};
+
+template <class... Es>
+struct chain_per_side_cbs_consistent<EltwiseChain<Es...>>
+    : std::bool_constant<detail::per_side_cbs_consistent_v<Side::SrcA, Es...> &&
+                         detail::per_side_cbs_consistent_v<Side::SrcB, Es...>> {};
+
+template <class Chain>
+struct chain_math_mop_uniform : std::true_type {};
+
+template <class... Es>
+struct chain_math_mop_uniform<EltwiseChain<Es...>>
+    : std::bool_constant<detail::chain_all_pred_uniform_v<detail::is_math_mop_op_t, Es...>> {};
+
+template <class Chain>
+struct chain_sfpu_inits_uniform : std::true_type {};
+
+template <class... Es>
+struct chain_sfpu_inits_uniform<EltwiseChain<Es...>>
+    : std::bool_constant<detail::chain_all_pred_uniform_v<detail::is_sfpu_op_t, Es...>> {};
+
 template <class Chain>
 struct chain_is_hoist_safe : std::false_type {};
 
 template <class... Es>
-struct chain_is_hoist_safe<EltwiseChain<Es...>> : std::false_type {};
+struct chain_is_hoist_safe<EltwiseChain<Es...>>
+    : std::bool_constant<chain_per_side_cbs_consistent_v<EltwiseChain<Es...>> &&
+                         chain_math_mop_uniform_v<EltwiseChain<Es...>> &&
+                         chain_sfpu_inits_uniform_v<EltwiseChain<Es...>>> {};
 
 // =============================================================================
 // 10. Chain pipeline — per-iteration emit

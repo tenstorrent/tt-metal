@@ -290,6 +290,32 @@ inline constexpr bool is_fill_tile_op_v = std::is_base_of_v<FillTileTag, T>;
 template <class T>
 inline constexpr bool is_rand_tile_op_v = std::is_base_of_v<RandTileTag, T>;
 
+/// SFPU (DEST-internal, non-RNG, non-fill) element predicate. SFPU ops inherit
+/// from `DestOnlyTag` via `UnaryOp` / `BinaryOp` / `TernaryOp` / `QuaternaryOp`;
+/// Fill / Rand share the `DestOnlyTag` lineage but their init programs PRNG /
+/// fill state, not the SFPU MOP / ADDR_MOD_7 lane. The hoist gate counts distinct
+/// SFPU init types — `is_sfpu_op_v` is the predicate.
+template <class T>
+inline constexpr bool is_sfpu_op_v = is_dest_only_op_v<T> && !is_fill_tile_op_v<T> && !is_rand_tile_op_v<T>;
+
+/// FPU-kind (non-CopyTile, FPU-MOP-touching) element predicate. Groups
+/// `BinaryFpu`, `DestReuseBinary`, `UnaryBcast` — each programs the FPU MOP /
+/// ADDR_MOD_0..3 lane on init via the binary-op init path.
+template <class T>
+inline constexpr bool is_fpu_kind_op_v =
+    is_binary_fpu_op_v<T> || is_dest_reuse_binary_op_v<T> || is_unary_bcast_op_v<T>;
+
+/// MATH-MOP-touching element predicate. Groups every element whose init
+/// programs the MATH MOP / ADDR_MOD_0..3 lane: `CopyTile` (via
+/// `copy_tile_to_dst_init_short`) and the FPU-kind ops (`BinaryFpu`,
+/// `DestReuseBinary`, `UnaryBcast`). The hoist gate (doc G3 + the
+/// CopyTile-versus-FPU clash from the old `chain_has_non_copy_tile_fpu_clash`
+/// predicate) requires all such elements in a chain to be the same
+/// instantiated type — otherwise the boot-time fold leaves only the last
+/// init's MOP programmed and earlier elements run with the wrong MOP.
+template <class T>
+inline constexpr bool is_math_mop_op_v = is_copy_tile_op_v<T> || is_fpu_kind_op_v<T>;
+
 // =============================================================================
 // 1b. 2D shape — (Ht, Wt) tile grid for the 2D chain overload
 // =============================================================================
@@ -1007,6 +1033,12 @@ struct chain_has_duplicate_upfront_cbs;
 template <class Chain>
 struct chain_pack_writes_collide;
 template <class Chain>
+struct chain_per_side_cbs_consistent;
+template <class Chain>
+struct chain_math_mop_uniform;
+template <class Chain>
+struct chain_sfpu_inits_uniform;
+template <class Chain>
 struct chain_is_hoist_safe;
 
 template <class Chain>
@@ -1025,6 +1057,12 @@ template <class Chain>
 inline constexpr bool chain_has_duplicate_upfront_cbs_v = chain_has_duplicate_upfront_cbs<Chain>::value;
 template <class Chain>
 inline constexpr bool chain_pack_writes_collide_v = chain_pack_writes_collide<Chain>::value;
+template <class Chain>
+inline constexpr bool chain_per_side_cbs_consistent_v = chain_per_side_cbs_consistent<Chain>::value;
+template <class Chain>
+inline constexpr bool chain_math_mop_uniform_v = chain_math_mop_uniform<Chain>::value;
+template <class Chain>
+inline constexpr bool chain_sfpu_inits_uniform_v = chain_sfpu_inits_uniform<Chain>::value;
 template <class Chain>
 inline constexpr bool chain_is_hoist_safe_v = chain_is_hoist_safe<Chain>::value;
 
