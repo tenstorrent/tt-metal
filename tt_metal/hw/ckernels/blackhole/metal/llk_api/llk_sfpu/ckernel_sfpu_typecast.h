@@ -56,7 +56,8 @@ inline void calculate_typecast_uint_to_uint8() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; ++d) {
         if constexpr (u16) {
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, 0);
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+            TTI_SFPAND(0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
         } else {
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         }
@@ -179,6 +180,7 @@ inline void init_typecast_fp32_to_uint8() {
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint_to_uint8() {
     sfpi::vConstIntPrgm0 = 0xFF;
+    sfpi::vConstIntPrgm1 = 0x0000FFFF;
 }
 
 template <bool APPROXIMATION_MODE>
