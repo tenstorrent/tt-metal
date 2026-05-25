@@ -941,7 +941,7 @@ class Glm4MoeLiteDenseOnlyTT:
         return logits_i
 
     def _lm_head_linear(self, a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
-        """LM head matmul with tuned interleaved 1D multicast program config."""
+        # Consolidated LM-head helper pins HiFi4+fp32-DST to block the implicit HiFi2→LoFi drop that follows program_config.
         return lm_head_linear(a, b, device=self.device)
 
     def _extract_logits(
