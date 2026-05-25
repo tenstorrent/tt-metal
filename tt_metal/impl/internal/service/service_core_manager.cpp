@@ -179,6 +179,26 @@ void ServiceCoreManager::deallocate_l1(IDevice* device, CoreCoord core, DeviceAd
     dit->second.cores.at(core).alloc->deallocate(addr);
 }
 
+std::optional<DeviceAddr> ServiceCoreManager::lowest_allocated_address(ChipId device_id, CoreCoord core) const {
+    auto dit = impl_->devices.find(device_id);
+    if (dit == impl_->devices.end()) {
+        return std::nullopt;
+    }
+    auto cit = dit->second.cores.find(core);
+    if (cit == dit->second.cores.end()) {
+        return std::nullopt;
+    }
+    const auto ranges = cit->second.alloc->allocated_addresses();
+    if (ranges.empty()) {
+        return std::nullopt;
+    }
+    DeviceAddr lo = ranges.front().first;
+    for (const auto& [start, end] : ranges) {
+        lo = std::min(lo, start);
+    }
+    return lo;
+}
+
 size_t ServiceCoreManager::bytes_available(IDevice* device, CoreCoord core) const {
     auto dit = impl_->devices.find(device->id());
     TT_FATAL(

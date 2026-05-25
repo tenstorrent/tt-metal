@@ -141,18 +141,40 @@ ChunkPlan derive_chunk_plan(uint32_t tensor_page_size, uint32_t tensor_num_pages
     };
 }
 
+// Worker-sync CT-arg block. Populated when Config::worker_cores is set; all
+// fields zero when disabled (the kernel's `if constexpr (worker_sync_enabled)`
+// gate skips the block entirely).
+struct WorkerSyncArgs {
+    bool enabled = false;
+    uint32_t data_ready_sem_addr = 0;     // worker-grid L1 (mesh-wide GlobalSemaphore)
+    uint32_t consumed_counter_addr = 0;   // service-core L1 (per-coord, allocated via ServiceCoreManager)
+    uint32_t mcast_noc_x_start = 0;       // physical NoC bbox of worker_cores on this device
+    uint32_t mcast_noc_y_start = 0;
+    uint32_t mcast_noc_x_end = 0;
+    uint32_t mcast_noc_y_end = 0;
+    uint32_t num_workers = 0;             // mcast destination count + sync arithmetic target
+};
+
 // Builds the single-core persistent H2D program for one socket / device buffer.
 //
 // CT-arg layout (must stay in sync with persistent_h2d_receiver.cpp):
-//   [0] socket_config_addr
-//   [1] termination_semaphore_addr
-//   [2] socket_page_size
-//   [3] num_socket_pages
-//   [4] output_tensor_addr
-//   [5] output_tensor_page_size
-//   [6] pages_per_chunk
-//   [7] scratch_buffer_cb_index
-//   [8..] TensorAccessorArgs
+//   [0]  socket_config_addr
+//   [1]  termination_semaphore_addr
+//   [2]  socket_page_size
+//   [3]  num_socket_pages
+//   [4]  output_tensor_addr
+//   [5]  output_tensor_page_size
+//   [6]  pages_per_chunk
+//   [7]  scratch_buffer_cb_index
+//   [8]  worker_sync_enabled            (uint32 0/1)
+//   [9]  data_ready_sem_addr            (uint32, worker-grid L1)
+//   [10] consumed_counter_addr          (uint32, local service-core L1)
+//   [11] worker_mcast_noc_x_start
+//   [12] worker_mcast_noc_y_start
+//   [13] worker_mcast_noc_x_end
+//   [14] worker_mcast_noc_y_end
+//   [15] num_workers
+//   [16..] TensorAccessorArgs
 Program build_persistent_h2d_program(
     const Buffer& device_buffer,
     const CoreCoord& recv_core,
@@ -160,7 +182,8 @@ Program build_persistent_h2d_program(
     uint32_t termination_semaphore_addr,
     const ChunkPlan& plan,
     uint32_t tensor_page_size,
-    DataType dtype) {
+    DataType dtype,
+    const WorkerSyncArgs& worker_sync) {
     auto program = CreateProgram();
 
     constexpr tt::CBIndex scratch_cb_index = tt::CBIndex::c_0;
@@ -181,6 +204,16 @@ Program build_persistent_h2d_program(
         tensor_page_size,
         plan.pages_per_chunk,
         static_cast<uint32_t>(scratch_cb_index),
+        // Worker-sync block (indices 8..15). All zero when disabled; the
+        // kernel's `if constexpr (worker_sync_enabled)` guards every use.
+        static_cast<uint32_t>(worker_sync.enabled ? 1u : 0u),
+        worker_sync.data_ready_sem_addr,
+        worker_sync.consumed_counter_addr,
+        worker_sync.mcast_noc_x_start,
+        worker_sync.mcast_noc_y_start,
+        worker_sync.mcast_noc_x_end,
+        worker_sync.mcast_noc_y_end,
+        worker_sync.num_workers,
     };
     ct_args.insert(ct_args.end(), tensor_accessor_compile_args.begin(), tensor_accessor_compile_args.end());
 
@@ -301,12 +334,66 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         tt::tt_metal::detail::WriteToDeviceL1(d, chosen, static_cast<uint32_t>(sem_addr), zero_word);
     }
 
+    // --- B7.5: optional worker-sync allocations -------------------------------
+    // When cfg_.worker_cores is set we allocate:
+    //   * one mesh-wide data_ready GlobalSemaphore on the worker CoreRangeSet
+    //     (BankManager-backed; same L1 address on every (device, worker core)),
+    //   * a per-coord consumed-counter L1 word on the service core (allocated
+    //     via ServiceCoreManager, zero-init via WriteToDeviceL1).
+    // These are unused by the kernel until the worker-sync CT-arg block lands
+    // in `build_persistent_h2d_program`; allocating them now keeps the addresses
+    // stable so future getters can expose them to user worker kernels.
+    if (cfg_.worker_cores.has_value()) {
+        const auto& worker_range = cfg_.worker_cores.value();
+        num_workers_ = (worker_range.end_coord.x - worker_range.start_coord.x + 1) *
+                       (worker_range.end_coord.y - worker_range.start_coord.y + 1);
+        TT_FATAL(num_workers_ > 0, "H2DStreamService: cfg.worker_cores must contain at least one core");
+
+        // Data-ready semaphore: mesh-wide, worker-grid L1, same address on every
+        // (device, worker core) in the range. Workers poll their local copy;
+        // the persistent service kernel multicasts atomic-inc into it.
+        data_ready_sem_.emplace(ttnn::global_semaphore::create_global_semaphore(
+            mesh_device_.get(),
+            CoreRangeSet(worker_range),
+            /*initial_value=*/0,
+            BufferType::L1));
+
+        // Consumed counter: per-coord L1 word on the service core.
+        for (const auto& coord : coords) {
+            auto* d = mesh_device_->get_device(coord);
+            const CoreCoord chosen = service_cores_.at(coord);
+            const DeviceAddr addr = svc.allocate_l1(d, chosen, sizeof(uint32_t));
+            consumed_addrs_.emplace(coord, addr);
+            tt::tt_metal::detail::WriteToDeviceL1(d, chosen, static_cast<uint32_t>(addr), zero_word);
+        }
+    }
+
     // --- B8: build one persistent program per socket, bundle into a workload --
     for (auto& s : sockets_) {
         const auto core = s->get_active_cores()[0];
         const Buffer* dbuf = device_tensor_.mesh_buffer().get_device_buffer(core.device_coord);
         TT_FATAL(dbuf != nullptr, "H2DStreamService: device buffer missing for coord {}", core.device_coord);
         const uint32_t term_addr = static_cast<uint32_t>(termination_addrs_.at(core.device_coord));
+
+        // Per-coord worker-sync args. Populated only when cfg.worker_cores is
+        // set; otherwise everything stays zero and the kernel skips the sync
+        // block via `if constexpr (worker_sync_enabled == 0)`.
+        WorkerSyncArgs worker_sync;
+        if (cfg_.worker_cores.has_value()) {
+            const auto& worker_range = cfg_.worker_cores.value();
+            auto* d = mesh_device_->get_device(core.device_coord);
+            const auto start_phys = d->worker_core_from_logical_core(worker_range.start_coord);
+            const auto end_phys = d->worker_core_from_logical_core(worker_range.end_coord);
+            worker_sync.enabled = true;
+            worker_sync.data_ready_sem_addr = static_cast<uint32_t>(data_ready_sem_->address());
+            worker_sync.consumed_counter_addr = static_cast<uint32_t>(consumed_addrs_.at(core.device_coord));
+            worker_sync.mcast_noc_x_start = static_cast<uint32_t>(start_phys.x);
+            worker_sync.mcast_noc_y_start = static_cast<uint32_t>(start_phys.y);
+            worker_sync.mcast_noc_x_end = static_cast<uint32_t>(end_phys.x);
+            worker_sync.mcast_noc_y_end = static_cast<uint32_t>(end_phys.y);
+            worker_sync.num_workers = num_workers_;
+        }
+
         auto program = build_persistent_h2d_program(
             *dbuf,
             core.core_coord,
@@ -314,7 +401,8 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
             term_addr,
             plan,
             tensor_page_size,
-            device_tensor_.dtype());
+            device_tensor_.dtype(),
+            worker_sync);
         workload_.add_program(distributed::MeshCoordinateRange(core.device_coord), std::move(program));
     }
 
@@ -343,14 +431,45 @@ H2DStreamService::~H2DStreamService() {
             distributed::Finish(mesh_device_->mesh_command_queue());
         }
 
-        // 4. Release the service-core L1 used by the termination words.
+        // 3.5 Wait for each persistent service kernel to actually return from
+        //     kernel_main (RUN_MSG_DONE), not just for the dispatch path to
+        //     drain. Without this, a subsequent service instance can find its
+        //     service core still occupied — the next test's SD launch waits
+        //     in `wait_for_cores_idle`, but earlier state can leak through and
+        //     the new receiver kernel never starts processing pages, so the
+        //     new host's `H2DSocket::write` hangs in `reserve_bytes` forever.
+        //     Safe to call after `signal_termination` because the persistent
+        //     kernel's outer loop exits on the next `socket_wait_for_pages_with_
+        //     termination` poll, which is the kernel's idle state between
+        //     transfers (the consumed-counter wait runs only after a transfer,
+        //     and Finish above guarantees the last transfer's worker acks
+        //     have already landed).
         auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+        if (mesh_device_) {
+            for (const auto& [coord, core] : service_cores_) {
+                auto* d = mesh_device_->get_device(coord);
+                svc.wait_done(d, core);
+            }
+        }
+
+        // 4. Release the service-core L1 used by the termination words and the
+        //    (optional) worker-sync consumed counters.
         if (mesh_device_) {
             for (const auto& [coord, addr] : termination_addrs_) {
                 auto* d = mesh_device_->get_device(coord);
                 svc.deallocate_l1(d, service_cores_.at(coord), addr);
             }
             termination_addrs_.clear();
+
+            // Worker-sync allocations (only present when cfg.worker_cores was set).
+            // The mesh-wide data_ready GlobalSemaphore frees itself when
+            // data_ready_sem_ is destroyed by the member-destruction phase; only
+            // the per-coord consumed counters need an explicit deallocate here.
+            for (const auto& [coord, addr] : consumed_addrs_) {
+                auto* d = mesh_device_->get_device(coord);
+                svc.deallocate_l1(d, service_cores_.at(coord), addr);
+            }
+            consumed_addrs_.clear();
 
             // 5. Destroy the sockets BEFORE releasing the service-core claims.
             //    H2DSocket dtors call `ServiceCoreManager::deallocate_l1` for
@@ -377,7 +496,6 @@ H2DStreamService::~H2DStreamService() {
 
 void H2DStreamService::barrier() {
     for (auto& s : sockets_) {
-        std::cout << "Barrier on: " << s->get_active_cores()[0].device_coord << " " << s->get_active_cores()[0].core_coord.str() << std::endl;
         s->barrier();
     }
 }
@@ -404,6 +522,33 @@ std::vector<distributed::H2DSocket*> H2DStreamService::get_sockets() const {
         out.push_back(s.get());
     }
     return out;
+}
+
+DeviceAddr H2DStreamService::get_data_ready_sem_addr() const {
+    TT_FATAL(
+        data_ready_sem_.has_value(),
+        "H2DStreamService::get_data_ready_sem_addr: worker-sync was not configured (Config::worker_cores unset).");
+    return data_ready_sem_->address();
+}
+
+DeviceAddr H2DStreamService::get_consumed_counter_addr(const distributed::MeshCoordinate& coord) const {
+    auto it = consumed_addrs_.find(coord);
+    TT_FATAL(
+        it != consumed_addrs_.end(),
+        "H2DStreamService::get_consumed_counter_addr: no consumed-counter at coord {} (worker-sync was not "
+        "configured or the coord does not participate in this service).",
+        coord);
+    return it->second;
+}
+
+CoreCoord H2DStreamService::get_service_core(const distributed::MeshCoordinate& coord) const {
+    auto it = service_cores_.find(coord);
+    TT_FATAL(
+        it != service_cores_.end(),
+        "H2DStreamService::get_service_core: no service core claimed at coord {} (does this coord participate "
+        "in this service?).",
+        coord);
+    return it->second;
 }
 
 void H2DStreamService::forward_to_tensor(ttsl::Span<const std::byte> bytes) {

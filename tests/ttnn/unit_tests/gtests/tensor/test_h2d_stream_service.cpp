@@ -21,16 +21,23 @@
 // are deliberately out of scope for this file.
 
 #include <functional>
+#include <future>
 #include <numeric>
 #include <vector>
 
 #include "gtest/gtest.h"
 
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -39,6 +46,7 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/tensor/socket_services.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::distributed::test {
@@ -76,17 +84,161 @@ struct H2DServiceCase {
     H2DMode mode = H2DMode::DEVICE_PULL;
 };
 
-// Drives the service through two full transfers (Write A + Write B reuse check)
-// for a given case + input path, verifying every per-device readback against
-// the per-coord shard produced by an external mapper with the same config.
+// Builds the per-coord worker MeshWorkload for the worker-sync handshake test.
 //
-// The Write B step is load-bearing: if the persistent kernel had exited after
-// the first transfer, the second readback would still match data_a and the
-// inner EXPECT_EQ would catch it.
+// One Program is constructed per participating mesh coord (per-coord because
+// the consumed-counter address and the service core's physical NoC coords are
+// per-device). All Programs share identical CT args (uniform across the mesh
+// by design — data_ready_sem_addr, input/output tensor addresses, page size,
+// and TensorAccessorArgs) but receive different per-coord runtime args.
+//
+// Each worker core in `worker_cores` is assigned a contiguous slice of the
+// flat tensor page array; total pages must divide evenly by the number of
+// workers (asserted).
+tt::tt_metal::distributed::MeshWorkload build_worker_workload(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    const tt::tt_metal::H2DStreamService& service,
+    const tt::tt_metal::Tensor& output_tensor,
+    const CoreRange& worker_cores) {
+    const tt::tt_metal::Tensor& input_tensor = service.get_backing_tensor();
+    auto* input_buf = input_tensor.buffer();
+    auto* output_buf = output_tensor.buffer();
+    TT_FATAL(input_buf != nullptr, "build_worker_workload: input tensor has no buffer");
+    TT_FATAL(output_buf != nullptr, "build_worker_workload: output tensor has no buffer");
+
+    const uint32_t page_size = input_buf->page_size();
+    const uint32_t num_pages = input_buf->num_pages();
+
+    // Count workers in row-major order over the CoreRange (consistent with the
+    // RT-arg assignment loop below).
+    const uint32_t num_workers = (worker_cores.end_coord.x - worker_cores.start_coord.x + 1) *
+                                 (worker_cores.end_coord.y - worker_cores.start_coord.y + 1);
+    TT_FATAL(num_workers > 0, "build_worker_workload: worker_cores must contain at least one core");
+    TT_FATAL(
+        num_pages % num_workers == 0,
+        "build_worker_workload: tensor page count ({}) must be divisible by num_workers ({}). "
+        "Pick a (shape, worker_cores) pair where the innermost-most-significant page count is a "
+        "multiple of the worker count, or adjust the test parameters.",
+        num_pages,
+        num_workers);
+    const uint32_t pages_per_worker = num_pages / num_workers;
+
+    // CT args uniform across mesh + workers. Single TensorAccessorArgs set is
+    // reused with the input and output base addresses inside the kernel.
+    const uint32_t data_ready_sem_addr = static_cast<uint32_t>(service.get_data_ready_sem_addr());
+    const uint32_t input_tensor_addr = static_cast<uint32_t>(input_buf->address());
+    const uint32_t output_tensor_addr = static_cast<uint32_t>(output_buf->address());
+
+    // Need a per-coord device buffer pointer to feed TensorAccessorArgs(); the
+    // resulting CT args describe the tensor layout, which is uniform across
+    // coords for the same TensorSpec — picking any coord's per-device buffer
+    // yields the same accessor args.
+    const auto& topology = input_tensor.tensor_topology();
+    const auto& coords = topology.mesh_coords();
+    TT_FATAL(!coords.empty(), "build_worker_workload: tensor topology has no coords");
+    const tt::tt_metal::Buffer* sample_dbuf =
+        input_tensor.mesh_buffer().get_device_buffer(coords.front());
+    auto accessor_args = tt::tt_metal::TensorAccessorArgs(*sample_dbuf);
+    auto accessor_compile_args = accessor_args.get_compile_time_args();
+
+    // Single scratch CB sized to one tensor page on every worker core.
+    constexpr tt::CBIndex scratch_cb_index = tt::CBIndex::c_0;
+
+    tt::tt_metal::distributed::MeshWorkload worker_workload;
+    for (const auto& coord : coords) {
+        auto* device = mesh_device->get_device(coord);
+
+        // Resolve service-core physical NoC coords for this device. Worker
+        // kernels NoC-write atomic-incs to (service_noc_x, service_noc_y,
+        // consumed_counter_addr); both pieces vary per device.
+        const CoreCoord service_logical = service.get_service_core(coord);
+        const CoreCoord service_phys = device->worker_core_from_logical_core(service_logical);
+        const uint32_t consumed_counter_addr =
+            static_cast<uint32_t>(service.get_consumed_counter_addr(coord));
+
+        auto program = tt::tt_metal::CreateProgram();
+
+        // Scratch CB: one page, BFLOAT16 data-format slot is a no-op for raw
+        // L1 staging; we just need the L1 region for the read-then-write copy.
+        auto cb_cfg = tt::tt_metal::CircularBufferConfig(
+                          page_size, {{scratch_cb_index, tt::DataFormat::UInt32}})
+                          .set_page_size(scratch_cb_index, page_size);
+        tt::tt_metal::CreateCircularBuffer(program, worker_cores, cb_cfg);
+
+        std::vector<uint32_t> ct_args = {
+            data_ready_sem_addr,
+            input_tensor_addr,
+            output_tensor_addr,
+            page_size,
+            static_cast<uint32_t>(scratch_cb_index),
+        };
+        ct_args.insert(ct_args.end(), accessor_compile_args.begin(), accessor_compile_args.end());
+
+        auto kernel_handle = tt::tt_metal::CreateKernel(
+            program,
+            "tests/ttnn/unit_tests/gtests/tensor/kernels/persistent_h2d_worker_test.cpp",
+            worker_cores,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .compile_args = ct_args,
+            });
+
+        // Per-worker runtime args: contiguous page slice + service-core handle.
+        // Iterate row-major over the CoreRange so worker index matches the
+        // page-slice assignment.
+        uint32_t worker_idx = 0;
+        for (uint32_t y = worker_cores.start_coord.y; y <= worker_cores.end_coord.y; ++y) {
+            for (uint32_t x = worker_cores.start_coord.x; x <= worker_cores.end_coord.x; ++x) {
+                const CoreCoord core{x, y};
+                const uint32_t start_page = worker_idx * pages_per_worker;
+                const uint32_t end_page = start_page + pages_per_worker;
+                tt::tt_metal::SetRuntimeArgs(
+                    program,
+                    kernel_handle,
+                    core,
+                    {
+                        start_page,
+                        end_page,
+                        consumed_counter_addr,
+                        static_cast<uint32_t>(service_phys.x),
+                        static_cast<uint32_t>(service_phys.y),
+                    });
+                ++worker_idx;
+            }
+        }
+
+        worker_workload.add_program(
+            tt::tt_metal::distributed::MeshCoordinateRange(coord, coord), std::move(program));
+    }
+
+    return worker_workload;
+}
+
+// Drives the service through `num_iterations` full transfers for a given case +
+// input path. The service is spawned once outside the loop; the worker workload
+// (when worker-sync is enabled) is built once and re-enqueued per iteration.
+// Each iteration writes a fresh iota source with a distinct seed and verifies
+// every per-device readback against the per-coord shard produced by an external
+// mapper with the same config. The persistent-kernel "reuse check" is implicit:
+// any iter after the first produces wrong contents if the kernel had exited.
+//
+// When `worker_cores` is set, the helper additionally:
+//   * passes the CoreRange to Config::worker_cores so the service kernel
+//     enables its multicast / consumed-counter handshake,
+//   * allocates a second device tensor (`output_tensor`) with the same per-
+//     shard spec + topology as the service's backing tensor,
+//   * builds a worker MeshWorkload (one Program per coord) using the kernel
+//     at tests/.../kernels/persistent_h2d_worker_test.cpp,
+//   * enqueues the worker workload after each forward_to_tensor + barrier and
+//     drains via Finish, so the output tensor reflects this iteration's data,
+//   * verifies against `output_tensor` instead of the service's backing tensor.
 void run_h2d_stream_service_case(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const H2DServiceCase& cs,
-    InputPath input_path) {
+    InputPath input_path,
+    std::optional<CoreRange> worker_cores = std::nullopt,
+    uint32_t num_iterations = 2) {
     SCOPED_TRACE(
         ::testing::Message() << "global_shape=" << cs.global_shape << " scratch_cb=" << cs.scratch_cb_size_bytes
                              << " fifo=" << cs.fifo_size_bytes << " input_path=" << input_path_name(input_path));
@@ -104,16 +256,31 @@ void run_h2d_stream_service_case(
         .fifo_size_bytes = cs.fifo_size_bytes,
         .scratch_cb_size_bytes = cs.scratch_cb_size_bytes,
         .socket_mode = cs.mode,
+        .worker_cores = worker_cores,
     };
 
     tt::tt_metal::H2DStreamService service(mesh_device, std::move(cfg));
     ASSERT_NE(service.get_backing_tensor().buffer(), nullptr);
     ASSERT_EQ(service.get_sockets().size(), mesh_device->num_devices());
 
-    // Push `src` through the selected input path and block until the service
-    // has drained it. Tensor-path constructs a fresh external mapper each call;
-    // bytes path lets the service's internal mapper handle distribution.
-    auto do_write = [&](const std::vector<uint32_t>& src) {
+    // Worker-sync path: allocate an output tensor with the same per-shard spec
+    // + topology as the service's backing tensor, build the worker MeshWorkload
+    // once (Programs + per-worker RT args persist across enqueues).
+    std::optional<tt::tt_metal::Tensor> output_tensor;
+    tt::tt_metal::distributed::MeshWorkload worker_workload;
+    if (worker_cores.has_value()) {
+        const auto& backing = service.get_backing_tensor();
+        output_tensor.emplace(tt::tt_metal::create_device_tensor(
+            backing.tensor_spec(), mesh_device.get(), backing.tensor_topology()));
+        worker_workload = build_worker_workload(mesh_device, service, *output_tensor, *worker_cores);
+    }
+
+    // Push `src` through the selected input path. NO host-side synchronisation —
+    // returns as soon as the bytes are in the socket FIFO. Subsequent flow
+    // control (waiting for the kernel to drain) happens either via
+    // service.barrier() in the serial path, or via the device-side worker
+    // handshake in the threaded path.
+    auto push = [&](const std::vector<uint32_t>& src) {
         if (input_path == InputPath::Bytes) {
             auto bytes = ttsl::Span<const std::byte>(
                 reinterpret_cast<const std::byte*>(src.data()), src.size() * sizeof(uint32_t));
@@ -123,19 +290,30 @@ void run_h2d_stream_service_case(
             auto host = distribute_tensor(Tensor::from_vector<uint32_t>(src, global_spec), *mapper);
             service.forward_to_tensor(host);
         }
-        service.barrier();
     };
 
-    // Read every per-device sub-tensor of the backing tensor and compare against
-    // the per-coord shard from an external mapper applied to `src`. Using the
-    // mapper here (instead of hand-coding per-placement slicing) keeps the
-    // verification logic independent of the placement pattern under test.
+    // Dispatch one worker iteration and wait for it to complete on-device. The
+    // service kernel's data_ready multicast (which only fires after the host's
+    // matching push has been fully drained into the backing tensor) gates the
+    // worker kernel; this Finish therefore transitively waits for the host
+    // push too. Only called from the worker-sync path.
+    auto consume_one = [&]() {
+        tt::tt_metal::distributed::EnqueueMeshWorkload(
+            mesh_device->mesh_command_queue(), worker_workload, /*blocking=*/false);
+        tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+    };
+
+    // Read every per-device sub-tensor of the tensor under test and compare
+    // against the per-coord shard from an external mapper applied to `src`.
+    // Worker-sync path: read from `output_tensor` (where the workers copy
+    // input->output). No-worker path: read from the service's backing tensor.
     auto verify = [&](const std::vector<uint32_t>& src) {
         auto verify_mapper = create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements});
         auto distributed_host = distribute_tensor(Tensor::from_vector<uint32_t>(src, global_spec), *verify_mapper);
         const auto& dhb = distributed_host.host_storage().host_tensor().buffer();
 
-        auto subs = get_device_tensors(service.get_backing_tensor());
+        const auto& tensor_under_test = worker_cores.has_value() ? *output_tensor : service.get_backing_tensor();
+        auto subs = get_device_tensors(tensor_under_test);
         ASSERT_EQ(subs.size(), mesh_device->num_devices());
         for (auto& sub : subs) {
             const auto coords = sub.device_storage().get_coords();
@@ -155,19 +333,64 @@ void run_h2d_stream_service_case(
         }
     };
 
-    // --- Write A ----------------------------------------------------------------
-    std::vector<uint32_t> data_a(cs.global_shape.volume());
-    std::iota(data_a.begin(), data_a.end(), 0u);
-    do_write(data_a);
-    verify(data_a);
+    // Deterministic per-iter source data so both threads can independently
+    // compute the same expected payload without sharing memory. Iter 0 has
+    // seed 0; later iters use seed = iter * 0x12345678u so a kernel that
+    // silently exited after iter 0 would surface as a contents mismatch on
+    // iter 1+ (subsumes the old "Write A / Write B" reuse check).
+    auto make_iter_data = [&](uint32_t iter) {
+        std::vector<uint32_t> v(cs.global_shape.volume());
+        std::iota(v.begin(), v.end(), iter * 0x12345678u);
+        return v;
+    };
 
-    // --- Write B (persistent-kernel reuse check) --------------------------------
-    // Wildly different seed so a stale buffer (e.g. kernel exited after A) shows
-    // up in the readback compare as A's contents still landing.
-    std::vector<uint32_t> data_b(cs.global_shape.volume());
-    std::iota(data_b.begin(), data_b.end(), 0x12345678u);
-    do_write(data_b);
-    verify(data_b);
+    // --- Iteration loop ---------------------------------------------------------
+    // Two execution modes:
+    //   * Serial (no worker-sync): push -> service.barrier() -> verify on the
+    //     main thread, one iter at a time.
+    //   * Threaded (worker-sync ON): writer and consumer run concurrently with
+    //     ZERO host-side synchronisation between them. Writer just pushes;
+    //     consumer drives worker workloads + verifies output_tensor. The only
+    //     synchronisation in the system is the device-side handshake (service
+    //     kernel multicast -> workers consume -> consumed_counter ack), which
+    //     gates the consumer's per-iter Finish. Backpressure is automatic:
+    //     writer blocks in `forward_to_tensor`'s `reserve_bytes` when the FIFO
+    //     fills; consumer's worker kernel blocks on data_ready_sem when the
+    //     writer is behind.
+    //
+    //     Thread safety: writer touches H2DSockets / PCIe TLBs only; consumer
+    //     touches the FD mesh command queue (EnqueueMeshWorkload + Finish) and
+    //     reads back output_tensor. Disjoint host state, disjoint hardware paths.
+    if (worker_cores.has_value()) {
+        auto writer = std::async(std::launch::async, [&] {
+            for (uint32_t iter = 0; iter < num_iterations; ++iter) {
+                SCOPED_TRACE(::testing::Message() << "[writer] iteration=" << iter);
+                push(make_iter_data(iter));
+            }
+        });
+        auto consumer = std::async(std::launch::async, [&] {
+            for (uint32_t iter = 0; iter < num_iterations; ++iter) {
+                SCOPED_TRACE(::testing::Message() << "[consumer] iteration=" << iter);
+                consume_one();
+                verify(make_iter_data(iter));
+            }
+        });
+        // Order matters: consumer first so that if a verify failure throws
+        // (or propagates exception via the future), we surface it before
+        // waiting on the writer. Both must complete before `service` goes out
+        // of scope — its dtor signals termination + wait_done, which would
+        // race with an in-flight writer.
+        consumer.get();
+        writer.get();
+    } else {
+        for (uint32_t iter = 0; iter < num_iterations; ++iter) {
+            SCOPED_TRACE(::testing::Message() << "iteration=" << iter);
+            auto data = make_iter_data(iter);
+            push(data);
+            service.barrier();
+            verify(data);
+        }
+    }
 }
 
 using H2DStreamServiceTest = ::tt::tt_metal::GenericMeshDeviceFixture;
@@ -243,8 +466,10 @@ TEST_F(H2DStreamServiceTest, Replicated_Sweep) {
             .scratch_cb_size_bytes = row.scratch_cb_pages * per_row_bytes,
             .fifo_size_bytes = row.fifo_pages * per_row_bytes,
         };
-        run_h2d_stream_service_case(this->mesh_device_, cs, InputPath::Tensor);
-        run_h2d_stream_service_case(this->mesh_device_, cs, InputPath::Bytes);
+        run_h2d_stream_service_case(
+            this->mesh_device_, cs, InputPath::Tensor, /*worker_cores=*/std::nullopt, /*num_iterations=*/10);
+        run_h2d_stream_service_case(
+            this->mesh_device_, cs, InputPath::Bytes, /*worker_cores=*/std::nullopt, /*num_iterations=*/10);
     }
 }
 
@@ -347,8 +572,10 @@ TEST_F(H2DStreamServiceTest, Sharded_Sweep) {
                 .scratch_cb_size_bytes = row.scratch_cb_pages * per_row_bytes,
                 .fifo_size_bytes = row.fifo_pages * per_row_bytes,
             };
-            run_h2d_stream_service_case(this->mesh_device_, cs, InputPath::Tensor);
-            run_h2d_stream_service_case(this->mesh_device_, cs, InputPath::Bytes);
+            run_h2d_stream_service_case(
+                this->mesh_device_, cs, InputPath::Tensor, /*worker_cores=*/std::nullopt, /*num_iterations=*/10);
+            run_h2d_stream_service_case(
+                this->mesh_device_, cs, InputPath::Bytes, /*worker_cores=*/std::nullopt, /*num_iterations=*/10);
         }
     };
 
@@ -378,6 +605,201 @@ TEST_F(H2DStreamServiceTest, Sharded_Sweep) {
     // along both tensor dim 2 (mesh-dim 0) and tensor dim 3 (mesh-dim 1).
     // Per-device shape stays [1, 1, N, per_row_size], so chunk math matches
     // B/C/E; only the global shape multiplier changes.
+    if (num_rows >= 2 && num_cols >= 2) {
+        run_pattern(
+            "FullShard2D",
+            {MeshMapperConfig::Shard{2}, MeshMapperConfig::Shard{3}},
+            [&](uint32_t N, uint32_t per_row_size) {
+                return ttnn::Shape({1, 1, num_rows * N, num_cols * per_row_size});
+            });
+    }
+}
+
+// W — Worker-sync handshake sweep across worker grid sizes.
+//
+// Wires up the optional `Config::worker_cores` path end-to-end:
+//   * Service kernel multicasts data_ready_sem after each transfer.
+//   * Worker kernels poll data_ready_sem locally, copy their assigned page slice
+//     from the backing tensor to a separately-allocated output tensor, and
+//     atomic-inc the per-device consumed_counter on the service core.
+//   * Service kernel waits for num_workers more incs and proceeds.
+//   * Host reads back `output_tensor` (not the backing tensor) and verifies.
+//
+// Per-device shape under fully-replicated mapping == global shape. The worker
+// grid on this arch is 12 columns x 10 rows = 120 cores; rows exercise the
+// extremes (single worker, mid-range, full grid) plus the original 4-worker
+// baseline. `N` (page count) must be divisible by `num_workers` in every row.
+TEST_F(H2DStreamServiceTest, Replicated_WorkerSync_Sweep) {
+    struct Row {
+        uint32_t per_row_size;
+        uint32_t N;  // tensor pages per device (must satisfy N % num_workers == 0)
+        CoreRange worker_cores;
+        uint32_t num_iterations;
+        const char* label;
+    };
+    // Chunking variants explored for every (shape, worker_cores) row. Values
+    // are in tensor-page units; per-row byte sizes are `cb_pages * per_row_bytes`
+    // and `fifo_pages * per_row_bytes`. `derive_chunk_plan` will pick the
+    // largest pages_per_chunk <= cb_pages that divides N, so cb_pages > N is
+    // safe (clamps to N).
+    struct Chunking {
+        uint32_t cb_pages;
+        uint32_t fifo_pages;
+        const char* label;
+    };
+    const Row rows[] = {
+        // Baseline: 4 workers in a single row, 4 pages each.
+        {640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 20, "4_workers_row"},
+        // Single worker covering all 16 pages — exercises the num_workers==1 path
+        // and the degenerate multicast (single destination).
+        {640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}, 20, "1_worker"},
+        // Full 12x10 worker grid = 120 cores, one page per worker. Page count is
+        // bumped to 120 so the divisibility constraint holds.
+        {640, 120, CoreRange{CoreCoord{0, 0}, CoreCoord{11, 9}}, 100, "120_workers_full_grid"},
+    };
+    const Chunking chunkings[] = {
+        // Smallest possible: one tensor page per socket page, FIFO holds one page.
+        {1, 1, "cb1_fifo1"},
+        // Page-at-a-time but deeper FIFO so host can fill ahead of kernel.
+        {1, 8, "cb1_fifo8"},
+        // 4-page chunks fanned out from a deeper FIFO. Exercises pages_per_chunk
+        // > 1 path and the corresponding multi-page socket FIFO accounting.
+        {4, 16, "cb4_fifo16"},
+        // Mid-large allocation on both axes: 128*2560B = 320KB CB + 320KB FIFO.
+        // fifo >= pages_per_chunk=min(N,128) holds for N ∈ {16, 120}.
+        {128, 128, "cb128_fifo128"},
+        // Near-1MB FIFO with small CB: 4*2560B = 10KB CB, 400*2560B ≈ 1MB FIFO.
+        // Stresses the service-core L1 allocator's top-down headroom; CB stays
+        // small so CB+FIFO total fits under the ~1MB usable L1 per service core.
+        {4, 400, "cb4_fifo1MB"},
+    };
+
+    for (const auto& row : rows) {
+        const uint32_t num_workers = (row.worker_cores.end_coord.x - row.worker_cores.start_coord.x + 1) *
+                                     (row.worker_cores.end_coord.y - row.worker_cores.start_coord.y + 1);
+        for (const auto& ch : chunkings) {
+            SCOPED_TRACE(
+                ::testing::Message() << "case=" << row.label << " chunk=" << ch.label << " N=" << row.N
+                                     << " per_row=" << row.per_row_size << " num_workers=" << num_workers
+                                     << " num_iterations=" << row.num_iterations);
+
+            const uint32_t per_row_bytes = row.per_row_size * sizeof(uint32_t);
+            H2DServiceCase cs{
+                .global_shape = ttnn::Shape({1, 1, row.N, row.per_row_size}),
+                .placements = replicate_all(*this->mesh_device_),
+                .scratch_cb_size_bytes = ch.cb_pages * per_row_bytes,
+                .fifo_size_bytes = ch.fifo_pages * per_row_bytes,
+            };
+            for (auto path : {InputPath::Tensor, InputPath::Bytes}) {
+                SCOPED_TRACE(::testing::Message() << "path=" << input_path_name(path));
+                run_h2d_stream_service_case(this->mesh_device_, cs, path, row.worker_cores, row.num_iterations);
+            }
+        }
+    }
+}
+
+// Worker-sync handshake across multi-device sharding topologies.
+//
+// Mirrors `Sharded_Sweep`'s placement patterns (ShardRowsReplicateCols,
+// ReplicateRowsShardCols, FullShard2D) AND mirrors Replicated_WorkerSync_Sweep's
+// worker-grid axis (1 / 4 / 120 workers). The cross-product catches any
+// regression where sharding interacts with worker-count: e.g., a multicast
+// bbox bug that only surfaces on a full-grid run combined with a sharded
+// per-device shape.
+//
+// Per-device shape is `[1, 1, N, per_row_size]` under every placement pattern
+// (the mappers slice the global shape down to this); page count per device == N,
+// and `N % num_workers == 0` must hold per row.
+TEST_F(H2DStreamServiceTest, Sharded_WorkerSync_Sweep) {
+    const auto mesh_shape = this->mesh_device_->shape();
+    if (mesh_shape.dims() != 2) {
+        GTEST_SKIP() << "This test requires a 2D mesh; got " << mesh_shape;
+    }
+    const uint32_t num_rows = mesh_shape[0];
+    const uint32_t num_cols = mesh_shape[1];
+
+    struct Row {
+        uint32_t per_row_size;
+        uint32_t N;  // per-device page count; must satisfy N % num_workers == 0
+        CoreRange worker_cores;
+        const char* label;
+    };
+    // Chunking sweep — see comment in Replicated_WorkerSync_Sweep for rationale.
+    struct Chunking {
+        uint32_t cb_pages;
+        uint32_t fifo_pages;
+        const char* label;
+    };
+    const Row rows[] = {
+        // 4-worker row. 16 / 4 = 4 pages per worker.
+        Row{640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, "4_workers_row"},
+        // Single worker covers all per-device pages. Exercises the
+        // num_workers==1 degenerate-multicast path with sharded per-device shapes.
+        Row{640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}, "1_worker"},
+        // Full 12x10 worker grid = 120 cores, one page per worker. N bumped
+        // to 120 to keep divisibility; per-device tensor grows to [1,1,120,640].
+        Row{640, 120, CoreRange{CoreCoord{0, 0}, CoreCoord{11, 9}}, "120_workers_full_grid"},
+    };
+    const Chunking chunkings[] = {
+        {1, 1, "cb1_fifo1"},
+        {1, 8, "cb1_fifo8"},
+        {4, 16, "cb4_fifo16"},
+        // Mid-large on both axes (320KB CB + 320KB FIFO).
+        {128, 128, "cb128_fifo128"},
+        // Near-1MB FIFO with small CB (10KB CB, ~1MB FIFO).
+        {4, 400, "cb4_fifo1MB"},
+    };
+
+    constexpr uint32_t kNumIterations = 20;
+
+    auto run_pattern = [&](const char* pattern_label,
+                           const ttsl::SmallVector<MeshMapperConfig::Placement>& placements,
+                           const std::function<ttnn::Shape(uint32_t /*N*/, uint32_t /*per_row_size*/)>&
+                               make_global_shape) {
+        SCOPED_TRACE(::testing::Message() << "placement_pattern=" << pattern_label);
+        for (const auto& row : rows) {
+            const uint32_t num_workers = (row.worker_cores.end_coord.x - row.worker_cores.start_coord.x + 1) *
+                                         (row.worker_cores.end_coord.y - row.worker_cores.start_coord.y + 1);
+            for (const auto& ch : chunkings) {
+                const uint32_t per_row_bytes = row.per_row_size * sizeof(uint32_t);
+                H2DServiceCase cs{
+                    .global_shape = make_global_shape(row.N, row.per_row_size),
+                    .placements = placements,
+                    .scratch_cb_size_bytes = ch.cb_pages * per_row_bytes,
+                    .fifo_size_bytes = ch.fifo_pages * per_row_bytes,
+                };
+                for (auto path : {InputPath::Tensor, InputPath::Bytes}) {
+                    SCOPED_TRACE(
+                        ::testing::Message() << "case=" << row.label << " chunk=" << ch.label
+                                             << " path=" << input_path_name(path) << " per_row=" << row.per_row_size
+                                             << " N=" << row.N << " num_workers=" << num_workers);
+                    run_h2d_stream_service_case(this->mesh_device_, cs, path, row.worker_cores, kNumIterations);
+                }
+            }
+        }
+    };
+
+    // Shard on tensor dim 3 across mesh-dim 0, replicate across mesh-dim 1.
+    if (num_rows >= 2) {
+        run_pattern(
+            "ShardRowsReplicateCols",
+            {MeshMapperConfig::Shard{3}, MeshMapperConfig::Replicate{}},
+            [&](uint32_t N, uint32_t per_row_size) {
+                return ttnn::Shape({1, 1, N, num_rows * per_row_size});
+            });
+    }
+
+    // Mirror: replicate across mesh-dim 0, shard tensor dim 3 across mesh-dim 1.
+    if (num_cols >= 2) {
+        run_pattern(
+            "ReplicateRowsShardCols",
+            {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{3}},
+            [&](uint32_t N, uint32_t per_row_size) {
+                return ttnn::Shape({1, 1, N, num_cols * per_row_size});
+            });
+    }
+
+    // Full 2D shard: tensor dim 2 across mesh-dim 0, tensor dim 3 across mesh-dim 1.
     if (num_rows >= 2 && num_cols >= 2) {
         run_pattern(
             "FullShard2D",

@@ -225,9 +225,6 @@ void H2DSocket::write_socket_metadata(
     md.h2d.data_addr_hi = data_info.addr_hi;
     md.h2d.pcie_xy_enc = bytes_acked_info.pcie_xy_enc;
 
-    std::cout << "Bytes Acked Address: " << md.h2d.bytes_acked_addr_hi << " " << md.h2d.bytes_acked_addr_lo << std::endl;
-    std::cout << "Data Address: " << md.h2d.data_addr_hi << " " << md.h2d.data_addr_lo << std::endl;
-    std::cout << "PCIe Enc: " << md.h2d.pcie_xy_enc << std::endl;
     if (svc_config_l1_addr_.has_value()) {
         // Service-core path: MeshCommandQueue dispatch has no context of
         // service cores, so WriteShard would silently miss. Write directly
@@ -257,27 +254,27 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
 
     const auto& cluster = MetalContext::instance().get_cluster();
 
-    // if (mesh_device) {
+    if (mesh_device) {
         recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
         recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core_.core_coord);
         receiver_core_tlb_ = cluster.get_driver()
                                  ->get_chip(recv_device_id)
                                  ->get_tlb_manager()
                                  ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
-    // } else {
-        // recv_device_id = device_id.value();
-        // recv_virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
-        //     recv_device_id, recv_core_.core_coord, CoreType::TENSIX);
-    // }
-    // auto arch = MetalContext::instance().hal().get_arch();
-    // if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
-    //     // This process owns a mesh_device and hence has statically initialized TLBs.
-    //     // Entire device address space for Blackhole is statically mapped.
-    //     // Safe to use static TLBs without requiring the driver to do a reconfig.
-    //     pcie_writer = [&](void* data, uint32_t num_bytes, uint64_t device_addr) {
-    //         receiver_core_tlb_->write_block(device_addr, data, num_bytes);
-    //     };
-    // } else {
+    } else {
+        recv_device_id = device_id.value();
+        recv_virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+            recv_device_id, recv_core_.core_coord, CoreType::TENSIX);
+    }
+    auto arch = MetalContext::instance().hal().get_arch();
+    if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
+        // This process owns a mesh_device and hence has statically initialized TLBs.
+        // Entire device address space for Blackhole is statically mapped.
+        // Safe to use static TLBs without requiring the driver to do a reconfig.
+        pcie_writer = [&](void* data, uint32_t num_bytes, uint64_t device_addr) {
+            receiver_core_tlb_->write_block(device_addr, data, num_bytes);
+        };
+    } else {
         // Mesh Device not owned - use dynamic TLBs through UMD.
         // Wormhole B0 may require the driver to do a reconfig of the TLB for each write,
         // since the device address space is not statically mapped.
@@ -285,7 +282,7 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
             const auto& cluster = MetalContext::instance().get_cluster();
             cluster.write_core(data, num_bytes, tt_cxy_pair(recv_device_id, recv_virtual_core), device_addr);
         };
-    // }
+    }
 }
 
 H2DSocket::H2DSocket(
