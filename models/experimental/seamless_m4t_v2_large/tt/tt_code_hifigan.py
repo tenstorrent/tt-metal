@@ -17,11 +17,26 @@ import torch
 import ttnn
 
 from models.experimental.seamless_m4t_v2_large.tt.common import (
+    TILE,
     core_grid,
     matmul_program_config,
     MATMUL_1D_SEQ_THRESHOLD,
     to_torch_replicated_first_shard,
 )
+
+# Both matmul dims must stay small on BH; ``t_audio`` alone can be thousands of frames.
+_VOCODER_EXPAND_MATMUL_CHUNK = TILE
+# HiFi-GAN conv_pre input length per chunk (upsample L1 grows quickly on BH).
+_HIFIGAN_MEL_CHUNK = 384
+
+
+def _vocoder_dram_slice_count(input_length: int) -> int:
+    """DRAM height slices for long vocoder upsample timelines on Blackhole."""
+    il = int(input_length)
+    if il <= MATMUL_1D_SEQ_THRESHOLD:
+        return 16
+    target_rows = 48
+    return min(128, max(16, (il + target_rows - 1) // target_rows))
 
 
 def _vocoder_hf_gather_index(input_ids: ttnn.Tensor, *, batch: int, seq: int, pad_id: int) -> int:
@@ -98,7 +113,12 @@ def _vocoder_conv2d_config(*, input_length: int, in_channels: int) -> ttnn.Conv2
         enable_weights_double_buffer=True,
         enable_act_double_buffer=True,
     )
-    if int(input_length) > 64 or int(in_channels) >= 512:
+    il = int(input_length)
+    if il > 256:
+        conv_kwargs["enable_weights_double_buffer"] = False
+        conv_kwargs["enable_act_double_buffer"] = False
+    # ``act_block_h_override`` must be a multiple of TILE (32); 8 → 0 ntiles and SIGFPE in conv2d.
+    if il > 64 or int(in_channels) >= 512:
         conv_kwargs["act_block_h_override"] = 32
     return ttnn.Conv2dConfig(**conv_kwargs)
 
@@ -148,6 +168,73 @@ class TTSeamlessM4Tv2CodeHifiGan:
         self._matmul_pc_cache: dict = {}
         # Populated only by ``prewarm_conv1d_weights`` (trace/E2E). Forward without prewarm uses raw weights (PCC path).
         self._conv1d_prepared_cache: Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]] = {}
+
+    def _expand_unit_embeddings_matmul(
+        self,
+        use_BEC: ttnn.Tensor,
+        H: ttnn.Tensor,
+        *,
+        batch: int,
+        e_unit: int,
+        seq: int,
+        t_audio: int,
+    ) -> ttnn.Tensor:
+        """``use_BEC @ H`` with 2D tiles when ``seq`` or ``t_audio`` exceeds the 1D L1 budget."""
+        mm_kwargs: dict = dict(
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self._compute,
+        )
+        if seq <= MATMUL_1D_SEQ_THRESHOLD and t_audio <= MATMUL_1D_SEQ_THRESHOLD:
+            pc_expand = self._matmul_pc(batch * e_unit, seq, t_audio)
+            if pc_expand is not None:
+                mm_kwargs["program_config"] = pc_expand
+            return ttnn.matmul(use_BEC, H, **mm_kwargs)
+
+        chunk = _VOCODER_EXPAND_MATMUL_CHUNK
+        t_cols: list[ttnn.Tensor] = []
+        for t0 in range(0, t_audio, chunk):
+            t1 = min(t0 + chunk, t_audio)
+            t_span = t1 - t0
+            acc: Optional[ttnn.Tensor] = None
+            for s0 in range(0, seq, chunk):
+                s1 = min(s0 + chunk, seq)
+                s_span = s1 - s0
+                use_sl = ttnn.slice(
+                    use_BEC,
+                    [0, 0, s0],
+                    [batch, e_unit, s1],
+                    (1, 1, 1),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                h_sl = ttnn.slice(
+                    H,
+                    [0, s0, t0],
+                    [batch, s1, t1],
+                    (1, 1, 1),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                pc = matmul_program_config(
+                    self.device,
+                    token_rows=batch * e_unit,
+                    in_dim=s_span,
+                    out_dim=t_span,
+                )
+                part = ttnn.matmul(use_sl, h_sl, program_config=pc, **mm_kwargs)
+                ttnn.deallocate(use_sl)
+                ttnn.deallocate(h_sl)
+                if acc is None:
+                    acc = part
+                else:
+                    acc_next = ttnn.add(acc, part, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    ttnn.deallocate(acc)
+                    ttnn.deallocate(part)
+                    acc = acc_next
+            assert acc is not None
+            t_cols.append(acc)
+
+        if len(t_cols) == 1:
+            return t_cols[0]
+        return ttnn.concat(t_cols, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def _matmul_pc(self, token_rows: int, in_dim: int, out_dim: int) -> Optional[ttnn.ProgramConfig]:
         if token_rows > MATMUL_1D_SEQ_THRESHOLD:
@@ -490,6 +577,103 @@ class TTSeamlessM4Tv2CodeHifiGan:
         out = ttnn.reshape(out, (batch, out_len, out_channels))
         return out, out_len
 
+    def _pad_nlc_time(
+        self,
+        x_nlc: ttnn.Tensor,
+        *,
+        batch: int,
+        tlen: int,
+        channels: int,
+        pad_to: int,
+    ) -> Tuple[ttnn.Tensor, bool]:
+        """Right-pad ``[B, tlen, C]`` to ``pad_to`` rows; returns (tensor, created_new)."""
+        if tlen >= pad_to:
+            return x_nlc, False
+        pad_rows = pad_to - tlen
+        pad = ttnn.zeros(
+            (batch, pad_rows, channels),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        out = ttnn.concat([x_nlc, pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(pad)
+        return out, True
+
+    def _conv_transpose1d_nlc_dram_sliced(
+        self,
+        x_nlc: ttnn.Tensor,
+        *,
+        layer: Any,
+        batch: int,
+        input_length: int,
+        in_channels: int,
+        out_channels: int,
+        conv_config: ttnn.Conv2dConfig,
+    ) -> Tuple[ttnn.Tensor, int]:
+        """DRAM height slices for long timelines (BH vocoder upsample L1 budget)."""
+        k = int(layer["kernel_size"])
+        s = int(layer["stride"])
+        p = int(layer["padding"])
+        weight = layer["weight"]
+        bias = layer["bias"]
+        num_slices = _vocoder_dram_slice_count(input_length)
+        pad_h = ((int(input_length) + num_slices - 1) // num_slices) * num_slices
+        x_work, padded = self._pad_nlc_time(
+            x_nlc,
+            batch=batch,
+            tlen=input_length,
+            channels=in_channels,
+            pad_to=pad_h,
+        )
+        x_nhwc = ttnn.reshape(x_work, (batch, pad_h, 1, in_channels))
+        if x_nhwc.memory_config().buffer_type != ttnn.BufferType.DRAM:
+            x_nhwc = ttnn.to_memory_config(x_nhwc, ttnn.DRAM_MEMORY_CONFIG)
+        dram_slice = ttnn.Conv2dSliceConfig(
+            slice_type=ttnn.Conv2dDRAMSliceHeight,
+            num_slices=num_slices,
+        )
+        out_4d, out_hw = ttnn.conv_transpose2d(
+            input_tensor=x_nhwc,
+            weight_tensor=weight,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            device=self.device,
+            bias_tensor=bias,
+            kernel_size=(k, 1),
+            stride=(s, 1),
+            padding=(p, 0),
+            output_padding=(0, 0),
+            dilation=(1, 1),
+            batch_size=batch,
+            input_height=pad_h,
+            input_width=1,
+            conv_config=conv_config,
+            compute_config=self._compute,
+            dram_slice_config=dram_slice,
+            groups=1,
+            return_output_dim=True,
+            return_weights_and_bias=False,
+            dtype=ttnn.bfloat16,
+        )
+        if padded:
+            ttnn.deallocate(x_work)
+        out_h_padded = int(out_hw[0])
+        out_nlc = ttnn.reshape(out_4d, (batch, out_h_padded, out_channels))
+        if ttnn.is_sharded(out_nlc):
+            out_nlc = ttnn.sharded_to_interleaved(out_nlc, ttnn.DRAM_MEMORY_CONFIG)
+        out_h = _host_transpose_conv_out_length(input_length, k, s, p)
+        if out_h < out_h_padded:
+            out_nlc = ttnn.slice(
+                out_nlc,
+                [0, 0, 0],
+                [batch, out_h, out_channels],
+                (1, 1, 1),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return out_nlc, out_h
+
     def _conv_transpose1d_nlc(
         self,
         x_nlc: ttnn.Tensor,
@@ -507,8 +691,19 @@ class TTSeamlessM4Tv2CodeHifiGan:
         weight = layer["weight"]
         bias = layer["bias"]
 
-        x_nhwc = ttnn.reshape(x_nlc, (batch, input_length, 1, in_channels))
         conv_config = _vocoder_conv2d_config(input_length=input_length, in_channels=in_channels)
+        if int(input_length) > 64:
+            return self._conv_transpose1d_nlc_dram_sliced(
+                x_nlc,
+                layer=layer,
+                batch=batch,
+                input_length=input_length,
+                in_channels=in_channels,
+                out_channels=out_channels,
+                conv_config=conv_config,
+            )
+
+        x_nhwc = ttnn.reshape(x_nlc, (batch, input_length, 1, in_channels))
         out_4d, out_hw = ttnn.conv_transpose2d(
             input_tensor=x_nhwc,
             weight_tensor=weight,
@@ -615,6 +810,33 @@ class TTSeamlessM4Tv2CodeHifiGan:
         return x_nlc
 
     def _hifi_gan(self, x_nlc: ttnn.Tensor, hg: Any, *, batch: int, tlen: int) -> ttnn.Tensor:
+        """HiFi-GAN stack; time-chunked when ``tlen`` exceeds BH upsample L1 budget."""
+        if tlen <= _HIFIGAN_MEL_CHUNK:
+            return self._hifi_gan_once(x_nlc, hg, batch=batch, tlen=tlen)
+
+        channels = int(x_nlc.shape[2])
+        wav_parts: list[ttnn.Tensor] = []
+        pos = 0
+        while pos < tlen:
+            end = min(pos + _HIFIGAN_MEL_CHUNK, tlen)
+            span = end - pos
+            x_sl = ttnn.slice(
+                x_nlc,
+                [0, pos, 0],
+                [batch, end, channels],
+                (1, 1, 1),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            wav_sl = self._hifi_gan_once(x_sl, hg, batch=batch, tlen=span)
+            ttnn.deallocate(x_sl)
+            wav_parts.append(wav_sl)
+            pos = end
+        ttnn.deallocate(x_nlc)
+        if len(wav_parts) == 1:
+            return wav_parts[0]
+        return ttnn.concat(wav_parts, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def _hifi_gan_once(self, x_nlc: ttnn.Tensor, hg: Any, *, batch: int, tlen: int) -> ttnn.Tensor:
         cp = hg.conv_pre
         h, tlen = self._conv1d(
             x_nlc,
@@ -789,14 +1011,14 @@ class TTSeamlessM4Tv2CodeHifiGan:
 
         # use: [B, T_units, E_unit] -> [B, E_unit, T_units]; expand to [B, E_unit, t_audio].
         use_BEC = ttnn.permute(use, (0, 2, 1))
-        pc_expand = self._matmul_pc(batch * e_unit, seq, t_audio)
-        mm_kwargs: dict = dict(
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self._compute,
+        expanded_BCT = self._expand_unit_embeddings_matmul(
+            use_BEC,
+            H,
+            batch=batch,
+            e_unit=e_unit,
+            seq=seq,
+            t_audio=t_audio,
         )
-        if pc_expand is not None:
-            mm_kwargs["program_config"] = pc_expand
-        expanded_BCT = ttnn.matmul(use_BEC, H, **mm_kwargs)
 
         # ---------- broadcast lang/spk to ``t_audio`` (device) ----------
         lang_dim = int(lang_e.shape[-1])
