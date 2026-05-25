@@ -151,20 +151,11 @@ ProgramDescriptor SliceWriteRMShardedInputProgramFactory::create_descriptor(
         "slice_write expects output start for the last dimension to be 0. Got {}",
         output_tensor_start[-1]);
 
-    std::vector<uint32_t> common_writer_kernel_args = {
-        output_buffer->address() + (output_tensor_start[-1] * output.element_size()),
-        output_row_size_bytes,
-        input_row_size_bytes_local,
-        input_row_size_bytes_offset,
-        num_dims,
-        0,
-        0,
-        0,
-        0};
-    common_writer_kernel_args.insert(
-        common_writer_kernel_args.end(), num_input_sticks_per_dim.begin(), num_input_sticks_per_dim.end());
-    common_writer_kernel_args.insert(
-        common_writer_kernel_args.end(), num_output_sticks_per_dim.begin(), num_output_sticks_per_dim.end());
+    // Arg 0 is the dst buffer base (BufferBinding so the framework patches it on cache hits);
+    // arg 9 carries the per-core byte offset into that buffer.  Keeping these split is what
+    // makes the writer survive program-cache hits when the caller passes a freshly-allocated
+    // output tensor — combining them into a single uint32 would freeze the value at first call.
+    const uint32_t base_addr_offset_bytes = output_tensor_start[-1] * output.element_size();
 
     const auto num_sticks_per_core = shard_spec.shape[0];
     const uint32_t num_sticks_per_core_read =
@@ -200,22 +191,34 @@ ProgramDescriptor SliceWriteRMShardedInputProgramFactory::create_descriptor(
         }
 
         uint32_t this_input_row_size_bytes = std::min(input_row_size_bytes_local, output_row_size_bytes - width_offset);
-        std::vector<uint32_t> writer_kernel_args = common_writer_kernel_args;
-        writer_kernel_args[0] += width_offset;
-        writer_kernel_args[2] = this_input_row_size_bytes;
 
         uint32_t num_sticks_this_core =
             std::min<uint32_t>(num_sticks_per_core, std::max<int>(max_num_sticks_this_core + 1, 0));
 
-        uint32_t addr_offset = 5;
-        writer_kernel_args[addr_offset++] = start_id;
-        writer_kernel_args[addr_offset++] = num_sticks_this_core;
-        writer_kernel_args[addr_offset++] = num_sticks_this_core;
-        writer_kernel_args[addr_offset] = num_read_per_barrier;
-        writer_kernel_args.insert(writer_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
+        std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> writer_kernel_args;
+        writer_kernel_args.reserve(10 + 3 * num_dims);
+        writer_kernel_args.push_back(output_buffer);                          // slot 0: BufferBinding base
+        writer_kernel_args.push_back(output_row_size_bytes);                  // slot 1
+        writer_kernel_args.push_back(this_input_row_size_bytes);              // slot 2
+        writer_kernel_args.push_back(input_row_size_bytes_offset);            // slot 3
+        writer_kernel_args.push_back(num_dims);                               // slot 4
+        writer_kernel_args.push_back(start_id);                               // slot 5
+        writer_kernel_args.push_back(num_sticks_this_core);                   // slot 6
+        writer_kernel_args.push_back(num_sticks_this_core);                   // slot 7
+        writer_kernel_args.push_back(num_read_per_barrier);                   // slot 8
+        writer_kernel_args.push_back(base_addr_offset_bytes + width_offset);  // slot 9: per-core byte offset
+        for (uint32_t v : num_input_sticks_per_dim) {
+            writer_kernel_args.push_back(v);
+        }
+        for (uint32_t v : num_output_sticks_per_dim) {
+            writer_kernel_args.push_back(v);
+        }
+        for (uint32_t v : id_per_dim) {
+            writer_kernel_args.push_back(v);
+        }
 
         reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_sticks_per_core});
-        writer_desc.runtime_args.emplace_back(core, std::move(writer_kernel_args));
+        writer_desc.emplace_runtime_args(core, writer_kernel_args);
         core_index++;
     }
 

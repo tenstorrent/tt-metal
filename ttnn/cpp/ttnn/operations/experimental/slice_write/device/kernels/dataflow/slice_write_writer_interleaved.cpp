@@ -8,7 +8,12 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    // Arg 0 is patched by the ProgramDescriptor framework to the current dst buffer base on
+    // every dispatch (BufferBinding).  Arg 9 carries the per-core byte offset into that buffer
+    // (output_tensor_start[-1] * elem_size + width_offset).  Splitting base+offset is what makes
+    // this safe on cache hits — see the legacy override_runtime_arguments path that this
+    // descriptor migration replaced.
+    const uint32_t dst_base_addr = get_arg_val<uint32_t>(0);
     const uint32_t output_stick_size = get_arg_val<uint32_t>(1);
     const uint32_t input_stick_size = get_arg_val<uint32_t>(2);
     const uint32_t stick_size_offset = get_arg_val<uint32_t>(3);
@@ -17,9 +22,12 @@ void kernel_main() {
     const uint32_t num_sticks_per_core = get_arg_val<uint32_t>(6);
     const uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(7);
     const uint32_t num_read_per_barrier = get_arg_val<uint32_t>(8);
+    const uint32_t dst_addr_offset_bytes = get_arg_val<uint32_t>(9);
+    const uint32_t dst_addr = dst_base_addr + dst_addr_offset_bytes;
 
 #ifdef UNPAD_INPUT_WIDTH
-    const uint32_t padding_width_ntiles = get_arg_val<uint32_t>(21);
+    // Variable-length section starts at arg 10 (was 9), padding_width_ntiles trailing it shifted from 21 to 22.
+    const uint32_t padding_width_ntiles = get_arg_val<uint32_t>(22);
 #endif
 
 #ifdef DEBUG
@@ -37,7 +45,7 @@ void kernel_main() {
 #endif
 
 #endif
-    tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
+    tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(10));
     volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
     volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);

@@ -185,8 +185,12 @@ ProgramDescriptor SliceWriteTiledShardedInputProgramFactory::create_descriptor(
         output_tensor_start[-1]);
 
     auto* output_buffer = output.buffer();
+    // Slot 0 is the dst buffer base, populated via BufferBinding in the per-core loop below
+    // so the framework re-patches it on cache hits (otherwise a stale first-call address
+    // sticks and the kernel writes into freed/reused memory).  Slot 9 is the per-core byte
+    // offset into that buffer; here it is always 0 because output_tensor_start[-1] == 0.
     std::vector<uint32_t> common_writer_kernel_args = {
-        output_buffer->address(),
+        0,  // slot 0: placeholder; replaced by output_buffer Buffer* via emplace_runtime_args
         input_single_tile_size,
         input_single_tile_size,
         input_single_tile_size,
@@ -194,7 +198,8 @@ ProgramDescriptor SliceWriteTiledShardedInputProgramFactory::create_descriptor(
         0,
         0,
         0,
-        0};
+        0,
+        0};  // slot 9: per-core dst byte offset (always 0 here)
     common_writer_kernel_args.insert(
         common_writer_kernel_args.end(), num_input_tiles_per_dim.begin(), num_input_tiles_per_dim.end());
     common_writer_kernel_args.insert(
@@ -252,8 +257,16 @@ ProgramDescriptor SliceWriteTiledShardedInputProgramFactory::create_descriptor(
         writer_kernel_args.insert(writer_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
         writer_kernel_args.push_back(num_tiles_per_channel - channels_tiles_this_core);
 
+        // Convert to RTArgList so the framework registers slot 0 as a BufferBinding.
+        KernelDescriptor::RTArgList writer_rt;
+        writer_rt.reserve(writer_kernel_args.size());
+        writer_rt.push_back(output_buffer);
+        for (size_t j = 1; j < writer_kernel_args.size(); ++j) {
+            writer_rt.push_back(writer_kernel_args[j]);
+        }
+
         reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_tiles_this_core});
-        writer_desc.runtime_args.emplace_back(core, std::move(writer_kernel_args));
+        writer_desc.emplace_runtime_args(core, writer_rt);
         core_index++;
     }
 
