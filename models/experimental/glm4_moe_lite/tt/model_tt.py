@@ -18,6 +18,10 @@ import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 
+_SIGNPOST_ENABLED = os.environ.get("GLM4_MOE_LITE_SIGNPOST", "").strip() == "1"
+if _SIGNPOST_ENABLED:
+    from tracy import signpost
+
 _PROFILER_READ_INTERVAL = int(os.environ.get("GLM4_MOE_LITE_PROFILER_READ_INTERVAL", "0").strip() or "0")
 
 from models.experimental.glm4_moe_lite.tt.decoder_layer_tt import (
@@ -1387,6 +1391,11 @@ class Glm4MoeLiteDenseOnlyTT:
         if profile_on:
             decode_profile["prep_inputs_s"] = decode_profile.get("prep_inputs_s", 0.0) + (time.perf_counter() - t0)
 
+        if _SIGNPOST_ENABLED:
+            signpost("decode-start")
+
+        if _SIGNPOST_ENABLED:
+            signpost("embed-start")
         t0 = time.perf_counter() if profile_on else 0.0
         x = run_tt_embedding(device=self.device, token_ids=tokens, tt_weight=self.embed_w)
         if x.layout != ttnn.TILE_LAYOUT:
@@ -1407,6 +1416,8 @@ class Glm4MoeLiteDenseOnlyTT:
         x = x_tight
         if profile_on:
             decode_profile["embed_s"] = decode_profile.get("embed_s", 0.0) + (time.perf_counter() - t0)
+        if _SIGNPOST_ENABLED:
+            signpost("embed-end")
 
         # Batch-expansion serial cache update: construct masked position tensors
         # so paged_update_cache serializes writes from aliased page_table entries.
@@ -1465,6 +1476,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 positions_main_tt=positions_main_tt,
                 positions_draft_tt=positions_draft_tt,
                 layer_idx=layer_idx,
+                use_signpost=_SIGNPOST_ENABLED,
             )
             if layer_profile is not None:
                 for key, value in layer_profile.items():
@@ -1486,11 +1498,18 @@ class Glm4MoeLiteDenseOnlyTT:
             ttnn.deallocate(sin_decode, force=False)
             ttnn.deallocate(trans_decode, force=False)
 
+        if _SIGNPOST_ENABLED:
+            signpost("lm_head-start")
         t0 = time.perf_counter() if profile_on else 0.0
         x = self.final_norm(x, mode="decode")
         logits_tt = self._lm_head_linear(x, self.lm_head_w)  # [1,1,B,vocab]
         if profile_on:
             decode_profile["head_s"] = decode_profile.get("head_s", 0.0) + (time.perf_counter() - t0)
+        if _SIGNPOST_ENABLED:
+            signpost("lm_head-end")
+
+        if _SIGNPOST_ENABLED:
+            signpost("decode-end")
 
         if sampling_params is not None:
             # Basic on-device sampling: greedy (argmax).
@@ -1780,6 +1799,7 @@ class Glm4MoeLiteDenseOnlyTT:
             profile=None,
             use_decode_rope=True,
             layer_idx=47,
+            use_signpost=_SIGNPOST_ENABLED,
         )
         ttnn.deallocate(proj, force=False)
 
