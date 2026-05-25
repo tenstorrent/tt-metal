@@ -1,0 +1,49 @@
+# Qwen3-TTS Japanese benchmark configuration
+
+model:
+  name: "Qwen3-TTS-12Hz-1.7B-Base"
+  path: "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+  language: "japanese"
+
+generation:
+  max_new_tokens: 2048
+  temperature: 0.9
+  top_k: 50
+  top_p: 1.0
+  repetition_penalty: 1.05
+
+datasets:
+  custom_ja:
+    path: "models/demos/qwen3_tts/evaluation/datasets/custom_ja.json"
+    type: "custom"
+  jsut:
+    path: null  # Set via JSUT_DATA_PATH env var
+    type: "jsut"
+    subset_size: 100
+
+metrics:
+  cer:
+    enabled: true
+    asr_model: "openai/whisper-large-v3"
+    language: "japanese"
+  utmos:
+    enabled: true
+    model: "sarulab-speech/UTMOS22"
+  speaker_similarity:
+    enabled: true
+    model: "microsoft/wavlm-base-plus-sv"
+  rtf:
+    enabled: true
+  pesq:
+    enabled: false  # Requires reference audio (GPU vs TT comparison only)
+
+output:
+  dir: "models/demos/qwen3_tts/evaluation/results"
+  format: "json"
+
+pass_criteria:
+  cer_delta: 0.005      # ±0.5% vs GPU reference
+  utmos_delta: 0.1      # ±0.1 vs GPU reference
+  sim_delta: 0.02       # ±0.02 vs GPU reference
+  max_rtf: 1.0          # Real-time factor < 1.0
+  min_pesq: 4.0         # PESQ > 4.0 (TT vs GPU waveform)
