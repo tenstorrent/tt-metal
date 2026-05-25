@@ -27,6 +27,8 @@
 #include <tt_stl/span.hpp>
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include "internal/tt-2xx/quasar/error_handling.h"
+#include <tt-metalium/experimental/host_api.hpp>
 #include "impl/debug/debug_helpers.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -118,11 +120,13 @@ static void RunTest(
                     break;
                 case HalProcessorClassType::COMPUTE:
                     if (is_quasar) {
+                        uint32_t trisc_id = static_cast<uint32_t>(processor.processor_type);
                         experimental::metal2_host_api::KernelSpec assert_kernel_spec{
                             .unique_id = ASSERT_KERNEL_NAME,
                             .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel},
                             .num_threads = 1,
-                            .compiler_options = {.defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}},
+                            .compiler_options = {.defines = {{fmt::format("TRISC{}", trisc_id), "1"}}},
+                            .compile_time_arg_bindings = {{"trisc_id", trisc_id}},
                             .runtime_arguments_schema =
                                 {.named_runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
                             .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
@@ -246,22 +250,35 @@ static void RunTest(
         default: core_str = "worker";
     }
 
+    uint64_t hw_fault_info = 0;
+    // DM errors are using the error values, as they are directly returned by the hardware
+    // TRISC errors are spread and have different meanings, so using 5,7 the same as DM (illegal access)
+    // and adding new cases 8 and 9.
+    if (processor.processor_class == HalProcessorClassType::COMPUTE) {
+        switch (hw_assert_cause) {
+            case 5:
+            case 7: hw_assert_cause = 0x128; break;
+            case 8: hw_assert_cause = 0x23bc; break;
+            case 9: hw_assert_cause = 0xc03; break;
+            default: hw_assert_cause = 0; break;
+        }
+    } else {
+        switch (hw_assert_cause) {
+            case static_cast<uint32_t>(DmErrors::ILLEGAL_INSTRUCTION): hw_fault_info = 0x0; break;
+            case static_cast<uint32_t>(DmErrors::UNALIGNED_LOAD):
+            case static_cast<uint32_t>(DmErrors::UNALIGNED_STORE): hw_fault_info = 0x2; break;
+            case static_cast<uint32_t>(DmErrors::LOAD_ACCESS_FAULT):
+            case static_cast<uint32_t>(DmErrors::STORE_ACCESS_FAULT): hw_fault_info = 0xffffffffff000000; break;
+            default: hw_fault_info = 0; break;
+        }
+    }
     // Don't hardcode line number, the ASSERT location in watcher_asserts.cpp kernel
     // can shift as code changes. Use regex to match any line number for DebugAssertTripped
     // (get_debug_assert_message defaults to line 0, which we replace with \d+ below)
-    uint64_t hw_fault_info = 0;
-    switch (hw_assert_cause) {
-        case 2: hw_fault_info = 0x0; break;
-        case 4:
-        case 6: hw_fault_info = 0x2; break;
-        case 5:
-        case 7: hw_fault_info = 0xffffffffff000000; break;
-        default: hw_fault_info = 0; break;
-    }
     const std::string msg = get_debug_assert_message(
         assert_type,
         0,
-        // hard code cause/line info for hW faults, as we know them exactly
+        // hard code cause/line info for HW faults, as we know them exactly
         hw_fault_info << 32 | hw_assert_cause);
     ASSERT_FALSE(msg.empty()) << "Unhandled assert type " << static_cast<int>(assert_type);
 
@@ -289,12 +306,21 @@ static void RunTest(
             << "Expected pattern: " << pattern << "\nActual: " << exception;
     } else if (assert_type == dev_msgs::DebugAssertHwFault) {
         // Build regex pattern from string expected, replacing PC 0x0 with PC 0x[\da-fA-F]+
+        // or instruction: 0x00000000 with instruction: 0x[\da-fA-F]+
         std::string pattern = regex_escape(expected);
-        const std::string pc_placeholder = "PC 0x0";
-        size_t pos = pattern.find(pc_placeholder);
-        ASSERT_NE(pos, std::string::npos)
-            << "Expected placeholder '" << pc_placeholder << "' not found in escaped pattern: " << pattern;
-        pattern.replace(pos, pc_placeholder.length(), "PC 0x[\\da-fA-F]+");
+        if (processor.processor_class == HalProcessorClassType::DM) {
+            const std::string pc_placeholder = "PC 0x0";
+            size_t pos = pattern.find(pc_placeholder);
+            ASSERT_NE(pos, std::string::npos)
+                << "Expected placeholder '" << pc_placeholder << "' not found in escaped pattern: " << pattern;
+            pattern.replace(pos, pc_placeholder.length(), "PC 0x[\\da-fA-F]+");
+        } else if (processor.processor_class == HalProcessorClassType::COMPUTE) {
+            const std::string instruction_placeholder = "instruction: 0x00000000";
+            size_t pos = pattern.find(instruction_placeholder);
+            ASSERT_NE(pos, std::string::npos)
+                << "Expected placeholder '" << instruction_placeholder << "' not found in escaped pattern: " << pattern;
+            pattern.replace(pos, instruction_placeholder.length(), "instruction: 0x[\\da-fA-F]+");
+        }
         EXPECT_TRUE(std::regex_match(exception, std::regex(pattern)))
             << "Expected pattern: " << pattern << "\nActual: " << exception;
     } else {
@@ -354,6 +380,9 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
     if (using_slow_dispatch && !is_quasar && !is_idle_eth && !is_dram) {
         GTEST_SKIP() << "Slow Dispatch tests only run on Quasar, IDLE_ETH, or DRAM cores";
     }
+    if (!is_quasar && params.assert_type == dev_msgs::DebugAssertHwFault) {
+        GTEST_SKIP() << "HW Fault tests only run on Quasar";
+    }
     this->RunTestOnDevice(
         [&params](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             RunTest(fixture, mesh_device, params.processor, params.assert_type, params.hw_assert_cause);
@@ -403,15 +432,34 @@ INSTANTIATE_TEST_SUITE_P(
         WatcherTestParams{"DM6", {TENSIX, DM, 6}, dev_msgs::DebugAssertRtaOutOfBounds},
         WatcherTestParams{"DM7", {TENSIX, DM, 7}, dev_msgs::DebugAssertCrtaOutOfBounds},
         WatcherTestParams{
-            "HWFault2", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 2},  //  using DM7 to run only on Quasar
+            "DMHWFaultIllegalInstruction",
+            {TENSIX, DM, 2},
+            dev_msgs::DebugAssertHwFault,
+            static_cast<uint32_t>(DmErrors::ILLEGAL_INSTRUCTION)},
         WatcherTestParams{
-            "HWFault4", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 4},  //  using DM7 to run only on Quasar
+            "DMHWFaultUnalignedLoad",
+            {TENSIX, DM, 3},
+            dev_msgs::DebugAssertHwFault,
+            static_cast<uint32_t>(DmErrors::UNALIGNED_LOAD)},
         WatcherTestParams{
-            "HWFault5", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 5},  //  using DM7 to run only on Quasar
+            "DMHWFaultLoadAccessFault",
+            {TENSIX, DM, 5},
+            dev_msgs::DebugAssertHwFault,
+            static_cast<uint32_t>(DmErrors::LOAD_ACCESS_FAULT)},
         WatcherTestParams{
-            "HWFault6", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 6},  //  using DM7 to run only on Quasar
+            "DMHWFaultUnalignedStore",
+            {TENSIX, DM, 6},
+            dev_msgs::DebugAssertHwFault,
+            static_cast<uint32_t>(DmErrors::UNALIGNED_STORE)},
         WatcherTestParams{
-            "HWFault7", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 7},  //  using DM7 to run only on Quasar
+            "DMHWFaultStoreAccessFault",
+            {TENSIX, DM, 7},
+            dev_msgs::DebugAssertHwFault,
+            static_cast<uint32_t>(DmErrors::STORE_ACCESS_FAULT)},
+        WatcherTestParams{"ComputeHWFaultRead", {TENSIX, COMPUTE, 1}, dev_msgs::DebugAssertHwFault, 5},
+        WatcherTestParams{"ComputeHWFaultWrite", {TENSIX, COMPUTE, 1}, dev_msgs::DebugAssertHwFault, 7},
+        WatcherTestParams{"ComputeHWFaultIllegalInstruction", {TENSIX, COMPUTE, 0}, dev_msgs::DebugAssertHwFault, 8},
+        WatcherTestParams{"ComputeHWFaultSemaphore", {TENSIX, COMPUTE, 0}, dev_msgs::DebugAssertHwFault, 9},
         WatcherTestParams{"Trisc0", {TENSIX, COMPUTE, 0}, dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped},
         WatcherTestParams{"Trisc1", {TENSIX, COMPUTE, 1}, dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped},
         WatcherTestParams{"Trisc2", {TENSIX, COMPUTE, 2}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -47,7 +47,7 @@ def reference_model(hf_config):
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": get_fabric_config(), "trace_region_size": 2967552},
+        {"fabric_config": get_fabric_config(), "trace_region_size": 0},
     ],
     indirect=True,
 )
@@ -139,8 +139,6 @@ def test_ds_moe_forward(
         layer_id=module_path,
     )
 
-    # MoE gate topk fallback performs host IO (to_torch/from_torch), which is illegal during trace capture.
-    # Match fused-op trace behavior by forcing pure device topk path when trace_mode is enabled.
     model_config = get_model_config(
         MoE,
         mode,
@@ -148,7 +146,6 @@ def test_ds_moe_forward(
         mesh_device,
         device_params["fabric_config"],
         batch_size_per_row=USERS_PER_ROW,
-        topk_fallback=not trace_mode,
     )
     model_state = MoE.create_state(hf_config, mesh_device, ccl)
     model_shared_state = MoE.create_shared_state(hf_config, mesh_device)

@@ -363,7 +363,7 @@ def _build_distributed_norm_inputs(
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": get_fabric_config(),
-            "trace_region_size": 2967552,
+            "trace_region_size": 0,
         }
     ],
     indirect=True,

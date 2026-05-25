@@ -77,7 +77,8 @@ void apply_statistics_inplace(const uint32_t cb_attention_weights, const uint32_
 
     const uint32_t working_reg = 0;
 
-    init_bcast<ELWSUB, BroadcastType::COL>(cb_attention_weights, cb_intermediates, cb_attention_weights);
+    init_bcast<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(
+        cb_attention_weights, cb_intermediates, cb_attention_weights);
 
     reconfig_data_format(cb_attention_weights, cb_intermediates);
     tile_regs_acquire();
@@ -162,7 +163,7 @@ void compute_u_scalar_row(
     // using binary_tiles_init function instead of specific mul_tiles_init() because specific one doesn't support
     // accumulation to dest regs
     reconfig_data_format(cb_grad_output, cb_attn_output);
-    binary_tiles_init<true, ELWMUL>(cb_grad_output, cb_attn_output, /*acc_to_dest*/ true);
+    binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(cb_grad_output, cb_attn_output, /*acc_to_dest*/ true);
     tile_regs_acquire();
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
         mul_tiles(

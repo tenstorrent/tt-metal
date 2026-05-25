@@ -459,6 +459,15 @@ jobs:
           arch = os.environ.get('ARCH_NAME', '').lower()
           arch_filter = 'wormhole' if 'wormhole' in arch else ('blackhole' if 'blackhole' in arch else '')
           is_galaxy = 'galaxy' in test_group
+          # Derive the hardware suffix from the test group name so we only
+          # scan vectors belonging to THIS runner's hardware group.
+          # e.g., test_group='wormhole-n150-sweeps' -> look for '_n150_' in filenames
+          #        test_group='wormhole-n300-sweeps' -> look for '_n300_' in filenames
+          hw_series_filter = ''
+          for series in ['n150', 'n300', 'p150b', 'p100a', 'galaxy']:
+              if series in test_group:
+                  hw_series_filter = series
+                  break
           for f in glob.glob('/work/tests/sweep_framework/vectors_export/*.json'):
               fname = os.path.basename(f).lower()
               if arch_filter and arch_filter not in fname:
@@ -467,6 +476,9 @@ jobs:
               if is_galaxy and 'galaxy' not in fname:
                   continue
               if not is_galaxy and 'galaxy' in fname:
+                  continue
+              # Filter by device series to avoid N300 vectors on N150 runners
+              if hw_series_filter and hw_series_filter not in fname:
                   continue
               with open(f) as fh:
                   data = json.load(fh)

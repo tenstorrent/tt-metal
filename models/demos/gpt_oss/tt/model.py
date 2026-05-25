@@ -860,7 +860,11 @@ class Model:
         return host_inputs
 
     def transform_and_embed_prefill_inputs_device(
-        self, tokens, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx=None
+        self,
+        tokens,
+        tt_page_table,
+        tt_chunk_page_table,
+        tt_chunk_start_idx=None,
     ):
         """Transform and embed tokens on device"""
         tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
@@ -883,6 +887,8 @@ class Model:
         batch_size=1,
         user_id=0,
         batched_prefill=False,
+        chunk_start_idx=None,
+        **kwargs,
     ):
         """Prepare inputs for prefill mode
 
@@ -980,13 +986,23 @@ class Model:
                 chunk_page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
             )
 
+        if chunk_start_idx is not None:
+            tt_chunk_start_idx = ttnn.from_torch(
+                torch.tensor([chunk_start_idx], dtype=torch.int32),
+                device=device,
+                dtype=ttnn.int32,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            tt_chunk_start_idx = None
+
         return (
             tokens if trace_enabled else tokens_embd,
             rot_mats_global,
             rot_mats_local,
             tt_page_table,
             tt_chunk_page_table,
-            None,
+            tt_chunk_start_idx,
         )
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
