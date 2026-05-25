@@ -43,7 +43,7 @@ def main():
     print(f"[TEST] Mesh device opened: {mesh.get_num_devices()} devices")
 
     try:
-        # Host HF cache (~/.cache/huggingface); /cache/huggingface exists only in the vLLM dev container.
+        # Load HF config and create hparams
         snapshot_dir = Path(
             "/cache/huggingface/hub/models--zai-org--GLM-4.7-Flash/snapshots/7dd20894a642a0aa287e9827cb1a1f7f91386b67"
         )
