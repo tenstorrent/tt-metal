@@ -103,8 +103,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     const auto in0_tensor_shape = input_tensor.padded_shape();
     const auto in1_tensor_shape = weight_tensor.padded_shape();
-    const bool transpose_a = config.transpose_a;
-    const bool transpose_b = config.transpose_b;
+    const bool transpose_a = operation_attributes.transpose_a;
+    const bool transpose_b = operation_attributes.transpose_b;
     // Matmul-K source depends on which side is the parent buffer:
     //   - in1_k_offset > 0 (or K_w > K_in): weight is the parent, matmul-K = K_in
     //   - else: in0 may be the parent (or both match), matmul-K = K_w
@@ -729,8 +729,8 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& a_padded = input_tensor.padded_shape();
     const auto& w_padded = tensor_args.weight_tensor.padded_shape();
-    const bool transpose_a = operation_attributes.config.transpose_a;
-    const bool transpose_b = operation_attributes.config.transpose_b;
+    const bool transpose_a = operation_attributes.transpose_a;
+    const bool transpose_b = operation_attributes.transpose_b;
     const uint32_t parent_M_tiles = (transpose_a ? a_padded[-1] : a_padded[-2]) / tt::constants::TILE_HEIGHT;
     const uint32_t parent_K_tiles_in0 = (transpose_a ? a_padded[-2] : a_padded[-1]) / tt::constants::TILE_WIDTH;
     const uint32_t parent_K_tiles_in1 = (transpose_b ? w_padded[-1] : w_padded[-2]) / tt::constants::TILE_WIDTH;

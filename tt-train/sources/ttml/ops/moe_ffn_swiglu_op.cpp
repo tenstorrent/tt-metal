@@ -31,18 +31,6 @@ const ttml::metal::VariableMatmulConfig kVarMmConfig{
     .compute_with_storage_grid_size = {10, 10},
 };
 
-const ttml::metal::VariableMatmulConfig kVarMmConfigTransposeA = [] {
-    auto c = kVarMmConfig;
-    c.transpose_a = true;
-    return c;
-}();
-
-const ttml::metal::VariableMatmulConfig kVarMmConfigTransposeB = [] {
-    auto c = kVarMmConfig;
-    c.transpose_b = true;
-    return c;
-}();
-
 }  // namespace
 
 autograd::TensorPtr moe_ffn_swiglu_fw(
@@ -111,7 +99,9 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         ttml::metal::variable_matmul(
             grouped_value,
             w_gate_e,
-            kVarMmConfigTransposeB,
+            kVarMmConfig,
+            /*transpose_a=*/false,
+            /*transpose_b=*/true,
             std::nullopt,
             /*in0_row_offset_tiles=*/0U,
             /*effective_M_tiles=*/t_cap_tiles,
@@ -125,7 +115,9 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         ttml::metal::variable_matmul(
             grouped_value,
             w_up_e,
-            kVarMmConfigTransposeB,
+            kVarMmConfig,
+            /*transpose_a=*/false,
+            /*transpose_b=*/true,
             std::nullopt,
             0U,
             t_cap_tiles,
@@ -154,7 +146,9 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         ttml::metal::variable_matmul(
             activated,
             w_down_e,
-            kVarMmConfigTransposeB,
+            kVarMmConfig,
+            /*transpose_a=*/false,
+            /*transpose_b=*/true,
             std::nullopt,
             /*in0_row_offset_tiles=*/0U,
             /*effective_M_tiles=*/t_cap_tiles,
@@ -211,6 +205,8 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 dY,
                 w_down_e,
                 kVarMmConfig,
+                /*transpose_a=*/false,
+                /*transpose_b=*/false,
                 std::nullopt,
                 /*in0_row_offset_tiles=*/0U,
                 /*effective_M_tiles=*/t_cap_tiles,
@@ -233,7 +229,9 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             auto dW_down_e = ttml::metal::variable_matmul(
                 dY,
                 activated,
-                kVarMmConfigTransposeA,
+                kVarMmConfig,
+                /*transpose_a=*/true,
+                /*transpose_b=*/false,
                 std::nullopt,
                 0U,
                 0U,
@@ -262,7 +260,9 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             auto dW_gate_e = ttml::metal::variable_matmul(
                 d_gate_proj,
                 grouped_value,
-                kVarMmConfigTransposeA,
+                kVarMmConfig,
+                /*transpose_a=*/true,
+                /*transpose_b=*/false,
                 std::nullopt,
                 0U,
                 0U,
@@ -277,7 +277,9 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             auto dW_up_e = ttml::metal::variable_matmul(
                 d_up_proj,
                 grouped_value,
-                kVarMmConfigTransposeA,
+                kVarMmConfig,
+                /*transpose_a=*/true,
+                /*transpose_b=*/false,
                 std::nullopt,
                 0U,
                 0U,
@@ -296,6 +298,8 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 d_gate_proj,
                 w_gate_e,
                 kVarMmConfig,
+                /*transpose_a=*/false,
+                /*transpose_b=*/false,
                 std::nullopt,
                 0U,
                 /*effective_M_tiles=*/t_cap_tiles,
@@ -310,6 +314,8 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 d_up_proj,
                 w_up_e,
                 kVarMmConfig,
+                /*transpose_a=*/false,
+                /*transpose_b=*/false,
                 std::nullopt,
                 0U,
                 t_cap_tiles,

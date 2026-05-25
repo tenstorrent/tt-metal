@@ -48,6 +48,8 @@ ttnn::Tensor ttml_variable_matmul(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const ttml::metal::ops::variable_matmul::device::VariableMatmulConfig& config,
+    bool transpose_a = false,
+    bool transpose_b = false,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     uint32_t in0_row_offset_tiles = 0,
     uint32_t effective_M_tiles = 0,

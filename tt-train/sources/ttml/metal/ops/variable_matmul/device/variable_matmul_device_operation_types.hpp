@@ -19,16 +19,6 @@ struct VariableMatmulConfig {
     uint32_t subblock_w{};
 
     tt::tt_metal::CoreCoord compute_with_storage_grid_size = {0, 0};
-
-    // When true, the input tensor is interpreted as transposed for matmul purposes:
-    // stored shape [..., K, M] but used as [..., M, K]. Reader applies stride swap,
-    // compute kernel applies intra-tile transpose via transpose_wh_tile into a dedicated CB.
-    bool transpose_a = false;
-
-    // When true, the weight tensor is interpreted as transposed for matmul purposes:
-    // stored shape [..., N, K] but used as [..., K, N]. Reader applies stride swap,
-    // matmul kernel applies intra-tile transpose via the LLK transpose flag.
-    bool transpose_b = false;
 };
 
 // EP-friendly on-device offsets: instead of a host-supplied scalar
@@ -71,6 +61,15 @@ enum class OffsetsRole : uint32_t {
 struct VariableMatmulParams {
     VariableMatmulConfig config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
+
+    // When true, the input tensor is interpreted as transposed for matmul purposes:
+    // stored shape [..., K, M] but used as [..., M, K]. Reader applies stride swap,
+    // compute kernel applies intra-tile transpose via transpose_wh_tile into a dedicated CB.
+    bool transpose_a = false;
+    // When true, the weight tensor is interpreted as transposed for matmul purposes:
+    // stored shape [..., N, K] but used as [..., K, N]. Reader applies stride swap,
+    // matmul kernel applies intra-tile transpose via the LLK transpose flag.
+    bool transpose_b = false;
 
     // Read-at-offset support — lets variable_matmul read a sub-range of the input tensor
     // without materializing a slice. The input tensor is treated as a parent buffer.

@@ -101,6 +101,8 @@ TEST_F(VariableMatmulTest, OnDeviceOffsets_OutputRow_ActualLessThanParent) {
         input,
         weight,
         kConfig,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
         std::nullopt,
         0U,
         0U,
@@ -168,6 +170,8 @@ TEST_F(VariableMatmulTest, OnDeviceOffsets_OutputRow_MultiExpert) {
             input,
             weight,
             kConfig,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false,
             std::nullopt,
             0U,
             0U,
@@ -213,11 +217,12 @@ TEST_F(VariableMatmulTest, OnDeviceOffsets_InputRow_PreZeroOutput_PadRowsStayZer
         offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
 
     auto cfg = kConfig;
-    cfg.transpose_b = true;
     ttml::metal::variable_matmul(
         grouped,
         w_gate,
         cfg,
+        /*transpose_a=*/false,
+        /*transpose_b=*/true,
         std::nullopt,
         0U,
         /*effective_M_tiles=*/upper_M_tiles,
@@ -271,11 +276,12 @@ TEST_F(VariableMatmulTest, OnDeviceOffsets_InputRow_ZeroPadRowsProduceZeroOutput
         offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
 
     auto cfg = kConfig;
-    cfg.transpose_b = true;
     ttml::metal::variable_matmul(
         grouped,
         w_gate,
         cfg,
+        /*transpose_a=*/false,
+        /*transpose_b=*/true,
         std::nullopt,
         0U,
         upper_M_tiles,
@@ -329,6 +335,8 @@ TEST_F(VariableMatmulTest, OnDeviceOffsets_OutputRow_ZeroInputRowsProduceZeroOut
         in0,
         weight,
         kConfig,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
         std::nullopt,
         0U,
         0U,
@@ -360,9 +368,7 @@ TEST_F(VariableMatmulTest, TransposeBoth_Correctness_128x128x512) {
     auto weight_nk = create_random_device_tensor(N, K, device);  // stored [N, K]
 
     auto cfg = kConfig;
-    cfg.transpose_a = true;
-    cfg.transpose_b = true;
-    auto result = ttml::metal::variable_matmul(input_km, weight_nk, cfg);
+    auto result = ttml::metal::variable_matmul(input_km, weight_nk, cfg, /*transpose_a=*/true, /*transpose_b=*/true);
     auto ref = ttnn::matmul(input_km, weight_nk, /*transpose_a=*/true, /*transpose_b=*/true);
 
     float err = max_abs_error(result, ref);
@@ -415,9 +421,8 @@ TEST_F(VariableMatmulTest, MinimalParity_TransposeB) {
     auto input = create_random_device_tensor(M, K, device);
     auto weight_nk = create_random_device_tensor(N, K, device);  // stored [N, K]
 
-    auto cfg = kConfig;
-    cfg.transpose_b = true;
-    auto result = ttml::metal::variable_matmul(input, weight_nk, cfg);
+    const auto& cfg = kConfig;
+    auto result = ttml::metal::variable_matmul(input, weight_nk, cfg, /*transpose_a=*/false, /*transpose_b=*/true);
     // minimal_matmul has no transpose flag; pre-transpose the weight to compare apples-to-apples.
     auto weight_kn = ttnn::transpose(weight_nk, -2, -1);
     auto ref = minimal_matmul_hifi4(input, weight_kn, kConfig);
@@ -432,9 +437,8 @@ TEST_F(VariableMatmulTest, MinimalParity_TransposeA) {
     auto input_km = create_random_device_tensor(K, M, device);  // stored [K, M]
     auto weight = create_random_device_tensor(K, N, device);
 
-    auto cfg = kConfig;
-    cfg.transpose_a = true;
-    auto result = ttml::metal::variable_matmul(input_km, weight, cfg);
+    const auto& cfg = kConfig;
+    auto result = ttml::metal::variable_matmul(input_km, weight, cfg, /*transpose_a=*/true, /*transpose_b=*/false);
     auto input_mk = ttnn::transpose(input_km, -2, -1);
     auto ref = minimal_matmul_hifi4(input_mk, weight, kConfig);
 
@@ -451,7 +455,6 @@ TEST_F(VariableMatmulTest, MinimalParity_MixtralDWDown_TransposeA) {
         .subblock_h = 2,
         .subblock_w = 2,
         .compute_with_storage_grid_size = {10, 10},
-        .transpose_a = true,
     };
     const uint32_t M = 14336, K = 1024, N = 4096;
     auto* device = &ttml::autograd::ctx().get_device();
@@ -459,7 +462,7 @@ TEST_F(VariableMatmulTest, MinimalParity_MixtralDWDown_TransposeA) {
     auto input_km = create_random_device_tensor(K, M, device);
     auto weight = create_random_device_tensor(K, N, device);
 
-    auto result = ttml::metal::variable_matmul(input_km, weight, cfg);
+    auto result = ttml::metal::variable_matmul(input_km, weight, cfg, /*transpose_a=*/true, /*transpose_b=*/false);
     auto input_mk = ttnn::transpose(input_km, -2, -1);
     auto ref = minimal_matmul_hifi4(input_mk, weight, cfg);
 
@@ -488,6 +491,8 @@ TEST_F(VariableMatmulTest, MinimalParity_KOffset_In0_NoTranspose) {
         parent,
         weight,
         kConfig,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
         /*bias=*/std::nullopt,
         /*in0_row_offset_tiles=*/0,
         /*effective_M_tiles=*/0,
@@ -518,6 +523,8 @@ TEST_F(VariableMatmulTest, MinimalParity_KOffset_In1_NoTranspose) {
         input,
         weight_parent,
         kConfig,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
         /*bias=*/std::nullopt,
         /*in0_row_offset_tiles=*/0,
         /*effective_M_tiles=*/0,
@@ -548,11 +555,12 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputK_TransposeA) {
     constexpr uint32_t k_lo = 128;
 
     auto cfg = kConfig;
-    cfg.transpose_a = true;
     auto result = ttml::metal::variable_matmul(
         parent_km,
         weight,
         cfg,
+        /*transpose_a=*/true,
+        /*transpose_b=*/false,
         /*bias=*/std::nullopt,
         /*in0_row_offset_tiles=*/0,
         /*effective_M_tiles=*/0,
@@ -589,11 +597,12 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceWeightK_TransposeA) {
     constexpr uint32_t k_lo = 128;
 
     auto cfg = kConfig;
-    cfg.transpose_a = true;
     auto result = ttml::metal::variable_matmul(
         input_km,
         weight_parent,
         cfg,
+        /*transpose_a=*/true,
+        /*transpose_b=*/false,
         /*bias=*/std::nullopt,
         /*in0_row_offset_tiles=*/0,
         /*effective_M_tiles=*/0,
@@ -633,11 +642,12 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA) {
     constexpr uint32_t K_active = 128;
 
     auto cfg = kConfig;
-    cfg.transpose_a = true;
     auto result = ttml::metal::variable_matmul(
         in0_km,
         in1,
         cfg,
+        /*transpose_a=*/true,
+        /*transpose_b=*/false,
         /*bias=*/std::nullopt,
         /*in0_row_offset_tiles=*/0,
         /*effective_M_tiles=*/0,
@@ -687,11 +697,12 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA_NonT
     constexpr uint32_t K_active = 128;
 
     auto cfg = kConfig;
-    cfg.transpose_a = true;
     auto result = ttml::metal::variable_matmul(
         in0_km,
         in1,
         cfg,
+        /*transpose_a=*/true,
+        /*transpose_b=*/false,
         /*bias=*/std::nullopt,
         /*in0_row_offset_tiles=*/0,
         /*effective_M_tiles=*/0,
@@ -769,6 +780,8 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputRow) {
         input,
         weight,
         kConfig,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
         /*bias=*/std::nullopt,
         /*in0_row_offset_tiles=*/0,
         /*effective_M_tiles=*/effective_M_tiles_upper,
@@ -817,6 +830,8 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceOutputRow) {
         input,
         weight,
         kConfig,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
         /*bias=*/std::nullopt,
         /*in0_row_offset_tiles=*/0,
         /*effective_M_tiles=*/0,
@@ -874,6 +889,8 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
         input,
         weight,
         kConfig,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
         /*bias=*/std::nullopt,
         /*in0_row_offset_tiles=*/0,
         /*effective_M_tiles=*/M_parent / 32U,  // upper bound = parent_M
@@ -925,7 +942,6 @@ const ttml::metal::VariableMatmulConfig kMoeFfnConfig{
 
 TEST_F(VariableMatmulTest, EmptyExpertProbe_InputAndWeightK_TransposeA) {
     auto cfg = kMoeFfnConfig;
-    cfg.transpose_a = true;
     auto* device = &ttml::autograd::ctx().get_device();
 
     const uint32_t H_tiles = 48, I_tiles = 24, T_cap_tiles = 64;
@@ -943,6 +959,8 @@ TEST_F(VariableMatmulTest, EmptyExpertProbe_InputAndWeightK_TransposeA) {
         dY,
         act,
         cfg,
+        /*transpose_a=*/true,
+        /*transpose_b=*/false,
         std::nullopt,
         0,
         0,

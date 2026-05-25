@@ -52,10 +52,10 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(a_logical.rank() >= 2 && w_logical.rank() >= 2, "variable_matmul expects rank >= 2 tensors");
 
     // With transpose_a, the input is stored as [K, M], so M is at [-1] and K at [-2].
-    const uint32_t M_parent = config.transpose_a ? a_logical[-1] : a_logical[-2];
-    const uint32_t K_in = config.transpose_a ? a_logical[-2] : a_logical[-1];
+    const uint32_t M_parent = operation_attributes.transpose_a ? a_logical[-1] : a_logical[-2];
+    const uint32_t K_in = operation_attributes.transpose_a ? a_logical[-2] : a_logical[-1];
     // When transpose_b, the weight is stored as [N, K] and K matches w_logical[-1].
-    const uint32_t K_w = config.transpose_b ? w_logical[-1] : w_logical[-2];
+    const uint32_t K_w = operation_attributes.transpose_b ? w_logical[-1] : w_logical[-2];
 
     // Effective M for the matmul (after applying offset + length); falls back to the
     // input tensor's full M when caller didn't specify a sub-range.
@@ -145,7 +145,7 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.output_tensor.has_value()) {
         const auto& out = tensor_args.output_tensor.value();
         const auto& out_logical = out.logical_shape();
-        const uint32_t matmul_N = config.transpose_b ? w_logical[-2] : w_logical[-1];
+        const uint32_t matmul_N = operation_attributes.transpose_b ? w_logical[-2] : w_logical[-1];
         const uint32_t out_M_tiles = tt::div_up(out_logical[-2], TILE_HEIGHT);
         const uint32_t out_N = out_logical[-1];
         const uint32_t out_offset = operation_attributes.out_row_offset_tiles;
@@ -199,16 +199,15 @@ VariableMatmulDeviceOperation::spec_return_value_t VariableMatmulDeviceOperation
     }
     const auto& in0 = tensor_args.input_tensor;
     const auto& in1 = tensor_args.weight_tensor;
-    const auto& config = operation_attributes.config;
     // With transpose_b, the weight is stored as [N, K] so N is at logical[-2].
-    const uint32_t N = config.transpose_b ? in1.logical_shape()[-2] : in1.logical_shape()[-1];
+    const uint32_t N = operation_attributes.transpose_b ? in1.logical_shape()[-2] : in1.logical_shape()[-1];
     // M dimension: use effective_M_tiles when provided (offset-read mode); otherwise derive
     // from the input tensor's full M dim ([-1] if transpose_a, else [-2]).
     // NB: the original code only set output_shape[-1] = N and inherited [-2] from in0 —
     // that was a latent bug for transpose_a (output was sized [M_e, N] instead of [H, N]),
     // hidden by the matmul kernel writing past the buffer end. Fixing this exposes the
     // real DRAM cost of the larger gradient tensors in the moe-ffn backward.
-    const uint32_t M_from_input = config.transpose_a ? in0.logical_shape()[-1] : in0.logical_shape()[-2];
+    const uint32_t M_from_input = operation_attributes.transpose_a ? in0.logical_shape()[-1] : in0.logical_shape()[-2];
     const uint32_t M = (operation_attributes.effective_M_tiles > 0)
                            ? (operation_attributes.effective_M_tiles * tt::constants::TILE_HEIGHT)
                            : M_from_input;
@@ -241,8 +240,8 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     // orientation is stable across offset-read calls on the same parent.
     const auto& w = tensor_args.weight_tensor;
     const auto& a = tensor_args.input_tensor;
-    const bool transpose_a = operation_attributes.config.transpose_a;
-    const bool transpose_b = operation_attributes.config.transpose_b;
+    const bool transpose_a = operation_attributes.transpose_a;
+    const bool transpose_b = operation_attributes.transpose_b;
     // use_offset is a compile-time kernel knob: when true, the address formula adds
     // M-offset and K-offset to the respective axes. Splitting on this gives two cached
     // programs (offset-enabled / disabled) but keeps the (offset=0) hot path at baseline.
@@ -307,6 +306,8 @@ ttnn::Tensor ttml_variable_matmul(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const ttml::metal::ops::variable_matmul::device::VariableMatmulConfig& config,
+    bool transpose_a,
+    bool transpose_b,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     uint32_t in0_row_offset_tiles,
     uint32_t effective_M_tiles,
@@ -330,6 +331,8 @@ ttnn::Tensor ttml_variable_matmul(
         OperationType::operation_attributes_t{
             .config = config,
             .compute_kernel_config = kernel_config_val,
+            .transpose_a = transpose_a,
+            .transpose_b = transpose_b,
             .in0_row_offset_tiles = in0_row_offset_tiles,
             .effective_M_tiles = effective_M_tiles,
             .in0_k_offset_tiles = in0_k_offset_tiles,

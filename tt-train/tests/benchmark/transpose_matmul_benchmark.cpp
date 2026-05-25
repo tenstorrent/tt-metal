@@ -77,19 +77,17 @@ void run_matmul_bench(benchmark::State& state, bool transpose_a, bool transpose_
     auto weight_shape = transpose_b ? ttnn::Shape({1, 1, N, K}) : ttnn::Shape({1, 1, K, N});
     auto weight = create_random_tensor(weight_shape, DataType::BFLOAT16, 43, device.get());
 
-    auto cfg = kBaseConfig;
-    cfg.transpose_a = transpose_a;
-    cfg.transpose_b = transpose_b;
+    const auto& cfg = kBaseConfig;
 
     for (int i = 0; i < kWarmupIterations; ++i) {
-        auto out = ttml::metal::variable_matmul(input, weight, cfg);
+        auto out = ttml::metal::variable_matmul(input, weight, cfg, transpose_a, transpose_b);
         distributed::Synchronize(device.get(), std::nullopt);
         out.deallocate();
     }
 
     for (auto _ : state) {
         auto start = std::chrono::high_resolution_clock::now();
-        auto out = ttml::metal::variable_matmul(input, weight, cfg);
+        auto out = ttml::metal::variable_matmul(input, weight, cfg, transpose_a, transpose_b);
         distributed::Synchronize(device.get(), std::nullopt);
         auto end = std::chrono::high_resolution_clock::now();
         double time_us = std::chrono::duration<double, std::micro>(end - start).count();
