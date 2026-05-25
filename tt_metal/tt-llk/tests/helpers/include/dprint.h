@@ -22,6 +22,8 @@
 
 #include <cstdint>
 
+#include "dev_mem_map.h"
+
 #define USE_DEVICE_PRINT
 
 // Device print occasionally writes from host; Blackhole needs a fence,
