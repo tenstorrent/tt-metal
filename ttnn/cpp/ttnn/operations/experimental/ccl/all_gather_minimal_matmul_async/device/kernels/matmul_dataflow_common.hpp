@@ -7,6 +7,10 @@
 #include <tuple>
 #include <utility>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 
 namespace detail {
 template <typename... Args, uint32_t... Indexes>
@@ -134,8 +138,14 @@ void compute_actual_k_block(
     if (device_iter > 0 && is_first_n_block) {
         // When we are not reading from local, and we are in the first forward pass through n, wait for data to arrive
         if (is_injector_core) {
+            // Device 2.0 migration: legacy primitive retained: out_ready_semaphore_forward/backward are
+            // GlobalSemaphore addresses. Semaphore<> binds to per-program ids via get_semaphore<>(id), so it
+            // cannot wrap a GlobalSemaphore. #45003 item 4.
             noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + in0_core_order_size);
             sem_target_forward += in0_core_order_size;
+            // Device 2.0 migration: legacy primitive retained: out_ready_semaphore_forward/backward are
+            // GlobalSemaphore addresses. Semaphore<> binds to per-program ids via get_semaphore<>(id), so it
+            // cannot wrap a GlobalSemaphore. #45003 item 4.
             noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + in0_core_order_size);
             sem_target_backward += in0_core_order_size;
         }
@@ -152,6 +162,7 @@ struct PacketHeaders {
 
 template <typename TensorAccessorType, typename ConnectionHandleType>
 FORCE_INLINE void forward_half_block_to_fabric_neighbor(
+    Noc& noc,
     uint32_t m_tile_start,
     uint32_t k_tile_start,  // this is the k_tile_index in the output
     uint32_t m_block_tiles,
@@ -217,7 +228,7 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
                     mux_connection_handle, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_addrs[0]});
             }
 
-            noc_async_writes_flushed();
+            noc.async_writes_flushed();
             tiles_read += tiles_to_put_in_current_packet;
             l1_read_addr += (tiles_to_put_in_current_packet * page_size);
             if (reached_half_block_end) {
@@ -232,7 +243,7 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
         pkt_hdr_sem_inc,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
 
-    noc_async_writes_flushed();
+    noc.async_writes_flushed();
 }
 #endif
 
@@ -244,11 +255,15 @@ bool is_backward_k_block_iter(uint32_t k_block_iter, uint32_t k_blocks_per_devic
 
 void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+    // Device 2.0 migration: legacy primitive retained: MEM_ZEROS_BASE source (local L1); no LocalL1 source
+    // endpoint on main. #45003 item 4.
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     // Fill tile with zeros
     uint32_t bytes_left = tile_bytes;
     for (;;) {
         uint32_t read_size = bytes_left > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_left;
+        // Device 2.0 migration: legacy primitive retained: MEM_ZEROS_BASE source (local L1); no LocalL1 source
+        // endpoint on main. #45003 item 4.
         noc_async_read(zeros_noc_addr, write_addr, read_size);
         write_addr += read_size;
         bytes_left -= read_size;
@@ -288,6 +303,7 @@ template <
 #endif
     >
 void read_in0_block_sync(
+    Noc& noc,
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
     uint32_t write_ptr,
@@ -320,11 +336,13 @@ void read_in0_block_sync(
                 if (local_k_start <= j && j <= local_k_end) {
                     // read from self_tensor_accessor
                     uint32_t tile_id = i * input_tensor_Wt + (j - local_k_start);
-                    noc_async_read_tile(tile_id, in3_accessor, write_ptr);
+                    noc.async_read(
+                        in3_accessor, CoreLocalMem<uint8_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
                 } else {
 #endif
                     uint32_t tile_id = i * shape.logical_d1 + j;
-                    noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+                    noc.async_read(
+                        tensor_accessor, CoreLocalMem<uint8_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
 #ifdef READ_FROM_LOCAL_INPUT
                 }
 #endif
@@ -341,11 +359,13 @@ void read_in0_block_sync(
                 if (local_k_start <= j && j <= local_k_end) {
                     // read from self_tensor_accessor
                     uint32_t tile_id = i * input_tensor_Wt + (j - local_k_start);
-                    noc_async_read_tile(tile_id, in3_accessor, write_ptr);
+                    noc.async_read(
+                        in3_accessor, CoreLocalMem<uint8_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
                 } else {
 #endif
                     uint32_t tile_id = i * shape.logical_d1 + j;
-                    noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+                    noc.async_read(
+                        tensor_accessor, CoreLocalMem<uint8_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
 #ifdef READ_FROM_LOCAL_INPUT
                 }
 #endif
@@ -357,7 +377,7 @@ void read_in0_block_sync(
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
         write_ptr += (d1_tiles_right - (d1_end_right - d1_start_right)) * tile_size_bytes;
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }
 
 /**
@@ -367,6 +387,7 @@ void read_in0_block_sync(
  */
 template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
 void read_in1_block_sync(
+    Noc& noc,
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
     uint32_t write_ptr,
@@ -388,7 +409,8 @@ void read_in1_block_sync(
             }
             if (i < shape.logical_d0) {
                 uint32_t tile_id = i * shape.logical_d1 + j;
-                noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+                noc.async_read(
+                    tensor_accessor, CoreLocalMem<uint8_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
             } else {
                 fill_zeros_async(write_ptr, tile_size_bytes);
             }
@@ -405,7 +427,8 @@ void read_in1_block_sync(
             }
             if (i < shape.logical_d0) {
                 uint32_t tile_id = i * shape.logical_d1 + j;
-                noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+                noc.async_read(
+                    tensor_accessor, CoreLocalMem<uint8_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
             } else {
                 fill_zeros_async(write_ptr, tile_size_bytes);
             }
@@ -414,7 +437,7 @@ void read_in1_block_sync(
         // finish up incrementing write_ptr if (d1_end - d1_start) < N_block_tiles
         write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }
 
 /**
@@ -423,6 +446,7 @@ void read_in1_block_sync(
  */
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
 void write_block_sync(
+    Noc& noc,
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
     uint32_t read_ptr,
@@ -444,13 +468,14 @@ void write_block_sync(
                 continue;
             }
             uint32_t tile_id = i * shape.logical_d1 + j;
-            noc_async_write_tile(tile_id, tensor_accessor, read_ptr);
+            noc.async_write(
+                CoreLocalMem<uint8_t>(read_ptr), tensor_accessor, tile_size_bytes, {}, {.page_id = tile_id});
             read_ptr += tile_size_bytes;
         }
         // finish up incrementing read_ptr if (d1_end - d1_start) < N_block_tiles
         read_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
-    noc_async_writes_flushed();
+    noc.async_writes_flushed();
 }
 
 /**
@@ -468,11 +493,12 @@ void write_block_sync(
  */
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
 void read_ternary_blocks_sync(
+    Noc& noc,
     const TensorAccessorType& ternary_a_accessor,
     const TensorAccessorType& ternary_b_accessor,
     const TensorShape2D& shape,
-    uint32_t ternary_a_cb,
-    uint32_t ternary_b_cb,
+    CircularBuffer& ternary_a_cb,
+    CircularBuffer& ternary_b_cb,
     uint32_t a_tile_size_bytes,
     uint32_t b_tile_size_bytes,
     uint32_t broadcast_ternary_b,
@@ -485,49 +511,59 @@ void read_ternary_blocks_sync(
 
     if (broadcast_ternary_b) {
         // Broadcast: read single row, push all at once
-        cb_reserve_back(ternary_b_cb, N_block_tiles);
-        uint32_t ternary_b_write_ptr = get_write_ptr(ternary_b_cb);
+        ternary_b_cb.reserve_back(N_block_tiles);
+        uint32_t ternary_b_write_ptr = ternary_b_cb.get_write_ptr();
         for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
             if (n_tile_id >= shape.logical_d1) {
                 break;
             }
-            noc_async_read_tile(n_tile_id, ternary_b_accessor, ternary_b_write_ptr);
+            noc.async_read(
+                ternary_b_accessor,
+                CoreLocalMem<uint8_t>(ternary_b_write_ptr),
+                b_tile_size_bytes,
+                {.page_id = n_tile_id},
+                {});
             ternary_b_write_ptr += b_tile_size_bytes;
         }
-        noc_async_read_barrier();
-        cb_push_back(ternary_b_cb, N_block_tiles);
+        noc.async_read_barrier();
+        ternary_b_cb.push_back(N_block_tiles);
     } else {
         // No broadcast: read row-by-row (matches ternary_a pattern)
         uint32_t b_m_id = 0;
         uint32_t b_i = d0_start;
         for (; b_i < d0_end; b_i++, b_m_id++) {
-            cb_reserve_back(ternary_b_cb, N_block_tiles);
-            uint32_t ternary_b_write_ptr = get_write_ptr(ternary_b_cb);
+            ternary_b_cb.reserve_back(N_block_tiles);
+            uint32_t ternary_b_write_ptr = ternary_b_cb.get_write_ptr();
             for (uint32_t j = d1_start; j < d1_end; j++) {
                 if (j >= shape.logical_d1) {
                     break;
                 }
                 if (b_i < shape.logical_d0) {
                     uint32_t tile_id = b_i * shape.logical_d1 + j;
-                    noc_async_read_tile(tile_id, ternary_b_accessor, ternary_b_write_ptr);
+                    noc.async_read(
+                        ternary_b_accessor,
+                        CoreLocalMem<uint8_t>(ternary_b_write_ptr),
+                        b_tile_size_bytes,
+                        {.page_id = tile_id},
+                        {});
                 }
                 ternary_b_write_ptr += b_tile_size_bytes;
             }
-            noc_async_read_barrier();
-            cb_push_back(ternary_b_cb, N_block_tiles);
+            noc.async_read_barrier();
+            ternary_b_cb.push_back(N_block_tiles);
         }
         for (; b_m_id < M_block_tiles; b_m_id++) {
-            cb_reserve_back(ternary_b_cb, N_block_tiles);
-            cb_push_back(ternary_b_cb, N_block_tiles);
+            ternary_b_cb.reserve_back(N_block_tiles);
+            ternary_b_cb.push_back(N_block_tiles);
         }
     }
 
     uint32_t m_id = 0;
     uint32_t i = d0_start;
     for (; i < d0_end; i++, m_id++) {
-        cb_reserve_back(ternary_a_cb, N_block_tiles);
+        ternary_a_cb.reserve_back(N_block_tiles);
 
-        uint32_t ternary_a_write_ptr = get_write_ptr(ternary_a_cb);
+        uint32_t ternary_a_write_ptr = ternary_a_cb.get_write_ptr();
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
                 // Do not move tile data into CB if tile is outside ternary/output tensor.
@@ -538,17 +574,22 @@ void read_ternary_blocks_sync(
             }
             if (i < shape.logical_d0) {
                 uint32_t tile_id = i * shape.logical_d1 + j;
-                noc_async_read_tile(tile_id, ternary_a_accessor, ternary_a_write_ptr);
+                noc.async_read(
+                    ternary_a_accessor,
+                    CoreLocalMem<uint8_t>(ternary_a_write_ptr),
+                    a_tile_size_bytes,
+                    {.page_id = tile_id},
+                    {});
             }
             ternary_a_write_ptr += a_tile_size_bytes;
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
-        cb_push_back(ternary_a_cb, N_block_tiles);
+        ternary_a_cb.push_back(N_block_tiles);
     }
     for (; m_id < M_block_tiles; m_id++) {
-        cb_reserve_back(ternary_a_cb, N_block_tiles);
-        cb_push_back(ternary_a_cb, N_block_tiles);
+        ternary_a_cb.reserve_back(N_block_tiles);
+        ternary_a_cb.push_back(N_block_tiles);
     }
 }
 
@@ -558,31 +599,33 @@ void read_ternary_blocks_sync(
  */
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
 void write_block_sync_granular(
+    Noc& noc,
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    uint32_t cb_id_out,
+    CircularBuffer& cb_out,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
-        cb_wait_front(cb_id_out, N_block_tiles);
+        cb_out.wait_front(N_block_tiles);
         uint32_t m_tile = d0_start + m_id;
         if (m_tile < d0_end && m_tile < shape.logical_d0) {
-            uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+            uint32_t out_read_ptr = cb_out.get_read_ptr();
             for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
                 if (n_tile_id >= shape.logical_d1) {
                     break;
                 }
                 uint32_t tile_id = m_tile * shape.logical_d1 + n_tile_id;
-                noc_async_write_tile(tile_id, tensor_accessor, out_read_ptr);
+                noc.async_write(
+                    CoreLocalMem<uint8_t>(out_read_ptr), tensor_accessor, tile_size_bytes, {}, {.page_id = tile_id});
                 out_read_ptr += tile_size_bytes;
             }
         }
-        cb_pop_front(cb_id_out, N_block_tiles);
+        cb_out.pop_front(N_block_tiles);
     }
-    noc_async_writes_flushed();
+    noc.async_writes_flushed();
 }
 
 /**
@@ -591,10 +634,21 @@ void write_block_sync_granular(
  */
 template <typename Tuple, size_t... Is>
 FORCE_INLINE void write_tile_to_chunk(
-    const Tuple& accessors, uint32_t chunk_idx, uint32_t tile_id, uint32_t read_ptr, std::index_sequence<Is...>) {
+    Noc& noc,
+    const Tuple& accessors,
+    uint32_t chunk_idx,
+    uint32_t tile_id,
+    uint32_t read_ptr,
+    uint32_t tile_size_bytes,
+    std::index_sequence<Is...>) {
     // Fold expression: expands to if/else chain at compile time
-    // Each branch calls noc_async_write_tile with the concrete type
-    ((chunk_idx == Is ? (noc_async_write_tile(tile_id, std::get<Is>(accessors), read_ptr), void()) : void()), ...);
+    // Each branch calls noc.async_write with the concrete TensorAccessor type
+    ((chunk_idx == Is
+          ? (noc.async_write(
+                 CoreLocalMem<uint8_t>(read_ptr), std::get<Is>(accessors), tile_size_bytes, {}, {.page_id = tile_id}),
+             void())
+          : void()),
+     ...);
 }
 
 /**
@@ -610,6 +664,7 @@ template <
     uint32_t N_tiles_per_chunk,
     typename... Accessors>
 void write_block_sync_split(
+    Noc& noc,
     const std::tuple<Accessors...>& accessors,
     const TensorShape2D& chunk_shape,
     uint32_t read_ptr,
@@ -650,13 +705,19 @@ void write_block_sync_split(
 
             // Compile-time dispatch preserving concrete types
             write_tile_to_chunk(
-                accessors, chunk_idx, tile_id_in_chunk, read_ptr, std::index_sequence_for<Accessors...>{});
+                noc,
+                accessors,
+                chunk_idx,
+                tile_id_in_chunk,
+                read_ptr,
+                tile_size_bytes,
+                std::index_sequence_for<Accessors...>{});
             read_ptr += tile_size_bytes;
         }
         // finish up incrementing read_ptr if (d1_end - d1_start) < N_block_tiles
         read_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
-    noc_async_writes_flushed();
+    noc.async_writes_flushed();
 }
 
 /**
@@ -670,9 +731,10 @@ template <
     uint32_t N_tiles_per_chunk,
     typename... Accessors>
 void write_block_sync_granular_split(
+    Noc& noc,
     const std::tuple<Accessors...>& accessors,
     const TensorShape2D& chunk_shape,
-    uint32_t cb_id_out,
+    CircularBuffer& cb_out,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
@@ -682,10 +744,10 @@ void write_block_sync_granular_split(
     const uint32_t tile_idx_in_chunk_start = d1_start % N_tiles_per_chunk;
 
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
-        cb_wait_front(cb_id_out, N_block_tiles);
+        cb_out.wait_front(N_block_tiles);
         uint32_t m_tile = d0_start + m_id;
         if (m_tile < d0_end && m_tile < chunk_shape.logical_d0) {
-            uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+            uint32_t out_read_ptr = cb_out.get_read_ptr();
 
             uint32_t chunk_idx = chunk_idx_start;
             uint32_t tile_idx_in_chunk = tile_idx_in_chunk_start;
@@ -704,14 +766,20 @@ void write_block_sync_granular_split(
                 uint32_t tile_id = m_tile * chunk_shape.logical_d1 + tile_idx_in_chunk;
                 // Compile-time dispatch preserving concrete types
                 write_tile_to_chunk(
-                    accessors, chunk_idx, tile_id, out_read_ptr, std::index_sequence_for<Accessors...>{});
+                    noc,
+                    accessors,
+                    chunk_idx,
+                    tile_id,
+                    out_read_ptr,
+                    tile_size_bytes,
+                    std::index_sequence_for<Accessors...>{});
 
                 out_read_ptr += tile_size_bytes;
             }
         }
-        cb_pop_front(cb_id_out, N_block_tiles);
+        cb_out.pop_front(N_block_tiles);
     }
-    noc_async_writes_flushed();
+    noc.async_writes_flushed();
 }
 
 #ifdef USE_MUX
@@ -842,6 +910,7 @@ FORCE_INLINE PacketHeaders allocate_and_init_packet_headers(
 
 template <typename ConnectionHandleType>
 FORCE_INLINE void close_mux(
+    Noc& noc,
     ConnectionHandleType mux_connection_handle,
     bool is_termination_master,
     uint32_t termination_sync_address,
@@ -854,13 +923,17 @@ FORCE_INLINE void close_mux(
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
+        // Device 2.0 migration: legacy primitive retained: fabric-mux sync address (raw L1 pointer, not a program id);
+        // #45003 item 4.
         noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
     } else {
         uint64_t dest_addr =
             safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
+        // Device 2.0 migration: legacy primitive retained: fabric-mux sync address (raw L1 pointer, not a program id);
+        // #45003 item 4.
         noc_semaphore_inc(dest_addr, 1);
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
     }
 }
 #endif
