@@ -188,9 +188,16 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         joint_k_shape[2],
         joint_v_shape[2]);
 
+    // Relaxed from `==` to `>=`: oversize persistent K/V buffers are safe.
+    // The AG kernel writes only N_local_kv*ring_size tiles starting at offset 0;
+    // its per-head stride and the SDPA reader's accessor both derive from the
+    // buffer's actual logical_shape, so write/read agree, and the SDPA reader
+    // bounds iteration by kv_local_padded_Nt (input K shape) and logical_n —
+    // never reads past the populated prefix. See test_persistent_buffer_size_constraint
+    // in models/demos/deepseek_v3_d_p/tests/test_ring_joint_sdpa_handoff.py.
     TT_FATAL(
-        N_global == N_local_kv * args.ring_size,
-        "Gathered K seq length must equal per-device K shard times ring size. Got N_global: {}, N_local_kv: {}, "
+        N_global >= N_local_kv * args.ring_size,
+        "Gathered K seq length must be >= per-device K shard times ring size. Got N_global: {}, N_local_kv: {}, "
         "ring_size: {}",
         N_global,
         N_local_kv,
