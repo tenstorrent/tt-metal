@@ -66,8 +66,8 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
 ## Operating Procedure
 
 1. Identify failing jobs from the latest relevant run:
-   - Initial pass: latest completed run on `main`
-   - Iteration pass: latest completed run on the feature branch
+  - Initial pass: latest completed run on `main`
+  - Iteration pass: latest completed run on the feature branch
 2. Build the target job set from those failures.
 3. Create a temporary verification branch from the current feature branch.
 4. In the temporary branch, modify workflow/job selection so only target jobs run.
@@ -81,10 +81,20 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
 - Never dispatch unrelated workflows.
 - Keep PRs as draft until final validation.
 - Do not include temporary workflow-pruning edits in the final PR branch.
+- After every workflow dispatch, immediately share the run URL in the status update.
+
+## Issue Tracking Sync (Mandatory)
+
+Keep the linked disable-tracking issue in sync with the draft PR at all times.
+
+- Every time a new test/parameterization is disabled, immediately update the issue with that test ID.
+- The issue must always reflect the full current set of disables in the PR (not just the latest addition).
+- If a disable is removed from the PR, remove it from the issue list in the same session.
 
 ## Exit Criteria for Full Workflow Run
 
 Run full workflow only when:
+
 - targeted failing jobs are stable/green, and
 - a final confidence pass is needed before undrafting/hand-off.
 
