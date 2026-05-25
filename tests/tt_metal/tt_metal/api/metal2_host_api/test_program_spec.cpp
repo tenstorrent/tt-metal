@@ -3096,6 +3096,65 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedBindingHasNoRuntimeFie
         << "Interleaved dynamic_tensor_shape is host-side-only; no runtime CRTA words.";
 }
 
+TEST_F(ProgramSpecTestGen1, KernelCrtaLayout_AllThreeSectionsConsistent) {
+    // The Kernel's stored KernelCrtaLayout must equal what a fresh walk of (named CRTAs +
+    // binding handles) would compute. This test exercises a Program in which ALL THREE
+    // sections of the CRTA buffer are non-empty:
+    //   - section 1: named CRTAs           (declared in runtime_arguments_schema)
+    //   - section 2: TensorBinding section (variable-size: a plain interleaved binding +
+    //                                       a sharded-with-dynamic_tensor_shape binding)
+    //   - section 3: varargs               (declared via num_common_runtime_varargs)
+    //
+    // The headergen bakes vararg_section_offset into the kernel's `get_common_vararg(idx)`
+    // macro, so a wrong offset here would silently route vararg reads into the binding
+    // section. The walk-based reference value is exactly what genfiles used to compute on
+    // its own; the refactor moves that computation into ResolveTensorBindingsForKernel and
+    // threads it through. This test guards against the threading silently producing a
+    // different value than the walk would.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    // Section 1: named CRTAs on the DM kernel.
+    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"foo", "bar"};
+    // Section 3: vararg CRTAs on the DM kernel.
+    spec.kernels[0].runtime_arguments_schema.num_common_runtime_varargs = 3;
+
+    // Section 2: two bindings — one plain (1 word), one sharded+dynamic_tensor_shape
+    // (1 word + tensor_shape_in_pages rank words).
+    auto plain_tp = MakeMinimalTensorParameter("plain_tensor");
+    auto dyn_tp =
+        MakeShardedTensorParameter("dyn_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2);
+    dyn_tp.dynamic_tensor_shape = true;
+    spec.tensor_parameters = {plain_tp, dyn_tp};
+    BindTensorParameterToKernel(spec.kernels[0], "plain_tensor", "plain_ta");
+    BindTensorParameterToKernel(spec.kernels[0], "dyn_tensor", "dyn_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    const KernelCrtaLayout layout = kernel->get_crta_layout();
+
+    // Reference values, re-derived independently of the layout struct.
+    const uint32_t expected_named_words = 2u;  // "foo", "bar"
+    uint32_t expected_binding_words = 0;
+    for (const auto& handle : kernel->tensor_binding_handles()) {
+        expected_binding_words += 1u + handle.num_runtime_field_crta_words;
+    }
+    const uint32_t expected_vararg_offset = expected_named_words + expected_binding_words;
+
+    EXPECT_EQ(layout.num_named_words, expected_named_words);
+    EXPECT_EQ(layout.binding_section_words, expected_binding_words);
+    EXPECT_EQ(layout.vararg_section_offset, expected_vararg_offset)
+        << "vararg_section_offset must equal num_named_words + binding_section_words; this is the "
+           "value baked into get_common_vararg(idx) by the kernel headergen.";
+
+    // Sanity: the dynamic-shape binding's runtime-field word count should be > 0, so this test
+    // genuinely exercises a variable-size binding (not just two 1-word bindings that would also
+    // pass with the old binding-count-based math).
+    ASSERT_EQ(kernel->tensor_binding_handles().size(), 2u);
+    EXPECT_GT(kernel->tensor_binding_handles()[1].num_runtime_field_crta_words, 0u)
+        << "Test precondition: the second binding should be variable-size; otherwise the layout "
+           "calculation degenerates to the pre-refactor case.";
+}
+
 TEST_F(ProgramSpecTestGen1, CompilerIncludePathsForwardedToKernelConfig) {
     // KernelSpec.compiler_options.include_paths should be picked up as `-I<path>` flags
     NodeCoord node{0, 0};
