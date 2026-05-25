@@ -4,6 +4,11 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -13,26 +18,33 @@
 namespace detail {
 
 inline void dispatch_input_local_device_flushed(
-    uint32_t input_token_read_addr, uint64_t output_token_write_addr, uint32_t output_page_size) {
+    const Noc& noc, uint32_t input_token_read_addr, uint64_t output_token_write_addr, uint32_t output_page_size) {
+    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address; #45003 item 4.
     noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
-    noc_async_writes_flushed();
+    noc.async_writes_flushed();
 }
 
 // Insert helper that handles the local-device metadata path
 inline void dispatch_metadata_local_device(
+    const Noc& noc,
     uint32_t token_indices_address,
     uint64_t metadata_write_addr,
     uint32_t metadata_page_size,
     uint64_t global_noc_semaphore_address) {
     // send metadata to local device output buffer
+    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address; #45003 item 4.
     noc_async_write(token_indices_address, metadata_write_addr, metadata_page_size);
-    noc_async_write_barrier();
+    noc.async_write_barrier();
+    // Device 2.0 migration: legacy primitive retained: global_noc_semaphore_address is a GlobalSemaphore address.
+    // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore. #45003 item 4.
     noc_semaphore_inc(global_noc_semaphore_address, 1);
     noc_async_atomic_barrier();
 }
 
 void zero_buffer_async(uint32_t write_addr, int bytes) {
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    // Device 2.0 migration: legacy primitive retained: MEM_ZEROS_BASE self-read; no LocalL1 endpoint on main. #45003
+    // item 4.
     while (bytes > 0) {
         uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
         noc_async_read(zeros_noc_addr, write_addr, curr_bytes);
@@ -41,7 +53,7 @@ void zero_buffer_async(uint32_t write_addr, int bytes) {
     }
 }
 
-void zero_buffer_barrier() { noc_async_read_barrier(); }
+void zero_buffer_barrier(const Noc& noc) { noc.async_read_barrier(); }
 
 // Bidirectional fabric multicast atomic increment - sends to both positive and negative directions
 // For a 1D ring with even number of devices, we multicast in both directions to cover all devices
@@ -110,6 +122,7 @@ template <
     uint32_t DispatchDevices,
     typename FabricConnectionsType>
 FORCE_INLINE void fabric_multicast_bidirectional_write_ring_1d_async(
+    const Noc& noc,
     FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
@@ -176,12 +189,13 @@ FORCE_INLINE void fabric_multicast_bidirectional_write_ring_1d_async(
         // Wait for header DMAs to complete before modifying headers in next iteration
         // The fabric API uses non-blocking header sends, so we need to ensure the
         // header memory is no longer being read before we overwrite it
-        noc_async_writes_flushed();
+        noc.async_writes_flushed();
     }
 
     // Also write to local device (use original addresses and total size)
+    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address; #45003 item 4.
     noc_async_write(original_src_addr, original_noc_addr, total_size);
-    noc_async_writes_flushed();
+    noc.async_writes_flushed();
 }
 
 // Fabric multicast metadata write helper - handles scatter writes in both directions along a 1D ring
@@ -194,6 +208,7 @@ template <
     uint32_t DispatchDevices,
     typename FabricConnectionsType>
 FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
+    const Noc& noc,
     FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
@@ -244,9 +259,11 @@ FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
     // Also write to local device - scatter means contiguous src, separate destinations
     // First chunk: src_addr -> noc_addresses[0], chunk_sizes[0] bytes
     // Second chunk: src_addr + chunk_sizes[0] -> noc_addresses[1], chunk_sizes[1] bytes
+    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address; #45003 item 4.
     noc_async_write(src_addr, noc_addresses[0], chunk_sizes[0]);
+    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address; #45003 item 4.
     noc_async_write(src_addr + chunk_sizes[0], noc_addresses[1], chunk_sizes[1]);
-    noc_async_writes_flushed();
+    noc.async_writes_flushed();
 }
 
 // ============================================================================
@@ -282,6 +299,7 @@ template <
     typename OutputAddrGenT,
     typename FabricConnectionsType>
 FORCE_INLINE bool dispatch_token_point_to_point_unicast(
+    const Noc& noc,
     FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* unicast_packet_header,
     const OutputAddrGenT& output_addr_gen,
@@ -313,6 +331,7 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
 
             if (target_device == LinearizedSrcMeshCoord) {
                 // If the expert lives on the current device, we dispatch the input token to it
+                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address; #45003 item 4.
                 noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
                 needs_barrier = true;
             } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(target_device)) {
@@ -338,7 +357,7 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
         }
     }
 
-    noc_async_writes_flushed();
+    noc.async_writes_flushed();
     return needs_barrier;
 }
 
@@ -375,6 +394,7 @@ template <
     typename OutputAddrGenT,
     typename FabricConnectionsType>
 FORCE_INLINE bool dispatch_token_sparse_multicast(
+    const Noc& noc,
     FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* unicast_packet_header,
     const OutputAddrGenT& output_addr_gen,
@@ -409,6 +429,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
 
             if (target_device == LinearizedSrcMeshCoord) {
                 // If the expert lives on the current device, dispatch locally
+                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address; #45003 item 4.
                 noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
                 needs_barrier = true;
             } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(target_device)) {
@@ -438,7 +459,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
             alignment,
             payload_offset);
     }
-    noc_async_writes_flushed();
+    noc.async_writes_flushed();
     return needs_barrier;
 }
 
@@ -481,6 +502,7 @@ template <
     typename OutputAddrGenT,
     typename FabricConnectionsType>
 FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
+    const Noc& noc,
     FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
@@ -517,6 +539,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
         if (target_device == LinearizedSrcMeshCoord) {
             // Local device - dispatch once
             if (!sent_local) {
+                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address; #45003 item 4.
                 noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
                 needs_barrier = true;
                 sent_local = true;
@@ -594,7 +617,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
             payload_offset);
     }
 
-    noc_async_writes_flushed();
+    noc.async_writes_flushed();
     return needs_barrier;
 }
 
@@ -636,6 +659,7 @@ template <
     typename OutputAddrGenT,
     typename FabricConnectionsType>
 FORCE_INLINE bool dispatch_token_split_bandwidth(
+    const Noc& noc,
     FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
@@ -679,6 +703,7 @@ FORCE_INLINE bool dispatch_token_split_bandwidth(
         if (target_device == LinearizedSrcMeshCoord) {
             // Local device - dispatch once
             if (!sent_local) {
+                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address; #45003 item 4.
                 noc_async_write(input_token_read_addr, output_token_write_addr, input_page_size);
                 needs_barrier = true;
                 sent_local = true;
@@ -752,7 +777,7 @@ FORCE_INLINE bool dispatch_token_split_bandwidth(
         (int)half_size,
         alignment,
         neg_offset);
-    noc_async_writes_flushed();
+    noc.async_writes_flushed();
     return needs_barrier;
 }
 
@@ -782,6 +807,7 @@ template <
     uint32_t DispatchDevices,
     typename FabricConnectionsType>
 FORCE_INLINE void dispatch_token_bidirectional_multicast(
+    const Noc& noc,
     FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
@@ -796,6 +822,7 @@ FORCE_INLINE void dispatch_token_bidirectional_multicast(
         MeshCols,
         Axis,
         DispatchDevices>(
+        noc,
         fabric_connections,
         packet_header_pos,
         packet_header_neg,
@@ -916,6 +943,15 @@ void kernel_main() {
         return;
     }
 
+    Noc noc_obj;
+    CircularBuffer cb_input(input_tensor_cb_id);
+    CircularBuffer cb_indices(indices_tensor_cb_id);
+    CircularBuffer cb_scores(scores_tensor_cb_id);
+    CircularBuffer cb_mapping(mapping_tensor_cb_id);
+    CircularBuffer cb_packet_header(packet_header_cb_id);
+    CircularBuffer cb_send_preparation_buffer(send_preparation_buffer_cb_id);
+    CircularBuffer cb_metadata(metadata_buffer_id);
+
 #ifdef USE_MUX
     // ========================================================================
     // MUX PATH: Use WorkerToFabricMuxSender connections via fabric mux
@@ -995,7 +1031,7 @@ void kernel_main() {
     open_direction_connections_async(directions, fabric_connections, rt_args_idx);
 #endif
 
-    uint32_t send_preparation_buffer_address = get_write_ptr(send_preparation_buffer_cb_id);
+    uint32_t send_preparation_buffer_address = cb_send_preparation_buffer.get_write_ptr();
     detail::zero_buffer_async(
         send_preparation_buffer_address, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
 
@@ -1021,7 +1057,7 @@ void kernel_main() {
     const auto output_scores_addr_gen =
         TensorAccessor(scores_out_args, scores_out_tensor_address, output_scores_page_size);
 
-    uint32_t packet_header_buffer_address = get_read_ptr(packet_header_cb_id);
+    uint32_t packet_header_buffer_address = cb_packet_header.get_read_ptr();
     auto* unicast_packet_header_pos = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     auto* unicast_packet_header_neg =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
@@ -1035,10 +1071,10 @@ void kernel_main() {
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 5 * sizeof(PACKET_HEADER_TYPE));
     // packet headers at +6 and +7 are currently unused (reserved for future split sends)
 
-    uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
-    uint32_t base_scores_addr = get_read_ptr(scores_tensor_cb_id);
+    uint32_t base_indices_addr = cb_indices.get_read_ptr();
+    uint32_t base_scores_addr = cb_scores.get_read_ptr();
 
-    detail::zero_buffer_barrier();
+    detail::zero_buffer_barrier(noc_obj);
 
 #ifdef USE_MUX
     // Wait for mux to be ready and connect
@@ -1062,6 +1098,8 @@ void kernel_main() {
     // - All output buffers are persistent, so remote writes won't corrupt data being used
     // - The cross_device_semaphore is double-buffered externally to avoid races between iterations
 #ifndef SKIP_INIT_SEMAPHORE
+    // Device 2.0 migration: legacy primitive retained: init_semaphore_address is a GlobalSemaphore address.
+    // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore. #45003 item 4.
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
     detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<
         linearized_mesh_coord,
@@ -1070,16 +1108,18 @@ void kernel_main() {
         axis,
         dispatch_devices>(
         fabric_connections, atomic_inc_packet_header_pos, atomic_inc_packet_header_neg, init_noc_semaphore_addr);
-    noc_async_writes_flushed();
+    noc_obj.async_writes_flushed();
 
     // Wait for all devices to complete initialization synchronization
+    // Device 2.0 migration: legacy primitive retained: init_semaphore_address is a GlobalSemaphore address.
+    // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore. #45003 item 4.
     noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
 #endif
     bool needs_barrier = false;
     // Based on the selected experts, we dispatch the input tokens to the corresponding devices
-    cb_wait_front(mapping_tensor_cb_id, 1);
-    uint16_t* expert_mapping = (uint16_t*)(get_read_ptr(mapping_tensor_cb_id));
+    cb_mapping.wait_front(1);
+    uint16_t* expert_mapping = (uint16_t*)(cb_mapping.get_read_ptr());
     uint8_t* send_preparation_buffer = (uint8_t*)send_preparation_buffer_address;
 
     // ============================================================================
@@ -1111,13 +1151,13 @@ void kernel_main() {
         uint64_t output_token_write_addr = get_noc_addr(global_token, output_addr_gen);
         // All workers read indices (needed for routing decisions)
         // Only primary worker reads scores (only primary sends metadata)
-        cb_wait_front(indices_tensor_cb_id, 1);
+        cb_indices.wait_front(1);
         if (is_primary_payload_worker) {
-            cb_wait_front(scores_tensor_cb_id, 1);
+            cb_scores.wait_front(1);
         }
-        cb_wait_front(input_tensor_cb_id, 1);
-        uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
-        uint16_t* token_indices = (uint16_t*)(get_read_ptr(indices_tensor_cb_id));
+        cb_input.wait_front(1);
+        uint32_t input_token_read_addr = cb_input.get_read_ptr();
+        uint16_t* token_indices = (uint16_t*)(cb_indices.get_read_ptr());
 
         // In payload split mode: reader already reads only this worker's portion into CB
         // In non-split mode: reader reads full page, payload_offset=0
@@ -1135,6 +1175,7 @@ void kernel_main() {
                 mesh_cols,
                 axis,
                 dispatch_devices>(
+                noc_obj,
                 fabric_connections,
                 unicast_packet_header_pos,
                 unicast_packet_header_neg,
@@ -1153,6 +1194,7 @@ void kernel_main() {
                 fabric_max_packet_size,
                 num_devices,
                 shared_and_selected_experts>(
+                noc_obj,
                 fabric_connections,
                 unicast_packet_header_neg,
                 output_addr_gen,
@@ -1178,6 +1220,7 @@ void kernel_main() {
                 fabric_max_packet_size,
                 num_devices,
                 shared_and_selected_experts>(
+                noc_obj,
                 fabric_connections,
                 unicast_packet_header_neg,
                 output_addr_gen,
@@ -1204,6 +1247,7 @@ void kernel_main() {
                 fabric_max_packet_size,
                 dispatch_devices,
                 shared_and_selected_experts>(
+                noc_obj,
                 fabric_connections,
                 unicast_packet_header_pos,
                 unicast_packet_header_neg,
@@ -1232,6 +1276,7 @@ void kernel_main() {
                 fabric_max_packet_size,
                 dispatch_devices,
                 shared_and_selected_experts>(
+                noc_obj,
                 fabric_connections,
                 unicast_packet_header_pos,
                 unicast_packet_header_neg,
@@ -1248,20 +1293,20 @@ void kernel_main() {
 
         // All workers pop indices (all read them for routing)
         // Only primary pops scores (only primary reads them)
-        cb_pop_front(indices_tensor_cb_id, 1);
+        cb_indices.pop_front(1);
         if (is_primary_payload_worker) {
-            cb_pop_front(scores_tensor_cb_id, 1);
+            cb_scores.pop_front(1);
         }
-        cb_pop_front(input_tensor_cb_id, 1);
+        cb_input.pop_front(1);
     }
     if (needs_barrier) {
-        noc_async_write_barrier();
+        noc_obj.async_write_barrier();
     }
 
 #ifdef PAYLOAD_SPLIT_MODE
     // In payload split mode, all workers must barrier before the primary sends atomic_inc
     // This ensures all payload portions have been sent before signaling completion
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 #endif
 
     // Only the primary worker (or all workers in non-payload-split mode) sends metadata and atomic_inc
@@ -1269,6 +1314,9 @@ void kernel_main() {
     if (is_primary_payload_worker) {
         // Send our selected experts tensor to all other devices and signal that we are done dispatching the input
         // tokens with a semaphore. Write directly to the output metadata tensor on the drain sync tilizer core.
+        // Device 2.0 migration: legacy primitive retained: global_semaphore_address is a GlobalSemaphore address.
+        // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore. #45003
+        // item 4.
         uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
 
         // IMPORTANT: Use aligned_metadata_page_size for OUTPUT metadata tensor offsets.
@@ -1296,21 +1344,22 @@ void kernel_main() {
                                                      dispatch_index * metadata_size_per_device +
                                                      token_start_idx * aligned_output_scores_page_size;
 
-        cb_wait_front(metadata_buffer_id, tokens_per_device);
-        uint32_t base_metadata_addr = get_read_ptr(metadata_buffer_id);
+        cb_metadata.wait_front(tokens_per_device);
+        uint32_t base_metadata_addr = cb_metadata.get_read_ptr();
         detail::fabric_multicast_bidirectional_scatter_write_ring_1d_async<
             linearized_mesh_coord,
             mesh_rows,
             mesh_cols,
             axis,
             dispatch_devices>(
+            noc_obj,
             fabric_connections,
             metadata_packet_header_pos,
             metadata_packet_header_neg,
             base_metadata_addr,
             {noc_core_offset_md_write_addr, noc_core_offset_scores_write_addr},
             {static_cast<uint16_t>(metadata_size_per_core), static_cast<uint16_t>(metadata_size_per_core)});
-        cb_pop_front(metadata_buffer_id, tokens_per_device);
+        cb_metadata.pop_front(tokens_per_device);
         // Use DoubleAntipodalAtomicInc=true to increment semaphore on all devices including twice on the antipodal
         // device
         detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<
@@ -1326,13 +1375,13 @@ void kernel_main() {
             global_noc_semaphore_address);
     }
 
-    cb_pop_front(mapping_tensor_cb_id, mapping_pages);
+    cb_mapping.pop_front(mapping_pages);
 
 #ifdef USE_MUX
     // MUX teardown for Phase 2: Multiple workers per link share the same mux cores
     // Each link has a termination master that waits for all other workers to disconnect
     // before terminating the mux cores.
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
     noc_async_atomic_barrier();
 
     // Step 1: All workers disconnect from their mux connections
@@ -1365,6 +1414,8 @@ void kernel_main() {
             if (num_mux_clients > 1) {
                 volatile uint32_t* termination_semaphore =
                     reinterpret_cast<volatile uint32_t*>(termination_sync_address_arr[coord_dir]);
+                // Device 2.0 migration: legacy primitive retained: termination_sync_address_arr is a fabric-mux sync
+                // address (not a get_semaphore<>(id) address); #45003 item 4.
                 noc_semaphore_wait(termination_semaphore, num_mux_clients - 1);
             }
 
@@ -1381,14 +1432,16 @@ void kernel_main() {
                 termination_master_noc_x_arr[coord_dir],
                 termination_master_noc_y_arr[coord_dir],
                 termination_sync_address_arr[coord_dir]);
+            // Device 2.0 migration: legacy primitive retained: termination_sync_address_arr is a fabric-mux sync
+            // address (not a get_semaphore<>(id) address); #45003 item 4.
             noc_semaphore_inc(termination_master_semaphore_noc_addr, 1);
             noc_async_atomic_barrier();
         }
     }
 
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 #else
     close_direction_connections(directions, fabric_connections);
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 #endif
 }
