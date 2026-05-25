@@ -58,13 +58,10 @@ def _tp_mesh_mapper(device: Any, *, shard_dim: int) -> Any | None:
 
 
 def _env_experts_dtype() -> ttnn.DataType:
-    """Return TT dtype for routed expert weights.
-
-    Default is BF8 for memory efficiency; override via `GLM4_MOE_LITE_EXPERTS_TT_DTYPE`.
-    """
+    """Return TT dtype for routed expert weights (default BFP4; override via GLM4_MOE_LITE_EXPERTS_TT_DTYPE)."""
     override = os.environ.get("GLM4_MOE_LITE_EXPERTS_TT_DTYPE", "").strip().lower()
     if not override:
-        return ttnn.bfloat8_b
+        return ttnn.bfloat4_b
     if override in {"bf8", "bfloat8_b"}:
         return ttnn.bfloat8_b
     if override in {"bf16", "bfloat16"}:
@@ -618,25 +615,28 @@ def convert_decoder_layer_weights(
     attn_proj_mapper = None if attn_dp else attn_row_mapper
     attn_proj_variant = f"{attn_variant}_attndp" if attn_dp and attn_variant else attn_variant
 
+    # All MLA projection weights use BFP8 (DRAM-bandwidth-bound; halves weight-side DRAM traffic).
+    attn_proj_dtype = ttnn.bfloat8_b
+
     w_q_a = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.q_a_proj.weight"],
         cache_file=c("w_q_a", attn_proj_variant),
-        dtype=dense_dtype,
+        dtype=attn_proj_dtype,
         mesh_mapper=attn_proj_mapper,
     )
     w_q_b = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.q_b_proj.weight"],
         cache_file=c("w_q_b", attn_proj_variant),
-        dtype=dense_dtype,
+        dtype=attn_proj_dtype,
         mesh_mapper=attn_proj_mapper,
     )
     w_kv_a = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.kv_a_proj_with_mqa.weight"],
         cache_file=c("w_kv_a", attn_proj_variant),
-        dtype=dense_dtype,
+        dtype=attn_proj_dtype,
         mesh_mapper=attn_proj_mapper,
     )
     w_q_kv_a: Optional[ttnn.Tensor] = None
@@ -655,7 +655,7 @@ def convert_decoder_layer_weights(
             device=device,
             torch_weight_out_in=fused_out_in,
             cache_file=c("w_q_kv_a", fused_base),
-            dtype=dense_dtype,
+            dtype=attn_proj_dtype,
             mesh_mapper=attn_proj_mapper,
         )
         if _env_dram_sharded_attn():
@@ -679,11 +679,14 @@ def convert_decoder_layer_weights(
             w_kv_b1_mapper = None  # replicate
             w_kv_b1_variant = f"{attn_variant}_rep"
 
+    # Per-head kv_b weights use BFP8 (DRAM-bandwidth-bound); variant suffix kept for cache explicitness.
+    kvb_dtype = ttnn.bfloat8_b
+    kvb_tag = "bf8"
     w_kv_b1 = _per_head_weight_tt(
         device=device,
         torch_weight=w_kv_b1_torch,
-        cache_file=c("w_kv_b1", w_kv_b1_variant),
-        dtype=dense_dtype,
+        cache_file=c("w_kv_b1", f"{w_kv_b1_variant}_{kvb_tag}"),
+        dtype=kvb_dtype,
         mesh_mapper=w_kv_b1_mapper,
     )
     # w_kv_b2: when HEAD_PARALLEL_KVB2=1, shard along the head dimension (dim=1)
@@ -704,17 +707,17 @@ def convert_decoder_layer_weights(
     w_kv_b2 = _per_head_weight_tt(
         device=device,
         torch_weight=w_kv_b2_torch,
-        cache_file=c("w_kv_b2", kvb2_variant),
-        dtype=dense_dtype,
+        cache_file=c("w_kv_b2", f"{kvb2_variant}_{kvb_tag}"),
+        dtype=kvb_dtype,
         mesh_mapper=kvb2_mapper,
     )
 
-    # w_o stays row-parallel even when ATTN_DP=1 (it MUST have all_reduce for correctness).
+    # w_o stays row-parallel even when ATTN_DP=1 (needs all_reduce); BFP8 halves DRAM traffic.
     w_o = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.o_proj.weight"],
         cache_file=c("w_o", attn_variant),
-        dtype=dense_dtype,
+        dtype=attn_proj_dtype,
         mesh_mapper=attn_row_mapper,
     )
     if _env_dram_sharded_attn():
@@ -752,25 +755,27 @@ def convert_decoder_layer_weights(
         mlp_gate_mapper = _tp_mesh_mapper(device, shard_dim=3)
         mlp_down_mapper = _tp_mesh_mapper(device, shard_dim=2)
 
+    # Shared/dense MLP weights use BFP8 (DRAM-bandwidth-saturated; halves weight DRAM traffic).
+    mlp_dtype = ttnn.bfloat8_b
     w_mlp_gate = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"{mlp_prefix}gate_proj.weight"],
         cache_file=c("w_mlp_gate", mlp_variant),
-        dtype=dense_dtype,
+        dtype=mlp_dtype,
         mesh_mapper=mlp_gate_mapper,
     )
     w_mlp_up = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"{mlp_prefix}up_proj.weight"],
         cache_file=c("w_mlp_up", mlp_variant),
-        dtype=dense_dtype,
+        dtype=mlp_dtype,
         mesh_mapper=mlp_gate_mapper,
     )
     w_mlp_down = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"{mlp_prefix}down_proj.weight"],
         cache_file=c("w_mlp_down", mlp_variant),
-        dtype=dense_dtype,
+        dtype=mlp_dtype,
         mesh_mapper=mlp_down_mapper,
     )
     if _env_dram_sharded_mlp() or _env_sharded_mlp():
@@ -788,7 +793,7 @@ def convert_decoder_layer_weights(
             device=device,
             torch_weight_out_in=gate_up_torch,
             cache_file=c("w_mlp_gate_up", mlp_variant),
-            dtype=dense_dtype,
+            dtype=mlp_dtype,
             mesh_mapper=mlp_gate_mapper,
         )
 
@@ -829,7 +834,8 @@ def convert_decoder_layer_weights(
         moe_intermediate = int(hparams.moe_intermediate_size)
         hidden = int(hparams.hidden_size)
         num_devices = int(device.get_num_devices()) if _is_mesh_device(device) else 1
-        experts_variant = f"localE_d{num_devices}_v1"
+        # Cache key includes dtype to prevent silent reuse after the BFP4 default flip.
+        experts_variant = f"localE_d{num_devices}_dt{str(experts_dtype).split('.')[-1]}_v2"
 
         # Stack experts: [E, in, out] with TT linear conventions.
         # gate/up: HF is [out, in] == [moe_intermediate, hidden] -> transpose to [hidden, moe_intermediate]

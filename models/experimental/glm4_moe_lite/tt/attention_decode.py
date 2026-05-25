@@ -19,7 +19,13 @@ import torch
 
 import ttnn
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
-from models.experimental.glm4_moe_lite.tt.linear_helpers import attn_linear, mlp_linear, tp_row_parallel_linear
+from models.experimental.glm4_moe_lite.tt.linear_helpers import (
+    attn_kva_linear,
+    attn_linear,
+    attn_wo_linear,
+    mlp_linear,
+    tp_row_parallel_linear,
+)
 from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
 
 
@@ -27,6 +33,10 @@ def _profile_add(profile: dict[str, float] | None, key: str, elapsed_s: float) -
     if profile is None:
         return
     profile[key] = float(profile.get(key, 0.0)) + float(elapsed_s)
+
+
+# FlashMLA → kv_b2 → w_o op-chain tuning constants (edit to retune without touching function bodies).
+_KVB2_INPUT_L1 = True
 
 
 def _safe_slice(
@@ -92,8 +102,9 @@ def kv_cache_update(
         kv = None
         qkv = None
         w_q_kv_a = getattr(w, "w_q_kv_a", None)
+        # Tuned 21-core kv_a helper (per_core_N=2, out_subblock_w=2) replaces the default 64-core SLOW path.
         if w_q_kv_a is not None:
-            qkv = attn_linear(x, w_q_kv_a, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
+            qkv = attn_kva_linear(x, w_q_kv_a, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
             q_a = _safe_slice(
                 qkv, [0, 0, 0, 0], [1, 1, batch, int(hparams.q_lora_rank)], skip_clones=cfg.skip_defensive_clones
             )
@@ -107,7 +118,7 @@ def kv_cache_update(
                 ttnn.deallocate(qkv, force=False)
                 qkv = None
         else:
-            kv = attn_linear(x, w.w_kv_a, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
+            kv = attn_kva_linear(x, w.w_kv_a, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
 
         kv_nope = _safe_slice(
             kv, [0, 0, 0, 0], [1, 1, batch, int(hparams.kv_lora_rank)], skip_clones=cfg.skip_defensive_clones
@@ -315,7 +326,8 @@ def flash_mla_and_output(
         exp_approx_mode=False,
     )
     compute_kernel_config = cfg.mla_compute_kernel_config()
-    flash_mla_memcfg = ttnn.DRAM_MEMORY_CONFIG
+    # If DECODE_L1_ACT=1 → decode_act_mc is L1_MEMORY_CONFIG → FlashMLA output goes to L1; otherwise DRAM.
+    flash_mla_memcfg = cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG
 
     # Optional Q sharding
     if cfg.shard_q:
@@ -418,7 +430,12 @@ def flash_mla_and_output(
     )
     if not cfg.skip_defensive_clones:
         ttnn.deallocate(attn_latent_padded, force=False)
-    attn_latent = ttnn.permute(attn_latent, (0, 2, 1, 3))  # [1,H,B,kv_lora_rank]
+    # Fuse permute output into L1 for downstream kv_b2 (see _KVB2_INPUT_L1 for tuning).
+    permute_mc = ttnn.L1_MEMORY_CONFIG if _KVB2_INPUT_L1 else None
+    if permute_mc is not None:
+        attn_latent = ttnn.permute(attn_latent, (0, 2, 1, 3), memory_config=permute_mc)  # [1,H,B,kv_lora_rank]
+    else:
+        attn_latent = ttnn.permute(attn_latent, (0, 2, 1, 3))  # [1,H,B,kv_lora_rank]
 
     # kv_b2 + output projection
     t0 = time.perf_counter() if profile is not None else 0.0
@@ -468,7 +485,8 @@ def flash_mla_and_output(
             v = ttnn.permute(v, (0, 2, 1, 3))
             v = ttnn.reshape(v, (1, batch, 1, int(num_heads * hparams.v_head_dim)))
             v = ttnn.permute(v, (0, 2, 1, 3))
-        attn_out = attn_linear(v, w.w_o, device=device, cfg=cfg)
+        # Tuned 32-core w_o helper: WIDTH_SHARDED L1 output + act-in-L1 cuts the 83%-DRAM-util baseline penalty.
+        attn_out = attn_wo_linear(v, w.w_o, device=device, cfg=cfg)
         ttnn.deallocate(v, force=False)
 
     _profile_add(profile, "attn_out_s", time.perf_counter() - t0 if profile is not None else 0.0)

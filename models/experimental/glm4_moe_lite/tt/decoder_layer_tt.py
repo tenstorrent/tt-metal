@@ -1056,11 +1056,11 @@ def run_decoder_layer_prefill_update_cache_tt(
         if router_impl == "cpu":
             topk_weights, topk_indices = moe_topk_cpu_reference(device=device, x=x, moe_w=w.moe, hparams=hparams)
         else:
+            # Router pins its own LoFi config internally; no longer inherits the over-precise shared HiFi4 MLP config.
             topk_weights, topk_indices = moe_topk_tt(
                 x=x,
                 moe_w=w.moe,
                 hparams=hparams,
-                compute_kernel_config=mlp_compute_kernel_config,
             )
         _profile_add(profile, "moe_router_s", time.perf_counter() - t0 if profile is not None else 0.0)
         t0 = time.perf_counter() if profile is not None else 0.0

@@ -14,6 +14,7 @@ import ttnn
 from models.common.modules.tt_ccl import get_tt_ccl
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.layer_weights import MoELayerTTWeights
+from models.experimental.glm4_moe_lite.tt.linear_helpers import compute_1d_prog_cfg
 
 _SCATTER_ZERO_CACHE: dict[tuple[int, int, int], ttnn.Tensor] = {}
 
@@ -481,7 +482,6 @@ def moe_topk_tt(
     x: ttnn.Tensor,  # [1,1,T,H] TILE
     moe_w: MoELayerTTWeights,
     hparams: Glm4MoeLiteHParams,
-    compute_kernel_config: Any | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return (topk_weights, topk_indices) for routed experts.
 
@@ -498,30 +498,38 @@ def moe_topk_tt(
     use_l1 = os.environ.get("GLM4_MOE_LITE_ROUTER_L1", "1").strip() == "1" and int(x.shape[2]) <= 32
     mc = ttnn.L1_MEMORY_CONFIG if use_l1 else None
 
-    if compute_kernel_config is None:
-        logits = ttnn.linear(x, moe_w.w_gate, memory_config=mc)  # [1,1,T,E]
-    else:
+    # Tuned 1D multicast program config (compute_1d_prog_cfg) + LoFi/fp32-acc for decode/small-batch router.
+    # Skipped for m_total>1024 (large prefill) to avoid L1 circular buffer clash with the explicit program config.
+    m_total = 1
+    for i in range(len(x.shape) - 1):
+        m_total *= int(x.shape[i])
+    if m_total <= 1024:
         logits = ttnn.linear(
-            x, moe_w.w_gate, compute_kernel_config=compute_kernel_config, memory_config=mc
+            x,
+            moe_w.w_gate,
+            program_config=compute_1d_prog_cfg(x.device(), moe_w.w_gate, m_total, fp32_dest_acc_en=False),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            ),
+            **({} if mc is None else {"memory_config": mc}),
         )  # [1,1,T,E]
+    else:
+        logits = ttnn.linear(x, moe_w.w_gate, memory_config=mc)  # [1,1,T,E]
     scores = ttnn.sigmoid(logits, memory_config=mc)
     ttnn.deallocate(logits, force=False)
 
     # scores_for_choice = scores + e_score_correction_bias (broadcast over tokens)
-    if int(scores.shape[2]) == 1 and moe_w.e_score_correction_bias_tile is not None:
-        # Decode path (T=1): use pre-converted TILE bias directly (no to_layout overhead).
+    # Use pre-converted TILE bias [1,1,1,E] when available; ttnn.add broadcasts
+    # dim-2 automatically so no explicit repeat is needed regardless of T.
+    if moe_w.e_score_correction_bias_tile is not None:
         bias = moe_w.e_score_correction_bias_tile  # [1,1,1,E] TILE (weight tensor; must not deallocate)
         bias_owned = False
     else:
-        # Prefill path (T>1): repeat ROW_MAJOR bias then convert to TILE.
         bias_rm = moe_w.e_score_correction_bias  # [1,1,1,E] ROW_MAJOR (weight tensor; must not deallocate)
-        bias_rm_owned = False
-        if int(scores.shape[2]) != 1:
-            bias_rm = ttnn.repeat(bias_rm, ttnn.Shape((1, 1, scores.shape[2], 1)))
-            bias_rm_owned = True
         bias = ttnn.to_layout(bias_rm, ttnn.TILE_LAYOUT)
-        if bias_rm_owned:
-            ttnn.deallocate(bias_rm, force=False)
         bias_owned = True
 
     scores_with_bias = ttnn.add(scores, bias, dtype=ttnn.bfloat16, memory_config=mc)
