@@ -11,6 +11,14 @@
 
 namespace tt::tt_metal::emule {
 
+// Master ASAN switch for all emule sanitizers (host + kernel side). Off by default.
+// Re-read on every call — see emule_strict_cb_boundary_enabled comment in
+// emulated_program_runner.cpp for why caching breaks combined test runs.
+inline bool emule_asan_enabled() {
+    const char* v = std::getenv("TT_METAL_EMULE_ASAN");
+    return v != nullptr && v[0] != '\0' && v[0] != '0';
+}
+
 // Host-side use-after-free / use-before-allocation sanitizer for Buffer access.
 // Catches the case where a caller holds a live Buffer object (or shared_ptr to one)
 // whose backing device memory has been reclaimed by the allocator (DeallocateBuffer,
@@ -18,7 +26,7 @@ namespace tt::tt_metal::emule {
 // this check, address() still returns the cached stale address and the write silently
 // stomps memory that the allocator may have already re-issued to another buffer.
 inline void check_buffer_allocated(const tt::tt_metal::Buffer& buffer, const char* op) {
-    if (!std::getenv("TT_METAL_EMULE_MODE")) {
+    if (!emule_asan_enabled()) {
         return;
     }
     if (!buffer.is_allocated()) {
@@ -41,7 +49,7 @@ inline void check_buffer_allocated(const tt::tt_metal::Buffer& buffer, const cha
 // addresses passed from host code are caught before they reach the cluster
 // write path. Alignment values match WH/N150.
 inline void check_host_l1_alignment(uint32_t address, const char* op) {
-    if (!std::getenv("TT_METAL_EMULE_MODE")) {
+    if (!emule_asan_enabled()) {
         return;
     }
     if (address % 4 != 0) {
@@ -55,7 +63,7 @@ inline void check_host_l1_alignment(uint32_t address, const char* op) {
 }
 
 inline void check_host_dram_alignment(uint32_t address, const char* op) {
-    if (!std::getenv("TT_METAL_EMULE_MODE")) {
+    if (!emule_asan_enabled()) {
         return;
     }
     if (address % 32 != 0) {

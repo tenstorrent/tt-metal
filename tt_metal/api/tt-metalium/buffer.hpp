@@ -241,7 +241,7 @@ public:
     // Declare that only the first `logical_size` bytes of this buffer hold
     // logical tensor data; bytes in [logical_size, size()) are hardware
     // padding (e.g. tile/alignment rounding) and must never be read or
-    // written by kernels. Under the emule sanitizer (TT_EMULE_STRICT_PADDING
+    // written by kernels. Under the emule sanitizer (TT_METAL_EMULE_ASAN
     // env var) any kernel access into that padded region aborts with a
     // "Tensor Padding Violation" message. Passing logical_size == size()
     // clears the declaration. Only meaningful for L1/L1_SMALL buffers today.

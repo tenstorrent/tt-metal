@@ -26,6 +26,8 @@ namespace tt::tt_metal {
 // wrapper in ConfigureDeviceWithProgram translates its TT_THROW into an
 // ASAN-style abort for emule.
 TEST_F(MeshDeviceFixture, Metadata_CB_Tensor_Clash_SanityCheck) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
     auto& mesh_device = this->devices_.at(0);
     auto* device = mesh_device->get_devices()[0];
     CoreCoord logical_core = {0, 0};

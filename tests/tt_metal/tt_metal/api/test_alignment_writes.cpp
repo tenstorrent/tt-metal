@@ -23,7 +23,7 @@ namespace tt::tt_metal {
 
 // L1->L1 read: src_noc lower 4 bits (0) != dst_l1 lower 4 bits (1) -> abort
 TEST_F(MeshDeviceFixture, NocRead_L1_Misaligned_SanityCheck) {
-    setenv("TT_EMULE_STRICT_NOC_ALIGN", "1", 1);
+    setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -48,12 +48,12 @@ TEST_F(MeshDeviceFixture, NocRead_L1_Misaligned_SanityCheck) {
         detail::LaunchProgram(device, program),
         ".*NOC Transfer Alignment.*L1.*lower 4 bits must match.*");
 
-    unsetenv("TT_EMULE_STRICT_NOC_ALIGN");
+    unsetenv("TT_METAL_EMULE_ASAN");
 }
 
 // L1->L1 write: src_l1 lower 4 bits (0) != dst_noc lower 4 bits (1) -> abort
 TEST_F(MeshDeviceFixture, NocWrite_L1_Misaligned_SanityCheck) {
-    setenv("TT_EMULE_STRICT_NOC_ALIGN", "1", 1);
+    setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -78,13 +78,13 @@ TEST_F(MeshDeviceFixture, NocWrite_L1_Misaligned_SanityCheck) {
         detail::LaunchProgram(device, program),
         ".*NOC Transfer Alignment.*L1.*lower 4 bits must match.*");
 
-    unsetenv("TT_EMULE_STRICT_NOC_ALIGN");
+    unsetenv("TT_METAL_EMULE_ASAN");
 }
 
 // DRAM->L1 read (WH): DRAM lower 8 bits (0x10) != L1 lower 8 bits (0x20) -> abort
 // Constructs DRAM NOC address from the host-side NOC XY of DRAM bank 0.
 TEST_F(MeshDeviceFixture, NocRead_DRAM_Misaligned_SanityCheck_WH) {
-    setenv("TT_EMULE_STRICT_NOC_ALIGN", "1", 1);
+    setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto& mesh = this->devices_.at(0);
     auto* device = mesh->get_devices()[0];
@@ -123,12 +123,12 @@ TEST_F(MeshDeviceFixture, NocRead_DRAM_Misaligned_SanityCheck_WH) {
         detail::LaunchProgram(device, program),
         ".*NOC Transfer Alignment.*DRAM.*lower bits must match.*");
 
-    unsetenv("TT_EMULE_STRICT_NOC_ALIGN");
+    unsetenv("TT_METAL_EMULE_ASAN");
 }
 
 // L1->DRAM write (WH/BH): L1 lower 4 bits (0) != DRAM lower 4 bits (1) -> abort
 TEST_F(MeshDeviceFixture, NocWrite_DRAM_Misaligned_SanityCheck) {
-    setenv("TT_EMULE_STRICT_NOC_ALIGN", "1", 1);
+    setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto& mesh = this->devices_.at(0);
     auto* device = mesh->get_devices()[0];
@@ -166,7 +166,7 @@ TEST_F(MeshDeviceFixture, NocWrite_DRAM_Misaligned_SanityCheck) {
         detail::LaunchProgram(device, program),
         ".*NOC Transfer Alignment.*DRAM.*lower 4 bits must match.*");
 
-    unsetenv("TT_EMULE_STRICT_NOC_ALIGN");
+    unsetenv("TT_METAL_EMULE_ASAN");
 }
 
 }  // namespace tt::tt_metal

@@ -4,6 +4,7 @@
 
 #include "emulated_program_runner.hpp"
 #include "emule_live_ranges.hpp"
+#include "host_sanitizers.hpp"
 
 #include <dlfcn.h>
 #include <unistd.h>
@@ -194,7 +195,7 @@ static constexpr uint32_t NOC_NODE_MASK = (1 << NOC_NODE_ID_BITS) - 1;
 extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
     // Out-of-bounds-tensor sanitizer for DRAM. Active only when
     // emulated_program_runner populated the live DRAM ranges (i.e.
-    // TT_EMULE_STRICT_TENSOR is set). Accesses below dram_unreserved_base are
+    // TT_METAL_EMULE_ASAN is set). Accesses below dram_unreserved_base are
     // reserved system regions and pass through; at-or-above must hit a live
     // DRAM tensor extent.
     if (__emule_dram_tensor_ranges != nullptr &&
@@ -231,75 +232,6 @@ extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
     return __emule_bridge_l1 ? __emule_bridge_l1 + offset : nullptr;
 }
 
-// Returns true when TT_EMULE_STRICT_NOC is set in the environment. The fabric
-// access guards in __emule_noc_resolve / __emule_resolve_noc_addr abort under
-// strict mode and fall back to the legacy "return nullptr + EMULE WARN at the
-// call site" behavior otherwise. Cached on first call. Off by default to keep
-// existing tests / kernels that NOC into unregistered cores (eth, dispatch, …)
-// running until those access sites are audited.
-static bool emule_strict_noc_enabled() {
-    static const bool enabled = []() {
-        const char* v = std::getenv("TT_EMULE_STRICT_NOC");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return enabled;
-}
-
-// TT_EMULE_STRICT_TENSOR: when set, populate the live-tensor-range thread_locals
-// before each kernel launch so __emule_local_l1_to_ptr aborts on accesses that
-// land at-or-above l1_unreserved_base but inside no allocated L1 buffer.
-// Off by default — many existing tests/kernels touch L1 regions (CB pages,
-// device-side scratch) that aren't yet registered as live ranges and would
-// false-positive.
-static bool emule_strict_tensor_enabled() {
-    static const bool enabled = []() {
-        const char* v = std::getenv("TT_EMULE_STRICT_TENSOR");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return enabled;
-}
-
-// TT_EMULE_STRICT_OBJECT_INTENT: when set, enable the post-kernel provenance
-// comparison that catches writes landing in the wrong live L1 object even when
-// the target address is still valid allocated memory. This reuses the live
-// tensor range snapshots from STRICT_TENSOR, but keeps the stronger
-// per-kernel-intent check behind its own opt-in because exact attribution is
-// only supported for single-kernel-per-core launches.
-static bool emule_strict_object_intent_enabled() {
-    static const bool enabled = []() {
-        const char* v = std::getenv("TT_EMULE_STRICT_OBJECT_INTENT");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return enabled;
-}
-
-// TT_EMULE_STRICT_CB_BOUNDARY: when set, populate __emule_cb_boundary_strict
-// before each kernel launch so __emule_local_l1_to_ptr aborts on accesses
-// that land inside a CB byte range but outside the currently-reserved
-// sub-range. Off by default for the same reason as STRICT_TENSOR: existing
-// kernels may legitimately touch CB pages outside an active reservation
-// (e.g. consumer-side speculative reads, cross-CB scratch use) and would
-// false-positive until those sites are audited.
-static bool emule_strict_cb_boundary_enabled() {
-    const char* v = std::getenv("TT_EMULE_STRICT_CB_BOUNDARY");
-    return v != nullptr && v[0] != '\0' && v[0] != '0';
-}
-
-// TT_EMULE_STRICT_PADDING: when set, populate the L1 padding-range thread_locals
-// before each kernel launch so __emule_local_l1_to_ptr aborts on accesses
-// that land inside a buffer's declared padding region [logical_end, physical_end).
-// Independent of STRICT_TENSOR: padding-only checks can be enabled without
-// requiring every buffer to be registered as a live tensor. Padding regions
-// are populated by Buffer::set_logical_size — buffers that never call it
-// have no padding entry and contribute nothing to the check.
-static bool emule_strict_padding_enabled() {
-    static const bool enabled = []() {
-        const char* v = std::getenv("TT_EMULE_STRICT_PADDING");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return enabled;
-}
-
 extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
     if (__emule_core_map) {
         uint64_t key = (uint64_t(x) << 32) | y;
@@ -307,7 +239,7 @@ extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
         if (it != __emule_core_map->end()) {
             return it->second->l1_ptr(static_cast<uint32_t>(addr));
         }
-        if (emule_strict_noc_enabled()) {
+        if (tt::tt_metal::emule::emule_asan_enabled()) {
             fprintf(stderr,
                     "[ASAN ERROR] Fabric Access Violation: Attempted to access unallocated Core at NOC coordinates (%u, %u)\n",
                     x, y);
@@ -330,7 +262,7 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
         if (it != __emule_core_map->end()) {
             return it->second->l1_ptr(static_cast<uint32_t>(l1_offset));
         }
-        if (emule_strict_noc_enabled()) {
+        if (tt::tt_metal::emule::emule_asan_enabled()) {
             fprintf(stderr,
                     "[ASAN ERROR] Fabric Access Violation: Attempted to access unallocated Core at NOC coordinates (%u, %u)\n",
                     noc_x, noc_y);
@@ -1640,6 +1572,7 @@ static std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> build_per_thr
 // stack of execute_program_emulated for the duration of launch_cores, threaded
 // through into each kernel thread's thread_local pointers.
 struct EmuleOobTensorState {
+    bool asan_enabled = false;
     uint32_t l1_unreserved_base = 0;
     const uint64_t* tensor_ranges = nullptr;
     uint32_t tensor_ranges_count = 0;
@@ -1647,17 +1580,8 @@ struct EmuleOobTensorState {
     const uint64_t* dram_tensor_ranges = nullptr;
     uint32_t dram_tensor_ranges_count = 0;
     bool cb_boundary_strict = false;
-    // Tensor-padding sanitizer state. Independent of (tensor_ranges,
-    // dram_tensor_ranges) above: STRICT_PADDING can be enabled without
-    // STRICT_TENSOR. Null means "no padding check this launch".
     const uint64_t* l1_padding_ranges = nullptr;
     uint32_t l1_padding_ranges_count = 0;
-    // Object-intent provenance check.
-    // When true, launch_cores snapshots every live L1 tensor's bytes on each
-    // core before kernels run, threads the resolved-ranges array into the one
-    // supported kernel's thread_locals, and post-launch compares every
-    // snapshot against current bytes for buffers that kernel never resolved.
-    // Any byte diff fires an Object Intent Violation abort.
     bool object_intent_strict = false;
 };
 
@@ -1708,7 +1632,7 @@ static void launch_cores(
                         if (cs.ki_list->size() != 1) {
                             fprintf(
                                 stderr,
-                                "[ASAN ERROR] Object Intent Violation: Exact per-kernel provenance tracking is unsupported when %zu kernels share core (%u, %u) in one launch. Enable TT_EMULE_STRICT_OBJECT_INTENT only for single-kernel-per-core launches.\n",
+                                "[ASAN ERROR] Object Intent Violation: Exact per-kernel provenance tracking is unsupported when %zu kernels share core (%u, %u) in one launch. Enable TT_METAL_EMULE_ASAN only for single-kernel-per-core launches.\n",
                                 cs.ki_list->size(),
                                 static_cast<unsigned>(cs.logical_core.x),
                                 static_cast<unsigned>(cs.logical_core.y));
@@ -1785,8 +1709,8 @@ static void launch_cores(
                             my_y[1] = py;
                             __emule_logical_x = lx;
                             __emule_logical_y = ly;
-                            __emule_sem_l1_range_start = sem_base;
-                            __emule_sem_l1_range_end = sem_base + sem_size;
+                            __emule_sem_l1_range_start = oob_state.asan_enabled ? sem_base : 0;
+                            __emule_sem_l1_range_end = oob_state.asan_enabled ? (sem_base + sem_size) : 0;
                             __emule_pending_noc_reads = 0;
                             __emule_l1_unreserved_base = oob_state.l1_unreserved_base;
                             __emule_l1_tensor_ranges = oob_state.tensor_ranges;
@@ -1840,12 +1764,7 @@ static void launch_cores(
                                     }
                                     ki.variants[t]();
                                 }
-                                // Kernel-side dirty-CB sanitizer (per-kernel attribution).
-                                // On silicon, leftover pages survive between launches and
-                                // back-pressure the next program. Only run on cores with a
-                                // single kernel — multi-kernel programs may legitimately
-                                // leave producer-side occupied>0 at producer exit.
-                                if (single_kernel_on_core) {
+                                if (single_kernel_on_core && emule_asan_enabled()) {
                                     for (uint32_t cb_id = 0; cb_id < EMULE_NUM_CBS; ++cb_id) {
                                         auto& cb = cb_array[cb_id];
                                         if (cb.num_pages == 0) {
@@ -2059,23 +1978,14 @@ void execute_program_emulated(IDevice* device, Program& program) {
     // Phase 3: Launch all cores concurrently
     uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
 
-    // Snapshot live L1 tensor ranges and the allocator's unreserved base for
-    // the OOB-tensor sanitizer (TT_EMULE_STRICT_TENSOR) and the stricter
-    // object-intent provenance sanitizer (TT_EMULE_STRICT_OBJECT_INTENT).
-    // When both are disabled, leave ranges null so the inline check in
-    // __emule_local_l1_to_ptr is a no-op.
     EmuleOobTensorState oob_state;
     std::vector<uint64_t> live_ranges_snapshot;
     std::vector<uint64_t> dram_live_ranges_snapshot;
     std::vector<uint64_t> padding_ranges_snapshot;
-    // Sentinel for the "no live ranges" case — vector::data() on an empty
-    // vector may return nullptr, which would short-circuit the check and let
-    // accesses through. A non-null sentinel with count=0 forces the check to
-    // run and abort, which is the correct behavior when no tensor is live.
     static const uint64_t kEmptyRange = 0;
-    const bool strict_tensor = emule_strict_tensor_enabled();
-    const bool strict_object_intent = emule_strict_object_intent_enabled();
-    if (strict_tensor || strict_object_intent) {
+    const bool asan_enabled = emule_asan_enabled();
+    oob_state.asan_enabled = asan_enabled;
+    if (asan_enabled) {
         live_ranges_snapshot = tt::tt_metal::emule::LiveL1Ranges::snapshot(device_id);
         oob_state.l1_unreserved_base = static_cast<uint32_t>(
             device->allocator()->get_base_allocator_addr(HalMemType::L1));
@@ -2091,50 +2001,43 @@ void execute_program_emulated(IDevice* device, Program& program) {
             ? &kEmptyRange
             : dram_live_ranges_snapshot.data();
         oob_state.dram_tensor_ranges_count = static_cast<uint32_t>(dram_live_ranges_snapshot.size());
-        oob_state.object_intent_strict = strict_object_intent;
-    }
-    if (emule_strict_padding_enabled()) {
+        oob_state.object_intent_strict = true;
+
         padding_ranges_snapshot = tt::tt_metal::emule::LiveL1PaddingRanges::snapshot(device_id);
-        // Padding check is per-range only — no buffer means no padding to
-        // check. Leave the pointer null in that case so the inline check is a
-        // pure no-op (unlike the OOB-tensor check which must trap on accesses
-        // when no tensor is live, the padding check has nothing to validate).
         if (!padding_ranges_snapshot.empty()) {
             oob_state.l1_padding_ranges = padding_ranges_snapshot.data();
             oob_state.l1_padding_ranges_count = static_cast<uint32_t>(padding_ranges_snapshot.size());
         }
     }
-    oob_state.cb_boundary_strict = emule_strict_cb_boundary_enabled();
+    oob_state.cb_boundary_strict = asan_enabled;
 
     launch_cores(core_setups, dram_data, core_map_ptr, oob_state);
 
-    // Phase 4: Host-side dirty-CB sanitizer — final whole-program sweep. The
-    // per-kernel kernel-side check inside launch_cores only fires for cores
-    // with a single kernel; this sweep catches multi-kernel cases where the
-    // producer and consumer don't fully balance.
-    for (const auto& cs : core_setups) {
-        tt_emule::CBSyncState* cb_array = cs.core->cb_sync_array();
-        if (cb_array == nullptr) {
-            continue;
-        }
-        for (uint32_t cb_id = 0; cb_id < EMULE_NUM_CBS; ++cb_id) {
-            auto& cb = cb_array[cb_id];
-            if (cb.num_pages == 0) {
+    if (asan_enabled) {
+        for (const auto& cs : core_setups) {
+            tt_emule::CBSyncState* cb_array = cs.core->cb_sync_array();
+            if (cb_array == nullptr) {
                 continue;
             }
-            uint32_t occupied = cb.occupied.load(std::memory_order_acquire);
-            if (occupied > 0) {
-                fprintf(
-                    stderr,
-                    "[ASAN ERROR] Dirty CB Detected: Core (%u, %u) CB %u was not flushed! "
-                    "%u/%u pages remain after program exit (push > pop) — would back-pressure "
-                    "the next program launch on silicon.\n",
-                    static_cast<uint32_t>(cs.logical_core.x),
-                    static_cast<uint32_t>(cs.logical_core.y),
-                    cb_id,
-                    occupied,
-                    cb.num_pages);
-                std::abort();
+            for (uint32_t cb_id = 0; cb_id < EMULE_NUM_CBS; ++cb_id) {
+                auto& cb = cb_array[cb_id];
+                if (cb.num_pages == 0) {
+                    continue;
+                }
+                uint32_t occupied = cb.occupied.load(std::memory_order_acquire);
+                if (occupied > 0) {
+                    fprintf(
+                        stderr,
+                        "[ASAN ERROR] Dirty CB Detected: Core (%u, %u) CB %u was not flushed! "
+                        "%u/%u pages remain after program exit (push > pop) — would back-pressure "
+                        "the next program launch on silicon.\n",
+                        static_cast<uint32_t>(cs.logical_core.x),
+                        static_cast<uint32_t>(cs.logical_core.y),
+                        cb_id,
+                        occupied,
+                        cb.num_pages);
+                    std::abort();
+                }
             }
         }
     }
