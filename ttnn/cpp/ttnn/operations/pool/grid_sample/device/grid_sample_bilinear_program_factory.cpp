@@ -102,7 +102,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
     // fp32 tiles, so each chunk must shrink to <= 4 tiles. When the user explicitly enables
     // dst_full_sync_en, full-sync DEST holds 8 fp32 tiles and the 4-tile clamp would be a
     // gratuitous slowdown — so we keep the full 8-tile chunk in that case. The compute kernel
-    // reads the same flag (ct_arg[37]) and recomputes its own MAX_TILES_PER_REDUCTION accordingly.
+    // reads the same flag (ct_arg[16]) and recomputes its own MAX_TILES_PER_REDUCTION accordingly.
     const auto [resolved_math_fidelity, resolved_math_approx, resolved_fp32_acc, resolved_l1_acc, user_dst_full_sync] =
         ttnn::get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
     (void)resolved_l1_acc;  // not consumed in this factory
@@ -307,28 +307,28 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             pre_tilize_cb_id,                  // ct_arg[13]: pre_tilize_cb_id
             is_output_tiled ? 1U : 0U,         // ct_arg[14]: is_output_tiled
             is_output_block_format ? 1U : 0U,  // ct_arg[15]: is_output_block_format
-            DUMMY_CB_ID,                       // ct_arg[16]: unused (in_idx_cb_id for mpwi)
-            DUMMY_CB_ID,                       // ct_arg[17]: unused (pack_tmp_cb_id for mpwi)
-            DUMMY_CB_ID,                       // ct_arg[18]: unused (pack_idx_tmp_cb_id for mpwi)
-            DUMMY_CB_ID,                       // ct_arg[19]: unused (right_inc_cb_id for mpwi)
-            DUMMY_CB_ID,                       // ct_arg[20]: unused (down_left_wrap_inc_cb_id for mpwi)
-            DUMMY_CB_ID,                       // ct_arg[21]: unused (up_left_wrap_inc_cb_id for mpwi)
-            DUMMY_CB_ID,                       // ct_arg[22]: unused (out_idx_cb_id for mpwi)
-            1,                                 // ct_arg[23]: stride_h (unused by grid_sample)
-            1,                                 // ct_arg[24]: stride_w (unused by grid_sample)
-            1,                                 // ct_arg[25]: in_h_padded (unused by grid_sample)
-            1,                                 // ct_arg[26]: in_w_padded (unused by grid_sample)
-            1,                                 // ct_arg[27]: eff_kernel_h (unused by grid_sample)
-            1,                                 // ct_arg[28]: eff_kernel_w (unused by grid_sample)
-            1,                                 // ct_arg[29]: pad_l (unused by grid_sample)
-            DUMMY_CB_ID,                       // ct_arg[30]: intra_kernel_right_inc_cb_id (unused)
-            DUMMY_CB_ID,                       // ct_arg[31]: intra_kernel_down_left_wrap_inc_cb_id (unused)
-            DUMMY_CB_ID,                       // ct_arg[32]: compute_tmp_idx_cb_id (unused)
-            DUMMY_CB_ID,                       // ct_arg[33]: clear_value_cb_id (unused)
-            1,                                 // ct_arg[34]: kernel_h (unused by grid_sample)
-            1,                                 // ct_arg[35]: kernel_w (unused by grid_sample)
-            0,                                 // ct_arg[36]: indexes_32_bit (unused by grid_sample)
-            force_4_tile_chunk ? 1U : 0U,      // ct_arg[37]: force_max_tiles_per_reduction_4
+            force_4_tile_chunk ? 1U : 0U,      // ct_arg[16]: force_max_tiles_per_reduction_4
+            DUMMY_CB_ID,                       // ct_arg[17]: unused (in_idx_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[18]: unused (pack_tmp_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[19]: unused (pack_idx_tmp_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[20]: unused (right_inc_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[21]: unused (down_left_wrap_inc_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[22]: unused (up_left_wrap_inc_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[23]: unused (out_idx_cb_id for mpwi)
+            1,                                 // ct_arg[24]: stride_h (unused by grid_sample)
+            1,                                 // ct_arg[25]: stride_w (unused by grid_sample)
+            1,                                 // ct_arg[26]: in_h_padded (unused by grid_sample)
+            1,                                 // ct_arg[27]: in_w_padded (unused by grid_sample)
+            1,                                 // ct_arg[28]: eff_kernel_h (unused by grid_sample)
+            1,                                 // ct_arg[29]: eff_kernel_w (unused by grid_sample)
+            1,                                 // ct_arg[30]: pad_l (unused by grid_sample)
+            DUMMY_CB_ID,                       // ct_arg[31]: intra_kernel_right_inc_cb_id (unused)
+            DUMMY_CB_ID,                       // ct_arg[32]: intra_kernel_down_left_wrap_inc_cb_id (unused)
+            DUMMY_CB_ID,                       // ct_arg[33]: compute_tmp_idx_cb_id (unused)
+            DUMMY_CB_ID,                       // ct_arg[34]: clear_value_cb_id (unused)
+            1,                                 // ct_arg[35]: kernel_h (unused by grid_sample)
+            1,                                 // ct_arg[36]: kernel_w (unused by grid_sample)
+            0,                                 // ct_arg[37]: indexes_32_bit (unused by grid_sample)
         };
 
         KernelDescriptor compute_desc;
