@@ -63,7 +63,7 @@ ALWI constexpr uint32_t idx_2d(uint32_t i_flat, uint32_t ht, uint32_t wt) noexce
     if constexpr (M == OperandKind::Scalar) { (void)i_flat; (void)ht; (void)wt; return 0; }
     else if constexpr (M == OperandKind::Block) { (void)ht; (void)wt; return i_flat; }
     else if constexpr (M == OperandKind::Row)  { (void)i_flat; (void)ht; return wt; }
-    else                                            { (void)i_flat; (void)wt; return ht; }  // ColBcast
+    else                                       { (void)i_flat; (void)wt; return ht; }  // Col
 }
 
 template <OperandKind M>
@@ -71,186 +71,30 @@ ALWI constexpr uint32_t window_2d(uint32_t Ht, uint32_t Wt) noexcept {
     if constexpr (M == OperandKind::Block) return Ht * Wt;
     else if constexpr (M == OperandKind::Row) { (void)Ht; return Wt; }
     else if constexpr (M == OperandKind::Col) { (void)Wt; return Ht; }
-    else                                            { (void)Ht; (void)Wt; return 1u; }  // FirstTile
+    else                                      { (void)Ht; (void)Wt; return 1u; }  // Scalar
 }
 
-// 1D window count, mirroring `window_2d`. The 1D chain entry passes `n_tiles`
-// (the full iteration count) as the bulk-wait/pop count; the operand's actual
-// visible-tile count depends on its kind:
-//   - Block  → n  (consume the full n_tiles)
-//   - Scalar → 1  (held single tile, broadcast across n iters)
-//   - Row/Col → degenerate to Scalar in 1D (no Ht/Wt context — `valid_policy_mode_2d_v`
-//                  rejects them with iterating waits anyway)
-//
-// This is what makes `Bulk + Scalar` (the softmax-hang cell) legal in 1D: the
-// chain emits `cb_wait_front(cb, 1)` for a held 1-tile operand instead of
-// `cb_wait_front(cb, n_tiles)`.
+/// 1D wait/pop/reserve/push window. Mirrors `window_2d`'s OperandKind-aware
+/// behavior: Scalar reads/writes 1 tile total (broadcast across iterations);
+/// Block reads/writes `n_tiles` distinct tiles. Row/Col degenerate in 1D
+/// (no separate Ht/Wt context) — treated same as Block.
+///
+/// Without this, `Bulk + Scalar` over-waits at runtime (emits
+/// `cb_wait_front(cb, n_tiles)` for a 1-tile broadcast operand). See HQ doc
+/// "Bulk + Scalar deadlock gotcha" — fixed here so OperandKind consistently
+/// drives counts across both 1D and 2D code paths.
 template <OperandKind M>
-ALWI constexpr uint32_t window_1d(uint32_t n) noexcept {
-    if constexpr (M == OperandKind::Block) return n;
-    else                                    { (void)n; return 1u; }  // Scalar / Row / Col
+ALWI constexpr uint32_t window_1d(uint32_t n_tiles) noexcept {
+    if constexpr (M == OperandKind::Scalar) { (void)n_tiles; return 1u; }
+    else                                    { return n_tiles; }  // Block (Row/Col degenerate in 1D)
 }
 
-// Allowed (Policy × Mode) combinations in 2D. RowBcast/ColBcast cannot stream
-// per-tile — the producer must stage the full row/col upfront. Matches the
-// `binary_op_helpers` static_assert (ROW/SCALAR require WaitUpfront* / NoWait*).
+// Allowed (Policy × Mode) combinations in 2D. Row/Col cannot stream per-tile —
+// the producer must stage the full row/col upfront. Matches the
+// `binary_op_helpers` static_assert (ROW/SCALAR require Bulk-family or NoWait*).
 template <InputLifecycle P, OperandKind M>
 inline constexpr bool valid_policy_mode_2d_v =
-    !(is_bcast_mode_v<M> &&
-      (P == Streaming || P == Chunked));
-
-// =============================================================================
-// Lifecycle × OperandKind validity predicates
-// =============================================================================
-//
-// `valid_input_combo` — structural rules valid in BOTH 1D and 2D modes.
-// Rejects combinations whose wait/pop emission contradicts the index walk:
-//
-//   1. Block index + Wait::PerTile      → wait(1) only, but read offset grows
-//                                          past 1 from iter 1 onwards (OOB).
-//   2. Block index + Pop::PerTile       → front advances per iter AND abs-frame
-//                                          index walks per iter ⇒ double-walk,
-//                                          read lands at 2·i.
-//   3. Cumulative wait + per-iter pop   → cb_wait_front cumulative-count contract
-//                                          (cb_api.h:24-28) assumes pops happen
-//                                          only at end; per-iter pops break the
-//                                          visible-window invariant.
-//
-// `valid_input_combo_1d` — adds 1D-only rules. `wait_upfront` / `pop_upfront_end`
-// are now kind-aware in 1D via `window_1d<Kind>(n)` (mirror of `window_2d`),
-// so Bulk-family + non-Block kind works correctly. The remaining 1D footguns
-// are policies whose per-iter emission is NOT kind-aware:
-//
-//   4. Non-Block kind + Cumulative wait → `wait_per_tile(cumulative_count)`
-//                                          emits cb_wait_front(cumulative_count);
-//                                          for non-Block, the count grows past M
-//                                          starting at iter M ⇒ DEADLOCK.
-//   5. Non-Block kind + PerChunk wait/pop → `wait_per_block` / `pop_per_block`
-//                                          emit `inner_count = block_size`, not
-//                                          kind-aware. (Generally also guarded
-//                                          by `chain_supports_block_v`.)
-//
-// When `wait_per_tile`'s Cumulative path learns to cap at `window_1d<Kind>(n)`,
-// rule 4 can be relaxed.
-
-constexpr bool valid_input_combo(InputLifecycle lc, OperandKind k) noexcept {
-    // Rule 1+2 — Block requires the wait to cover offset i and the pop not to
-    // race the abs-frame index. PerChunk uses local index per dispatch
-    // (a_uses_local_idx), so Chunked + Block is fine.
-    if (k == OperandKind::Block) {
-        if (lc.wait == WaitPolicy::PerTile) return false;   // OOB
-        if (lc.pop  == PopPolicy::PerTile)  return false;   // double-walk
-    }
-    // Rule 3 — Cumulative wait math is broken by interleaved pops.
-    if (lc.wait == WaitPolicy::Cumulative) {
-        if (lc.pop == PopPolicy::PerTile || lc.pop == PopPolicy::PerChunk) return false;
-    }
-    return true;
-}
-
-constexpr bool valid_input_combo_1d(InputLifecycle lc, OperandKind k) noexcept {
-    if (!valid_input_combo(lc, k)) return false;
-    // Rules 4+5 — Cumulative wait (wait_per_tile path) and PerChunk wait/pop
-    // (wait_per_block / pop_per_block paths) are not kind-aware in 1D.
-    // Upfront/AtEnd are kind-aware via window_1d after Fix B.
-    if (k != OperandKind::Block) {
-        if (lc.wait == WaitPolicy::Cumulative ||
-            lc.wait == WaitPolicy::PerChunk)  return false;
-        if (lc.pop  == PopPolicy::PerChunk)   return false;
-    }
-    return true;
-}
-
-// Output-side analogue. Pack always walks index=Block on the output (chain writes
-// to slot i), so only the Lifecycle × Output-Kind constraints from 1D emission
-// matter. Pack-side double-walk is rejected via Rule 1' below.
-constexpr bool valid_output_combo(OutputLifecycle lc, OperandKind k) noexcept {
-    // Rule 1' — Block + PerTile reserve|push reads-into-already-pushed-region risk.
-    // The existing `OutStreaming + Block` static_assert catches Streaming case;
-    // we generalize to any per-tile-output policy paired with Block.
-    if (k == OperandKind::Block) {
-        if (lc.reserve == ReservePolicy::PerTile) return false;
-        if (lc.push    == PushPolicy::PerTile)    return false;
-    }
-    return true;
-}
-
-constexpr bool valid_output_combo_1d(OutputLifecycle lc, OperandKind k) noexcept {
-    if (!valid_output_combo(lc, k)) return false;
-    // Reserve/push for Upfront/AtEnd are kind-aware in 1D via window_1d after Fix B.
-    // Only the PerChunk paths remain kind-blind.
-    if (k != OperandKind::Block) {
-        if (lc.reserve == ReservePolicy::PerChunk) return false;
-        if (lc.push    == PushPolicy::PerChunk)    return false;
-    }
-    return true;
-}
-
-// Per-element fold helpers — apply the combo rules to each chain element.
-// Uses SFINAE to gracefully skip elements that don't expose the canonical
-// accessors (e.g. UnaryBcast carries BroadcastDim instead of OperandKind).
-// Those skip cases keep their pre-existing static_asserts.
-namespace detail {
-template <class E, class = void>
-struct has_a_index_mode_member : std::false_type {};
-template <class E>
-struct has_a_index_mode_member<E, std::void_t<decltype(E::a_index_mode)>> : std::true_type {};
-
-template <class E, class = void>
-struct has_pack_policy_member : std::false_type {};
-template <class E>
-struct has_pack_policy_member<E, std::void_t<decltype(E::pack_policy())>> : std::true_type {};
-
-template <class E>
-constexpr bool element_input_combo_valid() noexcept {
-    if constexpr (is_cb_reader_op_v<E> && has_a_index_mode_member<E>::value) {
-        return valid_input_combo(E::a_policy(), E::a_index_mode) &&
-               valid_input_combo(E::b_policy(), E::b_index_mode);
-    } else {
-        return true;
-    }
-}
-
-template <class E>
-constexpr bool element_input_combo_valid_1d() noexcept {
-    if constexpr (is_cb_reader_op_v<E> && has_a_index_mode_member<E>::value) {
-        return valid_input_combo_1d(E::a_policy(), E::a_index_mode) &&
-               valid_input_combo_1d(E::b_policy(), E::b_index_mode);
-    } else {
-        return true;
-    }
-}
-
-template <class E>
-constexpr bool element_output_combo_valid() noexcept {
-    if constexpr (is_cb_writer_op_v<E> && has_pack_policy_member<E>::value) {
-        return valid_output_combo(E::pack_policy(), E::pack_index_mode);
-    } else {
-        return true;
-    }
-}
-
-template <class E>
-constexpr bool element_output_combo_valid_1d() noexcept {
-    if constexpr (is_cb_writer_op_v<E> && has_pack_policy_member<E>::value) {
-        return valid_output_combo_1d(E::pack_policy(), E::pack_index_mode);
-    } else {
-        return true;
-    }
-}
-}  // namespace detail
-
-template <class... Es>
-inline constexpr bool chain_inputs_valid_v = (detail::element_input_combo_valid<Es>() && ...);
-
-template <class... Es>
-inline constexpr bool chain_inputs_valid_1d_v = (detail::element_input_combo_valid_1d<Es>() && ...);
-
-template <class... Es>
-inline constexpr bool chain_outputs_valid_v = (detail::element_output_combo_valid<Es>() && ...);
-
-template <class... Es>
-inline constexpr bool chain_outputs_valid_1d_v = (detail::element_output_combo_valid_1d<Es>() && ...);
+    !(is_bcast_mode_v<M> && (P == Streaming || P == Chunked));
 
 // =============================================================================
 // A. Chain typed-list machinery
@@ -383,14 +227,13 @@ struct CopyTile : CopyTileTag {
     // ---- compile-time validation ----
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "CopyTile: DEST slot exceeds DEST_AUTO_LIMIT");
-    // Structural (Lifecycle × Kind) — rejects OOB / double-walk / cumulative-pop-race.
-    // Catches: Streaming+Block, HeldStream+Block, NoWaitPop+Block, BulkDrain+Block,
-    //          Cumulative wait paired with per-iter pop. Applies in both 1D and 2D.
-    static_assert(valid_input_combo(Policy, IndexMode),
-                  "CopyTile: invalid (lifecycle, kind) combination — "
-                  "Block index requires non-PerTile wait AND non-PerTile pop; "
-                  "Cumulative wait requires non-per-iter pop. "
-                  "See `valid_input_combo` in eltwise_chain.inl for the rule.");
+    // Comprehensive (IndexMode, Policy) legality. Block rejects PerTile-pop
+    // (Streaming/BulkDrain/NoWaitPop — absolute-idx footgun) and PerTile-wait-of-1
+    // (HeldStream — never tracks per-iter requirement). Scalar/Row/Col accept every
+    // legal lifecycle — caller-sized.
+    static_assert(is_legal_kind_lifecycle(IndexMode, Policy),
+                  "CopyTile: (IndexMode, Policy) is illegal for Block — exclude "
+                  "Streaming / HeldStream / BulkDrain / NoWaitPop on Block walkers.");
     // 2D: RowBcast / ColBcast require non-streaming policy (matches binary_op_helpers ROW/SCALAR rule).
     static_assert(detail::valid_policy_mode_2d_v<Policy, IndexMode>,
                   "CopyTile: RowBcast / ColBcast index require non-streaming policy "
@@ -460,7 +303,8 @@ struct CopyTile : CopyTileTag {
 
     ALWI void wait_upfront(uint32_t n) const {
         if constexpr (Policy == Bulk ||
-                      Policy == HeldBulk) {
+                      Policy == HeldBulk ||
+                      Policy == BulkDrain) {
             cb_wait_front(Cb, detail::window_1d<IndexMode>(n) + tile_base_value(tile_base));
         }
     }
@@ -480,7 +324,8 @@ struct CopyTile : CopyTileTag {
     // `wait_per_tile` / `pop_per_tile` as 1D.
     ALWI void wait_upfront_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == Bulk ||
-                      Policy == HeldBulk) {
+                      Policy == HeldBulk ||
+                      Policy == BulkDrain) {
             cb_wait_front(Cb, detail::window_2d<IndexMode>(Ht, Wt) + tile_base_value(tile_base));
         }
     }
@@ -492,7 +337,8 @@ struct CopyTile : CopyTileTag {
 
     ALWI void pop_upfront_end_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == Bulk ||
-                      Policy == Pipelined) {
+                      Policy == Pipelined ||
+                      Policy == DeferredPop) {
             cb_pop_front(Cb, detail::window_2d<IndexMode>(Ht, Wt) + tile_base_value(tile_base));
         }
     }
@@ -500,7 +346,9 @@ struct CopyTile : CopyTileTag {
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 
     ALWI void pop_per_tile(uint32_t /*i*/) const {
-        if constexpr (Policy == Streaming || Policy == NoWaitPop) {
+        if constexpr (Policy == Streaming ||
+                      Policy == NoWaitPop ||
+                      Policy == BulkDrain) {
             cb_pop_front(Cb, 1);
         }
     }
@@ -514,7 +362,8 @@ struct CopyTile : CopyTileTag {
 
     ALWI void pop_upfront_end(uint32_t n) const {
         if constexpr (Policy == Bulk ||
-                      Policy == Pipelined) {
+                      Policy == Pipelined ||
+                      Policy == DeferredPop) {
             cb_pop_front(Cb, detail::window_1d<IndexMode>(n) + tile_base_value(tile_base));
         }
     }
@@ -552,9 +401,7 @@ struct PackTile : PackTileTag {
     static constexpr Dst               pack_dst_slot       = DstSlot;
     static constexpr bool              is_upfront          = (Policy == OutBulk);
     static constexpr bool              uses_per_block_pack = (Policy == OutChunked);
-    static constexpr OperandKind       index_mode          = IndexMode;
-    static constexpr OutputLifecycle   pack_policy()       { return Policy; }
-    static constexpr OperandKind       pack_index_mode     = IndexMode;
+    static constexpr OperandKind index_mode          = IndexMode;
 
     // Prev-CB fold (D2): PackTile writes pack-side; mark Cb under reconfig only when
     // the user opted into pack reconfig (Output / OutputConditional). Otherwise no
@@ -616,16 +463,16 @@ struct PackTile : PackTileTag {
         pack_tile(to_u32(DstSlot) + slot_offset, Cb, out_idx);
     }
 
-    // 2D upfront reserve/push — full block window (Ht * Wt tiles), inflated by base.
+    // 2D upfront reserve/push — OperandKind-aware window (Scalar = 1, Block = Ht*Wt).
     ALWI void reserve_upfront_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == OutBulk) {
-            cb_reserve_back(Cb, Ht * Wt + tile_base_value(tile_base));
+            cb_reserve_back(Cb, detail::window_2d<IndexMode>(Ht, Wt) + tile_base_value(tile_base));
         }
     }
     ALWI void push_at_end_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == OutDeferredReserve ||
                       Policy == OutBulk) {
-            cb_push_back(Cb, Ht * Wt + tile_base_value(tile_base));
+            cb_push_back(Cb, detail::window_2d<IndexMode>(Ht, Wt) + tile_base_value(tile_base));
         }
     }
 
@@ -647,7 +494,7 @@ struct PackTile : PackTileTag {
     ALWI void push_at_end(uint32_t n) const {
         if constexpr (Policy == OutDeferredReserve ||
                       Policy == OutBulk) {
-            cb_push_back(Cb, detail::window_1d<IndexMode>(n) + tile_base_value(tile_base));
+            cb_push_back(Cb, n + tile_base_value(tile_base));
         }
     }
 };
@@ -673,8 +520,6 @@ struct PackTileBlock : PackTileTag {
     static constexpr uint32_t n_tiles      = NTiles;
     static constexpr bool     is_upfront   = (Policy == OutBulk);
     static constexpr bool     uses_per_block_pack = (Policy == OutChunked);
-    static constexpr OutputLifecycle pack_policy() { return Policy; }
-    static constexpr OperandKind     pack_index_mode = OperandKind::Block;
 
     // Prev-CB fold (D2): PackTileBlock writes pack-side.
     static constexpr uint32_t reconfig_srca_cb = NO_PREV_CB;
@@ -758,17 +603,16 @@ template <uint32_t CbA,
 struct BinaryFpu : BinaryFpuTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "BinaryFpu: DEST slot exceeds DEST_AUTO_LIMIT");
-    // Structural (Lifecycle × Kind) per side — rejects OOB / double-walk /
-    // cumulative-pop-race. Subsumes the old single-cell Streaming+Block check.
-    // Applies in both 1D and 2D.
-    static_assert(valid_input_combo(APolicy, AIndex),
-                  "BinaryFpu: A-side invalid (lifecycle, kind) — Block index requires "
-                  "non-PerTile wait AND non-PerTile pop; Cumulative wait requires "
-                  "non-per-iter pop. See `valid_input_combo` in eltwise_chain.inl.");
-    static_assert(valid_input_combo(BPolicy, BIndex),
-                  "BinaryFpu: B-side invalid (lifecycle, kind) — Block index requires "
-                  "non-PerTile wait AND non-PerTile pop; Cumulative wait requires "
-                  "non-per-iter pop. See `valid_input_combo` in eltwise_chain.inl.");
+    // Comprehensive per-side (IndexMode, Policy) legality. Block rejects PerTile-pop
+    // (Streaming/BulkDrain/NoWaitPop — absolute-idx footgun) and PerTile-wait-of-1
+    // (HeldStream — never tracks per-iter requirement). Scalar/Row/Col accept every
+    // legal lifecycle — caller-sized.
+    static_assert(is_legal_kind_lifecycle(AIndex, APolicy),
+                  "BinaryFpu: (AIndex, APolicy) is illegal for Block — exclude "
+                  "Streaming / HeldStream / BulkDrain / NoWaitPop on Block walkers.");
+    static_assert(is_legal_kind_lifecycle(BIndex, BPolicy),
+                  "BinaryFpu: (BIndex, BPolicy) is illegal for Block — exclude "
+                  "Streaming / HeldStream / BulkDrain / NoWaitPop on Block walkers.");
     // same_cb dedup safety: when CbA == CbB the B-side wait/pop is skipped, so the
     // helper would under-wait if A and B walked different ranges of the shared CB.
     static_assert((CbA != CbB) || AIndex == BIndex,
@@ -905,12 +749,14 @@ struct BinaryFpu : BinaryFpuTag {
 
     ALWI void wait_upfront(uint32_t n) const {
         if constexpr (APolicy == Bulk ||
-                      APolicy == HeldBulk) {
+                      APolicy == HeldBulk ||
+                      APolicy == BulkDrain) {
             const uint32_t a_base = same_cb ? same_cb_base_max() : tile_base_value(tile_base_a);
             cb_wait_front(CbA, detail::window_1d<AIndex>(n) + a_base);
         }
         if constexpr (!same_cb && (BPolicy == Bulk ||
-                                   BPolicy == HeldBulk)) {
+                                   BPolicy == HeldBulk ||
+                                   BPolicy == BulkDrain)) {
             cb_wait_front(CbB, detail::window_1d<BIndex>(n) + tile_base_value(tile_base_b));
         }
     }
@@ -919,12 +765,14 @@ struct BinaryFpu : BinaryFpuTag {
     // Same `same_cb` dedup as 1D (skip B side when CbA == CbB).
     ALWI void wait_upfront_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (APolicy == Bulk ||
-                      APolicy == HeldBulk) {
+                      APolicy == HeldBulk ||
+                      APolicy == BulkDrain) {
             const uint32_t a_base = same_cb ? same_cb_base_max() : tile_base_value(tile_base_a);
             cb_wait_front(CbA, detail::window_2d<AIndex>(Ht, Wt) + a_base);
         }
         if constexpr (!same_cb && (BPolicy == Bulk ||
-                                   BPolicy == HeldBulk)) {
+                                   BPolicy == HeldBulk ||
+                                   BPolicy == BulkDrain)) {
             cb_wait_front(CbB, detail::window_2d<BIndex>(Ht, Wt) + tile_base_value(tile_base_b));
         }
     }
@@ -969,10 +817,14 @@ struct BinaryFpu : BinaryFpuTag {
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 
     ALWI void pop_per_tile(uint32_t /*i*/) const {
-        if constexpr (APolicy == Streaming || APolicy == NoWaitPop) {
+        if constexpr (APolicy == Streaming ||
+                      APolicy == NoWaitPop ||
+                      APolicy == BulkDrain) {
             cb_pop_front(CbA, 1);
         }
-        if constexpr (!same_cb && (BPolicy == Streaming || BPolicy == NoWaitPop)) {
+        if constexpr (!same_cb && (BPolicy == Streaming ||
+                                   BPolicy == NoWaitPop ||
+                                   BPolicy == BulkDrain)) {
             cb_pop_front(CbB, 1);
         }
     }
@@ -988,12 +840,14 @@ struct BinaryFpu : BinaryFpuTag {
 
     ALWI void pop_upfront_end(uint32_t n) const {
         if constexpr (APolicy == Bulk ||
-                      APolicy == Pipelined) {
+                      APolicy == Pipelined ||
+                      APolicy == DeferredPop) {
             const uint32_t a_base = same_cb ? same_cb_base_max() : tile_base_value(tile_base_a);
             cb_pop_front(CbA, detail::window_1d<AIndex>(n) + a_base);
         }
         if constexpr (!same_cb && (BPolicy == Bulk ||
-                                   BPolicy == Pipelined)) {
+                                   BPolicy == Pipelined ||
+                                   BPolicy == DeferredPop)) {
             cb_pop_front(CbB, detail::window_1d<BIndex>(n) + tile_base_value(tile_base_b));
         }
     }
@@ -1034,12 +888,14 @@ struct BinaryFpu : BinaryFpuTag {
 
     ALWI void pop_upfront_end_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (APolicy == Bulk ||
-                      APolicy == Pipelined) {
+                      APolicy == Pipelined ||
+                      APolicy == DeferredPop) {
             const uint32_t a_base = same_cb ? same_cb_base_max() : tile_base_value(tile_base_a);
             cb_pop_front(CbA, detail::window_2d<AIndex>(Ht, Wt) + a_base);
         }
         if constexpr (!same_cb && (BPolicy == Bulk ||
-                                   BPolicy == Pipelined)) {
+                                   BPolicy == Pipelined ||
+                                   BPolicy == DeferredPop)) {
             cb_pop_front(CbB, detail::window_2d<BIndex>(Ht, Wt) + tile_base_value(tile_base_b));
         }
     }
@@ -1061,12 +917,9 @@ template <uint32_t Cb,
 struct DestReuseBinary : DestReuseBinaryTag {
     static_assert(to_u32(DstIn) < DEST_AUTO_LIMIT && to_u32(DstOut) < DEST_AUTO_LIMIT,
                   "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
-    // Structural (Lifecycle × Kind) — rejects OOB / double-walk / cumulative-pop-race.
-    // Subsumes the old single-cell Streaming+Block check.
-    static_assert(valid_input_combo(Policy, IndexMode),
-                  "DestReuseBinary: invalid (lifecycle, kind) — Block index requires "
-                  "non-PerTile wait AND non-PerTile pop; Cumulative wait requires "
-                  "non-per-iter pop. See `valid_input_combo` in eltwise_chain.inl.");
+    static_assert(is_legal_kind_lifecycle(IndexMode, Policy),
+                  "DestReuseBinary: (IndexMode, Policy) is illegal for Block — exclude "
+                  "Streaming / HeldStream / BulkDrain / NoWaitPop on Block walkers.");
     static_assert(detail::valid_policy_mode_2d_v<Policy, IndexMode>,
                   "DestReuseBinary: RowBcast / ColBcast index require non-streaming policy");
     static_assert(is_tile_base_none_v<TileBaseT> || is_legal_input_lifecycle_with_base(Policy),
@@ -1124,7 +977,8 @@ struct DestReuseBinary : DestReuseBinaryTag {
     }
     ALWI void wait_upfront(uint32_t n) const {
         if constexpr (Policy == Bulk ||
-                      Policy == HeldBulk) {
+                      Policy == HeldBulk ||
+                      Policy == BulkDrain) {
             cb_wait_front(Cb, detail::window_1d<IndexMode>(n) + tile_base_value(tile_base));
         }
     }
@@ -1147,7 +1001,8 @@ struct DestReuseBinary : DestReuseBinaryTag {
     // 2D variants
     ALWI void wait_upfront_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == Bulk ||
-                      Policy == HeldBulk) {
+                      Policy == HeldBulk ||
+                      Policy == BulkDrain) {
             cb_wait_front(Cb, detail::window_2d<IndexMode>(Ht, Wt) + tile_base_value(tile_base));
         }
     }
@@ -1163,7 +1018,8 @@ struct DestReuseBinary : DestReuseBinaryTag {
     }
     ALWI void pop_upfront_end_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == Bulk ||
-                      Policy == Pipelined) {
+                      Policy == Pipelined ||
+                      Policy == DeferredPop) {
             cb_pop_front(Cb, detail::window_2d<IndexMode>(Ht, Wt) + tile_base_value(tile_base));
         }
     }
@@ -1171,7 +1027,9 @@ struct DestReuseBinary : DestReuseBinaryTag {
     static constexpr uint32_t lane_width =
         (to_u32(DstIn) > to_u32(DstOut)) ? (to_u32(DstIn) + 1) : (to_u32(DstOut) + 1);
     ALWI void pop_per_tile(uint32_t /*i*/) const {
-        if constexpr (Policy == Streaming || Policy == NoWaitPop) {
+        if constexpr (Policy == Streaming ||
+                      Policy == NoWaitPop ||
+                      Policy == BulkDrain) {
             cb_pop_front(Cb, 1);
         }
     }
@@ -1182,7 +1040,8 @@ struct DestReuseBinary : DestReuseBinaryTag {
     }
     ALWI void pop_upfront_end(uint32_t n) const {
         if constexpr (Policy == Bulk ||
-                      Policy == Pipelined) {
+                      Policy == Pipelined ||
+                      Policy == DeferredPop) {
             cb_pop_front(Cb, detail::window_1d<IndexMode>(n) + tile_base_value(tile_base));
         }
     }
@@ -1242,7 +1101,8 @@ struct UnaryBcast : UnaryBcastTag {
     }
     ALWI void wait_upfront(uint32_t n) const {
         if constexpr (Policy == Bulk ||
-                      Policy == HeldBulk) {
+                      Policy == HeldBulk ||
+                      Policy == BulkDrain) {
             cb_wait_front(Cb, n);
         }
     }
@@ -1255,7 +1115,8 @@ struct UnaryBcast : UnaryBcastTag {
     // tile index. Upfront window in 2D = Ht * Wt (every (ht, wt) iter consumes one tile).
     ALWI void wait_upfront_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == Bulk ||
-                      Policy == HeldBulk) {
+                      Policy == HeldBulk ||
+                      Policy == BulkDrain) {
             cb_wait_front(Cb, Ht * Wt);
         }
     }
@@ -1265,14 +1126,17 @@ struct UnaryBcast : UnaryBcastTag {
     }
     ALWI void pop_upfront_end_2d(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == Bulk ||
-                      Policy == Pipelined) {
+                      Policy == Pipelined ||
+                      Policy == DeferredPop) {
             cb_pop_front(Cb, Ht * Wt);
         }
     }
 
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
     ALWI void pop_per_tile(uint32_t /*i*/) const {
-        if constexpr (Policy == Streaming || Policy == NoWaitPop) {
+        if constexpr (Policy == Streaming ||
+                      Policy == NoWaitPop ||
+                      Policy == BulkDrain) {
             cb_pop_front(Cb, 1);
         }
     }
@@ -1283,7 +1147,8 @@ struct UnaryBcast : UnaryBcastTag {
     }
     ALWI void pop_upfront_end(uint32_t n) const {
         if constexpr (Policy == Bulk ||
-                      Policy == Pipelined) {
+                      Policy == Pipelined ||
+                      Policy == DeferredPop) {
             cb_pop_front(Cb, n);
         }
     }
@@ -1435,6 +1300,43 @@ constexpr bool element_supports_block() {
 
 template <class... Es>
 constexpr bool chain_supports_block_impl_v = (element_supports_block<Es>() && ...);
+
+// 1D-only chain entry points cannot resolve Row/Col indexing — there is no
+// Ht/Wt context to drive `idx_2d<Row>(...) = wt` or `idx_2d<Col>(...) = ht`.
+// In 1D, exec collapses Row/Col to `base` (silently degenerate). Banning these
+// kinds at the 1D dispatch site forces callers to either pick Block/Scalar
+// (the only kinds that make sense without Ht/Wt) or switch to the 2D
+// `eltwise_chain(EltwiseShape, ...)` overload.
+template <class E, class = void>
+struct elem_has_a_index_mode : std::false_type {};
+template <class E>
+struct elem_has_a_index_mode<E, std::void_t<decltype(E::a_index_mode)>> : std::true_type {};
+
+template <class E, class = void>
+struct elem_has_b_index_mode : std::false_type {};
+template <class E>
+struct elem_has_b_index_mode<E, std::void_t<decltype(E::b_index_mode)>> : std::true_type {};
+
+template <class E, class = void>
+struct elem_has_index_mode : std::false_type {};
+template <class E>
+struct elem_has_index_mode<E, std::void_t<decltype(E::index_mode)>> : std::true_type {};
+
+constexpr bool is_2d_only_kind(OperandKind k) noexcept {
+    return k == OperandKind::Row || k == OperandKind::Col;
+}
+
+template <class E>
+constexpr bool element_uses_2d_only_kind() {
+    bool bad = false;
+    if constexpr (elem_has_a_index_mode<E>::value) bad = bad || is_2d_only_kind(E::a_index_mode);
+    if constexpr (elem_has_b_index_mode<E>::value) bad = bad || is_2d_only_kind(E::b_index_mode);
+    if constexpr (elem_has_index_mode<E>::value)   bad = bad || is_2d_only_kind(E::index_mode);
+    return bad;
+}
+
+template <class... Es>
+constexpr bool chain_uses_2d_only_kind_impl_v = (element_uses_2d_only_kind<Es>() || ...);
 }  // namespace detail
 
 template <class Chain>
@@ -1443,6 +1345,16 @@ struct chain_supports_block;
 template <class... Es>
 struct chain_supports_block<EltwiseChain<Es...>>
     : std::bool_constant<detail::chain_supports_block_impl_v<Es...>> {};
+
+template <class Chain>
+struct chain_uses_2d_only_kind;
+
+template <class... Es>
+struct chain_uses_2d_only_kind<EltwiseChain<Es...>>
+    : std::bool_constant<detail::chain_uses_2d_only_kind_impl_v<Es...>> {};
+
+template <class Chain>
+inline constexpr bool chain_uses_2d_only_kind_v = chain_uses_2d_only_kind<Chain>::value;
 
 template <class Chain>
 inline constexpr bool chain_supports_block_v = chain_supports_block<Chain>::value;
@@ -1898,29 +1810,10 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     static_assert(!chain_pack_writes_collide_v<Chain>,
                   "eltwise_chain: two PackTile elements collide on (cb, dst_slot). "
                   "Pack writes must target distinct (cb, dst) tuples.");
-    // 1D-specific (Lifecycle × Kind) — wait_upfront / pop_upfront_end in this overload
-    // emit counts derived from `n_tiles`, not the operand's kind size M. Non-Block
-    // kinds (Scalar / Row / Col have M < n_tiles) paired with a Bulk-family wait
-    // or AtEnd/PerChunk pop would `cb_wait_front(n_tiles)` / `cb_pop_front(n_tiles)`
-    // on a CB that only holds M tiles ⇒ deadlock / pop overshoot.
-    //
-    // The 2D overload `eltwise_chain(EltwiseShape, ...)` derives the count via
-    // `window_2d<Kind>(Ht, Wt)` and so does NOT have this hazard — same combinations
-    // are legal there.
-    //
-    // This is the cell that caused the softmax hang in run 360 (Bulk + Scalar).
-    static_assert(chain_inputs_valid_1d_v<Es...>,
-                  "eltwise_chain (1D): an input element pairs a Bulk-family wait "
-                  "(Upfront/Cumulative/PerChunk) or AtEnd/PerChunk pop with a non-Block "
-                  "kind (Scalar/Row/Col). In 1D the chain emits cb_wait_front(n_tiles) / "
-                  "cb_pop_front(n_tiles) regardless of kind, which deadlocks for a "
-                  "held / broadcast operand. Use HeldStream / CallerManaged / NoWaitPop "
-                  "for held single-tile operands, or call the 2D `eltwise_chain(shape, ...)` "
-                  "overload (window_2d handles kind-aware counts).");
-    static_assert(chain_outputs_valid_1d_v<Es...>,
-                  "eltwise_chain (1D): an output element pairs a Bulk-family reserve "
-                  "(Upfront/PerChunk) or AtEnd/PerChunk push with a non-Block kind. "
-                  "Same kind-blind 1D emission issue as the input side.");
+    static_assert(!chain_uses_2d_only_kind_v<Chain>,
+                  "eltwise_chain (1D): Row / Col OperandKind has no meaning without Ht/Wt "
+                  "context — pick Block (walk) or Scalar (broadcast), or switch to the 2D "
+                  "`eltwise_chain(EltwiseShape, ...)` overload.");
 
     constexpr bool emit_init_per_tile = !chain_is_hoist_safe_v<Chain>;
 

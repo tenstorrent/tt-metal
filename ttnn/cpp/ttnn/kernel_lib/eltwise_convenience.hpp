@@ -13,6 +13,10 @@
  * knobs callers actually toggle (`BroadcastDim`, `BinaryDataFormatReconfig`, `OperandKind`);
  * other policies use the struct defaults. Drop to `eltwise_chain` for anything outside
  * this surface.
+ *
+ * Internal usage of low-level lifecycle constants (`Streaming`, `OutStreaming`, …)
+ * matches the public chain element API — see `eltwise_chain.hpp` and
+ * `policy_alias_collapse_proposal.md` for the rationale.
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
