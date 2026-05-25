@@ -34,10 +34,11 @@ runs:
       run: |
         set -euo pipefail
 
-        # E2E perf tests need git config
-        if [[ -z "${{ inputs.device_perf_model_name }}" ]]; then
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-        fi
+        # Both branches invoke python merge scripts that call into gitpython
+        # (read repo.head.object.hexsha). Mark both /work and the runner workspace
+        # as safe because the container exposes the repo at both paths.
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        git config --global --add safe.directory /work
 
         : "${CI_LOG_FILE:=${{ inputs.ci_log_file }}}"
         mkdir -p "$(dirname "$CI_LOG_FILE")"
