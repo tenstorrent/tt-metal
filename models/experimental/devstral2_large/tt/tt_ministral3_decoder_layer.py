@@ -12,7 +12,7 @@ HF reference (``Ministral3DecoderLayer``)::
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 import ttnn
 
@@ -85,6 +85,9 @@ class TtDecoderLayer:
         start_pos: int = 0,
         current_pos: Optional[ttnn.Tensor] = None,
         user_id: int = 0,
+        chunk_start_idx_tensor: Optional[ttnn.Tensor] = None,
+        chunk_page_table: Optional[ttnn.Tensor] = None,
+        prefill_rope_tables: Optional[Sequence[ttnn.Tensor]] = None,
     ) -> ttnn.Tensor:
         mesh_device = self.self_attn.mesh_device
         act_mem = self.args.get_activation_mem_config(mode, mesh_device)
@@ -98,6 +101,9 @@ class TtDecoderLayer:
             start_pos=start_pos,
             current_pos=current_pos,
             user_id=user_id,
+            chunk_start_idx_tensor=chunk_start_idx_tensor,
+            chunk_page_table=chunk_page_table,
+            prefill_rope_tables=prefill_rope_tables,
         )
         h = ttnn.add(h, residual, memory_config=act_mem)
         ttnn.deallocate(residual)

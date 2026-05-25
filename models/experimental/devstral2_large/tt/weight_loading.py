@@ -243,13 +243,34 @@ def upload_paged_kv_cache_buffer(
     return materialize_tile_layout(tt)
 
 
+def pad_page_table_cols_to_multiple_of_8(
+    table: torch.Tensor,
+    *,
+    pad_value: int = 0,
+) -> torch.Tensor:
+    """Pad page-table columns so flexible chunked SDPA stick size is a multiple of 32 bytes.
+
+    Chunked SDPA with ``chunk_start_idx_tensor`` uses ``cols * sizeof(int32)`` as the stick size;
+    hardware requires that to be divisible by 32, i.e. column count must be a multiple of 8.
+    """
+    if table.ndim != 2:
+        raise ValueError(f"expected 2D page table, got shape={tuple(table.shape)}")
+    cols = table.shape[1]
+    cols_padded = ((cols + 7) // 8) * 8
+    if cols_padded == cols:
+        return table
+    padded = torch.full((table.shape[0], cols_padded), pad_value, dtype=table.dtype)
+    padded[:, :cols] = table
+    return padded
+
+
 def upload_page_table(
     *,
     batch_size: int,
     num_blocks_per_user: int,
     mesh_device,
     weight_cache_path: Optional[PathLike] = None,
-    cache_key: str = "kv_page_table",
+    cache_key: str = "kv_page_table_pad8",
 ) -> ttnn.Tensor:
     """Upload a contiguous page table ``[batch, num_blocks_per_user]`` (int32, DRAM ROW_MAJOR).
 
@@ -261,9 +282,13 @@ def upload_page_table(
     Multi-user case lays each user's blocks contiguously::
 
         page_table = [[0..11], [12..23], [24..35], ...]
+
+    Column count is padded up to a multiple of 8 when needed (flexible chunked SDPA alignment).
     """
+    # Caller should pass ``kv_page_table_blocks_per_user`` (already rounded up to a multiple of 8).
     block_ids = torch.arange(batch_size * num_blocks_per_user, dtype=torch.int32)
     page_table = block_ids.reshape(batch_size, num_blocks_per_user).contiguous()
+    page_table = pad_page_table_cols_to_multiple_of_8(page_table)  # no-op when already aligned
     return ttnn.as_tensor(
         page_table,
         dtype=ttnn.int32,

@@ -204,13 +204,35 @@ class Devstral2Args:
 
     @property
     def kv_num_blocks_per_user(self) -> int:
-        """Physical blocks per logical user in the paged KV cache."""
+        """Logical blocks per user (``max_seq_len // kv_block_size``)."""
         return self.max_seq_len // self.kv_block_size
 
     @property
+    def kv_page_table_blocks_per_user(self) -> int:
+        """Page-table columns and per-user physical KV blocks.
+
+        Flexible chunked SDPA requires the page-table row width (int32 columns) to be a
+        multiple of 8 so the stick size is divisible by 32 bytes. ``paged_update_cache`` also
+        requires ``page_table.shape[1] <= k_cache.shape[0]``, so the KV cache must allocate at
+        least this many physical blocks (extra slots stay unused for typical ``max_seq_len``).
+        """
+        n = self.kv_num_blocks_per_user
+        return ((n + 7) // 8) * 8
+
+    @property
     def kv_num_total_blocks(self) -> int:
-        """Total physical blocks in the paged KV cache (``batch * blocks_per_user``)."""
-        return self.max_batch_size * self.kv_num_blocks_per_user
+        """Total physical blocks in the paged KV cache (``batch * page_table_blocks``)."""
+        return self.max_batch_size * self.kv_page_table_blocks_per_user
+
+    @property
+    def supports_flexible_chunked_sdpa(self) -> bool:
+        """Whether ``chunk_start_idx_tensor`` (flexible chunked SDPA) is safe to use.
+
+        Flexible SDPA sets the attention span to ``Sq + page_table_cols * block_size``. If the
+        page table was widened only for 32-byte stick alignment (cols > logical blocks), that
+        span is too large and reads uninitialized KV — use legacy ``start_pos`` instead.
+        """
+        return self.kv_page_table_blocks_per_user == self.kv_num_blocks_per_user
 
     @property
     def q_proj_in_features(self) -> int:
