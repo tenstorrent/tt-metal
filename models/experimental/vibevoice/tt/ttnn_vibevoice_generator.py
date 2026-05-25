@@ -4,19 +4,15 @@
 """
 VibeVoice Generator — TTNN port of generate() from modeling_vibevoice_inference.py.
 
-Implements the full TTS generation pipeline:
-  1. Prefill: voice audio → acoustic/semantic encode → connectors → merged embeds → LM prefill
-  2. AR loop: greedy token decode with speech token constraint mask
-  3. Speech diffusion: DPM loop → acoustic decode → semantic re-encode → connectors
-  4. CFG dual KV cache for negative prompt
-
-No torch tensors on device in the generation loop.
+Pipeline (aligned with reference):
+  1. Prefill: processor speech_tensors/masks → acoustic encode → scatter into inputs_embeds
+  2. AR loop: greedy decode with valid-token constraint
+  3. On speech_diffusion_id: CFG diffusion → decode → semantic encode → connector sum → next embed
 """
 
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-import numpy as np
 import torch
 import ttnn
 
@@ -35,29 +31,23 @@ from models.experimental.vibevoice.tt.ttnn_dpm_scheduler import (
 
 @dataclass
 class TTVibeVoiceOutput:
-    sequences: torch.Tensor  # [B, S] token ids (host)
-    speech_outputs: List[torch.Tensor]  # list of [T] waveforms or latents (host)
+    sequences: torch.Tensor  # [B, S] full token ids (prefill + generated)
+    speech_outputs: List[torch.Tensor]  # concatenated waveforms per batch row
 
 
-def _ttnn_argmax(logits: ttnn.Tensor, device) -> int:
-    """Greedy argmax on the last token logits. Returns host Python int."""
-    # logits: [B, 1, 1, vocab] or [B, 1, S, vocab]
+def _ttnn_argmax(logits: ttnn.Tensor) -> int:
+    """Greedy argmax on last position logits. Returns host Python int."""
     logits_torch = ttnn.to_torch(logits).to(torch.float32)
-    # Take last position
-    last = logits_torch[0, 0, -1, :]  # [vocab]
+    last = logits_torch[0, 0, -1, :]
     return int(last.argmax().item())
 
 
 def _apply_token_constraint(
     logits: ttnn.Tensor,
-    valid_token_ids: torch.Tensor,
+    valid_token_ids: List[int],
     device,
 ) -> ttnn.Tensor:
-    """Zero out (set to -inf) all logits except valid_token_ids.
-
-    logits: [B, 1, 1, vocab]
-    """
-    # Build mask on host, then move to device
+    """Mask logits so only valid_token_ids are selectable."""
     vocab_size = logits.shape[-1]
     mask = torch.full((1, 1, 1, vocab_size), float("-inf"), dtype=torch.bfloat16)
     mask[:, :, :, valid_token_ids] = 0.0
@@ -71,18 +61,37 @@ def _apply_token_constraint(
     return ttnn.add(logits, mask_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-class TTVibeVoiceGenerator:
-    """Full VibeVoice generation pipeline using only TT modules.
+def _embeds_to_host_2d(inputs_embeds: ttnn.Tensor) -> torch.Tensor:
+    """[1, 1, S, H] device tensor → [S, H] float32 on host."""
+    return ttnn.to_torch(inputs_embeds).to(torch.float32).squeeze(0).squeeze(0)
 
-    Components provided via constructor:
-      lm_tt:              TTVibeVoiceLM
-      acoustic_connector: TTSpeechConnector
-      semantic_connector: TTSpeechConnector
-      diffusion_head:     TTDiffusionHead
-      acoustic_tokenizer: TTAcousticTokenizer (encode/decode)
-      semantic_tokenizer: TTSemanticTokenizer (forward/encode)
-      scheduler:          TTDPMSolverMultistepScheduler
-    """
+
+def _host_2d_to_embeds(embeds_2d: torch.Tensor, device) -> ttnn.Tensor:
+    """[S, H] or [1, H] bfloat16 host → [1, 1, S, H] on device."""
+    if embeds_2d.dim() == 1:
+        embeds_2d = embeds_2d.unsqueeze(0)
+    return ttnn.as_tensor(
+        embeds_2d.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _condition_from_hidden(last_hidden: ttnn.Tensor) -> ttnn.Tensor:
+    """last_hidden [1,1,S,H] → condition [1,1,1,H] at last position."""
+    h = last_hidden.shape[2] - 1
+    return ttnn.slice(
+        last_hidden,
+        [0, 0, h, 0],
+        [1, 1, h + 1, last_hidden.shape[-1]],
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+class TTVibeVoiceGenerator:
+    """Full VibeVoice generation pipeline using TT modules."""
 
     def __init__(
         self,
@@ -90,19 +99,23 @@ class TTVibeVoiceGenerator:
         acoustic_connector: TTSpeechConnector,
         semantic_connector: TTSpeechConnector,
         diffusion_head: TTDiffusionHead,
-        acoustic_tokenizer,  # TTAcousticTokenizer
-        semantic_tokenizer,  # TTSemanticTokenizer
+        acoustic_tokenizer,
+        semantic_tokenizer,
         scheduler: TTDPMSolverMultistepScheduler,
         device,
-        # Generation configuration
-        acoustic_speech_token_ids: Optional[List[int]] = None,
-        speech_start_token_id: Optional[int] = None,
-        speech_end_token_id: Optional[int] = None,
+        speech_start_id: int,
+        speech_end_id: int,
+        speech_diffusion_id: int,
+        eos_token_id: int,
+        bos_token_id: Optional[int] = None,
         cfg_scale: float = 1.3,
         num_diffusion_steps: int = 10,
-        max_new_tokens: int = 512,
-        speech_scaling_factor: float = 1.0,
-        speech_bias_factor: float = 0.0,
+        max_new_tokens: Optional[int] = None,
+        max_length_times: float = 20.0,
+        speech_scaling_factor: Optional[float] = None,
+        speech_bias_factor: Optional[float] = None,
+        acoustic_fix_std: float = 0.5,
+        cpu_acoustic_decoder=None,
     ):
         self.lm = lm_tt
         self.acoustic_conn = acoustic_connector
@@ -112,65 +125,141 @@ class TTVibeVoiceGenerator:
         self.semantic_tok = semantic_tokenizer
         self.scheduler = scheduler
         self.device = device
+        # Optional CPU acoustic decoder for streaming-correct final audio decode.
+        # If set, accumulated latent frames are decoded on CPU in a single pass
+        # (full causal context), matching the reference streaming acoustic cache.
+        self.cpu_acoustic_decoder = cpu_acoustic_decoder
 
-        self.acoustic_speech_token_ids = acoustic_speech_token_ids or []
-        self.speech_start_token_id = speech_start_token_id
-        self.speech_end_token_id = speech_end_token_id
+        self.speech_start_id = speech_start_id
+        self.speech_end_id = speech_end_id
+        self.speech_diffusion_id = speech_diffusion_id
+        self.eos_token_id = eos_token_id
+        self.bos_token_id = bos_token_id
         self.cfg_scale = cfg_scale
         self.num_diffusion_steps = num_diffusion_steps
         self.max_new_tokens = max_new_tokens
+        self.max_length_times = max_length_times
         self.speech_scaling_factor = speech_scaling_factor
         self.speech_bias_factor = speech_bias_factor
+        self.acoustic_fix_std = acoustic_fix_std
 
-    def _encode_voice(self, voice_audio_tt: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Encode voice audio → acoustic_embeds, semantic_embeds via connectors.
+        self.valid_token_ids = [
+            speech_start_id,
+            speech_end_id,
+            speech_diffusion_id,
+            eos_token_id,
+        ]
+        if bos_token_id is not None:
+            self.valid_token_ids.append(bos_token_id)
 
-        voice_audio_tt: [1, 1, 1, T] float audio on device
-
-        Returns:
-            acoustic_emb: [1, T_ac, 1, hidden]
-            semantic_emb: [1, T_sem, 1, hidden]
-        """
-        # Acoustic encode → [1, 1, T_ac, vae_dim=64]
-        acoustic_latent = self.acoustic_tok.encode(voice_audio_tt)
-        # Semantic encode → [1, 1, T_sem, vae_dim=128]
-        semantic_latent = self.semantic_tok.forward(voice_audio_tt)
-
-        # Apply connectors
-        acoustic_emb = self.acoustic_conn(acoustic_latent)  # [1, 1, T_ac, hidden]
-        semantic_emb = self.semantic_conn(semantic_latent)  # [1, 1, T_sem, hidden]
-        return acoustic_emb, semantic_emb
-
-    def _build_initial_embeds(
-        self,
-        input_ids: torch.Tensor,  # [1, S_text] host
-        acoustic_emb: ttnn.Tensor,  # [1, 1, T_ac, hidden]
-        semantic_emb: ttnn.Tensor,  # [1, 1, T_sem, hidden]
-    ) -> ttnn.Tensor:
-        """Build merged inputs_embeds for LM prefill.
-
-        Pattern: [text_embeds | acoustic_embeds | semantic_embeds]
-        """
-        # Text embeddings (via LM embedding lookup on host)
-        text_emb = self.lm._embed(input_ids)  # [1, 1, S_text, hidden]
-
-        # Concatenate along sequence dimension (dim=2 in 4D layout)
-        merged = ttnn.concat(
-            [text_emb, acoustic_emb, semantic_emb],
-            dim=2,
+    def _audio_row_to_tt(self, wav_1d: torch.Tensor) -> ttnn.Tensor:
+        """1D waveform [T] → [1, 1, 1, T] on device."""
+        audio = wav_1d.to(torch.bfloat16).view(1, 1, 1, -1)
+        return ttnn.as_tensor(
+            audio,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        return merged
+
+    def _encode_acoustic_latents(self, wav_1d: torch.Tensor) -> torch.Tensor:
+        """Encode audio → [T_enc, vae_dim] float32 on host (with fix-std sampling)."""
+        audio_tt = self._audio_row_to_tt(wav_1d)
+        lat_tt = self.acoustic_tok.encode(audio_tt)
+        lat = ttnn.to_torch(lat_tt).to(torch.float32).squeeze(0).squeeze(0)  # [T_enc, D]
+        if self.acoustic_fix_std:
+            lat = lat + self.acoustic_fix_std * torch.randn_like(lat)
+        return lat
+
+    def _compute_scale_bias(self, latents_list: List[torch.Tensor], speech_masks: torch.Tensor):
+        """Match reference: scale=1/std(masked), bias=-mean(masked) on stacked latents."""
+        parts = []
+        for i in range(speech_masks.shape[0]):
+            n = int(speech_masks[i].sum().item())
+            if n > 0:
+                parts.append(latents_list[i][:n].reshape(-1, latents_list[i].shape[-1]))
+        if not parts:
+            return 1.0, 0.0
+        flat = torch.cat(parts, dim=0).flatten()
+        return (1.0 / flat.std()).item(), (-flat.mean()).item()
+
+    def _process_speech_prefill(
+        self,
+        speech_tensors: torch.Tensor,
+        speech_masks: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return speech_embeds [N_slots, hidden] for scatter into prefill (host float32)."""
+        scale = self.speech_scaling_factor
+        bias = self.speech_bias_factor
+        latents_per_row = []
+        for i in range(speech_tensors.shape[0]):
+            latents_per_row.append(self._encode_acoustic_latents(speech_tensors[i]))
+
+        if scale is None or bias is None:
+            scale, bias = self._compute_scale_bias(latents_per_row, speech_masks)
+            self.speech_scaling_factor = scale
+            self.speech_bias_factor = bias
+
+        speech_embeds_parts = []
+        for i in range(speech_tensors.shape[0]):
+            n = int(speech_masks[i].sum().item())
+            feats = (latents_per_row[i][:n] + bias) * scale
+            feats_tt = ttnn.as_tensor(
+                feats.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            conn_out = self.acoustic_conn(feats_tt)
+            conn_torch = ttnn.to_torch(conn_out).to(torch.float32)
+            if conn_torch.dim() == 4:
+                conn_torch = conn_torch.squeeze(0).squeeze(0)
+            else:
+                conn_torch = conn_torch.squeeze(0)
+            conn_torch = conn_torch[:, :n, :]
+            speech_embeds_parts.append(conn_torch)
+
+        return torch.cat(speech_embeds_parts, dim=0)
+
+    def _build_prefill_embeds(
+        self,
+        input_ids: torch.Tensor,
+        speech_tensors: Optional[torch.Tensor],
+        speech_masks: Optional[torch.Tensor],
+        speech_input_mask: Optional[torch.Tensor],
+        prefill_speech_embeds: Optional[torch.Tensor] = None,
+    ) -> ttnn.Tensor:
+        """Text embeds with speech slots scattered (reference forward prefill)."""
+        inputs_embeds = self.lm._embed(input_ids)
+        if speech_input_mask is None:
+            return inputs_embeds
+
+        embed_2d = _embeds_to_host_2d(inputs_embeds)
+        if prefill_speech_embeds is not None:
+            speech_embeds = prefill_speech_embeds.to(torch.float32)
+        elif speech_tensors is not None and speech_masks is not None:
+            speech_embeds = self._process_speech_prefill(speech_tensors, speech_masks)
+        else:
+            return inputs_embeds
+        mask = speech_input_mask[0].cpu().bool()
+        n_slots = int(mask.sum().item())
+        embed_2d[mask[: embed_2d.shape[0]]] = speech_embeds[:n_slots].to(embed_2d.dtype)
+        return _host_2d_to_embeds(embed_2d, self.device)
 
     def _run_speech_diffusion(
         self,
-        condition: ttnn.Tensor,  # [1, 1, 1, hidden] positive cond
-        neg_condition: ttnn.Tensor,  # [1, 1, 1, hidden] negative cond (uncond)
+        condition: ttnn.Tensor,
+        neg_condition: ttnn.Tensor,
         latent_size: int = 64,
+        rng: Optional[torch.Generator] = None,
     ) -> ttnn.Tensor:
-        """Run DPM diffusion loop → speech latent [1, 1, 1, latent_size]."""
-        # Initial noise
-        noise = torch.randn(1, 1, 1, latent_size, dtype=torch.bfloat16)
+        # Draw 2×latent_size values to match reference's torch.randn(2, vae_dim)
+        # (reference cats pos+neg into batch=2, draws one noise per batch entry,
+        # then uses speech[:1]).  This keeps our global RNG state aligned.
+        noise_2x = torch.randn(2, 1, 1, latent_size, dtype=torch.bfloat16, generator=rng)
+        noise = noise_2x[:1]
         initial_latent = ttnn.as_tensor(
             noise,
             device=self.device,
@@ -188,147 +277,194 @@ class TTVibeVoiceGenerator:
             num_steps=self.num_diffusion_steps,
         )
 
+    def _post_diffusion_embeds(self, speech_latent: ttnn.Tensor) -> ttnn.Tensor:
+        """Diffusion latent → acoustic+semantic connector sum for next LM step."""
+        scale = self.speech_scaling_factor or 1.0
+        bias = self.speech_bias_factor or 0.0
+
+        lat_torch = ttnn.to_torch(speech_latent).to(torch.float32)
+        scaled = lat_torch / scale - bias
+        scaled_tt = ttnn.as_tensor(
+            scaled.to(torch.bfloat16),
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        audio_tt = self.acoustic_tok.decode(scaled_tt)
+        semantic_tt = self.semantic_tok.forward(audio_tt)
+
+        acoustic_embed = self.acoustic_conn(speech_latent)
+        semantic_embed = self.semantic_conn(semantic_tt)
+        return ttnn.add(acoustic_embed, semantic_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def _reset_neg_cache(self, kv_cache_neg: KVCache):
+        """Negative prefill: single speech_start token.
+
+        Returns (neg_pos=1, neg_hidden) where neg_hidden is the hidden state of
+        speech_start_id with no prior context — matches the reference's first
+        negative forward which processes [speech_start_id] alone.
+        """
+        neg_ids = torch.tensor([[self.speech_start_id]], dtype=torch.long)
+        neg_embeds = self.lm._embed(neg_ids)
+        _, neg_hidden = self.lm.forward(neg_embeds, start_pos=0, kv_cache=kv_cache_neg, return_last_hidden=True)
+        return 1, neg_hidden
+
+    def _lm_step(
+        self,
+        inputs_embeds: ttnn.Tensor,
+        start_pos: int,
+        kv_cache: KVCache,
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        logits, last_hidden = self.lm.forward(
+            inputs_embeds,
+            start_pos=start_pos,
+            kv_cache=kv_cache,
+            return_last_hidden=True,
+        )
+        return logits, last_hidden
+
     def generate(
         self,
-        input_ids: torch.Tensor,  # [1, S_text] on host
-        voice_audio_tt: ttnn.Tensor,  # [1, 1, 1, T_audio] on device
-        neg_input_ids: Optional[torch.Tensor] = None,  # [1, S_neg] negative prompt
-        neg_voice_audio_tt: Optional[ttnn.Tensor] = None,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        speech_tensors: Optional[torch.Tensor] = None,
+        speech_masks: Optional[torch.Tensor] = None,
+        speech_input_mask: Optional[torch.Tensor] = None,
+        prefill_speech_embeds: Optional[torch.Tensor] = None,
+        max_new_tokens: Optional[int] = None,
+        rng: Optional[torch.Generator] = None,
     ) -> TTVibeVoiceOutput:
-        """Full VibeVoice TTS generation.
-
-        Returns TTVibeVoiceOutput with generated token ids and speech waveforms.
-        """
+        """Run VibeVoice TTS generation aligned with reference generate()."""
         device = self.device
         cfg = self.lm.cfg
 
-        # 1. Encode voice audio
-        acoustic_emb, semantic_emb = self._encode_voice(voice_audio_tt)
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids, dtype=torch.long)
 
-        # 2. Build merged inputs_embeds for positive prompt
-        inputs_embeds = self._build_initial_embeds(input_ids, acoustic_emb, semantic_emb)
+        inputs_embeds = self._build_prefill_embeds(
+            input_ids,
+            speech_tensors,
+            speech_masks,
+            speech_input_mask,
+            prefill_speech_embeds=prefill_speech_embeds,
+        )
+        prefill_len = inputs_embeds.shape[2]
 
-        # 3. Build negative prompt (for CFG)
-        if neg_input_ids is not None and neg_voice_audio_tt is not None:
-            neg_ac_emb, neg_sem_emb = self._encode_voice(neg_voice_audio_tt)
-            neg_inputs_embeds = self._build_initial_embeds(neg_input_ids, neg_ac_emb, neg_sem_emb)
-        else:
-            neg_inputs_embeds = None
-
-        # 4. LM prefill for positive prompt
         kv_cache_pos = create_kv_cache(cfg.num_hidden_layers)
-        logits_pos, _ = self.lm.forward(
+        logits_pos, prefill_hidden = self.lm.prefill_embeds(
             inputs_embeds,
-            start_pos=0,
             kv_cache=kv_cache_pos,
-            return_last_hidden=False,
+            return_last_hidden=True,
         )
 
-        # 4b. LM prefill for negative prompt (for CFG in diffusion)
         kv_cache_neg = create_kv_cache(cfg.num_hidden_layers)
-        if neg_inputs_embeds is not None:
-            _, _ = self.lm.forward(
-                neg_inputs_embeds,
-                start_pos=0,
-                kv_cache=kv_cache_neg,
-                return_last_hidden=False,
+        neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
+        neg_prev_diffusion_token: Optional[int] = None  # delayed token for negative CFG
+
+        initial_length = input_ids.shape[-1]
+        initial_len = int(attention_mask.sum(dim=-1)[0].item())
+        if max_new_tokens is not None:
+            max_steps = max_new_tokens
+        else:
+            max_steps = min(
+                cfg.max_position_embeddings - initial_length,
+                int(self.max_length_times * initial_len),
             )
 
-        # 5. AR decode loop
-        generated_tokens: List[int] = []
-        speech_outputs: List[torch.Tensor] = []
-        current_speech_tokens: List[int] = []
-        in_speech = False
+        sequences = input_ids.clone()
+        # Accumulate unscaled latent frames [1,1,1,vae_dim] on host; batch-decode
+        # at the end so the causal-conv decoder sees full left context for every
+        # frame (identical to the reference's streaming acoustic_cache).
+        speech_latent_frames: List[torch.Tensor] = []
+        pending_embeds: Optional[ttnn.Tensor] = None
 
-        prefill_len = inputs_embeds.shape[2]
-        valid_tokens_tt = (
-            torch.tensor(self.acoustic_speech_token_ids, dtype=torch.long) if self.acoustic_speech_token_ids else None
-        )
+        next_token = _ttnn_argmax(logits_pos)
+        step_hidden = prefill_hidden
 
-        prev_token = int(ttnn.to_torch(logits_pos)[0, 0, -1, :].argmax().item())
+        scale = self.speech_scaling_factor or 1.0
+        bias = self.speech_bias_factor or 0.0
 
-        for step in range(self.max_new_tokens):
-            token_ids_np = np.array([[prev_token]], dtype=np.int32)
-            start_pos = prefill_len + step
-            logits = self.lm.decode_step(token_ids_np, start_pos, kv_cache_pos)
+        for step in range(max_steps):
+            current_token = next_token
+            sequences = torch.cat(
+                [sequences, torch.tensor([[current_token]], dtype=torch.long)],
+                dim=-1,
+            )
 
-            # Check if we're in speech generation mode and apply constraint
-            if in_speech and valid_tokens_tt is not None:
-                logits = _apply_token_constraint(logits, valid_tokens_tt, device)
+            if current_token == self.speech_diffusion_id:
+                cond_pos = _condition_from_hidden(step_hidden)
+                # Negative CFG: reference processes the PREVIOUS speech_diffusion_id
+                # at each step (the current one is appended to negative_input_ids
+                # AFTER the negative forward).  For the first diffusion step in a
+                # segment, the reference runs the negative model on speech_start_id
+                # alone — we captured that hidden in neg_start_hidden.
+                if neg_prev_diffusion_token is None:
+                    neg_hidden = neg_start_hidden
+                else:
+                    neg_ids = torch.tensor([[neg_prev_diffusion_token]], dtype=torch.long)
+                    _, neg_hidden = self.lm.decode_step(neg_ids, neg_pos, kv_cache_neg, return_last_hidden=True)
+                    neg_pos += 1
+                neg_prev_diffusion_token = current_token
+                cond_neg = _condition_from_hidden(neg_hidden)
 
-            # Greedy decode
-            next_token = _ttnn_argmax(logits, device)
-            generated_tokens.append(next_token)
+                speech_latent = self._run_speech_diffusion(cond_pos, cond_neg, latent_size=64, rng=rng)
 
-            # Track speech segment boundaries
-            if self.speech_start_token_id is not None and next_token == self.speech_start_token_id:
-                in_speech = True
-                current_speech_tokens = []
-            elif self.speech_end_token_id is not None and next_token == self.speech_end_token_id and in_speech:
-                in_speech = False
-                # Run speech diffusion for this segment
-                if current_speech_tokens:
-                    # Compute condition from last hidden state
-                    cond_pos = self._get_last_hidden_as_condition(kv_cache_pos, step, prefill_len)
-                    cond_neg = (
-                        self._get_last_hidden_as_condition(kv_cache_neg, step, prefill_len)
-                        if neg_inputs_embeds is not None
-                        else cond_pos
-                    )
+                # Accumulate unscaled latent frame for batch decode later.
+                speech_latent_frames.append(ttnn.to_torch(speech_latent).to(torch.float32))
 
-                    speech_latent = self._run_speech_diffusion(cond_pos, cond_neg)
-                    # Decode latent to waveform
-                    waveform_tt = self.acoustic_tok.decode(speech_latent)
-                    waveform = ttnn.to_torch(waveform_tt).squeeze().to(torch.float32)
-                    speech_outputs.append(waveform)
-                current_speech_tokens = []
-            elif in_speech:
-                current_speech_tokens.append(next_token)
+                pending_embeds = self._post_diffusion_embeds(speech_latent)
 
-            # EOS check
-            if self.speech_end_token_id is not None and next_token == cfg.vocab_size - 1:
+            if current_token == self.eos_token_id:
                 break
 
-            prev_token = next_token
+            start_pos = prefill_len + step
+            if pending_embeds is not None:
+                logits, step_hidden = self._lm_step(pending_embeds, start_pos, kv_cache_pos)
+                pending_embeds = None
+            else:
+                token_ids = torch.tensor([[current_token]], dtype=torch.long)
+                logits, step_hidden = self.lm.decode_step(token_ids, start_pos, kv_cache_pos, return_last_hidden=True)
+
+            if current_token == self.speech_start_id:
+                neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
+                neg_prev_diffusion_token = None
+
+            logits = _apply_token_constraint(logits, self.valid_token_ids, device)
+            next_token = _ttnn_argmax(logits)
+
+        # Batch-decode all accumulated latent frames in a single pass so the
+        # causal-conv decoder sees full left context for every frame, matching
+        # the reference streaming acoustic cache exactly.
+        if speech_latent_frames:
+            # Stack: [n, 1, 1, D] → [1, n, D] for the acoustic decoder
+            latents_stacked = torch.cat(speech_latent_frames, dim=0)  # [n, 1, 1, D]
+            latents_cpu = latents_stacked.squeeze(1).squeeze(1)  # [n, D]
+            latents_cpu = latents_cpu.unsqueeze(0)  # [1, n, D]
+            # Inverse-normalise: diffusion latent → acoustic VAE latent space
+            latents_unscaled = (latents_cpu / scale - bias).to(torch.float32)
+
+            if self.cpu_acoustic_decoder is not None:
+                # CPU reference decoder: correct streaming via full causal context.
+                with torch.no_grad():
+                    audio_cpu = self.cpu_acoustic_decoder.decode(latents_unscaled)
+                speech_waveform = audio_cpu.to(torch.float32).reshape(-1)
+            else:
+                # Fallback: TT device decode (may fail for large n_frames).
+                lat_tt = ttnn.as_tensor(
+                    latents_unscaled.unsqueeze(1).to(torch.bfloat16),
+                    device=device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                audio_tt = self.acoustic_tok.decode(lat_tt)
+                speech_waveform = ttnn.to_torch(audio_tt).to(torch.float32).reshape(-1)
+        else:
+            speech_waveform = torch.zeros(0)
 
         return TTVibeVoiceOutput(
-            sequences=torch.tensor(generated_tokens, dtype=torch.long).unsqueeze(0),
-            speech_outputs=speech_outputs,
+            sequences=sequences,
+            speech_outputs=[speech_waveform],
         )
-
-    def _get_last_hidden_as_condition(
-        self,
-        kv_cache: KVCache,
-        step: int,
-        prefill_len: int,
-    ) -> ttnn.Tensor:
-        """Extract a conditioning vector from the KV cache.
-
-        Uses the last value vector from the last layer as a proxy for the hidden state.
-        Returns [1, 1, 1, hidden_size].
-        """
-        cfg = self.lm.cfg
-        last_v = kv_cache.values[-1]  # ttnn tensor [1, n_kv, S, head_dim]
-        if last_v is not None:
-            # Bring to host for condition computation (small tensor, one-time transfer)
-            last_v_torch = ttnn.to_torch(last_v).to(torch.float32)  # [1, n_kv, S, head_dim]
-            last_v_mean = last_v_torch[:, :, -1:, :].mean(dim=1)  # [1, 1, head_dim]
-            hidden = cfg.hidden_size
-            cond_torch = torch.zeros(1, 1, 1, hidden, dtype=torch.bfloat16)
-            kv_dim = last_v_mean.shape[-1] * cfg.num_key_value_heads
-            cond_torch[:, :, :, : min(kv_dim, hidden)] = last_v_mean.view(1, 1, 1, -1)[:, :, :, : min(kv_dim, hidden)]
-            return ttnn.as_tensor(
-                cond_torch,
-                device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        else:
-            return ttnn.zeros(
-                (1, 1, 1, cfg.hidden_size),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
