@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <array>
 #include <type_traits>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using namespace tt::tt_fabric::linear::experimental;

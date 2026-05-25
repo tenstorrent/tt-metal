@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <utility>
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;

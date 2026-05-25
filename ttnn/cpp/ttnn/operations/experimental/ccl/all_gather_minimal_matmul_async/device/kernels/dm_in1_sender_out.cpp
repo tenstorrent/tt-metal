@@ -10,6 +10,7 @@
 #include "api/core_local_mem.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);

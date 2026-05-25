@@ -14,6 +14,7 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "api/tensor/noc_traits.h"
 
 namespace detail {
 

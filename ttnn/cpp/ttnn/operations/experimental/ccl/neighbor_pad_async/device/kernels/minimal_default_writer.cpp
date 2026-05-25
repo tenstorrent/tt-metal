@@ -20,6 +20,7 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include <cstdint>
 #include <utility>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using namespace tt::tt_fabric::linear::experimental;

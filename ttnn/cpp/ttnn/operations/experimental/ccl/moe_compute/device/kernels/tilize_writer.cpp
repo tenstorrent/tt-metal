@@ -31,14 +31,18 @@ FORCE_INLINE uint64_t get_safe_multicast_noc_addr(
 
 FORCE_INLINE void noc_async_write_linked_multicast(
     Noc& noc, uint32_t src_local_l1_addr, uint64_t dst_noc_addr_multicast, uint32_t size, uint32_t num_dests) {
+    // Device 2.0 migration: legacy primitive retained: dst_noc_addr_multicast is a precomposed uint64_t
+    // NoC multicast address (returned by get_safe_multicast_noc_addr above). Noc::async_write_multicast
+    // takes a typed Dst (MulticastEndpoint, TensorAccessor) plus separate dst_args; there is no wrapper
+    // for a raw uint64_t multicast address today. #45003 item 4.
     while (size > NOC_MAX_BURST_SIZE) {
-        noc.async_write_multicast(
-            {.offset_bytes = src_local_l1_addr}, dst_noc_addr_multicast, NOC_MAX_BURST_SIZE, num_dests, true);
+        noc_async_write_multicast(
+            src_local_l1_addr, dst_noc_addr_multicast, NOC_MAX_BURST_SIZE, num_dests, true, noc.get_noc_id());
         src_local_l1_addr += NOC_MAX_BURST_SIZE;
         dst_noc_addr_multicast += NOC_MAX_BURST_SIZE;
         size -= NOC_MAX_BURST_SIZE;
     }
-    noc.async_write_multicast({.offset_bytes = src_local_l1_addr}, dst_noc_addr_multicast, size, num_dests, false);
+    noc_async_write_multicast(src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, false, noc.get_noc_id());
 }
 
 void print_tile_rows(
@@ -666,15 +670,20 @@ void kernel_main() {
                     // send to proper offset on our initial mcast gather core
                     uint32_t target_l1_initial_gather_addr =
                         l1_read_addr + mcast_group_tile_offset * tilize_output_page_size;
+                    // Device 2.0 migration: legacy primitive retained: initial_gather_noc_addr is a
+                    // precomposed uint64_t NoC unicast address. Noc::async_write takes a typed Dst
+                    // (UnicastEndpoint with .noc_x/.noc_y/.addr args, or TensorAccessor) — there is no
+                    // wrapper for a raw uint64_t address today. #45003 item 4.
                     uint64_t initial_gather_noc_addr = get_noc_addr(
                         initial_mcast_gather_core_nox_x,
                         initial_mcast_gather_core_nox_y,
                         target_l1_initial_gather_addr,
                         noc_index);
-                    noc_obj.async_write(
-                        {.offset_bytes = l1_read_addr},
+                    noc_async_write(
+                        l1_read_addr,
                         initial_gather_noc_addr,
-                        tiles_per_local_chunk * tilize_output_page_size);
+                        tiles_per_local_chunk * tilize_output_page_size,
+                        noc_index);
                     noc_obj.async_write_barrier();
 
                     // == 4a ==
@@ -716,12 +725,17 @@ void kernel_main() {
                     // == 3b ==
                     // send to proper offset on global mmcast gather core (the drain-sync core)
                     uint32_t gather_addr = l1_read_addr + global_tile_offset * tilize_output_page_size;
+                    // Device 2.0 migration: legacy primitive retained: drain_gather_noc_addr is a
+                    // precomposed uint64_t NoC unicast address. Noc::async_write takes a typed Dst
+                    // (UnicastEndpoint with .noc_x/.noc_y/.addr args, or TensorAccessor) — there is no
+                    // wrapper for a raw uint64_t address today. #45003 item 4.
                     uint64_t drain_gather_noc_addr =
                         get_noc_addr(drain_core_noc_x, drain_core_noc_y, gather_addr, noc_index);
-                    noc_obj.async_write(
-                        {.offset_bytes = l1_read_addr},
+                    noc_async_write(
+                        l1_read_addr,
                         drain_gather_noc_addr,
-                        tiles_per_local_chunk * tilize_output_page_size);
+                        tiles_per_local_chunk * tilize_output_page_size,
+                        noc_index);
                     noc_obj.async_write_barrier();
 
                     // == 4b ==

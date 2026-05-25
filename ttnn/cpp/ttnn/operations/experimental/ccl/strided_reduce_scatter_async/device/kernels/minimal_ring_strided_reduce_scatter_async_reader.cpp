@@ -37,6 +37,7 @@
 #include <cstdint>
 #include "api/debug/dprint.h"
 #include "strided_ring_reduce_scatter_common.hpp"
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;

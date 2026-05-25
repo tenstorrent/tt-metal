@@ -11,6 +11,7 @@
 #include "api/core_local_mem.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/tensor/noc_traits.h"
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////

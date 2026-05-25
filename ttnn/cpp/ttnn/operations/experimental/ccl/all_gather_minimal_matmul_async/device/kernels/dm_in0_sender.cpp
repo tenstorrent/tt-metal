@@ -14,6 +14,7 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "api/tensor/noc_traits.h"
 
 using ttnn::ccl::Topology;
 

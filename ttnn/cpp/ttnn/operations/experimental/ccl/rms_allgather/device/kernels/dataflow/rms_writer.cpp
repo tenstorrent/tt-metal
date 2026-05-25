@@ -19,6 +19,7 @@
 #include "reshard_writer.hpp"
 #include <cstdint>
 #include <utility>
+#include "api/tensor/noc_traits.h"
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cb_in_2 = get_compile_time_arg_val(1);

@@ -21,6 +21,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 

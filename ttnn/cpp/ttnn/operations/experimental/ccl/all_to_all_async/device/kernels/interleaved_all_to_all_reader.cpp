@@ -7,6 +7,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include <cstdint>
 #include <utility>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 

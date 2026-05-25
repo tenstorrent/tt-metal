@@ -8,6 +8,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "api/tensor/noc_traits.h"
 
 using namespace ttnn::operations::ccl::common;
 

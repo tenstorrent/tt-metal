@@ -8,6 +8,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include <cstdint>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 

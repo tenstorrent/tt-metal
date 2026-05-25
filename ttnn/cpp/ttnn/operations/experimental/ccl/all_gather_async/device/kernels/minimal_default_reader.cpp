@@ -12,6 +12,7 @@
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include <cstdint>
 #include <utility>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;

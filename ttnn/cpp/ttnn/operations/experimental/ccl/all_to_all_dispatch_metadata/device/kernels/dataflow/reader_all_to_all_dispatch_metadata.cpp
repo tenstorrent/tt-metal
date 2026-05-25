@@ -10,6 +10,7 @@
 #include "api/core_local_mem.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "api/tensor/noc_traits.h"
 
 using namespace ttnn::operations::ccl::common;
 using tt::data_movement::common::tt_memmove;

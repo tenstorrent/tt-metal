@@ -13,6 +13,7 @@
 #include "api/remote_circular_buffer.h"
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_tile.h"
+#include "api/tensor/noc_traits.h"
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
