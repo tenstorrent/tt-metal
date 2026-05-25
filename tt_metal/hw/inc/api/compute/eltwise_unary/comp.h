@@ -31,7 +31,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void unary_ne_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(calculate_unary_ne, RC, APPROX, 8, idst, param0));
+    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(calculate_unary_ne, RC, APPROX, 8 /*ITER*/, idst, param0));
 }
 
 /**
@@ -56,7 +56,7 @@ ALWI void unary_ne_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(unary_ne, APPROX));
  */
 // clang-format on
 ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_COMP_INT32_KERNEL(unary_ne, RC, APPROX, 8, idst, param0));
+    MATH(SFPU_COMP_INT32_KERNEL(unary_ne, RC, APPROX, 8 /*ITER*/, idst, param0));
 }
 
 // unary eq : if x == value --> 1.0, else 0.0
@@ -76,7 +76,7 @@ ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_eq_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(calculate_unary_eq, RC, APPROX, 8, idst, param0));
+    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(calculate_unary_eq, RC, APPROX, 8 /*ITER*/, idst, param0));
 }
 
 /**
@@ -101,7 +101,7 @@ ALWI void unary_eq_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(unary_eq, APPROX));
  */
 // clang-format on
 ALWI void unary_eq_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_COMP_INT32_KERNEL(unary_eq, RC, APPROX, 8, idst, param0));
+    MATH(SFPU_COMP_INT32_KERNEL(unary_eq, RC, APPROX, 8 /*ITER*/, idst, param0));
 }
 
 // unary gt : if x > value --> 1.0, else 0.0
@@ -121,7 +121,7 @@ ALWI void unary_eq_tile_int32(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_gt_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(calculate_unary_gt, RC, APPROX, 8, idst, param0));
+    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(calculate_unary_gt, RC, APPROX, 8 /*ITER*/, idst, param0));
 }
 
 /**
@@ -146,7 +146,7 @@ ALWI void unary_gt_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(unary_gt, APPROX));
  */
 // clang-format on
 ALWI void unary_gt_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_COMP_INT32_KERNEL_UNDERSCORE(unary_gt, RC, APPROX, 8, idst, param0));
+    MATH(SFPU_COMP_INT32_KERNEL_UNDERSCORE(unary_gt, RC, APPROX, 8 /*ITER*/, idst, param0));
 }
 
 // unary ge : if x >= value --> 1.0, else 0.0
@@ -166,7 +166,7 @@ ALWI void unary_gt_tile_int32(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_ge_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(calculate_unary_ge, RC, APPROX, 8, idst, param0));
+    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(calculate_unary_ge, RC, APPROX, 8 /*ITER*/, idst, param0));
 }
 
 /**
@@ -191,7 +191,7 @@ ALWI void unary_ge_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(unary_ge, APPROX));
  */
 // clang-format on
 ALWI void unary_ge_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_COMP_INT32_KERNEL_UNDERSCORE(unary_ge, RC, APPROX, 8, idst, param0));
+    MATH(SFPU_COMP_INT32_KERNEL_UNDERSCORE(unary_ge, RC, APPROX, 8 /*ITER*/, idst, param0));
 }
 
 // unary lt : if x < value --> 1.0, else 0.0
@@ -211,7 +211,7 @@ ALWI void unary_ge_tile_int32(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_lt_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(calculate_unary_lt, RC, APPROX, 8, idst, param0));
+    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(calculate_unary_lt, RC, APPROX, 8 /*ITER*/, idst, param0));
 }
 
 // unary lt : if x < value --> 1, else 0
@@ -231,7 +231,7 @@ ALWI void unary_lt_tile(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_lt_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_COMP_INT32_KERNEL_UNDERSCORE(unary_lt, RC, APPROX, 8, idst, param0));
+    MATH(SFPU_COMP_INT32_KERNEL_UNDERSCORE(unary_lt, RC, APPROX, 8 /*ITER*/, idst, param0));
 }
 
 /**
@@ -256,7 +256,7 @@ ALWI void unary_lt_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(unary_lt, APPROX));
  */
 // clang-format on
 ALWI void unary_le_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(calculate_unary_le, RC, APPROX, 8, idst, param0));
+    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(calculate_unary_le, RC, APPROX, 8 /*ITER*/, idst, param0));
 }
 
 // unary le : if x <= value --> 1, else 0
@@ -276,7 +276,7 @@ ALWI void unary_le_tile(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_le_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_COMP_INT32_KERNEL_UNDERSCORE(unary_le, RC, APPROX, 8, idst, param0));
+    MATH(SFPU_COMP_INT32_KERNEL_UNDERSCORE(unary_le, RC, APPROX, 8 /*ITER*/, idst, param0));
 }
 
 /**
@@ -508,7 +508,7 @@ ALWI void eqz_tile_uint16(uint32_t idst) {
  */
 // clang-format on
 ALWI void eqz_tile_uint32(uint32_t idst) {
-    MATH((SFPU_TWO_PARAM_KERNEL(calculate_eqz_uint32, APPROX, 8, idst, (int)VectorMode::RC)));
+    MATH((SFPU_TWO_PARAM_KERNEL(calculate_eqz_uint32, APPROX, 8 /*ITER*/, idst, VectorMode::RC)));
 }
 
 /**
@@ -583,7 +583,7 @@ ALWI void nez_tile_uint16(uint32_t idst) {
  */
 // clang-format on
 ALWI void nez_tile_uint32(uint32_t idst) {
-    MATH((SFPU_TWO_PARAM_KERNEL(calculate_nez_uint32, APPROX, 8, idst, (int)VectorMode::RC)));
+    MATH((SFPU_TWO_PARAM_KERNEL(calculate_nez_uint32, APPROX, 8 /*ITER*/, idst, VectorMode::RC)));
 }
 
 /**

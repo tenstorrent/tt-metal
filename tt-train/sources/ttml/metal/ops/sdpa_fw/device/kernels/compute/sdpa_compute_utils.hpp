@@ -53,7 +53,7 @@ void calculate_recip_first_column() {
 }
 
 void recip_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column, idst, (int)VectorMode::C);
+    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column, idst, VectorMode::C);
 }
 
 // First-column exp with fused scale: exp(scale * x) on column 0 only.
@@ -74,7 +74,7 @@ void calculate_exponential_first_column() {
 
 template <uint16_t scale_bf16>
 void exp_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_exponential_first_column<scale_bf16>, idst, (int)VectorMode::C);
+    _llk_math_eltwise_unary_sfpu_params_(calculate_exponential_first_column<scale_bf16>, idst, VectorMode::C);
 }
 #endif
 
@@ -166,7 +166,7 @@ void update_cur_row_max_value(
 
         // find max value between current max and previous max
         binary_max_tile_init();
-        binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, static_cast<int>(VectorMode::C));
+        binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, VectorMode::C);
     }
     tile_regs_commit();
 
@@ -203,7 +203,7 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t 
     for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
         sub_tiles_bcast_cols(
             cb_attention_weights, cb_cur_max, /* in0 tile_idx */ n, /* in1 tile_idx */ 0, /* dst_reg_idx */ n);
-        exp_tile</* approx */ false, /* scale_en */ true>(n, (int)VectorMode::RC, scaler_bf16);
+        exp_tile</* approx */ false, /* scale_en */ true>(n, VectorMode::RC, scaler_bf16);
     }
     tile_regs_commit();
 

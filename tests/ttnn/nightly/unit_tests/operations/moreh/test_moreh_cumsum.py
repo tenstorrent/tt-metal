@@ -120,13 +120,12 @@ def test_moreh_cumsum_backward(input_shape, dim, device):
     torch_output = torch.cumsum(torch_input, dim)
     torch_output.backward(torch_output_grad)
 
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_input_grad_cpu = (
+    # Same fix pattern as #44283 applied to test_moreh_cumsum_dim: the legacy
+    # .cpu().to(ROW_MAJOR).unpad_from_tile(shape).to_torch() chain trips the
+    # hardened unpad_from_tile precondition (#43568) when input_shape's last
+    # two dims aren't tile-aligned — ttnn.to_torch handles padding correctly.
+    tt_input_grad_cpu = ttnn.to_torch(
         ttnn.operations.moreh.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad)
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(input_shape)
-        .to_torch()
     )
 
     # test for equivalance
@@ -225,13 +224,12 @@ def test_moreh_cumsum_backward(input_shape, dim, device):
     torch_output = torch.cumsum(torch_input, dim)
     torch_output.backward(torch_output_grad)
 
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_input_grad_cpu = (
+    # Same fix pattern as #44283 applied to test_moreh_cumsum_dim: the legacy
+    # .cpu().to(ROW_MAJOR).unpad_from_tile(shape).to_torch() chain trips the
+    # hardened unpad_from_tile precondition (#43568) when input_shape's last
+    # two dims aren't tile-aligned — ttnn.to_torch handles padding correctly.
+    tt_input_grad_cpu = ttnn.to_torch(
         ttnn.operations.moreh.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad)
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(input_shape)
-        .to_torch()
     )
 
     # test for equivalance

@@ -15,21 +15,26 @@ namespace ckernel {
 
 /**
  * Helper function to reconfigure srca and srcb data formats.
+ *
+ * NOTE(ARCH_QUASAR): On Quasar, buffer descriptors are programmed into the unpack MOP at op init.
+ * reconfig_data_format only reprograms THCON data formats (gasket), not the MOP. When operands or
+ * DFB/buffer descriptors change, call the op init again for the new operand pair before the next
+ * unpack operation.
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t srcb_new_operand) {
-#ifndef ARCH_QUASAR
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format<
             DST_ACCUM_MODE,
             is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE,
             to_from_int8>(srca_new_operand, srcb_new_operand)));
     MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE, to_from_int8>(srca_new_operand, srcb_new_operand)));
-#endif
 }
 
 /**
  * Helper function to reconfigure srca/srcb data formats, only if they differ from existing formats.
+ *
+ * NOTE(ARCH_QUASAR): See reconfig_data_format(srca_new_operand, srcb_new_operand).
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format(
@@ -37,7 +42,6 @@ ALWI void reconfig_data_format(
     const uint32_t srca_new_operand,
     const uint32_t srcb_old_operand,
     const uint32_t srcb_new_operand) {
-#ifndef ARCH_QUASAR
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format<
             DST_ACCUM_MODE,
@@ -45,7 +49,6 @@ ALWI void reconfig_data_format(
             to_from_int8>(srca_old_operand, srca_new_operand, srcb_old_operand, srcb_new_operand)));
     MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE, to_from_int8>(
         srca_old_operand, srca_new_operand, srcb_old_operand, srcb_new_operand)));
-#endif
 }
 
 /**
@@ -53,14 +56,12 @@ ALWI void reconfig_data_format(
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
-#ifndef ARCH_QUASAR
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srca<
             DST_ACCUM_MODE,
             is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE,
             to_from_int8>(srca_new_operand)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE, to_from_int8>(srca_new_operand)));
-#endif
 }
 
 /**
@@ -68,14 +69,12 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
-#ifndef ARCH_QUASAR
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srca<
             DST_ACCUM_MODE,
             is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE,
             to_from_int8>(srca_old_operand, srca_new_operand)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE, to_from_int8>(srca_old_operand, srca_new_operand)));
-#endif
 }
 
 /**
@@ -83,14 +82,12 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint3
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
-#ifndef ARCH_QUASAR
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srcb<
             DST_ACCUM_MODE,
             is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE,
             to_from_int8>(srcb_new_operand)));
     MATH((llk_math_reconfig_data_format_srcb<DST_ACCUM_MODE, to_from_int8>(srcb_new_operand)));
-#endif
 }
 
 /**
@@ -98,14 +95,12 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
-#ifndef ARCH_QUASAR
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srcb<
             DST_ACCUM_MODE,
             is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE,
             to_from_int8>(srcb_old_operand, srcb_new_operand)));
     MATH((llk_math_reconfig_data_format_srcb<DST_ACCUM_MODE, to_from_int8>(srcb_old_operand, srcb_new_operand)));
-#endif
 }
 
 // clang-format off
