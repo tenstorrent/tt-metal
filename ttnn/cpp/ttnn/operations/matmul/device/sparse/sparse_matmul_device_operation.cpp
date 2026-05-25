@@ -187,9 +187,7 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         b_shape_padded,
         in1_tile);
     TT_FATAL(
-        operation_attributes.nnz.value_or(1) > 0,
-        "nnz ({}) must be greater than 0",
-        operation_attributes.nnz.value_or(1));
+        operation_attributes.nnz.value_or(1) > 0, "nnz ({}) must be greater than 0", operation_attributes.nnz.value());
 
     // Check that nnz is less than or equal to the length of all batch dimensions
     uint32_t batch_length_A = 1;
@@ -225,7 +223,7 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         operation_attributes.nnz.value_or(1) <= batch_length,
         "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
-        operation_attributes.nnz.value_or(1),
+        operation_attributes.nnz,
         batch_length);
 
     // When nnz is supplied, the receiver and compute kernels loop exactly nnz times while the in0 sender
