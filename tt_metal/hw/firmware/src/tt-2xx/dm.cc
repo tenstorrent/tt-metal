@@ -110,9 +110,9 @@ void device_setup() {
     // instn_buf
     // pc_buf
     // clock gating
-    // NOC setup
     set_deassert_addresses();
     setup_isr_csrs();
+    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     // wzeromem
     // invalidate_l1_cache
     // clear_destination_registers
@@ -210,8 +210,6 @@ extern "C" uint32_t _start1() {
     device_setup();
     if (hartid > 0) {
         signal_subordinate_completion();
-        // Set up overlay command buffers - legacy name
-        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     } else {  // This is DM0
         risc_init();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
@@ -296,7 +294,7 @@ extern "C" uint32_t _start1() {
                 // noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
                 my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
                 my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
-                // Set up overlay command buffers - legacy name
+                overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 // re-initialize the NoCs
                 // uint8_t cmd_buf;
@@ -416,6 +414,7 @@ extern "C" uint32_t _start1() {
         setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
+        overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
         WAYPOINT("R1");
         while (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {
