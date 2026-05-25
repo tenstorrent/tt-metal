@@ -72,6 +72,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      use-artifacts-from-run:
+        required: false
+        type: string
+        default: ""
+        description: "Workflow run ID to reuse build artifacts from (skips rebuild)"
   workflow_call:
     inputs:
       regenerate-ttnn-cache:
@@ -188,6 +193,7 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      use-artifacts-from-run: ${{ inputs.use-artifacts-from-run || '' }}
   blackhole-demo-tests:
     needs: [build-artifact, generate-model-matrix]
     secrets: inherit
