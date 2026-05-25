@@ -1136,8 +1136,8 @@ class TTNNDotsVisionAttention(TTNNModule):
         else:
             q_chunk = 256
             k_chunk = 512
-        q_chunk = 256
-        k_chunk = 1024
+        # q_chunk = 256
+        # k_chunk = 1024
         return SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
             q_chunk_size=q_chunk,
