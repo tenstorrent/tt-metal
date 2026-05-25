@@ -57,10 +57,22 @@ OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
 T2ST_WAV = OUTPUT_DIR / "t2st_hindi_speech.wav"
 S2ST_WAV = OUTPUT_DIR / "s2st_spanish_speech.wav"
 
+# Full T2ST wav can exceed ~650 mel frames; S2TT/S2ST/ASR matmul programs overflow L1 past ~500.
+DEMO_MAX_SPEECH_SEC_FOR_S2X = 6.0
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _truncate_audio_for_speech_tasks(
+    audio: np.ndarray, sample_rate: int, max_seconds: float = DEMO_MAX_SPEECH_SEC_FOR_S2X
+) -> np.ndarray:
+    max_samples = int(max_seconds * sample_rate)
+    if audio.size <= max_samples:
+        return audio
+    return audio[:max_samples]
 
 
 def _weights_dir() -> Path:
@@ -193,7 +205,7 @@ def main() -> None:
     sample_rate = int(getattr(cfg, "sampling_rate", 16000))
 
     # ---- Single English prompt drives the entire demo chain ----
-    src_text = "Artificial intelligence systems are rapidly transforming the way people interact with technology in everyday life. From voice assistants and automated translation systems to medical diagnostics and scientific research tools, machine learning models are increasingly capable of performing tasks that once required significant human expertise. Large language models in particular have demonstrated remarkable abilities in reasoning, summarization, coding assistance, and multilingual communication. At the same time, researchers continue to investigate the limitations of these systems, including factual inaccuracies, computational cost, energy consumption, and challenges related to safety and alignment. Organizations deploying advanced AI models must balance performance with reliability, transparency, and responsible governance. In multilingual applications, speech and text models such as SeamlessM4T are designed to bridge communication barriers by supporting translation across many languages and modalities, including speech-to-text, speech-to-speech, and text-to-speech generation. These systems rely on transformer architectures that process sequences of tokens or acoustic representations while maintaining contextual awareness over long inputs. Sequence length becomes an important consideration because transformer attention mechanisms scale with the number of tokens being processed. As a result, models often define maximum context windows, positional embedding capacities, or chunked processing strategies to ensure that computation remains tractable. Developers working with these systems frequently optimize batching, memory usage, quantization, and streaming pipelines in order to deploy models efficiently on available hardware while preserving acceptable latency and output quality for real-world applications."
+    src_text = "going along slushy country roads and speaking to damp audiences in draughty schoolrooms day after day for a fortnight he'll have to put in an appearance at some place of worship on sunday morning and he can come to us immediately afterwards"
     src_lang = "eng"
     tgt_translate = "hin"  # task 1, 2: translate eng → hin
     tgt_back_text = "eng"  # task 3: speech in hin → text in eng (back-translation)
@@ -206,8 +218,13 @@ def main() -> None:
 
     # Optional KV-decode Metal trace (needs trace_region_size in device params; slow per position).
     use_decode_trace = False
+    # Long eng→hin needs ~50 decode tokens. Default was 48, but truncation at ~31 tokens is a
+    # text-decoder KV-cache issue (see ``use_kv_cache``); budget must be high enough once fixed.
+    gen_max_new = int(
+        getattr(cfg, "max_new_tokens", None) or getattr(model.generation_config, "max_new_tokens", 128) or 128
+    )
     gen_common = dict(
-        max_new_tokens=48,
+        max_new_tokens=min(128, gen_max_new),
         do_sample=False,
         num_beams=1,
         pad_token_id=cfg.pad_token_id,
@@ -264,6 +281,10 @@ def main() -> None:
             raise TypeError(f"T2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(t2tt_out)}")
         print(f"  Output text ({tgt_translate}): {_decode(tokenizer, t2tt_out.sequences)}")
 
+        # T2TT compiles many text-decoder programs; clear before T2ST so vocoder conv1d fits in L1.
+        tt_model.clear_runtime_program_cache()
+        ttnn.synchronize_device(device)
+
         # =========================================================================
         # 2. T2ST — Text-to-Speech Translation (English text → Hindi speech)
         # =========================================================================
@@ -286,8 +307,17 @@ def main() -> None:
         print(f"  Output audio ({tgt_translate}, {sample_rate} Hz, {hindi_wav_np.size} samples)")
         print(f"  Saved to: {T2ST_WAV}")
 
-        # The Hindi speech from T2ST becomes the input for tasks 3-5.
-        audio_inputs = processor(audios=hindi_wav_np, sampling_rate=sample_rate, return_tensors="pt")
+        tt_model.clear_runtime_program_cache()
+        ttnn.synchronize_device(device)
+
+        # The Hindi speech from T2ST becomes the input for tasks 3-5 (trimmed if very long).
+        hindi_for_s2x = _truncate_audio_for_speech_tasks(hindi_wav_np, sample_rate)
+        if hindi_for_s2x.size < hindi_wav_np.size:
+            print(
+                f"  Note: tasks 3–5 use the first {DEMO_MAX_SPEECH_SEC_FOR_S2X:.0f}s of T2ST audio "
+                f"({hindi_for_s2x.size} / {hindi_wav_np.size} samples) to stay within device L1."
+            )
+        audio_inputs = processor(audios=hindi_for_s2x, sampling_rate=sample_rate, return_tensors="pt")
         input_features = audio_inputs["input_features"]
         input_speech_attn = audio_inputs["attention_mask"]
 
@@ -306,6 +336,9 @@ def main() -> None:
         if not isinstance(s2tt_out, TTSeamlessM4Tv2GreedySearchOutput):
             raise TypeError(f"S2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(s2tt_out)}")
         print(f"  Output text ({tgt_back_text}): {_decode(tokenizer, s2tt_out.sequences)}")
+
+        tt_model.clear_runtime_program_cache()
+        ttnn.synchronize_device(device)
 
         # =========================================================================
         # 4. S2ST — Speech-to-Speech Translation (Hindi speech → Spanish speech)
@@ -328,6 +361,9 @@ def main() -> None:
         _save_wav(S2ST_WAV, spanish_wav_np, sample_rate=sample_rate)
         print(f"  Output audio ({tgt_speech_other}, {sample_rate} Hz, {spanish_wav_np.size} samples)")
         print(f"  Saved to: {S2ST_WAV}")
+
+        tt_model.clear_runtime_program_cache()
+        ttnn.synchronize_device(device)
 
         # =========================================================================
         # 5. ASR — Automatic Speech Recognition (Hindi speech → Hindi text)
