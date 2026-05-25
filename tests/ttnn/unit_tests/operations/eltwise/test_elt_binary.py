@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_allclose, assert_equal, assert_with_pcc
 from models.common.utility_functions import torch_random
 
 pytestmark = pytest.mark.use_module_device
@@ -178,4 +178,7 @@ def test_fused_relu_with_broadcast(device, dtype, broadcast_shape):
     tt_out = ttnn.add(tt_a, tt_b, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
     result = ttnn.to_torch(tt_out)
 
-    assert_equal(golden, result, max_ulp=1)
+    if dtype == ttnn.float32:
+        assert_equal(golden, result)
+    else:
+        assert_allclose(golden, result, rtol=0, atol=torch.finfo(torch.bfloat16).eps)
