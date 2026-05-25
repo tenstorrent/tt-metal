@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
-#include "ttnn/operations/transformer/sdpa/device/sdpa_cb_ids.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_interleaved_cb_ids.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -689,8 +689,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     cb_ids.k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
     cb_ids.v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
 
+    const bool needs_mask_cb = use_provided_mask || is_causal || use_padded_mask || sliding_window_size.value_or(0) > 0;
     // Only create mask buffer if it's going to be used.
-    if (use_provided_mask or is_causal or use_padded_mask) {
+    if (needs_mask_cb) {
         // Lightweight mask: Float16_b, mask_tiles already computed (1 for padding, 2 for causal).
         // Legacy: full Sq×Sk double-buffered matrix in Bfp4_b.
         tt::DataFormat actual_mask_df = lightweight_mask ? tt::DataFormat::Float16_b : mask_df;

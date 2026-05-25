@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ring_distributed_sdpa_device_operation.hpp"
-#include "sdpa_cb_ids.hpp"
+#include "sdpa_interleaved_cb_ids.hpp"
 #include "sdpa_subblock_utils.hpp"
 
 #include <bit>
