@@ -79,10 +79,17 @@ ttnn::Tensor rotary_embedding(
     auto padded_shape_sin = ttnn::operations::data_movement::pad_to_tile_shape(sin_cache.padded_shape());
     // tilize_with_val_padding short-circuits for already-TILE inputs and
     // silently drops the requested pad value, so the implicit tile padding
-    // keeps whatever bytes were in L1. Only in that case do we need to
-    // explicitly scrub the implicit tile padding here, otherwise the compute
-    // kernel (which processes the full padded seq_len) would multiply
-    // uninitialized L1 garbage into the output's padded rows.
+    // keeps whatever bytes were in L1. The compute kernel processes the full
+    // padded seq_len, so leaving garbage there leaks into the output's padded
+    // rows.
+    //
+    // Only the input needs scrubbing: once the input's tile-pad rows are 0,
+    //   output[pad] = x[pad]*cos[pad] + rotate_half(x)[pad]*sin[pad]
+    //               = 0*cos[pad] + concat(neg(0), 0)*sin[pad] = 0
+    // regardless of what's in the cos/sin pad rows, because rotate_half is
+    // a per-row operation (no cross-row reads). So fill_implicit_tile_padding
+    // on cos/sin would be pure overhead.
+    //
     // For ROW_MAJOR inputs tilize_with_val_padding already zero-pads, so we
     // skip the redundant fill.
     Tensor formatted_input =
@@ -92,14 +99,8 @@ ttnn::Tensor rotary_embedding(
     }
     Tensor formatted_cos =
         ttnn::tilize_with_val_padding(cos_cache, padded_shape_cos, PadValue(0.0f), cos_cache.memory_config());
-    if (cos_cache.layout() == Layout::TILE) {
-        formatted_cos = ttnn::fill_implicit_tile_padding(formatted_cos, 0.0f, formatted_cos.memory_config());
-    }
     Tensor formatted_sin =
         ttnn::tilize_with_val_padding(sin_cache, padded_shape_sin, PadValue(0.0f), sin_cache.memory_config());
-    if (sin_cache.layout() == Layout::TILE) {
-        formatted_sin = ttnn::fill_implicit_tile_padding(formatted_sin, 0.0f, formatted_sin.memory_config());
-    }
 
     return ttnn::prim::rotary_embedding(
         formatted_input,
