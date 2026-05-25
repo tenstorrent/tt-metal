@@ -343,6 +343,19 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         !coalesce_1d_depthwise_kw_reads || filter_h == 1,
         "Coalesced 1D depthwise reads require filter_h == 1, got {}",
         filter_h);
+    // The coalesced reader writes kw*C scalars contiguously per output position.  After tilize,
+    // each tile column must correspond to exactly one kernel tap, which requires C to be a
+    // multiple of TILE_WIDTH.  Equivalently, act_block_w_ntiles must be divisible by filter_w.
+    // This invariant is enforced by should_coalesce_1d_depthwise_conv_reads; this TT_FATAL
+    // guards against future regressions in that function.
+    TT_FATAL(
+        !coalesce_1d_depthwise_kw_reads || act_block_w_ntiles % filter_w == 0,
+        "Coalesced 1D depthwise: act_block_w_ntiles ({}) must be divisible by filter_w ({}) "
+        "(requires input_channels_padded={} to be a multiple of TILE_WIDTH={})",
+        act_block_w_ntiles,
+        filter_w,
+        input_channels_padded,
+        tt::constants::TILE_WIDTH);
 
     const bool enable_split_reader =
         is_split_reader_supported(a.memory_config().memory_layout(), is_conv_1d_depthwise_conv, act_block_h_ntiles) &&
@@ -380,17 +393,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     }
 
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
-    if (is_conv_1d_depthwise_conv && height_sharded) {
-        const uint32_t expected_act_block_w_ntiles =
-            tt::round_up(
-                input_channels_padded * (coalesce_1d_depthwise_kw_reads ? filter_w : 1), tt::constants::TILE_WIDTH) /
-            tt::constants::TILE_WIDTH;
-        TT_FATAL(
-            act_block_w_ntiles == expected_act_block_w_ntiles,
-            "1D depthwise activation block width mismatch. Got {} tiles, expected {} tiles",
-            act_block_w_ntiles,
-            expected_act_block_w_ntiles);
-    }
     // check is for 16-byte alignment
     TT_FATAL(
         // Since fp16 is smalleset data format used for halo output, 8 input_channels is enough for 16 byte alignment

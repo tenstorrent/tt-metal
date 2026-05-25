@@ -256,3 +256,40 @@ def test_conv_dram(
         fast_compare=True,
         use_dram_slicing=True,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "input_width",
+    [
+        pytest.param(126, id="w126"),
+        pytest.param(105, id="w105"),
+        pytest.param(21, id="w21_a"),
+        pytest.param(21, id="w21_b"),
+        pytest.param(77, id="w77"),
+        pytest.param(35, id="w35"),
+    ],
+)
+def test_conv2d_depthwise_small_channels(device, torch_tensor_map, input_width):
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.HiFi4,
+        ttnn.float32,  # output_dtype
+        ttnn.float32,  # weights_dtype
+        1,  # batch_size
+        3,  # output_channels
+        3,  # input_channels
+        1,  # input_height
+        input_width,
+        1,  # filter_height
+        7,  # filter_width
+        1,  # stride_h
+        7,  # stride_w
+        (0, 0, 0, 0),  # padding
+        None,  # config_override
+        groups=3,
+        has_bias=False,
+        fp32_accum=True,
+        enable_kernel_stride_folding=False,
+    )
