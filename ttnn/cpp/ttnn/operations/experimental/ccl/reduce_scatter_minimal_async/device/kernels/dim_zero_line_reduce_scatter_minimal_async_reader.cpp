@@ -182,7 +182,7 @@ void kernel_main() {
                     uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
                     cb_in0.reserve_back(tile_granularity);
-                    uint32_t l1_write_addr = cb_in0.get_write_ptr();
+                    uint32_t l1_write_offset = 0;
                     for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                         uint32_t tile_id = input_tile_id_start + tiles_read + j;
                         noc_obj.async_read(
@@ -190,8 +190,8 @@ void kernel_main() {
                             cb_in0,
                             page_size,
                             {.page_id = tile_id},
-                            {.offset_bytes = l1_write_addr});
-                        l1_write_addr += page_size;
+                            {.offset_bytes = l1_write_offset});
+                        l1_write_offset += page_size;
                     }
                     tiles_read += num_pages_to_read;
 
@@ -213,7 +213,7 @@ void kernel_main() {
                     uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
                     cb_in0.reserve_back(tile_granularity);
-                    uint32_t l1_write_addr = cb_in0.get_write_ptr();
+                    uint32_t l1_write_offset = 0;
                     for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                         uint32_t tile_id = input_tile_id_start + tiles_read + j;
                         noc_obj.async_read(
@@ -221,8 +221,8 @@ void kernel_main() {
                             cb_in0,
                             page_size,
                             {.page_id = tile_id},
-                            {.offset_bytes = l1_write_addr});
-                        l1_write_addr += page_size;
+                            {.offset_bytes = l1_write_offset});
+                        l1_write_offset += page_size;
                     }
 
                     if (chunk_count % chunks_per_sync == 0) {
@@ -236,7 +236,7 @@ void kernel_main() {
 
                     // read the next intermediate slice out of intermediate buffer, and put it in intermediate CB
                     cb_intermediate.reserve_back(tile_granularity);
-                    l1_write_addr = cb_intermediate.get_write_ptr();
+                    l1_write_offset = 0;
                     for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                         uint32_t tile_id = intermediate_tile_id_start + tiles_read + j;
                         noc_obj.async_read(
@@ -244,8 +244,8 @@ void kernel_main() {
                             cb_intermediate,
                             page_size,
                             {.page_id = tile_id},
-                            {.offset_bytes = l1_write_addr});
-                        l1_write_addr += page_size;
+                            {.offset_bytes = l1_write_offset});
+                        l1_write_offset += page_size;
                     }
 
                     tiles_read += num_pages_to_read;
@@ -296,7 +296,7 @@ void kernel_main() {
                 uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
                 cb_in0.reserve_back(tile_granularity);
-                uint32_t l1_write_addr = cb_in0.get_write_ptr();
+                uint32_t l1_write_offset = 0;
                 for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                     uint32_t tile_id = tile_id_start + tiles_read + j;
                     if (detail::do_accumulate_output(is_forward)) {
@@ -305,16 +305,16 @@ void kernel_main() {
                             cb_in0,
                             page_size,
                             {.page_id = tile_id},
-                            {.offset_bytes = l1_write_addr});
+                            {.offset_bytes = l1_write_offset});
                     } else {
                         noc_obj.async_read(
                             input_tensor_addrgen,
                             cb_in0,
                             page_size,
                             {.page_id = tile_id},
-                            {.offset_bytes = l1_write_addr});
+                            {.offset_bytes = l1_write_offset});
                     }
-                    l1_write_addr += page_size;
+                    l1_write_offset += page_size;
                 }
 
                 if (chunk_count % chunks_per_sync == 0) {
@@ -327,7 +327,7 @@ void kernel_main() {
 
                 // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
                 cb_intermediate.reserve_back(tile_granularity);
-                l1_write_addr = cb_intermediate.get_write_ptr();
+                l1_write_offset = 0;
                 for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                     uint32_t intermediate_tile_id = intermediate_tile_id_start + tiles_read + j;
                     noc_obj.async_read(
@@ -335,8 +335,8 @@ void kernel_main() {
                         cb_intermediate,
                         page_size,
                         {.page_id = intermediate_tile_id},
-                        {.offset_bytes = l1_write_addr});
-                    l1_write_addr += page_size;
+                        {.offset_bytes = l1_write_offset});
+                    l1_write_offset += page_size;
                 }
 
                 tiles_read += num_pages_to_read;

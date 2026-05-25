@@ -425,7 +425,7 @@ void kernel_main() {
                         } else {
                             // Write tiles to local tensor
                             cb_out.wait_front(tile_granularity);
-                            size_t l1_read_addr = cb_out.get_read_ptr();
+                            size_t l1_read_offset = 0;
                             for (uint32_t j = 0; j < tiles_to_read; ++j) {
                                 auto interm_tile_id = get_next_interm_tile_id();
                                 auto output_tile_id = get_next_output_tile_id();
@@ -434,17 +434,17 @@ void kernel_main() {
                                         cb_out,
                                         interm_tensor_accessor,
                                         page_size,
-                                        {.offset_bytes = l1_read_addr},
+                                        {.offset_bytes = l1_read_offset},
                                         {.page_id = interm_tile_id});
                                 } else {
                                     noc_obj.async_write(
                                         cb_out,
                                         output_tensor_accessor,
                                         page_size,
-                                        {.offset_bytes = l1_read_addr},
+                                        {.offset_bytes = l1_read_offset},
                                         {.page_id = output_tile_id});
                                 }
-                                l1_read_addr += page_size;
+                                l1_read_offset += page_size;
                                 tiles_read++;
                             }
                             noc_obj.async_write_barrier();

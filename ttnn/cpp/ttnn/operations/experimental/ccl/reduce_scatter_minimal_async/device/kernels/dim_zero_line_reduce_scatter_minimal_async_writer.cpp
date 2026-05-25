@@ -372,16 +372,16 @@ void kernel_main() {
                 uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
                 cb_compute_output.wait_front(tile_granularity);
-                size_t l1_read_addr = cb_compute_output.get_read_ptr();
+                size_t l1_read_offset = 0;
                 for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                     uint32_t output_tile_id = output_tile_id_start + tiles_read;
                     noc_obj.async_write(
                         cb_compute_output,
                         output_addrgen,
                         page_size,
-                        {.offset_bytes = l1_read_addr},
+                        {.offset_bytes = l1_read_offset},
                         {.page_id = output_tile_id});
-                    l1_read_addr += page_size;
+                    l1_read_offset += page_size;
                     tiles_read++;
                 }
 

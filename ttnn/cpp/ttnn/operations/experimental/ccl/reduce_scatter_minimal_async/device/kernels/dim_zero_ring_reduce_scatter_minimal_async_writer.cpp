@@ -346,16 +346,16 @@ void kernel_main() {
                     }
 
                     cb_output.wait_front(tile_granularity);
-                    size_t l1_read_addr = cb_output.get_read_ptr();
+                    size_t l1_read_offset = 0;
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                         uint32_t output_tile_id = output_tile_id_start + tiles_read;
                         noc_obj.async_write(
                             cb_output,
                             output_addrgen,
                             page_size,
-                            {.offset_bytes = l1_read_addr},
+                            {.offset_bytes = l1_read_offset},
                             {.page_id = output_tile_id});
-                        l1_read_addr += page_size;
+                        l1_read_offset += page_size;
                         tiles_read++;
                     }
 

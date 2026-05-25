@@ -106,7 +106,7 @@ void kernel_main() {
                 }
 
                 cb_in0.reserve_back(tile_granularity);
-                uint32_t l1_write_addr = cb_in0.get_write_ptr();
+                uint32_t l1_write_offset = 0;
                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                     uint32_t input_tile_id = tile_id_start + tiles_read + j;
                     noc_obj.async_read(
@@ -114,14 +114,14 @@ void kernel_main() {
                         cb_in0,
                         page_size,
                         {.page_id = input_tile_id},
-                        {.offset_bytes = l1_write_addr});
-                    l1_write_addr += page_size;
+                        {.offset_bytes = l1_write_offset});
+                    l1_write_offset += page_size;
                 }
 
                 if (do_reduce) {
                     // read next intermediate slice out of the intermediate buffer, and put it in intermediate CB
                     cb_intermediate.reserve_back(tile_granularity);
-                    uint32_t intermediate_l1_write_addr = cb_intermediate.get_write_ptr();
+                    uint32_t intermediate_l1_write_offset = 0;
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                         uint32_t intermediate_tile_id = tile_id_start + tiles_read + j;
                         noc_obj.async_read(
@@ -129,8 +129,8 @@ void kernel_main() {
                             cb_intermediate,
                             page_size,
                             {.page_id = intermediate_tile_id},
-                            {.offset_bytes = intermediate_l1_write_addr});
-                        intermediate_l1_write_addr += page_size;
+                            {.offset_bytes = intermediate_l1_write_offset});
+                        intermediate_l1_write_offset += page_size;
                     }
 
                     noc_obj.async_read_barrier();

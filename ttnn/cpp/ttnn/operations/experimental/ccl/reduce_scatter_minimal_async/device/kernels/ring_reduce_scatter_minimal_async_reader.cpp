@@ -241,14 +241,12 @@ void kernel_main() {
                         }
 
                         cb_in.reserve_back(tile_granularity);
-                        uint32_t l1_write_addr = cb_in.get_write_ptr();
-                        uint32_t interm_l1_write_addr, interm2_l1_write_addr;
+                        uint32_t l1_write_offset = 0;
+                        uint32_t interm_l1_write_offset = 0, interm2_l1_write_offset = 0;
                         if (reduce_interm) {
                             cb_interm.reserve_back(tile_granularity);
-                            interm_l1_write_addr = cb_interm.get_write_ptr();
                             if (reduce_output) {
                                 cb_interm2.reserve_back(tile_granularity);
-                                interm2_l1_write_addr = cb_interm2.get_write_ptr();
                             }
                         }
                         for (uint32_t j = 0; j < tiles_to_read; ++j) {
@@ -262,8 +260,8 @@ void kernel_main() {
                                 cb_in,
                                 page_size,
                                 {.page_id = input_tile_id},
-                                {.offset_bytes = l1_write_addr});
-                            l1_write_addr += page_size;
+                                {.offset_bytes = l1_write_offset});
+                            l1_write_offset += page_size;
 
                             if (reduce_interm) {
                                 // interm_tensor from reader -> compute
@@ -272,8 +270,8 @@ void kernel_main() {
                                     cb_interm,
                                     page_size,
                                     {.page_id = interm_tile_id},
-                                    {.offset_bytes = interm_l1_write_addr});
-                                interm_l1_write_addr += page_size;
+                                    {.offset_bytes = interm_l1_write_offset});
+                                interm_l1_write_offset += page_size;
 
                                 if (reduce_output) {
                                     // output_tensor from reader -> compute
@@ -282,8 +280,8 @@ void kernel_main() {
                                         cb_interm2,
                                         page_size,
                                         {.page_id = output_tile_id},
-                                        {.offset_bytes = interm2_l1_write_addr});
-                                    interm2_l1_write_addr += page_size;
+                                        {.offset_bytes = interm2_l1_write_offset});
+                                    interm2_l1_write_offset += page_size;
                                 }
                             }
                         }
