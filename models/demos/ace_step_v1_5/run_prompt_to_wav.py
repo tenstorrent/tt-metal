@@ -1178,6 +1178,15 @@ def main() -> None:
                         "(ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=1; inter-op buffers stay BF16 ROW_MAJOR)",
                         flush=True,
                     )
+                with perf.timed("vae_init", device=dev):
+                    tt_vae = TtOobleckVaeDecoder.from_hf_vae_dir(
+                        str(vae_dir),
+                        device=dev,
+                        latent_frames=int(frames),
+                        batch_size=1,
+                        activation_dtype=act_dtype_vae,
+                        weights_dtype=w_dtype_vae,
+                    )
                 if tt_vae is None:
                     with perf.timed("vae_init", device=dev):
                         tt_vae = TtOobleckVaeDecoder.from_hf_vae_dir(
