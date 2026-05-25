@@ -411,8 +411,11 @@ void kernel_main() {
                 const uint64_t gate_mcast_noc = get_noc_multicast_addr(
                     in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, gate_block_start);
                 const uint32_t gate_block_bytes = g_in1_block_num_tiles * gate_tile_bytes;
+                // linked=true on gate, linked=false on up — chains the two
+                // mcasts so they share NoC path setup, saving a few cycles
+                // of programming overhead per K-block.
                 noc_async_write_multicast(
-                    gate_block_start, gate_mcast_noc, gate_block_bytes, in1_num_receivers, /*linked=*/false);
+                    gate_block_start, gate_mcast_noc, gate_block_bytes, in1_num_receivers, /*linked=*/true);
 
                 const uint64_t up_mcast_noc = get_noc_multicast_addr(
                     in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, up_block_start);
