@@ -210,3 +210,66 @@ def upload_kv_cache_buffer(
         cache_file_name=weight_cache_file(weight_cache_path, cache_key),
     )
     return materialize_tile_layout(tt)
+
+
+def upload_paged_kv_cache_buffer(
+    *,
+    num_total_blocks: int,
+    n_kv_heads: int,
+    block_size: int,
+    head_dim: int,
+    mesh_device,
+    dtype: ttnn.DataType,
+    weight_cache_path: Optional[PathLike] = None,
+    cache_key: str,
+) -> ttnn.Tensor:
+    """Zero-init **paged** KV cache in DRAM TILE.
+
+    Layout: ``[num_total_blocks, n_kv_heads, block_size, head_dim]``. Each block stores
+    ``block_size`` consecutive KV positions for one logical user; the user-to-block mapping
+    is the page_table uploaded by :func:`upload_page_table`.
+    """
+    torch_dtype = torch_default_dtype_for(dtype)
+    zeros = torch.zeros((num_total_blocks, n_kv_heads, block_size, head_dim), dtype=torch_dtype)
+    tt = ttnn.as_tensor(
+        zeros,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=KV_CACHE_MEM_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        cache_file_name=weight_cache_file(weight_cache_path, cache_key),
+    )
+    return materialize_tile_layout(tt)
+
+
+def upload_page_table(
+    *,
+    batch_size: int,
+    num_blocks_per_user: int,
+    mesh_device,
+    weight_cache_path: Optional[PathLike] = None,
+    cache_key: str = "kv_page_table",
+) -> ttnn.Tensor:
+    """Upload a contiguous page table ``[batch, num_blocks_per_user]`` (int32, DRAM ROW_MAJOR).
+
+    Each entry is the physical block id a logical (user, block_position) maps to. For the simple
+    single-user demo with ``batch=1``, ``num_blocks_per_user=12``::
+
+        page_table = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]]
+
+    Multi-user case lays each user's blocks contiguously::
+
+        page_table = [[0..11], [12..23], [24..35], ...]
+    """
+    block_ids = torch.arange(batch_size * num_blocks_per_user, dtype=torch.int32)
+    page_table = block_ids.reshape(batch_size, num_blocks_per_user).contiguous()
+    return ttnn.as_tensor(
+        page_table,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        cache_file_name=weight_cache_file(weight_cache_path, cache_key),
+    )

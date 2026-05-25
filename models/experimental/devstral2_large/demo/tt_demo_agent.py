@@ -543,9 +543,9 @@ class TTAgentConfig(ChatConfig):
     mesh_device_name: str = "T3K"
     num_layers: Optional[int] = None
     max_seq_len: Optional[int] = None
-    max_context_tokens: int = 2048
+    max_context_tokens: int = 512
     seed: Optional[int] = None
-    prefill_activations_dram: bool = True
+    prefill_activations_dram: bool = False
 
 
 @dataclass
@@ -585,7 +585,7 @@ def _open_mesh(mesh_name: str) -> Tuple[ttnn.MeshDevice, bool]:
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(rows, cols),
         l1_small_size=DEVSTRAL2_LARGE_L1_SMALL_SIZE,
-        num_command_queues=2 if is_multichip else 1,
+        num_command_queues=1,
     )
     return mesh_device, fabric_set
 
@@ -797,7 +797,16 @@ def generate_assistant_text_tt(
     messages: List[Dict[str, str]],
     config: TTAgentConfig,
 ) -> str:
-    """One turn: full TT prefill of the chat history, then untraced decode steps."""
+    """One turn: chunked TT prefill of the chat history, then untraced decode steps.
+
+    Prefill is dispatched one ``kv_block_size`` (128-token) chunk at a time. Each chunk writes
+    its K/V into the paged cache at logical positions ``[chunk_start, chunk_start+block_size)``
+    via ``paged_fill_cache``; ``chunked_scaled_dot_product_attention`` then attends the chunk's Q
+    over the full cached history with a block-causal mask. This keeps every per-call op
+    (LayerNorm, matmul, SDPA) at ``block_h = block_size/TILE_SIZE = 4`` regardless of how long
+    the chat grows, which is what guarantees the dispatch fits in L1 (Wormhole/Blackhole: 1.5 MB
+    / core). Only the final chunk's logits are sampled — earlier chunks' logits are discarded.
+    """
     input_ids = _tokenize_messages(rt, messages)
     prompt_len = int(input_ids.shape[1])
     if prompt_len + config.max_new_tokens > int(rt.args.max_seq_len):
@@ -806,32 +815,42 @@ def generate_assistant_text_tt(
             f"max_seq_len={rt.args.max_seq_len}. Use /clear or restart with larger --max-seq-len."
         )
 
-    # Prefill is compiled on demand at the tile-aligned prompt length (TTNN caches the
-    # program once built — see also text_demo.py which uses the same padding rule).
-    prefill_len = max(_round_up(prompt_len, 32), 32)
+    # Pad to a multiple of ``kv_block_size`` so each chunk is exactly one paged-cache block.
+    block_size = int(rt.args.kv_block_size)
+    num_chunks = max(1, (prompt_len + block_size - 1) // block_size)
+    padded_prompt_len = num_chunks * block_size
     pad_id = rt.pad_token_id
-    input_ids_padded = torch.full((prefill_len,), int(pad_id), dtype=torch.long)
+    input_ids_padded = torch.full((padded_prompt_len,), int(pad_id), dtype=torch.long)
     input_ids_padded[:prompt_len] = input_ids[0]
-    input_ids_padded = input_ids_padded.unsqueeze(0)
+    input_ids_padded = input_ids_padded.unsqueeze(0)  # (1, padded_prompt_len)
 
     if config.seed is not None:
         torch.manual_seed(int(config.seed))
 
-    # ── Prefill at the actual (tile-aligned) prompt length ────────────────────
-    prefill_tokens_dev = _input_ids_to_tt(input_ids_padded, rt.mesh_device)
-    try:
-        tt_out = rt.model(prefill_tokens_dev, mode="prefill", start_pos=0)
-        ttnn.synchronize_device(rt.mesh_device)
-        logits_torch = _logits_to_torch(tt_out, rt.mesh_device, rt.args.vocab_size)
-        next_token = _sample_next(
-            logits_torch[prompt_len - 1],
-            do_sample=bool(config.do_sample),
-            temperature=float(config.temperature),
-            top_p=float(config.top_p),
-        )
-        tt_out.deallocate(True)
-    finally:
-        prefill_tokens_dev.deallocate(True)
+    # ── Chunked prefill: advance start_pos by block_size each iteration ──────
+    next_token: Optional[int] = None
+    for chunk_idx in range(num_chunks):
+        chunk_start = chunk_idx * block_size
+        chunk_tokens = input_ids_padded[:, chunk_start : chunk_start + block_size]  # (1, block_size)
+        chunk_dev = _input_ids_to_tt(chunk_tokens, rt.mesh_device)
+        try:
+            tt_out = rt.model(chunk_dev, mode="prefill", start_pos=chunk_start)
+            if chunk_idx == num_chunks - 1:
+                # Sample the first assistant token from the position of the final real prompt
+                # token (within this chunk's local frame).
+                ttnn.synchronize_device(rt.mesh_device)
+                logits_torch = _logits_to_torch(tt_out, rt.mesh_device, rt.args.vocab_size)
+                local_pos = (prompt_len - 1) - chunk_start
+                next_token = _sample_next(
+                    logits_torch[local_pos],
+                    do_sample=bool(config.do_sample),
+                    temperature=float(config.temperature),
+                    top_p=float(config.top_p),
+                )
+            tt_out.deallocate(True)
+        finally:
+            chunk_dev.deallocate(True)
+    assert next_token is not None, "chunked prefill produced no logits"
 
     generated: List[int] = [next_token]
     current_pos = prompt_len  # next decode reads from this position
@@ -1007,7 +1026,7 @@ def parse_tt_args() -> TTAgentConfig:
     p.add_argument(
         "--max-context-tokens",
         type=int,
-        default=2048,
+        default=512,
         metavar="N",
         help="Max total prompt tokens per turn (includes the fixed system/tool rules message).",
     )
@@ -1015,7 +1034,7 @@ def parse_tt_args() -> TTAgentConfig:
     p.add_argument(
         "--prefill-dram",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Route prefill activations through DRAM (default: on). Use --no-prefill-dram for L1 prefill.",
     )
 
