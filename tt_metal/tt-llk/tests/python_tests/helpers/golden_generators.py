@@ -1956,45 +1956,36 @@ class UnarySFPUGolden:
         else:  # self.data_format == DataFormat.Float16:
             return math.nan
 
+    def _torch_unary(self, x, torch_fn) -> float:
+        result = torch_fn(torch.tensor(x, dtype=torch.float32)).item()
+        if math.isinf(result) and not self.data_format.is_exponent_B():
+            return math.nan
+        return result
+
     # Operation methods
     def _abs(self, x):
         return abs(x)
 
     def _atanh(self, x):
-        result = torch.atanh(torch.tensor(x, dtype=torch.float32)).item()
-        if math.isinf(result) and not self.data_format.is_exponent_B():
-            return math.nan
-        return result
+        return self._torch_unary(x, torch.atanh)
 
     def _asinh(self, x):
         return math.asinh(x)
 
     def _acosh(self, x):
-        result = torch.acosh(torch.tensor(x, dtype=torch.float32)).item()
-        if math.isinf(result) and not self.data_format.is_exponent_B():
-            return math.nan
-        return result
+        return self._torch_unary(x, torch.acosh)
 
     def _cos(self, x):
         return math.cos(x)
 
     def _log(self, x):
-        result = torch.log(torch.tensor(x, dtype=torch.float32)).item()
-        if math.isinf(result) and not self.data_format.is_exponent_B():
-            return math.nan
-        return result
+        return self._torch_unary(x, torch.log)
 
     def _log1p(self, x):
-        result = torch.log1p(torch.tensor(x, dtype=torch.float32)).item()
-        if math.isinf(result) and not self.data_format.is_exponent_B():
-            return math.nan
-        return result
+        return self._torch_unary(x, torch.log1p)
 
     def _reciprocal(self, x):
-        result = torch.reciprocal(torch.tensor(x, dtype=torch.float32)).item()
-        if math.isinf(result) and not self.data_format.is_exponent_B():
-            return math.nan
-        return result
+        return self._torch_unary(x, torch.reciprocal)
 
     def _sin(self, x):
         # Never not finite, values range from [-1, 1]
@@ -2004,16 +1995,10 @@ class UnarySFPUGolden:
         return max(0.0, x)
 
     def _rsqrt(self, x):
-        result = torch.rsqrt(torch.tensor(x, dtype=torch.float32)).item()
-        if math.isinf(result) and not self.data_format.is_exponent_B():
-            return math.nan
-        return result
+        return self._torch_unary(x, torch.rsqrt)
 
     def _sqrt(self, x):
-        result = torch.sqrt(torch.tensor(x, dtype=torch.float32)).item()
-        if math.isinf(result) and not self.data_format.is_exponent_B():
-            return math.nan
-        return result
+        return self._torch_unary(x, torch.sqrt)
 
     def _tanh(self, x):
         return math.tanh(x)
