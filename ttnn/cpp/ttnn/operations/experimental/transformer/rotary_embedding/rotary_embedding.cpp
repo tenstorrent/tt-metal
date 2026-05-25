@@ -6,7 +6,6 @@
 
 #include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 namespace ttnn::experimental {
@@ -77,26 +76,22 @@ ttnn::Tensor rotary_embedding(
     auto padded_shape_input = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
     auto padded_shape_cos = ttnn::operations::data_movement::pad_to_tile_shape(cos_cache.padded_shape());
     auto padded_shape_sin = ttnn::operations::data_movement::pad_to_tile_shape(sin_cache.padded_shape());
-    // tilize_with_val_padding short-circuits for already-TILE inputs and
-    // silently drops the requested pad value, so the implicit tile padding
-    // keeps whatever bytes were in L1. The compute kernel processes the full
-    // padded seq_len, so leaving garbage there leaks into the output's padded
-    // rows.
+    // The rotary_embedding compute kernel is per-row and per-(B,H): row i of
+    // the output depends only on row i of the inputs within a single tile,
+    // and different (B,H) pairs live in different row-tiles. So implicit
+    // tile-pad rows in the input only produce implicit tile-pad rows in the
+    // output — they cannot cross-contaminate the valid output rows.
     //
-    // Only the input needs scrubbing: once the input's tile-pad rows are 0,
-    //   output[pad] = x[pad]*cos[pad] + rotate_half(x)[pad]*sin[pad]
-    //               = 0*cos[pad] + concat(neg(0), 0)*sin[pad] = 0
-    // regardless of what's in the cos/sin pad rows, because rotate_half is
-    // a per-row operation (no cross-row reads). So fill_implicit_tile_padding
-    // on cos/sin would be pure overhead.
-    //
-    // For ROW_MAJOR inputs tilize_with_val_padding already zero-pads, so we
-    // skip the redundant fill.
+    // Earlier we zero-filled the input's tile padding here as a workaround
+    // for PCC regressions seen downstream (e.g. fill_cache / update_cache
+    // writing input.padded_shape()[-2] rows verbatim into the KV cache, see
+    // tt-metal#42779). That belongs at the consumer, not here — scrubbing
+    // every rotary input costs ~31 row-tiles of writes in decode for no
+    // benefit on Q (which never reaches the cache) and double-charges K
+    // when the cache path is also fixed. The scrub now lives in
+    // ttnn::fill_cache / ttnn::update_cache.
     Tensor formatted_input =
         ttnn::tilize_with_val_padding(input_tensor, padded_shape_input, PadValue(0.0f), input_tensor.memory_config());
-    if (input_tensor.layout() == Layout::TILE) {
-        formatted_input = ttnn::fill_implicit_tile_padding(formatted_input, 0.0f, formatted_input.memory_config());
-    }
     Tensor formatted_cos =
         ttnn::tilize_with_val_padding(cos_cache, padded_shape_cos, PadValue(0.0f), cos_cache.memory_config());
     Tensor formatted_sin =
