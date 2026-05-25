@@ -22,7 +22,7 @@ namespace ckernel {
  *   mish(x) = x * u (u + 2) / (u^2 + 2u + 2),  where u = exp(x).
  *
  * In BH, to avoid catastrophic cancellation for sufficiently large positive x, we use
- *   For x >= 0, mish(x) = x - 2x / (u^2 + 2u + 2)
+ *   For x >= 0, mish(x) = x * (1 - 2 / (u^2 + 2u + 2))
  *   For x <  0, mish(x) = x * u(u+2) / (u^2 + 2u + 2)
  *
  * For x >= 8.0, mish(x) is approximated as x.
