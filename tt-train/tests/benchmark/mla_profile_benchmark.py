@@ -87,6 +87,15 @@ BACKWARD_STAGE_ORDER = [
     "forward_backward",
 ]
 
+_FLOAT_DTYPES = frozenset(
+    {
+        ttnn.DataType.BFLOAT16,
+        ttnn.DataType.FLOAT32,
+        ttnn.DataType.BFLOAT8_B,
+        ttnn.DataType.BFLOAT4_B,
+    }
+)
+
 
 def _make_config(case: MLACase) -> DeepSeekConfig:
     return DeepSeekConfig(
@@ -215,6 +224,52 @@ def _time_stage(device, timings_us: dict[str, list[float]], name: str, fn):
     return result
 
 
+def _mark_backward_boundary(tensor, stage: str, boundary: str, events: list[tuple[str, str, float]]):
+    import _ttml as cpp
+
+    ctx = ttml.autograd.AutoContext.get_instance()
+    if ctx.get_gradient_mode() != ttml.autograd.GradMode.ENABLED:
+        return tensor
+    if tensor.get_value().dtype not in _FLOAT_DTYPES:
+        return tensor
+
+    output = cpp.autograd.create_tensor(tensor.get_value(), requires_grad=True)
+    input_tensor = tensor
+
+    def backward_fn():
+        _sync(ctx.get_device())
+        events.append((stage, boundary, time.perf_counter()))
+        grad = output.get_grad() if output.is_grad_initialized() else cpp.core.zeros_like(output.get_value())
+        if input_tensor.get_requires_grad():
+            input_tensor.add_grad(grad)
+
+    links = []
+    input_node = tensor.get_node()
+    if input_node is not None:
+        links.append(input_node)
+
+    node_id = ctx.add_backward_node(backward_fn, links)
+    if node_id is not None:
+        output.set_node(node_id)
+    return output
+
+
+def _mark_backward_boundaries(tensors, stage: str, boundary: str, events: list[tuple[str, str, float]]):
+    return tuple(_mark_backward_boundary(tensor, stage, boundary, events) for tensor in tensors)
+
+
+def _backward_section_times_us(events: list[tuple[str, str, float]]) -> dict[str, float]:
+    timings_us: dict[str, float] = {}
+    for stage in STAGE_ORDER:
+        starts = [
+            timestamp for event_stage, boundary, timestamp in events if event_stage == stage and boundary == "start"
+        ]
+        ends = [timestamp for event_stage, boundary, timestamp in events if event_stage == stage and boundary == "end"]
+        if starts and ends:
+            timings_us[stage] = max(0.0, (max(starts) - min(ends)) * 1_000_000.0)
+    return timings_us
+
+
 def _run_profiled_forward(module: MultiHeadLatentAttention, x, mask, device, timings_us: dict[str, list[float]]):
     B, _, S, _ = list(x.get_value().shape)
     n_heads = module.n_heads
@@ -286,11 +341,74 @@ def _run_plain_forward(module: MultiHeadLatentAttention, x, mask, device) -> flo
     return (time.perf_counter() - start) * 1_000_000.0
 
 
-def _run_forward_backward(module: MultiHeadLatentAttention, x, mask, device) -> tuple[float, float, float]:
+def _run_marked_forward(module: MultiHeadLatentAttention, x, mask, events: list[tuple[str, str, float]]):
+    B, _, S, _ = list(x.get_value().shape)
+    n_heads = module.n_heads
+    qk_nope = module.qk_nope_head_dim
+    qk_head = module.qk_head_dim
+    kv_lora = module.kv_lora_rank
+
+    x_q = _mark_backward_boundary(x, "q_projection", "start", events)
+    if module.q_lora_rank == 0:
+        q = module.wq(x_q)
+    else:
+        q = module.wq_b(module.q_norm(module.wq_a(x_q)))
+    q = _mark_backward_boundary(q, "q_projection", "end", events)
+
+    q = _mark_backward_boundary(q, "q_split", "start", events)
+    q = split_heads(q, n_heads)
+    q = _mark_backward_boundary(q, "q_split", "end", events)
+
+    q = _mark_backward_boundary(q, "q_rope", "start", events)
+    q_nope = autograd_slice(q, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
+    q_pe = autograd_slice(q, [0, 0, 0, qk_nope], [B, n_heads, S, qk_head])
+    q_pe = ttml.ops.rope.rope(q_pe, module.rope_params)
+    q_nope, q_pe = _mark_backward_boundaries((q_nope, q_pe), "q_rope", "end", events)
+
+    x_kv = _mark_backward_boundary(x, "kv_down_split", "start", events)
+    kv_full = module.wkv_a(x_kv)
+    kv = autograd_slice(kv_full, [0, 0, 0, 0], [B, 1, S, kv_lora])
+    k_pe = autograd_slice(kv_full, [0, 0, 0, kv_lora], [B, 1, S, kv_lora + module.qk_rope_head_dim])
+    kv, k_pe = _mark_backward_boundaries((kv, k_pe), "kv_down_split", "end", events)
+
+    k_pe = _mark_backward_boundary(k_pe, "k_rope_broadcast", "start", events)
+    k_pe_rot = ttml.ops.rope.rope(k_pe, module.rope_params)
+    k_pe = autograd_concat([k_pe_rot] * n_heads, dim=1)
+    k_pe = _mark_backward_boundary(k_pe, "k_rope_broadcast", "end", events)
+
+    kv = _mark_backward_boundary(kv, "kv_up_split", "start", events)
+    kv_up = module.wkv_b(module.kv_norm(kv))
+    kv_up = split_heads(kv_up, n_heads)
+    k_nope = autograd_slice(kv_up, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
+    v = autograd_slice(kv_up, [0, 0, 0, qk_nope], [B, n_heads, S, qk_nope + module.v_head_dim])
+    k_nope, v = _mark_backward_boundaries((k_nope, v), "kv_up_split", "end", events)
+
+    q_nope, q_pe, k_nope, k_pe = _mark_backward_boundaries((q_nope, q_pe, k_nope, k_pe), "qk_assemble", "start", events)
+    q_full = autograd_concat([q_nope, q_pe], dim=3)
+    k_full = autograd_concat([k_nope, k_pe], dim=3)
+    q_full, k_full = _mark_backward_boundaries((q_full, k_full), "qk_assemble", "end", events)
+
+    q_full, k_full, v = _mark_backward_boundaries((q_full, k_full, v), "sdpa", "start", events)
+    attn = ttml.ops.attention.scaled_dot_product_attention_composite(q_full, k_full, v, mask)
+    attn = _mark_backward_boundary(attn, "sdpa", "end", events)
+
+    attn = _mark_backward_boundary(attn, "heads_fusion", "start", events)
+    attn = ttml.ops.multi_head_utils.heads_fusion(attn)
+    attn = _mark_backward_boundary(attn, "heads_fusion", "end", events)
+
+    attn = _mark_backward_boundary(attn, "output_projection", "start", events)
+    output = module.wo(attn)
+    return _mark_backward_boundary(output, "output_projection", "end", events)
+
+
+def _run_forward_backward(
+    module: MultiHeadLatentAttention, x, mask, device
+) -> tuple[float, float, float, dict[str, float]]:
+    events: list[tuple[str, str, float]] = []
     _sync(device)
     total_start = time.perf_counter()
     forward_start = total_start
-    output = module(x, mask)
+    output = _run_marked_forward(module, x, mask, events)
     loss = ttml.ops.unary.mean(output)
     _sync(device)
     forward_us = (time.perf_counter() - forward_start) * 1_000_000.0
@@ -300,7 +418,7 @@ def _run_forward_backward(module: MultiHeadLatentAttention, x, mask, device) -> 
     _sync(device)
     backward_us = (time.perf_counter() - backward_start) * 1_000_000.0
     forward_backward_us = (time.perf_counter() - total_start) * 1_000_000.0
-    return forward_us, backward_us, forward_backward_us
+    return forward_us, backward_us, forward_backward_us, _backward_section_times_us(events)
 
 
 def _stats(values: list[float]) -> dict[str, float]:
@@ -318,6 +436,7 @@ def _print_case(
     timings_us: dict[str, list[float]],
     end_to_end_us: list[float] | None = None,
     backward_timings_us: dict[str, list[float]] | None = None,
+    backward_section_timings_us: dict[str, list[float]] | None = None,
 ) -> list[dict[str, str | float]]:
     rows: list[dict[str, str | float]] = []
     total_avg = sum(_stats(timings_us[name])["avg_us"] for name in STAGE_ORDER)
@@ -395,6 +514,34 @@ def _print_case(
                     "est_tflops_per_s": 0.0,
                 }
             )
+    if backward_section_timings_us:
+        total_backward_avg = sum(_stats(backward_section_timings_us[name])["avg_us"] for name in STAGE_ORDER)
+        print("backward section measurements:")
+        print("+-------------------+----------+----------+----------+--------+")
+        print("| stage             | avg us   | p50 us   | min us   | pct    |")
+        print("+-------------------+----------+----------+----------+--------+")
+        for name in STAGE_ORDER:
+            s = _stats(backward_section_timings_us[name])
+            pct = 100.0 * s["avg_us"] / total_backward_avg if total_backward_avg > 0 else 0.0
+            print(
+                f"| {name:<17} | {s['avg_us']:>8.0f} | {s['p50_us']:>8.0f} | {s['min_us']:>8.0f} | " f"{pct:>5.1f}% |"
+            )
+            rows.append(
+                {
+                    "case": case.name,
+                    "stage": f"backward_{name}",
+                    "avg_us": s["avg_us"],
+                    "p50_us": s["p50_us"],
+                    "min_us": s["min_us"],
+                    "max_us": s["max_us"],
+                    "pct_of_section_sum": pct,
+                    "est_traffic_bytes": 0,
+                    "est_flops": 0,
+                    "est_tflops_per_s": 0.0,
+                }
+            )
+        print("+-------------------+----------+----------+----------+--------+")
+        print(f"backward_section_sum_avg_us={total_backward_avg:.0f}")
     return rows
 
 
@@ -420,6 +567,7 @@ def run_case(
     timings_us = {name: [] for name in STAGE_ORDER}
     end_to_end_us: list[float] = []
     backward_timings_us = {name: [] for name in BACKWARD_STAGE_ORDER}
+    backward_section_timings_us = {name: [] for name in STAGE_ORDER}
     previous_grad_mode = ctx.get_gradient_mode()
     ctx.set_gradient_mode(ttml.autograd.GradMode.ENABLED if grad_mode == "enabled" else ttml.autograd.GradMode.DISABLED)
     try:
@@ -441,17 +589,27 @@ def run_case(
             for iteration in range(warmup + iterations):
                 zero_grad_optimizer.zero_grad()
                 x, mask = _make_inputs(case, rng)
-                forward_us, backward_us, forward_backward_us = _run_forward_backward(module, x, mask, device)
+                forward_us, backward_us, forward_backward_us, section_times_us = _run_forward_backward(
+                    module, x, mask, device
+                )
                 if iteration >= warmup:
                     backward_timings_us["autograd_forward"].append(forward_us)
                     backward_timings_us["backward"].append(backward_us)
                     backward_timings_us["forward_backward"].append(forward_backward_us)
+                    for name in STAGE_ORDER:
+                        backward_section_timings_us[name].append(section_times_us[name])
                 ctx.reset_graph()
     finally:
         ctx.set_gradient_mode(previous_grad_mode)
         ctx.reset_graph()
 
-    return _print_case(case, timings_us, end_to_end_us, backward_timings_us if backward else None)
+    return _print_case(
+        case,
+        timings_us,
+        end_to_end_us,
+        backward_timings_us if backward else None,
+        backward_section_timings_us if backward else None,
+    )
 
 
 def parse_args() -> argparse.Namespace:
