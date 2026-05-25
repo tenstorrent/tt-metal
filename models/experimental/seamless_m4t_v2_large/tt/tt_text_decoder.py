@@ -257,9 +257,13 @@ def warm_text_decoder_kv_cache_prefill(
     *,
     kv_cache_fill_len: Optional[int] = None,
     trace_no_profiler: bool = False,
-) -> None:
-    """One batched prefill forward to fill self/cross KV caches (``prefill_kv_cache_fill=True``)."""
-    out = decoder.forward(
+) -> ttnn.Tensor:
+    """One batched prefill forward to fill self/cross KV caches (``prefill_kv_cache_fill=True``).
+
+    Returns decoder hidden states ``[B, S, H]`` so the caller can run ``lm_head`` on the last seed
+    position without re-feeding the final seed token through decode (which would overwrite cache).
+    """
+    return decoder.forward(
         input_ids_tt,
         position_ids_tt,
         encoder_tt,
@@ -271,14 +275,16 @@ def warm_text_decoder_kv_cache_prefill(
         kv_cache_fill_len=kv_cache_fill_len,
         trace_no_profiler=trace_no_profiler,
     )
-    ttnn.deallocate(out)
 
 
 def _next_power_of_2_cap256(n: int) -> int:
-    if n >= 256:
+    """Smallest power of 2 >= ``n``, capped at 256 (SDPA decode chunk / bucket size)."""
+    if n <= 0:
+        return 1
+    if n > 256:
         return 256
     power = 1
-    while power * 2 <= n:
+    while power < n:
         power *= 2
     return power
 

@@ -68,17 +68,39 @@ def _fused_activation_token(activation: Optional[ttnn.UnaryWithParam]) -> str:
     return str(op)
 
 
-def _vocoder_conv1d_config(fused_post_activation: Optional[ttnn.UnaryWithParam]) -> ttnn.Conv1dConfig:
+def _vocoder_conv1d_config(
+    fused_post_activation: Optional[ttnn.UnaryWithParam],
+    *,
+    input_length: int,
+    in_channels: int,
+) -> ttnn.Conv1dConfig:
+    # Match T2U conv1d L1 recipe: deallocate activations and cap act block height on long/wide ops.
     conv_kwargs: dict = dict(
         weights_dtype=ttnn.bfloat8_b,
         shard_layout=None,
-        deallocate_activation=False,
+        deallocate_activation=True,
         enable_weights_double_buffer=True,
         enable_act_double_buffer=True,
     )
     if fused_post_activation is not None:
         conv_kwargs["activation"] = fused_post_activation
+    if int(input_length) > 64 or int(in_channels) >= 512:
+        conv_kwargs["act_block_h_override"] = 32
     return ttnn.Conv1dConfig(**conv_kwargs)
+
+
+def _vocoder_conv2d_config(*, input_length: int, in_channels: int) -> ttnn.Conv2dConfig:
+    conv_kwargs: dict = dict(
+        weights_dtype=ttnn.bfloat8_b,
+        shard_layout=None,
+        deallocate_activation=True,
+        output_layout=ttnn.TILE_LAYOUT,
+        enable_weights_double_buffer=True,
+        enable_act_double_buffer=True,
+    )
+    if int(input_length) > 64 or int(in_channels) >= 512:
+        conv_kwargs["act_block_h_override"] = 32
+    return ttnn.Conv2dConfig(**conv_kwargs)
 
 
 def _host_conv_out_length(n: int, kernel_size: int, stride: int, pad: int, dilation: int = 1) -> int:
@@ -250,7 +272,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         if cache_key in self._conv1d_prepared_cache:
             return
 
-        conv_config = _vocoder_conv1d_config(fused_post_activation)
+        conv_config = _vocoder_conv1d_config(fused_post_activation, input_length=input_length, in_channels=in_channels)
         prep_w = ttnn.prepare_conv_weights(
             weight_tensor=weight,
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -424,7 +446,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         if x_nlc.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             rm_buf = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x_in = rm_buf
-        conv_config = _vocoder_conv1d_config(fused_post_activation)
+        conv_config = _vocoder_conv1d_config(fused_post_activation, input_length=input_length, in_channels=in_channels)
         cache_key = self._conv1d_prep_cache_key(
             weight=weight,
             bias=bias,
@@ -486,14 +508,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         bias = layer["bias"]
 
         x_nhwc = ttnn.reshape(x_nlc, (batch, input_length, 1, in_channels))
-        conv_config = ttnn.Conv2dConfig(
-            weights_dtype=ttnn.bfloat8_b,
-            shard_layout=None,
-            deallocate_activation=False,
-            output_layout=ttnn.TILE_LAYOUT,
-            enable_weights_double_buffer=True,
-            enable_act_double_buffer=True,
-        )
+        conv_config = _vocoder_conv2d_config(input_length=input_length, in_channels=in_channels)
         out_4d, out_hw = ttnn.conv_transpose2d(
             input_tensor=x_nhwc,
             weight_tensor=weight,
