@@ -53,15 +53,11 @@ ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
         false, false, icb)));  // init must be after configure
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
 #else
-<<<<<<< HEAD
-    UNPACK((llk_unpack_A_init</*TRANSPOSE_EN=*/false, DST_ACCUM_MODE>(icb)));
-=======
     UNPACK((llk_unpack_A_init<
             BroadcastType::NONE,
             false /*acc_to_dest*/,
             EltwiseBinaryReuseDestType::NONE,
             false /*unpack_to_dest*/>(false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/, icb)));
->>>>>>> 14a59addd72 (resolving conflicts with pack_untilize)
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
 #endif
     pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, false, TILE_C_DIM, false, configure_remap>(ocb);
@@ -165,35 +161,12 @@ ALWI void pack_untilize_dest_init_skip_remap(
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 14a59addd72 (resolving conflicts with pack_untilize)
     detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, true>(icb, ocb, call_line);
 }
 
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, false>(icb, ocb, call_line);
-<<<<<<< HEAD
-=======
-#ifndef ARCH_QUASAR
-    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        false, false, icb)));  // init must be after configure
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
-#else
-    UNPACK((llk_unpack_A_init<
-            BroadcastType::NONE,
-            false /*acc_to_dest*/,
-            EltwiseBinaryReuseDestType::NONE,
-            false /*unpack_to_dest*/>(false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/, icb)));
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
-#endif
-    pack_untilize_dest_init<block_ct_dim, full_ct_dim>(ocb);
->>>>>>> d91310961de (consolidated llk_unpack_A APIs to match WH/BH API signature, updated API calls to match in all relevant kernels)
-=======
->>>>>>> 14a59addd72 (resolving conflicts with pack_untilize)
 }
 
 // clang-format off
