@@ -22,7 +22,7 @@
 #include "ckernel_sfpu_gelu.h"
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void llk_math_eltwise_unary_sfpu_gelu(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+inline void llk_math_eltwise_unary_sfpu_gelu(uint dst_index, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::calculate_gelu<APPROXIMATE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
 }
@@ -236,7 +236,7 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            detail::pack_init_activation<activation_type>();
+            ::detail::pack_init_activation<activation_type>();
 
             // Initialize matmul for W0
             mm_block_init(
@@ -245,7 +245,7 @@ void kernel_main() {
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert
             // while first expert still being processed
-            detail::noc_semaphore_wait_min(
+            ::detail::noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                 matmul_chunk_ready_semaphore_wait_value++);
 
@@ -313,7 +313,7 @@ void kernel_main() {
                 //---------------------------------------------------------------------
                 // Apply activation
                 //---------------------------------------------------------------------
-                detail::pack_compute_activation<activation_type>();
+                ::detail::pack_compute_activation<activation_type>();
 
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
