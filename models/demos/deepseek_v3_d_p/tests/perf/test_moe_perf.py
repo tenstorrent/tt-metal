@@ -26,8 +26,8 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe"
 
 _CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and linear-8'"
-_CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and mesh-2x4 and not linear-8 and not mesh-4x2 and not mesh-8x4'"
-_CMD_8X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and mesh-8x4 and not linear-8 and not mesh-4x2 and not mesh-2x4'"
+_CMD_2X4 = f"pytest {_TEST_PATH} -k 'dsv3-device-256 and mesh-2x4 and not linear-8 and not mesh-4x2 and not mesh-8x4'"
+_CMD_8X4 = f"pytest {_TEST_PATH} -k 'dsv3-device-256 and mesh-8x4 and not linear-8 and not mesh-4x2 and not mesh-2x4'"
 
 
 @pytest.mark.timeout(0)
