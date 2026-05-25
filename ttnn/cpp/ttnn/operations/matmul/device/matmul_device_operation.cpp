@@ -462,12 +462,6 @@ void validate_matmul_fused_operations(
         "Unsupported fused activation op type for matmul: {}. Supported types are "
         "RELU, GELU, TANH, SILU, RELU6, SIGMOID, HARDSIGMOID, HARDTANH, SELU, SOFTPLUS",
         op_type);
-
-    const auto activation_params = fused_activation->get_params();
-    TT_FATAL(
-        activation_params.size() <= 2,
-        "Fused activation parameter count ({}) exceeds the maximum supported by matmul kernels (2)",
-        activation_params.size());
 }
 
 bool get_broadcast_batch(
