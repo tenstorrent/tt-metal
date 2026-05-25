@@ -10,6 +10,7 @@
 #include <future>
 #include <set>
 #include <thread>
+#include <unordered_set>
 
 #include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
@@ -525,11 +526,129 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             ++pass_non_mmio_count;
             ClearNocData(descriptor_->env_impl(), device_id);
             reset_cores(device_id);
-            if (cluster_.is_relay_broken(device_id)) {
+
+            // FIX RS (#42429): After reset_cores, active ETH cores on this non-MMIO device
+            // (including the relay receiver ERISC) may have been sent exit signals and are
+            // now rebooting (~1–2 s). The prior code immediately called
+            // initialize_and_launch_firmware(), which attempts relay writes during this
+            // reboot window → wait_for_non_mmio_flush() times out (5 013 ms) → relay
+            // permanently declared broken. That classification is wrong: the relay would
+            // recover once the ERISC completes its reboot.
+            //
+            // Fix: before calling initialize_and_launch_firmware(), probe the relay with a
+            // bounded retry loop. Poll the heartbeat register of any active ETH core on this
+            // device via the relay. If the probe succeeds (heartbeat == 0xABCDxxxx), the
+            // relay receiver is live and init is safe to proceed. If it fails, clear
+            // relay_broken and retry every 50 ms up to 5 000 ms. Only after that full
+            // timeout do we classify the relay as truly (not transiently) broken.
+            //
+            // This is always run, not just when relay_broken is set after reset_cores:
+            //   • relay_broken after reset_cores  → ERISC reboot took >one write timeout
+            //   • relay not broken after reset_cores → ERISC reboot still in progress but
+            //     exit signal already ACKed; first init write would race the reboot window.
+            // In both cases the probe serializes init on relay-receiver readiness.
+            bool rs_skip_init = false;
+            {
+                const uint32_t hb_addr_rs = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
+                const std::unordered_set<CoreCoord> eth_cores_rs =
+                    (hb_addr_rs != 0u)
+                        ? this->get_control_plane_().get_active_ethernet_cores(device_id)
+                        : std::unordered_set<CoreCoord>{};
+
+                if (hb_addr_rs != 0u && !eth_cores_rs.empty()) {
+                    const CoreCoord probe_virt =
+                        cluster_.get_virtual_coordinate_from_logical_coordinates(
+                            device_id, *eth_cores_rs.begin(), CoreType::ETH);
+
+                    if (cluster_.is_relay_broken(device_id)) {
+                        log_info(
+                            tt::LogAlways,
+                            "run_launch_phase: FIX RS — device {} relay broken after reset_cores; "
+                            "starting recovery probe (ERISC reboot expected). (#42429)",
+                            device_id);
+                    }
+
+                    constexpr int kRsTimeoutMs = 5000;
+                    constexpr int kRsStepMs    = 50;
+                    const auto rs_start = std::chrono::steady_clock::now();
+                    bool relay_ready = false;
+
+                    while (true) {
+                        // Clear relay_broken before each attempt so a transient reboot timeout
+                        // is not permanently recorded before we have exhausted the retry budget.
+                        cluster_.clear_relay_broken(device_id);
+
+                        try {
+                            auto hb_data = cluster_.read_core(
+                                device_id, probe_virt, hb_addr_rs, sizeof(uint32_t));
+                            if ((hb_data[0] >> 16) == 0xABCDu) {
+                                const auto rs_elapsed_ms =
+                                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::steady_clock::now() - rs_start)
+                                        .count();
+                                log_info(
+                                    tt::LogAlways,
+                                    "run_launch_phase: FIX RS — device {} relay receiver ready "
+                                    "in {}ms (heartbeat=0x{:08x}). (#42429)",
+                                    device_id,
+                                    rs_elapsed_ms,
+                                    hb_data[0]);
+                                relay_ready = true;
+                                break;
+                            }
+                            // Non-ABCD heartbeat: receiver alive but still booting, retry.
+                        } catch (...) {
+                            // Relay read threw; receiver still rebooting. relay_broken was
+                            // re-set by read_core FIX YA; will be cleared next iteration.
+                        }
+
+                        const auto rs_elapsed_ms =
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - rs_start)
+                                .count();
+                        if (rs_elapsed_ms >= kRsTimeoutMs) {
+                            log_warning(
+                                tt::LogAlways,
+                                "run_launch_phase: FIX RS — device {} relay did not recover "
+                                "within {}ms. Declaring truly broken — skipping init. (#42429)",
+                                device_id,
+                                kRsTimeoutMs);
+                            rs_skip_init = true;
+                            break;
+                        }
+
+                        std::this_thread::sleep_for(std::chrono::milliseconds(kRsStepMs));
+                    }
+
+                    if (!relay_ready) {
+                        // Ensure relay_broken is set so later guards fire. The last
+                        // failed read_core already set it; clear_relay_broken at the top
+                        // of the loop cleared it before the timeout check, so re-mark.
+                        if (!cluster_.is_relay_broken(device_id)) {
+                            // Re-probe once without clearing — this will throw and mark.
+                            try {
+                                cluster_.read_core(
+                                    device_id, probe_virt, hb_addr_rs, sizeof(uint32_t));
+                            } catch (...) {}
+                        }
+                    }
+                } else if (cluster_.is_relay_broken(device_id)) {
+                    // Heartbeat probe unavailable — fall back to the pre-FIX-RS behaviour:
+                    // skip init if relay_broken was set by reset_cores.
+                    log_warning(
+                        tt::LogAlways,
+                        "run_launch_phase: FIX RS — device {} relay broken after reset_cores "
+                        "(no heartbeat probe available). Skipping init. (#42429)",
+                        device_id);
+                    rs_skip_init = true;
+                }
+            }
+
+            if (rs_skip_init || cluster_.is_relay_broken(device_id)) {
                 log_warning(
                     tt::LogAlways,
-                    "run_launch_phase: FIX OP — skipping initialize_and_launch_firmware for "
-                    "non-MMIO device {} (relay broken after reset_cores). (#42429)",
+                    "run_launch_phase: FIX RS/OP — skipping initialize_and_launch_firmware "
+                    "for non-MMIO device {} (relay broken). (#42429)",
                     device_id);
                 continue;
             }
