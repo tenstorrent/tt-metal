@@ -159,13 +159,13 @@ void kernel_main() {
         }
 
         // Legacy primitive retained: see receiver_semaphore_address note.
-        noc_semaphore_wait((uint32_t*)receiver_semaphore_address, other_devices);
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_semaphore_address), other_devices);
 
         noc_obj.async_read_barrier();
         cb_fabric_receiver.push_back(num_pages_per_packet * num_devices);
     }
     local_sem.set(INVALID);
     // Legacy primitive retained: see receiver_semaphore_address note.
-    noc_semaphore_set((uint32_t*)receiver_semaphore_address, INVALID);
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_semaphore_address), INVALID);
     noc_obj.async_write_barrier();
 }
