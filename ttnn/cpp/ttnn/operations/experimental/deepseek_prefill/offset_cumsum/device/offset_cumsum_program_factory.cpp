@@ -24,7 +24,7 @@ tt::tt_metal::ProgramDescriptor OffsetCumsumProgramFactory::create_descriptor(
     TT_FATAL(
         mesh_dispatch_coordinate.has_value(),
         "OffsetCumsumProgramFactory::create_descriptor requires a mesh dispatch coordinate");
-    const ttnn::MeshCoordinate coord = mesh_dispatch_coordinate.value();
+    const ttnn::MeshCoordinate& coord = mesh_dispatch_coordinate.value();
     const uint32_t row_idx = coord[operation_attributes.cluster_axis];
     const uint32_t experts_per_chip = operation_attributes.experts_per_chip;
 
