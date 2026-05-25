@@ -208,28 +208,32 @@ run_multi_host_tracy_smoke() {
     done
 }
 
+run_device_profiler_test() {
+    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
+}
+
+run_perf_op_report_test() {
+    TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest
+}
+
+run_process_ops_logs_test() {
+    pytest tests/ttnn/tracy/test_process_ops_logs.py --noconftest
+    remove_default_log_locations
+}
+
+# Umbrella that runs every individual test in sequence. Kept for callers that
+# don't pass a function name (CI invokes individual functions via the matrix).
 run_profiling_test() {
     run_async_test
-
     run_ccl_T3000_test
-
     run_async_tracing_T3000_test
-
     run_async_tracing_mid_run_dump_T3000_test
-
     run_mid_run_data_dump
-
     run_trace_only_resnet
-
     run_multi_host_tracy_smoke
-
-    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
-
-    TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest
-
-    pytest tests/ttnn/tracy/test_process_ops_logs.py --noconftest
-
-    remove_default_log_locations
+    run_device_profiler_test
+    run_perf_op_report_test
+    run_process_ops_logs_test
 }
 
 main() {

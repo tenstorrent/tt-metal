@@ -11,8 +11,16 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: Galaxy profiler tests
-  cmd: run_profiling_test
+- name: Galaxy device profiler regressions
+  cmd: run_device_profiler_test
+  skus:
+    wh_galaxy:
+      timeout: 15
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+
+- name: Galaxy realtime profiler cross-reference (TG)
+  cmd: run_realtime_profiler_cross_reference_tg_test
   skus:
     wh_galaxy:
       timeout: 45

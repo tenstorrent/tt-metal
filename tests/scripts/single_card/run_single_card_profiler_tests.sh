@@ -55,21 +55,20 @@ run_mid_run_data_dump() {
     python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
 }
 
-run_profiling_test() {
-
-    run_mid_run_data_dump
-
+run_device_profiler_test() {
     device_profiler_marker_args=()
     if [[ "$MODE" == "post_commit" ]]; then
         device_profiler_marker_args=(-m "not skip_post_commit")
     fi
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360 "${device_profiler_marker_args[@]}"
+}
 
+run_perf_op_report_test() {
     TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest -k "not TestOpSupportCount"
+}
 
-    remove_default_log_locations
-
+run_realtime_profiler_test() {
     # Consolidated real-time profiler test suite: callback smoke test, short-zone
     # regression, host/device correlation, cross-reference vs device profiler,
     # sync-accuracy check (and TG cross-reference, which auto-skips off-Galaxy).
@@ -77,8 +76,17 @@ run_profiling_test() {
     # (so the pytest parent never takes the PCIe lock) and exports
     # TT_METAL_DEVICE_PROFILER=1 itself when needed.  Per-test timeouts come
     # from @pytest.mark.timeout decorators on the individual tests.
+    remove_default_log_locations
     pytest tests/ttnn/tracy/test_realtime_profiler.py
+}
 
+# Umbrella that runs every individual test in sequence. Kept for callers that
+# don't pass a function name (CI invokes individual functions via the matrix).
+run_profiling_test() {
+    run_mid_run_data_dump
+    run_device_profiler_test
+    run_perf_op_report_test
+    run_realtime_profiler_test
 }
 
 main() {

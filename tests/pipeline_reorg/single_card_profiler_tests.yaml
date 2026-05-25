@@ -11,18 +11,58 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-# run_profiling_test invokes run_mid_run_data_dump as a subroutine, so there is
-# no separate matrix entry for the mid-run dump.
-- name: Profiler regressions
-  cmd: run_profiling_test
+- name: Mid-run device data dump
+  cmd: run_mid_run_data_dump
   skus:
-    wh_n150_civ2:
-      timeout: 45
-    wh_n300_civ2:
-      timeout: 45
-    bh_p100a_civ2_viommu:
-      timeout: 45
-    bh_p150b_civ2_viommu:
-      timeout: 45
+    wh_n150_civ2:         
+      timeout: 5
+    wh_n300_civ2:         
+      timeout: 5
+    bh_p100a_civ2_viommu:         
+      timeout: 5
+    bh_p150b_civ2_viommu:         
+      timeout: 5
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+  team: ttnn
+
+- name: Device profiler regressions
+  cmd: run_device_profiler_test
+  skus:
+    wh_n150_civ2:         
+      timeout: 25
+    wh_n300_civ2:         
+      timeout: 25
+    bh_p100a_civ2_viommu:         
+      timeout: 25
+    bh_p150b_civ2_viommu:         
+      timeout: 25
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn
+
+- name: Perf op report
+  cmd: run_perf_op_report_test
+  skus:
+    wh_n150_civ2:         
+      timeout: 8
+    wh_n300_civ2:         
+      timeout: 8
+    bh_p100a_civ2_viommu:         
+      timeout: 8
+    bh_p150b_civ2_viommu:         
+      timeout: 8
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn
+
+- name: Realtime profiler suite
+  cmd: run_realtime_profiler_test
+  skus:
+    wh_n150_civ2:         
+      timeout: 15
+    wh_n300_civ2:         
+      timeout: 15
+    bh_p100a_civ2_viommu:         
+      timeout: 15
+    bh_p150b_civ2_viommu:         
+      timeout: 15
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn

@@ -91,9 +91,11 @@ ttnn:
   # test-framework assignment is being settled. Tracked in
   # https://github.com/tenstorrent/tt-metal/issues/44285
   profiler:
-    wh_llmbox: 120              # t3k_profiler_tests.yaml (~103m actual + headroom)
-    wh_galaxy: 50               # galaxy_profiler_tests.yaml (~45m actual + headroom)
-    wh_n150_civ2: 60            # single_card_profiler_tests.yaml (45m + headroom)
+    # Budgets sized against the per-test decomposition of the umbrella
+    # run_profiling_test (each unique test now has its own matrix entry).
+    wh_llmbox: 150              # t3k_profiler_tests.yaml (~141m actual + headroom)
+    wh_galaxy: 65               # galaxy_profiler_tests.yaml (~60m actual + headroom)
+    wh_n150_civ2: 60            # single_card_profiler_tests.yaml (~53m actual + headroom)
     wh_n300_civ2: 60
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
