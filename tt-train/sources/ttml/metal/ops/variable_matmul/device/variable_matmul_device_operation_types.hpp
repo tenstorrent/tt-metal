@@ -21,19 +21,18 @@ struct VariableMatmulConfig {
     tt::tt_metal::CoreCoord compute_with_storage_grid_size = {0, 0};
 };
 
-// EP-friendly on-device offsets: instead of a host-supplied scalar
-// out_row_offset_tiles, the kernel reads offsets[start_index] from a device tensor
-// at runtime and uses (offsets[start_index] / TILE_HEIGHT) as the write-at-offset
-// row. Lets moe_ffn avoid offsets.to_vector() under MeshDevice EP for the
-// down_proj / dX_via_* calls.
+// EP-friendly on-device offsets: instead of host-supplied scalars, the kernel reads
+// offsets[start_index..start_index+2] from a device tensor at runtime and derives the
+// matching row/K offsets. Lets moe_ffn avoid offsets.to_vector() under MeshDevice EP.
 enum class OffsetsRole : uint32_t {
     None = 0,
+    // Reads offsets[start_index] and uses (value / TILE_HEIGHT) as the output write-at-offset
+    // row (matmul writes into rows [offset, offset + actual_M) of the parent output tensor).
     OutputRow = 1,
     // Reads BOTH offsets[start_index] and offsets[start_index+1]. The kernel processes
     // M-rows [offsets[start_index], offsets[start_index+1]) of the input tensor, treating
-    // it as a parent buffer. Overrides in0_row_offset_tiles + effective_M_tiles and the
-    // derived per-core M_start_tile / M_end_tile / M_blocks_per_core values used by both
-    // dataflow and compute kernels.
+    // it as a parent buffer. Sets effective_M_tiles and the derived per-core M_start_tile /
+    // M_end_tile / M_blocks_per_core values used by both dataflow and compute kernels.
     InputRow = 2,
     // Reads offsets[start_index] and uses (value / TILE_HEIGHT) as in0_k_offset_tiles
     // (matmul-K start offset on the input parent). Matmul-K extent comes from the other
@@ -46,10 +45,9 @@ enum class OffsetsRole : uint32_t {
     // for BOTH the in0 read window AND the output write window. Lets moe_ffn use a single
     // shared output tensor of shape [T_cap, N] instead of E per-expert intermediates —
     // each expert's matmul reads grouped[offsets[e]:offsets[e+1]] and writes into the
-    // corresponding row range of the shared output. Overrides in0_row_offset_tiles +
-    // out_row_offset_tiles (when this kernel is the writer) + effective_M + per-core M
-    // values. The upper-bound constraint on per-expert size disappears: every expert's
-    // actual rows fit naturally into its slice of the shared [T_cap, N] tensor.
+    // corresponding row range of the shared output. The upper-bound constraint on per-expert
+    // size disappears: every expert's actual rows fit naturally into its slice of the
+    // shared [T_cap, N] tensor.
     InputAndOutputRow = 5,
     // Combined InputK + WeightK: reads offsets[start..start+2] and uses the same range
     // for BOTH the in0 K-slice and the in1 K-slice. Used in moe_ffn backward dW matmuls
@@ -74,48 +72,34 @@ struct VariableMatmulParams {
     // Read-at-offset support — lets variable_matmul read a sub-range of the input tensor
     // without materializing a slice. The input tensor is treated as a parent buffer.
     //
-    // M-axis offset (in0_row_offset_tiles + effective_M_tiles):
-    //   only the M-rows [in0_row_offset_tiles, in0_row_offset_tiles + effective_M_tiles)
-    //   are processed. For transpose_a, "row" means the M-axis of the matmul (= stored col
-    //   axis of the input).
-    //
-    // Which side is the parent (and which provides matmul-K) is picked at create() time:
-    //   - in1_k_offset > 0  OR  K_w > K_in  →  weight is parent, matmul-K = K_in
-    //   - otherwise                         →  input is parent (or equal), matmul-K = K_w
+    // effective_M_tiles:
+    //   When > 0, the matmul processes only `effective_M_tiles` rows on the M axis (instead
+    //   of the input's full M). With an output_tensor, this also bounds the host-side
+    //   output-shape validation (the EP path may further override the per-core M split).
     //
     // K-axis offset (in0_k_offset_tiles):
     //   Shifts the start of the in0 K-range read by this many tiles. matmul-K = K_w; in0
     //   is interpreted as a larger parent of which we read [k_offset, k_offset + K_w).
-    //   For non-transpose this offsets along in0's stored col axis (matmul-K); for
-    //   transpose_a it offsets along in0's stored row axis (matmul-K).
     //
     // in1_k_offset_tiles:
     //   K-axis offset on the weight (in1), analogous to in0_k_offset_tiles. matmul-K = K_in;
     //   the weight is interpreted as a larger parent of which we read
-    //   [k_offset, k_offset + K_in) on its K axis (= storage row axis when not transpose_b,
-    //   storage col axis when transpose_b). Cannot be combined with in0_k_offset > 0.
-    //
-    // out_row_offset_tiles:
-    //   When an output tensor is provided in tensor_args_t, the matmul writes its
-    //   actual_M-row output into rows [out_offset, out_offset + actual_M) of the parent
-    //   output tensor. matmul-N must match the parent's N (no N-axis slicing).
+    //   [k_offset, k_offset + K_in). Cannot be combined with in0_k_offset > 0.
     //
     // Defaults preserve "use the whole input" behavior. All offsets are RUNTIME args
     // (excluded from program hash) so different offset values hit the same cached program.
-    uint32_t in0_row_offset_tiles = 0;
     uint32_t effective_M_tiles = 0;
     uint32_t in0_k_offset_tiles = 0;
     uint32_t in1_k_offset_tiles = 0;
-    uint32_t out_row_offset_tiles = 0;
 
     // On-device offsets (EP). When set, dataflow kernels read the offsets tensor at
-    // runtime and override the matching host-supplied values:
-    //   OutputRow: offsets[start] overrides out_row_offset_tiles.
-    //   InputRow:  offsets[start..start+2] overrides in0_row_offset_tiles + effective_M
-    //              (matmul-M) + per-core M_start/M_end/M_blocks_per_core (dm_in0_sender
-    //              publishes the latter via cb_ctrl so compute can override RT args).
-    //   InputK:    offsets[start] overrides in0_k_offset_tiles.
-    //   WeightK:   offsets[start] overrides in1_k_offset_tiles.
+    // runtime and derive the row/K offsets:
+    //   OutputRow: offsets[start] → output write-at-offset row.
+    //   InputRow:  offsets[start..start+2] → input-row range + effective_M + per-core
+    //              M_start/M_end/M_blocks_per_core (dm_in0_sender publishes the latter
+    //              via cb_ctrl so compute can override RT args).
+    //   InputK:    offsets[start] → in0_k_offset_tiles.
+    //   WeightK:   offsets[start] → in1_k_offset_tiles.
     OffsetsRole offsets_role = OffsetsRole::None;
     uint32_t offsets_start_index = 0;
 };
@@ -123,8 +107,8 @@ struct VariableMatmulParams {
 struct VariableMatmulInputs {
     ttnn::Tensor input_tensor;   // [actual_M, K]
     ttnn::Tensor weight_tensor;  // [K, N]
-    // Optional caller-provided output tensor (write-at-offset mode). When set,
-    // out_row_offset_tiles must be a valid sub-range and N must match.
+    // Optional caller-provided output tensor (write-at-offset mode). When set, the
+    // EP path derives the row offset from offsets_tensor and matmul-N must match.
     std::optional<ttnn::Tensor> output_tensor;
     // Optional 1-D UINT32 ROW_MAJOR device tensor. Used with offsets_role.
     std::optional<ttnn::Tensor> offsets_tensor;

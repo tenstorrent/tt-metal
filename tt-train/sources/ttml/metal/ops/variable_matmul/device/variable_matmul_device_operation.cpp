@@ -57,10 +57,9 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     // When transpose_b, the weight is stored as [N, K] and K matches w_logical[-1].
     const uint32_t K_w = operation_attributes.transpose_b ? w_logical[-1] : w_logical[-2];
 
-    // Effective M for the matmul (after applying offset + length); falls back to the
-    // input tensor's full M when caller didn't specify a sub-range.
+    // Effective M for the matmul (after applying length); falls back to the input
+    // tensor's full M when caller didn't specify a sub-range.
     const uint32_t effective_M_tiles = operation_attributes.effective_M_tiles;
-    const uint32_t offset_tiles = operation_attributes.in0_row_offset_tiles;
     const uint32_t k_offset_tiles = operation_attributes.in0_k_offset_tiles;
     const uint32_t in1_k_offset_tiles = operation_attributes.in1_k_offset_tiles;
     const uint32_t M_parent_tiles = tt::div_up(M_parent, TILE_HEIGHT);
@@ -98,9 +97,8 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     // padded rows are zero on input → zero on output, so they're harmless.
     const uint32_t M_tiles_ceil = tt::div_up(M, TILE_HEIGHT);
     TT_FATAL(
-        offset_tiles + M_tiles_ceil <= M_parent_tiles,
-        "variable_matmul offset {} + effective_M tiles {} exceeds input M tiles {}",
-        offset_tiles,
+        M_tiles_ceil <= M_parent_tiles,
+        "variable_matmul effective_M tiles {} exceeds input M tiles {}",
         M_tiles_ceil,
         M_parent_tiles);
 
@@ -148,21 +146,15 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
         const uint32_t matmul_N = operation_attributes.transpose_b ? w_logical[-2] : w_logical[-1];
         const uint32_t out_M_tiles = tt::div_up(out_logical[-2], TILE_HEIGHT);
         const uint32_t out_N = out_logical[-1];
-        const uint32_t out_offset = operation_attributes.out_row_offset_tiles;
         const uint32_t M_tiles_actual = tt::div_up(M, TILE_HEIGHT);
         TT_FATAL(out.layout() == Layout::TILE, "variable_matmul output tensor must be TILE layout");
         TT_FATAL(out.dtype() == act_tensor.dtype(), "variable_matmul output dtype must match input dtype");
         TT_FATAL(out_N == matmul_N, "variable_matmul output N ({}) must match matmul N ({})", out_N, matmul_N);
         TT_FATAL(
-            out_offset + M_tiles_actual <= out_M_tiles,
-            "variable_matmul out_row_offset {} + actual_M tiles {} exceeds output M tiles {}",
-            out_offset,
+            M_tiles_actual <= out_M_tiles,
+            "variable_matmul actual_M tiles {} exceeds output M tiles {}",
             M_tiles_actual,
             out_M_tiles);
-    } else {
-        TT_FATAL(
-            operation_attributes.out_row_offset_tiles == 0U,
-            "variable_matmul out_row_offset_tiles > 0 requires a caller-provided output tensor");
     }
 
     // On-device offsets validation.
@@ -260,9 +252,8 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     // program's compile-time flags would diverge from what compute_program_hash predicted).
     const bool input_and_weight_k_active =
         operation_attributes.offsets_role == OffsetsRole::InputAndWeightK && tensor_args.offsets_tensor.has_value();
-    const bool use_offset = operation_attributes.in0_row_offset_tiles > 0 ||
-                            operation_attributes.effective_M_tiles > 0 || in0_parent_k_mode ||
-                            input_and_weight_k_active;
+    const bool use_offset =
+        operation_attributes.effective_M_tiles > 0 || in0_parent_k_mode || input_and_weight_k_active;
     const bool use_offset_in1 = in1_parent_k_mode || input_and_weight_k_active;
     // physical_volume / padded[-1] gives the count along the *stored* outer dim. With
     // transpose_a that's K-tiles; without, M-tiles. Either way, actual_M (for the matmul) is

@@ -56,18 +56,16 @@ void kernel_main() {
     uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 1);
     const uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 2);
     uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 3);
+    // Row offset is EP-only: 0 on host-scalar path, derived from offsets[start] below.
+    uint32_t out_row_offset_tiles = 0U;
     uint32_t in1_k_offset_tiles = 0U;
     uint32_t parent_K_tiles_stride_in1 = 0U;
     if constexpr (use_offset_in1) {
         in1_k_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 4);
         parent_K_tiles_stride_in1 = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 5);
     }
-    uint32_t out_row_offset_tiles = 0U;
-    if constexpr (use_out_offset) {
-        out_row_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 6);
-    }
     // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from on-device offsets[start..start+2].
-    uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 7);
+    uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 6);
 
 #ifdef OFFSETS_ACTIVE
     // EP path: read offsets from a 1-D UINT32 ROW_MAJOR device tensor. Each flag is independent.
@@ -79,8 +77,8 @@ void kernel_main() {
     //   OFFSET_IN1_K:    sets in1_k_offset_tiles + K_tiles. If OFFSET_IN0_K is not set,
     //                    also publishes K_tiles on cb_ctrl[3] (otherwise dm_in0 publishes).
     {
-        const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 8);
-        const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 9);
+        const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 7);
+        const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 8);
         constexpr auto offsets_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
         const auto offsets_acc = TensorAccessor(offsets_args, offsets_addr);
 
@@ -99,7 +97,7 @@ void kernel_main() {
         const uint32_t row_end = offsets_stage[offsets_start_index + 1U];
 #ifdef OFFSET_M_AXIS
         {
-            const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 10);
+            const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 9);
             const uint32_t actual_eff_M = (row_end - row_start) / 32U;
             // Empty-expert (actual=0) → M_blocks_per_core=0 (loop skipped). Still clamp
             // M_tiles to >=1 for shape construction (TensorShape2D asserts d0>0).
