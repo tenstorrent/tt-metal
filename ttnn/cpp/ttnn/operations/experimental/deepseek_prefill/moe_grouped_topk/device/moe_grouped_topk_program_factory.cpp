@@ -32,12 +32,10 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
 
     auto grid = device->compute_with_storage_grid_size();
     auto num_tiles = scores.buffer()->num_pages();
-    uint32_t tile_width = scores.tensor_spec().page_config().get_tile().get_width();
     uint32_t tile_height = scores.tensor_spec().page_config().get_tile().get_height();
     auto width_tiles = scores.padded_shape()[-1] / scores.tensor_spec().page_config().get_tile().get_width();
     auto height_tiles = num_tiles / width_tiles;
     uint32_t experts = scores.logical_shape()[-1];
-    uint32_t tokens = scores.logical_shape().volume() / experts;
     uint32_t seq_len = scores.logical_shape()[-2];
 
     log_debug(tt::LogOp, "height_tiles: {} width_tiles: {}", height_tiles, width_tiles);
@@ -63,7 +61,7 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
     auto indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_indices.dtype());
 
     uint32_t n_activated_expert_tiles = tt::div_up(operation_attributes.n_activated_experts, 32);
-    uint32_t uint16_page_size = output_indices.buffer()->page_size();
+
     tt::tt_metal::create_cb(
         cb_in_scores, program, all_cores, scores.buffer()->page_size(), 2 * width_tiles, scores_data_format);
     tt::tt_metal::create_cb(
@@ -90,59 +88,8 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
     tt::tt_metal::create_cb(
         cb_biased_scores, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
 
-    auto cb_sorted_group_scores = tt::CBIndex::c_6;
-    auto cb_sorted_expert_indices_temp = tt::CBIndex::c_7;
-    auto cb_expert_index_template = tt::CBIndex::c_8;
-    tt::tt_metal::create_cb(
-        cb_sorted_group_scores, program, all_cores, scores.buffer()->page_size(), 2, scores_data_format);
-    tt::tt_metal::create_cb(
-        cb_sorted_expert_indices_temp, program, all_cores, uint16_page_size, 2, tt::DataFormat::UInt16);
-    tt::tt_metal::create_cb(
-        cb_expert_index_template, program, all_cores, uint16_page_size, width_tiles, tt::DataFormat::UInt16);
-
-    uint32_t num_group_tiles = tt::div_up(operation_attributes.n_groups, 32);
-    auto cb_group_index_template = tt::CBIndex::c_9;
-    auto cb_group_summed_scores = tt::CBIndex::c_10;
-    auto cb_top_experts_per_group = tt::CBIndex::c_11;
-    auto cb_sorted_group_order = tt::CBIndex::c_12;
-    tt::tt_metal::create_cb(
-        cb_group_index_template, program, all_cores, uint16_page_size, num_group_tiles, tt::DataFormat::UInt16);
-    tt::tt_metal::create_cb(
-        cb_top_experts_per_group,
-        program,
-        all_cores,
-        scores.buffer()->page_size(),
-        operation_attributes.summed_experts_per_group,
-        scores_data_format);
-    tt::tt_metal::create_cb(
-        cb_group_summed_scores, program, all_cores, scores.buffer()->page_size(), num_group_tiles, scores_data_format);
-    tt::tt_metal::create_cb(
-        cb_sorted_group_order,
-        program,
-        all_cores,
-        output_indices.buffer()->page_size(),
-        num_group_tiles,
-        tt::DataFormat::UInt16);
-
-    auto cb_winning_group_scores = tt::CBIndex::c_13;
-    auto cb_winning_group_indices = tt::CBIndex::c_14;
-    tt::tt_metal::create_cb(
-        cb_winning_group_scores,
-        program,
-        all_cores,
-        scores.buffer()->page_size(),
-        operation_attributes.topk_groups,
-        scores_data_format);
-    tt::tt_metal::create_cb(
-        cb_winning_group_indices,
-        program,
-        all_cores,
-        output_indices.buffer()->page_size(),
-        operation_attributes.topk_groups,
-        tt::DataFormat::UInt16);
-
+    // Normalize intermediates
     auto cb_reduce_intermediate = tt::CBIndex::c_15;
-    auto cb_final_indices_transposed = tt::CBIndex::c_16;
     tt::tt_metal::create_cb(
         cb_reduce_intermediate,
         program,
@@ -150,13 +97,6 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         scores.buffer()->page_size(),
         2 * n_activated_expert_tiles,
         scores_data_format);
-    tt::tt_metal::create_cb(
-        cb_final_indices_transposed,
-        program,
-        all_cores,
-        output_indices.buffer()->page_size(),
-        2 * n_activated_expert_tiles,
-        tt::DataFormat::UInt16);
 
     auto cb_reduce_ones_scalar = tt::CBIndex::c_17;
     tt::tt_metal::create_cb(
@@ -196,10 +136,10 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         2 * n_activated_expert_tiles,
         scores_data_format);
 
+    // Reader kernel
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
         {"cb_in_scores", cb_in_scores},
         {"cb_in_bias", cb_in_bias},
-        {"cb_route_scale_scalar", cb_route_scale_scalar},
         {"width_tiles", width_tiles},
         {"scores_page_size", scores.buffer()->page_size()},
         {"bias_page_size", bias.buffer()->page_size()},
@@ -216,47 +156,21 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
 
+    // Compute kernel (simplified: sigmoid + add_bias + normalize + scale)
     std::unordered_map<std::string, uint32_t> compute_named_compile_time_args = {
         {"cb_in_scores", cb_in_scores},
         {"cb_in_bias", cb_in_bias},
         {"cb_sigmoid_scores", cb_sigmoid_scores},
         {"cb_biased_scores", cb_biased_scores},
         {"cb_out_weights", cb_out_weights},
-        {"cb_out_indices", cb_out_indices},
-        {"cb_group_index_template", cb_group_index_template},
-        {"cb_group_summed_scores", cb_group_summed_scores},
-        {"cb_top_experts_per_group", cb_top_experts_per_group},
-        {"cb_sorted_group_order", cb_sorted_group_order},
         {"width_tiles", width_tiles},
-        {"scores_page_size", scores.buffer()->page_size()},
-        {"bias_page_size", bias.buffer()->page_size()},
-        {"weights_page_size", output_weights.buffer()->page_size()},
-        {"indices_page_size", output_indices.buffer()->page_size()},
-        {"cb_sorted_group_scores", cb_sorted_group_scores},
-        {"cb_sorted_expert_indices_temp", cb_sorted_expert_indices_temp},
-        {"cb_expert_index_template", cb_expert_index_template},
-        {"group_size", experts / operation_attributes.n_groups},
-        {"log_group_size", std::log2(experts / operation_attributes.n_groups)},
-        {"summed_experts_per_group", operation_attributes.summed_experts_per_group},
-        {"topk_groups", operation_attributes.topk_groups},
-        {"n_groups", operation_attributes.n_groups},
-        {"log_topk_groups", std::log2(operation_attributes.topk_groups)},
-        {"log_n_groups", std::log2(operation_attributes.n_groups)},
-        {"cb_winning_group_scores", cb_winning_group_scores},
-        {"cb_winning_group_indices", cb_winning_group_indices},
-        {"num_group_tiles", num_group_tiles},
-        {"n_activated_experts", operation_attributes.n_activated_experts},
-        {"n_activated_expert_tiles", n_activated_expert_tiles},
-        {"log_n_activated_experts", std::log2(operation_attributes.n_activated_experts)},
         {"cb_reduce_intermediate", cb_reduce_intermediate},
-        {"cb_final_indices_transposed", cb_final_indices_transposed},
         {"cb_reduce_ones_scalar", cb_reduce_ones_scalar},
         {"cb_epsilon_scalar", cb_epsilon_scalar},
         {"cb_route_scale_scalar", cb_route_scale_scalar},
         {"cb_normalized_scores", cb_normalized_scores},
         {"cb_reciprocal_sums", cb_reciprocal_sums},
         {"cb_gathered_sigmoid", cb_gathered_sigmoid},
-        {"stable_sort", static_cast<uint32_t>(operation_attributes.stable_sort)},
     };
 
     std::vector<uint32_t> compute_compile_time_args = {};
@@ -272,39 +186,29 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
             .compile_args = compute_compile_time_args,
             .named_compile_args = compute_named_compile_time_args});
 
+    // Writer kernel (iterative topk + gather + DRAM writes)
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args = {
         {"cb_out_weights", cb_out_weights},
         {"cb_out_indices", cb_out_indices},
-        {"cb_expert_index_template", cb_expert_index_template},
-        {"cb_group_index_template", cb_group_index_template},
-        {"cb_top_experts_per_group", cb_top_experts_per_group},
+        {"cb_sigmoid_scores", cb_sigmoid_scores},
+        {"cb_biased_scores", cb_biased_scores},
         {"cb_gathered_sigmoid", cb_gathered_sigmoid},
-        {"cb_sorted_group_scores", cb_sorted_group_scores},
+        {"cb_reduce_ones_scalar", cb_reduce_ones_scalar},
+        {"cb_epsilon_scalar", cb_epsilon_scalar},
+        {"cb_route_scale_scalar", cb_route_scale_scalar},
         {"scores_page_size", scores.buffer()->page_size()},
         {"weights_page_size", output_weights.buffer()->page_size()},
         {"indices_page_size", output_indices.buffer()->page_size()},
         {"experts", experts},
         {"width_tiles", width_tiles},
-        {"tile_width", tile_width},
         {"tile_height", tile_height},
-        {"tokens", tokens},
         {"topk_groups", operation_attributes.topk_groups},
         {"n_groups", operation_attributes.n_groups},
         {"summed_experts_per_group", operation_attributes.summed_experts_per_group},
-        {"cb_winning_group_scores", cb_winning_group_scores},
-        {"cb_winning_group_indices", cb_winning_group_indices},
-        {"num_group_tiles", num_group_tiles},
-        {"cb_sorted_group_order", cb_sorted_group_order},
-        {"cb_in_scores", cb_in_scores},
-        {"cb_sigmoid_scores", cb_sigmoid_scores},
-        {"cb_biased_scores", cb_biased_scores},
-        {"cb_reduce_ones_scalar", cb_reduce_ones_scalar},
         {"n_activated_experts", operation_attributes.n_activated_experts},
         {"packed_one_scalar", std::bit_cast<uint32_t>(1.0f)},
         {"packed_epsilon", std::bit_cast<uint32_t>(operation_attributes.epsilon)},
         {"packed_route_scale", std::bit_cast<uint32_t>(operation_attributes.route_scale)},
-        {"cb_epsilon_scalar", cb_epsilon_scalar},
-        {"cb_route_scale_scalar", cb_route_scale_scalar},
         {"seq_len_tiles", tt::div_up(seq_len, tile_height)},
         {"remainder_tokens_per_tile", remainder_tokens_per_tile},
         {"n_activated_expert_tiles", n_activated_expert_tiles},

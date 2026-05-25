@@ -103,7 +103,7 @@ def test_moe_grouped_topk(device, num_batches, batch_size, seq_len):
     ref_indices_2d = ref_indices.reshape(-1, n_activated_experts)
 
     recall = calculate_average_recall(tt_indices_2d, ref_indices_2d)
-    recall_threshold = 0.9
+    recall_threshold = 0.97
     recall_passed = recall >= recall_threshold
     status = "PASS" if recall_passed else "FAIL"
     logger.info(
