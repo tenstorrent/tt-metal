@@ -113,8 +113,8 @@ class MultiHeadLatentAttention(AbstractModuleBase):
         q_full = autograd_concat([q_nope, q_pe], dim=3)  # [B, H, S, qk_head]
         k_full = autograd_concat([k_nope, k_pe], dim=3)  # [B, H, S, qk_head]
 
-        # ── Attention (composite path supports v_dim != qk_head) ──
-        attn = ttml.ops.attention.scaled_dot_product_attention_composite(q_full, k_full, v, mask)
+        # ── Attention ──
+        attn = ttml.ops.attention.scaled_dot_product_attention(q_full, k_full, v, mask)
 
         # ── Output ──
         attn = ttml.ops.multi_head_utils.heads_fusion(attn)  # [B, 1, S, n_heads * v_dim]
