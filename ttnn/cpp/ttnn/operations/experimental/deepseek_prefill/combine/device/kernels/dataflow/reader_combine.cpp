@@ -140,13 +140,11 @@ void kernel_main() {
         uint32_t page_end = get_arg_val<uint32_t>(rt_args++);
         uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args++);
         uint32_t zi_done_sem_address = get_semaphore(zi_done_semaphore_id);
+
+        fill_zero_buffer(zi_cb_id);
         uint32_t zero_buf = get_write_ptr(zi_cb_id);
 
-        {
-            // DeviceZoneScopedN("combine-zero-init-SENDER-writing");
-            fill_zero_buffer(zi_cb_id);
-            zero_pages(zero_buf, page_start, page_end, aligned_output_page_size, output_addr_gen);
-        }
+        zero_pages(zero_buf, page_start, page_end, aligned_output_page_size, output_addr_gen);
 
         volatile tt_l1_ptr uint32_t* zi_done_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address);
@@ -214,14 +212,11 @@ void kernel_main() {
     const auto experts_tok_counter_addr_gen = TensorAccessor(experts_tok_counter_args, experts_tok_counter_addr);
     cb_reserve_back(cb_experts_tok_counter_id, experts_tok_counter_pages);
     uint32_t counter_base_addr = get_write_ptr(cb_experts_tok_counter_id);
-    {
-        // DeviceZoneScopedN("combine-reading-expert-token-counts");
-        for (uint32_t i = 0; i < experts_tok_counter_pages; i++) {
-            noc_async_read_page(
-                i, experts_tok_counter_addr_gen, counter_base_addr + i * aligned_experts_tok_counter_page_size);
-        }
-        noc_async_read_barrier();
+    for (uint32_t i = 0; i < experts_tok_counter_pages; i++) {
+        noc_async_read_page(
+            i, experts_tok_counter_addr_gen, counter_base_addr + i * aligned_experts_tok_counter_page_size);
     }
+    noc_async_read_barrier();
 
     // Expert token counts: flat [num_routed_experts] array per device.
     // Decompose linearized_mesh_coord into (row, col) using physical mesh dims,
@@ -241,7 +236,6 @@ void kernel_main() {
     //   [0]: receive_buf_addr  — sender's c_18 L1 offset (where untilizer NOC-writes untilized data)
     //   [1]: metadata_buf_addr — sender's c_19 L1 offset (where untilizer NOC-writes routing metadata)
     {
-        // DeviceZoneScopedN("combine-sender-multicast-sending");
         constexpr uint32_t counter_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
 
         volatile tt_l1_ptr uint32_t* trailer_slot =
@@ -335,7 +329,12 @@ void kernel_main() {
                 if (*data_ready_sem_ptrs[c] == consumed[c]) {
                     continue;
                 }
-                consumed[c]++;
+
+                {
+                    DeviceZoneScopedN("combine-reader-waiting-for-idle-core-data");
+                    noc_semaphore_inc(self_data_ready_noc_addrs[c], (uint32_t)-1);
+                    noc_async_atomic_barrier();
+                }
 
                 uint32_t slot = read_slots[c];
                 volatile tt_l1_ptr uint32_t* ring_meta =
@@ -347,13 +346,13 @@ void kernel_main() {
                 read_slots[c] = (slot + 1) & SLOTS_PER_UNTILIZER_MASK;
 
                 if (meta0 == ROUTE_INFO_SENTINEL) {
-                    // Reset the sem so a subsequent kernel invocation starts at 0 even if the
-                    // framework doesn't reset program-level sems between runs.  Pairs with
-                    // consumed[c] being a local that resets at kernel entry.
-                    noc_semaphore_set(data_ready_sem_ptrs[c], 0);
-                    noc_async_atomic_barrier();
                     untilizer_finished[c] = true;
                     untilizer_done_count++;
+                    {
+                        DeviceZoneScopedN("combine-reader-incrmenting-credit-semaphore");
+                        noc_semaphore_inc(untilizer_credits_noc_addrs[c], 1);
+                        noc_async_atomic_barrier();
+                    }
                     continue;
                 }
 
@@ -371,15 +370,21 @@ void kernel_main() {
                     route_info[0] = route;
                     route_info[1] = distance;
                     route_info[2] = output_page_idx;
-                    {
-                        // DeviceZoneScopedN("sending-for-FABRIC-write");
-                        uint32_t output_dst = cb_base + l1_alignment;
-                        noc_async_read(buffer_scratch_noc_addr, output_dst, aligned_output_page_size);
-                        noc_async_read_barrier();
-                    }
+                    route_info[3] = 0;
                     cb_push_back(cb_route_info_id, 1);
+
+                    cb_reserve_back(cb_output_for_writer_id, 1);
+                    uint32_t output_dst = get_write_ptr(cb_output_for_writer_id);
+                    noc_async_read(buffer_scratch_noc_addr, output_dst, aligned_output_page_size);
+                    noc_async_read_barrier();
+                    cb_push_back(cb_output_for_writer_id, 1);
                 }
-                noc_semaphore_inc<true>(untilizer_credits_noc_addrs[c], 1);
+
+                {
+                    DeviceZoneScopedN("combine-reader-incrmenting-credit-semaphore");
+                    noc_semaphore_inc(untilizer_credits_noc_addrs[c], 1);
+                    noc_async_atomic_barrier();
+                }
             }
         }
     }
