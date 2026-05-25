@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Writer kernel for moe_grouped_topk with iterative max (replaces bitonic sort).
-// Performs 3-stage topk on TILE layout biased scores, constructs output indices
-// tile (UINT16), gathers sigmoid scores, and writes results to DRAM.
+// Writer kernel for moe_grouped_topk with iterative max.
+// Linearizes each token row from tile format into a flat buffer, then performs
+// 3-stage iterative topk on simple arrays. This avoids repeated face-aware
+// offset arithmetic during the iterative scanning.
 
 #include <cstdint>
 
@@ -21,34 +22,24 @@ union FloatUint32 {
     uint32_t u;
 };
 
-// Read a float element from contiguous tiles in L1.
-// tiles_base points to width_tiles contiguous tiles (as uint32_t*).
-FORCE_INLINE float read_f32_tile_element(
-    volatile tt_l1_ptr uint32_t* tiles_base, uint32_t intra_tile_row, uint32_t col) {
-    uint32_t tile_col_idx = col >> 5;
-    uint32_t intra_col = col & 31;
-    uint32_t face = ((intra_tile_row >> 4) << 1) + (intra_col >> 4);
+// Linearize one row from tile-format data into a flat contiguous buffer.
+// Reads 'total_cols' elements (across width_tiles tiles) for the given row.
+FORCE_INLINE void linearize_tile_row(
+    volatile tt_l1_ptr uint32_t* tiles_base, uint32_t intra_tile_row, uint32_t* dst, uint32_t total_cols) {
     uint32_t face_row = intra_tile_row & 15;
-    uint32_t face_col = intra_col & 15;
-    uint32_t offset = tile_col_idx * TILE_ELEMENTS + face * FACE_SIZE + face_row * COLS_PER_FACE + face_col;
-    FloatUint32 conv;
-    conv.u = tiles_base[offset];
-    return conv.f;
+    uint32_t face_vert = (intra_tile_row >> 4) << 1;  // 0 for rows 0-15, 2 for rows 16-31
+
+    for (uint32_t col = 0; col < total_cols; col++) {
+        uint32_t tile_col_idx = col >> 5;
+        uint32_t intra_col = col & 31;
+        uint32_t face = face_vert + (intra_col >> 4);
+        uint32_t face_col = intra_col & 15;
+        uint32_t offset = tile_col_idx * TILE_ELEMENTS + face * FACE_SIZE + face_row * COLS_PER_FACE + face_col;
+        dst[col] = tiles_base[offset];
+    }
 }
 
-// Read a uint32 element from contiguous tiles.
-FORCE_INLINE uint32_t
-read_u32_tile_element(volatile tt_l1_ptr uint32_t* tiles_base, uint32_t intra_tile_row, uint32_t col) {
-    uint32_t tile_col_idx = col >> 5;
-    uint32_t intra_col = col & 31;
-    uint32_t face = ((intra_tile_row >> 4) << 1) + (intra_col >> 4);
-    uint32_t face_row = intra_tile_row & 15;
-    uint32_t face_col = intra_col & 15;
-    uint32_t offset = tile_col_idx * TILE_ELEMENTS + face * FACE_SIZE + face_row * COLS_PER_FACE + face_col;
-    return tiles_base[offset];
-}
-
-// Write a uint32 value to a tile element position.
+// Write a uint32 value back to a tile element position.
 FORCE_INLINE void write_u32_tile_element(
     volatile tt_l1_ptr uint32_t* tiles_base, uint32_t intra_tile_row, uint32_t col, uint32_t value) {
     uint32_t tile_col_idx = col >> 5;
@@ -63,6 +54,18 @@ FORCE_INLINE void write_u32_tile_element(
 // Write a uint16 value into a UINT16 tile at face-aware position.
 FORCE_INLINE void write_u16_tile_element(
     volatile tt_l1_ptr uint16_t* tiles_base, uint32_t intra_tile_row, uint32_t col, uint16_t value) {
+    uint32_t tile_col_idx = col >> 5;
+    uint32_t intra_col = col & 31;
+    uint32_t face = ((intra_tile_row >> 4) << 1) + (intra_col >> 4);
+    uint32_t face_row = intra_tile_row & 15;
+    uint32_t face_col = intra_col & 15;
+    uint32_t offset = tile_col_idx * TILE_ELEMENTS + face * FACE_SIZE + face_row * COLS_PER_FACE + face_col;
+    tiles_base[offset] = value;
+}
+
+// Write a uint32 value into a FLOAT32 tile at face-aware position.
+FORCE_INLINE void write_f32_tile_element(
+    volatile tt_l1_ptr uint32_t* tiles_base, uint32_t intra_tile_row, uint32_t col, uint32_t value) {
     uint32_t tile_col_idx = col >> 5;
     uint32_t intra_col = col & 31;
     uint32_t face = ((intra_tile_row >> 4) << 1) + (intra_col >> 4);
@@ -167,6 +170,10 @@ void kernel_main() {
     neg_inf_conv.u = NEG_INF_U32;
     const float NEG_INF_F = neg_inf_conv.f;
 
+    // Scratch buffers for linearized row data (avoids repeated face-aware arithmetic)
+    uint32_t biased_row[experts];
+    uint32_t sigmoid_row[experts];
+
     // One-time setup: generate scalar tiles for compute kernel's normalize step
     generate_reduce_scalar(cb_reduce_ones_scalar, packed_one_scalar, n_activated_experts);
     write_single_scalar(cb_epsilon_scalar, packed_epsilon);
@@ -191,7 +198,7 @@ void kernel_main() {
         uint32_t indices_tile_addr = get_write_ptr(cb_out_indices);
         uint32_t gathered_tile_addr = get_write_ptr(cb_gathered_sigmoid);
 
-        // Zero the output tiles (only n_activated_experts columns per row will be filled)
+        // Zero the output tiles
         zero_buffer(indices_tile_addr, indices_page_size);
         zero_buffer(gathered_tile_addr, scores_page_size);
 
@@ -199,9 +206,11 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* gathered_tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gathered_tile_addr);
 
         for (uint32_t token = 0; token < tokens_per_tile; token++) {
+            // Linearize this token's row from tile format into flat arrays (one-time cost)
+            linearize_tile_row(biased_base, token, biased_row, experts);
+            linearize_tile_row(sigmoid_base, token, sigmoid_row, experts);
+
             // --- Stage 1: Compute group scores (sum of top-summed_experts_per_group per group) ---
-            // We do NOT mask the biased_scores here; stage 3 needs unmodified data.
-            // Instead we track indices locally to avoid double-counting.
             float group_scores[8];
             for (uint32_t g = 0; g < n_groups; g++) {
                 float score_sum = 0.0f;
@@ -209,7 +218,8 @@ void kernel_main() {
                 uint32_t masked_cols[2] = {0xFFFFFFFF, 0xFFFFFFFF};
 
                 for (uint32_t s = 0; s < summed_experts_per_group; s++) {
-                    float max_val = NEG_INF_F;
+                    FloatUint32 best;
+                    best.f = NEG_INF_F;
                     uint32_t max_col = 0;
                     for (uint32_t col = 0; col < group_size; col++) {
                         bool skip = false;
@@ -222,13 +232,14 @@ void kernel_main() {
                         if (skip) {
                             continue;
                         }
-                        float val = read_f32_tile_element(biased_base, token, group_col_base + col);
-                        if (val > max_val) {
-                            max_val = val;
+                        FloatUint32 val;
+                        val.u = biased_row[group_col_base + col];
+                        if (val.f > best.f) {
+                            best.f = val.f;
                             max_col = col;
                         }
                     }
-                    score_sum += max_val;
+                    score_sum += best.f;
                     masked_cols[s] = max_col;
                 }
                 group_scores[g] = score_sum;
@@ -249,26 +260,27 @@ void kernel_main() {
                 group_scores[max_idx] = NEG_INF_F;
             }
 
-            // --- Stage 3: Find top-n_activated_experts experts from winning groups ---
-            // Scan biased_scores (unmodified) across all winning groups' columns.
-            // Use in-place masking here since we're done reading this token row for scoring.
+            // --- Stage 3: Find top-n_activated_experts from winning groups ---
             uint16_t final_indices[8];
             for (uint32_t ki = 0; ki < n_activated_experts; ki++) {
-                float max_val = NEG_INF_F;
+                FloatUint32 best;
+                best.f = NEG_INF_F;
                 uint32_t max_global_col = 0;
                 for (uint32_t wgi = 0; wgi < topk_groups; wgi++) {
                     uint32_t g = winning_groups[wgi];
                     uint32_t group_col_base = g * group_size;
                     for (uint32_t col = 0; col < group_size; col++) {
-                        float val = read_f32_tile_element(biased_base, token, group_col_base + col);
-                        if (val > max_val) {
-                            max_val = val;
+                        FloatUint32 val;
+                        val.u = biased_row[group_col_base + col];
+                        if (val.f > best.f) {
+                            best.f = val.f;
                             max_global_col = group_col_base + col;
                         }
                     }
                 }
                 final_indices[ki] = (uint16_t)max_global_col;
-                write_u32_tile_element(biased_base, token, max_global_col, NEG_INF_U32);
+                // Mask in the linear buffer so next iteration finds the next best
+                biased_row[max_global_col] = NEG_INF_U32;
             }
 
             // --- Write indices into output UINT16 tile (face-aware) ---
@@ -279,8 +291,7 @@ void kernel_main() {
             // --- Gather sigmoid scores for the selected experts ---
             for (uint32_t ki = 0; ki < n_activated_experts; ki++) {
                 uint32_t expert_col = final_indices[ki];
-                uint32_t sigmoid_val = read_u32_tile_element(sigmoid_base, token, expert_col);
-                write_u32_tile_element(gathered_tile, token, ki, sigmoid_val);
+                write_f32_tile_element(gathered_tile, token, ki, sigmoid_row[expert_col]);
             }
         }
 
