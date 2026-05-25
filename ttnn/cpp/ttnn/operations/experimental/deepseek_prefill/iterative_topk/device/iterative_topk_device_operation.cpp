@@ -15,9 +15,25 @@ void IterativeTopkDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input.buffer() != nullptr, "Input tensor must be allocated");
     TT_FATAL(input.dtype() == tt::tt_metal::DataType::FLOAT32, "Input tensor must be FLOAT32");
     TT_FATAL(input.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be ROW_MAJOR layout");
+
+    const auto memory_layout = input.memory_config().memory_layout();
     TT_FATAL(
-        input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        "Input tensor must be interleaved");
+        memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED ||
+            memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        "Input tensor must be interleaved or height-sharded");
+
+    if (memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
+        TT_FATAL(input.shard_spec().has_value(), "Height-sharded input must have a shard spec");
+        const auto& shard_spec = input.shard_spec().value();
+        uint32_t width = input.logical_shape()[-1];
+        TT_FATAL(
+            shard_spec.shape[1] == width,
+            "Height-sharded input shard width ({}) must equal tensor width ({})",
+            shard_spec.shape[1],
+            width);
+        TT_FATAL(shard_spec.shape[0] > 0, "Shard height must be > 0");
+    }
+
     TT_FATAL(attributes.k > 0, "k must be > 0");
     TT_FATAL(
         attributes.k <= input.logical_shape()[-1],
@@ -27,6 +43,14 @@ void IterativeTopkDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input.logical_shape().rank() >= 2, "Input tensor must be at least 2D");
 }
 
+IterativeTopkDeviceOperation::program_factory_t IterativeTopkDeviceOperation::select_program_factory(
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
+    if (tensor_args.input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
+        return ShardedProgramFactory{};
+    }
+    return ProgramFactory{};
+}
+
 IterativeTopkDeviceOperation::spec_return_value_t IterativeTopkDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
@@ -34,19 +58,29 @@ IterativeTopkDeviceOperation::spec_return_value_t IterativeTopkDeviceOperation::
     auto output_shape = shape;
     output_shape[-1] = attributes.k;
 
+    auto output_mem_config = attributes.output_mem_config;
+
+    if (input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
+        const auto& input_shard_spec = input.shard_spec().value();
+        auto output_shard_spec = input_shard_spec;
+        output_shard_spec.shape[1] = attributes.k;
+        output_mem_config = tt::tt_metal::MemoryConfig{
+            tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, output_shard_spec};
+    }
+
     return std::array<TensorSpec, 2>{
         TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::FLOAT32,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-                attributes.output_mem_config)),
+                output_mem_config)),
         TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::UINT32,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-                attributes.output_mem_config))};
+                output_mem_config))};
 }
 
 IterativeTopkDeviceOperation::tensor_return_value_t IterativeTopkDeviceOperation::create_output_tensors(
