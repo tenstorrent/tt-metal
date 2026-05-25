@@ -27,8 +27,6 @@ Pass ``--no-use-trace`` to disable all traces (single CQ, fully eager).
   to host PyTorch HF Qwen 1.7B forward instead.
 
 
-Pass ``--no-ttnn-condition-embedding`` to compare against Torch ``prepare_condition`` on the host.
-
 ``--use-official-lm`` runs full ``acestep.inference.generate_music`` (PyTorch DiT on host) with no TTNN.
 
 Requires **torchaudio** (for ``AceStepHandler`` / 5 Hz LM preprocessing). After the TTNN device is opened for the Qwen3 caption
@@ -102,11 +100,10 @@ def _prepend_ttnn_pkg_to_syspath() -> None:
             sys.path.insert(0, p)
 
 
-def _configure_ttnn_runtime(*, no_ttnn_strict: bool) -> None:
-    """Insert tt-metal roots and optional strict fallback before ``import ttnn``."""
+def _configure_ttnn_runtime() -> None:
+    """Insert tt-metal roots and strict TTNN fallback (throw on silent CPU fallback)."""
     _prepend_ttnn_pkg_to_syspath()
-    if not no_ttnn_strict:
-        os.environ["TTNN_CONFIG_OVERRIDES"] = '{"throw_exception_on_fallback": true}'
+    os.environ["TTNN_CONFIG_OVERRIDES"] = '{"throw_exception_on_fallback": true}'
 
 
 def _require_torchaudio() -> None:
@@ -162,24 +159,11 @@ def _finalize_condition_trace_tensors(
     return enc_owned, ctx_owned
 
 
-def _build_t_schedule(*, shift: float, infer_steps: int, timesteps: str | None, variant: str) -> list[float]:
+def _build_t_schedule(*, infer_steps: int, variant: str) -> list[float]:
+    """Build diffusion timestep schedule (shift=1.0; turbo uses discrete tables)."""
     variant_l = (variant or "").lower()
     is_turbo = "turbo" in variant_l
-
-    if timesteps:
-        raw = [float(x.strip()) for x in timesteps.split(",") if x.strip()]
-        while raw and raw[-1] == 0.0:
-            raw.pop()
-        if not raw:
-            raise ValueError("--timesteps provided but empty after removing zeros")
-        if is_turbo:
-            mapped = [min(_VALID_TIMESTEPS, key=lambda v, t=t: abs(v - t)) for t in raw]
-            out: list[float] = []
-            for t in mapped:
-                if not out or out[-1] != t:
-                    out.append(t)
-            return out
-        return raw
+    shift = 1.0
 
     infer_steps = int(infer_steps)
     if infer_steps <= 1:
@@ -222,8 +206,7 @@ def _resolve_ace_step_repo_root(*, ckpt_dir: str | None, ace_step_repo_root: str
 
     Search order:
 
-    1. ``--ace-step-repo-root`` CLI flag (explicit override).
-    2. ``ACE_STEP_REPO_ROOT`` env var (explicit override).
+    1. ``ACE_STEP_REPO_ROOT`` env var (explicit override).
     3. **Vendored copy** at ``models/demos/ace_step_v1_5/torch_ref/_vendored_acestep/`` —
        default; lets the demo run with no external clone of ACE-Step-1.5.
     4. Walk up from ``ckpt_dir`` (looks for an ``acestep/`` sibling).
@@ -391,125 +374,11 @@ def _ensure_variant(name: str, ckpt_dir: Path) -> Path:
     return local
 
 
-_REUSE_REGISTRY: Any = None
-
-
-def _run_with_weight_cache(args: argparse.Namespace) -> None:
-    """Default demo path: load weights once into RAM/TT device, generate one WAV, exit."""
-    global _REUSE_REGISTRY
-
-    from models.demos.ace_step_v1_5.ref_decoder_compare import ensure_acestep_repo_on_path
-    from models.demos.ace_step_v1_5.serve_prompt_to_wav import AceStepModelRegistry
-    from models.demos.ace_step_v1_5.serve_prompt_to_wav import _build_t_schedule as _svc_build_t_schedule
-    from models.demos.ace_step_v1_5.serve_prompt_to_wav import _ensure_variant as _svc_ensure_variant
-    from models.demos.ace_step_v1_5.serve_prompt_to_wav import _resolve_ace_step_repo_root as _svc_resolve_repo
-    from models.demos.ace_step_v1_5.weight_cache import log_weights_ready
-
-    ckpt_dir = Path(args.ckpt_dir)
-    os.environ["ACESTEP_CHECKPOINTS_DIR"] = str(ckpt_dir)
-    for name in (args.variant, "vae", "Qwen3-Embedding-0.6B", args.lm_variant):
-        _svc_ensure_variant(name, ckpt_dir)
-
-    model_dir = _ensure_variant(args.variant, ckpt_dir)
-    safetensors_path = model_dir / "model.safetensors"
-    if not safetensors_path.is_file():
-        shards = sorted(model_dir.glob("model-*.safetensors"))
-        if not shards:
-            raise FileNotFoundError(f"Missing checkpoint: {safetensors_path}")
-        safetensors_path = shards[0]
-
-    infer_steps = args.infer_steps
-    if infer_steps is None:
-        infer_steps = 8 if "turbo" in str(args.variant).lower() else 50
-
-    gs = args.guidance_scale
-    if gs is None:
-        gs = 1.0 if "turbo" in str(args.variant).lower() else 7.0
-    gs = float(gs)
-
-    use_adg = args.use_adg
-    if use_adg is None:
-        use_adg = "base" in str(args.variant).lower() and "turbo" not in str(args.variant).lower()
-
-    ref_root = _svc_resolve_repo(ckpt_dir=str(ckpt_dir), ace_step_repo_root=args.ace_step_repo_root)
-    if ref_root is None:
-        raise RuntimeError(
-            "Could not find ACE-Step 'acestep' package. " "Pass --ace-step-repo-root or set ACE_STEP_REPO_ROOT."
-        )
-    ensure_acestep_repo_on_path(ref_root)
-
-    t_schedule = _svc_build_t_schedule(
-        shift=float(args.shift),
-        infer_steps=int(infer_steps),
-        variant=str(args.variant),
-    )
-
-    if _REUSE_REGISTRY is None:
-        _REUSE_REGISTRY = AceStepModelRegistry()
-        _REUSE_REGISTRY.load(
-            ckpt_dir=ckpt_dir,
-            variant=str(args.variant),
-            lm_variant=str(args.lm_variant),
-            device_id=int(args.device_id),
-            no_ttnn_strict=bool(args.no_ttnn_strict),
-            use_trace=bool(args.use_trace),
-            t_schedule=t_schedule,
-            safetensors_path=safetensors_path,
-            vae_dir=ckpt_dir / "vae",
-            text_model_dir=ckpt_dir / "Qwen3-Embedding-0.6B",
-            ref_root=ref_root,
-            ttnn_5hz_lm=bool(use_ttnn_5hz_lm),
-            use_torch_vae=bool(args.torch_vae),
-        )
-        log_weights_ready()
-    else:
-        from models.demos.ace_step_v1_5.weight_cache import log_weight_reuse
-
-        log_weight_reuse("all-components (session already initialised)", source="device")
-
-    exp_ttnn_lm = bool(use_ttnn_5hz_lm)
-    out_path = Path(args.out)
-
-    _REUSE_REGISTRY.generate(
-        prompt=str(args.prompt),
-        duration_sec=float(args.duration_sec),
-        seed=int(args.seed),
-        variant=str(args.variant),
-        lm_variant=str(args.lm_variant),
-        t_schedule=t_schedule,
-        guidance_scale=gs,
-        use_adg=bool(use_adg),
-        cfg_interval_start=float(args.cfg_interval_start),
-        cfg_interval_end=float(args.cfg_interval_end),
-        use_trace=bool(args.use_trace),
-        use_torch_vae=bool(args.torch_vae),
-        vae_chunk_latents=int(args.vae_chunk_latents),
-        vae_overlap_latents=int(args.vae_overlap_latents),
-        out_path=out_path,
-        exp_ttnn_lm=exp_ttnn_lm,
-        ckpt_dir=ckpt_dir,
-    )
-    from loguru import logger
-
-    logger.success("Wrote: {}", out_path.resolve())
-
-
-def main(
-    session_pass: int = 0,
-    *,
-    _handlers: tuple[Any, Any, Any] | None = None,
-    _demo_session: Any = None,
-) -> None:
+def main() -> None:
     ap = argparse.ArgumentParser(
         description="ACE-Step v1.5: HF preprocessing + TTNN DiT + TTNN or PyTorch VAE decode.",
     )
-    ap.add_argument("--prompt", type=str, default=None, help="Caption / text prompt (optional with --serve).")
-    ap.add_argument(
-        "--ckpt_dir",
-        type=str,
-        default=str(_DEFAULT_CKPT_DIR),
-        help="Checkpoint root dir (default: ~/.cache/huggingface/hub/ACE-Step-1.5-checkpoints).",
-    )
+    ap.add_argument("--prompt", type=str, required=True, help="Caption / text prompt.")
     ap.add_argument(
         "--variant",
         type=str,
@@ -536,9 +405,7 @@ def main(
         ),
     )
     ap.add_argument("--duration_sec", type=float, default=10.0)
-    ap.add_argument("--shift", type=float, default=1.0)
     ap.add_argument("--infer_steps", type=int, default=None, help="Default: 8 turbo, 50 base.")
-    ap.add_argument("--timesteps", type=str, default=None, help="Comma-separated t schedule (optional).")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument(
         "--guidance_scale",
@@ -550,39 +417,11 @@ def main(
             "Set 1 to disable DiT CFG."
         ),
     )
-    ap.add_argument("--cfg_interval_start", type=float, default=0.0)
-    ap.add_argument("--cfg_interval_end", type=float, default=1.0)
-    ap.add_argument(
-        "--use_adg",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Angular CFG (ADG apply_norm=False) on device after B=2 TTNN forward (default: base on, turbo off).",
-    )
     ap.add_argument("--out", type=str, default="ttnn_out.wav")
-    ap.add_argument(
-        "--ace-step-repo-root",
-        type=str,
-        default=None,
-        help="ACE-Step-1.5 repo (contains acestep/). Defaults to env ACE_STEP_REPO_ROOT or walk from ckpt_dir.",
-    )
     ap.add_argument(
         "--use-official-lm",
         action="store_true",
         help="Run full official generate_music (LLM+handlers, CPU). Does not use TTNN; writes --out for A/B.",
-    )
-    ap.add_argument(
-        "--ttnn-condition-embedding",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "Run ACE condition embedding in TTNN (handler path uses forward_payload_traced with "
-            "--use-trace). Default: on. Use --no-ttnn-condition-embedding for Torch prepare_condition."
-        ),
-    )
-    ap.add_argument(
-        "--no-ttnn-strict",
-        action="store_true",
-        help="Do not set throw_exception_on_fallback (may hide TTNN fallbacks).",
     )
     ap.add_argument(
         "--pytorch-lm",
@@ -601,7 +440,7 @@ def main(
         action="store_true",
         help=(
             "Decode latents with PyTorch Diffusers AutoencoderOobleck on GPU/CPU. "
-            "Default: TTNN Oobleck decoder (requires ckpt_dir/vae/config.json + weights)."
+            "Default: TTNN Oobleck decoder (requires ~/.cache/.../ACE-Step-1.5-checkpoints/vae/config.json + weights)."
         ),
     )
     ap.add_argument(
@@ -632,135 +471,18 @@ def main(
             "Single-chip runs ignore mesh-specific parts."
         ),
     )
-    ap.add_argument(
-        "--vae-chunk-latents",
-        type=int,
-        default=32,
-        help=(
-            "TTNN VAE only: maximum latent time length per decode tile (overlap-add for longer clips). "
-            "If decode still overflows L1, lower this value. "
-            "Override with env ACE_STEP_VAE_CHUNK_LATENTS."
-        ),
-    )
-    ap.add_argument(
-        "--vae-overlap-latents",
-        type=int,
-        default=4,
-        help=(
-            "TTNN VAE only: latent-frame overlap between tiles (min 4 internally when possible). "
-            "Override with env ACE_STEP_VAE_OVERLAP_LATENTS."
-        ),
-    )
-    ap.add_argument(
-        "--perf-log",
-        action="store_true",
-        help=(
-            "Log wall-clock time per module and run parameters to stdout/loguru. " "Same as ACE_STEP_DEMO_PERF_LOG=1."
-        ),
-    )
-    ap.add_argument(
-        "--perf-log-steps",
-        action="store_true",
-        help="Log each Euler denoise step wall time. Same as ACE_STEP_DEMO_PERF_LOG_STEPS=1.",
-    )
-    ap.add_argument(
-        "--warmup",
-        action="store_true",
-        help=(
-            "Single process: run an untimed compile-cache pass, then the timed generation. "
-            "Handlers and DiT/VAE/trace stay loaded between passes."
-        ),
-    )
-    ap.add_argument(
-        "--warmup-prompt",
-        type=str,
-        default=None,
-        help="Caption for the warmup pass (default: same as --prompt).",
-    )
-    ap.add_argument(
-        "--warmup-perf",
-        action="store_true",
-        help="Also log perf module lines for the warmup pass.",
-    )
-    ap.add_argument(
-        "--repeat",
-        type=int,
-        default=1,
-        help="Repeat the timed generation N times in the same session (after warmup if set).",
-    )
-    ap.add_argument(
-        "--close-dit-between-passes",
-        action="store_true",
-        help=(
-            "Close the DiT mesh after every session pass (legacy). Default: keep the mesh open "
-            "when the next pass reuses cached preprocess (same prompt/duration/seed)."
-        ),
-    )
-    ap.add_argument(
-        "--serve",
-        action="store_true",
-        help="Keep the session alive and read prompts from stdin until EOF or a blank line.",
-    )
-    ap.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable DEBUG loguru output (includes per-tensor TTNN flatbuffer cache lines).",
-    )
-    ap.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Force INFO-only logging (default). Same as omitting --verbose.",
-    )
-    ap.add_argument(
-        "--use-model-registry",
-        action="store_true",
-        help=(
-            "Load all weights once via AceStepModelRegistry and run a single generation "
-            "(same path as serve_prompt_to_wav). Incompatible with --warmup/--repeat/--serve."
-        ),
-    )
     args = ap.parse_args()
 
     from models.demos.ace_step_v1_5.official_lm_preprocess import configure_acestep_logging
 
-    if bool(args.verbose):
-        log_level = "DEBUG"
-        show_ttnn_cache = True
-    elif bool(args.quiet):
-        log_level = "INFO"
-        show_ttnn_cache = False
-    else:
-        log_level = os.environ.get("ACE_STEP_LOG_LEVEL", "INFO")
-        show_ttnn_cache = log_level.upper() == "DEBUG" and os.environ.get("ACE_STEP_SHOW_TTNN_TENSOR_CACHE", "0") in (
-            "1",
-            "true",
-            "True",
-            "yes",
-        )
-    configure_acestep_logging(level=log_level, show_ttnn_tensor_cache=show_ttnn_cache)
-
-    if bool(getattr(args, "use_model_registry", False)):
-        if not args.prompt:
-            ap.error("--prompt is required for --use-model-registry")
-        _run_with_weight_cache(args)
-        return
-
-    if not args.prompt and not args.serve:
-        ap.error("--prompt is required unless --serve is set")
-    if int(args.repeat) < 1:
-        ap.error("--repeat must be >= 1")
-
-    if args.perf_log:
-        os.environ["ACE_STEP_DEMO_PERF_LOG"] = "1"
-    if args.perf_log_steps:
-        os.environ["ACE_STEP_DEMO_PERF_LOG_STEPS"] = "1"
+    configure_acestep_logging(level="INFO", show_ttnn_tensor_cache=False)
 
     _require_torchaudio()
     use_ttnn_5hz_lm = not bool(args.pytorch_lm)
 
     import torch
 
-    ckpt_dir = Path(args.ckpt_dir)
+    ckpt_dir = _DEFAULT_CKPT_DIR.expanduser().resolve()
     os.environ["ACESTEP_CHECKPOINTS_DIR"] = str(ckpt_dir)
 
     model_dir = _ensure_variant(args.variant, ckpt_dir)
@@ -809,17 +531,14 @@ def main(
     mesh_sku = resolve_ace_step_mesh_sku(cli_value=args.mesh_device)
     split_device = ace_step_needs_split_device(mesh_sku)
 
-    if ace_step_mesh_perf_log_default(mesh_sku=mesh_sku):
-        os.environ.setdefault("ACE_STEP_DEMO_PERF_LOG", "1")
-    if args.perf_log:
-        os.environ["ACE_STEP_DEMO_PERF_LOG"] = "1"
-    if args.perf_log_steps:
-        os.environ["ACE_STEP_DEMO_PERF_LOG_STEPS"] = "1"
+    perf_log_enabled = ace_step_mesh_perf_log_default(mesh_sku=mesh_sku)
+    vae_chunk_latents = 32
+    vae_overlap_latents = 4
 
-    cfg_interval_start = float(args.cfg_interval_start)
-    cfg_interval_end = float(args.cfg_interval_end)
+    cfg_interval_start = 0.0
+    cfg_interval_end = 1.0
     if bool(args.clarity) and split_device:
-        os.environ.setdefault("ACE_STEP_VAE_OVERLAP_LATENTS", "12")
+        vae_overlap_latents = 12
         if cfg_interval_end >= 1.0:
             cfg_interval_end = 0.95
         print(
@@ -842,8 +561,7 @@ def main(
             )
         else:
             print(
-                "[ace_step_v1_5] multi-device mesh: legacy host PyTorch preprocess "
-                "(ACE_STEP_MESH_HOST_PREPROCESS=1; DiT/VAE on full mesh after preprocess).",
+                "[ace_step_v1_5] multi-device mesh: host PyTorch preprocess (DiT/VAE on full mesh after preprocess).",
                 flush=True,
             )
         if use_ttnn_5hz_lm and not mesh_ttnn_preprocess:
@@ -853,14 +571,6 @@ def main(
             )
             args.pytorch_lm = True
             use_ttnn_5hz_lm = False
-        if args.ttnn_condition_embedding and not mesh_ttnn_preprocess:
-            print(
-                "[ace_step_v1_5] multi-device mesh: forcing --no-ttnn-condition-embedding "
-                "(HF prepare_condition on CPU).",
-                flush=True,
-            )
-            args.ttnn_condition_embedding = False
-
     gs = args.guidance_scale
     if gs is None:
         # NOTE: TTNN 5 Hz LM does not force gs=1.0. The LM batch=1 constraint only affects
@@ -875,7 +585,7 @@ def main(
     use_adg = ace_step_mesh_use_adg(
         mesh_sku=mesh_sku,
         variant=str(args.variant),
-        cli_use_adg=False if (bool(args.clarity) and split_device) else args.use_adg,
+        cli_use_adg=False if (bool(args.clarity) and split_device) else None,
     )
 
     if mesh_sku is not None:
@@ -891,13 +601,12 @@ def main(
 
     from models.demos.ace_step_v1_5.ace_step_perf_log import (
         AceStepPerfRecorder,
-        ace_step_perf_logging_enabled,
         emit_session_summary,
         make_denoise_progress_fn,
     )
 
     perf = AceStepPerfRecorder(
-        enabled=ace_step_perf_logging_enabled(),
+        enabled=perf_log_enabled,
         params={
             "variant": str(args.variant),
             "lm_variant": str(args.lm_variant),
@@ -906,7 +615,7 @@ def main(
             "guidance_scale": float(gs),
             "use_adg": bool(use_adg),
             "seed": int(args.seed),
-            "ttnn_condition": bool(args.ttnn_condition_embedding),
+            "ttnn_condition": True,
             "torch_vae": bool(args.torch_vae),
             "use_trace": bool(args.use_trace),
             "ttnn_5hz_lm": bool(use_ttnn_5hz_lm),
@@ -915,49 +624,19 @@ def main(
             "mesh_sku": mesh_sku,
             "split_device": bool(split_device),
             "mesh_ttnn_preprocess": bool(mesh_ttnn_preprocess),
-            "session_pass": int(session_pass),
+            "session_pass": 0,
         },
     )
 
-    from models.demos.ace_step_v1_5.demo_session import AceStepDemoSession, build_demo_run_specs
+    from models.demos.ace_step_v1_5.demo_session import AceStepDemoSession
 
-    demo_session = _demo_session if _demo_session is not None else AceStepDemoSession()
+    demo_session = AceStepDemoSession()
     if demo_session.session_perf.session_t0 is None:
         demo_session.session_perf.session_t0 = time.perf_counter()
-    session_active = (
-        bool(getattr(args, "warmup", False))
-        or int(getattr(args, "repeat", 1)) > 1
-        or bool(getattr(args, "serve", False))
-    )
-    if session_pass == 0:
-        demo_session.run_specs = build_demo_run_specs(args)
-    run_specs = getattr(demo_session, "run_specs", None) or build_demo_run_specs(args)
-    if session_active and session_pass > 0:
-        demo_session.mark_pass_started()
-    if session_pass == 0 and session_active:
-        print("[ace_step_v1_5] session mode: handlers + DiT/VAE reused across passes", flush=True)
-    if session_pass < len(run_specs):
-        run_spec = run_specs[session_pass]
-    elif session_pass == 0:
-        from models.demos.ace_step_v1_5.demo_session import DemoRunSpec
 
-        run_spec = DemoRunSpec(prompt=str(args.prompt), out_path=Path(args.out), summary_label="demo_total")
-    else:
-        run_spec = None
-    if run_spec is not None:
-        if run_spec.record_perf:
-            perf.begin_run(summary_label=run_spec.summary_label, record=True)
-        else:
-            perf.begin_run_disabled(summary_label=run_spec.summary_label)
-        if run_spec.is_warmup:
-            print("[ace_step_v1_5] --- warmup pass (compile cache) ---", flush=True)
-        elif session_active and session_pass > 0:
-            print(f"[ace_step_v1_5] --- pass: {run_spec.summary_label} ---", flush=True)
-        run_prompt = run_spec.prompt
-        run_out_path = run_spec.out_path
-    else:
-        run_prompt = str(args.prompt)
-        run_out_path = Path(args.out)
+    perf.begin_run(summary_label="demo_total", record=True)
+    run_prompt = str(args.prompt)
+    run_out_path = Path(args.out)
 
     torch.manual_seed(int(args.seed))
     np.random.seed(int(args.seed))
@@ -965,12 +644,12 @@ def main(
     torch_dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def _ensure_acestep_on_path() -> Path:
-        root = _resolve_ace_step_repo_root(ckpt_dir=str(args.ckpt_dir), ace_step_repo_root=args.ace_step_repo_root)
+        root = _resolve_ace_step_repo_root(ckpt_dir=str(ckpt_dir), ace_step_repo_root=None)
         if root is None:
             raise RuntimeError(
                 "Could not find ACE-Step-1.5 'acestep' package. The vendored copy at "
                 "models/demos/ace_step_v1_5/torch_ref/_vendored_acestep/acestep/ should normally "
-                "be used automatically; if it is missing, pass --ace-step-repo-root or set "
+                "be used automatically; if it is missing, set "
                 "ACE_STEP_REPO_ROOT to an external checkout."
             )
 
@@ -999,7 +678,7 @@ def main(
                 "  1. Keep the vendored copy at "
                 "models/demos/ace_step_v1_5/torch_ref/_vendored_acestep/ in place "
                 "(it ships with this demo by default).\n"
-                "  2. Point --ace-step-repo-root / $ACE_STEP_REPO_ROOT at an external clone "
+                "  2. Set ACE_STEP_REPO_ROOT to an external clone "
                 "of https://github.com/ace-step/ACE-Step-1.5.\n"
                 "  3. Run without --use-official-lm (the default TTNN path doesn't need "
                 "acestep.inference)."
@@ -1050,7 +729,7 @@ def main(
             guidance_scale=gs,
             cfg_interval_start=cfg_interval_start,
             cfg_interval_end=cfg_interval_end,
-            shift=float(args.shift),
+            shift=1.0,
         )
         config = GenerationConfig(batch_size=1, use_random_seed=False, seeds=[int(args.seed)], audio_format="wav")
         out_dir = Path(args.out).resolve().parent
@@ -1079,7 +758,6 @@ def main(
         build_filtered_dit_kwargs_for_handler,
         configure_acestep_logging,
         handler_prepare_condition_payload,
-        handler_prepare_condition_tensors,
     )
 
     configure_acestep_logging()
@@ -1098,7 +776,7 @@ def main(
             "  1. Keep the vendored copy at "
             "models/demos/ace_step_v1_5/torch_ref/_vendored_acestep/ in place "
             "(it ships with this demo by default).\n"
-            "  2. Point --ace-step-repo-root / $ACE_STEP_REPO_ROOT at an external clone "
+            "  2. Set ACE_STEP_REPO_ROOT to an external clone "
             "of https://github.com/ace-step/ACE-Step-1.5.\n"
             "  3. If e.name == 'torchaudio': pip install torchaudio (match your torch/CUDA "
             "build from pytorch.org; required for handler preprocessing)."
@@ -1115,17 +793,13 @@ def main(
 
     tt_dev_early = None
     need_preprocess_ttnn_dev = bool(use_ttnn_5hz_lm) or bool(mesh_ttnn_preprocess)
-    if need_preprocess_ttnn_dev and _handlers is None:
+    if need_preprocess_ttnn_dev:
         # TTNN 5 Hz LM uses ``max_batch_size=1`` (see ``QwenModelTtTransformers``). That
         # applies to the LM only (``lm_cfg_scale=1`` below), not DiT CFG.
-        _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
+        _configure_ttnn_runtime()
         import ttnn as _ttnn_pre_lm
 
-        if (
-            not args.no_ttnn_strict
-            and hasattr(_ttnn_pre_lm, "CONFIG")
-            and hasattr(_ttnn_pre_lm.CONFIG, "throw_exception_on_fallback")
-        ):
+        if hasattr(_ttnn_pre_lm, "CONFIG") and hasattr(_ttnn_pre_lm.CONFIG, "throw_exception_on_fallback"):
             _ttnn_pre_lm.CONFIG.throw_exception_on_fallback = True
         if mesh_ttnn_preprocess:
             tt_dev_early = open_preprocess_device(
@@ -1143,54 +817,40 @@ def main(
             tt_dev_early.enable_program_cache()
         demo_session.preprocess_dev = tt_dev_early
 
-    if _handlers is not None:
-        dit_handler, llm_handler, tt_dev_early = _handlers
-        demo_session.dit_handler = dit_handler
-        demo_session.llm_handler = llm_handler
-        if tt_dev_early is not None:
-            llm_handler.set_ttnn_logits_device(tt_dev_early)
-    else:
-        dit_handler = AceStepHandler()
-        llm_handler = LocalFiveHzLMHandler()
+    dit_handler = AceStepHandler()
+    llm_handler = LocalFiveHzLMHandler()
 
-        device = "cpu"
-        _init_t0 = time.perf_counter() if perf.enabled else None
-        with perf.timed("handler_init"):
-            status, ok = dit_handler.initialize_service(
-                project_root=str(ref_root),
-                config_path=args.variant,
-                device=device,
-                use_flash_attention=False,
-            )
-            print(status, flush=True)
-            if not ok:
-                raise RuntimeError("AceStepHandler.initialize_service failed")
-            status, ok = llm_handler.initialize(
-                checkpoint_dir=str(ckpt_dir),
-                lm_model_path=args.lm_variant,
-                backend="pt",
-                device=device,
-                ttnn_causal_device=tt_dev_early,
-                use_ttnn_causal_lm=bool(use_ttnn_5hz_lm),
-                ttnn_lm_prefill_trace=bool(args.use_trace) and bool(use_ttnn_5hz_lm),
-                ttnn_lm_decode_trace=bool(args.use_trace) and bool(use_ttnn_5hz_lm),
-            )
-            print(status, flush=True)
-            if not ok:
-                raise RuntimeError("5 Hz LM (local HF) initialize failed")
-        if _init_t0 is not None:
-            _init_ms = (time.perf_counter() - _init_t0) * 1000.0
-            perf.record_init_once("handler_init", _init_ms)
-            demo_session.session_perf.note_init("handler_init", _init_ms)
-        demo_session.dit_handler = dit_handler
-        demo_session.llm_handler = llm_handler
-
-    ts_list = None
-    if args.timesteps:
-        raw_ts = [float(x.strip()) for x in args.timesteps.split(",") if x.strip()]
-        while raw_ts and raw_ts[-1] == 0.0:
-            raw_ts.pop()
-        ts_list = raw_ts or None
+    device = "cpu"
+    _init_t0 = time.perf_counter() if perf.enabled else None
+    with perf.timed("handler_init"):
+        status, ok = dit_handler.initialize_service(
+            project_root=str(ref_root),
+            config_path=args.variant,
+            device=device,
+            use_flash_attention=False,
+        )
+        print(status, flush=True)
+        if not ok:
+            raise RuntimeError("AceStepHandler.initialize_service failed")
+        status, ok = llm_handler.initialize(
+            checkpoint_dir=str(ckpt_dir),
+            lm_model_path=args.lm_variant,
+            backend="pt",
+            device=device,
+            ttnn_causal_device=tt_dev_early,
+            use_ttnn_causal_lm=bool(use_ttnn_5hz_lm),
+            ttnn_lm_prefill_trace=bool(args.use_trace) and bool(use_ttnn_5hz_lm),
+            ttnn_lm_decode_trace=bool(args.use_trace) and bool(use_ttnn_5hz_lm),
+        )
+        print(status, flush=True)
+        if not ok:
+            raise RuntimeError("5 Hz LM (local HF) initialize failed")
+    if _init_t0 is not None:
+        _init_ms = (time.perf_counter() - _init_t0) * 1000.0
+        perf.record_init_once("handler_init", _init_ms)
+        demo_session.session_perf.note_init("handler_init", _init_ms)
+    demo_session.dit_handler = dit_handler
+    demo_session.llm_handler = llm_handler
 
     reuse_preprocess = demo_session.can_reuse_preprocess(
         prompt=run_prompt,
@@ -1227,12 +887,12 @@ def main(
             guidance_scale=gs,
             lm_cfg_scale=1.0 if use_ttnn_5hz_lm else 2.0,
             use_adg=use_adg,
-            cfg_interval_start=float(args.cfg_interval_start),
-            cfg_interval_end=float(args.cfg_interval_end),
-            shift=float(args.shift),
+            cfg_interval_start=cfg_interval_start,
+            cfg_interval_end=cfg_interval_end,
+            shift=1.0,
             thinking=True,
             use_constrained_decoding=True,
-            timesteps=ts_list,
+            timesteps=None,
         )
         config = GenerationConfig(
             batch_size=1,
@@ -1247,14 +907,14 @@ def main(
         if not qwen_safetensors.is_file():
             raise FileNotFoundError(f"Missing Qwen embedding weights at {qwen_safetensors}")
 
-        _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
+        _configure_ttnn_runtime()
         import ttnn
         from models.demos.ace_step_v1_5.ttnn_impl.audio_code_detokenizer import TtAceStepAudioCodeDetokenizer
         from models.demos.ace_step_v1_5.ttnn_impl.qwen3_embedding_ace_step import (
             AceStepQwen3Encoder as TtQwen3EmbeddingEncoder,
         )
 
-        if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
+        if hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
             ttnn.CONFIG.throw_exception_on_fallback = True
 
         if demo_session.preprocess_dev is not None and demo_session.dit_dev is None:
@@ -1306,80 +966,72 @@ def main(
         if bool(args.use_trace):
             print("[qwen3] backend=ttnn trace+2cq caption encode (handler infer_text_embeddings)", flush=True)
         try:
-            if args.ttnn_condition_embedding:
-                from models.demos.ace_step_v1_5.official_lm_preprocess import (
-                    condition_encode_payload_tt,
-                    release_preprocess_device_traces,
-                )
-                from models.demos.ace_step_v1_5.ttnn_impl.condition_encoder import TtAceStepInstrumentalConditionEncoder
+            from models.demos.ace_step_v1_5.official_lm_preprocess import (
+                condition_encode_payload_tt,
+                release_preprocess_device_traces,
+            )
+            from models.demos.ace_step_v1_5.ttnn_impl.condition_encoder import TtAceStepInstrumentalConditionEncoder
 
-                use_trace = bool(args.use_trace)
-                with perf.timed("handler_preprocess", device=dev):
-                    payload, frames = handler_prepare_condition_payload(dit_handler, filtered)
-                perf.set_params(frames=int(frames))
-                if use_trace:
-                    release_preprocess_device_traces(
-                        device=dev,
-                        tt_qwen_encoder=qwen_tt_encoder,
-                        tt_audio_detokenizer=audio_code_detokenizer,
-                    )
-                condition_encoder = TtAceStepInstrumentalConditionEncoder(
+            use_trace = bool(args.use_trace)
+            with perf.timed("handler_preprocess", device=dev):
+                payload, frames = handler_prepare_condition_payload(dit_handler, filtered)
+            perf.set_params(frames=int(frames))
+            if use_trace:
+                release_preprocess_device_traces(
                     device=dev,
-                    checkpoint_safetensors_path=str(safetensors_path),
-                    dtype=getattr(ttnn, "bfloat16", None),
+                    tt_qwen_encoder=qwen_tt_encoder,
+                    tt_audio_detokenizer=audio_code_detokenizer,
                 )
-                with perf.timed("condition_encoder", device=dev):
-                    enc_hs_tt_one, enc_mask_np, ctx_tt_one, null_emb_tt = condition_encode_payload_tt(
-                        condition_encoder,
-                        payload,
-                        use_trace=use_trace,
-                    )
-                enc_hs_tt_one, ctx_tt_one = _finalize_condition_trace_tensors(
-                    enc_hs_tt_one,
+            condition_encoder = TtAceStepInstrumentalConditionEncoder(
+                device=dev,
+                checkpoint_safetensors_path=str(safetensors_path),
+                dtype=getattr(ttnn, "bfloat16", None),
+            )
+            with perf.timed("condition_encoder", device=dev):
+                enc_hs_tt_one, enc_mask_np, ctx_tt_one, null_emb_tt = condition_encode_payload_tt(
                     condition_encoder,
-                    dev,
+                    payload,
                     use_trace=use_trace,
-                    ctx_tt=ctx_tt_one,
                 )
-                if mesh_ttnn_preprocess:
-                    with perf.timed("preprocess_readback", device=dev):
-                        enc_hs = ace_step_ttnn_to_torch(enc_hs_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
-                        ctx_lat = ace_step_ttnn_to_torch(ctx_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
-                        null_emb = ace_step_ttnn_to_torch(null_emb_tt, mesh_device=dev, dtype=torch.float32).cpu()
-                    enc_mask = torch.from_numpy(np.asarray(enc_mask_np, dtype=np.float32))
-                    for _maybe_tt in (enc_hs_tt_one, ctx_tt_one, null_emb_tt):
-                        if _maybe_tt is not None:
-                            try:
-                                ttnn.deallocate(_maybe_tt)
-                            except Exception:
-                                pass
-                    enc_hs_tt_one = None
-                    ctx_tt_one = None
-                    null_emb_tt = None
-                    condition_tensors_on_device = False
-                else:
-                    enc_mask = torch.from_numpy(enc_mask_np).to(dtype=torch.float32)
-                    condition_tensors_on_device = True
-                if use_trace:
-                    print(
-                        "[condition] backend=ttnn trace+2cq official "
-                        "(lyric 8L + timbre 4L + text+concat + ctx concat trace)",
-                        flush=True,
-                    )
-                    print(
-                        "[preprocess] qwen caption + lyric embed + audio detokenizer + "
-                        "5Hz LM prefill+decode trace enabled",
-                        flush=True,
-                    )
-                else:
-                    print("[condition] backend=ttnn official lyric+timbre+text+context (eager)", flush=True)
-            else:
-                with perf.timed("handler_preprocess"):
-                    enc_hs, enc_mask, ctx_lat, frames, null_emb = handler_prepare_condition_tensors(
-                        dit_handler, filtered
-                    )
-                perf.set_params(frames=int(frames))
+            enc_hs_tt_one, ctx_tt_one = _finalize_condition_trace_tensors(
+                enc_hs_tt_one,
+                condition_encoder,
+                dev,
+                use_trace=use_trace,
+                ctx_tt=ctx_tt_one,
+            )
+            if mesh_ttnn_preprocess:
+                with perf.timed("preprocess_readback", device=dev):
+                    enc_hs = ace_step_ttnn_to_torch(enc_hs_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+                    ctx_lat = ace_step_ttnn_to_torch(ctx_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+                    null_emb = ace_step_ttnn_to_torch(null_emb_tt, mesh_device=dev, dtype=torch.float32).cpu()
+                enc_mask = torch.from_numpy(np.asarray(enc_mask_np, dtype=np.float32))
+                for _maybe_tt in (enc_hs_tt_one, ctx_tt_one, null_emb_tt):
+                    if _maybe_tt is not None:
+                        try:
+                            ttnn.deallocate(_maybe_tt)
+                        except Exception:
+                            pass
+                enc_hs_tt_one = None
+                ctx_tt_one = None
+                null_emb_tt = None
                 condition_tensors_on_device = False
+            else:
+                enc_mask = torch.from_numpy(enc_mask_np).to(dtype=torch.float32)
+                condition_tensors_on_device = True
+            if use_trace:
+                print(
+                    "[condition] backend=ttnn trace+2cq official "
+                    "(lyric 8L + timbre 4L + text+concat + ctx concat trace)",
+                    flush=True,
+                )
+                print(
+                    "[preprocess] qwen caption + lyric embed + audio detokenizer + "
+                    "5Hz LM prefill+decode trace enabled",
+                    flush=True,
+                )
+            else:
+                print("[condition] backend=ttnn official lyric+timbre+text+context (eager)", flush=True)
         finally:
             _restore_infer_txt()
             if hasattr(qwen_tt_encoder, "release_trace"):
@@ -1401,15 +1053,13 @@ def main(
     perf.set_params(do_cfg=bool(do_cfg))
 
     t_schedule = _build_t_schedule(
-        shift=float(args.shift),
         infer_steps=int(infer_steps),
-        timesteps=args.timesteps,
         variant=str(args.variant),
     )
     timesteps_host = np.asarray(t_schedule + [0.0], dtype=np.float32)
 
     # --- TTNN (DiT): device may already be open after TTNN Qwen3 caption embedding (handler path) ---
-    _configure_ttnn_runtime(no_ttnn_strict=args.no_ttnn_strict)
+    _configure_ttnn_runtime()
     import ttnn
     from models.demos.ace_step_v1_5.torch_ref._vendored_acestep.acestep.models.common.apg_guidance import MomentumBuffer
     from models.demos.ace_step_v1_5.ttnn_impl.dit_sampling_ttnn import (
@@ -1436,15 +1086,13 @@ def main(
     from models.demos.ace_step_v1_5.ttnn_impl.full_pipeline import AceStepV15TTNNPipeline
     from models.demos.ace_step_v1_5.ttnn_impl.oobleck_vae_decoder import TtOobleckVaeDecoder
 
-    if not args.no_ttnn_strict and hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
+    if hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
         ttnn.CONFIG.throw_exception_on_fallback = True
 
     dit_num_cqs = 2 if bool(args.use_trace) else 1
     if demo_session.dit_dev is not None:
         dev = demo_session.dit_dev
         dev_opened_for_ttnn_text_encoder = True
-        if demo_session.multi_pass:
-            print("[ace_step_v1_5] reusing DiT mesh device from session", flush=True)
     elif split_device and dev_opened_for_ttnn_text_encoder and dev is not None:
         dev = transition_preprocess_to_dit_device(
             ttnn,
@@ -1486,19 +1134,6 @@ def main(
     pred_latents: Any = None
     wav_bct_cpu: Any = None
 
-    _more_session_passes = session_pass + 1 < len(run_specs)
-    _keep_dit_mesh_for_next = (
-        session_active
-        and _more_session_passes
-        and demo_session.should_keep_dit_mesh_open(
-            run_specs=run_specs,
-            session_pass=session_pass,
-            duration_sec=float(args.duration_sec),
-            seed=int(args.seed),
-            force_close=bool(getattr(args, "close_dit_between_passes", False)),
-        )
-    )
-
     try:
         if demo_session.pipe is None:
             with perf.timed("dit_pipeline_init", device=dev):
@@ -1509,8 +1144,6 @@ def main(
                     expected_input_length=int(frames),
                 )
         pipe = demo_session.pipe
-        if demo_session.multi_pass:
-            print("[ace_step_v1_5] reusing DiT pipeline from session", flush=True)
         if ace_step_device_num_chips(dev) > 1:
             ace_step_synchronize_device(ttnn, dev)
         print("[ace_step_v1_5] DiT pipeline init complete", flush=True)
@@ -1545,8 +1178,6 @@ def main(
                             weights_dtype=act_dtype_vae,
                         )
                     demo_session.tt_vae = tt_vae
-                elif demo_session.multi_pass:
-                    print("[ace_step_v1_5] reusing TTNN VAE from session", flush=True)
 
         _ensure_acestep_on_path()
 
@@ -2088,10 +1719,10 @@ def main(
             vae_cs, vae_ov = ace_step_resolve_vae_tiling(
                 frames=int(frames),
                 mesh_sku=mesh_sku,
-                chunk_cli=int(args.vae_chunk_latents),
-                overlap_cli=int(args.vae_overlap_latents),
+                chunk_cli=vae_chunk_latents,
+                overlap_cli=vae_overlap_latents,
             )
-            if vae_ov > int(args.vae_overlap_latents):
+            if vae_ov > vae_overlap_latents:
                 print(
                     f"[ace_step_v1_5] VAE tiling: chunk={vae_cs} overlap={vae_ov} "
                     f"(auto widened for {int(frames)} latent frames on mesh)",
@@ -2161,22 +1792,9 @@ def main(
                     ttnn.deallocate(_maybe_tt)
                 except Exception:
                     pass
-        if _more_session_passes and session_active:
-            if _keep_dit_mesh_for_next:
-                print(
-                    "[ace_step_v1_5] keeping DiT mesh open for next pass "
-                    "(reuse pipe/VAE/trace; cached preprocess on next pass)",
-                    flush=True,
-                )
-            else:
-                demo_session.close_dit_device(ttnn)
-                print("[ace_step_v1_5] closed DiT mesh before next pass", flush=True)
-        elif not _more_session_passes:
-            demo_session.release(ttnn)
+        demo_session.release(ttnn)
 
-    if run_spec is not None and (run_spec.is_warmup or run_out_path is None):
-        print("[ace_step_v1_5] warmup pass complete (no wav written)", flush=True)
-    elif wav_bct_cpu is not None:
+    if wav_bct_cpu is not None:
         wav = _normalize_wav_for_save(wav_bct_cpu.float())
         wav_to_save = wav[0]
         out_path = run_out_path if run_out_path is not None else Path(args.out)
@@ -2207,36 +1825,19 @@ def main(
         _save_wav_fallback(wav_to_save, out_path, sample_rate=48000)
         print(f"Wrote: {out_path}", flush=True)
 
-    if run_spec is not None:
-        if perf.enabled:
-            demo_session.session_perf.add_pass_snapshot(
-                perf.export_pass_snapshot(
-                    label=run_spec.summary_label,
-                    session_pass=session_pass,
-                    is_warmup=run_spec.is_warmup,
-                )
+    if perf.enabled:
+        demo_session.session_perf.add_pass_snapshot(
+            perf.export_pass_snapshot(
+                label="demo_total",
+                session_pass=0,
+                is_warmup=False,
             )
-        perf.emit_summary(label=run_spec.summary_label)
-
-    _has_more_passes = demo_session.dit_handler is not None and session_pass + 1 < len(run_specs)
-    if _has_more_passes:
-        return main(
-            session_pass + 1,
-            _handlers=(
-                demo_session.dit_handler,
-                demo_session.llm_handler,
-                None,
-            ),
-            _demo_session=demo_session,
         )
-
-    emit_session_summary(demo_session.session_perf)
-    out_path = Path(args.out)
-    _save_wav_fallback(wav[0], out_path, sample_rate=48000)
     perf.emit_summary(label="demo_total")
+    emit_session_summary(demo_session.session_perf)
     from loguru import logger
 
-    logger.success("Wrote: {}", out_path.resolve())
+    logger.success("Wrote: {}", run_out_path.resolve())
 
 
 if __name__ == "__main__":

@@ -15,18 +15,6 @@ import torch.nn as nn
 from models.demos.ace_step_v1_5.tests._dit_decoder_pcc_common import assert_pcc_print
 
 
-def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.float().flatten()
-    b = b.float().flatten()
-    n = min(a.numel(), b.numel())
-    if n == 0:
-        return 0.0
-    a = a[:n] - a[:n].mean()
-    b = b[:n] - b[:n].mean()
-    denom = a.square().sum().sqrt() * b.square().sum().sqrt() + 1e-12
-    return float((a * b).sum() / denom)
-
-
 @dataclass(frozen=True)
 class AceCfg:
     patch_size: int

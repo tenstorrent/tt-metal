@@ -89,14 +89,6 @@ def test_ttnn_text_condition_embedding_pcc_vs_torch(device):
     if text_tt_torch.ndim == 4:
         text_tt_torch = text_tt_torch.squeeze(1)
 
-    # ``AceStepQwen3Encoder.forward`` ignores ``attention_mask`` by design (it pads input_ids
-    # to ``max_seq_len`` and lets the stock causal mask in ``Attention.forward_prefill`` do
-    # the rest). HF's ``AutoModel`` honours ``attention_mask`` and therefore produces
-    # **different** hidden states at the pad positions (where it deliberately avoids
-    # attending to other pads). For right-padded input with causal attention, real positions
-    # ``0..real_len-1`` are unaffected by the difference; pad positions diverge legitimately.
-    # Compare only the real positions so the PCC reflects encoder parity rather than
-    # pad-mask handling.
     text_ref_real = text_ref_hf[:, :real_len, :].contiguous()
     text_tt_real = text_tt_torch[:, :real_len, :].contiguous()
     print(
@@ -106,7 +98,6 @@ def test_ttnn_text_condition_embedding_pcc_vs_torch(device):
     )
     assert_pcc_print("ttnn_qwen3_hidden_vs_hf", text_ref_real, text_tt_real, pcc=0.98)
 
-    # Projector PCC: same TTNN Qwen hidden states as production (``run_prompt_to_wav`` path).
     with torch.inference_mode():
         projected_ref = torch.matmul(text_tt_torch.to(torch.bfloat16), text_projector_w.t()).float()
 
