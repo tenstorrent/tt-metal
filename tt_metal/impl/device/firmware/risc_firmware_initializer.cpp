@@ -536,11 +536,16 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             // recover once the ERISC completes its reboot.
             //
             // Fix: before calling initialize_and_launch_firmware(), probe the relay with a
-            // bounded retry loop. Poll the heartbeat register of any active ETH core on this
-            // device via the relay. If the probe succeeds (heartbeat == 0xABCDxxxx), the
-            // relay receiver is live and init is safe to proceed. If it fails, clear
-            // relay_broken and retry every 50 ms up to 5 000 ms. Only after that full
-            // timeout do we classify the relay as truly (not transiently) broken.
+            // bounded retry loop. Two-phase check:
+            //   1. Read probe: poll heartbeat register of any active ETH core on the device
+            //      via the relay (heartbeat == 0xABCDxxxx → ERISC firmware running).
+            //   2. Write probe: attempt write_core_immediate to first Tensix CORE_INFO addr.
+            //      The relay ERISC sets heartbeat before its NOC write-forwarding loop starts;
+            //      without this, initialize_and_launch_firmware's first write blocks in
+            //      wait_for_non_mmio_flush for 5013ms and then throws. (#42429 FIX ST)
+            //
+            // If either probe fails, clear relay_broken and retry every 50 ms up to 12 000 ms.
+            // Only after that full timeout do we classify the relay as truly broken.
             //
             // This is always run, not just when relay_broken is set after reset_cores:
             //   • relay_broken after reset_cores  → ERISC reboot took >one write timeout
@@ -568,7 +573,7 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                             device_id);
                     }
 
-                    constexpr int kRsTimeoutMs = 5000;
+                    constexpr int kRsTimeoutMs = 12000;  // must exceed write_core_immediate UMD timeout (~5013ms)
                     constexpr int kRsStepMs    = 50;
                     const auto rs_start = std::chrono::steady_clock::now();
                     bool relay_ready = false;
@@ -582,21 +587,64 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                             auto hb_data = cluster_.read_core(
                                 device_id, probe_virt, hb_addr_rs, sizeof(uint32_t));
                             if ((hb_data[0] >> 16) == 0xABCDu) {
-                                const auto rs_elapsed_ms =
-                                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                                        std::chrono::steady_clock::now() - rs_start)
-                                        .count();
+                                // Heartbeat confirms relay ERISC firmware is running.
+                                // But the ERISC sets heartbeat BEFORE its NOC write-forwarding
+                                // loop starts. Without a write probe here, the first
+                                // write_core_immediate in initialize_and_launch_firmware enters
+                                // wait_for_non_mmio_flush and blocks for 5013ms before throwing.
+                                // Probe the full relay write path now so we know it is ready.
+                                // (#42429 FIX ST)
+                                bool write_probe_ok = false;
+                                const CoreCoord tensix_grid =
+                                    cluster_.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+                                if (tensix_grid.x > 0 && tensix_grid.y > 0) {
+                                    const CoreCoord probe_tensix_virt =
+                                        cluster_.get_virtual_coordinate_from_logical_coordinates(
+                                            device_id, CoreCoord(0, 0), CoreType::WORKER);
+                                    const uint64_t probe_addr = hal_.get_dev_addr(
+                                        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::CORE_INFO);
+                                    const uint32_t dummy = 0u;
+                                    try {
+                                        cluster_.write_core_immediate(
+                                            &dummy, sizeof(dummy),
+                                            {static_cast<size_t>(device_id), probe_tensix_virt},
+                                            probe_addr);
+                                        write_probe_ok = true;
+                                    } catch (...) {
+                                        // Write-forwarding not ready yet. relay_broken was set by
+                                        // write_core_immediate; clear_relay_broken at top of loop
+                                        // resets it on the next iteration.
+                                    }
+                                } else {
+                                    // No Tensix grid — skip write probe, proceed on heartbeat alone.
+                                    write_probe_ok = true;
+                                }
+
+                                if (write_probe_ok) {
+                                    const auto rs_elapsed_ms =
+                                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                                            std::chrono::steady_clock::now() - rs_start)
+                                            .count();
+                                    log_info(
+                                        tt::LogAlways,
+                                        "run_launch_phase: FIX RS/ST — device {} relay write path "
+                                        "ready in {}ms (heartbeat=0x{:08x}). (#42429)",
+                                        device_id,
+                                        rs_elapsed_ms,
+                                        hb_data[0]);
+                                    relay_ready = true;
+                                    break;
+                                }
+
+                                // Heartbeat live but write-forwarding not yet ready — retry.
                                 log_info(
                                     tt::LogAlways,
-                                    "run_launch_phase: FIX RS — device {} relay receiver ready "
-                                    "in {}ms (heartbeat=0x{:08x}). (#42429)",
+                                    "run_launch_phase: FIX RS/ST — device {} heartbeat=0x{:08x} "
+                                    "but write probe failed; retrying write-forwarding check. (#42429)",
                                     device_id,
-                                    rs_elapsed_ms,
                                     hb_data[0]);
-                                relay_ready = true;
-                                break;
                             }
-                            // Non-ABCD heartbeat: receiver alive but still booting, retry.
+                            // Non-ABCD heartbeat or write probe failed: receiver still booting, retry.
                         } catch (...) {
                             // Relay read threw; receiver still rebooting. relay_broken was
                             // re-set by read_core FIX YA; will be cleared next iteration.
