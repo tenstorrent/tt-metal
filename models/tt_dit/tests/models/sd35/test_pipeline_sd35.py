@@ -27,15 +27,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, topology, num_links",
     [
-        pytest.param(
-            (2, 4),
-            (2, 1),
-            (2, 0),
-            (2, 1),
-            ttnn.Topology.Linear,
-            1,
-            marks=pytest.mark.skip(reason="Disabled by issue #44937"),
-        ),
+        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
         [(2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1],
         [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
     ],
@@ -77,6 +69,8 @@ def test_sd35_pipeline(
     # Setup CI environment
     if is_ci_env and traced:
         pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
+    if cfg == (2, 1) and sp == (2, 0) and tp == (2, 1) and not traced:
+        pytest.skip("Disabled by issue #44937")
 
     # Create pipeline
     pipeline = StableDiffusion3Pipeline.create_pipeline(
