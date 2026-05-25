@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Union
 
 import numpy as np
 import torch
@@ -196,42 +197,78 @@ def preprocess_tt_custom_albert(
 # --- helpers ----------------------------------------------------------------
 
 
-def _fix_b1th_after_linear(x: ttnn.Tensor, *, B: int, T: int, width: int) -> ttnn.Tensor:
+def _is_l1_interleaved(mc: ttnn.MemoryConfig) -> bool:
+    return mc.buffer_type == ttnn.BufferType.L1 and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+
+
+def _ensure_dram_interleaved(x: ttnn.Tensor) -> ttnn.Tensor:
+    """Hand off final BERT output to downstream ops (KModel) that expect DRAM activations."""
+    mc = x.memory_config()
+    if mc.buffer_type == ttnn.BufferType.DRAM and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        return x
+    out = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+    if out is not x:
+        ttnn.deallocate(x)
+    return out
+
+
+def _fix_b1th_after_linear(
+    x: ttnn.Tensor,
+    *,
+    B: int,
+    T: int,
+    width: int,
+    memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
+) -> ttnn.Tensor:
     """``ttnn.linear`` may return ``[1, B, T, C]`` instead of ``[B, 1, T, C]``."""
     sh = list(x.shape)
     if len(sh) == 4 and int(sh[0]) == 1 and int(sh[1]) == B:
-        return ttnn.permute(x, (1, 0, 2, 3))
+        return ttnn.permute(x, (1, 0, 2, 3), memory_config=memory_config)
     if len(sh) == 4 and int(sh[0]) == B and int(sh[1]) == 1:
-        return ttnn.reshape(x, [B, 1, T, width])
+        return ttnn.reshape(x, [B, 1, T, width], memory_config=memory_config)
     raise ValueError(f"unexpected linear output shape {sh} for B={B} T={T} width={width}")
 
 
-def _to_b1th(x: ttnn.Tensor, *, B: int, T: int, width: int) -> ttnn.Tensor:
+def _to_b1th(
+    x: ttnn.Tensor,
+    *,
+    B: int,
+    T: int,
+    width: int,
+    memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
+) -> ttnn.Tensor:
     """Normalize activations to ``[B, 1, T, width]`` for ``nlp_create_qkv_heads``."""
     while len(x.shape) > 4:
         x = ttnn.squeeze(x, 0)
     sh = list(x.shape)
     if len(sh) == 3:
-        return ttnn.reshape(x, [B, 1, T, width])
+        return ttnn.reshape(x, [B, 1, T, width], memory_config=memory_config)
     if len(sh) == 4 and int(sh[0]) == 1 and int(sh[1]) == B:
-        return ttnn.permute(x, (1, 0, 2, 3))
+        return ttnn.permute(x, (1, 0, 2, 3), memory_config=memory_config)
     if len(sh) == 4 and int(sh[0]) == B and int(sh[1]) == 1:
-        return ttnn.reshape(x, [B, 1, T, width])
+        return ttnn.reshape(x, [B, 1, T, width], memory_config=memory_config)
     raise ValueError(f"unexpected shape {sh} for B={B} T={T} width={width}")
 
 
-def _from_b1th(x: ttnn.Tensor, *, B: int, T: int, hidden_size: int) -> ttnn.Tensor:
+def _from_b1th(
+    x: ttnn.Tensor,
+    *,
+    B: int,
+    T: int,
+    hidden_size: int,
+    memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
+) -> ttnn.Tensor:
     """``[B, 1, T, H]`` or ``[1, B, T, H]`` -> ``[B, T, H]`` TILE."""
     while len(x.shape) > 4:
         x = ttnn.squeeze(x, 0)
     sh = list(x.shape)
     if len(sh) == 3:
-        return ttnn.reshape(x, [B, T, hidden_size])
+        return ttnn.reshape(x, [B, T, hidden_size], memory_config=memory_config)
     if len(sh) == 4 and int(sh[0]) == 1 and int(sh[1]) == B:
-        x = ttnn.permute(x, (1, 0, 2, 3))
+        x = ttnn.permute(x, (1, 0, 2, 3), memory_config=memory_config)
     elif not (len(sh) == 4 and int(sh[0]) == B and int(sh[1]) == 1):
         raise ValueError(f"unexpected shape {sh} for B={B} T={T} H={hidden_size}")
-    return ttnn.reshape(x, [B, T, hidden_size])
+    return ttnn.reshape(x, [B, T, hidden_size], memory_config=memory_config)
 
 
 def _mcast_1d_dram_program_config(
@@ -330,8 +367,152 @@ def _batched_attn_matmul_program_config(
     )
 
 
-def _dram_layernorm_program_config() -> ttnn.LayerNormDefaultProgramConfig:
+@dataclass(frozen=True)
+class TTAlbertWidthShardedLnConfig:
+    """L1 WIDTH-sharded LayerNorm: full ``M=B×T`` rows, hidden dim split across cores."""
+
+    input_mem_config: ttnn.MemoryConfig
+    program_config: ttnn.LayerNormShardedMultiCoreProgramConfig
+
+
+TTAlbertLnConfig = Union[TTAlbertWidthShardedLnConfig, ttnn.LayerNormDefaultProgramConfig]
+
+
+def _default_ln_program_config() -> ttnn.LayerNormDefaultProgramConfig:
     return ttnn.LayerNormDefaultProgramConfig()
+
+
+def _ln_uses_width_sharding(B: int, T: int, normalized_size: int) -> bool:
+    """WIDTH-sharded LN needs tile-aligned ``B×T`` and hidden/embedding dim."""
+    tile = ttnn.TILE_SIZE
+    return (B * T) % tile == 0 and normalized_size % tile == 0
+
+
+def _ln_width_num_cores(normalized_size: int, *, max_cores: int) -> int:
+    kt = normalized_size // ttnn.TILE_SIZE
+    for n in range(min(kt, max_cores), 0, -1):
+        if kt % n == 0:
+            return n
+    return 1
+
+
+def _ln_core_grid(num_cores: int, device: ttnn.Device) -> ttnn.CoreGrid:
+    grid = device.compute_with_storage_grid_size()
+    max_x, max_y = int(grid.x), int(grid.y)
+    for y in range(max_y, 0, -1):
+        if num_cores % y == 0:
+            x = num_cores // y
+            if x <= max_x:
+                return ttnn.CoreGrid(x=x, y=y)
+    raise ValueError(f"cannot place {num_cores} LN cores on {max_x}x{max_y} grid")
+
+
+def _build_width_sharded_ln_config(
+    device: ttnn.Device,
+    *,
+    batch_rows: int,
+    normalized_size: int,
+) -> TTAlbertWidthShardedLnConfig:
+    tile = ttnn.TILE_SIZE
+    if batch_rows % tile != 0:
+        raise ValueError(f"batch_rows {batch_rows} must be divisible by TILE_SIZE {tile}")
+    if normalized_size % tile != 0:
+        raise ValueError(f"normalized_size {normalized_size} must be divisible by TILE_SIZE {tile}")
+
+    grid = device.compute_with_storage_grid_size()
+    num_cores = _ln_width_num_cores(normalized_size, max_cores=int(grid.x) * int(grid.y))
+    core_grid = _ln_core_grid(num_cores, device)
+    shard_width = normalized_size // num_cores
+    input_mem_config = ttnn.create_sharded_memory_config(
+        (batch_rows, shard_width),
+        core_grid,
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    block_h = batch_rows // tile
+    block_w = shard_width // tile
+    subblock_w = _largest_divisor(block_w, max_divisor=4)
+    device_grid = device.compute_with_storage_grid_size()
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(int(device_grid.x), int(device_grid.y)),
+        subblock_w=subblock_w,
+        block_h=block_h,
+        block_w=block_w,
+        inplace=False,
+    )
+    return TTAlbertWidthShardedLnConfig(
+        input_mem_config=input_mem_config,
+        program_config=program_config,
+    )
+
+
+def _width_sharded_layer_norm(
+    x: ttnn.Tensor,
+    *,
+    weight: ttnn.Tensor,
+    bias: ttnn.Tensor,
+    epsilon: float,
+    ln_cfg: TTAlbertWidthShardedLnConfig,
+    compute_kernel_config,
+    output_mem_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    """Interleaved activations -> WIDTH-sharded LN -> interleaved output."""
+    mc = x.memory_config()
+    if mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED and mc.buffer_type == ttnn.BufferType.L1:
+        sharded = x
+    else:
+        sharded = ttnn.to_memory_config(x, ln_cfg.input_mem_config)
+        if sharded is not x:
+            ttnn.deallocate(x)
+
+    normed = ttnn.layer_norm(
+        sharded,
+        weight=weight,
+        bias=bias,
+        epsilon=epsilon,
+        program_config=ln_cfg.program_config,
+        memory_config=ln_cfg.input_mem_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    if normed is not sharded:
+        ttnn.deallocate(sharded)
+
+    return ttnn.sharded_to_interleaved(normed, memory_config=output_mem_config)
+
+
+def _apply_layer_norm(
+    x: ttnn.Tensor,
+    *,
+    weight: ttnn.Tensor,
+    bias: ttnn.Tensor,
+    epsilon: float,
+    ln_cfg: TTAlbertLnConfig,
+    compute_kernel_config,
+    output_mem_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    if isinstance(ln_cfg, TTAlbertWidthShardedLnConfig):
+        return _width_sharded_layer_norm(
+            x,
+            weight=weight,
+            bias=bias,
+            epsilon=epsilon,
+            ln_cfg=ln_cfg,
+            compute_kernel_config=compute_kernel_config,
+            output_mem_config=output_mem_config,
+        )
+    out = ttnn.layer_norm(
+        x,
+        weight=weight,
+        bias=bias,
+        epsilon=epsilon,
+        program_config=ln_cfg,
+        memory_config=output_mem_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    if out is not x:
+        ttnn.deallocate(x)
+    return out
 
 
 # gelu_new (PyTorch tanh approx) for fused FFN activation
@@ -441,7 +622,7 @@ def _build_extended_mask(
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
 
@@ -476,14 +657,20 @@ class TTAlbertLayer:
         attention_mask: ttnn.Tensor,
         *,
         matmul_pcs: TTAlbertMatmulProgramConfigs,
-        ln_program_config: ttnn.LayerNormDefaultProgramConfig,
-        memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+        ln_cfg: TTAlbertLnConfig,
+        memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
     ) -> ttnn.Tensor:
         p = self.params
         x_shape = list(x.shape)
         B, T = int(x_shape[-3]), int(x_shape[-2])
 
-        x_b1th = _to_b1th(x, B=B, T=T, width=self.hidden_size)
+        if not _is_l1_interleaved(x.memory_config()):
+            x_l1 = ttnn.to_memory_config(x, memory_config)
+            if x_l1 is not x:
+                ttnn.deallocate(x)
+            x = x_l1
+
+        x_b1th = _to_b1th(x, B=B, T=T, width=self.hidden_size, memory_config=memory_config)
         xqkv = ttnn.linear(
             x_b1th,
             p.qkv_w,
@@ -493,7 +680,7 @@ class TTAlbertLayer:
             memory_config=memory_config,
             compute_kernel_config=self.compute_kernel_config,
         )
-        xqkv = _fix_b1th_after_linear(xqkv, B=B, T=T, width=3 * self.hidden_size)
+        xqkv = _fix_b1th_after_linear(xqkv, B=B, T=T, width=3 * self.hidden_size, memory_config=memory_config)
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
@@ -542,22 +729,21 @@ class TTAlbertLayer:
             compute_kernel_config=self.compute_kernel_config,
         )
         ttnn.deallocate(ctx_b1th)
-        projected_btH = _from_b1th(projected, B=B, T=T, hidden_size=self.hidden_size)
+        projected_btH = _from_b1th(projected, B=B, T=T, hidden_size=self.hidden_size, memory_config=memory_config)
         ttnn.deallocate(projected)
 
         residual = ttnn.add(x, projected_btH, memory_config=memory_config)
         ttnn.deallocate(projected_btH)
 
-        out = ttnn.layer_norm(
+        out = _apply_layer_norm(
             residual,
             weight=p.attn_ln_w,
             bias=p.attn_ln_b,
             epsilon=self.layer_norm_eps,
-            program_config=ln_program_config,
-            memory_config=memory_config,
+            ln_cfg=ln_cfg,
             compute_kernel_config=self.compute_kernel_config,
+            output_mem_config=memory_config,
         )
-        ttnn.deallocate(residual)
         return out
 
     def _ffn(
@@ -565,10 +751,16 @@ class TTAlbertLayer:
         x: ttnn.Tensor,
         *,
         matmul_pcs: TTAlbertMatmulProgramConfigs,
-        ln_program_config: ttnn.LayerNormDefaultProgramConfig,
-        memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+        ln_cfg: TTAlbertLnConfig,
+        memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
     ) -> ttnn.Tensor:
         p = self.params
+        if not _is_l1_interleaved(x.memory_config()):
+            x_l1 = ttnn.to_memory_config(x, memory_config)
+            if x_l1 is not x:
+                ttnn.deallocate(x)
+            x = x_l1
+
         h_act = ttnn.linear(
             x,
             p.ffn_w,
@@ -590,16 +782,15 @@ class TTAlbertLayer:
         ttnn.deallocate(h_act)
         residual = ttnn.add(h2, x, memory_config=memory_config)
         ttnn.deallocate(h2)
-        out = ttnn.layer_norm(
+        out = _apply_layer_norm(
             residual,
             weight=p.full_ln_w,
             bias=p.full_ln_b,
             epsilon=self.layer_norm_eps,
-            program_config=ln_program_config,
-            memory_config=memory_config,
+            ln_cfg=ln_cfg,
             compute_kernel_config=self.compute_kernel_config,
+            output_mem_config=memory_config,
         )
-        ttnn.deallocate(residual)
         return out
 
     def forward(
@@ -608,10 +799,10 @@ class TTAlbertLayer:
         attention_mask: ttnn.Tensor,
         *,
         matmul_pcs: TTAlbertMatmulProgramConfigs,
-        ln_program_config: ttnn.LayerNormDefaultProgramConfig,
+        ln_cfg: TTAlbertLnConfig,
     ) -> ttnn.Tensor:
-        a = self._attention(x, attention_mask, matmul_pcs=matmul_pcs, ln_program_config=ln_program_config)
-        o = self._ffn(a, matmul_pcs=matmul_pcs, ln_program_config=ln_program_config)
+        a = self._attention(x, attention_mask, matmul_pcs=matmul_pcs, ln_cfg=ln_cfg)
+        o = self._ffn(a, matmul_pcs=matmul_pcs, ln_cfg=ln_cfg)
         ttnn.deallocate(a)
         return o
 
@@ -633,7 +824,7 @@ class TTCustomAlbert:
         self._intermediate_size = int(params.layer_groups[0][0].ffn_w.shape[-1])
         self._head_size = params.hidden_size // params.num_attention_heads
         self._matmul_pc_cache: dict[tuple[int, int], TTAlbertMatmulProgramConfigs] = {}
-        self._ln_program_config = _dram_layernorm_program_config()
+        self._ln_cfg_cache: dict[tuple[int, int, int], TTAlbertLnConfig] = {}
         self._layers: tuple[tuple[TTAlbertLayer, ...], ...] = tuple(
             tuple(
                 TTAlbertLayer(
@@ -661,6 +852,19 @@ class TTCustomAlbert:
                 fp32_dest_acc_en=True,
             )
         return self._matmul_pc_cache[key]
+
+    def _ln_config(self, B: int, T: int, normalized_size: int) -> TTAlbertLnConfig:
+        key = (B, T, normalized_size)
+        if key not in self._ln_cfg_cache:
+            if _ln_uses_width_sharding(B, T, normalized_size):
+                self._ln_cfg_cache[key] = _build_width_sharded_ln_config(
+                    self.device,
+                    batch_rows=B * T,
+                    normalized_size=normalized_size,
+                )
+            else:
+                self._ln_cfg_cache[key] = _default_ln_program_config()
+        return self._ln_cfg_cache[key]
 
     def _embed(
         self,
@@ -708,16 +912,16 @@ class TTCustomAlbert:
         ttnn.deallocate(emb)
         ttnn.deallocate(pos_e)
 
-        out = ttnn.layer_norm(
+        ln_cfg = self._ln_config(B, T, self.params.embedding_size)
+        out = _apply_layer_norm(
             emb_sum,
             weight=self.params.emb_ln_w,
             bias=self.params.emb_ln_b,
             epsilon=self.params.layer_norm_eps,
-            program_config=self._ln_program_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ln_cfg=ln_cfg,
             compute_kernel_config=self.compute_kernel_config,
+            output_mem_config=ttnn.L1_MEMORY_CONFIG,
         )
-        ttnn.deallocate(emb_sum)
         return out
 
     def forward(
@@ -743,6 +947,7 @@ class TTCustomAlbert:
         emb = self._embed(input_ids, token_type_ids)
 
         matmul_pcs = self._matmul_program_configs(B, T)
+        ln_cfg = self._ln_config(B, T, self.params.hidden_size)
 
         hidden = ttnn.linear(
             emb,
@@ -750,7 +955,7 @@ class TTCustomAlbert:
             bias=self.params.emb_map_b,
             transpose_b=True,
             program_config=matmul_pcs.emb_map,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
         ttnn.deallocate(emb)
@@ -771,7 +976,7 @@ class TTCustomAlbert:
                 hidden,
                 ext_mask,
                 matmul_pcs=matmul_pcs,
-                ln_program_config=self._ln_program_config,
+                ln_cfg=ln_cfg,
             )
             ttnn.deallocate(hidden)
             hidden = new_hidden
@@ -780,6 +985,6 @@ class TTCustomAlbert:
 
         while len(hidden.shape) > 3:
             hidden = ttnn.squeeze(hidden, 0)
-        return hidden
+        return _ensure_dram_interleaved(hidden)
 
     __call__ = forward
