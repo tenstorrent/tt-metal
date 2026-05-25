@@ -18,8 +18,11 @@ if str(_TT_METAL_ROOT) not in sys.path:
 
 import ttnn
 
+import pytest
+
 from models.common.utility_functions import comp_pcc
 from models.experimental.kokoro.reference.istftnet import AdaIN1d
+from models.experimental.kokoro.tests.kokoro_checkpoint import load_kmodel
 from models.experimental.kokoro.tt.tt_adain_1d import (
     TTAdaIN1d,
     preprocess_tt_adain_1d,
@@ -156,6 +159,45 @@ def test_tt_adain_1d_decoder_norm1_config(device):
     assert y_hat.shape == y_ref.shape
     _, pcc = comp_pcc(y_ref, y_hat, pcc=0.0)
     print(f"TTAdaIN1d (Decoder.encode norm1: style=128, C=514) PCC: {pcc:.6f}")
+    assert pcc > 0.99, f"PCC too low: {pcc}"
+
+
+@pytest.fixture(scope="module")
+def kmodel():
+    try:
+        return load_kmodel()
+    except FileNotFoundError:
+        pytest.skip("Kokoro-82M checkpoint not found locally.")
+
+
+def test_tt_instance_norm_1d_prosody_f0_config(device, kmodel):
+    """``predictor.F0[0].norm1.norm`` from Kokoro-82M (``reference/reference.txt``)."""
+    inn = kmodel.predictor.F0[0].norm1.norm
+    assert isinstance(inn, nn.InstanceNorm1d)
+    assert inn.num_features == 512
+    assert inn.eps == pytest.approx(1e-05)
+    assert inn.affine
+    assert not inn.track_running_stats
+    inn.eval()
+    p = preprocess_tt_instance_norm_1d(inn, device)
+
+    torch.manual_seed(5)
+    b, l = 2, 96
+    x_bcl = torch.randn(b, inn.num_features, l)
+    with torch.no_grad():
+        y_ref = inn(x_bcl)
+
+    x_nlc = x_bcl.transpose(1, 2).contiguous()
+    x_tt = ttnn.from_torch(x_nlc, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = tt_instance_norm_1d_nlc(x_nlc=x_tt, params=p)
+    y_hat = ttnn.to_torch(y_tt).float().transpose(1, 2).contiguous()
+
+    ttnn.deallocate(y_tt)
+    ttnn.deallocate(x_tt)
+
+    assert y_hat.shape == y_ref.shape
+    _, pcc = comp_pcc(y_ref, y_hat, pcc=0.0)
+    print(f"TTInstanceNorm1d (Prosody F0 C=512) PCC: {pcc:.6f}")
     assert pcc > 0.99, f"PCC too low: {pcc}"
 
 
