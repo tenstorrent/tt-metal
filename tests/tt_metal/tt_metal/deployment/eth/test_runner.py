@@ -551,7 +551,7 @@ def print_test_summary_per_chip(t: TestCase, runs: list[TestRun]):
 
             row = [c, bdf, ch["tests"]]
             if have_bws:
-                row += [min(bws), max(bws), f"{avg(bws):.3f}"]
+                row += [f"{min(bws):.3f}", f"{max(bws):.3f}", f"{avg(bws):.3f}"]
             row += [err, msg]
 
             rows.append(row)
