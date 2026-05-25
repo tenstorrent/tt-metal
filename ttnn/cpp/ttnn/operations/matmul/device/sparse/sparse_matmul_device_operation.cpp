@@ -91,6 +91,10 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         "Input tensor A must be a floating point type, got {}",
         input_tensor_a.dtype());
     TT_FATAL(
+        is_floating_point(input_tensor_b.dtype()),
+        "Input tensor B must be a floating point type, got {}",
+        input_tensor_b.dtype());
+    TT_FATAL(
         sparsity.layout() == ttnn::Layout::ROW_MAJOR,
         "Sparsity tensor must be ROW_MAJOR layout, got {}",
         sparsity.layout());
@@ -147,9 +151,7 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         b_shape_padded,
         in1_tile);
     TT_FATAL(
-        operation_attributes.nnz.value_or(1) > 0,
-        "nnz ({}) must be greater than 0",
-        operation_attributes.nnz.value_or(1));
+        operation_attributes.nnz.value_or(1) > 0, "nnz ({}) must be greater than 0", operation_attributes.nnz.value());
 
     // Check that nnz is less than or equal to the length of all batch dimensions
     uint32_t batch_length_A = 1;
