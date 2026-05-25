@@ -126,6 +126,12 @@ def _upload_scalar(value: float, device, *, dtype: ttnn.DataType) -> ttnn.Tensor
     )
 
 
+def _to_fp32_if_needed(x: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> tuple[ttnn.Tensor, bool]:
+    if x.dtype == ttnn.float32:
+        return x, False
+    return ttnn.typecast(x, ttnn.float32, memory_config=memory_config), True
+
+
 def preprocess_tt_sinegen(
     *,
     device: ttnn.Device,
@@ -486,11 +492,13 @@ class TTSineGen:
             ttnn.deallocate(rad)
             sine_waves_unmasked = self._torch_phase_fallback(f0_btd, rand_ini)
         else:
-            # Permute to ``[B, dim, T]`` so the time-axis maps are last-axis matmuls.
-            rad_bdt = ttnn.permute(rad, (0, 2, 1), memory_config=memory_config)
-            ttnn.deallocate(rad)
+            # On-device fp32 phase chain: BF16 cumsum/lerp × 2π×upsample_scale loses phase at Kokoro scale.
+            rad_fp32, owns_rad = _to_fp32_if_needed(rad, memory_config)
+            if owns_rad:
+                ttnn.deallocate(rad)
+            rad_bdt = ttnn.permute(rad_fp32, (0, 2, 1), memory_config=memory_config)
+            ttnn.deallocate(rad_fp32)
 
-            # Downsample along T: ``[B, dim, T] @ [T, T_down]`` → ``[B, dim, T_down]``
             rad_down = ttnn.matmul(
                 rad_bdt,
                 p.interp_down,
@@ -498,15 +506,20 @@ class TTSineGen:
                 compute_kernel_config=self.compute_kernel_config,
             )
             ttnn.deallocate(rad_bdt)
+            rad_down, owns_rd = _to_fp32_if_needed(rad_down, memory_config)
 
-            # Cumsum along T_down via sequential prefix adds — avoids K=T_down matmul whose BF16
-            # per-tile multiply gives ~2e-3 relative error that amplifies to ~2 radians in phase_up.
-            # Each r_t = rad_down[:, :, t:t+1] is [B, dim, 1]; prefix[t] = r_0 + ... + r_t.
+            lerp_alpha, owns_la = _to_fp32_if_needed(p.lerp_alpha, memory_config)
+            lerp_one_minus, owns_lom = _to_fp32_if_needed(p.lerp_one_minus_alpha, memory_config)
+            lerp_clamp, owns_lc = _to_fp32_if_needed(p.lerp_clamp_ones, memory_config)
+            two_pi_scale, owns_tps = _to_fp32_if_needed(p.two_pi_times_scale, memory_config)
+            sine_amp_fp32, owns_sa = _to_fp32_if_needed(p.sine_amp, memory_config)
+
             r_slices = [
                 ttnn.slice(rad_down, [0, 0, t], [B, p.dim, t + 1], [1, 1, 1], memory_config=memory_config)
                 for t in range(p.time_len_down)
             ]
-            ttnn.deallocate(rad_down)
+            if owns_rd:
+                ttnn.deallocate(rad_down)
             prefix = [r_slices[0]]
             for t in range(1, p.time_len_down):
                 prefix.append(ttnn.add(prefix[-1], r_slices[t], memory_config=memory_config))
@@ -516,32 +529,26 @@ class TTSineGen:
             for t in range(p.time_len_down):
                 ttnn.deallocate(prefix[t])
 
-            # Upsample via elementwise linear interpolation (avoids K=T_down matmul whose BF16
-            # accumulation causes ~1 radian phase_up error, destroying sines PCC).
-            # Layout: permute phase [B, dim, T_down] → [B, T_down, dim] for dim=1 slicing.
             phase_btd = ttnn.permute(phase, (0, 2, 1), memory_config=memory_config)
             ttnn.deallocate(phase)
 
-            # Clamped start: repeat phase[t=0] for clamp_len output steps.
             p0 = ttnn.slice(phase_btd, [0, 0, 0], [B, 1, p.dim], [1, 1, 1], memory_config=memory_config)
-            start_seg = ttnn.multiply(p0, p.lerp_clamp_ones, memory_config=memory_config)
+            start_seg = ttnn.multiply(p0, lerp_clamp, memory_config=memory_config)
             ttnn.deallocate(p0)
 
-            # Interior lerp segments: one upsample_scale-length segment per adjacent pair.
             lerp_segs = [start_seg]
             for s in range(p.time_len_down - 1):
                 p_s = ttnn.slice(phase_btd, [0, s, 0], [B, s + 1, p.dim], [1, 1, 1], memory_config=memory_config)
                 p_s1 = ttnn.slice(phase_btd, [0, s + 1, 0], [B, s + 2, p.dim], [1, 1, 1], memory_config=memory_config)
                 seg = ttnn.add(
-                    ttnn.multiply(p_s, p.lerp_one_minus_alpha, memory_config=memory_config),
-                    ttnn.multiply(p_s1, p.lerp_alpha, memory_config=memory_config),
+                    ttnn.multiply(p_s, lerp_one_minus, memory_config=memory_config),
+                    ttnn.multiply(p_s1, lerp_alpha, memory_config=memory_config),
                     memory_config=memory_config,
                 )
                 ttnn.deallocate(p_s)
                 ttnn.deallocate(p_s1)
                 lerp_segs.append(seg)
 
-            # Clamped end: repeat phase[t=T_down-1] for clamp_len output steps.
             p_last = ttnn.slice(
                 phase_btd,
                 [0, p.time_len_down - 1, 0],
@@ -549,7 +556,7 @@ class TTSineGen:
                 [1, 1, 1],
                 memory_config=memory_config,
             )
-            end_seg = ttnn.multiply(p_last, p.lerp_clamp_ones, memory_config=memory_config)
+            end_seg = ttnn.multiply(p_last, lerp_clamp, memory_config=memory_config)
             ttnn.deallocate(p_last)
             ttnn.deallocate(phase_btd)
             lerp_segs.append(end_seg)
@@ -558,12 +565,27 @@ class TTSineGen:
             for seg in lerp_segs:
                 ttnn.deallocate(seg)
 
-            phase_up = ttnn.multiply(phase_up, p.two_pi_times_scale, memory_config=memory_config)
+            phase_up = ttnn.multiply(phase_up, two_pi_scale, memory_config=memory_config)
             sines = ttnn.sin(phase_up, memory_config=memory_config)
             ttnn.deallocate(phase_up)
 
-            sine_waves_unmasked = ttnn.multiply(sines, p.sine_amp, memory_config=memory_config)
+            sine_waves_unmasked = ttnn.multiply(sines, sine_amp_fp32, memory_config=memory_config)
             ttnn.deallocate(sines)
+            if sine_waves_unmasked.dtype != p.activation_dtype:
+                sine_bf16 = ttnn.typecast(sine_waves_unmasked, p.activation_dtype, memory_config=memory_config)
+                ttnn.deallocate(sine_waves_unmasked)
+                sine_waves_unmasked = sine_bf16
+
+            if owns_la:
+                ttnn.deallocate(lerp_alpha)
+            if owns_lom:
+                ttnn.deallocate(lerp_one_minus)
+            if owns_lc:
+                ttnn.deallocate(lerp_clamp)
+            if owns_tps:
+                ttnn.deallocate(two_pi_scale)
+            if owns_sa:
+                ttnn.deallocate(sine_amp_fp32)
 
         # ``noise_amp = uv * noise_std + (1 - uv) * sine_amp/3`` → [B, T, 1]
         one_minus_uv = ttnn.subtract(p.one, uv, memory_config=memory_config)

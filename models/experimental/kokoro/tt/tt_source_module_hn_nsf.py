@@ -212,15 +212,19 @@ class TTSourceModuleHnNSF:
                 sine_merge = ttnn.tanh(merged, memory_config=memory_config)
                 ttnn.deallocate(merged)
         else:
+            sine_in = sine_wavs
+            if sine_wavs.dtype != ttnn.float32:
+                sine_in = ttnn.typecast(sine_wavs, ttnn.float32, memory_config=memory_config)
+                ttnn.deallocate(sine_wavs)
             merged = ttnn.linear(
-                sine_wavs,
+                sine_in,
                 p.linear_weight,
                 bias=p.linear_bias,
                 transpose_b=True,
                 memory_config=memory_config,
                 compute_kernel_config=self.compute_kernel_config,
             )
-            ttnn.deallocate(sine_wavs)
+            ttnn.deallocate(sine_in)
             # ``ttnn.linear`` may pad to rank 4; squeeze leading singletons.
             while len(merged.shape) > 3:
                 merged = ttnn.squeeze(merged, 0)

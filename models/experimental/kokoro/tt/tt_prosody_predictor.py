@@ -276,6 +276,7 @@ class TTProsodyPredictor:
             rev=self.params.shared_rev,
             compute_kernel_config=ck,
             memory_config=memory_config,
+            fp32_state=use_fp32_boundary,
         )
         if use_fp32_boundary:
             # BiLSTM states are bf16; keep F0/N branch activations in fp32 to avoid ~Hz-level F0 drift.
