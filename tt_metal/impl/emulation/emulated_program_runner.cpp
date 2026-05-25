@@ -1117,18 +1117,17 @@ static void collect_kernels(
             bool is_tilize_kernel = false;
             if (is_tensix && !is_quasar_compute) {
                 std::ifstream kscan(src_path);
-                if (kscan) {
-                    std::string content((std::istreambuf_iterator<char>(kscan)), std::istreambuf_iterator<char>());
-                    is_tilize_kernel = content.find("llk_unpack_tilize") != std::string::npos;
+                if (!kscan) {
+                    throw std::runtime_error(
+                        "collect_kernels: cannot read kernel source for TRISC-define gating: " + src_path);
                 }
+                std::string content((std::istreambuf_iterator<char>(kscan)), std::istreambuf_iterator<char>());
+                is_tilize_kernel = content.find("llk_unpack_tilize") != std::string::npos;
             }
             if (is_tensix && !is_quasar_compute && !is_tilize_kernel) {
-                auto defines_with_trisc = build_kernel_defines(
-                    *kernel, impl, num_dram_channels, worker_col_map_str, worker_row_map_str, emule_sem_base);
-                defines_with_trisc["TRISC_UNPACK"] = "1";
-                defines_with_trisc["TRISC_MATH"] = "1";
-                defines_with_trisc["TRISC_PACK"] = "1";
-                defines = std::move(defines_with_trisc);
+                defines["TRISC_UNPACK"] = "1";
+                defines["TRISC_MATH"] = "1";
+                defines["TRISC_PACK"] = "1";
             }
 
             // Metal 2.0 bindings — same across this Kernel's TRISC variants, so
