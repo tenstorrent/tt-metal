@@ -83,11 +83,8 @@ constexpr bool can_use_fast_tilize() {
     // That truncation is acceptable for bf16/bfp output but destroys precision
     // for fp32 output, producing garbage results in downstream fp32 consumers
     // (see attn_matmul_fp32 regression).
-    return block_width_tiles < 256 &&
-           has_32x32_tiles<output_cb>() &&
-           !get_dst_full_sync_enabled() &&
-           has_supported_fast_tilize_format<input_cb>() &&
-           !is_fp32_output_format<output_cb>();
+    return block_width_tiles < 256 && has_32x32_tiles<output_cb>() && !get_dst_full_sync_enabled() &&
+           has_supported_fast_tilize_format<input_cb>() && !is_fp32_output_format<output_cb>();
 }
 
 // =============================================================================
@@ -101,20 +98,14 @@ template <
     tilize_config::InitUninitMode init_uninit_mode,
     tilize_config::WaitMode wait_mode,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
-    tilize_config::Fp32Mode fp32_mode>
-ALWI void tilize(
-    uint32_t num_blocks,
-    std::optional<uint32_t> total_input_pages) {
-
+    tilize_config::Fp32Mode fp32_mode,
+    tilize_config::RemapMode remap_mode>
+ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages) {
     // Compile-time validation
-    static_assert(block_width_tiles > 0,
-        "block_width_tiles must be greater than 0");
-    static_assert(input_cb != output_cb,
-        "Tilize cannot be done in-place: input_cb and output_cb must be different");
-    static_assert(input_cb < 32,
-        "Invalid input_cb: must be less than 32");
-    static_assert(output_cb < 32,
-        "Invalid output_cb: must be less than 32");
+    static_assert(block_width_tiles > 0, "block_width_tiles must be greater than 0");
+    static_assert(input_cb != output_cb, "Tilize cannot be done in-place: input_cb and output_cb must be different");
+    static_assert(input_cb < 32, "Invalid input_cb: must be less than 32");
+    static_assert(output_cb < 32, "Invalid output_cb: must be less than 32");
 
     // Runtime parameter validation
     ASSERT(num_blocks > 0);
@@ -122,10 +113,9 @@ ALWI void tilize(
     // Determine if we're using fast tilize mode (automatic detection based on tile size, sync mode, and data format).
     // Fp32Mode::Lossless disables fast tilize only for fp32 inputs to preserve exact values
     // (fast tilize truncates fp32 → tf32). Has no effect on non-fp32 formats.
-    constexpr bool lossless_fp32_override = (fp32_mode == tilize_config::Fp32Mode::Lossless) &&
-                                            is_fp32_input_format<input_cb>();
-    constexpr bool use_fast = can_use_fast_tilize<block_width_tiles, input_cb, output_cb>() &&
-                              !lossless_fp32_override;
+    constexpr bool lossless_fp32_override =
+        (fp32_mode == tilize_config::Fp32Mode::Lossless) && is_fp32_input_format<input_cb>();
+    constexpr bool use_fast = can_use_fast_tilize<block_width_tiles, input_cb, output_cb>() && !lossless_fp32_override;
 
     // Determine if we're doing data type reconfiguration
     constexpr bool use_unpack_reconfig =
@@ -139,7 +129,7 @@ ALWI void tilize(
     const bool asymmetric_cb_pages = total_input_pages.has_value();
     if (asymmetric_cb_pages) {
         ASSERT(*total_input_pages > (num_blocks - 1) * 32);  // at least one row in the last block
-        ASSERT(*total_input_pages <= num_blocks * 32);        // rows fit within num_blocks tile-rows
+        ASSERT(*total_input_pages <= num_blocks * 32);       // rows fit within num_blocks tile-rows
     }
 
     // Tilize input must not be a block float format (Bfp8/4/2 and _b variants).
@@ -170,9 +160,15 @@ ALWI void tilize(
     if constexpr (
         init_uninit_mode == tilize_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == tilize_config::InitUninitMode::InitOnly) {
-
         if constexpr (use_fast) {
-            fast_tilize_init(input_cb, block_width_tiles, output_cb);
+#ifdef ARCH_BLACKHOLE
+            if constexpr (remap_mode == tilize_config::RemapMode::AssumeConfigured) {
+                fast_tilize_init_skip_remap(input_cb, block_width_tiles, output_cb);
+            } else
+#endif
+            {
+                fast_tilize_init(input_cb, block_width_tiles, output_cb);
+            }
         } else {
             tilize_init(input_cb, block_width_tiles, output_cb);
         }
@@ -231,7 +227,6 @@ ALWI void tilize(
     if constexpr (
         init_uninit_mode == tilize_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == tilize_config::InitUninitMode::UninitOnly) {
-
         if constexpr (use_fast) {
             fast_tilize_uninit(input_cb, output_cb, block_width_tiles);
         } else {
