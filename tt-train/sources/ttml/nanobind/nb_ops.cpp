@@ -263,8 +263,8 @@ void py_module(nb::module_& m) {
     {
         auto py_mla = static_cast<nb::module_>(m.attr("mla"));
         py_mla.def(
-            "qkv_assemble_fw",
-            &ttml::ops::mla_qkv_assemble_fw,
+            "qkv_assemble",
+            &ttml::ops::mla_qkv_assemble,
             nb::arg("q_pre"),
             nb::arg("kv_up"),
             nb::arg("k_pe"),
