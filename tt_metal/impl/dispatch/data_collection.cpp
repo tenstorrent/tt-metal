@@ -52,6 +52,16 @@ void RecordKernelSourceMap(ProgramImpl& program) {
     tt::tt_metal::MetalContext::instance().data_collector()->RecordKernelSourceMap(program);
 }
 
+void RecordProgramSubDevice(
+    tt::ChipId device_id, uint64_t sub_device_manager_id, uint64_t runtime_id, SubDeviceId sub_device_id) {
+    tt::tt_metal::MetalContext::instance().data_collector()->RecordProgramSubDevice(
+        device_id, sub_device_manager_id, runtime_id, sub_device_id);
+}
+
+std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, uint64_t runtime_id) {
+    return tt::tt_metal::MetalContext::instance().data_collector()->GetProgramSubDevice(device_id, runtime_id);
+}
+
 std::string GetKernelSourcesForRuntimeId(uint64_t runtime_id) {
     return tt::tt_metal::MetalContext::instance().data_collector()->GetKernelSourcesForRuntimeId(runtime_id);
 }

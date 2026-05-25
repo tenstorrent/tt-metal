@@ -15,6 +15,7 @@
 #include <vector>
 #include <optional>
 #include <fstream>
+#include <tt-metalium/sub_device_types.hpp>
 #include "data_collection.hpp"
 
 namespace tt::tt_metal {
@@ -56,6 +57,9 @@ public:
     // Should be called at dispatch time when runtime_id is guaranteed to be set.
     // Only records the mapping once per runtime_id.
     void RecordKernelSourceMap(tt_metal::detail::ProgramImpl& program);
+    void RecordProgramSubDevice(
+        tt::ChipId device_id, uint64_t sub_device_manager_id, uint64_t runtime_id, SubDeviceId sub_device_id);
+    std::optional<tt::ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, uint64_t runtime_id) const;
     // Look up the kernel source paths for a given runtime_id.
     // Returns a comma-separated string of kernel source paths, or empty string if not found.
     std::string GetKernelSourcesForRuntimeId(uint64_t runtime_id) const;
@@ -107,6 +111,8 @@ private:
     // and the RealtimeProfiler receiver thread reads.
     std::map<uint64_t, std::vector<std::string>> runtime_id_to_kernel_sources;
     mutable std::mutex runtime_id_to_kernel_sources_mutex_;
+    std::map<std::pair<tt::ChipId, uint64_t>, tt::ProgramSubDeviceInfo> runtime_id_to_sub_device;
+    mutable std::mutex runtime_id_to_sub_device_mutex_;
     // Registered real-time profiler callbacks (invoked from the receiver thread).
     mutable std::mutex program_realtime_profiler_callbacks_mutex_;
     std::vector<RealtimeCallbackRegistration> program_realtime_profiler_callbacks_;

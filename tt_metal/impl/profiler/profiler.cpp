@@ -27,6 +27,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch/data_collection.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "profiler_analysis.hpp"
 #include "hal_types.hpp"
@@ -65,6 +66,24 @@ namespace tt::tt_metal {
 namespace {
 kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
+}
+
+void add_program_sub_device_meta_data(nlohmann::json& meta_data, tt::ChipId device_id, uint32_t runtime_id) {
+    const std::optional<tt::ProgramSubDeviceInfo> sub_device_info =
+        tt::GetProgramSubDevice(device_id, static_cast<uint16_t>(runtime_id));
+    if (!sub_device_info.has_value()) {
+        return;
+    }
+    meta_data["sub_device_id"] = sub_device_info->sub_device_id;
+    meta_data["sub_device_manager_id"] = sub_device_info->sub_device_manager_id;
+}
+
+void add_program_sub_device_meta_data(nlohmann::json& meta_data, uint32_t encoded_run_host_id) {
+    if (encoded_run_host_id == 0) {
+        return;
+    }
+    const auto decoded = detail::DecodePerDeviceProgramID(encoded_run_host_id);
+    add_program_sub_device_meta_data(meta_data, decoded.device_id, decoded.base_program_id);
 }
 
 #if defined(TRACY_ENABLE)
@@ -1833,6 +1852,7 @@ void DeviceProfiler::readDeviceMarkerData(
     ZoneScoped;
 
     nlohmann::json meta_data;
+    add_program_sub_device_meta_data(meta_data, run_host_id);
     const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
     const auto [trace_id, trace_id_count] = getTraceIdAndCount(run_host_id, device_trace_counter);
@@ -2100,6 +2120,8 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                                    tracy::MarkerDetails::MarkerNameKeyword::RUNTIME_HOST_ID_DISPATCH)]) {
                         current_dispatch_meta_data.worker_runtime_id = (uint32_t)marker.data;
                         marker.meta_data["workers_runtime_id"] = current_dispatch_meta_data.worker_runtime_id;
+                        add_program_sub_device_meta_data(
+                            marker.meta_data, marker.chip_id, current_dispatch_meta_data.worker_runtime_id);
                     } else if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
                                    tracy::MarkerDetails::MarkerNameKeyword::PACKED_DATA_DISPATCH)]) {
                         current_dispatch_meta_data.cmd_subtype = fmt::format(

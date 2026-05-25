@@ -27,6 +27,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "dispatch/data_collection.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
 #include "mesh_config.hpp"
@@ -75,6 +76,15 @@ void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& 
     });
 }
 // NOLINTEND(cppcoreguidelines-missing-std-forward)
+
+void record_program_sub_device_for_range(
+    MeshDevice* mesh_device, const MeshCoordinateRange& device_range, uint64_t runtime_id, SubDeviceId sub_device_id) {
+    const uint64_t sub_device_manager_id = *mesh_device->get_active_sub_device_manager_id();
+    for_each_local(mesh_device, device_range, [&](const MeshCoordinate& coord) {
+        tt::RecordProgramSubDevice(
+            mesh_device->impl().get_device(coord)->id(), sub_device_manager_id, runtime_id, sub_device_id);
+    });
+}
 
 [[maybe_unused]] MeshCoordinate get_local_start_coord(MeshDevice* mesh_device, const MeshCoordinateRange& range) {
     for (const auto& coord : range) {
@@ -405,6 +415,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             dispatch_metadata,
             mesh_workload.impl().get_program_binary_status(mesh_device_id),
             std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores));
+
+        record_program_sub_device_for_range(mesh_device_, device_range, program.get_runtime_id(), sub_device_id);
 
         this->write_program_cmds_to_subgrid(
             device_range,
@@ -1359,6 +1371,8 @@ void FDMeshCommandQueue::record_end() {
                 sub_device_id,
                 ProgramBinaryStatus::Committed,
                 std::pair<bool, int>(mesh_node.unicast_go_signals, num_virtual_eth_cores));
+
+            record_program_sub_device_for_range(mesh_device_, range, node.program_runtime_id, sub_device_id);
 
             // Issue dispatch commands for this program
             program_dispatch::write_program_command_sequence(
