@@ -4,6 +4,8 @@
 
 #pragma once
 
+// Host-side emule sanitizers + master switch. See SANITIZERS.md.
+
 #include <buffer.hpp>
 #include <cstdint>
 #include <cstdio>
@@ -11,20 +13,12 @@
 
 namespace tt::tt_metal::emule {
 
-// Master ASAN switch for all emule sanitizers (host + kernel side). Off by default.
-// Re-read on every call — see emule_strict_cb_boundary_enabled comment in
-// emulated_program_runner.cpp for why caching breaks combined test runs.
+// Re-read every call: caching breaks combined test runs that toggle the var.
 inline bool emule_asan_enabled() {
     const char* v = std::getenv("TT_METAL_EMULE_ASAN");
     return v != nullptr && v[0] != '\0' && v[0] != '0';
 }
 
-// Host-side use-after-free / use-before-allocation sanitizer for Buffer access.
-// Catches the case where a caller holds a live Buffer object (or shared_ptr to one)
-// whose backing device memory has been reclaimed by the allocator (DeallocateBuffer,
-// allocator reset, etc.) and then issues a host-side read/write through it. Without
-// this check, address() still returns the cached stale address and the write silently
-// stomps memory that the allocator may have already re-issued to another buffer.
 inline void check_buffer_allocated(const tt::tt_metal::Buffer& buffer, const char* op) {
     if (!emule_asan_enabled()) {
         return;
@@ -43,35 +37,46 @@ inline void check_buffer_allocated(const tt::tt_metal::Buffer& buffer, const cha
     }
 }
 
-// Host→device alignment sanitizers. Device/kernel-side accesses are checked
-// inside tt-emule's Core::l1_ptr; these guard the symmetric host entry points
-// (WriteToDevice{L1,DRAMChannel}, ReadFromDevice{L1,DRAMChannel}) so misaligned
-// addresses passed from host code are caught before they reach the cluster
-// write path. Alignment values match WH/N150.
-inline void check_host_l1_alignment(uint32_t address, const char* op) {
+// `alignment` is the transfer's real requirement from Cluster::get_alignment_requirements(device, size)
+// (DMA alignment when DMA-backed, else 1). The host->L1 data path
+// (Cluster::write_core -> UMD write_to_device) accepts byte-granular writes and
+// WriteToBuffer applies no separate floor, so a hardcoded word/NoC alignment
+// here would false-positive legitimate writes (e.g. row-major remainders).
+// Register pokes that genuinely need 4-byte alignment go through write_reg,
+// not this path.
+inline void check_host_l1_alignment(uint32_t address, uint32_t alignment, const char* op) {
     if (!emule_asan_enabled()) {
         return;
     }
-    if (address % 4 != 0) {
+    if (alignment > 1 && address % alignment != 0) {
         fprintf(
             stderr,
-            "[ASAN ERROR] L1 Alignment: %s host address 0x%x must be 4-byte aligned\n",
+            "[ASAN ERROR] L1 Alignment: %s host address 0x%x must be %u-byte aligned\n",
             op,
-            address);
+            address,
+            alignment);
         std::abort();
     }
 }
 
-inline void check_host_dram_alignment(uint32_t address, const char* op) {
+// `alignment` is the transfer's real requirement, obtained at the call site
+// from Cluster::get_alignment_requirements(device, size): the DMA alignment
+// when a DMA engine backs the transfer, otherwise 1. A value of 1 means the
+// host/UMD poke path imposes no alignment (e.g. emule's memory-backed I/O, or
+// the unaligned row-major page remainders that WriteToBuffer issues by design),
+// so the check must be a no-op. Passing the value in keeps this header free of
+// MetalContext/Cluster includes.
+inline void check_host_dram_alignment(uint32_t address, uint32_t alignment, const char* op) {
     if (!emule_asan_enabled()) {
         return;
     }
-    if (address % 32 != 0) {
+    if (alignment > 1 && address % alignment != 0) {
         fprintf(
             stderr,
-            "[ASAN ERROR] DRAM Alignment: %s host address 0x%x must be 32-byte aligned (WH)\n",
+            "[ASAN ERROR] DRAM Alignment: %s host address 0x%x must be %u-byte aligned\n",
             op,
-            address);
+            address,
+            alignment);
         std::abort();
     }
 }

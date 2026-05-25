@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // To run:
-// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.NocRead_L1_Misaligned_SanityCheck:MeshDeviceFixture.NocWrite_L1_Misaligned_SanityCheck:MeshDeviceFixture.NocRead_DRAM_Misaligned_SanityCheck_WH:MeshDeviceFixture.NocWrite_DRAM_Misaligned_SanityCheck"
+// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api
+// --gtest_filter="MeshDeviceFixture.NocRead_L1_Misaligned_SanityCheck:MeshDeviceFixture.NocWrite_L1_Misaligned_SanityCheck:MeshDeviceFixture.NocRead_DRAM_Misaligned_SanityCheck_WH:MeshDeviceFixture.NocWrite_DRAM_Misaligned_SanityCheck:MeshDeviceFixture.NocRead_DRAM_Aligned_NoViolation_WH"
 
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -81,8 +82,13 @@ TEST_F(MeshDeviceFixture, NocWrite_L1_Misaligned_SanityCheck) {
     unsetenv("TT_METAL_EMULE_ASAN");
 }
 
-// DRAM->L1 read (WH): DRAM lower 8 bits (0x10) != L1 lower 8 bits (0x20) -> abort
-// Constructs DRAM NOC address from the host-side NOC XY of DRAM bank 0.
+// DRAM->L1 read (WH, 32-byte rule, mask 0x1F): DRAM src offset 0x10 is 16-byte
+// aligned but NOT 32-byte aligned, while L1 dst 0x30020 is 32-byte aligned.
+// Their lower 5 bits differ (0x10 != 0x00), so the read is misaligned for a
+// WH DRAM transfer and must abort. (Pre-fix this also tripped the bogus 0xFF
+// mask, but for the wrong reason; the corrected 0x1F mask catches the genuine
+// 32-byte misalignment.) Constructs the DRAM NOC address from the host-side
+// NOC XY of DRAM bank 0.
 TEST_F(MeshDeviceFixture, NocRead_DRAM_Misaligned_SanityCheck_WH) {
     setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
@@ -91,7 +97,8 @@ TEST_F(MeshDeviceFixture, NocRead_DRAM_Misaligned_SanityCheck_WH) {
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
-    // Get DRAM bank 0 NOC coordinates and build a NOC address with offset 0x10.
+    // Get DRAM bank 0 NOC coordinates and build a NOC address with offset 0x10
+    // (16-byte aligned, NOT 32-byte aligned).
     // NOC encoding: (y << 6) | x, shifted by 36 for the local-address field.
     auto dram_noc_coord = mesh->virtual_core_from_logical_core({0, 0}, CoreType::DRAM);
     uint32_t noc_xy = (static_cast<uint32_t>(dram_noc_coord.y) << 6) |
@@ -100,7 +107,8 @@ TEST_F(MeshDeviceFixture, NocRead_DRAM_Misaligned_SanityCheck_WH) {
     uint32_t dram_lo = static_cast<uint32_t>(dram_src & 0xFFFFFFFFU);
     uint32_t dram_hi = static_cast<uint32_t>(dram_src >> 32);
 
-    // L1 dst: lower 8 bits = 0x20 -- mismatches DRAM lower 8 bits (0x10)
+    // L1 dst is 32-byte aligned (lower 5 bits = 0). DRAM src lower 5 bits = 0x10,
+    // so the 32-byte relative check (mask 0x1F) sees 0x10 != 0x00 -> abort.
     uint32_t l1_dst = 0x30020;
 
     std::string kernel_src = R"(
@@ -165,6 +173,76 @@ TEST_F(MeshDeviceFixture, NocWrite_DRAM_Misaligned_SanityCheck) {
     EXPECT_DEATH(
         detail::LaunchProgram(device, program),
         ".*NOC Transfer Alignment.*DRAM.*lower 4 bits must match.*");
+
+    unsetenv("TT_METAL_EMULE_ASAN");
+}
+
+// Positive control (WH): a DRAM->L1 read where BOTH endpoints are 32-byte
+// aligned (lower 5 bits = 0) but differ in higher bits MUST NOT abort. This is
+// the exact pattern that the old, too-strict 0xFF mask (256-byte) wrongly
+// flagged across the ttnn sweeps (e.g. DRAM off 0x40 -> L1 off 0xa0: both
+// 32-aligned, but 0x40 != 0xa0 under 0xFF). The corrected 0x1F mask compares
+// only the lower 5 bits (0 == 0) and lets it through.
+//
+// Guards against a regression back to an over-strict mask: if the mask is ever
+// widened past 0x1F, the two offsets below diverge and LaunchProgram SIGABRTs,
+// failing this test. The DRAM source is a real DRAM-bank NOC-XY (so the NOC
+// resolver maps it instead of raising a Fabric violation) and the L1 dest sits
+// inside an allocated L1 buffer (so the dst-side OOB-tensor check passes).
+TEST_F(MeshDeviceFixture, NocRead_DRAM_Aligned_NoViolation_WH) {
+    setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
+    auto& mesh = this->devices_.at(0);
+    auto* device = mesh->get_devices()[0];
+    CoreCoord logical_core = {0, 0};
+    Program program = CreateProgram();
+
+    // Allocate a real L1 buffer so the read destination is a live tensor (no
+    // OOB-tensor abort). Pick a 32-byte-aligned dst inside it whose lower 8
+    // bits (0x20) differ from the DRAM source's (0x40) — that divergence is
+    // exactly what the broken 0xFF mask used to reject.
+    constexpr uint32_t buf_size = 8192;
+    auto l1_buf = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    uint32_t base = static_cast<uint32_t>(l1_buf->address());
+    uint32_t l1_dst = ((base + 0xFFu) & ~0xFFu) + 0x20u;  // 256-align, +0x20 -> low5=0, low8=0x20
+    ASSERT_GE(l1_dst, base);
+    ASSERT_LT(l1_dst + 32u, base + buf_size);
+
+    // DRAM source on bank 0, offset 0x40 (32-byte aligned, low5=0).
+    auto dram_noc_coord = mesh->virtual_core_from_logical_core({0, 0}, CoreType::DRAM);
+    uint32_t noc_xy = (static_cast<uint32_t>(dram_noc_coord.y) << 6) | static_cast<uint32_t>(dram_noc_coord.x);
+    constexpr uint32_t dram_off = 0x40u;
+    uint64_t dram_src = (static_cast<uint64_t>(noc_xy) << 36) | dram_off;
+    uint32_t dram_lo = static_cast<uint32_t>(dram_src & 0xFFFFFFFFU);
+    uint32_t dram_hi = static_cast<uint32_t>(dram_src >> 32);
+
+    // Same lower 5 bits (both 0) -> 32-byte rule satisfied; different lower 8
+    // bits -> the old 256-byte mask would have falsely aborted.
+    ASSERT_EQ(dram_off & 0x1Fu, l1_dst & 0x1Fu);
+    ASSERT_NE(dram_off & 0xFFu, l1_dst & 0xFFu);
+
+    std::string kernel_src = R"(
+        #include "api/dataflow/dataflow_api.h"
+        void kernel_main() {
+            uint32_t lo  = get_arg_val<uint32_t>(0);
+            uint32_t hi  = get_arg_val<uint32_t>(1);
+            uint32_t dst = get_arg_val<uint32_t>(2);
+            uint64_t src = (static_cast<uint64_t>(hi) << 32) | lo;
+            noc_async_read(src, dst, 32);
+        }
+    )";
+
+    auto kernel = CreateKernelFromString(
+        program,
+        kernel_src,
+        logical_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    SetRuntimeArgs(program, kernel, logical_core, {dram_lo, dram_hi, l1_dst});
+
+    // Must NOT abort. If the alignment mask regresses to something stricter than
+    // 0x1F, this LaunchProgram SIGABRTs and the harness marks the test failed.
+    detail::LaunchProgram(device, program);
+    SUCCEED();
 
     unsetenv("TT_METAL_EMULE_ASAN");
 }

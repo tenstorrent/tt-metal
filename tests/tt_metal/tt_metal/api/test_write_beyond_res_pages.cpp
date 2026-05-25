@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // To run:
-// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.CB_Boundary_Violation_*"
+// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.CB_Boundary_*"
 
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -164,6 +164,52 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_SanityCheck) {
     // sanitizer will fire AFTER the (legitimate) wraparound write succeeds.
     // That confirms the boundary check let the wrap-around access through.
     EXPECT_DEATH(detail::LaunchProgram(device, program), ".*Dirty CB Detected.*");
+}
+
+// Positive control: accessing a CB page with NO active reservation/wait window
+// (reserved==0 && waited==0) is raw get_write_ptr/get_read_ptr addressing — the
+// pattern used by globally-allocated/sharded CBs and single-buffered scratch.
+// The boundary check is only meaningful relative to an active window, so this
+// must NOT abort. This is the exact shape (reserved==0, waited==0) that the old
+// check false-positived across the ttnn sweeps (expand/reshape/roll/to_memory_config/…).
+TEST_F(MeshDeviceFixture, CB_Boundary_NoActiveWindow_NoViolation) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
+    auto* device = this->devices_.at(0)->get_devices()[0];
+    CoreCoord logical_core = {0, 0};
+    Program program = CreateProgram();
+
+    constexpr uint32_t cb_id = 0;
+    constexpr uint32_t page_size = 1024;
+    CircularBufferConfig cb_config =
+        CircularBufferConfig(2 * page_size, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, page_size);
+    CreateCircularBuffer(program, logical_core, cb_config);
+
+    // No cb_reserve_back / cb_wait_front: the in-bounds access to page 0 reaches
+    // __emule_local_l1_to_ptr with reserved==0 && waited==0. No push, so the CB
+    // ends empty (occupied==0) — nothing else can fire either.
+    std::string kernel_src = R"(
+        #include "api/dataflow/dataflow_api.h"
+        void kernel_main() {
+            uint32_t addr = get_write_ptr(0);          // page 0, in-bounds
+            uint64_t src = get_noc_addr(addr);
+            noc_async_read(src, addr, 1024);           // dst goes through __emule_local_l1_to_ptr
+            noc_async_read_barrier();
+        }
+    )";
+
+    CreateKernelFromString(
+        program,
+        kernel_src,
+        logical_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    // Must NOT abort. If the window check regresses to firing without an active
+    // reservation/wait, LaunchProgram SIGABRTs and this test fails.
+    detail::LaunchProgram(device, program);
+    SUCCEED();
+
+    ::unsetenv("TT_METAL_EMULE_ASAN");
 }
 
 }  // namespace tt::tt_metal
