@@ -4,14 +4,14 @@
 """
 Sanity tests handed off to the ring_joint_scaled_dot_product_attention owners.
 
-Four small tests built around MLA-shaped inputs, with the goal of teasing out
+Four small test areas built around MLA-shaped inputs, with the goal of teasing out
 what the op already supports vs. what we'd like it to support cleanly. Each
 test is intentionally tiny (seq_len just a few tiles) so the answer comes
 back fast.
 
 Test scope:
 1. ND-sharded KV cache as K input directly (no slice workaround).
-2. Index-based K access — desired API showcase in torch.
+2. Index-based KV access — desired API showcase in torch.
 3. Per-chunk persistent-buffer reallocation — TODO, needs design input.
 4. ISL smaller than chunk_size — TODO, needs design input.
 
@@ -424,7 +424,7 @@ def test_nd_sharded_kv_cache_as_k(mesh_device, device_params, v_memory_layout):
 
 
 # ===========================================================================
-# Test 2: Index-based K access — torch showcase of the desired op API
+# Test 2: Index-based KV access — torch showcase of the desired op API
 # ===========================================================================
 #
 # The chunked MLA branch currently feeds K to ring_joint_sdpa via a slice:
@@ -445,25 +445,222 @@ def test_nd_sharded_kv_cache_as_k(mesh_device, device_params, v_memory_layout):
 # interleaved DRAM. (b) is the layout-coupling that breaks the cache layout
 # abstraction and forces the caller to know the on-device shard format.
 #
-# Desired op API — pass the whole cache plus an integer slot index and a
-# populated-length, let the op do the equivalent select+trim internally
-# without changing the underlying buffer:
+# Desired op API — pass the whole K/V caches plus an optional integer slot
+# index and a populated-length, let the op do the equivalent select+trim
+# internally without changing the underlying buffers:
 #
 #     attn = ring_joint_sdpa(
 #         tt_q,
-#         kvpe_cache,                      # <-- whole cache, any layout
-#         tt_v_populated,
+#         kvpe_cache,                      # <-- whole K cache, any layout
+#         v_cache,                         # <-- whole V cache
 #         ...,
-#         cache_batch_idx=cache_batch_idx, # NEW: which user/layer slot
-#         n_local_kv=populated_local,      # NEW: how much of that slot is populated
+#         cache_batch_idx=cache_batch_idx, # optional: which user/layer slot for both K and V
 #         ...
 #     )
 #
-# This is a pure-torch test that mocks both call shapes against the same
-# inputs and asserts they produce identical output. It serves as the spec
-# for what the op-side change should mean mathematically — no device, no
-# layout, just call ergonomics.
+# The device test below exercises the ttnn API shape. The pure-torch tests
+# after it mock both call shapes against the same inputs and serve as the
+# mathematical spec for what the op-side change should mean.
 # ===========================================================================
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2)], ids=["2x2"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    ids=["line"],
+    indirect=True,
+)
+@pytest.mark.timeout(0)
+def test_index_based_kv_access_ttnn(mesh_device, device_params):
+    sp_axis = 0
+    tp_axis = 1
+    mesh_shape = list(mesh_device.shape)
+    sp = mesh_shape[sp_axis]
+    tp = mesh_shape[tp_axis]
+
+    num_heads = tp * tp
+    num_heads_local = num_heads // tp
+    seq_len_local = 64
+    seq_len = seq_len_local * sp
+    cache_batch = 3
+    selected_cache_batch_idxs = (1, 2)
+
+    scale = QK_HEAD_DIM**-0.5
+    topology = _topology_from(device_params)
+
+    torch.manual_seed(11)
+    q_host = torch.randn(1, num_heads, seq_len, KVPE_DIM, dtype=torch.bfloat16)
+    kvpe_hosts = {
+        cache_batch_idx: torch.randn(1, 1, seq_len, KVPE_DIM, dtype=torch.bfloat16)
+        for cache_batch_idx in selected_cache_batch_idxs
+    }
+    kvpe_noise_host = torch.randn(1, 1, seq_len, KVPE_DIM, dtype=torch.bfloat16) * 100
+    v_hosts = {
+        cache_batch_idx: torch.randn(1, num_heads, seq_len, V_HEAD_DIM, dtype=torch.bfloat16)
+        for cache_batch_idx in selected_cache_batch_idxs
+    }
+    v_cache_host = torch.empty(cache_batch, num_heads, seq_len, V_HEAD_DIM, dtype=torch.bfloat16)
+    for i in range(cache_batch):
+        v_cache_host[i] = torch.randn(num_heads, seq_len, V_HEAD_DIM, dtype=torch.bfloat16) * 100
+    for cache_batch_idx in selected_cache_batch_idxs:
+        v_cache_host[cache_batch_idx] = v_hosts[cache_batch_idx][0]
+
+    tt_ccl = get_tt_ccl(mesh_device)
+    tt_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=KVPE_DIM,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=cache_batch,
+    )
+
+    kvpe_shard_dims = [None, None]
+    kvpe_shard_dims[sp_axis] = 2
+    tt_kvpes = {
+        cache_batch_idx: ttnn.from_torch(
+            kvpe_host,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kvpe_shard_dims),
+        )
+        for cache_batch_idx, kvpe_host in kvpe_hosts.items()
+    }
+    tt_kvpe_noise = ttnn.from_torch(
+        kvpe_noise_host,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kvpe_shard_dims),
+    )
+    ttnn.kv_cache.fill_cache_for_user_(tt_cache, tt_kvpe_noise, 0)
+    for cache_batch_idx, tt_kvpe in tt_kvpes.items():
+        ttnn.kv_cache.fill_cache_for_user_(tt_cache, tt_kvpe, cache_batch_idx)
+
+    q_shard_dims = [None, None]
+    q_shard_dims[sp_axis] = 2
+    q_shard_dims[tp_axis] = 1
+    tt_q = ttnn.from_torch(
+        q_host,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=q_shard_dims),
+    )
+
+    v_shard_dims = [None, None]
+    v_shard_dims[sp_axis] = 2
+    v_shard_dims[tp_axis] = 1
+    tt_v_cache = ttnn.from_torch(
+        v_cache_host,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=v_shard_dims),
+    )
+
+    joint_shard_dims = [None, None]
+    joint_shard_dims[tp_axis] = 1
+    joint_q = ttnn.from_torch(
+        torch.zeros(1, num_heads_local, 0, KVPE_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=joint_shard_dims),
+    )
+    joint_kv = ttnn.from_torch(
+        torch.zeros(1, 1, 0, KVPE_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    joint_v = ttnn.from_torch(
+        torch.zeros(1, num_heads_local, 0, V_HEAD_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=joint_shard_dims),
+    )
+
+    persistent_k_buf = ttnn.from_torch(
+        torch.zeros(cache_batch, 1, seq_len, KVPE_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]),
+    )
+    persistent_v_shard_dims = [None, None]
+    persistent_v_shard_dims[tp_axis] = 1
+    persistent_v_buf = ttnn.from_torch(
+        torch.zeros(cache_batch, num_heads, seq_len, V_HEAD_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_v_shard_dims
+        ),
+    )
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+    out_concat_dims = [None, None]
+    out_concat_dims[tp_axis] = 1
+    out_concat_dims[sp_axis] = 2
+    for cache_batch_idx in selected_cache_batch_idxs:
+        attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tt_q,
+            tt_cache,
+            tt_v_cache,
+            joint_q,
+            joint_kv,
+            joint_v,
+            persistent_output_buffer_k=persistent_k_buf,
+            persistent_output_buffer_v=persistent_v_buf,
+            joint_strategy="rear",
+            logical_n=seq_len,
+            program_config=_make_program_config(mesh_device),
+            compute_kernel_config=compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=tt_ccl.ring_attention_ccl_semaphore_handles,
+            num_links=1,
+            cluster_axis=sp_axis,
+            mesh_device=mesh_device,
+            topology=topology,
+            subdevice_id=tt_ccl.worker_sub_device_id,
+            ccl_core_grid_offset=tt_ccl.ring_attention_ccl_core_grid_offset,
+            use_column_major_ccl=True,
+            is_causal=True,
+            scale=scale,
+            is_balanced=False,
+            cache_batch_idx=cache_batch_idx,
+        )
+
+        tt_out_host = ttnn.to_torch(
+            attn_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape),
+        ).to(torch.bfloat16)
+
+        ref = _mla_sdpa_reference(q_host, kvpe_hosts[cache_batch_idx], v_hosts[cache_batch_idx], scale)
+        _, pcc_msg = assert_with_pcc(ref, tt_out_host, 0.97)
+        logger.info(f"Index-based KV cache access for cache_batch_idx={cache_batch_idx} PCC: {pcc_msg}")
 
 
 def _causal_chunked_mla_sdpa_torch(q, k, v, q_abs_offset, scale):
@@ -526,19 +723,46 @@ def _to_balanced_growing(t, sp, chunk_size_local, n_chunks):
     return out
 
 
-def _ring_joint_sdpa_torch_with_cache_index(q, kvpe_cache, v, *, cache_batch_idx, n_local_kv, q_abs_offset, scale):
+def _ring_joint_sdpa_torch_with_cache_index(q, kvpe_cache, v_cache, *, cache_batch_idx, q_abs_offset, scale):
     """
-    Desired API in torch: caller passes the whole cache + (cache_batch_idx,
-    n_local_kv); the op does the slot select + populated-prefix trim
-    internally. On-device this would be a layout-free view, not a copy.
+    Desired API in torch: caller passes the whole cache + cache_batch_idx; the op
+    selects that slot from both K and V internally. On-device this would be a
+    layout-free view, not a copy.
 
       kvpe_cache: [num_users * num_cache_layers, 1, seq_len, KVPE_DIM]
+      v_cache:    [num_users * num_cache_layers, nhq, seq_len, V_HEAD_DIM]
     """
-    k_view = kvpe_cache[cache_batch_idx : cache_batch_idx + 1, :, :n_local_kv, :]
-    return _causal_chunked_mla_sdpa_torch(q, k_view, v, q_abs_offset, scale)
+    if not 0 <= cache_batch_idx < kvpe_cache.shape[0]:
+        raise ValueError(f"cache_batch_idx={cache_batch_idx} is outside K cache batch={kvpe_cache.shape[0]}")
+    if not 0 <= cache_batch_idx < v_cache.shape[0]:
+        raise ValueError(f"cache_batch_idx={cache_batch_idx} is outside V cache batch={v_cache.shape[0]}")
+    if kvpe_cache.shape[2] != v_cache.shape[2]:
+        raise ValueError(f"K/V cache sequence mismatch: K={kvpe_cache.shape[2]}, V={v_cache.shape[2]}")
+    q_end = q_abs_offset + q.shape[2]
+    if q_end > kvpe_cache.shape[2]:
+        raise ValueError(f"Q chunk ends at {q_end}, beyond K/V cache length {kvpe_cache.shape[2]}")
+
+    k_view = kvpe_cache[cache_batch_idx : cache_batch_idx + 1]
+    v_view = v_cache[cache_batch_idx : cache_batch_idx + 1]
+    return _causal_chunked_mla_sdpa_torch(q, k_view, v_view, q_abs_offset, scale)
 
 
-def test_index_based_k_access_torch_showcase():
+@pytest.mark.parametrize(
+    ("cache_user_id", "cache_layer_idx", "chunk_i"),
+    [
+        (0, 0, 0),
+        (1, 0, 1),
+        (2, 1, 2),
+        (1, 1, 3),
+    ],
+    ids=[
+        "slot0-first-chunk",
+        "middle-user-layer0",
+        "last-slot-middle-chunk",
+        "middle-user-last-chunk",
+    ],
+)
+def test_index_based_kv_access_torch_showcase(cache_user_id, cache_layer_idx, chunk_i):
     # Multi-user, multi-layer cache (user-major layout):
     #   cache_batch_idx = cache_user_id * num_cache_layers + cache_layer_idx
     num_users = 3
@@ -550,12 +774,8 @@ def test_index_based_k_access_torch_showcase():
     n_chunks = seq_len // chunk_size
     nhq = 8  # arbitrary — torch only, no device sharding constraints
 
-    # Exercise a non-trivial (user, layer) so we can see the index math matter:
-    # cache_batch_idx = 2 * 2 + 1 = 5  (last user, second layer)
-    cache_user_id = 2
-    cache_layer_idx = 1
     cache_batch_idx = cache_user_id * num_cache_layers + cache_layer_idx
-    assert cache_batch_idx == 5, "index math should be user-major"
+    assert 0 <= cache_batch_idx < cache_batch, "index math should be user-major"
 
     scale = QK_HEAD_DIM**-0.5
 
@@ -564,36 +784,35 @@ def test_index_based_k_access_torch_showcase():
     k_full = torch.randn(1, 1, seq_len, KVPE_DIM, dtype=torch.bfloat16)
     v_full = torch.randn(1, nhq, seq_len, V_HEAD_DIM, dtype=torch.bfloat16)
 
-    # Build the multi-user cache. Slot 5 holds k_full for "our" user/layer;
-    # other slots hold distinct random data so a wrong index would show up
-    # as a PCC failure rather than a coincidental pass.
-    cache = torch.empty(cache_batch, 1, seq_len, KVPE_DIM, dtype=torch.bfloat16)
+    # Build the multi-user caches. The selected slot holds K/V for "our"
+    # user/layer; other slots hold distinct random data so a wrong index would show up
+    # as an output mismatch rather than a coincidental pass.
+    k_cache = torch.empty(cache_batch, 1, seq_len, KVPE_DIM, dtype=torch.bfloat16)
+    v_cache = torch.empty(cache_batch, nhq, seq_len, V_HEAD_DIM, dtype=torch.bfloat16)
     for i in range(cache_batch):
         if i == cache_batch_idx:
-            cache[i] = k_full[0]
+            k_cache[i] = k_full[0]
+            v_cache[i] = v_full[0]
         else:
-            cache[i] = torch.randn(1, seq_len, KVPE_DIM, dtype=torch.bfloat16) * 100  # noise
+            k_cache[i] = torch.randn(1, seq_len, KVPE_DIM, dtype=torch.bfloat16) * 100  # noise
+            v_cache[i] = torch.randn(nhq, seq_len, V_HEAD_DIM, dtype=torch.bfloat16) * 100  # noise
 
-    # Pick the middle chunk so neither approach trivially passes (chunk 0
-    # has populated_local == chunk_size; last chunk has populated_local == seq_len).
-    chunk_i = n_chunks // 2  # = 2 for n_chunks=4
+    assert 0 <= chunk_i < n_chunks
     q_abs_offset = chunk_i * chunk_size
-    populated_local = q_abs_offset + chunk_size  # cache populated up to end of this chunk
 
     q_chunk = q_full[:, :, q_abs_offset : q_abs_offset + chunk_size, :]
-    v_populated = v_full[:, :, :populated_local, :]
 
     # ----- Approach A: current API (pre-slice K from the cache) -----
-    k_pre_sliced = cache[cache_batch_idx : cache_batch_idx + 1, :, :populated_local, :]
-    out_with_slice = _ring_joint_sdpa_torch_with_slice(q_chunk, k_pre_sliced, v_populated, q_abs_offset, scale)
+    k_pre_sliced = k_cache[cache_batch_idx : cache_batch_idx + 1]
+    v_pre_sliced = v_cache[cache_batch_idx : cache_batch_idx + 1]
+    out_with_slice = _ring_joint_sdpa_torch_with_slice(q_chunk, k_pre_sliced, v_pre_sliced, q_abs_offset, scale)
 
-    # ----- Approach B: desired API (cache + index + n_local_kv) -----
+    # ----- Approach B: desired API (cache + index) -----
     out_with_index = _ring_joint_sdpa_torch_with_cache_index(
         q_chunk,
-        cache,
-        v_populated,
+        k_cache,
+        v_cache,
         cache_batch_idx=cache_batch_idx,
-        n_local_kv=populated_local,
         q_abs_offset=q_abs_offset,
         scale=scale,
     )
@@ -604,8 +823,43 @@ def test_index_based_k_access_torch_showcase():
     logger.success(
         f"Index API matches slice API. cache_batch_idx={cache_batch_idx} "
         f"(user={cache_user_id}, layer={cache_layer_idx}), "
-        f"populated_local={populated_local}, q_abs_offset={q_abs_offset}"
+        f"q_abs_offset={q_abs_offset}"
     )
+
+
+@pytest.mark.parametrize(
+    ("cache_batch_idx", "k_cache_batch", "k_seq_len", "v_cache_batch", "v_seq_len", "q_abs_offset"),
+    [
+        (-1, 6, 256, 6, 256, 0),
+        (6, 6, 256, 6, 256, 0),
+        (0, 6, 256, 6, 128, 0),
+        (0, 6, 256, 6, 256, 224),
+    ],
+    ids=[
+        "negative-slot",
+        "past-last-slot",
+        "kv-sequence-mismatch",
+        "q-past-cache",
+    ],
+)
+def test_index_based_kv_access_torch_showcase_rejects_invalid_args(
+    cache_batch_idx, k_cache_batch, k_seq_len, v_cache_batch, v_seq_len, q_abs_offset
+):
+    chunk_size = 64
+    nhq = 8
+    k_cache = torch.zeros(k_cache_batch, 1, k_seq_len, KVPE_DIM, dtype=torch.bfloat16)
+    v_cache = torch.zeros(v_cache_batch, nhq, v_seq_len, V_HEAD_DIM, dtype=torch.bfloat16)
+    q = torch.zeros(1, nhq, chunk_size, KVPE_DIM, dtype=torch.bfloat16)
+
+    with pytest.raises(ValueError):
+        _ring_joint_sdpa_torch_with_cache_index(
+            q,
+            k_cache,
+            v_cache,
+            cache_batch_idx=cache_batch_idx,
+            q_abs_offset=q_abs_offset,
+            scale=QK_HEAD_DIM**-0.5,
+        )
 
 
 # ===========================================================================

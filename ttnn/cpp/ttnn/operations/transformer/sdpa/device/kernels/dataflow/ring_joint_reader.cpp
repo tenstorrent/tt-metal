@@ -41,13 +41,14 @@ void kernel_main() {
     constexpr bool chunked_enabled = get_compile_time_arg_val(24) == 1;
     constexpr uint32_t num_q_readers = get_compile_time_arg_val(25);
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(26);
+    constexpr bool indexed_kv_cache = get_compile_time_arg_val(27) == 1;
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and joint generator uses.
     constexpr bool has_joint_q = num_joint_q_chunks > 0;
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
 
-    constexpr auto q_args = TensorAccessorArgs<27>();
+    constexpr auto q_args = TensorAccessorArgs<28>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -67,6 +68,7 @@ void kernel_main() {
     const uint32_t joint_v_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t cache_batch_idx = get_arg_val<uint32_t>(argidx++);
     const uint32_t q_per_core = global_q_end - global_q_start;
 
     // Head chain runtime args (always present)
@@ -208,11 +210,12 @@ void kernel_main() {
     const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr);
     const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr);
 
+    const uint32_t kv_batch_dim = indexed_kv_cache ? cache_batch_idx + 1 : B;
     const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt);
-    const auto input_k_tile_logical = TensorTileShape(B, NHK, kv_local_padded_Nt, DHt);
-    const auto input_v_tile_logical = TensorTileShape(B, NH, kv_local_padded_Nt, vDHt);
-    const auto gathered_k_input_tile_logical = TensorTileShape(B, NHK, padded_Nt, DHt);
-    const auto gathered_v_input_tile_logical = TensorTileShape(B, NH, padded_Nt, vDHt);
+    const auto input_k_tile_logical = TensorTileShape(kv_batch_dim, NHK, kv_local_padded_Nt, DHt);
+    const auto input_v_tile_logical = TensorTileShape(kv_batch_dim, NH, kv_local_padded_Nt, vDHt);
+    const auto gathered_k_input_tile_logical = TensorTileShape(kv_batch_dim, NHK, padded_Nt, DHt);
+    const auto gathered_v_input_tile_logical = TensorTileShape(kv_batch_dim, NH, padded_Nt, vDHt);
     const auto joint_input_tile_logical = TensorTileShape(B, NH, Lt, DHt);
 
     const auto q_generator = PaddedAddrGenerator(q_reader, input_q_tile_logical);
@@ -276,6 +279,15 @@ void kernel_main() {
         const uint32_t ring_iter_kv_start_tile = ring_id * kv_local_padded_Nt;
         const bool ring_iter_processes_KV_chunks =
             chunked_enabled ? true : (ring_iter_kv_start_tile <= global_n_tile_id);
+        uint32_t ring_iter_valid_kv_tiles = kv_local_padded_Nt;
+        if constexpr (!chunked_enabled) {
+            ring_iter_valid_kv_tiles = 0;
+            if (ring_iter_kv_start_tile < logical_nt) {
+                const uint32_t remaining_kv_tiles = logical_nt - ring_iter_kv_start_tile;
+                ring_iter_valid_kv_tiles =
+                    remaining_kv_tiles < kv_local_padded_Nt ? remaining_kv_tiles : kv_local_padded_Nt;
+            }
+        }
 
         // In causal non balanced case when processing KV received from other devices:
         // - skip over KV received from subsequent devices
@@ -379,28 +391,31 @@ void kernel_main() {
                 // Default to local/gathered KV; override below for joint KV when applicable.
                 Slice k_slice;
                 Slice v_slice;
-                uint32_t end_seq_tile;
+                uint32_t k_end_seq_tile;
+                uint32_t v_end_seq_tile;
                 const uint32_t nk = nq / q_heads_per_k;
+                const uint32_t kv_batch = indexed_kv_cache ? cache_batch_idx : nb;
                 if (ring_iter == 0) {
-                    const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
-                    k_slice = Slice(nb, nk, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                    v_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, vDHt);
-                    // Chunked: gathered-K coord ≠ global-K coord, so skip the logical_nt clamp
-                    // (host pre-zeros padding slabs, so reading the full slice is safe).
-                    end_seq_tile = chunked_enabled ? kv_local_padded_Nt : std::min(logical_nt, kv_local_padded_Nt);
+                    const uint32_t local_k_start_tile = k_chunk * Sk_chunk_t;
+                    const uint32_t local_v_start_tile = k_chunk * Sk_chunk_t;
+                    k_slice = Slice(kv_batch, nk, local_k_start_tile, local_k_start_tile + Sk_chunk_t, 0, DHt);
+                    v_slice = Slice(kv_batch, nq, local_v_start_tile, local_v_start_tile + Sk_chunk_t, 0, vDHt);
+                    k_end_seq_tile = ring_iter_valid_kv_tiles;
+                    v_end_seq_tile = ring_iter_valid_kv_tiles;
                 } else {
-                    const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
-                    k_slice = Slice(nb, nk, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
-                    v_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, vDHt);
-                    end_seq_tile = chunked_enabled ? kv_local_padded_Nt * (ring_id + 1)
-                                                   : std::min(logical_nt, kv_local_padded_Nt * (ring_id + 1));
+                    const uint32_t gathered_start_tile = ring_id * kv_local_padded_Nt + k_chunk * Sk_chunk_t;
+                    k_slice = Slice(kv_batch, nk, gathered_start_tile, gathered_start_tile + Sk_chunk_t, 0, DHt);
+                    v_slice = Slice(kv_batch, nq, gathered_start_tile, gathered_start_tile + Sk_chunk_t, 0, vDHt);
+                    k_end_seq_tile = ring_id * kv_local_padded_Nt + ring_iter_valid_kv_tiles;
+                    v_end_seq_tile = k_end_seq_tile;
                 }
                 if constexpr (has_joint_k) {
                     if (kv_chunk_is_joint) {
                         const uint32_t joint_k_row_start_tile = (k_chunk - num_local_k_chunks) * Sk_chunk_t;
                         k_slice = Slice(nb, nk, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
                         v_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, vDHt);
-                        end_seq_tile = Lt;
+                        k_end_seq_tile = Lt;
+                        v_end_seq_tile = Lt;
                     }
                 }
 
@@ -420,7 +435,8 @@ void kernel_main() {
                     // Injector or non-participant: read K from DRAM. Dispatch directly so
                     // local and gathered tensors may use different accessor types.
                     const auto fetch_k = [&](const auto& k_gen) {
-                        fetch_block(k_gen, k_slice, end_seq_tile, cb_k_start_address, k_tile_bytes, true /*transpose*/);
+                        fetch_block(
+                            k_gen, k_slice, k_end_seq_tile, cb_k_start_address, k_tile_bytes, true /*transpose*/);
                     };
                     fetch_from_kv_source(
                         local_k_generator,
@@ -499,7 +515,7 @@ void kernel_main() {
                 } else {
                     const auto fetch_v = [&](const auto& v_gen) {
                         fetch_block(
-                            v_gen, v_slice, end_seq_tile, cb_v_start_address, v_tile_bytes, false /*transpose*/);
+                            v_gen, v_slice, v_end_seq_tile, cb_v_start_address, v_tile_bytes, false /*transpose*/);
                     };
                     fetch_from_kv_source(
                         local_v_generator,
