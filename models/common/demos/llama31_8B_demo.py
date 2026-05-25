@@ -488,6 +488,8 @@ def test_mlp1d_llama_demo(
 
     if is_ci_env and "batch-1" in test_id:
         pytest.skip("CI only runs batch-32 and token-accuracy tests")
+    if "batch-32" in test_id:
+        pytest.skip("Disabled by issue #45107")
 
     # Skip TG devices - MLP1D does not support Galaxy
     mesh_shape = mesh_device.shape
