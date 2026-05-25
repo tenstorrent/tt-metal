@@ -3,13 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/math.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
-#include "ttnn/operations/embedding_backward/device/embedding_backward_program_factory.hpp"
+#include "ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -17,7 +15,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-EmbeddingBackwardProgramFactory::cached_program_t EmbeddingBackwardProgramFactory::create(
+ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
     const EmbeddingBackwardParams& operation_attributes,
     const EmbeddingBackwardInputs& tensor_args,
     Tensor& tensor_return_value) {
@@ -35,8 +33,6 @@ EmbeddingBackwardProgramFactory::cached_program_t EmbeddingBackwardProgramFactor
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-
-    Program program{};
 
     uint32_t index_element_size_bytes = index_tensor.element_size();
     constexpr uint32_t INPUT_SIZE = 32;
@@ -78,24 +74,73 @@ EmbeddingBackwardProgramFactory::cached_program_t EmbeddingBackwardProgramFactor
     //                 Circular buffers
     ////////////////////////////////////////////////////////////////////////////
 
+    ProgramDescriptor desc;
+
     // To read from grad tensor
-    create_cb(CBIndex::c_0, program, all_cores, grad_single_tile_size, max_tiles_per_core, grad_cb_data_format);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = max_tiles_per_core * grad_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_0),
+            .data_format = grad_cb_data_format,
+            .page_size = grad_single_tile_size,
+        }}},
+    });
 
     // To store index values for a single tile
-    create_cb(CBIndex::c_1, program, all_cores, index_single_page_size, 1, index_cb_data_format);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = index_single_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_1),
+            .data_format = index_cb_data_format,
+            .page_size = index_single_page_size,
+        }}},
+    });
 
     // To read from output tensor
-    create_cb(CBIndex::c_2, program, all_cores, output_single_tile_size, max_tiles_per_core, output_cb_data_format);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = max_tiles_per_core * output_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_2),
+            .data_format = output_cb_data_format,
+            .page_size = output_single_tile_size,
+        }}},
+    });
 
     // To store mask values for a single tile
-    create_cb(CBIndex::c_24, program, all_cores, mask_single_page_size, 1, mask_cb_data_format);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = mask_single_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_24),
+            .data_format = mask_cb_data_format,
+            .page_size = mask_single_page_size,
+        }}},
+    });
 
     // L1 scratch space to pass chunk_count from reader to UNPACK
-    create_cb(
-        CBIndex::c_25, program, all_cores, 16, 1, grad_cb_data_format);  // grad_cb_data_format doesn't matter here
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 16,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_25),
+            .data_format = grad_cb_data_format,
+            .page_size = 16,
+        }}},
+    });  // grad_cb_data_format doesn't matter here
 
     // For tiles to be written to the output
-    create_cb(CBIndex::c_16, program, all_cores, output_single_tile_size, max_tiles_per_core, output_cb_data_format);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = max_tiles_per_core * output_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_16),
+            .data_format = output_cb_data_format,
+            .page_size = output_single_tile_size,
+        }}},
+    });
 
     ////////////////////////////////////////////////////////////////////////////
     //                 Kernels
@@ -115,26 +160,21 @@ EmbeddingBackwardProgramFactory::cached_program_t EmbeddingBackwardProgramFactor
     TensorAccessorArgs(*index_tensor_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*out_buffer).append_to(reader_compile_time_args);
 
-    auto reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/embedding_backward/device/kernels/dataflow/reader_embedding_backward.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/embedding_backward/device/kernels/dataflow/reader_embedding_backward.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    std::vector<uint32_t> reader_runtime_args = {
-        grad_tensor_buffer->address(),
-        index_tensor_buffer->address(),
-        out_buffer->address(),
-        embedding_tiles,  // how many pages to skip to get to the next row
-        0,                // offset to the first tile in a row
-        0,                // how many tiles to process in a row
-    };
-
-    auto compute_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/embedding_backward/device/kernels/compute/embedding_backward.cpp",
-        all_cores,
-        tt_metal::ComputeConfig{.compile_args = {max_tiles_per_core, input_height_tiles}});
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/embedding_backward/device/kernels/compute/embedding_backward.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_cores;
+    compute_desc.compile_time_args = {max_tiles_per_core, input_height_tiles};
+    compute_desc.config = ComputeConfigDescriptor{};
 
     ////////////////////////////////////////////////////////////////////////////
     //                 Run-time arguments
@@ -143,40 +183,24 @@ EmbeddingBackwardProgramFactory::cached_program_t EmbeddingBackwardProgramFactor
     auto cores = corerange_to_cores(all_cores);
     uint32_t offset = 0;
     for (auto core : cores) {
-        reader_runtime_args[4] = offset;
+        uint32_t tiles_this_core = 0;
         if (core_group_1.contains(core)) {
-            reader_runtime_args[5] = num_tiles_per_core_group_1;
+            tiles_this_core = num_tiles_per_core_group_1;
         } else {
-            reader_runtime_args[5] = num_tiles_per_core_group_2;
+            tiles_this_core = num_tiles_per_core_group_2;
         }
-        SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-        SetRuntimeArgs(program, compute_kernel_id, core, {reader_runtime_args[5]});
+        // Buffer* entries register for fast cache-hit address patching (see PR #42992).
+        reader_desc.emplace_runtime_args(
+            core, {grad_tensor_buffer, index_tensor_buffer, out_buffer, embedding_tiles, offset, tiles_this_core});
+        compute_desc.emplace_runtime_args(core, {tiles_this_core});
 
-        offset += reader_runtime_args[5];
+        offset += tiles_this_core;
     }
-    return cached_program_t{
-        std::move(program), {.reader_kernel_id = reader_kernel_id, .cores = cores, .device = device}};
-}
 
-void EmbeddingBackwardProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const EmbeddingBackwardParams&,
-    const EmbeddingBackwardInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto* index_dram_buffer = tensor_args.index_tensor.buffer();
-    auto* grad_dram_buffer = tensor_args.grad_tensor.buffer();
-    auto* output_dram_buffer = tensor_return_value.buffer();
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 
-    auto& program = cached_program.program;
-    const auto& shared_variables = cached_program.shared_variables;
-
-    auto& runtime_args_by_core = GetRuntimeArgs(program, shared_variables.reader_kernel_id);
-    for (const auto& core : shared_variables.cores) {
-        auto& runtime_args = runtime_args_by_core[core.x][core.y];
-        runtime_args[0] = grad_dram_buffer->address();
-        runtime_args[1] = index_dram_buffer->address();
-        runtime_args[2] = output_dram_buffer->address();
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim
