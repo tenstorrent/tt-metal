@@ -22,7 +22,10 @@
 // CB lifecycles:
 //   cb_batch_var      Bulk on Scalar          chain waits 1 / pops 1 within stage 1
 //   cb_eps            CallerManaged on Scalar held by kernel_main across the whole kernel
-//   cb_other          Streaming on Block      per-tile wait/pop inside the stage-2+ chain
+//   cb_other          Streaming on Scalar     per-tile wait/pop, reads CB front each iter
+//                                             (Scalar idx = 0; pop advances the front so each
+//                                             iter consumes the next producer-pushed tile —
+//                                             matches the original `sub_tiles(cb_other, _, 0, _, _)`)
 //   cb_bcast, cb_den  CallerManaged on Scalar caller waits before the chain, pops after
 //   cb_weight,
 //   cb_bias           CallerManaged on Scalar same — held by this function call only
@@ -68,140 +71,60 @@ ALWI void batchnorm_bcast_tiles(
         cb_wait_front(cb_bias, 1);
     }
 
-    // Stage 2..4 fused. Same DEST[0] threaded through Sub → Mul (den) → [Mul (weight)] → [Add (bias)] → Pack.
-    if constexpr (WeightHas && BiasHas) {
-        compute_kernel_lib::eltwise_chain(
-            inner_count,
-            compute_kernel_lib::BinaryFpu<
-                cb_other,
-                cb_bcast,
-                compute_kernel_lib::BinaryFpuOp::Sub,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::DestReuseBinary<
-                cb_den,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::DestReuseReconfig::Input,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::DestReuseBinary<
-                cb_weight,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::DestReuseReconfig::Input,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::DestReuseBinary<
-                cb_bias,
-                compute_kernel_lib::BinaryFpuOp::Add,
-                compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::DestReuseReconfig::Input,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<cb_output_0, compute_kernel_lib::Dst::D0, compute_kernel_lib::OutStreaming>{});
-    } else if constexpr (WeightHas) {
-        compute_kernel_lib::eltwise_chain(
-            inner_count,
-            compute_kernel_lib::BinaryFpu<
-                cb_other,
-                cb_bcast,
-                compute_kernel_lib::BinaryFpuOp::Sub,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::DestReuseBinary<
-                cb_den,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::DestReuseReconfig::Input,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::DestReuseBinary<
-                cb_weight,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::DestReuseReconfig::Input,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<cb_output_0, compute_kernel_lib::Dst::D0, compute_kernel_lib::OutStreaming>{});
-    } else if constexpr (BiasHas) {
-        compute_kernel_lib::eltwise_chain(
-            inner_count,
-            compute_kernel_lib::BinaryFpu<
-                cb_other,
-                cb_bcast,
-                compute_kernel_lib::BinaryFpuOp::Sub,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::DestReuseBinary<
-                cb_den,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::DestReuseReconfig::Input,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::DestReuseBinary<
-                cb_bias,
-                compute_kernel_lib::BinaryFpuOp::Add,
-                compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::DestReuseReconfig::Input,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<cb_output_0, compute_kernel_lib::Dst::D0, compute_kernel_lib::OutStreaming>{});
-    } else {
-        compute_kernel_lib::eltwise_chain(
-            inner_count,
-            compute_kernel_lib::BinaryFpu<
-                cb_other,
-                cb_bcast,
-                compute_kernel_lib::BinaryFpuOp::Sub,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::DestReuseBinary<
-                cb_den,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::DestReuseReconfig::Input,
-                compute_kernel_lib::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<cb_output_0, compute_kernel_lib::Dst::D0, compute_kernel_lib::OutStreaming>{});
-    }
+    // Reusable chain pieces. Sub walks cb_other producer-streamed (Scalar idx + Streaming
+    // wait/pop drains the producer one tile per iter); the three DestReuse multiplies/adds
+    // are bcast operands held across the whole chain (CallerManaged on Scalar). The
+    // weight / bias multiplies are OptionalChainElement-gated on the template bools so
+    // they collapse to no-op tag wrappers when the caller didn't pass those tensors.
+    constexpr auto sub_op = compute_kernel_lib::BinaryFpu<
+        cb_other,
+        cb_bcast,
+        compute_kernel_lib::BinaryFpuOp::Sub,
+        compute_kernel_lib::BroadcastDim::None,
+        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+        compute_kernel_lib::Streaming,
+        compute_kernel_lib::CallerManaged,
+        compute_kernel_lib::OperandKind::Scalar,
+        compute_kernel_lib::Dst::D0,
+        compute_kernel_lib::OperandKind::Scalar>{};
+    constexpr auto mul_den = compute_kernel_lib::DestReuseBinary<
+        cb_den,
+        compute_kernel_lib::BinaryFpuOp::Mul,
+        compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
+        compute_kernel_lib::Dst::D0,
+        compute_kernel_lib::Dst::D0,
+        compute_kernel_lib::DestReuseReconfig::Input,
+        compute_kernel_lib::CallerManaged,
+        compute_kernel_lib::OperandKind::Scalar>{};
+    constexpr auto mul_weight = compute_kernel_lib::OptionalChainElement<
+        WeightHas,
+        compute_kernel_lib::DestReuseBinary<
+            cb_weight,
+            compute_kernel_lib::BinaryFpuOp::Mul,
+            compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::DestReuseReconfig::Input,
+            compute_kernel_lib::CallerManaged,
+            compute_kernel_lib::OperandKind::Scalar>>{};
+    constexpr auto add_bias = compute_kernel_lib::OptionalChainElement<
+        BiasHas,
+        compute_kernel_lib::DestReuseBinary<
+            cb_bias,
+            compute_kernel_lib::BinaryFpuOp::Add,
+            compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::DestReuseReconfig::Input,
+            compute_kernel_lib::CallerManaged,
+            compute_kernel_lib::OperandKind::Scalar>>{};
+    constexpr auto pack_out =
+        compute_kernel_lib::PackTile<cb_output_0, compute_kernel_lib::Dst::D0, compute_kernel_lib::OutStreaming>{};
+
+    // Stage 2..4 fused. Single chain — DEST[0] threaded through Sub → Mul(den) →
+    // [Mul(weight)] → [Add(bias)] → Pack. Optional weight / bias gates handle the four
+    // (WeightHas, BiasHas) cases without a four-way constexpr-if.
+    compute_kernel_lib::eltwise_chain(inner_count, sub_op, mul_den, mul_weight, add_bias, pack_out);
 
     cb_pop_front(cb_bcast, 1);
     cb_pop_front(cb_den, 1);
