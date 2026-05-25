@@ -90,10 +90,8 @@ std::vector<uint64_t> LiveDramRanges::snapshot(int device_id) {
 
 namespace {
 
-// Padding registry storage. Keyed by (device_id, start_address) — the buffer's
-// physical start uniquely identifies the entry while it is allocated. The
-// kernel-side check only needs the (logical_end, physical_end) pair, but we
-// keep `start` so clear() can find the entry by its buffer address.
+// `start` is the lookup key for clear(); the kernel-side check only consumes
+// (logical_end, physical_end).
 struct PaddingEntry {
     uint32_t start;
     uint32_t logical_end;
