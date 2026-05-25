@@ -5,6 +5,7 @@
 #include "prefix_scan_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -59,16 +60,6 @@ TensorSpec PrefixScanDeviceOperation::compute_output_specs(
 Tensor PrefixScanDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.a.device());
-}
-
-ttsl::hash::hash_t PrefixScanDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& a = tensor_args.a;
-    const auto& a_shape = a.padded_shape();
-    operation::Hash hash = operation::hash_operation<PrefixScanDeviceOperation>(
-        args.math_fidelity, a.dtype(), a.memory_config(), a_shape.volume());
-
-    return hash;
 }
 
 }  // namespace ttnn::experimental::prim

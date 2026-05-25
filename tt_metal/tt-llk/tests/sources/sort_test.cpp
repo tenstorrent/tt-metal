@@ -204,7 +204,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     constexpr bool APPROX             = false;
     constexpr std::uint32_t dst_index = 0;
-    constexpr int vector_mode         = (int)VectorMode::RC_custom;
+    constexpr VectorMode vector_mode  = VectorMode::RC_custom;
     constexpr int start_phase         = 0;
     constexpr int end_step            = 0;
     constexpr int start_step          = 0;

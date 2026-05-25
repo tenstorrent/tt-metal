@@ -331,6 +331,15 @@ void kernel_main() {
             //---------------------------------------------------------------------
 
             cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
+
+            // Init pack_untilize ONCE before the iter loop (hoisted, mirrors moe_gpt pattern).
+            // Cycling init/uninit per-iter triggers BH's MATH reconfig_remap workaround
+            // (pack_untilize.h:66-80, tt-metal#17132) which races with in-flight PACR/MOP
+            // execution and produces garbage output (NaN/Inf) on BH silicon.
+            pack_untilize_dest_init<
+                /*block_ct_dim=*/w2_tiles_per_iter_w,
+                /*full_ct_dim=*/Cfg::w2_tiles_per_expert_w>(cb_c2s_out);
+
             for (uint32_t iter = 0; iter < Cfg::num_a2a_iters; ++iter) {
                 uint32_t src_core = ring_core_id;
                 uint32_t dm1_tiles_remaining = shard_tiles_lut[ring_core_id];
@@ -393,21 +402,21 @@ void kernel_main() {
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_untilize_dest_init<
-                    /*block_ct_dim=*/w2_tiles_per_iter_w,
-                    /*full_ct_dim=*/Cfg::w2_tiles_per_expert_w>(cb_c2s_out);
-
                 pack_untilize_dest</*block_ct_dim=*/w2_tiles_per_iter_w, /*full_ct_dim=*/Cfg::w2_tiles_per_expert_w>(
                     cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
-                pack_untilize_uninit(cb_c2s_out);
 
                 tile_regs_release();
             }
+
+            // Uninit pack_untilize ONCE after the iter loop (hoisted, mirrors moe_gpt pattern).
+            pack_untilize_uninit(cb_c2s_out);
 
             cb_push_back(cb_c2s_out, num_w0_w1_tiles_h);
 
             // Toggle the buffer to use
             use_second_half_buffer = !use_second_half_buffer;
+            // Restore packer data format for next chunk's activation pipeline (mirrors moe_gpt:342).
+            pack_reconfig_data_format(cb_s2c_in2);
 
         }  // end for (chunk)
     }  // end for (expert_id)
