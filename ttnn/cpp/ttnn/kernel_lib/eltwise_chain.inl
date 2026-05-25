@@ -663,10 +663,16 @@ struct BinaryFpu : BinaryFpuTag {
     // Prev-CB fold (D2): BinaryFpu touches srca (CbA) and srcb (CbB) only. Pack-side
     // reconfig is owned by the downstream PackTile element (`PackTileReconfig::Output`)
     // — BinaryFpu writes to DEST, not to a CB, so it has no pack-side responsibility.
+    //
+    // Per-side selection (Input / SrcA / SrcB) lets the caller opt into a single-side
+    // fold when the other side is already programmed (by a previous chain element on
+    // the same side, or by external init).
     static constexpr uint32_t      reconfig_srca_cb =
-        (DfReconfig == BinaryDataFormatReconfig::Input) ? CbA : NO_PREV_CB;
+        (DfReconfig == BinaryDataFormatReconfig::Input ||
+         DfReconfig == BinaryDataFormatReconfig::SrcA) ? CbA : NO_PREV_CB;
     static constexpr uint32_t      reconfig_srcb_cb =
-        (DfReconfig == BinaryDataFormatReconfig::Input) ? CbB : NO_PREV_CB;
+        (DfReconfig == BinaryDataFormatReconfig::Input ||
+         DfReconfig == BinaryDataFormatReconfig::SrcB) ? CbB : NO_PREV_CB;
     static constexpr uint32_t      reconfig_pack_cb = NO_PREV_CB;
 
     [[no_unique_address]] TileBaseA tile_base_a{};
@@ -939,10 +945,17 @@ struct DestReuseBinary : DestReuseBinaryTag {
 
     // Prev-CB fold (D2): DestReuseBinary loads CB into srca (when DEST → srcb) or srcb
     // (when DEST → srca). Reconfig only fires when opted in.
+    //
+    // `Input` follows ReuseType (programs the side the CB actually unpacks into).
+    // `SrcA` / `SrcB` explicitly pick a side, decoupled from ReuseType — used when
+    // the caller wants to program a specific unpack lane regardless of which lane
+    // DEST is feeding into.
     static constexpr uint32_t       reconfig_srca_cb  =
-        (Reconfig == DestReuseReconfig::Input && ReuseType == DestReuseType::DEST_TO_SRCB) ? Cb : NO_PREV_CB;
+        ((Reconfig == DestReuseReconfig::Input && ReuseType == DestReuseType::DEST_TO_SRCB) ||
+         Reconfig == DestReuseReconfig::SrcA) ? Cb : NO_PREV_CB;
     static constexpr uint32_t       reconfig_srcb_cb  =
-        (Reconfig == DestReuseReconfig::Input && ReuseType == DestReuseType::DEST_TO_SRCA) ? Cb : NO_PREV_CB;
+        ((Reconfig == DestReuseReconfig::Input && ReuseType == DestReuseType::DEST_TO_SRCA) ||
+         Reconfig == DestReuseReconfig::SrcB) ? Cb : NO_PREV_CB;
     static constexpr uint32_t       reconfig_pack_cb  = NO_PREV_CB;
 
     [[no_unique_address]] TileBaseT tile_base{};

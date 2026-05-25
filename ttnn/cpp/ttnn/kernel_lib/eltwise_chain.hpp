@@ -186,7 +186,13 @@
  *  - BinaryDataFormatReconfig::Input → fold emits `reconfig_data_format_srca / _srcb` per side (compile-time-elided per
  * side). Pack-side reconfig is owned by the downstream `PackTile` (`PackTileReconfig::Output`); BinaryFpu writes to
  * DEST, never to a CB.
+ *  - BinaryDataFormatReconfig::SrcA  → fold emits `reconfig_data_format_srca` only (caller asserts srcb is already
+ * programmed). Single-side variant for chains where the other side is already bound by a prior element.
+ *  - BinaryDataFormatReconfig::SrcB  → fold emits `reconfig_data_format_srcb` only (caller asserts srca is already
+ * programmed). Mirror of SrcA.
  *  - DestReuseReconfig::Input        → fold emits per-side reconfig (srca OR srcb depending on ReuseType).
+ *  - DestReuseReconfig::SrcA         → fold emits `reconfig_data_format_srca` only, decoupled from ReuseType.
+ *  - DestReuseReconfig::SrcB         → fold emits `reconfig_data_format_srcb` only, decoupled from ReuseType.
  *  - PackTileReconfig::Output        → fold emits `pack_reconfig_data_format(new_cb)`.
  *  - PackTileReconfig::OutputConditional → currently emits same as ::Output; future extension may
  *    select two-arg `pack_reconfig_data_format(prev, curr)` form when prev_pack is known (D7 note).
@@ -680,9 +686,16 @@ enum class BinaryFpuOp : uint8_t { Add, Sub, Mul };
 /// FPU binary dtype-reconfig. Input-side only — pack-side reconfig is owned by
 /// the downstream `PackTile` element (`PackTileReconfig::Output`). BinaryFpu writes
 /// to DEST, never to a CB, so it has no pack-side responsibility.
+///
+/// `Input` is the safe default (both sides folded). `SrcA` / `SrcB` opt into a
+/// single-side fold when the caller knows the *other* side is already programmed
+/// (e.g. previous chain element bound that CB on the same side, or the side is
+/// programmed via external init outside the chain).
 enum class BinaryDataFormatReconfig : uint8_t {
     None,
-    Input,  // srca and/or srcb on entry (default — safest, no skip)
+    Input,  // srca and srcb on entry (default — safest, no skip)
+    SrcA,   // srca only — caller asserts srcb is already programmed
+    SrcB,   // srcb only — caller asserts srca is already programmed
 };
 
 /// FPU broadcast dimension. Caller MUST pass explicitly — no inference.
@@ -717,9 +730,16 @@ enum class DestReuseType : uint8_t {
 };
 
 /// DestReuseBinary reconfig (NEVER a bool — see proposal §2.5).
+///
+/// `Input` folds the side the CB is loaded into (driven by `ReuseType`: DEST_TO_SRCA
+/// reconfigs srcb, DEST_TO_SRCB reconfigs srca). `SrcA` / `SrcB` explicitly pick a
+/// side, decoupled from `ReuseType` — useful when the caller wants to assert which
+/// unpack lane needs reprogramming irrespective of which lane DEST is feeding into.
 enum class DestReuseReconfig : uint8_t {
     None,
     Input,  // srca-or-srcb reconfig per ReuseType
+    SrcA,   // srca only — explicit, independent of ReuseType
+    SrcB,   // srcb only — explicit, independent of ReuseType
 };
 
 /// UnaryBcast reconfig.
