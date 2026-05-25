@@ -493,20 +493,21 @@ def print_test_summary_per_chip(t: TestCase, runs: list[TestRun]):
 
         def ensure_dev(ch: str):
             if ch not in chips:
-                chips[ch] = {"pass": True, "tests": 0, "bws": [], "errors": 0}
+                chips[ch] = {"tests": 0, "bws": [], "errors": 0}
 
         for l in r.links:
             ensure_dev(l.src_dev)
             ensure_dev(l.dst_dev)
 
-            chips[l.src_dev]["pass"] = chips[l.src_dev]["pass"] and not len(l.errors)
-            chips[l.dst_dev]["pass"] = chips[l.dst_dev]["pass"] and not len(l.errors)
             chips[l.src_dev]["tests"] += 1
             chips[l.dst_dev]["tests"] += 1
             if len(l.bw):
                 have_bws = True
                 chips[l.src_dev]["bws"].append(l.bw["bw"])
                 chips[l.dst_dev]["bws"].append(l.bw["bw"])
+
+            chips[l.src_dev]["errors"] += len(l.errors)
+            chips[l.dst_dev]["errors"] += len(l.errors)
 
         avg = lambda x: sum(x) / len(x)
         headers = ["chip id", "tests"]
