@@ -118,8 +118,8 @@ void kernel_main() {
 
         const uint32_t cb_in0_addr = get_write_ptr(cb_in0);
         const uint32_t cb_in1_addr = get_write_ptr(cb_in1);
-        noc_async_read_tile(i, a, cb_in0_addr);
-        noc_async_read_tile(i, b, cb_in1_addr);
+        noc_async_read_page(i, a, cb_in0_addr);
+        noc_async_read_page(i, b, cb_in1_addr);
 
         noc_async_read_barrier();  // Wait until tile reads are done
 

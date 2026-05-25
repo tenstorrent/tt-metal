@@ -189,7 +189,7 @@ mesh_device->close();
 ```cpp
 cb_reserve_back(src0_cb_index, one_tile);
 const uint32_t l1_write_addr = get_write_ptr(src0_cb_index);
-noc_async_read_tile(0, interleaved_accessor, l1_write_addr);
+noc_async_read_page(0, interleaved_accessor, l1_write_addr);
 noc_async_read_barrier();
 cb_push_back(src0_cb_index, one_tile);
 ```

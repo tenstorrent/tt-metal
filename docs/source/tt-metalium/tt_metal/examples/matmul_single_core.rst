@@ -220,7 +220,7 @@ maps tiles in the row-major order of the matrices in DRAM to read into the circu
                         uint32_t a_tile_index = mt * Kt + kt;  // A is MK, so we stride by Kt
                         cb_reserve_back(cb_id_in0, 1);
                         uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                        noc_async_read_tile(a_tile_index, s0, l1_write_addr_in0);
+                        noc_async_read_page(a_tile_index, s0, l1_write_addr_in0);
                         noc_async_read_barrier();
                         cb_push_back(cb_id_in0, 1);
                     }
@@ -229,7 +229,7 @@ maps tiles in the row-major order of the matrices in DRAM to read into the circu
                         uint32_t b_tile_index = kt * Nt + nt;  // B is KN, so we stride by Nt
                         cb_reserve_back(cb_id_in1, 1);
                         uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                        noc_async_read_tile(b_tile_index, s1, l1_write_addr_in1);
+                        noc_async_read_page(b_tile_index, s1, l1_write_addr_in1);
                         noc_async_read_barrier();
                         cb_push_back(cb_id_in1, 1);
                     }

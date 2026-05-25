@@ -72,8 +72,8 @@ The reader kernel reads tiles from two source DRAM buffers and pushes them into 
             cb_reserve_back(cb_in1, 1);
             uint32_t cb_in0_addr = get_write_ptr(cb_in0);
             uint32_t cb_in1_addr = get_write_ptr(cb_in1);
-            noc_async_read_tile(i, in0, cb_in0_addr);
-            noc_async_read_tile(i, in1, cb_in1_addr);
+            noc_async_read_page(i, in0, cb_in0_addr);
+            noc_async_read_page(i, in1, cb_in1_addr);
 
             noc_async_read_barrier();
             cb_push_back(cb_in0, 1);

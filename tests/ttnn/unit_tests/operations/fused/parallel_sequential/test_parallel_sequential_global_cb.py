@@ -41,7 +41,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; i++) {
         cb_reserve_back(cb_id, 1);
         uint32_t l1_write_addr = get_write_ptr(cb_id);
-        noc_async_read_tile(i, s, l1_write_addr);
+        noc_async_read_page(i, s, l1_write_addr);
         noc_async_read_barrier();
         cb_push_back(cb_id, 1);
     }

@@ -178,8 +178,8 @@ To do so, the reader creates 2 interleaved address generators. Unlike on most pr
             cb_reserve_back(cb_in0, 1);
             cb_reserve_back(cb_in1, 1);
 
-            noc_async_read_tile(i, in0, get_write_ptr(cb_in0));
-            noc_async_read_tile(i, in1, get_write_ptr(cb_in1));
+            noc_async_read_page(i, in0, get_write_ptr(cb_in0));
+            noc_async_read_page(i, in1, get_write_ptr(cb_in1));
 
             // Wait until tile reads are done
             noc_async_read_barrier();
