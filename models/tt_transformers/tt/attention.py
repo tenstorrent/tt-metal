@@ -792,7 +792,9 @@ class Attention(LightweightModule):
             # rotary output back to interleaved L1 and then resharding it for SDPA.
             q_heads_rotary_1BQD = q_heads_1BQD
             k_heads_rotary_1BKD = k_heads_1BKD
-            q_heads_1BQD = ttnn.concat([q_heads_rotary_1BQD, query_pass], dim=-1, memory_config=height_sharded_memory_config)
+            q_heads_1BQD = ttnn.concat(
+                [q_heads_rotary_1BQD, query_pass], dim=-1, memory_config=height_sharded_memory_config
+            )
             k_heads_1BKD = ttnn.concat(
                 [k_heads_rotary_1BKD, key_pass], dim=-1, memory_config=k_height_sharded_memory_config
             )
