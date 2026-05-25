@@ -525,6 +525,7 @@
 - name: Z-Image-Turbo Text Encoder
   cmd: |
     set -e
+    uv pip install -r models/demos/z_image_turbo/requirements.txt
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     pytest models/demos/z_image_turbo/tests/test_text_encoder.py --timeout=600
   skus:
@@ -537,6 +538,7 @@
 - name: Z-Image-Turbo DiT
   cmd: |
     set -e
+    uv pip install -r models/demos/z_image_turbo/requirements.txt
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     pytest models/demos/z_image_turbo/tests/test_dit.py --timeout=600
   skus:
@@ -549,6 +551,7 @@
 - name: Z-Image-Turbo VAE decoder
   cmd: |
     set -e
+    uv pip install -r models/demos/z_image_turbo/requirements.txt
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     pytest models/demos/z_image_turbo/tests/test_vae.py --timeout=600
   skus:
@@ -561,6 +564,7 @@
 - name: Z-Image-Turbo full pipeline
   cmd: |
     set -e
+    uv pip install -r models/demos/z_image_turbo/requirements.txt
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     pytest models/demos/z_image_turbo/tests/test_pipeline.py --timeout=600
   skus:
