@@ -66,6 +66,8 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Smoke test Tracy CLI tools
+        run: ./tests/scripts/tracy/tracy_cli_smoke_test.sh
       - name: Run profiler regression tests
         timeout-minutes: 35
         run: |
