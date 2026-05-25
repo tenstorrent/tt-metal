@@ -37,7 +37,6 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import torch
-import torch.nn.functional as F
 import ttnn
 
 from models.experimental.vibevoice.tt.vibevoice_config import SemanticTokenizerConfig
@@ -231,66 +230,6 @@ def preprocess_semantic_tokenizer_weights(
         eps=eps,
         config=config,
     )
-
-
-# ──────────────────────────────────────────────────────────────
-# Host-side forward helpers
-# ──────────────────────────────────────────────────────────────
-
-
-def _apply_conv1d(x: torch.Tensor, cw: ConvWeightsHost) -> torch.Tensor:
-    """Apply Conv1d on host. x: [B, C, T] → [B, C_out, T_out].
-
-    Matches SConv1d._forward_non_streaming: left-pads by padding_total and
-    right-pads by extra_padding so output length equals ceil(T / stride).
-    """
-    T = x.shape[-1]
-    kernel_size = cw.weight.shape[-1]
-    padding_total = cw.causal_pad
-
-    # Compute right-side extra padding (matches get_extra_padding_for_conv1d)
-    if cw.stride > 1:
-        n_frames = (T - kernel_size + padding_total) / cw.stride + 1
-        ideal_length = (math.ceil(n_frames) - 1) * cw.stride + (kernel_size - padding_total)
-        extra_pad = max(0, ideal_length - T)
-    else:
-        extra_pad = 0
-
-    if padding_total > 0 or extra_pad > 0:
-        x = F.pad(x, (padding_total, extra_pad))
-    return F.conv1d(x, cw.weight, cw.bias, stride=cw.stride, groups=cw.groups)
-
-
-def _conv_rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
-    """ConvRMSNorm on [B, C, T]: normalize last dim of transposed input."""
-    x = x.transpose(1, 2)  # [B, C, T] → [B, T, C]
-    rms = x.float().pow(2).mean(-1, keepdim=True).add(eps).sqrt()
-    x = (x.float() / rms).to(x.dtype) * weight.unsqueeze(0).unsqueeze(0)
-    return x.transpose(1, 2)  # [B, T, C] → [B, C, T]
-
-
-def _block1d_forward(x: torch.Tensor, bw: Block1DWeightsHost) -> torch.Tensor:
-    """Block1D forward on [B, C, T]."""
-    # Mixer (depthwise conv) path
-    residual = x
-    x = _conv_rms_norm(x, bw.norm_w, bw.eps)
-    x = _apply_conv1d(x, bw.dw_conv)
-    if bw.gamma is not None:
-        x = x * bw.gamma.unsqueeze(-1)
-    x = residual + x
-
-    # FFN path
-    residual = x
-    x = _conv_rms_norm(x, bw.ffn_norm_w, bw.eps)
-    x = x.permute(0, 2, 1)  # [B, C, T] → [B, T, C]
-    x = F.linear(x, bw.linear1_w, bw.linear1_b)
-    x = F.gelu(x)
-    x = F.linear(x, bw.linear2_w, bw.linear2_b)
-    x = x.permute(0, 2, 1)  # [B, T, C] → [B, C, T]
-    if bw.ffn_gamma is not None:
-        x = x * bw.ffn_gamma.unsqueeze(-1)
-    x = residual + x
-    return x
 
 
 # ──────────────────────────────────────────────────────────────
@@ -495,6 +434,57 @@ class TTBlock1DDevice:
 
 
 # ──────────────────────────────────────────────────────────────
+# Device-side TT functional helpers (TTNN equivalents of torch fallbacks)
+# ──────────────────────────────────────────────────────────────
+
+
+def comp_pcc(golden: torch.Tensor, calculated: torch.Tensor, pcc_threshold: float = 0.99) -> "tuple[bool, float]":
+    """Pearson Correlation Coefficient between two tensors (flattened).
+
+    Returns (passes_threshold, pcc_value).
+    """
+    g = golden.float().flatten()
+    c = calculated.float().flatten()
+    pcc_val = torch.corrcoef(torch.stack([g, c]))[0, 1].item()
+    return pcc_val >= pcc_threshold, pcc_val
+
+
+def _tt_conv_rms_norm(x: ttnn.Tensor, weight: ttnn.Tensor, eps: float) -> ttnn.Tensor:
+    """ConvRMSNorm on [B, 1, T, C] NHWC: RMS-normalise over C, then scale.
+
+    TTNN equivalent of _conv_rms_norm.  ttnn.rms_norm normalises the last dim
+    so no transpose is needed — NHWC already has C last.
+    weight must be in [1, 1, C//32, 32] ROW_MAJOR as produced by _norm_w_tt.
+    """
+    return ttnn.rms_norm(
+        x,
+        weight=weight,
+        epsilon=eps,
+        compute_kernel_config=_HIFI4,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _tt_apply_conv1d(x: ttnn.Tensor, conv: "TTConv1d") -> ttnn.Tensor:
+    """Causal-padded Conv1d on [B, 1, T, C] NHWC → [B, 1, T_out, out_ch].
+
+    TTNN equivalent of _apply_conv1d.  Delegates to TTConv1d which computes
+    the extra right-pad and dispatches to ttnn.conv2d.
+    """
+    return conv(x)
+
+
+def _tt_block1d_forward(x: ttnn.Tensor, blk: "TTBlock1DDevice") -> ttnn.Tensor:
+    """Block1D forward on [B, 1, T, C] NHWC → [B, 1, T, C].
+
+    TTNN equivalent of _block1d_forward.  Runs mixer (depthwise conv +
+    layer-scale + residual) and FFN (linear → gelu → linear + layer-scale +
+    residual) entirely on device via TTBlock1DDevice.
+    """
+    return blk(x)
+
+
+# ──────────────────────────────────────────────────────────────
 # TTSemanticTokenizer
 # ──────────────────────────────────────────────────────────────
 
@@ -524,8 +514,14 @@ class TTSemanticTokenizer:
 
         self._head_conv = TTConv1d(weights.head_conv, device)
 
-    def forward(self, audio: ttnn.Tensor) -> ttnn.Tensor:
-        """Encode audio to semantic latents (all ops on device)."""
+    def forward(self, audio: ttnn.Tensor, golden: Optional[torch.Tensor] = None) -> ttnn.Tensor:
+        """Encode audio to semantic latents (all ops on device).
+
+        Args:
+            audio:  [B, 1, 1, T] raw audio tensor on device.
+            golden: optional [B, vae_dim, T_enc] torch reference tensor.
+                    If provided, PCC between TTNN output and golden is printed.
+        """
         B = audio.shape[0]
         T = audio.shape[-1]
 
@@ -549,7 +545,14 @@ class TTSemanticTokenizer:
             )
 
         x = self._head_conv(x)  # [B, 1, T_enc, vae_dim]
+
+        if golden is not None:
+            # [B, 1, T_enc, vae_dim] NHWC → [B, vae_dim, T_enc] channels-first
+            out_torch = ttnn.to_torch(x).squeeze(1).permute(0, 2, 1)
+            passed, pcc_val = comp_pcc(golden, out_torch)
+            print(f"[TTSemanticTokenizer] PCC = {pcc_val:.6f} ({'PASS' if passed else 'FAIL'})")
+
         return x
 
-    def __call__(self, audio: ttnn.Tensor) -> ttnn.Tensor:
-        return self.forward(audio)
+    def __call__(self, audio: ttnn.Tensor, golden: Optional[torch.Tensor] = None) -> ttnn.Tensor:
+        return self.forward(audio, golden)
