@@ -13,7 +13,6 @@
 #include <bit>
 #include <cmath>
 #include <limits>
-#include <map>
 #include <numeric>
 
 namespace ttnn::prim {
@@ -478,7 +477,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     compute_desc_g1.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = rm_path ? false : dst_full_sync_en,
+        .dst_full_sync_en = dst_full_sync_en,
     };
 
     std::optional<KernelDescriptor> compute_desc_g2;
@@ -508,7 +507,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         d.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = rm_path ? false : dst_full_sync_en,
+            .dst_full_sync_en = dst_full_sync_en,
         };
         compute_desc_g2 = std::move(d);
     }

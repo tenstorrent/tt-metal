@@ -98,7 +98,7 @@ void kernel_main() {
     constexpr uint32_t NC = get_compile_time_arg_val(2);
     constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(4);
     constexpr uint32_t ht_tiles_per_chunk = get_compile_time_arg_val(5);
-    // arg(5) = post_mul_scaler_bits — captured inside reduce_block() under REDUCE_POST_MUL.
+    // arg(3) = post_mul_scaler_bits — captured inside reduce_block() under REDUCE_POST_MUL.
 
     compute_kernel_hw_startup(cb_rm, cb_tile_in);
 
