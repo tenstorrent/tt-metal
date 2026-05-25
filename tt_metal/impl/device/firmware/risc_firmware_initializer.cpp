@@ -601,26 +601,47 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                                     const CoreCoord probe_tensix_virt =
                                         cluster_.get_virtual_coordinate_from_logical_coordinates(
                                             device_id, CoreCoord(0, 0), CoreType::WORKER);
+                                    // FIX UV (#42429): Use the LAUNCH address (offset 16 in
+                                    // mailboxes_t at MEM_MAILBOX_BASE=16 → absolute addr=32=0x20,
+                                    // 32-byte aligned) with sizeof(launch_msg_t)=112 bytes.
+                                    //
+                                    // FIX ST v1/v2 false-positive root cause:
+                                    //   write_to_non_mmio checks (core_dest + offset) & 0x1F:
+                                    //   if NOT 32-byte aligned → block_size = DATA_WORD_SIZE = 4
+                                    //   (word mode, data inline, no relay L1 buffer needed → 0ms).
+                                    //   CORE_INFO addr = 16 + large_offset → not 32-byte aligned
+                                    //   → even 8-byte probe → still two 4-byte word-mode writes
+                                    //   → passes before block-mode NOC-DMA path is ready.
+                                    //
+                                    // LAUNCH addr is 32-byte aligned; 112 bytes > DATA_WORD_SIZE=4
+                                    // → req_flags gets cmd_data_block | cmd_wr_req → relay ERISC
+                                    // must copy data to its L1 buffer and do a full NOC DMA write
+                                    // to Tensix. This is the same code path initialize_and_launch_
+                                    // firmware takes, so passing this probe ≡ init will succeed.
+                                    //
+                                    // initialize_and_launch_firmware overwrites LAUNCH anyway,
+                                    // so probing it with zeros here is safe. (#42429 FIX UV)
                                     const uint64_t probe_addr = hal_.get_dev_addr(
-                                        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::CORE_INFO);
-                                    // Use 8 bytes (> DATA_WORD_SIZE=4) to force BLOCK MODE
-                                    // (cmd_data_block path) in write_to_non_mmio. A 4-byte probe
-                                    // uses WORD MODE (data inline in command) which succeeds before
-                                    // the relay ERISC's L1-buffer/NOC-DMA path is ready — false
-                                    // positive. BLOCK MODE matches initialize_and_launch_firmware's
-                                    // core_info writes and ensures we probe the full relay path.
-                                    // (#42429 FIX ST v2)
-                                    const uint32_t dummy[2] = {0u, 0u};
+                                        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH);
+                                    const uint32_t probe_size = hal_.get_dev_size(
+                                        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH);
+                                    log_debug(
+                                        tt::LogAlways,
+                                        "run_launch_phase: FIX UV diag — device {} probe_addr=0x{:x} "
+                                        "probe_size={} alignment={}B (#42429)",
+                                        device_id, probe_addr, probe_size,
+                                        static_cast<int>(probe_addr & 0x1Fu));
+                                    std::vector<uint32_t> dummy(probe_size / sizeof(uint32_t), 0u);
                                     try {
                                         cluster_.write_core_immediate(
-                                            dummy, sizeof(dummy),
+                                            dummy.data(), probe_size,
                                             {static_cast<size_t>(device_id), probe_tensix_virt},
                                             probe_addr);
                                         write_probe_ok = true;
                                     } catch (...) {
-                                        // Write-forwarding not ready yet. relay_broken was set by
-                                        // write_core_immediate; clear_relay_broken at top of loop
-                                        // resets it on the next iteration.
+                                        // Block-mode write-forwarding not ready yet. relay_broken
+                                        // was set by write_core_immediate; clear_relay_broken at
+                                        // top of loop resets it on the next iteration.
                                     }
                                 } else {
                                     // No Tensix grid — skip write probe, proceed on heartbeat alone.
@@ -634,7 +655,7 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                                             .count();
                                     log_info(
                                         tt::LogAlways,
-                                        "run_launch_phase: FIX RS/ST — device {} relay write path "
+                                        "run_launch_phase: FIX RS/UV — device {} relay write path "
                                         "ready in {}ms (heartbeat=0x{:08x}). (#42429)",
                                         device_id,
                                         rs_elapsed_ms,
@@ -646,8 +667,8 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                                 // Heartbeat live but write-forwarding not yet ready — retry.
                                 log_info(
                                     tt::LogAlways,
-                                    "run_launch_phase: FIX RS/ST — device {} heartbeat=0x{:08x} "
-                                    "but write probe failed; retrying write-forwarding check. (#42429)",
+                                    "run_launch_phase: FIX RS/UV — device {} heartbeat=0x{:08x} "
+                                    "but block-mode write probe failed; retrying. (#42429)",
                                     device_id,
                                     hb_data[0]);
                             }
