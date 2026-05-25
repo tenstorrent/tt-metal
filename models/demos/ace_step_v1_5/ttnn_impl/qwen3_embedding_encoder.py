@@ -35,6 +35,8 @@ from .math_perf_env import (
     ace_step_cond_linear_program_config,
     ace_step_cond_mlp_gate_up_linear_program_config,
     ace_step_cond_rms_norm_kwargs,
+    ace_step_ensure_l1_activation,
+    ace_step_ensure_tile_layout,
     ace_step_init_cond_linear_compute_kernel_config,
     ace_step_init_cond_sdpa_compute_kernel_config,
     ace_step_linear_l1_memory_config,
@@ -42,6 +44,9 @@ from .math_perf_env import (
     ace_step_nlp_concat_heads,
     ace_step_permute_kwargs,
     ace_step_reshape_kwargs,
+    ace_step_sdpa_activation_kwargs,
+    ace_step_sdpa_mask_memory_config,
+    ace_step_upload_f32_np_as_bf16_tile,
 )
 
 # Bounded LRU cap for the per-prompt causal+padding attention bias cache. Each entry is
@@ -218,7 +223,11 @@ class Qwen3EmbeddingEncoderConfig:
 
 
 def repeat_kv_gqa_ttnn(x: ttnn.Tensor, n_rep: int) -> ttnn.Tensor:
-    """``[B, n_kv, S, D]`` → ``[B, n_kv * n_rep, S, D]`` interleaved per HF ``repeat_kv`` / ``torch.repeat_interleave``."""
+    """``[B, n_kv, S, D]`` → ``[B, n_kv * n_rep, S, D]`` interleaved per HF ``repeat_kv`` / ``torch.repeat_interleave``.
+
+    Prefer native GQA in :meth:`_TtQwen3EncoderLayer.__call__` (pass ``[B, kv_h, S, D]`` K/V into SDPA).
+    This helper remains for callers that still need explicit head expansion.
+    """
     if int(n_rep) == 1:
         return x
     return ttnn.repeat_interleave(x, int(n_rep), dim=1)
@@ -297,7 +306,9 @@ class TtQwen3EncoderMLP:
                     self._gate_up_pc_cache[key] = pc
             if pc is not None:
                 kw["program_config"] = pc
-        if self._linear_out_l1 is not None and not self._mlp_keep_dram_activations:
+        if self._mlp_keep_dram_activations and self.mem is not None:
+            kw["memory_config"] = self.mem
+        elif self._linear_out_l1 is not None:
             kw["memory_config"] = self._linear_out_l1
         return kw
 
@@ -316,12 +327,14 @@ class TtQwen3EncoderMLP:
             )
             if pc is not None:
                 kw["program_config"] = pc
-        if self._linear_out_l1 is not None and not self._mlp_keep_dram_activations:
+        if self._mlp_keep_dram_activations and self.mem is not None:
+            kw["memory_config"] = self.mem
+        elif self._linear_out_l1 is not None:
             kw["memory_config"] = self._linear_out_l1
         return kw
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ace_step_ensure_tile_layout(ttnn, x)
         b_x = int(x.shape[0])
         s = int(x.shape[2])
         if self._mlp_keep_dram_activations:
@@ -341,9 +354,6 @@ class TtQwen3EncoderMLP:
             else ttnn.gelu(gate, memory_config=_silu_mc)
         )
         h = ttnn.multiply(gate, up, memory_config=_silu_mc)
-        _bf16 = getattr(ttnn, "bfloat16", None)
-        if _bf16 is not None:
-            h = ttnn.typecast(h, _bf16, memory_config=_silu_mc)
         if not self._mlp_keep_dram_activations:
             h = self._l1_activation(h)
         lin_down = self._down_linear_kwargs(batch_size=b_x, seq_len=s)
@@ -472,8 +482,8 @@ class _TtQwen3EncoderLayer:
     def __call__(self, hidden_b1sh: ttnn.Tensor, cos_11sd: ttnn.Tensor, sin_11sd: ttnn.Tensor, attn_bias_b11ss):
         _l1_mc = self._linear_out_l1 or self.mem
         _rms_kw = ace_step_cond_rms_norm_kwargs(ttnn, _l1_mc, device=self.device)
-        res = hidden_b1sh
-        x = ttnn.to_layout(hidden_b1sh, ttnn.TILE_LAYOUT)
+        x = ace_step_ensure_tile_layout(ttnn, hidden_b1sh)
+        res = x
         x = ttnn.rms_norm(x, weight=self.input_ln_w, epsilon=self.eps, **_rms_kw)
 
         b = int(x.shape[0])
@@ -492,6 +502,13 @@ class _TtQwen3EncoderLayer:
         k = ttnn.linear(x, self.wk, bias=None, transpose_b=True, **lin_kv)
         v = ttnn.linear(x, self.wv, bias=None, transpose_b=True, **lin_kv)
 
+        # BFP8 1D-mcast matmul can spill Q/K/V to DRAM despite memory_config=L1; reshape/permute
+        # views inherit that placement. Force L1 before SDPA (no-op when already L1).
+        if _l1_mc is not None:
+            q = ace_step_ensure_l1_activation(ttnn, q, _l1_mc)
+            k = ace_step_ensure_l1_activation(ttnn, k, _l1_mc)
+            v = ace_step_ensure_l1_activation(ttnn, v, _l1_mc)
+
         # [B,1,S,H*Dh] -> [B,S,H,Dh] -> [B,H,S,Dh] (4-D path; avoids rank-5 intermediate)
         q = ttnn.reshape(q, (b, s, H, Dh), **_sr)
         k = ttnn.reshape(k, (b, s, kv_h, Dh), **_sr)
@@ -500,15 +517,18 @@ class _TtQwen3EncoderLayer:
         k = ttnn.permute(k, (0, 2, 1, 3), **_pk)
         v = ttnn.permute(v, (0, 2, 1, 3), **_pk)
 
+        if _l1_mc is not None:
+            q = ace_step_ensure_l1_activation(ttnn, q, _l1_mc)
+            k = ace_step_ensure_l1_activation(ttnn, k, _l1_mc)
+            v = ace_step_ensure_l1_activation(ttnn, v, _l1_mc)
+
         q = ttnn.rms_norm(q, weight=self.q_norm_w, epsilon=self.eps, **_rms_kw)
         k = ttnn.rms_norm(k, weight=self.k_norm_w, epsilon=self.eps, **_rms_kw)
 
         q, k = apply_rope_hf_style(q, k, cos_11sd, sin_11sd, eltwise_memory_config=_l1_mc)
 
-        if kv_h != H:
-            rep = H // kv_h
-            k = repeat_kv_gqa_ttnn(k, rep)
-            v = repeat_kv_gqa_ttnn(v, rep)
+        # Native GQA: SDPA accepts q [B, H, S, D] with k/v [B, kv_h, S, D] when H % kv_h == 0.
+        # Avoids repeat_interleave Untilize/Concat/Tilize (~52 μs/layer).
 
         sdpa_d = _sdpa_head_dim_tile_padding(self.dh)
         if sdpa_d > self.dh:
@@ -518,15 +538,15 @@ class _TtQwen3EncoderLayer:
             k = ttnn.pad(k, padding=pad4, value=0.0)
             v = ttnn.pad(v, padding=pad4, value=0.0)
 
+        # ``attn_bias_b11ss`` is pre-expanded to ``[B, H, S, S]`` once in ``forward()`` (not per layer).
         mask_tt = attn_bias_b11ss
-        if mask_tt is not None:
-            mask_tt = ttnn.repeat(mask_tt, (1, H, 1, 1))
 
         sdpa_kw = dict(attn_mask=mask_tt, is_causal=False, scale=self.scale)
         if self._sdpa_compute_kernel_config is not None:
             sdpa_kw["compute_kernel_config"] = self._sdpa_compute_kernel_config
         if self._sdpa_program_config is not None:
             sdpa_kw["program_config"] = self._sdpa_program_config
+        sdpa_kw.update(ace_step_sdpa_activation_kwargs(ttnn, self._act_l1))
         ctx = self._sdpa(q, k, v, **sdpa_kw)
 
         if sdpa_d > self.dh:
@@ -541,7 +561,7 @@ class _TtQwen3EncoderLayer:
 
         h = ttnn.add(res, attn_out, memory_config=_l1_mc)
         res2 = h
-        h2 = ttnn.to_layout(h, ttnn.TILE_LAYOUT)
+        h2 = ace_step_ensure_tile_layout(ttnn, h)
         h2 = ttnn.rms_norm(h2, weight=self.post_ln_w, epsilon=self.eps, **_rms_kw)
         ff = self.mlp(h2)
         return ttnn.add(res2, ff, memory_config=_l1_mc)
@@ -564,12 +584,14 @@ class TtQwen3EmbeddingEncoder:
         self.device = device
         self.cfg = cfg or Qwen3EmbeddingEncoderConfig()
         self.dtype = dtype or getattr(ttnn, "bfloat16", None)
-        self.projection_dtype = projection_dtype if projection_dtype is not None else self.dtype
-        self.mlp_weight_dtype = mlp_weight_dtype if mlp_weight_dtype is not None else self.dtype
         if self.dtype is None:
             raise RuntimeError("bfloat16 required")
+        _w8 = ace_step_linear_weight_dtype(ttnn, self.dtype)
+        self.projection_dtype = projection_dtype if projection_dtype is not None else _w8
+        self.mlp_weight_dtype = mlp_weight_dtype if mlp_weight_dtype is not None else _w8
         self.mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         mapper = ttnn.ReplicateTensorToMesh(device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        self._attn_bias_cache: dict[tuple, ttnn.Tensor] = {}
 
         weights_np = load_qwen3_weights_np(str(qwen_safetensors_path))
 
@@ -601,15 +623,6 @@ class TtQwen3EmbeddingEncoder:
         l1_mc = ace_step_linear_l1_memory_config(ttnn)
         sdpa_compute_kernel_config = ace_step_init_cond_sdpa_compute_kernel_config(device)
 
-        sdpa_program_config = None
-        if hasattr(device, "compute_with_storage_grid_size") and hasattr(ttnn, "SDPAProgramConfig"):
-            sdpa_program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                q_chunk_size=32,
-                k_chunk_size=256,
-                exp_approx_mode=False,
-            )
-
         self.embed_weight = ttnn.as_tensor(
             weights_np["embed_tokens.weight"],
             device=device,
@@ -624,7 +637,7 @@ class TtQwen3EmbeddingEncoder:
             activation_l1_memory_config=l1_mc,
             linear_output_l1_memory_config=l1_mc,
             sdpa_compute_kernel_config=sdpa_compute_kernel_config,
-            sdpa_program_config=sdpa_program_config,
+            sdpa_program_config=None,
         )
         self.layers = [
             _TtQwen3EncoderLayer(
@@ -652,10 +665,12 @@ class TtQwen3EmbeddingEncoder:
         )
 
     def embed_tokens(self, input_ids: np.ndarray) -> ttnn.Tensor:
-        """Token IDs ``[B,S]`` -> embedding hidden states ``[B,S,H]`` on device."""
-        cfg = self.cfg
+        """Token IDs ``[B,S]`` -> embedding hidden states ``[B,S,H]`` on device (ROW_MAJOR).
+
+        Callers (lyric ``embed_tokens`` path) consume via ``to_torch``; keep ROW_MAJOR and defer
+        tilize to the consumer. :meth:`forward` reshapes first, then tilizes once in layer 0.
+        """
         ids = np.asarray(input_ids, dtype=np.uint32)
-        b, s = int(ids.shape[0]), int(ids.shape[1])
         mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
         ids_tt = ttnn.as_tensor(
             ids,
@@ -667,7 +682,8 @@ class TtQwen3EmbeddingEncoder:
         )
         h = ttnn.embedding(ids_tt, weight=self.embed_weight, dtype=self.dtype)
         ttnn.deallocate(ids_tt)
-        return h
+        l1_mc = ace_step_linear_l1_memory_config(ttnn)
+        return ace_step_ensure_l1_activation(ttnn, h, l1_mc)
 
     def forward(self, input_ids: np.ndarray, attention_mask: Optional[np.ndarray] = None) -> ttnn.Tensor:
         cfg = self.cfg
@@ -678,7 +694,18 @@ class TtQwen3EmbeddingEncoder:
 
         mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
         _sr = ace_step_reshape_kwargs(ttnn)
-        h = self.embed_tokens(ids)
+        ids_tt = ttnn.as_tensor(
+            ids,
+            device=self.device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=self.mem,
+            mesh_mapper=mapper,
+        )
+        h = ttnn.embedding(ids_tt, weight=self.embed_weight, dtype=self.dtype)
+        ttnn.deallocate(ids_tt)
+        l1_mc = ace_step_linear_l1_memory_config(ttnn)
+        h = ace_step_ensure_l1_activation(ttnn, h, l1_mc)
         h = ttnn.reshape(h, (b, 1, s, cfg.hidden_size), **_sr)
 
         attn_bias_tt = None
@@ -686,19 +713,26 @@ class TtQwen3EmbeddingEncoder:
         if m is None:
             m = np.ones((b, s), dtype=np.float32)
         bias_np = causal_padding_attn_bias_np(np.asarray(m), cfg.max_seq_len)
-        attn_bias_tt = ttnn.as_tensor(
-            bias_np,
-            device=self.device,
-            dtype=self.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.mem,
-            mesh_mapper=mapper,
-        )
+        nh = int(cfg.num_attention_heads)
+        if nh > 1:
+            bias_np = np.repeat(bias_np, nh, axis=1)
+        mask_key = (int(cfg.max_seq_len), nh, np.asarray(m, dtype=np.float32).tobytes())
+        attn_bias_tt = self._attn_bias_cache.get(mask_key)
+        if attn_bias_tt is None:
+            attn_bias_tt = ace_step_upload_f32_np_as_bf16_tile(
+                ttnn,
+                bias_np,
+                device=self.device,
+                dtype=self.dtype,
+                memory_config=ace_step_sdpa_mask_memory_config(ttnn) or self.mem,
+                mesh_mapper=mapper,
+            )
+            self._attn_bias_cache[mask_key] = attn_bias_tt
 
         for layer in self.layers:
             h = layer(h, self.cos_tt, self.sin_tt, attn_bias_tt)
 
-        h = ttnn.to_layout(h, ttnn.TILE_LAYOUT)
+        h = ace_step_ensure_tile_layout(ttnn, h)
         _fn_mc = ace_step_linear_l1_memory_config(ttnn) or self.mem
         h = ttnn.rms_norm(h, weight=self.final_norm_w, epsilon=float(cfg.rms_norm_eps), memory_config=_fn_mc)
         return h

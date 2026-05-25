@@ -28,13 +28,16 @@ from .math_perf_env import (
     ace_step_concat_kwargs,
     ace_step_cond_linear_program_config,
     ace_step_cond_rms_norm_kwargs,
+    ace_step_ensure_row_major_layout,
     ace_step_ensure_tile_layout,
     ace_step_init_cond_linear_compute_kernel_config,
     ace_step_init_cond_sdpa_compute_kernel_config,
     ace_step_linear_l1_memory_config,
     ace_step_linear_weight_dtype,
     ace_step_reshape_kwargs,
+    ace_step_sdpa_mask_memory_config,
     ace_step_to_layout_kwargs,
+    ace_step_upload_f32_np_as_bf16_tile,
 )
 from .qwen3_embedding_encoder import Qwen3EmbeddingEncoderConfig, _TtQwen3EncoderLayer
 from .text_projector import TtAceStepTextProjector, load_text_projector_weight_numpy
@@ -108,6 +111,17 @@ def _to_numpy_mask(x) -> np.ndarray:
     if hasattr(x, "detach"):
         return x.detach().cpu().numpy().astype(np.float32)
     return np.asarray(x, dtype=np.float32)
+
+
+def _cond_seq_for_concat(t: ttnn.Tensor) -> ttnn.Tensor:
+    """``[B,1,S,H]`` TILE → ``[B,S,H]`` for ``ttnn.concat(..., dim=1)`` (single reshape at boundary)."""
+    sh = t.shape
+    if len(sh) == 4:
+        b, one, s, h = int(sh[0]), int(sh[1]), int(sh[2]), int(sh[3])
+        if one != 1:
+            raise ValueError(f"expected [B,1,S,H] for condition concat, got {sh}")
+        return ttnn.reshape(t, (b, s, h), **ace_step_reshape_kwargs(ttnn))
+    return t
 
 
 def _text_seq_len_from_payload(payload: dict) -> int:
@@ -206,6 +220,22 @@ class _TtAceStepTinyEncoder:
         self.sin_tt = ttnn.as_tensor(
             sin_np, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=mem, mesh_mapper=mapper
         )
+        self._rope_cache: dict[int, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+        self._attn_bias_cache: dict[str, ttnn.Tensor] = {}
+
+    def _rope_tables_for_seq(self, seq_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Cached RoPE cos/sin views for sequence length *s* (avoid per-forward slice ops)."""
+        s = int(seq_len)
+        cached = self._rope_cache.get(s)
+        if cached is not None:
+            return cached
+        head_dim = int(self.cos_tt.shape[-1])
+        cached = (
+            ttnn.slice(self.cos_tt, (0, 0, 0, 0), (1, 1, s, head_dim)),
+            ttnn.slice(self.sin_tt, (0, 0, 0, 0), (1, 1, s, head_dim)),
+        )
+        self._rope_cache[s] = cached
+        return cached
 
     def _l1_activation(self, t: ttnn.Tensor) -> ttnn.Tensor:
         if self._act_l1 is None:
@@ -266,12 +296,11 @@ class _TtAceStepTinyEncoder:
             memory_config=self.mem,
         )
         x = ttnn.reshape(x, (b, 1, s, self.input_dim), **_sr)
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, **ace_step_to_layout_kwargs(ttnn))
+        x = ace_step_ensure_tile_layout(ttnn, x, l1_mc=self._act_l1)
         x = self._l1_activation(x)
         lin_embed = self._embed_linear_kwargs(batch_size=b, seq_len=s)
         h = ttnn.linear(x, self.embed_w, bias=self.embed_b, transpose_b=True, **lin_embed)
-        cos_tt = ttnn.slice(self.cos_tt, (0, 0, 0, 0), (1, 1, s, int(self.cos_tt.shape[-1])))
-        sin_tt = ttnn.slice(self.sin_tt, (0, 0, 0, 0), (1, 1, s, int(self.sin_tt.shape[-1])))
+        cos_tt, sin_tt = self._rope_tables_for_seq(s)
         mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
         bias_cache: dict[str, ttnn.Tensor] = {}
         try:
@@ -283,26 +312,26 @@ class _TtAceStepTinyEncoder:
                         mask_np,
                         sliding_window=self.sliding_window if use_sliding else None,
                     )
-                    bias_cache[cache_key] = ttnn.as_tensor(
-                        bias_np,
-                        device=self.device,
-                        dtype=self.dtype,
-                        layout=ttnn.TILE_LAYOUT,
-                        memory_config=self.mem,
-                        mesh_mapper=mapper,
-                    )
+                    if cache_key not in self._attn_bias_cache:
+                        self._attn_bias_cache[cache_key] = ace_step_upload_f32_np_as_bf16_tile(
+                            ttnn,
+                            bias_np,
+                            device=self.device,
+                            dtype=self.dtype,
+                            memory_config=ace_step_sdpa_mask_memory_config(ttnn) or self.mem,
+                            mesh_mapper=mapper,
+                        )
+                    bias_cache[cache_key] = self._attn_bias_cache[cache_key]
                 h = layer(h, cos_tt, sin_tt, bias_cache[cache_key])
         finally:
             # ``cos_tt`` / ``sin_tt`` are views into persistent ``self.cos_tt`` / ``self.sin_tt``;
-            # do not deallocate slices or RoPE tables become unallocated for the next call.
-            for bias_tt in bias_cache.values():
-                ttnn.deallocate(bias_tt)
-        h = ttnn.to_layout(h, ttnn.TILE_LAYOUT, **ace_step_to_layout_kwargs(ttnn))
+            # ``bias_cache`` entries point at ``self._attn_bias_cache`` — do not deallocate.
+            pass
+        h = ace_step_ensure_tile_layout(ttnn, h, l1_mc=self._linear_out_l1)
         h = ttnn.rms_norm(h, weight=self.norm_w, epsilon=float(1e-6), **self._rms_norm_kw)
         if output_first_token:
-            h = ttnn.slice(h, (0, 0, 0, 0), (b, 1, 1, self.hidden_size))
-            return ttnn.reshape(h, (b, 1, self.hidden_size), **_sr)
-        return ttnn.reshape(h, (b, s, self.hidden_size), **_sr)
+            return ttnn.slice(h, (0, 0, 0, 0), (b, 1, 1, self.hidden_size))
+        return h
 
     def forward_device(
         self,
@@ -321,24 +350,24 @@ class _TtAceStepTinyEncoder:
         if s > self.max_seq_len:
             raise ValueError(f"sequence length {s} exceeds max_seq_len={self.max_seq_len}")
         _sr = ace_step_reshape_kwargs(ttnn)
-        x = ttnn.to_layout(x_bsd, ttnn.ROW_MAJOR_LAYOUT)
+        # Use ensure_row_major_layout to skip the Untilize when x_bsd is already ROW_MAJOR
+        # (avoids a redundant UntilizeDeviceOperation on each timbre forward pass).
+        x = ace_step_ensure_row_major_layout(ttnn, x_bsd)
         x = ttnn.reshape(x, (b, 1, s, self.input_dim), **_sr)
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ace_step_ensure_tile_layout(ttnn, x, l1_mc=self._act_l1)
         x = self._l1_activation(x)
         lin_embed = self._embed_linear_kwargs(batch_size=b, seq_len=s)
         h = ttnn.linear(x, self.embed_w, bias=self.embed_b, transpose_b=True, **lin_embed)
-        cos_tt = ttnn.slice(self.cos_tt, (0, 0, 0, 0), (1, 1, s, int(self.cos_tt.shape[-1])))
-        sin_tt = ttnn.slice(self.sin_tt, (0, 0, 0, 0), (1, 1, s, int(self.sin_tt.shape[-1])))
+        cos_tt, sin_tt = self._rope_tables_for_seq(s)
         for layer, attn_type in zip(self.layers, self.layer_attention_types):
             use_sliding = attn_type == "sliding_attention" and self.sliding_window is not None
             bias_tt = bias_sliding if use_sliding else bias_full
             h = layer(h, cos_tt, sin_tt, bias_tt)
-        h = ttnn.to_layout(h, ttnn.TILE_LAYOUT)
+        h = ace_step_ensure_tile_layout(ttnn, h, l1_mc=self._linear_out_l1)
         h = ttnn.rms_norm(h, weight=self.norm_w, epsilon=float(1e-6), memory_config=self._linear_out_l1 or self.mem)
         if output_first_token:
-            h = ttnn.slice(h, (0, 0, 0, 0), (b, 1, 1, self.hidden_size))
-            return ttnn.reshape(h, (b, 1, self.hidden_size), **_sr)
-        return ttnn.reshape(h, (b, s, self.hidden_size), **_sr)
+            return ttnn.slice(h, (0, 0, 0, 0), (b, 1, 1, self.hidden_size))
+        return h
 
     def make_attn_bias_dev(self, attention_mask_01: np.ndarray, *, use_sliding: bool) -> ttnn.Tensor:
         """Host mask → device bias tile (call outside trace capture; refresh on CQ1 staging)."""
@@ -348,14 +377,17 @@ class _TtAceStepTinyEncoder:
             sliding_window=self.sliding_window if use_sliding else None,
         )
         mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
-        return ttnn.as_tensor(
-            bias_np,
-            device=self.device,
-            dtype=self.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.mem,
-            mesh_mapper=mapper,
-        )
+        cache_key = "sliding" if use_sliding else "full"
+        if cache_key not in self._attn_bias_cache:
+            self._attn_bias_cache[cache_key] = ace_step_upload_f32_np_as_bf16_tile(
+                ttnn,
+                bias_np,
+                device=self.device,
+                dtype=self.dtype,
+                memory_config=ace_step_sdpa_mask_memory_config(ttnn) or self.mem,
+                mesh_mapper=mapper,
+            )
+        return self._attn_bias_cache[cache_key]
 
 
 class TtAceStepInstrumentalConditionEncoder:
@@ -373,14 +405,6 @@ class TtAceStepInstrumentalConditionEncoder:
         linear_compute_kernel_config = ace_step_init_cond_linear_compute_kernel_config(device)
         l1_mc = ace_step_linear_l1_memory_config(ttnn)
         sdpa_compute_kernel_config = ace_step_init_cond_sdpa_compute_kernel_config(device)
-        sdpa_program_config = None
-        if hasattr(device, "compute_with_storage_grid_size") and hasattr(ttnn, "SDPAProgramConfig"):
-            sdpa_program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                q_chunk_size=32,
-                k_chunk_size=256,
-                exp_approx_mode=False,
-            )
         cfg = Qwen3EmbeddingEncoderConfig(
             hidden_size=2048,
             num_hidden_layers=1,
@@ -421,7 +445,6 @@ class TtAceStepInstrumentalConditionEncoder:
         )
         for layer in self.lyric_encoder.layers:
             layer._sdpa_compute_kernel_config = sdpa_compute_kernel_config
-            layer._sdpa_program_config = sdpa_program_config
         self.timbre_encoder = _TtAceStepTinyEncoder(
             weights_np=self.weights_np,
             prefix="encoder.timbre_encoder",
@@ -438,7 +461,6 @@ class TtAceStepInstrumentalConditionEncoder:
         )
         for layer in self.timbre_encoder.layers:
             layer._sdpa_compute_kernel_config = sdpa_compute_kernel_config
-            layer._sdpa_program_config = sdpa_program_config
         self.null_condition_emb = ttnn.as_tensor(
             self.weights_np["null_condition_emb"],
             device=device,
@@ -457,9 +479,13 @@ class TtAceStepInstrumentalConditionEncoder:
         #   - makes forward() trace-safe (no per-call ttnn.as_tensor of dummy x_np / bias_np)
         # `_lyric_const_tt` and `_timbre_const_tt` are persistent for the lifetime of this encoder
         # instance and intentionally never deallocated in forward().
-        _tl = ace_step_to_layout_kwargs(ttnn, l1_mc)
-        self._lyric_const_tt = ttnn.to_layout(self.lyric_encoder(), ttnn.TILE_LAYOUT, **_tl)
-        self._timbre_const_tt = ttnn.to_layout(self.timbre_encoder(), ttnn.TILE_LAYOUT, **_tl)
+        l1_mc = ace_step_linear_l1_memory_config(ttnn)
+        self._lyric_const_tt = ace_step_ensure_tile_layout(
+            ttnn, _cond_seq_for_concat(self.lyric_encoder()), l1_mc=l1_mc
+        )
+        self._timbre_const_tt = ace_step_ensure_tile_layout(
+            ttnn, _cond_seq_for_concat(self.timbre_encoder()), l1_mc=l1_mc
+        )
 
         # Lazy trace + 2CQ state for :meth:`forward_traced` (see perf test
         # ``test_condition_encoder_trace_2cq``). Freed by :meth:`release_trace`.
@@ -995,8 +1021,8 @@ class TtAceStepInstrumentalConditionEncoder:
         if timbre_np.shape[0] != 1 or order_mask_np.shape != (1,) or int(order_mask_np[0]) != 0:
             raise ValueError("TTNN official condition encoder currently supports one packed timbre segment.")
 
-        lyric = self.lyric_encoder(lyric_np, lyric_mask_np)
-        timbre = self.timbre_encoder(timbre_np, None, output_first_token=True)
+        lyric = _cond_seq_for_concat(self.lyric_encoder(lyric_np, lyric_mask_np))
+        timbre = _cond_seq_for_concat(self.timbre_encoder(timbre_np, None, output_first_token=True))
         lyric_valid = int(np.asarray(lyric_mask_np, dtype=np.float32).sum())
         lyric_s = int(lyric_np.shape[1])
         parts: list[ttnn.Tensor] = []
@@ -1051,16 +1077,20 @@ class TtAceStepInstrumentalConditionEncoder:
             or self._payload_timbre_bias_full is None
         ):
             raise RuntimeError("payload trace persistent buffers are not allocated.")
-        lyric = self.lyric_encoder.forward_device(
-            self._payload_persistent_lyric,
-            self._payload_lyric_bias_full,
-            self._payload_lyric_bias_sliding,
+        lyric = _cond_seq_for_concat(
+            self.lyric_encoder.forward_device(
+                self._payload_persistent_lyric,
+                self._payload_lyric_bias_full,
+                self._payload_lyric_bias_sliding,
+            )
         )
-        timbre = self.timbre_encoder.forward_device(
-            self._payload_persistent_timbre,
-            self._payload_timbre_bias_full,
-            self._payload_timbre_bias_sliding,
-            output_first_token=True,
+        timbre = _cond_seq_for_concat(
+            self.timbre_encoder.forward_device(
+                self._payload_persistent_timbre,
+                self._payload_timbre_bias_full,
+                self._payload_timbre_bias_sliding,
+                output_first_token=True,
+            )
         )
         text_proj = self.text_projector.forward_from_hidden(self._payload_persistent_text, activation_dtype=self.dtype)
         d = int(self.lyric_encoder.hidden_size)
@@ -1081,7 +1111,11 @@ class TtAceStepInstrumentalConditionEncoder:
         text_pad = ttnn.slice(text_proj, (0, v, 0), (1, s, d)) if v < s else None
         if text_pad is not None:
             parts.append(text_pad)
-        enc = ttnn.concat([ttnn.to_layout(p, ttnn.TILE_LAYOUT) for p in parts], dim=1)
+        enc = ttnn.concat(
+            [ace_step_ensure_tile_layout(ttnn, p) for p in parts],
+            dim=1,
+            **ace_step_concat_kwargs(ttnn),
+        )
         for t in (lyric, timbre, text_proj, text_valid, text_pad):
             if t is not None:
                 try:
@@ -1262,8 +1296,8 @@ class TtAceStepInstrumentalConditionEncoder:
             raise ValueError("TTNN official condition encoder currently supports one packed timbre segment.")
 
         text_proj = self.text_projector.forward(text_np, activation_dtype=self.dtype)
-        lyric = self.lyric_encoder(lyric_np, lyric_mask_np)
-        timbre = self.timbre_encoder(timbre_np, None, output_first_token=True)
+        lyric = _cond_seq_for_concat(self.lyric_encoder(lyric_np, lyric_mask_np))
+        timbre = _cond_seq_for_concat(self.timbre_encoder(timbre_np, None, output_first_token=True))
 
         lyric_valid = int(np.asarray(lyric_mask_np, dtype=np.float32).sum())
         text_valid = int(np.asarray(text_mask_np, dtype=np.float32).sum())

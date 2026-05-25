@@ -143,11 +143,66 @@ def ace_step_is_tile_layout(ttnn: Any, tensor: Any) -> bool:
     return layout == tile
 
 
-def ace_step_ensure_tile_layout(ttnn: Any, tensor: Any) -> Any:
-    """Return *tensor* unchanged when already TILE — avoids redundant ``TilizeDeviceOperation``."""
-    if tensor is None or ace_step_is_tile_layout(ttnn, tensor):
+def ace_step_ensure_tile_layout(
+    ttnn: Any, tensor: Any, l1_mc: Any | None = None, *, out_memory_config: Any | None = None
+) -> Any:
+    """Return *tensor* unchanged when already TILE — avoids redundant ``TilizeDeviceOperation``.
+
+    When a Tilize is required the output is placed in L1 (via ``L1_MEMORY_CONFIG``) so the
+    caller gets an L1-resident tile instead of a DRAM-resident one.  Pass *out_memory_config*
+    (e.g. ``DRAM_MEMORY_CONFIG`` for SDPA masks) to override the default L1 placement.
+    """
+    if tensor is None:
         return tensor
-    return ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
+    out_mc = out_memory_config if out_memory_config is not None else l1_mc
+    if out_mc is None and out_memory_config is None:
+        out_mc = ace_step_linear_l1_memory_config(ttnn)
+    if ace_step_is_tile_layout(ttnn, tensor):
+        if out_mc is not None and hasattr(tensor, "memory_config") and hasattr(ttnn, "to_memory_config"):
+            if tensor.memory_config() != out_mc:
+                return ttnn.to_memory_config(tensor, out_mc)
+        return tensor
+    kw = {"memory_config": out_mc} if out_mc is not None else {}
+    return ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, **kw)
+
+
+def ace_step_upload_f32_np_as_bf16_tile(
+    ttnn: Any,
+    host_f32: Any,
+    *,
+    device: Any,
+    dtype: Any | None = None,
+    memory_config: Any | None = None,
+    mesh_mapper: Any | None = None,
+) -> Any:
+    """Upload host float32 bias/mask numpy as BF16 TILE without on-device FP32 tilize + typecast.
+
+    ``ttnn.as_tensor(fp32_np, dtype=bfloat16, layout=TILE)`` runs Tilize FP32→FP32 then
+    Typecast FP32→BF16 on device. Converting on host and uploading ROW_MAJOR BF16 needs one
+    BF16 tilize only.
+    """
+    import numpy as np
+    import torch
+
+    bf16 = dtype if dtype is not None else getattr(ttnn, "bfloat16", None)
+    if bf16 is None:
+        raise RuntimeError("bfloat16 required for ace_step_upload_f32_np_as_bf16_tile")
+    mc = memory_config if memory_config is not None else ace_step_sdpa_mask_memory_config(ttnn)
+    host = np.ascontiguousarray(host_f32, dtype=np.float32)
+    torch_bf16 = torch.from_numpy(host).to(torch.bfloat16)
+    kw: dict = {}
+    if mesh_mapper is not None:
+        kw["mesh_mapper"] = mesh_mapper
+    if mc is not None:
+        kw["memory_config"] = mc
+    tt_rm = ttnn.from_torch(
+        torch_bf16,
+        device=device,
+        dtype=bf16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        **kw,
+    )
+    return ace_step_ensure_tile_layout(ttnn, tt_rm, out_memory_config=mc)
 
 
 def ace_step_ensure_row_major_layout(ttnn: Any, tensor: Any) -> Any:
@@ -329,7 +384,10 @@ def ace_step_nlp_concat_heads(ttnn: Any, ctx: Any, *, l1_mc: Any | None = None) 
     experimental = getattr(ttnn, "experimental", None)
     nlp_concat = getattr(experimental, "nlp_concat_heads", None) if experimental is not None else None
     mc = l1_mc if l1_mc is not None else ace_step_linear_l1_memory_config(ttnn)
-    ctx = ace_step_ensure_l1_activation(ttnn, ctx, mc)
+    # SDPA without ``SDPAProgramConfig`` leaves interleaved L1; skip sharded→interleaved copy.
+    if mc is not None and hasattr(ctx, "memory_config") and hasattr(ttnn, "to_memory_config"):
+        if ctx.memory_config() != mc:
+            ctx = ace_step_ensure_l1_activation(ttnn, ctx, mc)
     if nlp_concat is not None:
         kw = {"memory_config": mc} if mc is not None else {}
         return nlp_concat(ctx, **kw)
@@ -531,7 +589,7 @@ def ace_step_qwen3_optimizations(model_args: Any):
                 TensorGroup.FF2: PrecisionSetting.BFP8,
                 TensorGroup.WQKV: PrecisionSetting.BFP8,
                 TensorGroup.WO: PrecisionSetting.BFP8,
-                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                TensorGroup.KV_CACHE: PrecisionSetting.BF16,
             },
             "OpFidelity": {
                 OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
