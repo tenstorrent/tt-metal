@@ -51,6 +51,7 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("down_proj").noconvert(),
         nb::arg("counts").noconvert(),
         nb::arg("global_expert_idx_table").noconvert(),
+        nb::arg("expert_region_offsets").noconvert(),
         nb::arg("local_expert_id"),
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none(),

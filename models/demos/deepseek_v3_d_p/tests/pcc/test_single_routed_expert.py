@@ -250,7 +250,15 @@ def test_single_routed_expert_faked_token_count(
         weights_dtype=ttnn.bfloat4_b,
     )
 
-    tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
+    # Time 5 iters (iter0 includes JIT compile; iter1-4 are steady-state).
+    import time as _time
+
+    for _i in range(5):
+        _t0 = _time.time()
+        tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
+        ttnn.synchronize_device(mesh_device)
+        _dt_ms = (_time.time() - _t0) * 1000
+        logger.warning(f"  faked iter {_i}: {_dt_ms:.2f} ms (alloc={allocated_tokens}, active={active_tokens})")
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),

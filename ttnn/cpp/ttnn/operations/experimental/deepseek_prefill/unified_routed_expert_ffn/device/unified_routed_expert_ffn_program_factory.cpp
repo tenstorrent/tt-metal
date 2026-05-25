@@ -40,6 +40,12 @@ constexpr uint32_t CB_IN0_DOWN_FULL = tt::CBIndex::c_12;
 // partials_up (up matmul) using the SAME shared x K-block, halving x DRAM
 // reads vs the v1 sequential-phases design.
 constexpr uint32_t CB_PARTIALS_UP = tt::CBIndex::c_13;
+// Region offsets share CB_IDX_SCRATCH's L1 region. The idx CB is made
+// two-page: page 0 = idx table, page 1 = expert_region_offsets. Both are
+// UInt32 vectors of length num_routed_experts so the page sizes match
+// exactly — no separate CB allocation (which on Blackhole rounded up to
+// a 4KB region per core and pushed cb_in0_x past the L1 budget for the
+// 256-expert / 32-per-chip case).
 }  // namespace
 
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
@@ -184,6 +190,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     auto* down_buffer = t.down_proj.buffer();
     auto* counts_buffer = t.counts.buffer();
     auto* idx_buffer = t.global_expert_idx_table.buffer();
+    auto* region_offsets_buffer = t.expert_region_offsets.buffer();
     auto* out_buffer = tensor_return_value.buffer();
 
     // -------------------------- scratch buffer + semaphore ----------------
@@ -312,9 +319,20 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         tt::tt_metal::CircularBufferConfig(counts_page_size, {{CB_COUNTS_SCRATCH, tt::DataFormat::UInt32}})
             .set_page_size(CB_COUNTS_SCRATCH, counts_page_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, counts_cb_cfg);
+    // CB_IDX_SCRATCH holds BOTH idx and region_offsets in one page:
+    //   bytes [0, idx_page_size)                     -> idx table
+    //   bytes [idx_page_size, idx_page_size+region)  -> region_offsets
+    // Reader reads both into the single L1 page (idx first, region_offsets
+    // appended), pushes 1. Writer/compute cb_wait_front(cb_idx, 1) and read
+    // their respective offset. The L1 conflict that arose from this growth
+    // on the 256-expert case is mitigated by moving offset_cumsum output to
+    // DRAM (tt_moe_routing_setup.py) so the L1 buffer that previously sat
+    // at the conflict address goes away.
+    const uint32_t region_offsets_page_size = region_offsets_buffer->aligned_page_size();
+    const uint32_t idx_cb_page_size = idx_page_size + region_offsets_page_size;
     tt::tt_metal::CircularBufferConfig idx_cb_cfg =
-        tt::tt_metal::CircularBufferConfig(idx_page_size, {{CB_IDX_SCRATCH, tt::DataFormat::UInt32}})
-            .set_page_size(CB_IDX_SCRATCH, idx_page_size);
+        tt::tt_metal::CircularBufferConfig(idx_cb_page_size, {{CB_IDX_SCRATCH, tt::DataFormat::UInt32}})
+            .set_page_size(CB_IDX_SCRATCH, idx_cb_page_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, idx_cb_cfg);
 
     // -------------------------- kernel build ------------------------------
@@ -352,6 +370,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // K_down_tiles_padded — phase-4 K-loop bound. K dim of down is
         // padded to N_gate_padded so per-K-block sender = gx == kb holds.
         K_down_tiles_padded,
+        // region_offsets share CB_IDX_SCRATCH's single page — reader writes
+        // idx at offset 0 and region_offsets at offset idx_page_bytes
+        // within the same L1 page. Pass idx_page_bytes so the kernels know
+        // where to split. CT arg slot here is the byte offset of
+        // region_offsets within the shared idx-scratch L1 page.
+        idx_page_size,
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -360,6 +384,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(idx_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(scratch_buffer).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(region_offsets_buffer).append_to(reader_ct_args);
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -394,6 +419,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // chunk_M_tiles rows per core, of which only those < M_tiles_full
         // correspond to real output rows in the tensor.
         M_tiles_full,  // 16
+        // Byte offset of region_offsets within CB_IDX_SCRATCH's L1 page.
+        // Writer reads idx at offset 0 and region_offsets at this offset.
+        idx_page_size,  // 17
     };
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(scratch_buffer).append_to(writer_ct_args);
@@ -607,11 +635,16 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             // phase-3/4 barrier with per-K-block sender/receiver handshake.
             act_ready_sem_addr,  // 33
             act_valid_sem_addr,  // 34
+            // expert_region_offsets DRAM buffer address (35). Reader pulls
+            // the page into cb_region_offsets_scratch L1 at kernel start;
+            // writer cb_wait_fronts the same CB to read start_tile_row.
+            region_offsets_buffer->address(),  // 35
         };
         // M-row NoC coord table: for our M-row (gy=my_mt), the NoC (x, y) of
         // each of the 8 cores (gx=0..GRID_X-1). Reader uses this per phase-4
         // K-block (kb=0..7) to find the sender's NoC addr and to build the
-        // M-row mcast rectangle.
+        // M-row mcast rectangle. Starts at index 36 now (was 35 before
+        // region_offsets_addr was added).
         for (uint32_t gxi = 0; gxi < GRID_X; ++gxi) {
             const auto noc = device->worker_core_from_logical_core(CoreCoord{gxi, gy});
             reader_args.push_back(static_cast<uint32_t>(noc.x));
@@ -689,6 +722,7 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
     const uint32_t counts_addr = t.counts.buffer()->address();
     const uint32_t idx_addr = t.global_expert_idx_table.buffer()->address();
     const uint32_t scratch_addr = scratch_buf->address();
+    const uint32_t region_offsets_addr = t.expert_region_offsets.buffer()->address();
     const uint32_t out_addr = tensor_return_value.buffer()->address();
 
     for (const auto& core : cores) {
@@ -700,6 +734,9 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
         reader_args[4] = counts_addr;
         reader_args[5] = idx_addr;
         reader_args[6] = scratch_addr;
+        // index 35 = region_offsets_addr (must stay in sync with the layout
+        // built in create() and consumed by reader_unified_re.cpp).
+        reader_args[35] = region_offsets_addr;
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_id, core);
         writer_args[0] = out_addr;
