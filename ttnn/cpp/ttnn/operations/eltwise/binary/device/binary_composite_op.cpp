@@ -17,7 +17,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include <variant>
 #include <tt-metalium/sub_device_types.hpp>
@@ -548,8 +548,9 @@ Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::option
 //
 // Height-sharded inputs flow through unchanged: the shard is along the
 // preserved dim, so unsqueeze's reshape and the downstream broadcast
-// multiply both accept the layout. Width- and block-sharded inputs touch
-// the width dim, so we materialize those as interleaved DRAM first.
+// multiply both accept the layout. Width-, block-, and ND-sharded inputs
+// are materialized as interleaved first (preserving the source
+// buffer_type so L1-resident sharded inputs stay in L1).
 // Output sharding remains caller-controlled via output_mem_config.
 Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL(
@@ -557,9 +558,18 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
         "ttnn.outer: inputs must be at least 1D, but got shapes {} and {}",
         input_a.logical_shape(),
         input_b.logical_shape());
+    // Keep this whitelist in sync with the dtype list advertised by the
+    // nanobind docstring for ttnn.outer. Anything outside it would otherwise
+    // fail deeper in ttnn::reshape or ttnn::multiply with a less attributable
+    // error.
+    auto is_supported = [](DataType dt) {
+        return dt == DataType::BFLOAT16 || dt == DataType::BFLOAT8_B || dt == DataType::FLOAT32 ||
+               dt == DataType::INT32 || dt == DataType::UINT32;
+    };
     TT_FATAL(
-        input_a.dtype() != DataType::BFLOAT4_B && input_b.dtype() != DataType::BFLOAT4_B,
-        "ttnn.outer: bfloat4_b is not supported (got dtypes {} and {})",
+        is_supported(input_a.dtype()) && is_supported(input_b.dtype()),
+        "ttnn.outer: unsupported dtype (got {} and {}); supported dtypes are BFLOAT16, BFLOAT8_B, FLOAT32, INT32, "
+        "UINT32",
         input_a.dtype(),
         input_b.dtype());
     TT_FATAL(
@@ -571,7 +581,15 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
         const auto layout = t.memory_config().memory_layout();
         const bool keep_sharded =
             layout == TensorMemoryLayout::INTERLEAVED || layout == TensorMemoryLayout::HEIGHT_SHARDED;
-        return keep_sharded ? t : ttnn::sharded_to_interleaved(t, ttnn::DRAM_MEMORY_CONFIG);
+        if (keep_sharded) {
+            return t;
+        }
+        // to_memory_config (not sharded_to_interleaved): the latter early-returns
+        // when the legacy shard_spec is empty, silently leaving ND_SHARDED tensors
+        // un-desharded. Preserve the source buffer_type so L1-resident sharded
+        // inputs stay in L1.
+        return ttnn::to_memory_config(
+            t, MemoryConfig{TensorMemoryLayout::INTERLEAVED, t.memory_config().buffer_type()});
     };
     return ttnn::multiply(
         ttnn::unsqueeze(deshard_unless_height(input_a), -1),

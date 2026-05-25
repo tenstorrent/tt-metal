@@ -9,7 +9,8 @@ Coverage
 - All batched and unbatched torch.outer variants (1D, batched same-rank,
   broadcast-on-batch, rank-mismatch, degenerate)
 - All float and block-float dtypes (bfloat16, float32, bfloat8_b;
-  bfloat4_b is intentionally not supported -- see test_outer_bfloat4b_unsupported)
+  bfloat4_b/uint16/uint8 are intentionally not supported -- see
+  test_outer_unsupported_dtype_rejected)
 - All input tensor spec combinations (layouts x memory configs x sharded)
 - Output tensor spec variants (DRAM/L1, default, sharded)
 
@@ -574,19 +575,26 @@ def test_outer_integer_dtypes(a_shape, b_shape, dtype, low, high, device):
 
 
 # ---------------------------------------------------------------------------
-# Test 9: bfloat4_b is intentionally rejected up front with a ttnn.outer message
+# Test 9: dtypes outside the documented whitelist are rejected up front
 # ---------------------------------------------------------------------------
+# The supported set advertised by the nanobind docstring is
+# {BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32}. Anything else (bfloat4_b,
+# uint16, uint8) is rejected at entry with a "ttnn.outer: unsupported dtype"
+# error rather than falling through to an opaque reshape_device_operation /
+# multiply failure (related: https://github.com/tenstorrent/tt-metal/issues/44919).
 
 
-def test_outer_bfloat4b_unsupported(device):
-    """ttnn.outer rejects bfloat4_b at entry with an explicit ttnn.outer error
-    rather than letting it fall through to an opaque reshape_device_operation
-    failure (related: https://github.com/tenstorrent/tt-metal/issues/44919)."""
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.bfloat4_b, ttnn.uint16, ttnn.uint8],
+    ids=["bfloat4_b", "uint16", "uint8"],
+)
+def test_outer_unsupported_dtype_rejected(device, dtype):
     a_pt = torch.rand([32], dtype=torch.bfloat16)
     b_pt = torch.rand([32], dtype=torch.bfloat16)
-    a_tt = ttnn.from_torch(a_pt, dtype=ttnn.bfloat4_b, device=device, layout=ttnn.TILE_LAYOUT)
-    b_tt = ttnn.from_torch(b_pt, dtype=ttnn.bfloat4_b, device=device, layout=ttnn.TILE_LAYOUT)
-    with pytest.raises(RuntimeError, match="ttnn.outer: bfloat4_b is not supported"):
+    a_tt = ttnn.from_torch(a_pt, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    b_tt = ttnn.from_torch(b_pt, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    with pytest.raises(RuntimeError, match="ttnn.outer: unsupported dtype"):
         ttnn.outer(a_tt, b_tt)
 
 
