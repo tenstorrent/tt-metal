@@ -16,11 +16,24 @@ RUN apt-get update && apt-get install -y \
     software-properties-common \
     && apt-get update && apt-get install -y \
     curl \
-    cmake \
     ninja-build \
     g++-12 \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
+
+# Install modern CMake from Kitware apt repo.
+# Ubuntu 22.04 defaults to CMake 3.22, but tt-metal requires >=3.24.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y ca-certificates gpg wget; \
+    . /etc/os-release; \
+    wget -qO- https://apt.kitware.com/keys/kitware-archive-latest.asc \
+      | gpg --dearmor -o /usr/share/keyrings/kitware-archive-keyring.gpg; \
+    echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ ${VERSION_CODENAME} main" \
+      > /etc/apt/sources.list.d/kitware.list; \
+    apt-get update; \
+    apt-get install -y kitware-archive-keyring cmake; \
+    rm -rf /var/lib/apt/lists/*
 
 # Install clang-20 and ASan runtime (needed for ASan-instrumented package testing)
 RUN apt-get update && apt-get install -y wget gnupg && \
