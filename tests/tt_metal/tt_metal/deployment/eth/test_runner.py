@@ -489,6 +489,7 @@ def print_test_summary_per_chip(t: TestCase, runs: list[TestRun]):
             continue
 
         chips: dict = {}
+        have_bws = False
 
         def ensure_dev(ch: str):
             if ch not in chips:
@@ -502,18 +503,30 @@ def print_test_summary_per_chip(t: TestCase, runs: list[TestRun]):
             chips[l.dst_dev]["pass"] = chips[l.dst_dev]["pass"] and not len(l.errors)
             chips[l.src_dev]["tests"] += 1
             chips[l.dst_dev]["tests"] += 1
-            chips[l.src_dev]["bws"].append(l.bw["bw"])
-            chips[l.dst_dev]["bws"].append(l.bw["bw"])
+            if len(l.bw):
+                have_bws = True
+                chips[l.src_dev]["bws"].append(l.bw["bw"])
+                chips[l.dst_dev]["bws"].append(l.bw["bw"])
 
         avg = lambda x: sum(x) / len(x)
-        headers = ["chip id", "tests", "bw (min)", "bw (max)", "bw (avg)", "errors", "pass"]
+        headers = ["chip id", "tests"]
+        if have_bws:
+            headers += ["bw (min)", "bw (max)", "bw (avg)"]
+        headers += ["errors", "status"]
+
         rows = []
         for c in sorted(chips.keys(), key=int):
             ch = chips[c]
             bws = ch["bws"]
             err = ch["errors"]
-            msg = "FAIL" if err > 0 else "PASS"
-            rows.append([c, ch["tests"], min(bws), max(bws), f"{avg(bws):.3f}", err, msg])
+            msg = "FAIL" if err > 0 else "OK"
+
+            row = [c, ch["tests"]]
+            if have_bws:
+                row += [min(bws), max(bws), f"{avg(bws):.3f}"]
+            row += [err, msg]
+
+            rows.append(row)
 
         print(table(f"{t} per chip test summary", headers, rows))
 
