@@ -632,7 +632,10 @@ async def main():
         print_logs = False
 
     if opts.t:
-        tests = [TestCase(t) for t in opts.t.split(",")]
+        if opts.t == "all":
+            tests = list(TestCase)
+        else:
+            tests = [TestCase(t) for t in opts.t.split(",")]
 
     outfile = opts.o if opts.o else "out.json"
     print(f"Writing results to '{outfile}'")
