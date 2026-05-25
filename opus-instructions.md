@@ -533,9 +533,28 @@ Two Explore-agent surveys against the codebase ground the gaps in real numbers:
 - Python orphan rate: % of Python functions/classes with zero incoming edges (compared against pre-Tier-2 baseline).
 - Histogram of edge `kind` × `via_dispatch` to confirm B2/B3 are firing.
 
+#### Tier 4 — kernel-launch tracking (static only)
+
+The current graph stops at the host/device boundary: it knows `ttnn::add` calls `invoke_binary_ng`, but it doesn't know which Tensix kernels `invoke_binary_ng` ultimately launches. Kernel sources live under different trees and compile with a different toolchain (SFPI/RISC-V), so they aren't in our `compile_commands.json`. But the *connection* from host → kernel is a string literal at the launch call site, identical in shape to the nanobind binding strings we already extract.
+
+**D1. Host→kernel `launches` edges** (`dep-graph/scripts/_cpp_lib.py`).
+- Add `KERNEL_LAUNCHERS = {"CreateKernel", "CreateComputeKernel", "CreateDataMovementKernel", "CreateEthernetKernel", ...}` (final list discovered by grep in `tt_metal/api/tt-metalium/`).
+- In `_handle_call`, when the callee name is in this set, walk the call's args, extract any `STRING_LITERAL` that looks like a `.cpp` / `.hpp` path, and synthesize a `kind=kernel_file` node identified by that path. Emit a `kind=launches` edge from the calling host function → the kernel-file node.
+- The kernel file's *contents* are not parsed at this stage — the node is a placeholder identified solely by its path. That's enough to answer "which host code launches kernel X?" which is the primary question Tier 4 exists to support.
+
+**D2 (deferred — separate effort).** Index kernel-internal structure with a second libclang pass against the SFPI toolchain (separate `compile_commands.json` extracted from `tt_metal/jit_build/`). Tag those nodes with `target="kernel"`. Connects to D1 by upgrading the `kernel_file` node's edges to point at the kernel's `kernel_main` function. Skip until a concrete use case demands kernel-internal recall.
+
+**D3 (cheap, optional).** Parse `tt_metal/jit_build/` configuration to enumerate every kernel class the JIT system can compile. Use as a completeness check: kernels in that list that nothing launches statically are either bugs, dead code, or evidence of a dynamic-path launch site we missed.
+
+**Known limits**:
+- Dynamic kernel paths (`fmt::format("compute/{}.cpp", op_type)`) are unresolvable statically — same class of problem as Python `getattr(obj, runtime_string)`.
+- Runtime kernel args (`set_runtime_args` / `get_arg_val<>`) aren't function calls and don't appear as edges; the data flow is real but lives outside the call-graph model.
+
+Acceptance: at least one well-known op (e.g., `ttnn::add`) has a `launches` edge from somewhere in its impl chain to a `kernel_file` node under `ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/`. A `query.py launches ttnn::add` subcommand returns the kernel-file list.
+
 ### Sequencing
 
-Tier 1 first — all five items are independent ~half-day fixes, can land in one session, no schema changes. **B5 + B6 next** — they're small and B4/A4 depend on B6. Then **B1** — biggest single recall gain on the cross-language side. Then **B2** — recall gain on C++. Then **B4 (Pyright)** — biggest single recall gain on Python; depends on B6 being in place. Then **B3** — template instantiations are a "nice to have" for graph richness, least time-sensitive. Tier 3 (C1, C2, C3) runs at the end to lock the result and measure.
+Tier 1 first — all five items are independent ~half-day fixes, can land in one session, no schema changes. **B5 + B6 next** — they're small and B4/A4 depend on B6. Then **B1** — biggest single recall gain on the cross-language side. Then **B2** — recall gain on C++. Then **D1** (kernel-launch tracking) — natural to do alongside B1/B2 since it reuses the same string-extraction + new-edge-kind plumbing. Then **B4 (Pyright)** — biggest single recall gain on Python; depends on B6 being in place. Then **B3** — template instantiations are a "nice to have" for graph richness, least time-sensitive. Tier 3 (C1, C2, C3) runs at the end to lock the result and measure. D2/D3 stay deferred unless a use case surfaces.
 
 ### Critical files
 
@@ -574,6 +593,7 @@ Acceptance gates per tier:
 | 1 | All 16 existing chains still green; +A2/A3/A4/A5 each add ≥1 new chain that passes. Total chain count ≥ 20. |
 | 2 | All Tier-1 chains still green; new chains: `IDevice::open_device` reaches ≥3 override classes (B2), `bind_function` has ≥400 `instantiates` edges (B3), at least one `bind_*` helper not in the original list now produces bindings (B1), `model_preprocessing.preprocess_linear_weight` resolves `weight.T.contiguous` via Pyright (B4). Cross-file py→py edges ≥1500. |
 | 3 | C1 chain count ≥ 40. C2 reports recall vs pycg ≥ 80% on ttnn/ttnn/. C3 report says resolution rate ≥ 60% (currently ~10%). |
+| 4 | `query.py launches ttnn::add` returns ≥1 kernel-file node; total `kind=launches` edges in the DB ≥ 100; at least one `kernel_file` node is reachable transitively from a Python entry point through an `invoke_binary_ng`-style chain. |
 
 Each acceptance metric is a runnable SQL chain or a script output number — no human-in-the-loop required.
 
