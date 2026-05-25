@@ -35,20 +35,10 @@ def _profile_add(profile: dict[str, float] | None, key: str, elapsed_s: float) -
     profile[key] = float(profile.get(key, 0.0)) + float(elapsed_s)
 
 
-# ---------------------------------------------------------------------------
-# FlashMLA → kv_b2 → w_o op-chain tuning constants
-# ---------------------------------------------------------------------------
-# _KVB2_INPUT_L1 = True was ~+1ms wall regression on Blackhole 1×4 batch=1.
-# attn_latent is ~1.3 MB; the DRAM→L1 copy costs more than the matmul's
-# DRAM-read savings (27% bandwidth utilization; kernel pipelines DRAM reads
-# well). Kept as a constant for re-tuning if activation size or kernel
-# scheduling changes.
+# FlashMLA → kv_b2 → w_o op-chain tuning constants (edit to retune without touching function bodies).
 _KVB2_INPUT_L1 = True
 
-# FlashMLA output memory config override. ``None`` = use ``cfg.decode_act_mc``
-# (i.e. L1 when DECODE_L1_ACT=1, DRAM otherwise) so the attn_latent ends up in
-# L1 *without* a follow-on DRAM→L1 copy. Set to ``ttnn.DRAM_MEMORY_CONFIG`` to
-# force the legacy DRAM output path.
+# FlashMLA output memcfg override: None = use cfg.decode_act_mc; set DRAM_MEMORY_CONFIG to force legacy path.
 _FLASH_MLA_DEFAULT_MEMCFG: ttnn.MemoryConfig | None = None
 
 
@@ -339,11 +329,7 @@ def flash_mla_and_output(
         exp_approx_mode=False,
     )
     compute_kernel_config = cfg.mla_compute_kernel_config()
-    # FlashMLA output memcfg. When ``cfg.shard_q`` is on (Q is L1-sharded) we
-    # set this further below to a matching sharded L1 layout. Otherwise the
-    # default tracks ``cfg.decode_act_mc`` so that DECODE_L1_ACT=1 places the
-    # attn_latent in L1 directly — eliminating the otherwise-needed
-    # DRAM→L1 copy before kv_b2. Editable here for tuning.
+    # FlashMLA output memcfg: tracks cfg.decode_act_mc by default; overridden below when shard_q is on.
     flash_mla_memcfg = (
         _FLASH_MLA_DEFAULT_MEMCFG
         if _FLASH_MLA_DEFAULT_MEMCFG is not None
@@ -451,9 +437,7 @@ def flash_mla_and_output(
     )
     if not cfg.skip_defensive_clones:
         ttnn.deallocate(attn_latent_padded, force=False)
-    # Fuse permute output into L1 so the downstream kv_b2 batched matmul reads
-    # input 0 from L1 instead of DRAM_INTERLEAVED (perf-tool flagged warning).
-    # See _KVB2_INPUT_L1 at top of file for tuning.
+    # Fuse permute output into L1 for downstream kv_b2 (see _KVB2_INPUT_L1 for tuning).
     permute_mc = ttnn.L1_MEMORY_CONFIG if _KVB2_INPUT_L1 else None
     if permute_mc is not None:
         attn_latent = ttnn.permute(attn_latent, (0, 2, 1, 3), memory_config=permute_mc)  # [1,H,B,kv_lora_rank]
@@ -473,9 +457,13 @@ def flash_mla_and_output(
                 pass
         heads_per_dev = num_heads // cfg.tp_size
         flat_dim = heads_per_dev * int(hparams.v_head_dim)
-        v = ttnn.permute(v, (0, 2, 1, 3))
-        v = ttnn.reshape(v, (1, batch, 1, flat_dim))
-        v = ttnn.permute(v, (0, 2, 1, 3))
+        if cfg.concat_heads:
+            v = ttnn.transformer.concatenate_heads(v)
+            v = ttnn.reshape(v, (1, 1, batch, flat_dim))
+        else:
+            v = ttnn.permute(v, (0, 2, 1, 3))
+            v = ttnn.reshape(v, (1, batch, 1, flat_dim))
+            v = ttnn.permute(v, (0, 2, 1, 3))
         attn_out_partial = mlp_linear(v, w.w_o, device=device, cfg=cfg)
         ttnn.deallocate(v, force=False)
         attn_out = ttnn.all_reduce(
@@ -497,10 +485,13 @@ def flash_mla_and_output(
                 ttnn.deallocate(attn_latent_padded, force=False)
             except Exception:
                 pass
-        flat_dim = int(num_heads * hparams.v_head_dim)
-        v = ttnn.permute(v, (0, 2, 1, 3))
-        v = ttnn.reshape(v, (1, batch, 1, flat_dim))
-        v = ttnn.permute(v, (0, 2, 1, 3))
+        if cfg.concat_heads:
+            v = ttnn.transformer.concatenate_heads(v)
+            v = ttnn.reshape(v, (1, 1, batch, int(num_heads * hparams.v_head_dim)))
+        else:
+            v = ttnn.permute(v, (0, 2, 1, 3))
+            v = ttnn.reshape(v, (1, batch, 1, int(num_heads * hparams.v_head_dim)))
+            v = ttnn.permute(v, (0, 2, 1, 3))
         # Tuned 32-core w_o helper: WIDTH_SHARDED L1 output + act-in-L1 cuts the 83%-DRAM-util baseline penalty.
         attn_out = attn_wo_linear(v, w.w_o, device=device, cfg=cfg)
         ttnn.deallocate(v, force=False)
