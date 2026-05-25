@@ -119,6 +119,7 @@ def _gate_up_matmul_program_config(input_shape, weight_shape):
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=False,
+        gather_in0=True,
     )
 
 
