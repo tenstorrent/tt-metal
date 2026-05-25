@@ -21,26 +21,17 @@ using VariableMatmulConfig = ttml::metal::ops::variable_matmul::device::Variable
 // (M, K) pair within a transpose variant.
 //
 // Optional read-at-offset support (input/weight treated as parent buffers):
-//   - in0_row_offset_tiles: tile offset on the in0 matmul-M axis.
 //   - effective_M_tiles: M tile count to actually process (0 = use input's full M).
-//   - in0_k_offset_tiles: tile offset on the in0 matmul-K axis. The K count comes
-//     from the weight (no effective_K argument); in0 is read as if it had a larger
-//     K extent and we slice [k_offset, k_offset + K) tiles.
-//   - in1_k_offset_tiles: tile offset on the in1 matmul-K axis. When set, in0's K
-//     determines matmul-K; the weight is read as if it had a larger K extent and
-//     we slice [k_offset, k_offset + K) tiles. Cannot be combined with in0_k_offset.
+//   - EP path: offsets_tensor + offsets_role derive M/K row+offset ranges from a
+//     device tensor at runtime, letting one cached program serve all expert slices.
 //
 // Optional write-at-offset support (output treated as a parent buffer):
-//   - output_tensor: pre-allocated output to write into.
-//   - out_row_offset_tiles: tile offset on the output's M axis. matmul-N must equal
-//     parent-N. When omitted, a fresh output tensor is allocated and returned.
+//   - output_tensor: pre-allocated output to write into. matmul-N must equal parent-N.
+//     The EP path derives the per-expert row offset; without EP, the matmul writes
+//     starting at row 0 of the parent.
 //
 // All defaults preserve "use the whole input, allocate fresh output" behavior.
 // All offsets/lengths are runtime args — different values reuse the same cached program.
-//
-// Tile alignment: all offsets/counts must be in TILE_HEIGHT (32) units. With transpose_a,
-// "row" still means the matmul-M axis (= input's stored *col* axis) and "k_offset" still
-// means the matmul-K axis (= input's stored *row* axis).
 using OffsetsRole = ttml::metal::ops::variable_matmul::device::OffsetsRole;
 
 ttnn::Tensor variable_matmul(
@@ -54,17 +45,14 @@ ttnn::Tensor variable_matmul(
     // this caller-provided parent. EP path overrides the row offset via offsets_tensor.
     std::optional<ttnn::Tensor> output_tensor = std::nullopt,
     // EP path: when offsets_tensor is set, the dataflow kernel reads
-    // offsets_tensor[offsets_start_index..start_index+2] at runtime and overrides the
-    // matching scalar offsets below (M-range for InputRow/OutputRow/InputAndOutputRow,
+    // offsets_tensor[offsets_start_index..start_index+2] at runtime and derives the
+    // matching row/K ranges (M-range for InputRow/OutputRow/InputAndOutputRow,
     // K-range for InputK/WeightK/InputAndWeightK).
     std::optional<ttnn::Tensor> offsets_tensor = std::nullopt,
     OffsetsRole offsets_role = OffsetsRole::None,
     uint32_t offsets_start_index = 0,
-    // Scalar (host-known) offsets — used only when offsets_tensor is std::nullopt.
-    // effective_M_tiles is also honored for the host-side output_tensor bounds check
-    // even on the EP path (matters when token_capacity is non-tile-aligned).
-    uint32_t effective_M_tiles = 0,
-    uint32_t in0_k_offset_tiles = 0,
-    uint32_t in1_k_offset_tiles = 0);
+    // effective_M_tiles also bounds the host-side output_tensor validation on the EP
+    // path (matters when token_capacity is non-tile-aligned).
+    uint32_t effective_M_tiles = 0);
 
 }  // namespace ttml::metal

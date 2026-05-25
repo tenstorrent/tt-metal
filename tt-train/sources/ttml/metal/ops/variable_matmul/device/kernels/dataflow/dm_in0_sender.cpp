@@ -58,20 +58,19 @@ void kernel_main() {
     uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 3);
     // Read-at-offset support — only read the runtime args when the compile-time flag is set
     // (avoids any potential register pressure / dead-code propagation issues on the no-offset
-    // hot path used by all backward calls). Row offsets are EP-only: they're 0 on the
+    // hot path used by all backward calls). Row and K offsets are EP-only: they're 0 on the
     // host-scalar path and derived from offsets[start] on the EP path below.
     uint32_t in0_row_offset_tiles = 0U;
     uint32_t out_row_offset_tiles = 0U;
-    uint32_t parent_M_tiles_stride = 0U;
     uint32_t in0_k_offset_tiles = 0U;
+    uint32_t parent_M_tiles_stride = 0U;
     uint32_t parent_K_tiles_stride = 0U;
     if constexpr (use_offset) {
         parent_M_tiles_stride = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 4);
-        in0_k_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 5);
-        parent_K_tiles_stride = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 6);
+        parent_K_tiles_stride = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 5);
     }
     // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from on-device offsets[start..start+2].
-    uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 7);
+    uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 6);
 
 #ifdef OFFSETS_ACTIVE
     // EP path: read on-device offsets and override the matching host-derived values. Each flag
@@ -84,8 +83,8 @@ void kernel_main() {
     //   OFFSET_IN1_K:    in1 K-slice — only sets K_tiles locally here; dm_in1 owns the offset
     //                    and (when OFFSET_IN0_K is not set) the cb_ctrl publish.
     {
-        const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 8);
-        const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 9);
+        const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 7);
+        const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 8);
         constexpr auto offsets_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
         const auto offsets_acc = TensorAccessor(offsets_args, offsets_addr);
         // Use cb_id_in0's L1 backing as scratch — the CB is unused at kernel startup, and the
@@ -102,7 +101,7 @@ void kernel_main() {
         const uint32_t row_start = offsets_stage[offsets_start_index];
         const uint32_t row_end = offsets_stage[offsets_start_index + 1U];
 #ifdef OFFSET_M_AXIS
-        const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 10);
+        const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 9);
         const uint32_t actual_eff_M = (row_end - row_start) / 32U;
         // Empty-expert (actual=0) → M_blocks_per_core=0 (loop skipped). Still clamp M_tiles
         // to >=1 for in0_shape construction (TensorShape2D asserts d0>0); the shape isn't

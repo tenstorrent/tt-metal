@@ -56,8 +56,6 @@ ttnn::Tensor ttml_variable_matmul(
     ttml::metal::ops::variable_matmul::device::OffsetsRole offsets_role =
         ttml::metal::ops::variable_matmul::device::OffsetsRole::None,
     uint32_t offsets_start_index = 0,
-    uint32_t effective_M_tiles = 0,
-    uint32_t in0_k_offset_tiles = 0,
-    uint32_t in1_k_offset_tiles = 0);
+    uint32_t effective_M_tiles = 0);
 
 }  // namespace ttnn::prim

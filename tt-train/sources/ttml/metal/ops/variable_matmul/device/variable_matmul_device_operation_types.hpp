@@ -69,28 +69,12 @@ struct VariableMatmulParams {
     // matmul kernel applies intra-tile transpose via the LLK transpose flag.
     bool transpose_b = false;
 
-    // Read-at-offset support — lets variable_matmul read a sub-range of the input tensor
-    // without materializing a slice. The input tensor is treated as a parent buffer.
-    //
     // effective_M_tiles:
     //   When > 0, the matmul processes only `effective_M_tiles` rows on the M axis (instead
     //   of the input's full M). With an output_tensor, this also bounds the host-side
     //   output-shape validation (the EP path may further override the per-core M split).
-    //
-    // K-axis offset (in0_k_offset_tiles):
-    //   Shifts the start of the in0 K-range read by this many tiles. matmul-K = K_w; in0
-    //   is interpreted as a larger parent of which we read [k_offset, k_offset + K_w).
-    //
-    // in1_k_offset_tiles:
-    //   K-axis offset on the weight (in1), analogous to in0_k_offset_tiles. matmul-K = K_in;
-    //   the weight is interpreted as a larger parent of which we read
-    //   [k_offset, k_offset + K_in). Cannot be combined with in0_k_offset > 0.
-    //
-    // Defaults preserve "use the whole input" behavior. All offsets are RUNTIME args
-    // (excluded from program hash) so different offset values hit the same cached program.
+    //   Runtime arg — different values hit the same cached program.
     uint32_t effective_M_tiles = 0;
-    uint32_t in0_k_offset_tiles = 0;
-    uint32_t in1_k_offset_tiles = 0;
 
     // On-device offsets (EP). When set, dataflow kernels read the offsets tensor at
     // runtime and derive the row/K offsets:
