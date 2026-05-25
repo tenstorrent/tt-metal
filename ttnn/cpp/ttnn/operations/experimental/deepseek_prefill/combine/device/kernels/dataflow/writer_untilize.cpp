@@ -21,7 +21,17 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/zero_init_common.hpp"
+
+#define ENABLE_COMBINE_DEBUG 0
+#if ENABLE_COMBINE_DEBUG
+#define DPRINT_COMBINE DPRINT
+#else
+#define DPRINT_COMBINE \
+    if (0)             \
+    DebugPrinter()
+#endif
 
 // Sentinel used by compute to tell this kernel to exit its send loop.
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
@@ -183,6 +193,10 @@ void kernel_main() {
         cb_wait_front(cb_stop_signal_id, 1);
         volatile tt_l1_ptr uint32_t* stop_signal_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_stop_signal_id));
+        // stop_signal_ptr was written by the compute kernel (PACK TRISC on this core);
+        // invalidate L1 cache so this load sees the fresh value rather than a stale
+        // BRISC-cached copy.
+        invalidate_l1_cache();
         uint32_t signal_value = stop_signal_ptr[0];
         cb_pop_front(cb_stop_signal_id, 1);
         if (signal_value == ROUTE_INFO_SENTINEL) {
@@ -191,9 +205,11 @@ void kernel_main() {
         uint32_t batch_count = signal_value;
 
         // Wait for compute to finish untilizing this batch and for reader_untilize to land
-        // the corresponding metadata pages in the metadata CB.
+        // the corresponding metadata pages in the metadata CB.  c_9 is pushed/popped in
+        // fixed read_batch_size chunks (only the first batch_count entries are valid), so
+        // its fifo pointers wrap cleanly even when batch_count < read_batch_size.
         cb_wait_front(cb_untilize_id, read_batch_size);
-        cb_wait_front(cb_metadata_batch_id, batch_count);
+        cb_wait_front(cb_metadata_batch_id, read_batch_size);
 
         uint32_t untilize_read_ptr = get_read_ptr(cb_untilize_id);
         uint32_t metadata_read_ptr = get_read_ptr(cb_metadata_batch_id);
@@ -210,11 +226,15 @@ void kernel_main() {
             const volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
                 metadata_read_ptr + t * aligned_dispatched_metadata_page_size);
             uint32_t dst_chip = metadata[0];
+            uint32_t dst_token_idx = metadata[1];
+            uint32_t dst_topk_indice = metadata[2];
+            DPRINT_COMBINE << "writer_untilize meta t=" << t << " batch_count=" << batch_count
+                           << " write_slot=" << write_slot << " local_credits=" << local_credits
+                           << " dst_chip=" << dst_chip << " dst_token_idx=" << dst_token_idx
+                           << " dst_topk_indice=" << dst_topk_indice << ENDL();
             uint32_t untilize_row_addr = untilize_read_ptr + t * aligned_output_page_size;
 
             if (dst_chip == linearized_mesh_coord) {
-                uint32_t dst_token_idx = metadata[1];
-                uint32_t dst_topk_indice = metadata[2];
                 uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
                 noc_async_write_page(output_page_idx, output_addr_gen, untilize_row_addr);
                 noc_async_writes_flushed();
@@ -258,7 +278,7 @@ void kernel_main() {
         // writes).
         noc_async_write_barrier();
 
-        cb_pop_front(cb_metadata_batch_id, batch_count);
+        cb_pop_front(cb_metadata_batch_id, read_batch_size);
         cb_pop_front(cb_untilize_id, read_batch_size);
     }
 

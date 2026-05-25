@@ -642,12 +642,14 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             /*buffering_factor=*/2 * block_ct_dim,
             /*cb_id=*/tt::CBIndex::c_0,
             "dispatched_buffer_idle");
-        // c_2 on idle cores: untilized output rows, one full batch (read_batch_size rows)
+        // c_2 on idle cores: untilized output rows, double-buffered so compute can untilize
+        // the next batch while writer_untilize sends the current one (2 * read_batch_size rows).
         detail::create_tensor_cb(
             program,
             untilizer_core_grid,
             output_tensor,
-            /*buffering_factor=*/read_batch_size,
+            /*buffering_factor=*/2 * read_batch_size,
+            ///*buffering_factor=*/ read_batch_size,
             /*cb_id=*/tt::CBIndex::c_2,
             "untilize_idle");
         // c_3 on idle cores: 1-page signal CB (reader->compute, mirrors c_17 on sender cores)
@@ -671,12 +673,13 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         // c_9 on idle cores: metadata-batch CB. reader_untilize on this core reads the
         // per-batch metadata pages from DRAM and pushes them here; zero_init_writer pops
         // batch_count pages each iteration and decides the per-batch path locally (sender
-        // no longer writes to this CB).  Sized for one batch in flight (read_batch_size
-        // pages), matching the buffer/untilize CBs.
+        // no longer writes to this CB).  Double-buffered (2 * read_batch_size pages) so
+        // reader_untilize can stage the next batch's metadata while zero_init_writer
+        // processes the current one, matching the buffer/untilize CBs.
         {
             uint32_t metadata_batch_page_size = detail::get_aligned_page_size(dispatched_metadata);
             auto metadata_fmt = tt::tt_metal::datatype_to_dataformat_converter(dispatched_metadata.dtype());
-            uint32_t metadata_batch_cb_size = read_batch_size * metadata_batch_page_size;
+            uint32_t metadata_batch_cb_size = 2 * read_batch_size * metadata_batch_page_size;
             tt::tt_metal::CircularBufferConfig metadata_batch_untilizer_config =
                 tt::tt_metal::CircularBufferConfig(metadata_batch_cb_size, {{tt::CBIndex::c_9, metadata_fmt}})
                     .set_page_size(tt::CBIndex::c_9, metadata_batch_page_size);

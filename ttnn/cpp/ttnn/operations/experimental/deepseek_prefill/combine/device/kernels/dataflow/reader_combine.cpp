@@ -339,6 +339,9 @@ void kernel_main() {
                 uint32_t slot = read_slots[c];
                 volatile tt_l1_ptr uint32_t* ring_meta =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ring_meta_addr[c][slot]);
+                // ring_meta was written by the untilizer core via NoC; invalidate L1 cache
+                // so this load sees the fresh metadata rather than a stale cached copy.
+                invalidate_l1_cache();
                 uint32_t meta0 = ring_meta[0];
                 uint32_t meta1 = ring_meta[1];
                 uint32_t meta2 = ring_meta[2];

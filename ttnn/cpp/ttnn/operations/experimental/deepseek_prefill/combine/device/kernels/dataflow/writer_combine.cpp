@@ -198,6 +198,9 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* route_info =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_route_info_id));
 
+        // route_info was written by reader_combine (NCRISC on this core); invalidate L1 cache
+        // so this load sees the fresh values rather than a stale BRISC-cached copy.
+        invalidate_l1_cache();
         uint32_t route = route_info[0];
         if (route == ROUTE_INFO_SENTINEL) {
             cb_pop_front(cb_route_info_id, 1);

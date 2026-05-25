@@ -194,7 +194,11 @@ void kernel_main() {
             //    path (all-local vs non-local) locally — sender no longer writes to c_9.
             //    Per-expert metadata stride is tile-aligned, hence reusing start_token.
             uint32_t metadata_batch_start = start_token + batch_token_start;
-            cb_reserve_back(cb_metadata_batch_id, batch_count);
+            // Always reserve/push read_batch_size pages so cb_metadata_batch_id wraps cleanly
+            // (tt-metal CBs require fifo_wr_ptr to hit fifo_limit exactly to wrap).  Only the
+            // first batch_count pages contain valid metadata read from DRAM; the trailing
+            // (read_batch_size - batch_count) pages are unused and will not be read by writer.
+            cb_reserve_back(cb_metadata_batch_id, read_batch_size);
             uint32_t metadata_base = get_write_ptr(cb_metadata_batch_id);
             for (uint32_t t = 0; t < batch_count; t++) {
                 noc_async_read_page(
@@ -203,7 +207,7 @@ void kernel_main() {
                     metadata_base + t * aligned_dispatched_metadata_page_size);
             }
             noc_async_read_barrier();
-            cb_push_back(cb_metadata_batch_id, batch_count);
+            cb_push_back(cb_metadata_batch_id, read_batch_size);
 
             // 3. Read tiles for this batch in block_ct_dim-sized chunks so each push matches one
             //    compute-side pack_untilize_block consumption of block_ct_dim tiles.  The CB
