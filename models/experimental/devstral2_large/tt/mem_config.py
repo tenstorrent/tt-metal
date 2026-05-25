@@ -115,9 +115,37 @@ def _largest_divisor_at_most(n: int, cap: int) -> int:
 
 
 def _pick_width_shard_grid(hidden: int) -> ttnn.CoreGrid:
-    """32-core width grid for hidden=12288 (profiler: fastest RMSNorm on BH)."""
+    """32-core width grid for hidden=12288 (profiler: fastest RMSNorm on BH).
+
+    Used for decode and decode-width-sharded matmul, where the per-core shard is one
+    tile row tall and per-core CBs stay small.
+    """
     hidden_padded = pad_to_tile(hidden)
     for grid_y, grid_x in ((4, 8), (8, 4), (2, 8), (4, 4)):
+        num_cores = grid_y * grid_x
+        shard_w = hidden_padded // num_cores
+        if hidden_padded % num_cores == 0 and shard_w % ttnn.TILE_SIZE == 0:
+            return ttnn.CoreGrid(y=grid_y, x=grid_x)
+    return ttnn.CoreGrid(y=4, x=4)
+
+
+def _pick_prefill_width_shard_grid(hidden: int) -> ttnn.CoreGrid:
+    """Larger 64-core (8,8) width grid for prefill RMSNorm.
+
+    Sharded LayerNorm holds the per-core shard ``(block_h × block_w)`` in several CBs
+    concurrently, so the L1 footprint scales with both ``block_h`` (seq_len) and
+    ``block_w`` (hidden / num_cores). For hidden=12288 the 32-core grid leaves
+    block_w=12, which makes prefill CBs blow past the 1.5 MB/core L1 limit at block_h≈8
+    (≈256 tokens). Doubling to 64 cores halves block_w to 6 and roughly halves the
+    per-core CB region, keeping prefill RMSNorm in L1 for the seq_lens the agent demo
+    actually feeds.
+
+    (8,8) fits inside BH P150's 11×10 compute rectangle and WH T3K's 8×8 worker grid.
+    On any device where 64-core tile alignment fails, falls back to the 32-core grid
+    used by decode.
+    """
+    hidden_padded = pad_to_tile(hidden)
+    for grid_y, grid_x in ((8, 8), (4, 8), (8, 4), (2, 8), (4, 4)):
         num_cores = grid_y * grid_x
         shard_w = hidden_padded // num_cores
         if hidden_padded % num_cores == 0 and shard_w % ttnn.TILE_SIZE == 0:
@@ -144,11 +172,15 @@ def _width_sharded_norm_program_config(
     *,
     seq_len: int,
     hidden_size: int,
+    prefill: bool = False,
 ) -> ttnn.LayerNormShardedMultiCoreProgramConfig:
-    """Shared width-sharded ``LayerNormShardedMultiCoreProgramConfig`` (see ``layernorm_unit_test``)."""
+    """Shared width-sharded ``LayerNormShardedMultiCoreProgramConfig`` (see ``layernorm_unit_test``).
+
+    ``prefill=True`` uses the larger 64-core grid so per-core CBs stay in L1 at long seq_len.
+    """
     m_padded = pad_to_tile(seq_len)
     hidden_padded = pad_to_tile(hidden_size)
-    grid = _pick_width_shard_grid(hidden_padded)
+    grid = _pick_prefill_width_shard_grid(hidden_padded) if prefill else _pick_width_shard_grid(hidden_padded)
     shard_w = hidden_padded // grid.num_cores
     block_h = m_padded // ttnn.TILE_SIZE
     block_w = shard_w // ttnn.TILE_SIZE
@@ -170,10 +202,14 @@ def get_decode_width_sharded_norm_program_config(hidden_size: int) -> ttnn.Layer
 
 @lru_cache(maxsize=32)
 def get_prefill_width_sharded_activation_mem_config(seq_len: int, hidden_size: int) -> ttnn.MemoryConfig:
-    """L1 WIDTH-sharded activations for prefill RMSNorm (``M`` and hidden split across cores)."""
+    """L1 WIDTH-sharded activations for prefill RMSNorm (``M`` and hidden split across cores).
+
+    Uses the larger 64-core prefill grid so per-core ``block_w`` stays small enough that
+    sharded LayerNorm CBs fit in L1 at long prefill seq_lens.
+    """
     m_padded = pad_to_tile(seq_len)
     hidden_padded = pad_to_tile(hidden_size)
-    grid = _pick_width_shard_grid(hidden_padded)
+    grid = _pick_prefill_width_shard_grid(hidden_padded)
     shard_w = hidden_padded // grid.num_cores
     return ttnn.create_sharded_memory_config(
         (m_padded, shard_w),
@@ -189,7 +225,7 @@ def get_prefill_width_sharded_norm_program_config(
     seq_len: int, hidden_size: int
 ) -> ttnn.LayerNormShardedMultiCoreProgramConfig:
     """Width-sharded norm program config for prefill (e.g. ``M=128`` → ``block_h=4``)."""
-    return _width_sharded_norm_program_config(seq_len=seq_len, hidden_size=hidden_size)
+    return _width_sharded_norm_program_config(seq_len=seq_len, hidden_size=hidden_size, prefill=True)
 
 
 def get_sharded_norm_compute_kernel_config(mesh_device) -> ttnn.DeviceComputeKernelConfig:
@@ -222,11 +258,11 @@ def get_activation_mem_config(args: Devstral2Args, mode: str, mesh_device) -> tt
 
     ``Devstral2Args.prefill_activations_dram`` forces DRAM prefill on any mesh (e.g. agent demo).
     """
-    if mode == "decode":
-        _ = args
-        return ttnn.L1_MEMORY_CONFIG
-    if mode == "prefill" and (args.prefill_activations_dram or is_blackhole_mesh(mesh_device)):
-        return ttnn.DRAM_MEMORY_CONFIG
+    # if mode == "decode":
+    #     _ = args
+    #     return ttnn.L1_MEMORY_CONFIG
+    # if mode == "prefill" and (args.prefill_activations_dram or is_blackhole_mesh(mesh_device)):
+    #     return ttnn.DRAM_MEMORY_CONFIG
     _ = mesh_device
     return ttnn.L1_MEMORY_CONFIG
 

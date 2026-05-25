@@ -131,23 +131,36 @@ class TtRMSNorm:
         return out
 
     def _forward_prefill(self, x: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor:
-        """Width-sharded norm for prefill sequence length; output matches ``memory_config`` (DRAM on BH)."""
+        """Width-sharded norm for short chunks (seq_len <= kv_block_size); streaming fallback otherwise.
+
+        Streaming (no program_config) processes tile-rows one at a time; its L1 footprint is
+        bounded by block_w alone and doesn't grow with seq_len, so it is safe for any length.
+        """
         out_mem = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
         seq_len = max(1, int(x.shape[-2]))
-        sharded_mem = get_prefill_width_sharded_activation_mem_config(seq_len, self.args.hidden_size)
-        program_config = get_prefill_width_sharded_norm_program_config(seq_len, self.args.hidden_size)
-        x = _ensure_memory_config(x, sharded_mem)
-        out = ttnn.rms_norm(
+        if seq_len <= self.args.kv_block_size:
+            sharded_mem = get_prefill_width_sharded_activation_mem_config(seq_len, self.args.hidden_size)
+            program_config = get_prefill_width_sharded_norm_program_config(seq_len, self.args.hidden_size)
+            x = _ensure_memory_config(x, sharded_mem)
+            out = ttnn.rms_norm(
+                x,
+                epsilon=self.eps,
+                weight=self.weight,
+                program_config=program_config,
+                memory_config=sharded_mem,
+                compute_kernel_config=self._sharded_compute_kernel_config,
+            )
+            if out_mem != sharded_mem:
+                out = ttnn.to_memory_config(out, out_mem)
+            return out
+        x = _ensure_memory_config(x, out_mem)
+        return ttnn.rms_norm(
             x,
             epsilon=self.eps,
             weight=self.weight,
-            program_config=program_config,
-            memory_config=sharded_mem,
+            memory_config=out_mem,
             compute_kernel_config=self._sharded_compute_kernel_config,
         )
-        if out_mem != sharded_mem:
-            out = ttnn.to_memory_config(out, out_mem)
-        return out
 
     def forward(
         self,

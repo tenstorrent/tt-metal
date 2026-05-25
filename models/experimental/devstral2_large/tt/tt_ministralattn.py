@@ -50,8 +50,9 @@ from models.experimental.devstral2_large.tt.tt_ministral_rotary_emb import (
 )
 from models.experimental.devstral2_large.tt.weight_loading import (
     resolve_weight_cache_path,
-    upload_kv_cache_buffer,
     upload_matmul_weight,
+    upload_page_table,
+    upload_paged_kv_cache_buffer,
 )
 
 __all__ = ["TtAttention"]
@@ -220,25 +221,38 @@ class TtAttention:
             cache_key=f"{pfx}o_proj_bfp8",
         )
 
-        cache_shape = (
-            args.max_batch_size,
-            args.n_local_kv_heads,
-            args.max_seq_len,
-            args.head_dim,
-        )
-        self.k_cache = upload_kv_cache_buffer(
-            cache_shape,
-            mesh_device,
+        # Paged KV cache: [num_total_blocks, n_local_kv_heads, block_size, head_dim]. Logical
+        # position p maps to physical block ``page_table[user, p // block_size]`` at slot
+        # ``p % block_size``. Chunked prefill writes block-by-block via ``paged_fill_cache``;
+        # decode updates a single position via ``paged_update_cache``.
+        self.k_cache = upload_paged_kv_cache_buffer(
+            num_total_blocks=args.kv_num_total_blocks,
+            n_kv_heads=args.n_local_kv_heads,
+            block_size=args.kv_block_size,
+            head_dim=args.head_dim,
+            mesh_device=mesh_device,
             dtype=args.kv_cache_dtype,
             weight_cache_path=wp,
-            cache_key=f"{pfx}k_cache",
+            cache_key=f"{pfx}k_cache_paged",
         )
-        self.v_cache = upload_kv_cache_buffer(
-            cache_shape,
-            mesh_device,
+        self.v_cache = upload_paged_kv_cache_buffer(
+            num_total_blocks=args.kv_num_total_blocks,
+            n_kv_heads=args.n_local_kv_heads,
+            block_size=args.kv_block_size,
+            head_dim=args.head_dim,
+            mesh_device=mesh_device,
             dtype=args.kv_cache_dtype,
             weight_cache_path=wp,
-            cache_key=f"{pfx}v_cache",
+            cache_key=f"{pfx}v_cache_paged",
+        )
+        # Page table: ``[batch, blocks_per_user]`` int32 mapping logical block -> physical block.
+        # Identical across all attention layers; step 3 (model) will hoist this to model scope to
+        # save the per-layer duplication. For now each layer holds its own (tiny) replica.
+        self.page_table = upload_page_table(
+            batch_size=args.max_batch_size,
+            num_blocks_per_user=args.kv_num_blocks_per_user,
+            mesh_device=mesh_device,
+            weight_cache_path=wp,
         )
 
         self._compute_kernel_config = get_compute_kernel_config(mesh_device)
@@ -326,7 +340,41 @@ class TtAttention:
             memory_config=self.args.get_ccl_output_mem_config(mode, self.mesh_device),
         )
 
-    # --- Prefill: full sequence, populates KV cache from ``start_pos`` ---
+    # --- Prefill: chunk of ``S`` tokens starting at ``start_pos``, populates paged KV cache ---
+
+    def _chunk_page_table(self, start_pos: int, seq_len: int) -> ttnn.Tensor:
+        """Slice ``self.page_table`` to the blocks this chunk writes into.
+
+        ``paged_fill_cache`` reads ``page_table[batch_idx]`` to find the physical blocks to fill,
+        so the slice must cover exactly the blocks spanned by ``[start_pos, start_pos+seq_len)``.
+        Requires ``start_pos`` to be a multiple of ``kv_block_size``.
+        """
+        block_size = self.args.kv_block_size
+        if start_pos % block_size != 0:
+            raise ValueError(f"start_pos ({start_pos}) must be a multiple of kv_block_size ({block_size})")
+        block_start = start_pos // block_size
+        # Ceiling-divide: a partial last chunk still writes a full block (extra slots are masked
+        # off by causal attention since the chunk's Q seq_len bounds the active range).
+        num_chunk_blocks = (seq_len + block_size - 1) // block_size
+        return ttnn.slice(
+            self.page_table,
+            [0, block_start],
+            [self.args.max_batch_size, block_start + num_chunk_blocks],
+        )
+
+    def _prefill_sdpa_program_config(self) -> ttnn.SDPAProgramConfig:
+        """SDPA program config for chunked prefill.
+
+        ``q_chunk_size`` divides ``chunk_start_idx`` (which is always a multiple of
+        ``kv_block_size``) so this is always legal. ``k_chunk_size`` matches the cache's
+        physical block size to stream K/V efficiently from paged storage.
+        """
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=self.args.kv_block_size,
+            k_chunk_size=self.args.kv_block_size,
+        )
 
     def forward_prefill(
         self,
@@ -335,10 +383,13 @@ class TtAttention:
         start_pos: int = 0,
         user_id: int = 0,
     ) -> ttnn.Tensor:
-        """``x``: ``(1, 1, S, hidden_size)``, replicated across TP. Returns same shape."""
-        B = 1
+        """One prefill chunk. ``x``: ``(1, 1, S, hidden_size)``, ``S`` a multiple of ``kv_block_size``.
+
+        Writes chunk K/V into the paged cache at logical positions ``[start_pos, start_pos+S)`` and
+        runs chunked SDPA so the chunk's Q attends to **all** prior cached K/V positions plus its
+        own with the correct block-causal mask.
+        """
         S = int(x.shape[-2])
-        D = self.args.head_dim
         Hq_local = self.args.n_local_heads
         Hkv_local = self.args.n_local_kv_heads
 
@@ -358,35 +409,38 @@ class TtAttention:
         q_heads, k_heads = self.rotary_emb.apply(q_heads, k_heads, cos_q, sin_q, cos_k, sin_k)
         # Free the RoPE prefill slices immediately. They sit in L1 (sliced from L1 source tables)
         # and would otherwise stay alive through SDPA + nlp_concat_heads + o_proj matmul,
-        # where a growing CB region eventually collides with their L1 address. For long contexts
-        # the four slices (each ``[1,1,seq_len,head_dim]``) add up to hundreds of KB of L1 per
-        # layer that the matmul validator sees as occupied data.
+        # where a growing CB region eventually collides with their L1 address.
         ttnn.deallocate(cos_q)
         ttnn.deallocate(sin_q)
         ttnn.deallocate(cos_k)
         ttnn.deallocate(sin_k)
 
-        # Write K/V into the cache for future decode steps. ``ttnn.fill_cache`` writes the entire
-        # ``src`` tensor into the cache's ``user_id`` batch slot starting at position 0. Chunked
-        # prefill (start_pos > 0) would need ``paged_update_cache`` with a position vector; not
-        # supported in this baseline.
-        if start_pos != 0:
-            raise NotImplementedError("Chunked prefill (start_pos > 0) is not implemented in this baseline.")
-        ttnn.fill_cache(self.k_cache, k_heads, user_id)
-        ttnn.fill_cache(self.v_cache, v_heads, user_id)
-
-        attn = ttnn.transformer.scaled_dot_product_attention(
-            q_heads,
-            k_heads,
-            v_heads,
-            is_causal=True,
-            scale=self.args.attn_scale,
-            compute_kernel_config=self._compute_kernel_config,
-            memory_config=act_mem,
-        )
-        ttnn.deallocate(q_heads)
+        # Write this chunk's K, V into the paged cache. The chunk_page_table is a contiguous
+        # slice of the full page_table covering only the blocks this chunk fills.
+        chunk_pt = self._chunk_page_table(start_pos, S)
+        ttnn.experimental.paged_fill_cache(self.k_cache, k_heads, chunk_pt, batch_idx=user_id)
+        ttnn.experimental.paged_fill_cache(self.v_cache, v_heads, chunk_pt, batch_idx=user_id)
+        ttnn.deallocate(chunk_pt)
+        # K/V have been persisted; the fresh head tensors are no longer needed — SDPA reads from
+        # the cache via the full page_table.
         ttnn.deallocate(k_heads)
         ttnn.deallocate(v_heads)
+
+        # Chunked SDPA: Q chunk at positions ``[start_pos, start_pos+S)`` attends to all cached
+        # K/V at ``[0, start_pos+S)`` with a block-causal mask. K/V are read from paged storage.
+        # Q/K/V/page_table/chunk_start_idx must be positional (nanobind ``noconvert()`` on tensors).
+        # Do not pass ``memory_config`` here; output defaults to interleaved DRAM (see ``test_sdpa_chunked``).
+        attn = ttnn.transformer.chunked_scaled_dot_product_attention(
+            q_heads,
+            self.k_cache,
+            self.v_cache,
+            self.page_table,
+            start_pos,
+            program_config=self._prefill_sdpa_program_config(),
+            compute_kernel_config=self._compute_kernel_config,
+        )
+        attn = ttnn.to_memory_config(attn, act_mem)
+        ttnn.deallocate(q_heads)
 
         # (B, Hq_local, S, D) -> (1, 1, S, Hq_local*D)
         attn_flat = ttnn.experimental.nlp_concat_heads(attn, memory_config=act_mem)
@@ -429,20 +483,32 @@ class TtAttention:
         trans_mat = self.rotary_emb.get_sharded_trans_mat(batch_size)
         q_heads = ttnn.experimental.rotary_embedding_llama(q_heads, cos_q, sin_q, trans_mat, is_decode_mode=True)
         k_heads = ttnn.experimental.rotary_embedding_llama(k_heads, cos_k, sin_k, trans_mat, is_decode_mode=True)
+        # Mirror forward_prefill: release the sharded RoPE tables before SDPA / o_proj so their L1
+        # addresses don't collide with the next program's growing CB region across many decode steps
+        # or a follow-up prefill (validate_circular_buffer_region throw on the agent demo).
+        ttnn.deallocate(cos_q)
+        ttnn.deallocate(sin_q)
+        ttnn.deallocate(cos_k)
+        ttnn.deallocate(sin_k)
 
         pos_tt = current_pos
-        # Separate updates: fused op requires K/V head tensors on non-overlapping core grids, but
-        # ``nlp_create_qkv_heads_decode`` places them on the same height-sharded L1 cores.
-        ttnn.experimental.paged_update_cache(self.k_cache, k_heads, update_idxs_tensor=pos_tt, page_table=None)
-        ttnn.experimental.paged_update_cache(self.v_cache, v_heads, update_idxs_tensor=pos_tt, page_table=None)
+        # Paged decode write: ``paged_update_cache`` consults ``page_table[batch_idx, pos // block]``
+        # to find the physical block and writes the new K/V at ``pos % block``.
+        ttnn.experimental.paged_update_cache(
+            self.k_cache, k_heads, update_idxs_tensor=pos_tt, page_table=self.page_table
+        )
+        ttnn.experimental.paged_update_cache(
+            self.v_cache, v_heads, update_idxs_tensor=pos_tt, page_table=self.page_table
+        )
         ttnn.deallocate(k_heads)
         ttnn.deallocate(v_heads)
 
         sdpa_out_mem = get_sdpa_decode_output_mem_config(self.args, batch_size)
-        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+        attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q_heads,
             self.k_cache,
             self.v_cache,
+            page_table_tensor=self.page_table,
             cur_pos_tensor=pos_tt,
             scale=self.args.attn_scale,
             program_config=self._sdpa_decode_program_config,

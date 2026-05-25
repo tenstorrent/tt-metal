@@ -97,6 +97,19 @@ class Devstral2Args:
     # When True, route prefill activations through DRAM (see ``mem_config.get_activation_mem_config``).
     prefill_activations_dram: bool = False
 
+    # Paged KV cache: physical block size in tokens. ``max_seq_len`` must be a multiple.
+    # 128 keeps each chunked-prefill dispatch within the sharded-LayerNorm L1 budget; smaller
+    # blocks reduce wasted slots when sequences don't fill the last block but raise page_table size.
+    kv_block_size: int = 128
+
+    def __post_init__(self) -> None:
+        if self.kv_block_size <= 0:
+            raise ValueError(f"kv_block_size must be positive, got {self.kv_block_size}")
+        if self.max_seq_len % self.kv_block_size != 0:
+            raise ValueError(
+                f"max_seq_len ({self.max_seq_len}) must be a multiple of kv_block_size " f"({self.kv_block_size})"
+            )
+
     @classmethod
     def from_hf_config(
         cls,
@@ -111,6 +124,7 @@ class Devstral2Args:
         kv_cache_dtype: ttnn.DataType = ttnn.bfloat16,
         ccl_dtype: ttnn.DataType = ttnn.bfloat16,
         prefill_activations_dram: bool = False,
+        kv_block_size: int = 128,
     ) -> "Devstral2Args":
         """Build from a HuggingFace ``Ministral3Config`` (or the inner ``text_config`` of a wrapper)."""
         text = getattr(hf_config, "text_config", None) or hf_config
@@ -158,6 +172,7 @@ class Devstral2Args:
             kv_cache_dtype=kv_cache_dtype,
             ccl_dtype=ccl_dtype,
             prefill_activations_dram=prefill_activations_dram,
+            kv_block_size=kv_block_size,
         )
 
     # ---- Derived ----
@@ -186,6 +201,16 @@ class Devstral2Args:
     @property
     def n_kv_groups(self) -> int:
         return self.num_attention_heads // self.num_key_value_heads
+
+    @property
+    def kv_num_blocks_per_user(self) -> int:
+        """Physical blocks per logical user in the paged KV cache."""
+        return self.max_seq_len // self.kv_block_size
+
+    @property
+    def kv_num_total_blocks(self) -> int:
+        """Total physical blocks in the paged KV cache (``batch * blocks_per_user``)."""
+        return self.max_batch_size * self.kv_num_blocks_per_user
 
     @property
     def q_proj_in_features(self) -> int:
