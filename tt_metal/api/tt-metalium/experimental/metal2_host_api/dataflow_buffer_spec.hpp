@@ -96,9 +96,13 @@ struct DataflowBufferSpec {
 
     // Alias two or more DFBs
     // Aliased DFBs are logically distinct, but physically share the same backing memory.
-    // All aliased DFBs must have the same total size (num_entries * entry_size), must be bound to the same kernels,
-    // and must mutually declare each other as aliases.
-    // (Aliased DFBs offer NO guarantees against data clobbering; the kernel author must ensure safety.)
+    // Aliased DFBs offer NO guarantees against data clobbering; kernel logic must ensure safety.
+    //
+    // Rules for aliased DFBs:
+    //   - Every DFB in the alias group must list every other member as an alias
+    //   - Aliased DFBs must have the same total size (num_entries * entry_size).
+    //   - All members must target the same node set
+    //     (derived from their bound kernels' WorkUnitSpecs).
     using DFBIdentifiers = std::vector<DFBSpecName>;
     DFBIdentifiers alias_with;  // empty vector means no aliasing
 

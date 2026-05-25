@@ -62,7 +62,7 @@ def _pad_or_create_page_table(table, target_blocks):
     if table is not None:
         num_pad = aligned_blocks - table.shape[1]
         if num_pad > 0:
-            padding = torch.ones(1, num_pad, dtype=torch.int32) * -1
+            padding = torch.ones(table.shape[0], num_pad, dtype=torch.int32) * -1
             return torch.cat([table, padding], dim=-1)
         return table
     return torch.ones(1, aligned_blocks, dtype=torch.int32) * -1
@@ -440,13 +440,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             full_page_table = full_page_table[user_id : user_id + 1, :]
 
         chunk_page_table = None
+        max_blocks_prefill = _get_max_blocks_prefill(kv_cache)
+        # Preserve full per-user page IDs for traced APC slicing.
+        source_page_table = full_page_table if full_page_table is not None else page_table
+        if source_page_table is None:
+            raise ValueError("Traced prefill requires a page_table")
+        page_table = _pad_or_create_page_table(source_page_table, max_blocks_prefill)
         if batch_size == 1:
-            max_blocks_prefill = _get_max_blocks_prefill(kv_cache)
-            # Preserve full per-user page IDs for traced APC slicing.
-            source_page_table = full_page_table if full_page_table is not None else page_table
-            if source_page_table is None:
-                raise ValueError("Traced prefill requires a page_table")
-            page_table = _pad_or_create_page_table(source_page_table, max_blocks_prefill)
             if use_prefix_caching:
                 chunk_start_block = num_cached_tokens // block_size
                 chunk_end_block = num_blocks_in_seq(num_cached_tokens + prefill_seq_len, block_size)
@@ -1148,7 +1148,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 user_id=user_id,
                 **kwargs,
             )
-            prefill_input, rot_mats_global_prefill, rot_mats_local_prefill, page_table_tt, _, _ = inputs
+            prefill_input, rot_mats_global_prefill, rot_mats_local_prefill, page_table_tt, *_ = inputs
 
             tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,

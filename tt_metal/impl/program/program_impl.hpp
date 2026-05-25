@@ -167,6 +167,9 @@ public:
     // Compiles all programs in the group
     void compile_all(bool force_slow_dispatch);
 
+    // Finalize program offsets for all programs in the group
+    void finalize_offsets();
+
     // Write runtime args for all programs in the group
     void write_runtime_args(bool force_slow_dispatch);
 
@@ -285,6 +288,9 @@ public:
 
     uint32_t add_dataflow_buffer(
         const CoreRangeSet& core_range_set, const experimental::dfb::DataflowBufferConfig& config);
+
+    // Declare an alias relationship: secondary shares primary's L1 address.
+    void set_dfb_alias(uint32_t primary_id, uint32_t secondary_id);
 
     // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
     // core require remapper being enabled
