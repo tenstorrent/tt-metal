@@ -76,6 +76,7 @@ def _run_standard_swiglu(
     memory_config: ttnn.MemoryConfig | None = None,
 ) -> ttnn.Tensor:
     """Standard (non-DRAM-sharded) SwiGLU: gate * silu -> up -> down."""
+    # Tuned 48-core gate/up helper: WIDTH_SHARDED L1 output replaces cross-NOC DRAM writes; out_subblock_w=2 avoids SLOW path.
     if fuse_gate_up and getattr(w, "w_mlp_gate_up", None) is not None:
         gate_up = mlp_gate_up_linear(x, w.w_mlp_gate_up, device=device, cfg=cfg)
         _batch = int(gate_up.shape[2])
@@ -90,6 +91,7 @@ def _run_standard_swiglu(
     x_ff = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
     ttnn.deallocate(gate, force=False)
     ttnn.deallocate(up, force=False)
+    # Tuned down-proj helper: 32-core / per_core_N=2 / out_subblock_w=2.
     out = mlp_down_linear(x_ff, w.w_mlp_down, device=device, cfg=cfg, memory_config=memory_config)
     ttnn.deallocate(x_ff, force=False)
     return out

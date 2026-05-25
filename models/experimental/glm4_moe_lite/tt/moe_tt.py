@@ -501,18 +501,21 @@ def moe_topk_tt(
     m_total = 1
     for i in range(len(x.shape) - 1):
         m_total *= int(x.shape[i])
-    logits = ttnn.linear(
-        x,
-        moe_w.w_gate,
-        program_config=compute_1d_prog_cfg(x.device(), moe_w.w_gate, m_total, fp32_dest_acc_en=False),
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        ),
-        **({} if mc is None else {"memory_config": mc}),
-    )  # [1,1,T,E]
+    if m_total <= 1024:
+        logits = ttnn.linear(
+            x,
+            moe_w.w_gate,
+            program_config=compute_1d_prog_cfg(x.device(), moe_w.w_gate, m_total, fp32_dest_acc_en=False),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            ),
+            **({} if mc is None else {"memory_config": mc}),
+        )  # [1,1,T,E]
+    else:
+        logits = ttnn.linear(x, moe_w.w_gate, memory_config=mc)  # [1,1,T,E]
     scores = ttnn.sigmoid(logits, memory_config=mc)
     ttnn.deallocate(logits, force=False)
 
