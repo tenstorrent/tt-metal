@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_allclose, assert_equal, assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp
 from models.common.utility_functions import torch_random
 
 pytestmark = pytest.mark.use_module_device
