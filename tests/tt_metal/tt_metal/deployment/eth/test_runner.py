@@ -483,6 +483,42 @@ def print_test_summary(t: TestCase, runs: list[TestRun]):
         print(table(f"{t} test summary", headers, rows))
 
 
+def print_test_summary_per_chip(t: TestCase, runs: list[TestRun]):
+    for r in runs:
+        if not r.name.endswith(t):
+            continue
+
+        chips: dict = {}
+
+        def ensure_dev(ch: str):
+            if ch not in chips:
+                chips[ch] = {"pass": True, "tests": 0, "bws": [], "errors": 0}
+
+        for l in r.links:
+            ensure_dev(l.src_dev)
+            ensure_dev(l.dst_dev)
+
+            chips[l.src_dev]["pass"] = chips[l.src_dev]["pass"] and not len(l.errors)
+            chips[l.dst_dev]["pass"] = chips[l.dst_dev]["pass"] and not len(l.errors)
+            chips[l.src_dev]["tests"] += 1
+            chips[l.dst_dev]["tests"] += 1
+            chips[l.src_dev]["bws"].append(l.bw["bw"])
+            chips[l.dst_dev]["bws"].append(l.bw["bw"])
+
+        avg = lambda x: sum(x) / len(x)
+        headers = ["chip id", "tests", "bw (min)", "bw (max)", "bw (avg)", "errors", "pass"]
+        rows = []
+        for c in chips:
+            print("\t", c)
+            ch = chips[c]
+            bws = ch["bws"]
+            err = ch["errors"]
+            msg = "FAIL" if err > 0 else "PASS"
+            rows.append([c, ch["tests"], min(bws), max(bws), f"{avg(bws):.3f}", err, msg])
+
+        print(table(f"{t} per chip test summary", headers, rows))
+
+
 def print_failing(runs: list[TestRun]):
     headers = ["test name", "link", "direction", "processor", "errors"]
     rows = []
@@ -502,6 +538,8 @@ def print_results(runs: list[TestRun]):
     print_failing(runs)
     for t in TestCase:
         print_test_summary(t, runs)
+    for t in TestCase:
+        print_test_summary_per_chip(t, runs)
     print_summary(runs)
 
 
