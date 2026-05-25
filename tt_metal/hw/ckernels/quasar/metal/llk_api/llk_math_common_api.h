@@ -81,6 +81,8 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
     }
 }
 
+inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {}
+
 /**
  * @brief Sets the dest dvalid for FPU/SFPU
  *
@@ -124,3 +126,31 @@ inline void llk_math_dest_section_done() {
  * Waits for any previous packs to finish, resets the dest bank id, initializes the MATH_PACK semaphore
  */
 inline void llk_math_pack_sync_init() { _llk_math_pack_sync_init_<DST_SYNC_MODE>(); }
+
+// Math has no per-tile data-format state on Quasar; format reconfig is unpack-only.
+// The wrappers below are intentionally empty no-ops, kept so reconfig_data_format.h
+// can issue MATH((...)) uniformly across arches.
+template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+inline void llk_math_reconfig_data_format_srca(const std::uint32_t /*srca_new_operand*/) {}
+
+template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+inline void llk_math_reconfig_data_format_srcb(const std::uint32_t /*srcb_new_operand*/) {}
+
+template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+inline void llk_math_reconfig_data_format(
+    const std::uint32_t /*srca_new_operand*/, const std::uint32_t /*srcb_new_operand*/) {}
+
+template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+inline void llk_math_reconfig_data_format(
+    const std::uint32_t /*srca_old_operand*/,
+    const std::uint32_t /*srca_new_operand*/,
+    const std::uint32_t /*srcb_old_operand*/,
+    const std::uint32_t /*srcb_new_operand*/) {}
+
+template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+inline void llk_math_reconfig_data_format_srca(
+    const std::uint32_t /*srca_old_operand*/, const std::uint32_t /*srca_new_operand*/) {}
+
+template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+inline void llk_math_reconfig_data_format_srcb(
+    const std::uint32_t /*srcb_old_operand*/, const std::uint32_t /*srcb_new_operand*/) {}

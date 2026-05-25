@@ -841,7 +841,6 @@ def run_demo(
                     agg_top1_matches / agg_total_tokens,
                     agg_top5_matches / agg_total_tokens,
                 )
-
             statistics["tt-metal_commit"] = _resolve_tt_metal_commit()
             return {"generations": results, "statistics": statistics, "model_params": model_params}
         finally:
