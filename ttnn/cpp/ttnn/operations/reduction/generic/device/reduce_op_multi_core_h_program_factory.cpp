@@ -78,8 +78,11 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         !(rm_path && operation_attributes.negate),
         "Reduce H RM path does not currently support 'negate' (CB index c_4/c_5 collision)");
 
-    const uint32_t src_datum_size_rm = tt::datum_size(src0_cb_data_format);
-    const uint32_t dst_datum_size_rm = tt::datum_size(dst_cb_data_format);
+    // `tt::datum_size(...)` throws for block-float formats (BFP8/BFP4/BFP2). The RM dense path
+    // is gated to BF16/FP32 only, but the tile path can still arrive here with BFLOAT8_B input,
+    // so guard the unpacked-format byte-size calls behind `rm_path`.
+    const uint32_t src_datum_size_rm = rm_path ? tt::datum_size(src0_cb_data_format) : 0u;
+    const uint32_t dst_datum_size_rm = rm_path ? tt::datum_size(dst_cb_data_format) : 0u;
     const uint32_t chunk_row_bytes_rm = k_rm_wt_tiles_per_chunk * tile_width * src_datum_size_rm;
     const uint32_t rm_staging_page_size = rm_rows_per_tile * chunk_row_bytes_rm;
 
