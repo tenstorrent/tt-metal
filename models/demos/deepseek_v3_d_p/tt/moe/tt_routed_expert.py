@@ -380,6 +380,7 @@ class TtRoutedExpert(LightweightModule):
         up_proj: ttnn.Tensor,
         down_proj: ttnn.Tensor,
         expert_token_counts: ttnn.Tensor,
+        expert_region_offsets: ttnn.Tensor,
         local_expert_id: int,
         out: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
@@ -422,6 +423,7 @@ class TtRoutedExpert(LightweightModule):
             down_proj,
             expert_token_counts,
             self.global_expert_idx_table,
+            expert_region_offsets,
             local_expert_id=local_expert_id,
             compute_kernel_config=self.compute_kernel_config,
             output=None if padded_m != original_m else out,

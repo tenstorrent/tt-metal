@@ -49,6 +49,15 @@ struct UnifiedRoutedExpertFfnInputs {
     Tensor down_proj;
     Tensor counts;
     Tensor global_expert_idx_table;
+    // Per-global-expert starting M-row in x (in tokens). The reader reads
+    // region_offsets[global_expert_id] device-side and adds it to the M-tile
+    // index of each DRAM read, so the FFN can operate on a slice of a
+    // larger shared buffer (e.g. the full dispatched_buffer) without a
+    // preceding extract op. Same for the writer's output tile_idx — output
+    // writes land at the same offset, so a separate insert op is also
+    // unnecessary. For single-expert tests where x is already the expert's
+    // tokens, pass a single-element [0] offsets tensor.
+    Tensor expert_region_offsets;
     std::optional<Tensor> optional_output;
 };
 

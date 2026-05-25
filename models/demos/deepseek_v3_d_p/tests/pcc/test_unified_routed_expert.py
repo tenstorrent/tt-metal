@@ -100,6 +100,9 @@ def test_unified_routed_expert(
 
     counts = _idx_tensor([num_tokens])
     idx_table = _idx_tensor([0])
+    # Single-expert PCC test: only one region starting at row 0, so the
+    # device-side region_offsets read returns 0 and start_tile_row = 0.
+    region_offsets = _idx_tensor([0])
 
     tt_output = ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn(
         tt_input,
@@ -108,6 +111,7 @@ def test_unified_routed_expert(
         tt_down,
         counts,
         idx_table,
+        region_offsets,
         local_expert_id=0,
         compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
     )
