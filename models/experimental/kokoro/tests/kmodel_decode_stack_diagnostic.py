@@ -44,7 +44,12 @@ if str(_TT_METAL_ROOT) not in sys.path:
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.kokoro.reference.model import KModel
-from models.experimental.kokoro.tt.tt_conv import tt_conv1d_nlc, tt_conv1d_nlc_cpu, tt_conv_transpose1d_nlc
+from models.experimental.kokoro.tt.tt_conv import (
+    tt_conv1d_nlc,
+    tt_conv1d_nlc_cpu,
+    tt_conv1d_stride2_k3_1ch_nlc,
+    tt_conv_transpose1d_nlc,
+)
 from models.experimental.kokoro.tt.tt_decoder import _to_interleaved
 from models.experimental.kokoro.tt.tt_generator import _reflection_pad_left_1_nlc
 from models.experimental.kokoro.tt.tt_kmodel import (
@@ -377,6 +382,7 @@ def _run_tt_decode_stack(
     s_style: torch.Tensor,
     *,
     asr_entry_dtype: Literal["fp32", "bf16"] = "fp32",
+    use_f0n_cpu: bool = True,
 ) -> dict[str, torch.Tensor]:
     """Walk TTDecoder + TTGenerator forward, capturing intermediates."""
     T_mel = int(asr.shape[-1])
@@ -418,12 +424,9 @@ def _run_tt_decode_stack(
         # Decoder forward (mirroring TTDecoder.forward)
         f0_nlc = ttnn.unsqueeze(F0_tt, 2)
         n_nlc = ttnn.unsqueeze(N_tt, 2)
-        F0_down = _to_interleaved(
-            tt_conv1d_nlc_cpu(x_nlc=f0_nlc, params=dec.params.F0_conv, device=dev, memory_config=mc), mc
-        )
-        N_down = _to_interleaved(
-            tt_conv1d_nlc_cpu(x_nlc=n_nlc, params=dec.params.N_conv, device=dev, memory_config=mc), mc
-        )
+        _f0n_conv = tt_conv1d_nlc_cpu if use_f0n_cpu else tt_conv1d_stride2_k3_1ch_nlc
+        F0_down = _to_interleaved(_f0n_conv(x_nlc=f0_nlc, params=dec.params.F0_conv, device=dev, memory_config=mc), mc)
+        N_down = _to_interleaved(_f0n_conv(x_nlc=n_nlc, params=dec.params.N_conv, device=dev, memory_config=mc), mc)
         caps["D0_F0_conv"] = (
             _tt_to_torch(F0_down).permute(0, 2, 1).contiguous()
             if _tt_to_torch(F0_down).dim() == 3
