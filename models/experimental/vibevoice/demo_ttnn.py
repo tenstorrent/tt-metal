@@ -104,7 +104,7 @@ def main():
 
     # ── Open device ───────────────────────────────────────────────────────
     print("[demo_ttnn] Opening device...")
-    mesh_device = ttnn.open_device(device_id=0)
+    mesh_device = ttnn.open_device(device_id=0, l1_small_size=32768)
 
     try:
         # ── Load model ────────────────────────────────────────────────────

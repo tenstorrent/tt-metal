@@ -20,6 +20,7 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
 import ttnn
 
@@ -76,8 +77,8 @@ class LayerWeights:
 
 @dataclass
 class LMWeights:
-    tok_embeddings: ttnn.Tensor  # [vocab, hidden] — on host for embed lookup, then to device
-    tok_embeddings_torch: torch.Tensor  # host copy for embedding lookup
+    tok_embeddings: ttnn.Tensor  # [1, 1, hidden, vocab] TILE — kept for compatibility
+    tok_embeddings_embed: ttnn.Tensor  # [vocab, hidden] ROW_MAJOR — for ttnn.embedding
     norm_w: ttnn.Tensor  # [1,1,1,hidden]
     lm_head_w: ttnn.Tensor  # [hidden, vocab] transposed for linear
     layers: List[LayerWeights]
@@ -125,6 +126,14 @@ def preprocess_lm_weights(
     """
     tok_emb_torch = state_dict["tok_embeddings.weight"].to(torch.bfloat16)  # [vocab, hidden]
     tok_emb_tt = _tile(tok_emb_torch, device)
+    # ROW_MAJOR [vocab, hidden] for ttnn.embedding lookup
+    tok_emb_embed = ttnn.as_tensor(
+        tok_emb_torch,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
     norm_tt = _norm_weight(state_dict["norm.weight"], device)
 
@@ -173,7 +182,7 @@ def preprocess_lm_weights(
 
     return LMWeights(
         tok_embeddings=tok_emb_tt,
-        tok_embeddings_torch=tok_emb_torch,
+        tok_embeddings_embed=tok_emb_embed,
         norm_w=norm_tt,
         lm_head_w=lm_head_tt,
         layers=layers,
@@ -186,20 +195,14 @@ def preprocess_lm_weights(
 # ──────────────────────────────────────────────────────────────
 
 
-def _build_rope_cache(
-    seq_len: int,
-    head_dim: int,
-    rope_theta: float = 1_000_000.0,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Build cos/sin cache for RoPE on host."""
+def _build_rope_cache(seq_len: int, head_dim: int, rope_theta: float = 1_000_000.0):
+    """Build cos/sin RoPE tables using numpy. Returns numpy arrays [S, head_dim]."""
     half = head_dim // 2
-    inv_freq = 1.0 / (rope_theta ** (torch.arange(0, half, dtype=torch.float32) * 2 / head_dim))
-    positions = torch.arange(seq_len, dtype=torch.float32)
-    freqs = torch.outer(positions, inv_freq)  # [S, head_dim//2]
-    emb = torch.cat([freqs, freqs], dim=-1)  # [S, head_dim]
-    cos = emb.cos().to(torch.bfloat16)
-    sin = emb.sin().to(torch.bfloat16)
-    return cos, sin  # [S, head_dim]
+    inv_freq = (1.0 / (rope_theta ** (np.arange(0, half, dtype=np.float32) * 2.0 / head_dim))).astype(np.float32)
+    positions = np.arange(seq_len, dtype=np.float32)
+    freqs = np.outer(positions, inv_freq)  # [S, half]
+    emb = np.concatenate([freqs, freqs], axis=-1).astype(np.float32)  # [S, head_dim]
+    return np.cos(emb).astype(np.float32), np.sin(emb).astype(np.float32)
 
 
 def _build_rope_cache_tt(
@@ -209,9 +212,9 @@ def _build_rope_cache_tt(
     rope_theta: float = 1_000_000.0,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
     """Build RoPE cos/sin on device. Returns [1, 1, seq_len, head_dim] TILE."""
-    cos, sin = _build_rope_cache(seq_len, head_dim, rope_theta)
-    cos_4d = cos.unsqueeze(0).unsqueeze(0)  # [1, 1, S, head_dim]
-    sin_4d = sin.unsqueeze(0).unsqueeze(0)
+    cos, sin = _build_rope_cache(seq_len, head_dim, rope_theta)  # numpy [S, hd]
+    cos_4d = cos[np.newaxis, np.newaxis, :, :]  # [1, 1, S, head_dim]
+    sin_4d = sin[np.newaxis, np.newaxis, :, :]
     cos_tt = ttnn.as_tensor(
         cos_4d, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
@@ -282,20 +285,30 @@ class TTVibeVoiceLM:
         self.w = weights
         self.device = device
         self.cfg = weights.config
+        # Precompute full RoPE tables on device once (sliced per call via ttnn.slice)
+        max_len = self.cfg.max_position_embeddings
+        self._cos_tt, self._sin_tt = _build_rope_cache_tt(max_len, self.cfg.head_dim, device, self.cfg.rope_theta)
+        # Causal mask cache keyed by (S, S_total) — populated lazily, lives on device
+        self._mask_cache: Dict[Tuple[int, int], ttnn.Tensor] = {}
 
-    def _embed(self, input_ids: torch.Tensor) -> ttnn.Tensor:
-        """Lookup embeddings on host → move to device. Returns [B, S, hidden]."""
-        # input_ids: [B, S] long on CPU
-        emb = self.w.tok_embeddings_torch[input_ids.view(-1)]  # [B*S, hidden]
-        B, S = input_ids.shape
-        emb = emb.view(B, S, -1)  # [B, S, hidden]
-        return ttnn.as_tensor(
-            emb.unsqueeze(1),  # [B, 1, S, hidden] for ttnn
+    def _embed(self, input_ids) -> ttnn.Tensor:
+        """Device embedding lookup via ttnn.embedding. Returns [B, 1, S, hidden] TILE.
+
+        input_ids: torch.Tensor, numpy array, or any array-like [B, S] of token ids.
+        """
+        ids_np = np.asarray(input_ids, dtype=np.int32)
+        B, S = ids_np.shape
+        ids_tt = ttnn.as_tensor(
+            ids_np,
             device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # ttnn.embedding: [B, S] uint32 + [vocab, hidden] ROW_MAJOR → [B, S, hidden]
+        emb = ttnn.embedding(ids_tt, self.w.tok_embeddings_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Reshape [B, S, hidden] → [B, 1, S, hidden] and convert to TILE
+        return _reshape_tt(emb, [B, 1, S, self.cfg.hidden_size])
 
     def _attention_layer(
         self,
@@ -395,17 +408,19 @@ class TTVibeVoiceLM:
         scores = ttnn.matmul(q_f32, k_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         scores = ttnn.mul(scores, scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Causal mask for prefill (S > 1)
+        # Causal mask for prefill (S > 1) — cached by (S, S_total), populated lazily
         if S > 1:
-            mask = torch.triu(torch.full((S, S_total), float("-inf"), dtype=torch.float32), diagonal=S_total - S + 1)
-            mask_tt = ttnn.as_tensor(
-                mask.unsqueeze(0).unsqueeze(0),  # [1, 1, S, S_total]
-                device=self.device,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            scores = ttnn.add(scores, mask_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            cache_key = (S, S_total)
+            if cache_key not in self._mask_cache:
+                mask = np.triu(np.full((S, S_total), float("-inf"), dtype=np.float32), k=S_total - S + 1)
+                self._mask_cache[cache_key] = ttnn.as_tensor(
+                    mask[np.newaxis, np.newaxis, :, :],
+                    device=self.device,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            scores = ttnn.add(scores, self._mask_cache[cache_key], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         attn = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.matmul(attn, v_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -485,8 +500,8 @@ class TTVibeVoiceLM:
         S = inputs_embeds.shape[2]
         cfg = self.cfg
 
-        # Build RoPE cache on device
-        cos_tt, sin_tt = _build_rope_cache_tt(start_pos + S, cfg.head_dim, self.device, cfg.rope_theta)
+        # Use precomputed full RoPE tables; _attention_layer slices [start_pos:start_pos+S]
+        cos_tt, sin_tt = self._cos_tt, self._sin_tt
 
         x = inputs_embeds
         for layer_idx in range(cfg.num_hidden_layers):
