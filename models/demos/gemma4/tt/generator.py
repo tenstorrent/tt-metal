@@ -3,6 +3,8 @@
 
 from pathlib import Path
 
+import torch
+from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
@@ -72,6 +74,32 @@ class Gemma4Generator(Generator):
             # Warmup traces are only for compile coverage and must not be reused
             # for a different prompt at runtime.
             self._clear_prefill_traces()
+
+    def prefill_forward_text(
+        self,
+        tokens: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        enable_trace=True,
+        **kwargs,
+    ):
+        batch_size = tokens.shape[0]
+        if batch_size > 1 and enable_trace:
+            # Batched prefill uses prompt-specific per-layer inputs; trace capture
+            # cannot host-read/write those buffers (TT_FATAL during capture).
+            logger.info("Disabling prefill trace for batched prefill (batch_size={})", batch_size)
+            enable_trace = False
+        return super().prefill_forward_text(
+            tokens=tokens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            empty_slots=empty_slots,
+            enable_trace=enable_trace,
+            **kwargs,
+        )
 
     @classmethod
     def from_pretrained(
