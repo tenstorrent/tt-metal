@@ -77,6 +77,7 @@ void kernel_main() {
         noc_async_read_barrier();
 
         if (is_vflip || is_hflip) {
+            uint8_t* tp = reinterpret_cast<uint8_t*>(l1_addr);
             auto swap_face_pair = [&](uint32_t fa, uint32_t fb) {
                 swap_bytes(tp + face_data_off(fa), tp + face_data_off(fb), FACE_HW_BYTES);
                 if constexpr (is_bfp8)
