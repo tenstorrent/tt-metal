@@ -6,6 +6,7 @@
 // Do not include directly - include reduce_helpers_compute.hpp instead
 
 #include "api/compute/matmul.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
@@ -108,7 +109,26 @@ ALWI void reload_accumulator_if_needed(
             constexpr uint32_t onetile = 1;
             accum_cb.wait_front(onetile);
             const uint32_t prev_srca_cb = use_matmul ? scaler_cb_id : input_cb_id;
-            copy_tile_to_dst_init_short_with_dt(prev_srca_cb, accumulate.config.cb_accumulator);
+            // For MAX + REDUCE_ROW, the LLK runs reduce_row_perform_transpose after GMPOOL to
+            // convert the natural DST-row-0 result into DST-col-0 output layout. A vanilla
+            // copy_tile reload would therefore land the running max at DST col 0, but the
+            // next GMPOOL chain accumulates into DST row 0 — so the running max would be
+            // silently dropped. We undo the LLK's transpose on reload by setting the
+            // unpacker into within-face-16x16-transpose mode, which puts col 0 of each face
+            // back at row 0 of that face (the layout GMPOOL expects as its accumulator).
+            //
+            // CRITICAL: transpose_of_faces must stay 0 (per-face transpose only). A full
+            // 32x32 transpose would also swap face positions BL<->TR, moving the running
+            // max for global rows 16-31 (stored in BL col 0) into TR — where the LLK's
+            // second-phase BL/BR GMPOOL chain never reads it.
+            constexpr bool reload_within_face_transpose =
+                (reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW);
+
+            reconfig_data_format_srca(prev_srca_cb, accumulate.config.cb_accumulator);
+            copy_tile_to_dst_init_short(
+                accumulate.config.cb_accumulator,
+                /*transpose_of_faces=*/0,
+                /*transpose_within_16x16_face=*/reload_within_face_transpose ? 1u : 0u);
             copy_tile(accumulate.config.cb_accumulator, 0, accumulate.config.dst_index);
             accum_cb.pop_front(onetile);
 
@@ -178,10 +198,10 @@ ALWI void reduce(
         is_post_reduce_op_v<PostReduceOp>,
         "PostReduceOp must be callable with a uint32_t argument");
     static_assert(
-        !is_accumulate_v<AccumulateT> || reduce_type != PoolType::MAX || reduce_dim == ReduceDim::REDUCE_COL,
-        "Accumulate::at with PoolType::MAX only works for REDUCE_COL. For REDUCE_ROW / REDUCE_SCALAR "
-        "the pack reduce edge mask drops the face-row-0 spread that GMPOOL needs as its running "
-        "accumulator on the reload pass, so the previous MAX is lost.");
+        !is_accumulate_v<AccumulateT> || reduce_type != PoolType::MAX || reduce_dim != ReduceDim::REDUCE_SCALAR,
+        "Accumulate::at with PoolType::MAX is not supported for REDUCE_SCALAR. The LLK transposes the "
+        "scalar position post-GMPOOL via MOVD2B/TRNSPSRCB, which does not have a symmetric reload "
+        "remedy like REDUCE_ROW does (DST-only transpose via transpose_wh_dest).");
 
     // =============================================================================
     // Runtime Assertions (parameter validation)
