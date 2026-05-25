@@ -1833,7 +1833,13 @@ void RiscFirmwareInitializer::assert_inactive_ethernet_cores(tt::ChipId device_i
     for (const auto& logical_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-        cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+        // FIX PQ: Use BRISC (bit 11 only) instead of ALL (bits 11-14+18) for ETH tiles.
+        // ETH tiles have no TRISC or NCRISC; writing those bits (12-14, 18) to 0xFFB121B0
+        // on an ETH tile has undefined/harmful effects — observed to corrupt the NOC relay
+        // such that the next relay write to Tensix L1 times out at 5013ms even after
+        // l1_barrier() confirms all prior writes complete.
+        // RiscType::BRISC maps to bit 11 = ERISC soft reset on ETH tiles.
+        cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
     }
 }
 
