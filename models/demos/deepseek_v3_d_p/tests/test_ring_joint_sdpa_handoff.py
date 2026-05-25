@@ -1227,5 +1227,321 @@ def test_persistent_buffer_reuse_across_chunks(mesh_device, device_params):
 
 
 # ===========================================================================
-# Test 4 — TODO: ISL smaller than chunk_size (needs design input)
+# Test 4: KV-pad-aware rotation for ISL smaller than chunk_size (torch showcase)
 # ===========================================================================
+#
+# Production scenario
+# -------------------
+# The op is always handed an input tensor of fixed shape `chunk_size` in
+# the ISL dim (e.g. 5120 in production). Only the first `new_actual_isl`
+# tokens are valid; the rest is padding that the next iteration will
+# overwrite. The prior cache holds `kv_actual_isl` valid tokens (always
+# rounded down to TILE_SIZE), with trailing padding inside the last device's
+# OLD slab if `kv_actual_isl` doesn't fill the per-device slab cleanly.
+#
+# Across iterations the cache state can be: each device's slab is uniform
+# in size, valid tokens are dense up to position kv_actual_isl in global
+# order, with the trailing padding always on the "pad chip" (the chip
+# whose OLD slab has the unfilled cells).
+#
+# The server, between iterations, REORDERS new tokens so that the pad
+# chip gets the first `pad_size_in_chip` tokens (to overwrite its OLD pad
+# cells), then the remaining new tokens are distributed across devices'
+# NEW slabs (devs 0..pad_chip-1 each get up to chunk_size_local NEW
+# tokens, then pad_chip gets the leftover into its NEW slab). When
+# new_actual_isl < chunk_size, some NEW slabs end up with their own
+# trailing padding too.
+#
+# What the op needs (per Q3+Q4)
+# -----------------------------
+# Today the op derives the Q-to-global-position offset from
+# `q_start_idx = (N_local_kv - N_local_q) * ring_size`, which assumes a
+# clean balanced-growing layout. With this rotation the layout is no
+# longer clean — Q rows on a single chip can correspond to two disjoint
+# global-position regions (the pad-fill bump + the chip's natural slab
+# slot).
+#
+# The op needs to compute, from `(kv_actual_isl, new_actual_isl, sp_factor,
+# chunk_size_local)`:
+#
+#     pad_chip           = (kv_actual_isl // chunk_size_local) % sp_factor   # first chip with pad
+#     pad_offset_in_chip = kv_actual_isl % chunk_size_local
+#     total_pad_in_old   = sp_factor * chunk_size_local - kv_actual_isl      # may span multiple chips
+#
+# Pad fill (phase 1) walks OLD-slab pad cells in *global-position order* —
+# pad can span multiple chips when `kv_actual_isl + pad` straddles
+# chunk_size_local boundaries (e.g., kv_actual_isl=128 on sp=4 with
+# chunk_size_local=64 leaves devs 2 and 3 OLD slabs entirely as pad).
+# Phase 2 (NEW-slab fills) only starts after all OLD pad is consumed.
+#
+# From these the op derives, for each Q row on each chip, the row's global
+# position; for each K col on each chip, the col's global position; then
+# apply a per-(Q row, K col) mask:
+#
+#     mask = -inf if (Q row is padding) OR (K col is padding) OR (K_pos > Q_pos)
+#     mask = 0    otherwise
+#
+# Causality applies on the global positions, not the local row indices —
+# the kernel's existing kv_global_tile_for_local() math doesn't capture
+# the rotation.
+#
+# What this test does
+# -------------------
+# Pure torch, no device. Builds the rotated per-device layout for K, V, Q
+# explicitly, builds the explicit attention mask using global positions,
+# runs torch SDPA with the mask, then verifies the result against a
+# natural-order causal reference (no rotation, full sequence).
+#
+# Owners would implement this on-device: derive the global positions from
+# kv_actual_isl + new_actual_isl + sp_factor + chunk_size_local on the
+# fly, and either pass an explicit mask CB or fold the masking math
+# into the existing chunked-prefill mask path.
+#
+# Test scenario (small)
+# ---------------------
+#   sp_factor          = 4
+#   chunk_size         = 256       (so chunk_size_local = 64)
+#   kv_actual_isl      = 224       (pad on dev 3: 32 valid + 32 pad in its OLD slab)
+#   new_actual_isl     = 64        (much smaller than chunk_size — the "small ISL" case)
+#
+#   Derived:
+#     pad_chip            = 3
+#     pad_offset_in_chip  = 32     (where pad starts on pad_chip's OLD slab)
+#     pad_size_in_chip    = 32     (how many pad cells)
+#
+#   Server reorder of new tokens [0..64]:
+#     tokens [0..32]  -> dev 3 OLD slab cells [32..64]  (global pos 224..256)
+#     tokens [32..64] -> dev 0 NEW slab cells [0..32]   (global pos 256..288)
+#     all other NEW-slab cells are padding.
+#
+# ===========================================================================
+
+
+def _kv_pad_rotation_layout(kv_actual_isl, new_actual_isl, sp_factor, chunk_size_local):
+    """
+    Compute the per-device K/Q layout after the server's kv-pad-aware rotation.
+
+    OLD-slab pad can span multiple chips when kv_actual_isl + pad straddles
+    chunk_size_local boundaries (e.g., kv_actual_isl=128 with sp=4,
+    chunk_size_local=64 leaves devs 2 and 3 OLD slabs entirely as pad).
+    Phase 1 fills these pad cells in global-position order across all
+    affected chips before phase 2 moves to NEW slabs.
+
+    Returns:
+      pad_chip            (int): first chip whose OLD slab contains pad
+        (= (kv_actual_isl // chunk_size_local) % sp_factor).
+      pad_offset_in_chip  (int): position in pad_chip's OLD slab where
+        pad starts (= kv_actual_isl % chunk_size_local).
+      total_pad_in_old    (int): total number of pad cells across all OLD
+        slabs (= sp_factor * chunk_size_local - kv_actual_isl).
+      new_token_destinations (list of (token_idx, chip, slab, cell)):
+        For each new token (index in natural order, 0..new_actual_isl),
+        where it ends up. `slab` is "OLD" or "NEW", `cell` is the position
+        in that slab (0..chunk_size_local).
+    """
+    pad_chip = (kv_actual_isl // chunk_size_local) % sp_factor
+    pad_offset_in_chip = kv_actual_isl % chunk_size_local
+    total_pad_in_old = max(0, sp_factor * chunk_size_local - kv_actual_isl)
+
+    new_token_destinations = []
+    # Phase 1: fill OLD-slab pad cells in global-position order, which can
+    # span multiple chips.
+    fill_count = min(total_pad_in_old, new_actual_isl)
+    for i in range(fill_count):
+        pad_global_pos = kv_actual_isl + i
+        chip = (pad_global_pos // chunk_size_local) % sp_factor
+        cell = pad_global_pos % chunk_size_local
+        new_token_destinations.append((i, chip, "OLD", cell))
+
+    # Phase 2: remaining tokens go into NEW slabs, starting from chip 0,
+    # filling chunk_size_local cells per chip before moving on.
+    remaining = new_actual_isl - fill_count
+    token_idx = fill_count
+    chip = 0
+    cell = 0
+    while remaining > 0:
+        new_token_destinations.append((token_idx, chip, "NEW", cell))
+        token_idx += 1
+        remaining -= 1
+        cell += 1
+        if cell == chunk_size_local:
+            cell = 0
+            chip += 1  # next chip's NEW slab (chip can equal pad_chip — its NEW slab is a normal slab)
+
+    return pad_chip, pad_offset_in_chip, total_pad_in_old, new_token_destinations
+
+
+@pytest.mark.parametrize(
+    "kv_actual_isl, new_actual_isl, expected_pad_chip, expected_pad_offset, expected_total_pad",
+    [
+        # Single-device pad: pad on dev 3 only (32 cells).
+        (224, 64, 3, 32, 32),
+        # Multi-device pad: devs 2 and 3 OLD slabs entirely pad; new fills both fully.
+        (128, 128, 2, 0, 128),
+        # Multi-device pad, partial fill: fills dev 2's pad fully, dev 3's pad partially.
+        (128, 96, 2, 0, 128),
+        # Cold start: every OLD slab is pad; new fills first two devices.
+        (0, 128, 0, 0, 256),
+        # Clean boundary: kv ends on a chunk boundary, no OLD pad anywhere.
+        # All new tokens go to NEW slabs starting from dev 0.
+        (256, 64, 0, 0, 0),
+    ],
+    ids=["single_pad_dev3", "multi_pad_2_full", "multi_pad_2_partial", "cold_start", "no_old_pad"],
+)
+def test_kv_pad_aware_rotation_torch_showcase(
+    kv_actual_isl, new_actual_isl, expected_pad_chip, expected_pad_offset, expected_total_pad
+):
+    """See section header above for the full motivation and math."""
+    # ----- Scenario parameters -----
+    sp_factor = 4
+    chunk_size = 256
+    chunk_size_local = chunk_size // sp_factor  # 64
+    nhq = 4  # torch only — pick anything
+
+    scale = QK_HEAD_DIM**-0.5
+
+    # ----- Layout math -----
+    pad_chip, pad_offset_in_chip, total_pad_in_old, new_token_destinations = _kv_pad_rotation_layout(
+        kv_actual_isl=kv_actual_isl,
+        new_actual_isl=new_actual_isl,
+        sp_factor=sp_factor,
+        chunk_size_local=chunk_size_local,
+    )
+    assert pad_chip == expected_pad_chip
+    assert pad_offset_in_chip == expected_pad_offset
+    assert total_pad_in_old == expected_total_pad
+    assert len(new_token_destinations) == new_actual_isl
+
+    # ----- Generate inputs -----
+    torch.manual_seed(0)
+    # Prior cache (kv_actual_isl tokens in natural order across global positions 0..kv_actual_isl).
+    old_cache_k = torch.randn(1, 1, kv_actual_isl, KVPE_DIM, dtype=torch.bfloat16)
+    old_cache_v = torch.randn(1, nhq, kv_actual_isl, V_HEAD_DIM, dtype=torch.bfloat16)
+    # This iteration's new tokens in NATURAL order (positions kv_actual_isl..kv_actual_isl+new_actual_isl).
+    new_tokens_q = torch.randn(1, nhq, new_actual_isl, KVPE_DIM, dtype=torch.bfloat16)
+    new_tokens_k = torch.randn(1, 1, new_actual_isl, KVPE_DIM, dtype=torch.bfloat16)
+    new_tokens_v = torch.randn(1, nhq, new_actual_isl, V_HEAD_DIM, dtype=torch.bfloat16)
+
+    # ----- Build per-device K/V cache (OLD slab + NEW slab) after the iteration's writes -----
+    # Each device's cache slab is now 2 * chunk_size_local (OLD + NEW).
+    # Per-cell metadata: (is_valid, global_pos, source: "old_cache" or "new_tokens", source_idx).
+    cache_seq_per_dev = 2 * chunk_size_local  # 128
+    k_per_dev = torch.zeros(sp_factor, 1, cache_seq_per_dev, KVPE_DIM, dtype=torch.bfloat16)
+    v_per_dev = torch.zeros(sp_factor, nhq, cache_seq_per_dev, V_HEAD_DIM, dtype=torch.bfloat16)
+    k_global_pos_per_dev = [[None] * cache_seq_per_dev for _ in range(sp_factor)]  # None = padding
+
+    # OLD slab content from prior cache. Each chip's OLD slab holds positions
+    # [chip * chunk_size_local .. (chip+1) * chunk_size_local) of the prior cache;
+    # cells past kv_actual_isl are padding (will be overwritten by rotation).
+    for chip in range(sp_factor):
+        chip_old_start = chip * chunk_size_local
+        chip_old_end = min(chip_old_start + chunk_size_local, kv_actual_isl)
+        n_valid_in_chip = max(0, chip_old_end - chip_old_start)
+        if n_valid_in_chip > 0:
+            k_per_dev[chip, :, :n_valid_in_chip, :] = old_cache_k[0, :, chip_old_start:chip_old_end, :]
+            v_per_dev[chip, :, :n_valid_in_chip, :] = old_cache_v[0, :, chip_old_start:chip_old_end, :]
+            for r in range(n_valid_in_chip):
+                k_global_pos_per_dev[chip][r] = chip_old_start + r
+
+    # Apply the server's rotation: new tokens go into the OLD pad slot first, then NEW slabs.
+    for token_idx, chip, slab, cell in new_token_destinations:
+        global_pos = kv_actual_isl + token_idx
+        cache_row = cell if slab == "OLD" else (chunk_size_local + cell)
+        k_per_dev[chip, :, cache_row, :] = new_tokens_k[0, :, token_idx, :]
+        v_per_dev[chip, :, cache_row, :] = new_tokens_v[0, :, token_idx, :]
+        k_global_pos_per_dev[chip][cache_row] = global_pos
+
+    # ----- Build per-device Q (just this iter's new tokens, padded) -----
+    q_per_dev = torch.zeros(sp_factor, nhq, chunk_size_local, KVPE_DIM, dtype=torch.bfloat16)
+    q_global_pos_per_dev = [[None] * chunk_size_local for _ in range(sp_factor)]
+    # Per-device Q layout follows the same distribution as the NEW writes (one Q row per new token).
+    # Q's chunk_size_local slab per device gets the new tokens that ALSO populate THIS chip's
+    # NEW K/V slab cells (one-to-one mapping by cell index), PLUS the pad-fill tokens get
+    # placed on pad_chip's Q slab too (they're new tokens whose Q rows must be computed).
+    #
+    # Simplest model: Q-on-chip-c row r is THE new token whose K-on-chip-c lands at cell r
+    # of EITHER the pad-fill slot (mapping cell in OLD slab [pad_offset..chunk_size_local)
+    # back to Q row [0..pad_size_in_chip)) OR the NEW slab (cell in NEW slab maps directly to
+    # Q row of the same cell index). pad_chip's Q ends up with both pad-fill tokens (rows
+    # 0..pad_size_in_chip) and any NEW-slab tokens (rows pad_size_in_chip..) — Q row indices
+    # don't directly correspond to "OLD vs NEW slab", they just enumerate this chip's
+    # contribution to the new iteration.
+    #
+    # The mapping we use: for each new_token_destination, the Q row on `chip` is the
+    # next-available row on that chip's Q slab. We track per-chip Q fill cursor.
+    q_fill_cursor = [0] * sp_factor
+    for token_idx, chip, slab, cell in new_token_destinations:
+        global_pos = kv_actual_isl + token_idx
+        q_row = q_fill_cursor[chip]
+        q_per_dev[chip, :, q_row, :] = new_tokens_q[0, :, token_idx, :]
+        q_global_pos_per_dev[chip][q_row] = global_pos
+        q_fill_cursor[chip] += 1
+
+    # ----- Concatenate per-device tensors into one flat sequence for torch SDPA -----
+    # Combined K shape: [1, 1, sp_factor * cache_seq_per_dev, KVPE_DIM]
+    combined_K = k_per_dev.permute(1, 0, 2, 3).reshape(1, 1, sp_factor * cache_seq_per_dev, KVPE_DIM)
+    combined_V = v_per_dev.permute(1, 0, 2, 3).reshape(1, nhq, sp_factor * cache_seq_per_dev, V_HEAD_DIM)
+    combined_Q = q_per_dev.permute(1, 0, 2, 3).reshape(1, nhq, sp_factor * chunk_size_local, KVPE_DIM)
+
+    # Flatten per-device global position maps to match the combined layout.
+    combined_K_global_pos = []
+    for chip in range(sp_factor):
+        combined_K_global_pos.extend(k_global_pos_per_dev[chip])
+    combined_Q_global_pos = []
+    for chip in range(sp_factor):
+        combined_Q_global_pos.extend(q_global_pos_per_dev[chip])
+
+    # ----- Build the explicit attention mask using global positions -----
+    sq_total = len(combined_Q_global_pos)
+    sk_total = len(combined_K_global_pos)
+    mask = torch.zeros(sq_total, sk_total, dtype=torch.float32)
+    for i, q_pos in enumerate(combined_Q_global_pos):
+        for j, k_pos in enumerate(combined_K_global_pos):
+            if q_pos is None or k_pos is None or k_pos > q_pos:
+                mask[i, j] = float("-inf")
+
+    # ----- Run torch SDPA with the explicit mask -----
+    # K head dim differs from Q in MLA flat sense, but the K we built here is the absorbed
+    # form (head_dim=KVPE_DIM=576), matching Q. Broadcast K's single head to nhq.
+    K_b = combined_K.expand(-1, nhq, -1, -1)
+    attn_scores = (combined_Q.float() @ K_b.transpose(-2, -1).float()) * scale
+    attn_scores = attn_scores + mask  # mask is broadcast across batch + heads
+    attn = torch.softmax(attn_scores, dim=-1)
+    rotated_out = (attn @ combined_V.float()).to(torch.bfloat16)
+    # rotated_out shape: [1, nhq, sq_total, V_HEAD_DIM]
+
+    # Extract the valid Q rows in natural global-position order.
+    # For each new token index t (global pos kv_actual_isl+t), find its row in combined_Q.
+    valid_rows = [None] * new_actual_isl
+    for i, q_pos in enumerate(combined_Q_global_pos):
+        if q_pos is not None:
+            t = q_pos - kv_actual_isl
+            assert 0 <= t < new_actual_isl
+            valid_rows[t] = i
+    assert all(r is not None for r in valid_rows), "missing some new tokens in rotated layout"
+    rotated_out_natural_order = rotated_out[:, :, valid_rows, :]
+
+    # ----- Natural-order reference -----
+    natural_K = torch.cat([old_cache_k, new_tokens_k], dim=2)  # [1, 1, kv+new, KVPE_DIM]
+    natural_V = torch.cat([old_cache_v, new_tokens_v], dim=2)  # [1, nhq, kv+new, V_HEAD_DIM]
+    natural_K_b = natural_K.expand(-1, nhq, -1, -1)
+    sq = new_actual_isl
+    sk = kv_actual_isl + new_actual_isl
+    ref_scores = (new_tokens_q.float() @ natural_K_b.transpose(-2, -1).float()) * scale
+    # Causal mask: Q row r (global pos kv_actual_isl+r) attends to K cols [0, kv_actual_isl+r] (inclusive).
+    q_pos_vec = torch.arange(sq) + kv_actual_isl
+    k_pos_vec = torch.arange(sk)
+    ref_mask = (k_pos_vec.unsqueeze(0) > q_pos_vec.unsqueeze(1)).float() * float("-inf")
+    ref_mask = torch.nan_to_num(ref_mask, nan=0.0)  # turn 0*-inf into 0
+    ref_scores = ref_scores + ref_mask
+    ref_attn = torch.softmax(ref_scores, dim=-1)
+    ref_out = (ref_attn @ natural_V.float()).to(torch.bfloat16)
+    # ref_out shape: [1, nhq, new_actual_isl, V_HEAD_DIM]
+
+    # ----- Compare -----
+    torch.testing.assert_close(rotated_out_natural_order, ref_out, rtol=1e-2, atol=1e-2)
+    logger.success(
+        f"KV-pad-aware rotation showcase passed: rotated output matches natural-order "
+        f"causal reference for new_actual_isl={new_actual_isl}, kv_actual_isl={kv_actual_isl}, "
+        f"pad_chip={pad_chip}, total_pad_in_old={total_pad_in_old}."
+    )
