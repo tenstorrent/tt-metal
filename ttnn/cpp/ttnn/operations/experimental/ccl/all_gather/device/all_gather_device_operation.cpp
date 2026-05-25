@@ -35,6 +35,8 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.dim >= -rank && args.dim < rank, "Invalid gather dim {} for {}D input tensor", args.dim, rank);
     TT_FATAL(args.ring_size > 1, "all_gather collective will only work for num_devices > 1, got {}", args.ring_size);
 
+    // TODO if mesh_shape is 2D but !FABRIC_2D, then must specify cluster_axis.
+
     // Constraints on persistent output tensor
     if (tensor_args.persistent_output_tensor.has_value()) {
         const auto& output_tensor = tensor_args.persistent_output_tensor.value();
