@@ -127,3 +127,73 @@ chains:
     query: |
       SELECT COUNT(*) FROM bindings
     expect_min: 100
+
+  # ─── Regression: intra-Python edges ──────────────────────────────────
+  # An earlier version of py_index emitted ZERO intra-Python edges; every
+  # bare-name call like `cluster_distance(x)` was dropped as "unresolved".
+  # Diagnosed by the visualizer agent. These chains lock the fix.
+
+  - name: "cluster_distance — same-module bare-name call resolves"
+    description: >
+      `cluster_distance` (moe_compute_utils.py:94) is called bare-name on
+      line 178 of the same file. Must show up as a py→py edge.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes ns ON ns.id = e.src
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE nd.name = 'cluster_distance'
+        AND nd.language = 'python'
+        AND ns.language = 'python'
+        AND e.kind = 'calls'
+    expect_min: 1
+
+  - name: "intra-Python call edges are non-trivial"
+    description: >
+      A healthy Python AST extractor produces hundreds, not dozens, of
+      py→py call edges across the ttnn/ttnn/ tree.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes ns ON ns.id = e.src
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE ns.language = 'python' AND nd.language = 'python'
+        AND e.kind = 'calls'
+    expect_min: 200
+
+  - name: "unique Python functions emitting edges is non-trivial"
+    description: >
+      Regression guard: the bug had only 63 distinct Python sources with any
+      outgoing edge. We expect ~200+ after the fix.
+    query: |
+      SELECT COUNT(DISTINCT e.src) FROM edges e
+      JOIN nodes ns ON ns.id = e.src
+      WHERE ns.language = 'python'
+        AND (ns.kind = 'function' OR ns.kind = 'method')
+    expect_min: 150
+
+  # ─── Regression: cross-module Python resolution ──────────────────────
+
+  - name: "ttnn.attach_golden_function — re-export resolves through ttnn/__init__.py"
+    description: >
+      `attach_golden_function` is defined in `ttnn/ttnn/decorators.py` and
+      re-exported via `ttnn/__init__.py`. Many files call it as
+      `ttnn.attach_golden_function(...)`. The cross-module + re-export pass
+      should connect those calls to the real def.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE nd.qualified_name = 'ttnn.decorators.attach_golden_function'
+        AND e.kind IN ('calls', 'binds')
+    expect_min: 100
+
+  - name: "Cross-file Python edges are non-trivial"
+    description: >
+      Without the cross-module pass this was effectively 0 (only intra-module
+      same-file edges existed). The pass should produce hundreds of cross-file
+      Python edges.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes ns ON ns.id = e.src
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE ns.language = 'python' AND nd.language = 'python'
+        AND ns.file != nd.file
+    expect_min: 300

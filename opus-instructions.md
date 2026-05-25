@@ -463,7 +463,121 @@ Acceptance: §3 schema doc updated; per-kind counts visible in the manifest.
 
 I'd treat **A+B together as one work block** since they share shard/DB format decisions, then C, then D, then E if there's time.
 
-## 12. Progress Log
+## 12. Phase 3 Plan — Toward Static Completeness
+
+**Status**: approved 2026-05-25, not yet executed. The plan file persists at `/home/ubuntu/.claude/plans/recursive-popping-shell.md`. This section is the canonical copy for context-compression survival.
+
+### Context
+
+The current dep-graph (cpp_index + py_index + stitch_sqlite + query/validate) captures a useful subset of tt-metal's function dependencies — 13,221 C++ nodes, 924 py→py call edges, 522 cross-language edges, 16/16 validation chains green — but it's a **lower bound**, not the full graph.
+
+Two Explore-agent surveys against the codebase ground the gaps in real numbers:
+
+- **C++**: ~248 virtual methods (3 hierarchies — `IDevice`, `JitBuildSettings`, fabric handlers) currently resolved only to declared methods. ~3,091 template declarations, including 173 `*DeviceOperation` struct templates and 475 `bind_function<"name">` instantiations — none tracked as instantiations. 60+ `bind_*` helper functions whose bodies call `.def(...)` are silently missed because our `BINDING_HELPERS` set is hard-coded. 36 cursors per full run trip the libclang-18-vs-clang-20 kind mismatch (now soft-skipped via `_safe_kind`).
+- **Python**: 19% parameter annotation coverage, but Pyright's type *inference* propagates types through expressions; the previous "we need runtime tracing" recommendation was wrong. Wildcard imports: 1 (`from ttnn.distributed import *`). Function-wrapping decorators beyond `@register_python_operation`: 3, all in `decorators.py`. Inheritance shallow (1-2 levels). Dynamic dispatch surface (`getattr`, `eval`, `importlib`): ~5 sites total.
+
+**Constraint**: static analysis only. No code execution, no test runs, no hardware-bound tracing. All tooling must be free and self-hosted.
+
+**Decisions locked in this planning round**:
+1. Integrate **Pyright** (open-source, MIT, runs locally) as the Python type-resolution backend.
+2. **C++ virtual dispatch edges fan out to ALL overrides** (favor recall over precision; tag with `kind="virtual_dispatch"` so consumers can filter).
+3. **Auto-discover** C++ binding helpers; don't maintain a manual list.
+
+### Approach — three tiers, executed in order
+
+#### Tier 1 — low-effort wins (`py_index.py`, `_cpp_lib.py`)
+
+1. **A1. Bindings-kind patch.** Replace the `_safe_kind` swallow with a proper monkey-patch at module import: register clang-20 cursor kinds 145+ as opaque `UNKNOWN` rather than raising `ValueError`. Source: hand-port the missing enum entries from llvm-project's clang-20 cindex.py.
+2. **A2. Wildcard imports.** Recognize `from X import *`; if module X has been indexed and defines `__all__`, treat each name as imported. If `__all__` is missing, fall back to every public top-level name.
+3. **A3. Wrapping decorators.** Add `set_output_tensor_id_decorator`, `comparison_decorator`, `runtime_decorator` (`ttnn/ttnn/decorators.py:226,542,622`) to a `WRAPPING_DECORATORS` set. Treat the inner function as the bound symbol.
+4. **A4. MRO-aware `self.method`.** When resolving `self.X()`, walk `class_methods` for the immediate class first, then up the recorded inheritance chain (which Tier 2 B6 will populate).
+5. **A5. Static `getattr` for literal strings.** When the second arg of `getattr(obj, ...)` is an `ast.Constant` str, treat the call as `obj.<that_string>(...)` and run normal resolution.
+
+#### Tier 2 — structural enrichment
+
+**B1. C++ binding-helper auto-discovery** (`_cpp_lib.py`). Two-pass per TU:
+- Pass 1: every `FUNCTION_DECL` whose body contains a `CALL_EXPR` to `nb::module_::def` / `nb::class_<>::def` (or to another discovered helper) is itself a helper. Iterate to a fixed point.
+- Pass 2: re-scan `CALL_EXPR`s; for any callee in the discovered helper set, run the existing `_extract_binding` logic.
+- Removes the hard-coded `BINDING_HELPERS` set. Recall jumps to capture `bind_ttnn_cluster`, `bind_fabric_api`, `bind_disaggregation_api`, etc.
+
+**B2. C++ virtual dispatch + `inherits` edges** (`_cpp_lib.py:Indexer._walk`).
+- On `CLASS_DECL` / `STRUCT_DECL`, iterate `CXX_BASE_SPECIFIER` children → emit `inherits` edges.
+- On call emission, if `callee.is_virtual_method()`, call `cursor.get_overriden_cursors()` to enumerate overrides; emit one extra `calls` edge per override, with `via_dispatch="virtual"` recorded in the edge.
+
+**B3. C++ template instantiations.** During the AST walk, when a `FUNCTION_DECL` reports `get_specialization_kind()` ≠ undefined, emit an `instantiates` edge from the specialization → its primary template. Most useful for the 475 `bind_function<"name">` instantiations and the 173 `*DeviceOperation` templates.
+
+**B4. Pyright integration** (`dep-graph/scripts/py_type_resolver.py`, new file).
+- One-time setup: `npm install -g pyright` (or pip wrapper); document in `dep-graph/README.md`.
+- For each Python file in scope, shell out to `pyright --outputjson <file>` and parse the JSON.
+- Extract: for every expression at `(line, col)`, what type Pyright inferred for it.
+- In `py_index.py`'s post-pass, when resolving `receiver.method()`, look up `receiver`'s inferred type → look up the corresponding class node → emit an edge to that class's method.
+- Falls back gracefully when Pyright says `Unknown`.
+
+**B5. `imports` edges** (`py_index.py`). We already collect `Import` / `ImportFrom` per file. Emit them as edges from the importing module node → the imported module/function node. Cheap addition; lets `query.py` answer "who imports X."
+
+**B6. `inherits` edges (Python)** (`py_index.py:visit_ClassDef`). Walk `node.bases`, resolve each through `module_defs` / `module_defs_global` (with the same re-export propagation we already do for refs), emit `inherits` edges. Powers A4's MRO walk.
+
+#### Tier 3 — measurement (still no execution)
+
+**C1. Expand `expected_chains.yaml`.** Add 25-30 hand-verified chains covering eltwise/reduction/matmul/ccl/normalization/conv2d/data_movement/embedding/transformer/creation/`IDevice`. Each authored by running `query.py` against the existing DB, eyeballing correctness, and freezing the result.
+
+**C2. Tool-diff harness** (`dep-graph/scripts/tool_diff.py`, new file).
+- Run `pycg` (Python call graph generator, MIT, https://github.com/vitsalis/PyCG) over `ttnn/ttnn/`.
+- Convert its output to (caller, callee) pairs.
+- Diff against our `edges` table. Pairs pycg finds but we don't = recall misses to investigate; pairs we find but pycg doesn't = expected (we have more context via Pyright).
+- Print a recall percentage per scope (per-file, per-module).
+
+**C3. Coverage metrics** (`dep-graph/scripts/report.py`, new file). One-shot report from the SQLite DB:
+- Resolution rate: `resolved_edges / (resolved_edges + unresolved_refs)`.
+- Reverse-binding coverage: % of `bindings` table entries whose `cpp_node_id` is reached from at least one Python caller.
+- Python orphan rate: % of Python functions/classes with zero incoming edges (compared against pre-Tier-2 baseline).
+- Histogram of edge `kind` × `via_dispatch` to confirm B2/B3 are firing.
+
+### Sequencing
+
+Tier 1 first — all five items are independent ~half-day fixes, can land in one session, no schema changes. **B5 + B6 next** — they're small and B4/A4 depend on B6. Then **B1** — biggest single recall gain on the cross-language side. Then **B2** — recall gain on C++. Then **B4 (Pyright)** — biggest single recall gain on Python; depends on B6 being in place. Then **B3** — template instantiations are a "nice to have" for graph richness, least time-sensitive. Tier 3 (C1, C2, C3) runs at the end to lock the result and measure.
+
+### Critical files
+
+**Modified**:
+- `dep-graph/scripts/_cpp_lib.py` — A1, B1, B2, B3 land here. The `Indexer` class extends; existing `_walk` / `_record_function` / `_handle_call` / `_extract_binding` are extension points, not rewrites.
+- `dep-graph/scripts/py_index.py` — A2, A3, A4, A5, B5, B6; also the integration point where `py_type_resolver.py`'s output feeds the resolution post-pass.
+- `dep-graph/scripts/stitch_sqlite.py` — schema additions: new edge `kind` values (`virtual_dispatch`, `instantiates`, `inherits`, `imports`), new optional `via_dispatch` column. Migration is a recreate-from-scratch (DB is regenerable).
+- `dep-graph/scripts/query.py` — add subcommands `overrides SYMBOL`, `inherits SYMBOL`, `imports MODULE`, `instantiates SYMBOL`.
+- `dep-graph/scripts/validate.py` — no code change, just feed more chains.
+- `dep-graph/tests/expected_chains.yaml` — expand per C1.
+- `dep-graph/README.md` — update runbook with Pyright install step and new schema columns.
+- `opus-instructions.md` — log Tier 1/2/3 milestones as they land.
+
+**New**:
+- `dep-graph/scripts/py_type_resolver.py` — Pyright bridge (B4).
+- `dep-graph/scripts/tool_diff.py` — pycg comparison (C2).
+- `dep-graph/scripts/report.py` — coverage metrics (C3).
+
+### Existing utilities to reuse
+
+- `_cpp_lib.Indexer._walk`, `_record_function`, `_handle_call`, `_extract_binding` — all extension points.
+- `_cpp_lib._safe_kind` / `_iter_children` — keep as defence-in-depth even after A1.
+- `py_index.FileIndexer._resolve_local_refs`, `resolve_cross_module_refs` — extend in place.
+- `query.py:resolve_symbol`, the `argparse`-subcommand pattern.
+- The `validate.py` chain runner — no changes, just more chains.
+- The mtime-keyed shard cache: A1 / B1 / B2 / B3 don't change argv → shards stay valid. A re-merge is enough to pick up changes to `_cpp_lib.py` logic (shards regenerate only on `--force`; we'll need that).
+
+### Verification
+
+After each tier, the full loop is the same end-to-end pipeline (driver → merger → stitch → validate). Cpp re-parse is `--force`'d only when `_cpp_lib.py` logic changes (Tier 1 A1 + all of Tier 2 B-items). Py re-runs in seconds and doesn't need cache.
+
+Acceptance gates per tier:
+
+| Tier | Pass criteria |
+|---|---|
+| 1 | All 16 existing chains still green; +A2/A3/A4/A5 each add ≥1 new chain that passes. Total chain count ≥ 20. |
+| 2 | All Tier-1 chains still green; new chains: `IDevice::open_device` reaches ≥3 override classes (B2), `bind_function` has ≥400 `instantiates` edges (B3), at least one `bind_*` helper not in the original list now produces bindings (B1), `model_preprocessing.preprocess_linear_weight` resolves `weight.T.contiguous` via Pyright (B4). Cross-file py→py edges ≥1500. |
+| 3 | C1 chain count ≥ 40. C2 reports recall vs pycg ≥ 80% on ttnn/ttnn/. C3 report says resolution rate ≥ 60% (currently ~10%). |
+
+Each acceptance metric is a runnable SQL chain or a script output number — no human-in-the-loop required.
+
+## 13. Progress Log
 
 | Date | Note |
 |------|------|
@@ -477,3 +591,5 @@ I'd treat **A+B together as one work block** since they share shard/DB format de
 | 2026-05-25 | P2-C (decorator unwrap) landed: `py_index.py` detects `@ttnn.register_python_operation(name="ttnn.X")` decorators AND call-form `ttnn.register_python_operation(name="ttnn.X")(impl)` at module scope. Emits new `registrations` record. 17 registrations detected across `ttnn/ttnn/`: 7 decorator-form (Python impls including `from_torch`, `to_torch`, `as_tensor`, `dump_tensor`, `load_tensor`, `pearson_correlation_coefficient`, `Tensor.__getitem__`) and 10 call-form (C++ pass-throughs like `unsqueeze_to_4D`, `deallocate`, etc.). After stitch: `ttnn.from_torch` correctly resolves to its Python impl (51 callers), `ttnn.to_torch` (43 callers), all `via_decorator=@ttnn.register_python_operation`. |
 | 2026-05-25 | P2-D precursor: wrote `dep-graph/tests/expected_chains.yaml` with 11 chains and `dep-graph/scripts/validate.py`. Covers positive (cross-language slice, decorator unwrap, call-form pass-through, overload sets) and negative (Bug A regressions: no `nanobind::*` / `std::*` / `__builtin_*` in bindings). **11/11 chains pass.** Validation harness is now the gate before launching the full P2-A run. |
 | 2026-05-25 | **Full repo run complete.** 1,202 TUs parsed in ~25 min with 14 workers, 0 failures (bug fixes held across the whole surface). Merger: 7 min wall (single-process JSON-line read of 1454 shards — improvement opportunity, see below). Stitch: 5 s. Validate: 5 s, **11/11 chains pass.** Final `dep-graph/out/dep-graph.sqlite` is **350 MB**, contains 13,221 C++ nodes + 889 Python nodes, 78,841 intra-C++ edges, 522 cross-language edges, 615 nanobind bindings, 17 Python registrations. Wrote `dep-graph/README.md` as a self-contained runbook. |
+| 2026-05-25 | **Bug found in production via visualizer**: `py_index.py` was emitting ZERO intra-Python edges. All bare-name calls (e.g. `cluster_distance(x, y)`) were dropped as "unresolved" because the stitcher only resolved `ttnn.*` chains. Fix landed in `py_index.py`: per-file `module_defs` table for bare-name resolution and `class_methods` table for `self.X` resolution, run as a post-pass after the AST walk. **Result**: py→py call edges jumped 48 → 571 (12×); Python functions with outgoing edges 63 → 247. `cluster_distance` now correctly connected. Added 3 new regression chains (`expected_chains.yaml`). **14/14 chains pass.** |
+| 2026-05-25 | **Cross-module Python resolution added.** `py_index.py` now collects `Import` and `ImportFrom` AST statements (module-level only), resolves relative imports to absolute dotted paths, and builds a global `(module, name) → node_id` table after all files are indexed. A re-export propagation pass runs to a fixed point so `ttnn/__init__.py` doing `from .decorators import attach_golden_function` makes `ttnn.attach_golden_function(...)` resolve from any other file. **Result**: py→py calls 571 → **924** (~19× over the original bug); cross-file py edges 139 → **783**; `ttnn.attach_golden_function` callers 0 → **595**. Added 2 new regression chains. **16/16 chains pass.** Remaining unresolved refs are external (`torch.*`, builtins) or dynamic method calls on local variables; ~5,800 left, mostly out-of-scope by design. |
