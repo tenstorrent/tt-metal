@@ -1,14 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-
-"""Tracy-oriented performance harness for ``AceStepE2EModel`` (``ttnn_impl/e2e_model_tt.py``).
+"""Tracy E2E perf for ``AceStepE2EModel`` (trace on by default).
 
 Run from the repository root (example):
 
     TT_METAL_DEVICE_PROFILER=1 python -m tracy -p -r -v -m pytest \\
-        models/demos/ace_step_v1_5/perf/test_perf_e2e_model_tt_tracy.py::test_perf_ace_step_e2e_model_tt_tracy_profile \\
-        -v -s
+        models/demos/ace_step_v1_5/perf/test_perf_e2e_model_tt_tracy.py -v -s
 
 CSV / Tracy artifacts are written under ``generated/profiler/reports/<timestamp>/`` as documented in
 ``docs/source/tt-metalium/tools/tracy_profiler.rst``.
@@ -52,8 +50,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import Profiler
-from models.demos.ace_step_v1_5.run_prompt_to_wav import _DEFAULT_CKPT_DIR, _ensure_variant
-from models.demos.ace_step_v1_5.ttnn_impl.e2e_model_tt import AceStepE2EModel, E2EConfig
+from models.demos.ace_step_v1_5.scripts.run_prompt_to_wav import _DEFAULT_CKPT_DIR, _ensure_variant
+from models.demos.ace_step_v1_5.ttnn_impl.pipeline.e2e_model import AceStepE2EModel, E2EConfig
 
 
 def _is_ci() -> bool:

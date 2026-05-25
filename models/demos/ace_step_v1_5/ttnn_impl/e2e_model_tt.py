@@ -53,12 +53,7 @@ import numpy as np
 import torch
 
 import ttnn
-from models.demos.ace_step_v1_5.ace_step_perf_log import (
-    AceStepPerfRecorder,
-    ace_step_perf_log_steps_enabled,
-    ace_step_perf_logging_enabled,
-    make_denoise_progress_fn,
-)
+from models.demos.ace_step_v1_5.ace_step_perf_log import AceStepPerfRecorder, ace_step_perf_logging_enabled
 
 from .condition_encoder import TtAceStepInstrumentalConditionEncoder
 from .denoise_trace_full_step import (
@@ -1896,8 +1891,8 @@ class AceStepE2EModel:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=self.mem,
             )
-        chunk = int(os.environ.get("ACE_STEP_VAE_CHUNK_LATENTS", str(self.config.vae_chunk_latents)))
-        overlap = int(os.environ.get("ACE_STEP_VAE_OVERLAP_LATENTS", str(self.config.vae_overlap_latents)))
+        chunk = int(self.config.vae_chunk_latents)
+        overlap = int(self.config.vae_overlap_latents)
         use_vae_trace = self._trace_state is not None
         if use_vae_trace:
             self._tt_vae.release_trace()
@@ -2137,9 +2132,6 @@ class AceStepE2EModel:
             loop_kw["enc_mask"] = enc_mask_np
         else:
             loop_kw["enc_mask"] = None
-
-        if ace_step_perf_log_steps_enabled():
-            loop_kw["progress_fn"] = make_denoise_progress_fn(perf, num_steps=len(self.t_schedule))
 
         _ace_step_prof_signpost("ACE-Step E2E", "Start denoising loop")
         with perf.timed("dit_denoise_loop", device=self.device):

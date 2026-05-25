@@ -7,12 +7,10 @@
 Enable module-level timing with either:
 
 - ``ACE_STEP_DEMO_PERF_LOG=1`` (or ``ACE_STEP_PERF_LOG=1``), or
-- ``--perf-log`` on ``run_prompt_to_wav.py``.
+- multi-device mesh runs (on by default).
 
 On multi-device mesh (e.g. ``BH_QB``), perf logging is **on by default** unless
 ``ACE_STEP_DEMO_PERF_LOG=0``.
-
-Optional per-Euler-step lines: ``ACE_STEP_DEMO_PERF_LOG_STEPS=1``.
 
 Logs go to stdout (``[ace_step_v1_5][perf]``) and loguru at INFO.
 """
@@ -62,11 +60,6 @@ def ace_step_perf_logging_enabled(*, explicit: Optional[bool] = None) -> bool:
     if explicit is not None:
         return bool(explicit)
     env = os.environ.get("ACE_STEP_DEMO_PERF_LOG", os.environ.get("ACE_STEP_PERF_LOG", ""))
-    return env.lower() in ("1", "true", "yes")
-
-
-def ace_step_perf_log_steps_enabled() -> bool:
-    env = os.environ.get("ACE_STEP_DEMO_PERF_LOG_STEPS", "")
     return env.lower() in ("1", "true", "yes")
 
 
@@ -313,43 +306,10 @@ def make_denoise_progress_fn(
     *,
     num_steps: int,
 ) -> Optional[Any]:
-    """Build a ``progress_fn`` for :func:`run_ttnn_denoise_loop` when per-step logging is on."""
-    if not ace_step_perf_log_steps_enabled():
-        return None
-    step_times: List[float] = []
-    step_t0 = time.perf_counter()
-
-    def _progress(step_idx: int, _num_steps: int, t_curr: float, dt: float) -> None:
-        nonlocal step_t0
-        elapsed_ms = (time.perf_counter() - step_t0) * 1000.0
-        step_times.append(elapsed_ms)
-        line = (
-            f"[ace_step_v1_5][perf] denoise_step {step_idx + 1}/{num_steps} "
-            f"t={t_curr:.5f} dt={dt:.5f} wall={elapsed_ms:.2f} ms"
-        )
-        print(line, flush=True)
-        logger.info(
-            "ACE-Step denoise step {}/{} t={:.5f} dt={:.5f} {:.2f} ms",
-            step_idx + 1,
-            num_steps,
-            t_curr,
-            dt,
-            elapsed_ms,
-        )
-        step_t0 = time.perf_counter()
-
-    return _progress
+    """Reserved for optional per-step denoise logging (disabled)."""
+    del recorder, num_steps
+    return None
 
 
 def log_denoise_step_summary(step_times_ms: List[float]) -> None:
-    if not ace_step_perf_log_steps_enabled() or not step_times_ms:
-        return
-    total = sum(step_times_ms)
-    avg = total / len(step_times_ms)
-    best = min(step_times_ms)
-    worst = max(step_times_ms)
-    print(
-        f"[ace_step_v1_5][perf] denoise_steps n={len(step_times_ms)} "
-        f"sum={total:.2f} ms avg={avg:.2f} ms best={best:.2f} ms worst={worst:.2f} ms",
-        flush=True,
-    )
+    del step_times_ms

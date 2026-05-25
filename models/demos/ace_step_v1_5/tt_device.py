@@ -2,15 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""ACE-Step TT device helpers: mesh SKU resolution, split-device lifecycle, mesh readback, CFG DP."""
+"""ACE-Step TT device helpers: mesh SKU resolution, split-device lifecycle, mesh readback."""
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Tuple
 
-import numpy as np
 import torch
 
 import ttnn
@@ -66,12 +64,7 @@ def ace_step_needs_split_device(mesh_sku: str | None) -> bool:
 
 
 def ace_step_mesh_use_split_ttnn_preprocess(mesh_sku: str | None) -> bool:
-    """Run LM + Qwen + condition on a 1×1 TTNN device before opening the DiT mesh (BH_QB Phase A).
-
-    Set ``ACE_STEP_MESH_HOST_PREPROCESS=1`` to restore legacy CPU ``prepare_condition`` on mesh.
-    """
-    if os.environ.get("ACE_STEP_MESH_HOST_PREPROCESS", "").lower() in ("1", "true", "yes", "on"):
-        return False
+    """Run LM + Qwen + condition on a 1×1 TTNN device before opening the DiT mesh (BH_QB Phase A)."""
     return ace_step_needs_split_device(mesh_sku)
 
 
@@ -81,14 +74,7 @@ def ace_step_mesh_use_host_temb_precompute(device: Any) -> bool:
 
 
 def ace_step_mesh_use_host_cfg_euler(device: Any) -> bool:
-    """Run APG/ADG + Euler on CPU after each DiT forward (trace or eager) on multi-device meshes.
-
-    Device-side guidance ops on BH 2×2 can add noise vs the torch reference; host math matches
-    P150 while DiT stays on the mesh (optionally traced). Set ``ACE_STEP_MESH_HOST_CFG_EULER=0``
-    to restore the legacy all-device denoise loop.
-    """
-    if os.environ.get("ACE_STEP_MESH_HOST_CFG_EULER", "").lower() in ("0", "false", "no", "off"):
-        return False
+    """Run APG/ADG + Euler on CPU after each DiT forward (trace or eager) on multi-device meshes."""
     return ace_step_device_num_chips(device) > 1
 
 
@@ -99,12 +85,9 @@ def ace_step_resolve_vae_tiling(
     chunk_cli: int,
     overlap_cli: int,
 ) -> tuple[int, int]:
-    """Pick TTNN VAE ``decode_tiled`` chunk/overlap; mesh long clips use wider overlap (fewer seams).
-
-    Env ``ACE_STEP_VAE_CHUNK_LATENTS`` / ``ACE_STEP_VAE_OVERLAP_LATENTS`` override CLI when set.
-    """
-    chunk = int(os.environ.get("ACE_STEP_VAE_CHUNK_LATENTS", str(int(chunk_cli))))
-    overlap = int(os.environ.get("ACE_STEP_VAE_OVERLAP_LATENTS", str(int(overlap_cli))))
+    """Pick TTNN VAE ``decode_tiled`` chunk/overlap; mesh long clips use wider overlap (fewer seams)."""
+    chunk = int(chunk_cli)
+    overlap = int(overlap_cli)
     frames_i = int(frames)
     on_mesh = mesh_sku is not None and ace_step_needs_split_device(mesh_sku)
     if on_mesh:
@@ -118,24 +101,18 @@ def ace_step_resolve_vae_tiling(
     # decode_tiled requires chunk_size > 2 * overlap (stride > 0).
     while chunk - 2 * overlap <= 0 and overlap > 4:
         overlap //= 2
-    # Multi-device mesh: each overlap-add tile runs a full VAE forward; large chunk windows
-    # (e.g. 48 latents) need ~23 MiB L1 per conv and OOM after many tiles without per-tile free.
-    if on_mesh:
-        max_chunk = int(os.environ.get("ACE_STEP_VAE_MAX_CHUNK_LATENTS", "32"))
-        allow_large = os.environ.get("ACE_STEP_VAE_ALLOW_LARGE_CHUNK", "").lower() in ("1", "true", "yes", "on")
-        if chunk > max_chunk and not allow_large:
-            prev_chunk, prev_overlap = int(chunk), int(overlap)
-            chunk = max_chunk
-            while chunk - 2 * overlap <= 0 and overlap > 4:
-                overlap //= 2
-            if chunk - 2 * overlap <= 0:
-                overlap = max(4, (chunk - 4) // 2)
-            print(
-                f"[ace_step_v1_5] VAE: mesh chunk/overlap {prev_chunk}/{prev_overlap} "
-                f"-> {chunk}/{overlap} (L1-safe; set ACE_STEP_VAE_ALLOW_LARGE_CHUNK=1 to keep "
-                f"{prev_chunk}/{prev_overlap})",
-                flush=True,
-            )
+    # Multi-device mesh: each overlap-add tile runs a full VAE forward; cap chunk for L1 safety.
+    if on_mesh and chunk > 32:
+        prev_chunk, prev_overlap = int(chunk), int(overlap)
+        chunk = 32
+        while chunk - 2 * overlap <= 0 and overlap > 4:
+            overlap //= 2
+        if chunk - 2 * overlap <= 0:
+            overlap = max(4, (chunk - 4) // 2)
+        print(
+            f"[ace_step_v1_5] VAE: mesh chunk/overlap {prev_chunk}/{prev_overlap} -> {chunk}/{overlap} (L1-safe)",
+            flush=True,
+        )
     return chunk, overlap
 
 
@@ -150,10 +127,7 @@ def ace_step_mesh_perf_log_default(*, mesh_sku: str | None) -> bool:
 
 
 def ace_step_mesh_use_adg(*, mesh_sku: str | None, variant: str, cli_use_adg: bool | None) -> bool:
-    """CFG guidance on multi-device meshes defaults to APG (host/device); ADG can sound harsh on BH.
-
-    Single-chip P150 keeps ADG for base. Set ``ACE_STEP_MESH_USE_ADG=1`` or pass ``--use-adg`` to force ADG on mesh.
-    """
+    """CFG guidance: ADG on single-chip base/sft; APG on multi-device mesh unless ``cli_use_adg`` overrides."""
     is_turbo = "turbo" in str(variant).lower()
     if is_turbo:
         return False
@@ -163,7 +137,7 @@ def ace_step_mesh_use_adg(*, mesh_sku: str | None, variant: str, cli_use_adg: bo
     if cli_use_adg is not None:
         return bool(cli_use_adg)
     if mesh_sku is not None and ace_step_needs_split_device(mesh_sku):
-        return os.environ.get("ACE_STEP_MESH_USE_ADG", "").lower() in ("1", "true", "yes", "on")
+        return False
     return True
 
 
@@ -411,7 +385,7 @@ def ace_step_dit_rope_max_seq_len(
     remainder = frames % ps
     pad = 0 if remainder == 0 else (ps - remainder)
     patch_seq = (frames + pad) // ps
-    margin = int(os.environ.get("ACE_STEP_ROPE_SEQ_MARGIN", "128"))
+    margin = 128
     cap = max(int(patch_seq) + margin, 128)
     out = min(hf_max_i, cap)
     if out < hf_max_i:
@@ -463,13 +437,11 @@ def ace_step_log_mesh_quality_hints(
     if int(rows) * int(cols) > 1:
         if ace_step_mesh_use_split_ttnn_preprocess(mesh_sku):
             print(
-                "[ace_step_v1_5] mesh: split TTNN preprocess (1×1 LM/Qwen/condition) → full mesh DiT/VAE; "
-                "set ACE_STEP_MESH_HOST_PREPROCESS=1 for legacy CPU preprocess",
+                "[ace_step_v1_5] mesh: split TTNN preprocess (1×1 LM/Qwen/condition) → full mesh DiT/VAE",
                 flush=True,
             )
         print(
-            "[ace_step_v1_5] mesh: host APG/ADG + Euler after each DiT step "
-            "(DiT trace/eager on device; set ACE_STEP_MESH_HOST_CFG_EULER=0 to disable)",
+            "[ace_step_v1_5] mesh: host APG/ADG + Euler after each DiT step (DiT trace/eager on device)",
             flush=True,
         )
     if is_base and not is_turbo and float(guidance_scale) < 6.0:
@@ -486,8 +458,7 @@ def ace_step_log_mesh_quality_hints(
         )
     if is_base and not is_turbo and int(rows) * int(cols) > 1 and not use_adg:
         print(
-            "[ace_step_v1_5] mesh tip: using APG (not ADG) on BH by default. If still noisy, A/B with "
-            "``--torch-vae`` to isolate TTNN VAE or ``ACE_STEP_MESH_USE_ADG=1 --use-adg``.",
+            "[ace_step_v1_5] mesh tip: using APG (not ADG) on BH by default. If still noisy, try ``--torch-vae``.",
             flush=True,
         )
     elif is_base and not is_turbo and int(rows) * int(cols) > 1 and use_adg:
@@ -529,284 +500,8 @@ def ace_step_ttnn_to_torch(
     return out.contiguous()
 
 
-def ace_step_cfg_data_parallel_requested(*, cli_flag: bool = False) -> bool:
-    if cli_flag:
-        return True
-    env = os.environ.get("ACE_STEP_CFG_DATA_PARALLEL", "")
-    return str(env).lower() in ("1", "true", "yes", "on")
-
-
-def ace_step_cfg_data_parallel_available(device: Any, *, do_cfg: bool, requested: bool) -> bool:
-    if not requested or not do_cfg:
-        return False
-    n = ace_step_device_num_chips(device)
-    return n >= 2 and (n % 2) == 0
-
-
-def ace_step_cfg_dp_use_submeshes() -> bool:
-    """True to split the parent mesh into submeshes (experimental; can hang on BH_QB during DiT init).
-
-    Default is sequential cond/uncond forwards on the **full** mesh with a single DiT pipeline
-    (``--cfg-data-parallel`` still splits CFG across two B=1 forwards, just not on separate submeshes).
-    Set ``ACE_STEP_CFG_DP_SUBMESHES=1`` to opt into the submesh path.
-    """
-    return os.environ.get("ACE_STEP_CFG_DP_SUBMESHES", "").lower() in ("1", "true", "yes", "on")
-
-
-def prepare_cfg_dp_submeshes(mesh_device: ttnn.MeshDevice) -> Tuple[ttnn.MeshDevice, ttnn.MeshDevice]:
-    """Split an even-size mesh into two DP groups (cond / uncond), each of shape ``(1, N/2)``.
-
-    Must be called **before** any kernels run on ``mesh_device``. While submeshes are
-    open the **parent mesh must stay idle** (no ``ttnn.randn``, APG/Euler, or other parent
-    dispatch); otherwise BH_QB hits CQ ownership hangs. CFG-DP keeps latents and guidance
-    on the host and only runs DiT on the submeshes until they are closed.
-    """
-    n = int(mesh_device.get_num_devices())
-    if n < 2 or (n % 2) != 0:
-        raise ValueError(f"CFG data parallelism needs an even device count >= 2, got {n}")
-    print(f"[ace_step_v1_5] CFG-DP: create_submeshes (1, {n // 2}) on parent mesh …", flush=True)
-    submeshes = mesh_device.create_submeshes(ttnn.MeshShape(1, n // 2))
-    if len(submeshes) < 2:
-        raise RuntimeError(f"create_submeshes returned {len(submeshes)} groups, expected >= 2")
-    print("[ace_step_v1_5] CFG-DP: submeshes open (cond / uncond)", flush=True)
-    return submeshes[0], submeshes[1]
-
-
 def slice_batch_dim0(t: ttnn.Tensor, b0: int, b1_exc: int) -> ttnn.Tensor:
     """Slice batch dimension 0 of a rank-3 tensor ``[B, T, C]``."""
     t_dim = int(t.shape[1])
     c_dim = int(t.shape[2])
     return ttnn.slice(t, (int(b0), 0, 0), (int(b1_exc), t_dim, c_dim))
-
-
-def stage_row_tensor_to_device(
-    t: ttnn.Tensor,
-    *,
-    target_device: Any,
-    mem: Any,
-) -> ttnn.Tensor:
-    """Host-roundtrip staging so ``t`` is valid on ``target_device`` (parent mesh → submesh safe)."""
-    from models.demos.ace_step_v1_5.ttnn_impl.dit_sampling_ttnn import bf16_row_from_numpy_bc
-
-    try:
-        src_dev = t.device()
-    except Exception:
-        src_dev = None
-    host = ace_step_ttnn_to_torch(t, mesh_device=src_dev, dtype=torch.float32).detach().cpu().numpy()
-    return bf16_row_from_numpy_bc(host.astype(np.float32, copy=False), device=target_device, dram=mem)
-
-
-@dataclass
-class AceStepCfgDpRuntime:
-    """CFG runtime: sequential B=1 cond/uncond forwards (full mesh) or optional submesh split."""
-
-    submesh_cond: ttnn.MeshDevice
-    submesh_uncond: ttnn.MeshDevice
-    parent_mesh: ttnn.MeshDevice
-    pipe_cond: Any
-    pipe_uncond: Any
-    enc_cond: ttnn.Tensor
-    enc_uncond: ttnn.Tensor
-    ctx_cond: ttnn.Tensor
-    ctx_uncond: ttnn.Tensor
-    temb_cond_per_step: list[ttnn.Tensor]
-    tp_cond_per_step: list[ttnn.Tensor]
-    temb_uncond_per_step: list[ttnn.Tensor]
-    tp_uncond_per_step: list[ttnn.Tensor]
-    encoder_attention_mask_cond: ttnn.Tensor | None = None
-    encoder_attention_mask_uncond: ttnn.Tensor | None = None
-    owns_submeshes: bool = False
-
-    def close_submeshes(self, ttnn_mod: Any) -> None:
-        if not self.owns_submeshes:
-            return
-        for sub in (self.submesh_cond, self.submesh_uncond):
-            if sub is self.parent_mesh:
-                continue
-            try:
-                ttnn_mod.close_mesh_device(sub)
-            except Exception:
-                pass
-
-
-def build_cfg_dp_runtime(
-    *,
-    parent_mesh: ttnn.MeshDevice,
-    submesh_cond: ttnn.MeshDevice | None = None,
-    submesh_uncond: ttnn.MeshDevice | None = None,
-    pipe_factory: Callable[[ttnn.MeshDevice], Any],
-    enc_tt_pipe: ttnn.Tensor | None = None,
-    ctx_tt_pipe: ttnn.Tensor | None = None,
-    enc_host_np: np.ndarray | None = None,
-    ctx_host_np: np.ndarray | None = None,
-    encoder_mask_host_np: np.ndarray | None = None,
-    t_schedule: list[float],
-    mem: Any,
-    encoder_attention_mask_b1qk: ttnn.Tensor | None,
-) -> AceStepCfgDpRuntime:
-    """Build CFG state: one shared DiT pipeline on the full mesh (default) or two submesh pipelines."""
-    from models.demos.ace_step_v1_5.ttnn_impl.dit_sampling_ttnn import bf16_row_from_numpy_bc
-
-    if enc_host_np is None and enc_tt_pipe is None:
-        raise ValueError("build_cfg_dp_runtime requires enc_host_np or enc_tt_pipe.")
-    if ctx_host_np is None and ctx_tt_pipe is None:
-        raise ValueError("build_cfg_dp_runtime requires ctx_host_np or ctx_tt_pipe.")
-    if enc_host_np is not None:
-        enc_chk = np.asarray(enc_host_np, dtype=np.float32)
-        if enc_chk.ndim != 3 or int(enc_chk.shape[0]) < 2:
-            raise ValueError(f"enc_host_np must be [2, S, D] for CFG, got {enc_chk.shape}")
-    if ctx_host_np is not None:
-        ctx_chk = np.asarray(ctx_host_np, dtype=np.float32)
-        if ctx_chk.ndim != 3 or int(ctx_chk.shape[0]) < 2:
-            raise ValueError(f"ctx_host_np must be [2, T, C] for CFG, got {ctx_chk.shape}")
-
-    owns_submeshes = submesh_cond is not None and submesh_uncond is not None
-    if not owns_submeshes:
-        submesh_cond = parent_mesh
-        submesh_uncond = parent_mesh
-
-    def _stage_enc(row: int, target: Any) -> ttnn.Tensor:
-        if enc_host_np is not None:
-            enc_host = np.asarray(enc_host_np, dtype=np.float32)
-            return bf16_row_from_numpy_bc(enc_host[row : row + 1], device=target, dram=mem)
-        assert enc_tt_pipe is not None
-        return stage_row_tensor_to_device(slice_batch_dim0(enc_tt_pipe, row, row + 1), target_device=target, mem=mem)
-
-    def _stage_ctx(row: int, target: Any) -> ttnn.Tensor:
-        if ctx_host_np is not None:
-            ctx_host = np.asarray(ctx_host_np, dtype=np.float32)
-            return bf16_row_from_numpy_bc(ctx_host[row : row + 1], device=target, dram=mem)
-        assert ctx_tt_pipe is not None
-        return stage_row_tensor_to_device(slice_batch_dim0(ctx_tt_pipe, row, row + 1), target_device=target, mem=mem)
-
-    def _stage_cond_ctx_and_masks() -> (
-        tuple[
-            ttnn.Tensor,
-            ttnn.Tensor,
-            ttnn.Tensor,
-            ttnn.Tensor,
-            ttnn.Tensor | None,
-            ttnn.Tensor | None,
-        ]
-    ):
-        print("[ace_step_v1_5] CFG: staging enc_cond …", flush=True)
-        enc_c = _stage_enc(0, submesh_cond)
-        print("[ace_step_v1_5] CFG: staging enc_uncond …", flush=True)
-        enc_u = _stage_enc(1, submesh_uncond)
-        print("[ace_step_v1_5] CFG: staging ctx_cond …", flush=True)
-        ctx_c = _stage_ctx(0, submesh_cond)
-        print("[ace_step_v1_5] CFG: staging ctx_uncond …", flush=True)
-        ctx_u = _stage_ctx(1, submesh_uncond)
-        mask_c = None
-        mask_u = None
-        if encoder_mask_host_np is not None:
-            mask_host = np.asarray(encoder_mask_host_np, dtype=np.float32)
-            mask_c = bf16_row_from_numpy_bc(mask_host[0:1], device=submesh_cond, dram=mem)
-            mask_u = bf16_row_from_numpy_bc(mask_host[1:2], device=submesh_uncond, dram=mem)
-        elif encoder_attention_mask_b1qk is not None:
-            mask_c = stage_row_tensor_to_device(
-                slice_batch_dim0(encoder_attention_mask_b1qk, 0, 1),
-                target_device=submesh_cond,
-                mem=mem,
-            )
-            mask_u = stage_row_tensor_to_device(
-                slice_batch_dim0(encoder_attention_mask_b1qk, 1, 2),
-                target_device=submesh_uncond,
-                mem=mem,
-            )
-        ace_step_synchronize_device(ttnn, parent_mesh)
-        print("[ace_step_v1_5] CFG: cond/ctx staged", flush=True)
-        return enc_c, enc_u, ctx_c, ctx_u, mask_c, mask_u
-
-    def _load_pipes() -> tuple[Any, Any]:
-        if owns_submeshes:
-            print("[ace_step_v1_5] CFG-DP: loading cond DiT pipeline on submesh …", flush=True)
-            p_cond = pipe_factory(submesh_cond)
-            print("[ace_step_v1_5] CFG-DP: cond DiT pipeline ready", flush=True)
-            print("[ace_step_v1_5] CFG-DP: loading uncond DiT pipeline on submesh …", flush=True)
-            p_uncond = pipe_factory(submesh_uncond)
-            print("[ace_step_v1_5] CFG-DP: uncond DiT pipeline ready", flush=True)
-            return p_cond, p_uncond
-        print(
-            "[ace_step_v1_5] CFG: loading DiT pipeline on full mesh "
-            "(sequential cond/uncond B=1 forwards; set ACE_STEP_CFG_DP_SUBMESHES=1 for submesh split)",
-            flush=True,
-        )
-        p_cond = pipe_factory(parent_mesh)
-        print("[ace_step_v1_5] CFG: DiT pipeline ready", flush=True)
-        return p_cond, p_cond
-
-    if owns_submeshes:
-        enc_cond, enc_uncond, ctx_cond, ctx_uncond, mask_cond, mask_uncond = _stage_cond_ctx_and_masks()
-        pipe_cond, pipe_uncond = _load_pipes()
-    else:
-        pipe_cond, pipe_uncond = _load_pipes()
-        enc_cond, enc_uncond, ctx_cond, ctx_uncond, mask_cond, mask_uncond = _stage_cond_ctx_and_masks()
-    num_steps = len(t_schedule)
-    temb_cond_per_step: list[ttnn.Tensor] = []
-    tp_cond_per_step: list[ttnn.Tensor] = []
-    temb_uncond_per_step: list[ttnn.Tensor] = []
-    tp_uncond_per_step: list[ttnn.Tensor] = []
-    for idx in range(num_steps):
-        temb_c, tp_c = pipe_cond.compute_temb_tp(int(idx), target_batch=1)
-        temb_u, tp_u = pipe_uncond.compute_temb_tp(int(idx), target_batch=1)
-        temb_cond_per_step.append(temb_c)
-        tp_cond_per_step.append(tp_c)
-        temb_uncond_per_step.append(temb_u)
-        tp_uncond_per_step.append(tp_u)
-
-    return AceStepCfgDpRuntime(
-        submesh_cond=submesh_cond,
-        submesh_uncond=submesh_uncond,
-        parent_mesh=parent_mesh,
-        pipe_cond=pipe_cond,
-        pipe_uncond=pipe_uncond,
-        enc_cond=enc_cond,
-        enc_uncond=enc_uncond,
-        ctx_cond=ctx_cond,
-        ctx_uncond=ctx_uncond,
-        temb_cond_per_step=temb_cond_per_step,
-        tp_cond_per_step=tp_cond_per_step,
-        temb_uncond_per_step=temb_uncond_per_step,
-        tp_uncond_per_step=tp_uncond_per_step,
-        encoder_attention_mask_cond=mask_cond,
-        encoder_attention_mask_uncond=mask_uncond,
-        owns_submeshes=owns_submeshes,
-    )
-
-
-def run_cfg_dp_dit_forwards(
-    *,
-    cfg_dp: AceStepCfgDpRuntime,
-    step_idx: int,
-    xt_cond: ttnn.Tensor,
-    xt_uncond: ttnn.Tensor,
-    encoder_attn_1d_bk_np: Optional[Any] = None,
-) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Run cond then uncond DiT forwards on separate submeshes (single-threaded dispatch)."""
-    vpc_rm = cfg_dp.pipe_cond.forward_with_temb_tp(
-        xt_bt64=xt_cond,
-        context_latents_bt128=cfg_dp.ctx_cond,
-        encoder_hidden_states_btd=cfg_dp.enc_cond,
-        temb_bd=cfg_dp.temb_cond_per_step[int(step_idx)],
-        timestep_proj_b6d=cfg_dp.tp_cond_per_step[int(step_idx)],
-        attention_mask_1d_bt=None,
-        encoder_attention_mask_1d_bk=None if cfg_dp.encoder_attention_mask_cond is not None else encoder_attn_1d_bk_np,
-        encoder_attention_mask_b1qk=cfg_dp.encoder_attention_mask_cond,
-    )
-    ttnn.synchronize_device(cfg_dp.submesh_cond)
-
-    vpu_rm = cfg_dp.pipe_uncond.forward_with_temb_tp(
-        xt_bt64=xt_uncond,
-        context_latents_bt128=cfg_dp.ctx_uncond,
-        encoder_hidden_states_btd=cfg_dp.enc_uncond,
-        temb_bd=cfg_dp.temb_uncond_per_step[int(step_idx)],
-        timestep_proj_b6d=cfg_dp.tp_uncond_per_step[int(step_idx)],
-        attention_mask_1d_bt=None,
-        encoder_attention_mask_1d_bk=None
-        if cfg_dp.encoder_attention_mask_uncond is not None
-        else encoder_attn_1d_bk_np,
-        encoder_attention_mask_b1qk=cfg_dp.encoder_attention_mask_uncond,
-    )
-    ttnn.synchronize_device(cfg_dp.submesh_uncond)
-    return vpc_rm, vpu_rm

@@ -90,20 +90,15 @@ Look for log lines:
 python3 models/demos/ace_step_v1_5/serve_prompt_to_wav.py --port 8765
 ```
 
-Disable all caching with `ACE_STEP_DISABLE_WEIGHT_CACHE=1`.
+Disable in-memory weight caching with `ACE_STEP_DISABLE_WEIGHT_CACHE=1`.
 
-Logging defaults to **INFO** (hides TTNN per-tensor flatbuffer cache DEBUG spam). Use
-`--verbose` on `run_prompt_to_wav.py` for full DEBUG output, or `ACE_STEP_LOG_LEVEL=DEBUG`.
-
-Disk npz sidecars are **off by default** (`ACE_STEP_WEIGHT_DISK_CACHE=1` to enable). Writing
-compressed caches for the full condition-encoder slice can take many minutes and looked like a hang.
+Logging defaults to **INFO** (hides TTNN per-tensor flatbuffer cache DEBUG spam).
 
 ### CLI options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--prompt` | `str` | **(required)** | Text description of the music to generate. |
-| `--ckpt_dir` | `str` | `~/.cache/huggingface/hub/ACE-Step-1.5-checkpoints` | Root directory for model checkpoints. Missing variants are auto-downloaded from HuggingFace. |
 | `--variant` | `str` | `acestep-v15-base` | DiT model variant. Choices: `acestep-v15-base`, `acestep-v15-sft`, `acestep-v15-turbo`. |
 | `--lm_variant` | `str` | `acestep-5Hz-lm-1.7B` | 5 Hz Language Model variant. Choices: `acestep-5Hz-lm-0.6B`, `acestep-5Hz-lm-1.7B`, `acestep-5Hz-lm-4B`. |
 | `--device_id` | `int` | `0` | TT device index. |
@@ -112,18 +107,9 @@ compressed caches for the full condition-encoder slice can take many minutes and
 | `--infer_steps` | `int` | auto | Number of diffusion inference steps. Defaults to 8 for turbo, 50 for base/sft. |
 | `--seed` | `int` | `0` | Random seed for reproducibility. |
 | `--guidance_scale` | `float` | auto | Classifier-free guidance (CFG) strength. Defaults to 7.0 for base/sft, 1.0 for turbo. Set to 1 to disable CFG. |
-| `--shift` | `float` | `1.0` | Timestep shift factor for the diffusion schedule. |
-| `--timesteps` | `str` | `None` | Comma-separated custom timestep schedule (overrides `--infer_steps`). |
-| `--cfg_interval_start` | `float` | `0.0` | Timestep fraction where CFG begins (0.0 = start). |
-| `--cfg_interval_end` | `float` | `1.0` | Timestep fraction where CFG ends (1.0 = end). |
-| `--use_adg` | flag | auto | Use ADG guidance on host after TTNN forward. Defaults to on for base, off for turbo. Use `--no-use_adg` to force off. |
 | `--out` | `str` | `ttnn_out.wav` | Output WAV file path. |
 | `--use-official-lm` | flag | off | Run the full official `generate_music` path (LLM + handlers, CPU only). Does not use TTNN; useful for A/B comparison. |
-| `--ace-step-repo-root` | `str` | auto | Path to the ACE-Step-1.5 repo (contains `acestep/`). Auto-detected from well-known locations or `ACE_STEP_REPO_ROOT` env var. |
-| `--no-ttnn-strict` | flag | off | Do not set `throw_exception_on_fallback` (may hide silent TTNN fallbacks to PyTorch). |
 | `--use-trace` | flag | on | TTNN trace + 2CQ for preprocess + DiT (see table below). Use `--no-use-trace` for fully eager. |
-| `--perf-log` | flag | off | Per-module wall times (`ACE_STEP_DEMO_PERF_LOG=1`). |
-
 
 ### Trace + 2 command queues (default `--use-trace`)
 
@@ -204,16 +190,7 @@ python3 models/demos/ace_step_v1_5/run_prompt_to_wav.py \
   --out /tmp/orchestral.wav
 ```
 
-**Using a custom checkpoint directory:**
-
-```bash
-python3 models/demos/ace_step_v1_5/run_prompt_to_wav.py \
-  --prompt "Jazz piano trio with upright bass and brushed drums" \
-  --ckpt_dir /path/to/my/checkpoints \
-  --variant acestep-v15-base \
-  --lm_variant acestep-5Hz-lm-1.7B \
-  --out /tmp/jazz.wav
-```
+Checkpoints are always loaded from `~/.cache/huggingface/hub/ACE-Step-1.5-checkpoints/` (auto-download on first run). For a custom root, use `serve_prompt_to_wav.py --ckpt_dir …` or symlink that directory to the default cache path.
 
 ---
 

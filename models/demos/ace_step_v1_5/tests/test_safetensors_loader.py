@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import pytest
@@ -9,7 +13,6 @@ def test_load_safetensors_state_dict_prefix_stripping(tmp_path):
     torch = pytest.importorskip("torch")
     safetensors_torch = pytest.importorskip("safetensors.torch")
 
-    # Include multiple prefixes so we can validate filtering + stripping.
     tensors = {
         "decoder.w": torch.randn(4, 3, dtype=torch.float32),
         "decoder.b": torch.randn(4, dtype=torch.float32),

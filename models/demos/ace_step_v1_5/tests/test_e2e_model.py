@@ -116,11 +116,6 @@ def _make_random_safetensors(
     }
 
 
-# ---------------------------------------------------------------------------
-# Smoke tests (TTNN only)
-# ---------------------------------------------------------------------------
-
-
 class TestDiTPipelineRandomInputs:
     """Test the TTNN DiT pipeline with random weights and inputs."""
 
@@ -281,11 +276,6 @@ class TestDiTPipelineRandomInputs:
         assert torch.isfinite(xt).all(), "Denoised output contains non-finite values"
 
 
-# ---------------------------------------------------------------------------
-# PCC tests: Torch reference vs TTNN
-# ---------------------------------------------------------------------------
-
-
 class TestDiTPipelinePCC:
     """Compare single-forward outputs between torch_ref and TTNN pipelines."""
 
@@ -299,7 +289,6 @@ class TestDiTPipelinePCC:
         cond_dim = dims["cond_dim"]
         timesteps = np.array([1.0, 0.5, 0.0], dtype=np.float32)
 
-        # --- Torch reference pipeline ---
         torch_pipe = AceStepV15TorchPipeline(
             checkpoint_safetensors_path=ckpt_path,
             timesteps_host=timesteps,
@@ -307,7 +296,6 @@ class TestDiTPipelinePCC:
             dtype=torch.bfloat16,
         )
 
-        # --- TTNN pipeline ---
         ttnn_pipe = AceStepV15TTNNPipeline(
             device=self.device,
             checkpoint_safetensors_path=ckpt_path,
