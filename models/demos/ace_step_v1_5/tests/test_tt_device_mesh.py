@@ -10,8 +10,6 @@ import numpy as np
 import pytest
 
 from models.demos.ace_step_v1_5.tt_device import (
-    ace_step_cfg_data_parallel_available,
-    ace_step_cfg_data_parallel_requested,
     ace_step_dit_rope_max_seq_len,
     ace_step_mesh_is_2d,
     ace_step_mesh_perf_log_default,
@@ -45,28 +43,6 @@ def test_split_preprocess_only_for_multi_device():
     assert not ace_step_needs_split_device("P150")
     assert ace_step_needs_split_device("BH_QB")
     assert ace_step_needs_split_device("BH_LB")
-
-
-def test_cfg_dp_requested_from_env(monkeypatch):
-    monkeypatch.delenv("ACE_STEP_CFG_DATA_PARALLEL", raising=False)
-    assert not ace_step_cfg_data_parallel_requested()
-    monkeypatch.setenv("ACE_STEP_CFG_DATA_PARALLEL", "1")
-    assert ace_step_cfg_data_parallel_requested()
-
-
-class _FakeMesh:
-    def __init__(self, n: int):
-        self._n = n
-
-    def get_num_devices(self):
-        return self._n
-
-
-def test_cfg_dp_available_requires_even_multi_device():
-    assert not ace_step_cfg_data_parallel_available(_FakeMesh(1), do_cfg=True, requested=True)
-    assert not ace_step_cfg_data_parallel_available(_FakeMesh(4), do_cfg=False, requested=True)
-    assert ace_step_cfg_data_parallel_available(_FakeMesh(4), do_cfg=True, requested=True)
-    assert not ace_step_cfg_data_parallel_available(_FakeMesh(3), do_cfg=True, requested=True)
 
 
 def test_unknown_mesh_sku_raises():
@@ -136,7 +112,6 @@ def test_dit_body_trace_safe_30s_with_sequential_cfg():
     fused_m = ace_step_dit_fused_m_tiles(batch_size=pipe_batch, seq_len=patch_seq)
     assert fused_m == 12
     assert ace_step_dit_body_trace_safe(batch_size=pipe_batch, patch_seq_len=patch_seq)
-    # Wrong gate (batched CFG B=2) would falsely disable trace and clear program cache at 30 s.
     assert not ace_step_dit_body_trace_safe(batch_size=2, patch_seq_len=patch_seq)
 
 
@@ -145,13 +120,10 @@ def test_host_temb_precompute_on_multi_device_only():
     assert ace_step_mesh_use_host_temb_precompute(_FakeMesh(4))
 
 
-def test_mesh_split_ttnn_preprocess_default(monkeypatch):
-    monkeypatch.delenv("ACE_STEP_MESH_HOST_PREPROCESS", raising=False)
+def test_mesh_split_ttnn_preprocess_on_multi_device():
     assert ace_step_mesh_use_split_ttnn_preprocess("BH_QB")
     assert not ace_step_mesh_use_split_ttnn_preprocess("P150")
     assert not ace_step_mesh_use_split_ttnn_preprocess(None)
-    monkeypatch.setenv("ACE_STEP_MESH_HOST_PREPROCESS", "1")
-    assert not ace_step_mesh_use_split_ttnn_preprocess("BH_QB")
 
 
 def test_mesh_use_adg_defaults():
@@ -173,26 +145,8 @@ def test_mesh_perf_log_default():
     assert not ace_step_mesh_perf_log_default(mesh_sku=None)
 
 
-def test_build_demo_run_specs_warmup():
-    from types import SimpleNamespace
-
-    from models.demos.ace_step_v1_5.demo_session import AceStepDemoSession, build_demo_run_specs
-
-    args = SimpleNamespace(
-        prompt="main prompt",
-        out="out.wav",
-        warmup=True,
-        warmup_prompt=None,
-        warmup_perf=False,
-        repeat=1,
-        serve=False,
-    )
-    specs = build_demo_run_specs(args)
-    assert len(specs) == 2
-    assert specs[0].is_warmup
-    assert not specs[0].record_perf
-    assert specs[1].summary_label == "demo_total"
-    assert specs[1].prompt == "main prompt"
+def test_cached_preprocess_reuse():
+    from models.demos.ace_step_v1_5.demo_session import AceStepDemoSession
 
     session = AceStepDemoSession()
     session.store_preprocess(
@@ -207,64 +161,6 @@ def test_build_demo_run_specs_warmup():
     )
     assert session.can_reuse_preprocess(prompt="main prompt", duration_sec=15.0, seed=0)
     assert not session.can_reuse_preprocess(prompt="other", duration_sec=15.0, seed=0)
-
-
-def test_should_keep_dit_mesh_open_when_next_pass_reuses_preprocess():
-    from types import SimpleNamespace
-
-    from models.demos.ace_step_v1_5.demo_session import AceStepDemoSession, build_demo_run_specs
-
-    args = SimpleNamespace(
-        prompt="main prompt",
-        out="out.wav",
-        warmup=True,
-        warmup_prompt=None,
-        warmup_perf=False,
-        repeat=2,
-        serve=False,
-    )
-    specs = build_demo_run_specs(args)
-    session = AceStepDemoSession()
-    session.dit_dev = object()
-    session.store_preprocess(
-        prompt="main prompt",
-        duration_sec=30.0,
-        seed=0,
-        frames=750,
-        enc_hs=object(),
-        enc_mask=object(),
-        ctx_lat=object(),
-        null_emb=object(),
-    )
-    assert session.should_keep_dit_mesh_open(
-        run_specs=specs,
-        session_pass=0,
-        duration_sec=30.0,
-        seed=0,
-    )
-    assert not session.should_keep_dit_mesh_open(
-        run_specs=specs,
-        session_pass=0,
-        duration_sec=30.0,
-        seed=0,
-        force_close=True,
-    )
-    session.store_preprocess(
-        prompt="warmup only",
-        duration_sec=30.0,
-        seed=0,
-        frames=750,
-        enc_hs=object(),
-        enc_mask=object(),
-        ctx_lat=object(),
-        null_emb=object(),
-    )
-    assert not session.should_keep_dit_mesh_open(
-        run_specs=specs,
-        session_pass=0,
-        duration_sec=30.0,
-        seed=0,
-    )
 
 
 def test_emit_session_summary_rollup(monkeypatch):
