@@ -287,11 +287,41 @@ void kernel_main() {
         }
 
         // -------- PHASES 1+2 fused — push x ONCE per K-block, then gate then up.
-        // Compute does both matmuls per K-block sharing the same x. This halves
-        // the x DRAM mcast bytes vs sequential phases.
+        //
+        // Per-K-block restructure for parallelism:
+        //   Previously each K-block ran in0 mcast section FULLY then in1 mcast
+        //   section FULLY in series on every core. That meant the kernel walked
+        //   through every K-block as ~30µs(in0) + ~30µs(in1) = 60µs.
+        //   Now we ack BOTH ready semaphores up-front (receivers signal both
+        //   senders before either sender starts work), then both senders run
+        //   their DRAM-read + NoC-mcast in parallel (in0 sender on M-row,
+        //   in1 sender on N-col are disjoint sets of cores except (0,0)).
+        //   Receivers wait for BOTH valid semaphores at the end. Halves the
+        //   per-K-block elapsed time at small per_core_M where mcast/handshake
+        //   overhead dominates compute.
         for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
-            // x via multicast in M-row direction.
             cb_reserve_back(cb_in0_x, g_in0_block_num_tiles);
+            cb_reserve_back(cb_in1_gate, g_in1_block_num_tiles);
+            cb_reserve_back(cb_in1_up, g_in1_block_num_tiles);
+
+            // Step 1: receivers ack BOTH senders upfront so both senders can
+            // proceed in parallel. The senders are usually disjoint sets of
+            // cores; the only core that's both senders is (0,0) which doesn't
+            // self-inc (it's its own sender for both).
+            if (!is_in0_sender) {
+                *in0_valid_local = 0;
+                noc_semaphore_inc(in0_sender_ready_noc, 1);
+            }
+            if (!is_in1_sender) {
+                *in1_valid_local = 0;
+                noc_semaphore_inc(in1_sender_ready_noc, 1);
+            }
+
+            // Step 2: senders run their work. in0 sender path and in1 sender
+            // path can each start as soon as their ready sem is satisfied —
+            // for the common case where a core is one type of sender, the
+            // work begins immediately. For core (0,0) (both senders), in0
+            // runs first then in1, ~60µs sequentially — same as before.
             if (is_in0_sender) {
                 noc_semaphore_wait(in0_ready_local, in0_num_receivers);
                 *in0_ready_local = 0;
@@ -308,22 +338,10 @@ void kernel_main() {
                     // accumulation and contaminates the FFN output. Zero-fill
                     // the L1 region for those rows instead — silu(0) = 0,
                     // 0 * up = 0, 0 @ W_down = 0 (safe and free of NaN).
-                    // Invalid rows (past count_tiles): skip the DRAM read.
-                    // The pre-zero at kernel start filled both DB slots'
-                    // invalid-row L1 regions with zeros, and the K-loop never
-                    // writes to those rows again, so the slot stays zero
-                    // across all K-blocks (slot 0 used by K-blocks 0, 2, 4...;
-                    // slot 1 by K-blocks 1, 3, 5...).
                     const bool row_valid = row < count_tiles;
                     if (row_valid) {
                         for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                             const uint32_t col = kb * in0_block_w_gu + k;
-                            // start_tile_row offsets x reads into the shared
-                            // dispatched_buffer at this expert's region. The
-                            // chunk + my_mt + m parts of `row` are local to
-                            // this expert's slice; the base is added once
-                            // here. Same offset is applied by the writer to
-                            // output writes (fused extract+insert).
                             const uint32_t tile_idx = (start_tile_row + row) * K_gate_tiles + col;
                             noc_async_read_tile(tile_idx, x_acc, l1_x, /*offset=*/0, /*noc=*/0);
                             l1_x += x_tile_bytes;
@@ -340,28 +358,13 @@ void kernel_main() {
                 const uint32_t block_bytes = g_in0_block_num_tiles * x_tile_bytes;
                 noc_async_write_multicast(
                     block_start, mcast_data_noc, block_bytes, in0_num_receivers, /*linked=*/false);
-
-                // Sender's own compute can start NOW — the data is already in
-                // the local CB. The mcast only affects receivers. Push first,
-                // THEN flush + set valid sem (which receivers wait on).
                 cb_push_back(cb_in0_x, g_in0_block_num_tiles);
 
                 noc_async_writes_flushed();
                 *in0_valid_local = IN0_VALID;
                 noc_semaphore_set_multicast(in0_valid_sem_addr, in0_mcast_valid_noc, in0_num_receivers);
-            } else {
-                *in0_valid_local = 0;
-                noc_semaphore_inc(in0_sender_ready_noc, 1);
-                noc_semaphore_wait(in0_valid_local, IN0_VALID);
-                cb_push_back(cb_in0_x, g_in0_block_num_tiles);
             }
 
-            // in1_gate AND in1_up via a SINGLE mcast handshake. We issue two
-            // back-to-back NoC writes (gate L1 region, then up L1 region) but
-            // share one ready/valid sem pair. Halves in1 mcast handshake count
-            // for the fused phases 1+2 (from 28 to 14 sem handshakes).
-            cb_reserve_back(cb_in1_gate, g_in1_block_num_tiles);
-            cb_reserve_back(cb_in1_up, g_in1_block_num_tiles);
             if (is_in1_sender) {
                 noc_semaphore_wait(in1_ready_local, in1_num_receivers);
                 *in1_ready_local = 0;
@@ -385,7 +388,6 @@ void kernel_main() {
                         l1_w_gate += gate_tile_bytes;
                     }
                 }
-                // DRAM read up region (queued behind gate reads on the same NoC).
                 uint32_t l1_w_up = get_write_ptr(cb_in1_up);
                 const uint32_t up_block_start = l1_w_up;
                 for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
@@ -406,7 +408,6 @@ void kernel_main() {
                 }
                 noc_async_read_barrier(/*noc=*/0);
 
-                // Issue TWO mcast writes back-to-back on NoC 1 (default).
                 const uint64_t gate_mcast_noc = get_noc_multicast_addr(
                     in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, gate_block_start);
                 const uint32_t gate_block_bytes = g_in1_block_num_tiles * gate_tile_bytes;
@@ -419,20 +420,21 @@ void kernel_main() {
                 noc_async_write_multicast(
                     up_block_start, up_mcast_noc, up_block_bytes, in1_num_receivers, /*linked=*/false);
 
-                // Sender's local compute can start as soon as the data is in
-                // its own CB. Mcast only affects receivers.
                 cb_push_back(cb_in1_gate, g_in1_block_num_tiles);
                 cb_push_back(cb_in1_up, g_in1_block_num_tiles);
 
                 noc_async_writes_flushed();
 
-                // ONE valid mcast covers both gate and up data — receivers
-                // wait once and find both pushed.
                 *in1_valid_local = IN1_VALID;
                 noc_semaphore_set_multicast(in1_valid_sem_addr, in1_mcast_valid_noc, in1_num_receivers);
-            } else {
-                *in1_valid_local = 0;
-                noc_semaphore_inc(in1_sender_ready_noc, 1);
+            }
+
+            // Step 3: receivers wait for both valid semaphores and push.
+            if (!is_in0_sender) {
+                noc_semaphore_wait(in0_valid_local, IN0_VALID);
+                cb_push_back(cb_in0_x, g_in0_block_num_tiles);
+            }
+            if (!is_in1_sender) {
                 noc_semaphore_wait(in1_valid_local, IN1_VALID);
                 cb_push_back(cb_in1_gate, g_in1_block_num_tiles);
                 cb_push_back(cb_in1_up, g_in1_block_num_tiles);
