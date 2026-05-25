@@ -40,6 +40,7 @@ Sharding strategy for 2-device mesh [1, 2] (P300 × 2):
 """
 
 import math
+import os
 
 import torch
 
@@ -233,6 +234,7 @@ class TtMistral4Attention(LightweightModule):
         self.kv_a_proj_out = KV_A_PROJ_OUT
         self.kv_b_per_head = KV_B_PROJ_OUT_PER_HEAD
         self.scale = 1.0 / math.sqrt(self.head_dim)
+        self.prefill_l1_reshape = os.environ.get("MISTRAL4_ATTN_L1_RESHAPE", "1") == "1"
 
         if compute_kernel_config is None:
             compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -437,6 +439,7 @@ class TtMistral4Attention(LightweightModule):
             [1, 1, seq_len, HIDDEN_SIZE] replicated on all devices
         """
         seq_len = x.shape[2]
+        reshape_mem = ttnn.L1_MEMORY_CONFIG if self.prefill_l1_reshape else ttnn.DRAM_MEMORY_CONFIG
 
         # ── Q projection ──────────────────────────────────────────────────
         q_latent = ttnn.linear(
@@ -461,16 +464,23 @@ class TtMistral4Attention(LightweightModule):
             self.q_b_proj,
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=reshape_mem,
         )  # [1, 1, seq, N_HEADS * HEAD_DIM]
         ttnn.deallocate(q_latent)
 
         q = ttnn.reshape(q, [1, seq_len, self.n_heads, self.head_dim])
-        q = ttnn.transpose(q, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q = ttnn.transpose(q, 1, 2, memory_config=reshape_mem)
         # [1, N_HEADS, seq, HEAD_DIM]
 
-        q_nope = ttnn.slice(q, [0, 0, 0, 0], [1, self.n_heads, seq_len, self.qk_nope_head_dim])
-        q_rope = ttnn.slice(q, [0, 0, 0, self.qk_nope_head_dim], [1, self.n_heads, seq_len, self.head_dim])
+        q_nope = ttnn.slice(
+            q, [0, 0, 0, 0], [1, self.n_heads, seq_len, self.qk_nope_head_dim], memory_config=reshape_mem
+        )
+        q_rope = ttnn.slice(
+            q,
+            [0, 0, 0, self.qk_nope_head_dim],
+            [1, self.n_heads, seq_len, self.head_dim],
+            memory_config=reshape_mem,
+        )
         ttnn.deallocate(q)
 
         q_rope_rotated = ttnn.experimental.rotary_embedding_hf(
@@ -511,17 +521,24 @@ class TtMistral4Attention(LightweightModule):
             self.kv_b_proj,
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=reshape_mem,
         )  # [1, 1, seq, KV_B_PROJ_OUT_TOTAL]
         ttnn.deallocate(kv_latent)
         ttnn.deallocate(kv_latent_normed)
 
         kv = ttnn.reshape(kv, [1, seq_len, self.n_heads, self.kv_b_per_head])
-        kv = ttnn.transpose(kv, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        kv = ttnn.transpose(kv, 1, 2, memory_config=reshape_mem)
         # [1, N_HEADS, seq, KV_B_PER_HEAD=192]
 
-        k_nope = ttnn.slice(kv, [0, 0, 0, 0], [1, self.n_heads, seq_len, self.qk_nope_head_dim])
-        v = ttnn.slice(kv, [0, 0, 0, self.qk_nope_head_dim], [1, self.n_heads, seq_len, self.kv_b_per_head])
+        k_nope = ttnn.slice(
+            kv, [0, 0, 0, 0], [1, self.n_heads, seq_len, self.qk_nope_head_dim], memory_config=reshape_mem
+        )
+        v = ttnn.slice(
+            kv,
+            [0, 0, 0, self.qk_nope_head_dim],
+            [1, self.n_heads, seq_len, self.kv_b_per_head],
+            memory_config=reshape_mem,
+        )
         ttnn.deallocate(kv)
 
         k_rope_rotated = ttnn.experimental.rotary_embedding_hf(
@@ -564,7 +581,7 @@ class TtMistral4Attention(LightweightModule):
         # ── Output projection ──────────────────────────────────────────────
         # attn_out is [1, N_HEADS, seq, V_HEAD_DIM]; transpose to [1, seq, N_HEADS, V_HEAD_DIM]
         # before reshaping so head features for the same position are contiguous.
-        attn_out_t = ttnn.transpose(attn_out, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_out_t = ttnn.transpose(attn_out, 1, 2, memory_config=reshape_mem)
         ttnn.deallocate(attn_out)
         attn_flat = ttnn.reshape(
             attn_out_t, [1, 1, seq_len, self.n_heads * self.v_head_dim]

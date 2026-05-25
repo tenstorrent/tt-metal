@@ -24,6 +24,8 @@ Usage::
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -392,12 +394,13 @@ class TtMistral4TextModel:
         ttnn.deallocate(x)
 
         x_last = _rms_norm(x_last, self.final_norm_w, self.compute_kernel_config)
+        use_bf8_lm_head = os.environ.get("MISTRAL4_PREFILL_BF8_LM_HEAD", "0") == "1"
         logits_tt = ttnn.linear(
             x_last,
             self.lm_head_weight,
             compute_kernel_config=self.lm_head_compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b if use_bf8_lm_head else ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG if use_bf8_lm_head else ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(x_last)
         return logits_tt
