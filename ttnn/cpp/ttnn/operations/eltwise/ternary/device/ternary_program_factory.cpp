@@ -690,7 +690,19 @@ void populate_runtime_arguments(
                 out_rank,
                 tile_h,
                 tile_w);
-            reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{reader_runtime_args.begin(), reader_runtime_args.end()});
+            // Opt into the fast cache-hit patching path: bind Buffer* directly at the
+            // buffer-address slots (0: predicate, 1: tensor_operand). Position 2 stays a
+            // scalar placeholder for the absent operand. Remaining slots are non-buffer
+            // values that don't change between dispatches that share this cache entry.
+            KernelDescriptor::RTArgList reader_rt_args;
+            reader_rt_args.reserve(num_reader_args);
+            reader_rt_args.push_back(predicate_tensor.buffer());  // 0: src0_addr (predicate)
+            reader_rt_args.push_back(tensor_operand.buffer());    // 1: src1_addr (tensor operand)
+            reader_rt_args.push_back(0u);                         // 2: src2_addr (scalar operand placeholder)
+            for (size_t j = 3; j < num_reader_args; ++j) {
+                reader_rt_args.push_back(reader_runtime_args[j]);
+            }
+            reader_desc.emplace_runtime_args(core, reader_rt_args);
         } else if (variant == TernaryVariant::TTT) {
             auto pred_dims = extract_tensor_dimensions(predicate_tensor, out_rank, tile_h, tile_w);
             auto true_dims = extract_tensor_dimensions(value_true_tensor.value(), out_rank, tile_h, tile_w);
@@ -729,26 +741,39 @@ void populate_runtime_arguments(
             reader_runtime_args[25] = c_current_shard_width;    // 25: dst_shard_width
             reader_runtime_args[26] = a_num_tiles;              // 26: src_num_tiles (predicate)
 
-            reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{reader_runtime_args.begin(), reader_runtime_args.end()});
+            // Opt into the fast cache-hit patching path: bind Buffer* directly at the
+            // buffer-address slots (0/1/2). The framework will patch these addresses on
+            // every cache hit without re-running create_descriptor().
+            KernelDescriptor::RTArgList reader_rt_args;
+            reader_rt_args.reserve(num_reader_args);
+            reader_rt_args.push_back(predicate_tensor.buffer());            // 0: src0_addr (predicate)
+            reader_rt_args.push_back(value_true_tensor.value().buffer());   // 1: src1_addr (true tensor)
+            reader_rt_args.push_back(value_false_tensor.value().buffer());  // 2: src2_addr (false tensor)
+            for (size_t j = 3; j < num_reader_args; ++j) {
+                reader_rt_args.push_back(reader_runtime_args[j]);
+            }
+            reader_desc.emplace_runtime_args(core, reader_rt_args);
         } else {
             TT_FATAL(false, "Unsupported Where variant in TernaryDeviceOperation. Supported: TTS, TST, TTT");
         }
 
-        // Writer runtime args
-        std::array writer_runtime_args = {
-            output.buffer()->address(),  // 0: dst_addr
-            num_tiles_per_core,          // 1: num_tiles
-            c_start_id,                  // 2: start_id
-            c_current_shard_width,       // 3: dst_shard_width
-            output_dims.D,               // 4: D
-            output_dims.N,               // 5: N
-            output_dims.C,               // 6: C
-            output_dims.Ht,              // 7: Ht
-            output_dims.Wt,              // 8: Wt
-            output_dims.ND,              // 9: cND
-            0u                           // 10: padding
-        };
-        writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
+        // Writer runtime args — opt into the fast cache-hit patching path by binding
+        // Buffer* directly at slot 0 (dst_addr). The remaining slots are tile counts
+        // and shape dims that don't change for dispatches sharing this cache entry.
+        KernelDescriptor::RTArgList writer_rt_args;
+        writer_rt_args.reserve(num_writer_args);
+        writer_rt_args.push_back(output.buffer());        // 0: dst_addr
+        writer_rt_args.push_back(num_tiles_per_core);     // 1: num_tiles
+        writer_rt_args.push_back(c_start_id);             // 2: start_id
+        writer_rt_args.push_back(c_current_shard_width);  // 3: dst_shard_width
+        writer_rt_args.push_back(output_dims.D);          // 4: D
+        writer_rt_args.push_back(output_dims.N);          // 5: N
+        writer_rt_args.push_back(output_dims.C);          // 6: C
+        writer_rt_args.push_back(output_dims.Ht);         // 7: Ht
+        writer_rt_args.push_back(output_dims.Wt);         // 8: Wt
+        writer_rt_args.push_back(output_dims.ND);         // 9: cND
+        writer_rt_args.push_back(0u);                     // 10: padding
+        writer_desc.emplace_runtime_args(core, writer_rt_args);
 
         // Compute runtime args
         uint32_t scalar_arg = 0u;
@@ -823,7 +848,7 @@ std::optional<AllShardVolumes> get_shard_volumes(
     };
 }
 
-tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::create_descriptor(
+tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {

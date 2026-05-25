@@ -41,18 +41,14 @@ struct TernaryDeviceOperation {
         std::optional<Tensor> optional_output_tensor;
     };
 
-    struct TernaryProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-    };
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output);
 
-    using program_factory_t = std::variant<TernaryProgramFactory>;
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };
 
