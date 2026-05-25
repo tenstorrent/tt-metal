@@ -10,33 +10,17 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 namespace ttnn::experimental::prim {
 
-// Use ReduceScatterProgramArtifacts as the shared variables type for consistency
-using LineReduceScatterSharedVariables = ReduceScatterProgramArtifacts;
-
 struct LineReduceScatterMeshWorkloadFactory {
-    using shared_variables_t = LineReduceScatterSharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
-        const ReduceScatterMinimalAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const ReduceScatterMinimalAsyncInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
-
-    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const ReduceScatterMinimalAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const ReduceScatterMinimalAsyncInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const ReduceScatterMinimalAsyncParams& operation_attributes,
         const ReduceScatterMinimalAsyncInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
+        std::vector<Tensor>& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 // Builder function for line topology - creates program artifacts

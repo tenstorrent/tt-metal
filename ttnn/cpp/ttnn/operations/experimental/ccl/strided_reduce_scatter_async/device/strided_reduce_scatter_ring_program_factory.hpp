@@ -11,33 +11,19 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail {
 
-// Use StridedReduceScatterProgramArtifacts as the shared variables type for consistency
-using RingStridedReduceScatterSharedVariables = StridedReduceScatterProgramArtifacts;
-
 struct RingStridedReduceScatterMeshWorkloadFactory {
-    using shared_variables_t = RingStridedReduceScatterSharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
-        const operation_attributes_t& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-
-    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const operation_attributes_t& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+    // Contract-2: declarative WorkloadDescriptor.  Per-coord ProgramDescriptors
+    // are built via build_ring_strided_reduce_scatter_async_program_artifacts_descriptor.
+    // No workload-scoped resources (GlobalSemaphores live on operation_attributes_t).
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        tensor_return_value_t& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 // Builder function for ring topology - creates program artifacts

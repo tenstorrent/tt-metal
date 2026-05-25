@@ -244,93 +244,95 @@ auto launch_mux_workers_descriptor(
 }
 
 }  // namespace detail
-UnifiedSelectReduce::cached_mesh_workload_t UnifiedSelectReduce::create_mesh_workload(
+
+tt::tt_metal::WorkloadDescriptor UnifiedSelectReduce::create_workload_descriptor(
     const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
 
     auto* mesh_device = tensor_args.dense_input_tensor.device();
     const ttnn::CoreRangeSet worker_core_range_set(operation_attributes.worker_cores);
+
+    // Workload-scoped GlobalSemaphores: allocated once on cache miss and parked
+    // on workload_descriptor.semaphores so they outlive the cached workload.
+    // The init/final barrier semaphores synchronize handoffs between devices,
+    // hence the Synchronize call before kicking off any per-coord program.
     auto init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0);
 
-    auto final_barrier_semaphore = operation_attributes.optional_cross_device_semaphore.value_or(
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0));
+    GlobalSemaphore final_barrier_semaphore =
+        operation_attributes.optional_cross_device_semaphore.has_value()
+            ? operation_attributes.optional_cross_device_semaphore.value()
+            : ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0);
 
     tt::tt_metal::distributed::Synchronize(
         mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
 
-    for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(
+    workload_descriptor.semaphores.push_back(init_barrier_semaphore);
+    if (!operation_attributes.optional_cross_device_semaphore.has_value()) {
+        // Only park the final barrier when we allocated it ourselves; if the
+        // caller passed one in, lifetime is the caller's responsibility.
+        workload_descriptor.semaphores.push_back(final_barrier_semaphore);
+    }
+
+    const auto all_mesh_coordinates = tensor_coords.coords();
+
+    // Build a ProgramDescriptor per mesh coord — the descriptor builder bakes
+    // in per-coord fabric routing (src_chip_id, neighbors) so each program is
+    // unique.
+    for (const auto& coord : all_mesh_coordinates) {
+        tt::tt_metal::ProgramDescriptor desc;
+
+        // Allocate the two worker-scoped sync semaphores as SemaphoreDescriptors
+        // on `desc`.  The legacy factory created these via
+        // CreateSemaphore(program, ...) inside create_at(); the descriptor
+        // builder takes their IDs by value so it does not need to know how the
+        // caller allocated them.
+        //
+        // metadata_sync covers the bounding box of the worker cores and is
+        // initialized to 1; compute_sync covers all worker cores and starts at
+        // 0.  These initial values match the legacy CreateSemaphore calls.
+        const auto metadata_sync_core_ranges = CoreRangeSet(worker_core_range_set.bounding_box());
+        const auto probe_core = worker_core_range_set.bounding_box().start_coord;
+        auto metadata_sync_id_opt = desc.find_available_semaphore_id(probe_core, tt::CoreType::WORKER);
+        TT_FATAL(metadata_sync_id_opt.has_value(), "No available semaphore ID for metadata sync");
+        const uint32_t metadata_sync_semaphore_id = metadata_sync_id_opt.value();
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = metadata_sync_semaphore_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = metadata_sync_core_ranges,
+            .initial_value = 1});
+
+        // Compute sync ID must be distinct from metadata_sync on shared cores;
+        // pushing metadata_sync above ensures find_available_semaphore_id will
+        // skip the freshly used ID here.
+        auto compute_sync_id_opt = desc.find_available_semaphore_id(probe_core, tt::CoreType::WORKER);
+        TT_FATAL(compute_sync_id_opt.has_value(), "No available semaphore ID for compute sync");
+        const uint32_t compute_sync_semaphore_id = compute_sync_id_opt.value();
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = compute_sync_semaphore_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = worker_core_range_set,
+            .initial_value = 0});
+
+        build_selective_reduce_combine_program_artifacts_descriptor(
+            desc,
             operation_attributes,
             coord,
-            tensor_coords.coords(),
+            all_mesh_coordinates,
             tensor_args,
             tensor_return_value,
             init_barrier_semaphore,
-            final_barrier_semaphore);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(coord, std::move(cached_program.shared_variables));
+            final_barrier_semaphore,
+            metadata_sync_semaphore_id,
+            compute_sync_semaphore_id);
+
+        workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
-    return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
-}
 
-ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> UnifiedSelectReduce::create_at(
-    const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinate& mesh_coordinate,
-    const std::vector<ttnn::MeshCoordinate>& all_mesh_coordinates,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
-    const GlobalSemaphore& init_semaphore,
-    const GlobalSemaphore& cross_device_semaphore) {
-    tt::tt_metal::Program program{};
-    const ttnn::CoreRangeSet worker_core_range_set(operation_attributes.worker_cores);
-    const uint32_t metadata_sync_semaphore_id =
-        tt::tt_metal::CreateSemaphore(program, CoreRangeSet(worker_core_range_set.bounding_box()), 1);
-    const uint32_t compute_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range_set, 0);
-    auto artifacts = build_selective_reduce_combine_program_artifacts(
-        program,
-        operation_attributes,
-        mesh_coordinate,
-        all_mesh_coordinates,
-        tensor_args,
-        tensor_return_value,
-        init_semaphore,
-        cross_device_semaphore,
-        metadata_sync_semaphore_id,
-        compute_sync_semaphore_id);
-    return {std::move(program), std::move(artifacts)};
-}
-
-void UnifiedSelectReduce::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto& coord = range.start_coord();
-        TT_FATAL(
-            coord == range.end_coord(),
-            "Expected single coordinate per program but got range of {} to {}",
-            coord,
-            range.end_coord());
-
-        const auto& shared_variables = cached_workload.shared_variables.at(range);
-        selective_reduce_combine_helper_override_runtime_arguments(
-            program,
-            shared_variables.reader_kernel_id,
-            shared_variables.writer_kernel_id,
-            shared_variables.data_cb_handle,
-            shared_variables.cores,
-            tensor_args,
-            tensor_return_value,
-            shared_variables.init_semaphore,
-            shared_variables.cross_device_semaphore,
-            operation_attributes.optional_cross_device_semaphore);
-    }
+    return workload_descriptor;
 }
 
 SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_artifacts(

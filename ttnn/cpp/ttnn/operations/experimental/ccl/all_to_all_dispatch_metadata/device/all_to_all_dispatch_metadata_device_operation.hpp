@@ -15,6 +15,8 @@
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 #include <vector>
 #include "ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/all_to_all_dispatch_metadata.hpp"
 
@@ -76,39 +78,19 @@ struct AllToAllDispatchMetadataDeviceOperation {
     using tensor_return_value_t = std::array<Tensor, 3>;
 
     struct AllToAllDispatchMetadataSparse {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle ternary_reader_kernel_id;
-            tt::tt_metal::KernelHandle binary_writer_kernel_id;
-            std::vector<CoreCoord> cores;
-            const std::optional<GlobalSemaphore> init_semaphore;  // Optional - not used in persistent mode
-            const GlobalSemaphore cross_device_semaphore;
-            const bool
-                skip_init_semaphore;  // True when using persistent mode (all outputs persistent + external semaphore)
-        };
-        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-        static cached_mesh_workload_t create_mesh_workload(
+        // Contract-2: declarative WorkloadDescriptor.  Per coord, builds a
+        // ProgramDescriptor containing the mux (when worker_mode != DIRECT),
+        // reader, and writer kernels plus their CBs.  Workload-scoped init /
+        // cross-device GlobalSemaphores (cache miss only -- in persistent
+        // mode the caller-provided semaphore on operation_attributes is used
+        // instead) are parked on workload_descriptor.semaphores.  Tensor base
+        // addresses are bound via emplace_runtime_args(Buffer*) so the
+        // framework patches them on every dispatch.
+        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
             const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinate& mesh_coordinate,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords,
-            const std::optional<GlobalSemaphore>& init_semaphore,
-            const GlobalSemaphore& cross_device_semaphore,
-            bool skip_init_semaphore);
-
-        static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_workload,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
     };
 
     using program_factory_t = std::variant<AllToAllDispatchMetadataSparse>;
