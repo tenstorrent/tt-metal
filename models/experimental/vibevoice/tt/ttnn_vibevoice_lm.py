@@ -202,16 +202,51 @@ def _build_rope_cache(
     return cos, sin  # [S, head_dim]
 
 
-def _apply_rope_torch(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-    """Apply RoPE to [B, n_heads, S, head_dim] tensor (host, for weight precomputation)."""
+def _build_rope_cache_tt(
+    seq_len: int,
+    head_dim: int,
+    device,
+    rope_theta: float = 1_000_000.0,
+) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Build RoPE cos/sin on device. Returns [1, 1, seq_len, head_dim] TILE."""
+    cos, sin = _build_rope_cache(seq_len, head_dim, rope_theta)
+    cos_4d = cos.unsqueeze(0).unsqueeze(0)  # [1, 1, S, head_dim]
+    sin_4d = sin.unsqueeze(0).unsqueeze(0)
+    cos_tt = ttnn.as_tensor(
+        cos_4d, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    sin_tt = ttnn.as_tensor(
+        sin_4d, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    return cos_tt, sin_tt
 
-    def rotate_half(t):
-        half = t.shape[-1] // 2
-        return torch.cat([-t[..., half:], t[..., :half]], dim=-1)
 
-    cos = cos.unsqueeze(0).unsqueeze(0)  # [1, 1, S, head_dim]
-    sin = sin.unsqueeze(0).unsqueeze(0)
-    return x * cos + rotate_half(x) * sin
+def _rotate_half_ttnn(x: ttnn.Tensor) -> ttnn.Tensor:
+    """Rotate half: [B, n, S, hd] → [-x2, x1] where x = [x1 | x2], hd split in half."""
+    sh = x.shape
+    B, n, S, hd = sh[0], sh[1], sh[2], sh[3]
+    half = hd // 2
+    x1 = ttnn.slice(x, [0, 0, 0, 0], [B, n, S, half], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    x2 = ttnn.slice(x, [0, 0, 0, half], [B, n, S, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.concat(
+        [ttnn.neg(x2, memory_config=ttnn.DRAM_MEMORY_CONFIG), x1], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+
+def _apply_rope_ttnn(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+    """Apply RoPE. x: [B, n, S, hd], cos/sin: [1, 1, S, hd] (broadcasts over n)."""
+    return ttnn.add(
+        ttnn.mul(x, cos, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+        ttnn.mul(_rotate_half_ttnn(x), sin, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _reshape_tt(x: ttnn.Tensor, shape: list) -> ttnn.Tensor:
+    """Reshape via ROW_MAJOR intermediary to avoid tile layout conflicts."""
+    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    x = ttnn.reshape(x, shape)
+    return ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -266,12 +301,12 @@ class TTVibeVoiceLM:
         self,
         x: ttnn.Tensor,
         layer_w: LayerWeights,
-        cos_sin: Optional[Tuple[torch.Tensor, torch.Tensor]],
+        cos_sin_tt: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]],
         kv_cache: Optional[KVCache],
         layer_idx: int,
         start_pos: int = 0,
     ) -> ttnn.Tensor:
-        """Single Qwen2 attention block (no torch on device).
+        """Single Qwen2 attention block — all ops on device.
 
         x: [B, 1, S, hidden]
         Returns: [B, 1, S, hidden]
@@ -283,12 +318,11 @@ class TTVibeVoiceLM:
         n_heads = cfg.num_attention_heads
         n_kv = cfg.num_key_value_heads
 
-        # QKV projections
+        # QKV projections [B, 1, S, n*hd]
         q = ttnn.linear(x, layer_w.wq, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         k = ttnn.linear(x, layer_w.wk, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v = ttnn.linear(x, layer_w.wv, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Add QKV biases if present (Qwen2 has them)
         if layer_w.q_bias is not None:
             q = ttnn.add(q, layer_w.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if layer_w.k_bias is not None:
@@ -296,60 +330,95 @@ class TTVibeVoiceLM:
         if layer_w.v_bias is not None:
             v = ttnn.add(v, layer_w.v_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Reshape to [B, n_heads, S, head_dim] — need to go through host for reshape
-        # For correctness: bring to host, reshape, apply RoPE, return to device
-        q_torch = ttnn.to_torch(q).to(torch.float32).view(B, S, n_heads, head_dim).transpose(1, 2)  # [B,nh,S,hd]
-        k_torch = ttnn.to_torch(k).to(torch.float32).view(B, S, n_kv, head_dim).transpose(1, 2)  # [B,nkv,S,hd]
-        v_torch = ttnn.to_torch(v).to(torch.float32).view(B, S, n_kv, head_dim).transpose(1, 2)  # [B,nkv,S,hd]
+        # Reshape [B, 1, S, n*hd] → [B, S, n, hd] then permute → [B, n, S, hd]
+        # Matches PyTorch: view(B, S, n, hd).transpose(1, 2)
+        q = _reshape_tt(q, [B, S, n_heads, head_dim])
+        q = ttnn.permute(q, (0, 2, 1, 3))  # [B, n_heads, S, hd]
+        k = _reshape_tt(k, [B, S, n_kv, head_dim])
+        k = ttnn.permute(k, (0, 2, 1, 3))  # [B, n_kv, S, hd]
+        v = _reshape_tt(v, [B, S, n_kv, head_dim])
+        v = ttnn.permute(v, (0, 2, 1, 3))  # [B, n_kv, S, hd]
 
-        # Apply RoPE on host
-        if cos_sin is not None:
-            cos, sin = cos_sin
-            # cos/sin: [S_total, head_dim]; slice for this sequence position
-            c = cos[start_pos : start_pos + S]
-            s = sin[start_pos : start_pos + S]
-            q_torch = _apply_rope_torch(q_torch, c, s)
-            k_torch = _apply_rope_torch(k_torch, c, s)
+        # Apply RoPE on device; cos/sin: [1, 1, S_total, head_dim]
+        if cos_sin_tt is not None:
+            cos_tt, sin_tt = cos_sin_tt
+            S_cos = cos_tt.shape[2]
+            c = ttnn.slice(
+                cos_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            s = ttnn.slice(
+                sin_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            q = _apply_rope_ttnn(q, c, s)
+            k = _apply_rope_ttnn(k, c, s)
 
-        # Update KV cache if provided
+        # KV cache update (stores ttnn tensors)
         if kv_cache is not None:
             if kv_cache.keys[layer_idx] is None:
-                kv_cache.keys[layer_idx] = k_torch
-                kv_cache.values[layer_idx] = v_torch
+                kv_cache.keys[layer_idx] = k
+                kv_cache.values[layer_idx] = v
             else:
-                kv_cache.keys[layer_idx] = torch.cat([kv_cache.keys[layer_idx], k_torch], dim=2)
-                kv_cache.values[layer_idx] = torch.cat([kv_cache.values[layer_idx], v_torch], dim=2)
-            k_torch = kv_cache.keys[layer_idx]
-            v_torch = kv_cache.values[layer_idx]
+                kv_cache.keys[layer_idx] = ttnn.concat(
+                    [kv_cache.keys[layer_idx], k], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                kv_cache.values[layer_idx] = ttnn.concat(
+                    [kv_cache.values[layer_idx], v], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+            k = kv_cache.keys[layer_idx]
+            v = kv_cache.values[layer_idx]
 
-        # GQA: repeat KV heads to match Q heads
+        S_total = k.shape[2]
+
+        # GQA: repeat_interleave KV heads to match Q heads → [B, n_heads, S_total, hd]
         repeat = n_heads // n_kv
-        k_torch = k_torch.repeat_interleave(repeat, dim=1)  # [B, n_heads, S_total, hd]
-        v_torch = v_torch.repeat_interleave(repeat, dim=1)
+        k_slices = []
+        v_slices = []
+        for kv_idx in range(n_kv):
+            kh = ttnn.slice(
+                k, [0, kv_idx, 0, 0], [B, kv_idx + 1, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            vh = ttnn.slice(
+                v, [0, kv_idx, 0, 0], [B, kv_idx + 1, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            for _ in range(repeat):
+                k_slices.append(kh)
+                v_slices.append(vh)
+        k = ttnn.concat(k_slices, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v = ttnn.concat(v_slices, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Scaled dot-product attention
+        # Scaled dot-product attention — upcast to float32 for precision
         scale = 1.0 / math.sqrt(head_dim)
-        scores = torch.matmul(q_torch, k_torch.transpose(-2, -1)) * scale  # [B,nh,S,S_total]
-        # Causal mask for prefill
-        S_total = k_torch.shape[2]
-        if S > 1:
-            mask = torch.triu(torch.full((S, S_total), float("-inf")), diagonal=S_total - S + 1)
-            scores = scores + mask
-        attn = torch.softmax(scores.float(), dim=-1)
-        out = torch.matmul(attn, v_torch)  # [B, nh, S, hd]
-        out = out.transpose(1, 2).contiguous().view(B, S, n_heads * head_dim)  # [B, S, hidden]
+        q_f32 = ttnn.typecast(q, ttnn.float32)
+        k_f32 = ttnn.typecast(k, ttnn.float32)
+        v_f32 = ttnn.typecast(v, ttnn.float32)
+        k_t = ttnn.permute(k_f32, (0, 1, 3, 2))  # [B, n_heads, hd, S_total]
+        scores = ttnn.matmul(q_f32, k_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        scores = ttnn.mul(scores, scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Back to device
-        out_tt = ttnn.as_tensor(
-            out.unsqueeze(1),  # [B, 1, S, hidden]
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Causal mask for prefill (S > 1)
+        if S > 1:
+            mask = torch.triu(torch.full((S, S_total), float("-inf"), dtype=torch.float32), diagonal=S_total - S + 1)
+            mask_tt = ttnn.as_tensor(
+                mask.unsqueeze(0).unsqueeze(0),  # [1, 1, S, S_total]
+                device=self.device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            scores = ttnn.add(scores, mask_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        attn = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.matmul(attn, v_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.typecast(out, ttnn.bfloat16)
+
+        # Reshape [B, n_heads, S, hd] → [B, 1, S, n_heads*hd]
+        # Inverse: permute (0,2,1,3) → [B, S, n_heads, hd], then reshape [B, 1, S, n_heads*hd]
+        out = ttnn.permute(out, (0, 2, 1, 3))  # [B, S, n_heads, hd]
+        out = _reshape_tt(out, [B, 1, S, n_heads * head_dim])
+
         # Output projection
-        out_tt = ttnn.linear(out_tt, layer_w.wo, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return out_tt
+        out = ttnn.linear(out, layer_w.wo, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return out
 
     def _ffn_layer(self, x: ttnn.Tensor, layer_w: LayerWeights) -> ttnn.Tensor:
         """SwiGLU FFN: gate_proj(x) * silu(gate_proj(x)) → down_proj."""
@@ -364,7 +433,7 @@ class TTVibeVoiceLM:
         self,
         x: ttnn.Tensor,
         layer_idx: int,
-        cos_sin: Optional[Tuple[torch.Tensor, torch.Tensor]],
+        cos_sin_tt: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]],
         kv_cache: Optional[KVCache],
         start_pos: int = 0,
     ) -> ttnn.Tensor:
@@ -379,7 +448,7 @@ class TTVibeVoiceLM:
             compute_kernel_config=_HIFI4,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        attn_out = self._attention_layer(x_norm, lw, cos_sin, kv_cache, layer_idx, start_pos)
+        attn_out = self._attention_layer(x_norm, lw, cos_sin_tt, kv_cache, layer_idx, start_pos)
         x = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Pre-norm + FFN
@@ -416,12 +485,12 @@ class TTVibeVoiceLM:
         S = inputs_embeds.shape[2]
         cfg = self.cfg
 
-        # Build RoPE cache on host
-        cos, sin = _build_rope_cache(start_pos + S, cfg.head_dim, cfg.rope_theta)
+        # Build RoPE cache on device
+        cos_tt, sin_tt = _build_rope_cache_tt(start_pos + S, cfg.head_dim, self.device, cfg.rope_theta)
 
         x = inputs_embeds
         for layer_idx in range(cfg.num_hidden_layers):
-            x = self._transformer_layer(x, layer_idx, (cos, sin), kv_cache, start_pos)
+            x = self._transformer_layer(x, layer_idx, (cos_tt, sin_tt), kv_cache, start_pos)
 
         # Final norm
         x = ttnn.rms_norm(
