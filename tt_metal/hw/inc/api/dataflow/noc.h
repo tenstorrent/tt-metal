@@ -107,6 +107,10 @@ private:
     }
 
 public:
+    // Invariant: default-constructed Noc shares noc_index with legacy noc_async_* free functions
+    // (which default their `noc` arg to noc_index, see dataflow_api.h). Mixed legacy + typed
+    // kernels rely on this for barrier coherence: a Noc{}.async_*_barrier() call flushes legacy
+    // noc_async_* transactions issued without an explicit noc arg, and vice versa.
     Noc() : noc_id_(noc_index) {}
     explicit Noc(uint8_t noc_id) : noc_id_(noc_id) {}
 
