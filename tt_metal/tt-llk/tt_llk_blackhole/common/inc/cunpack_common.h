@@ -213,6 +213,23 @@ inline void enable_int8_fpu_math()
  * \param unpack_dst_format Unpacker output (register) data format.
  * \return true if both formats are Int32 or Float32; false otherwise.
  */
+// Canonical srcA channel-1 X stride in bytes, derived from the unpacker dst format.
+// Used to compute the canonical Y/Z strides programmed into UNP0_ADDR_CTRL_*.
+inline constexpr std::uint32_t canonical_unpA_x_stride(const std::uint32_t unpack_dst_format)
+{
+    return (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float32) ? 4 : (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float16) ? 2 : 1;
+}
+
+// Canonical srcA channel-1 Y stride: full-tile sequential row step.
+//
+// This is the value programmed by configure_unpack_AB and the srca data-format reconfig,
+// so it serves as the documented baseline that operations which mutate Y-stride
+// (untilize, tilizeA_B) restore on uninit. See tt-llk#1015.
+inline constexpr std::uint32_t canonical_unpA_y_stride(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim)
+{
+    return FACE_C_DIM * face_r_dim * canonical_unpA_x_stride(unpack_dst_format);
+}
+
 inline constexpr bool is_32bit_input(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format)
 {
     const DataFormat input_df  = static_cast<DataFormat>(masked_data_format(unpack_src_format));
@@ -773,6 +790,12 @@ inline void configure_unpack_AB(
     cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =
         (0 << UNP1_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT) |
         (unpB_ch1_z_stride << UNP1_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT); // Z and W(not used) stride for dest address (ch1)
+
+    // Canonical Y-stride for srcA (ch1). Programmed here so per-op inits that mutate Y-stride
+    // (untilize, tilizeA_B) can deterministically restore this baseline on uninit instead of
+    // snapshotting the previous value. See tt-llk#1015.
+    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
+        canonical_unpA_y_stride(unpA_dst_format_masked, unpA_face_r_dim));
 
     // Math ALU_FORMAT_REG
     t6_mutex_acquire(mutex::REG_RMW);

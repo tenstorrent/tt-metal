@@ -24,9 +24,10 @@ inline void llk_unpack_untilize_init(std::uint32_t operand = 0) {
         unpack_dst_format[operand_id], get_local_cb_interface(operand_id).fifo_page_size, face_r_dim);
 }
 
-inline void llk_unpack_untilize_uninit() {
+inline void llk_unpack_untilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
+    std::uint32_t operand_id = get_operand_id(operand);
     WAYPOINT("UPUW");
-    _llk_unpack_untilize_uninit_();
+    _llk_unpack_untilize_uninit_((uint)unpack_dst_format[operand_id], face_r_dim);
     WAYPOINT("UPUD");
 }
 

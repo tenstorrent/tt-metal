@@ -177,11 +177,17 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
 
     if constexpr (dim_stride_target == p_dim_stride_target::FACE_ROW_MAJOR)
     {
-        std::uint32_t unpack_ch1_x_stride = datum_size_in_bytes(unpack_dst_format);
+        std::uint32_t unpack_ch1_x_stride = canonical_unpA_x_stride(unpack_dst_format);
         // FACE_R_DIM constant is used here because data is not stored densely in src/dest registers
         // so we want to keep standard stride for one face
         std::uint32_t unpack_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpack_ch1_x_stride;
         cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(unpack_ch1_z_stride);
+
+        // Re-establish the canonical Y-stride baseline for srcA. Per-op inits (untilize, tilizeA_B)
+        // mutate this register; configure_unpack_AB and this reconfig are the only places that
+        // commit the canonical value. See tt-llk#1015.
+        cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
+            canonical_unpA_y_stride(unpack_dst_format, unpack_face_r_dim));
 
         // Program unpacker0 per context x_dim (face size in l1)
         // Overrides value set by tile descriptor when thread override bit is set in unpack instruction
