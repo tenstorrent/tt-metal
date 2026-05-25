@@ -17,33 +17,11 @@ from typing import Any
 import ttnn
 from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
 
-# Shared-expert down proj (e.g. 32 x 10240 x 2048): 64 N-tiles / 32 cores => per_core_N=2,
-# which allows out_subblock_w=2 (perf report recommends out_subblock_h * out_subblock_w >= 2).
+# Down proj tuning: 32 cores, per_core_N=2, out_subblock_w=2 (avoids subblock_h*w==1 penalty).
 _DOWN_MATMUL_NUM_CORES = 32
 _DOWN_OUT_SUBBLOCK_W = 2
 
-# ---------------------------------------------------------------------------
-# w_o output projection decode matmul tuning — M=32, K=5120, N=2048
-# Default 64-core path gives per_core_N=1 → out_subblock_w=1 (SLOW in tracy).
-# 32 cores → per_core_N=2 → out_subblock_w=2, matching the down-proj pattern.
-#
-# Output sharding strategy (WIDTH_SHARDED):
-#   With mcast_in0=True the 1D multicast kernel width-parallelizes across N:
-#   each of the 32 compute cores independently produces its
-#   [per_core_M*TILE × per_core_N*TILE] = [32 × 64] output slice in its own DST
-#   registers.  Setting memory_config to WIDTH_SHARDED lets each core write that
-#   result directly to its local L1 bank (core-local store, no NOC hop) instead
-#   of routing it to DRAM via cross-chip NOC writes.  The net effect:
-#     • matmul writes: 32 local L1 writes of 4 KB each (fast)   vs.
-#                      32 NOC→DRAM writes of 4 KB each (slow, bandwidth-limited)
-#     • one follow-up to_memory_config gathers the 32 L1 shards to downstream
-#       format (DRAM or L1-interleaved), amortized across the whole output tensor
-#   Activation (in0) is NOT width-sharded — it is multicast via mcast_in0=True.
-#   K is the reduction dimension and is not partitioned.
-#   Weights stay DRAM-backed; 20 MB (K=5120×N=2048×2 B) does not fit in L1.
-#
-# Edit these constants directly to retune without touching function bodies.
-# ---------------------------------------------------------------------------
+# w_o decode tuning: 32 cores, per_core_N=2, out_subblock_w=2, WIDTH_SHARDED L1 output.
 _WO_NUM_CORES = 32  # total cores for 1D multicast; 32 → per_core_N=2 for N=2048
 _WO_PER_CORE_N = 2  # N=2048 → 64 N-tiles / 32 cores
 _WO_PER_CORE_M = 1  # M=32 → 1 M-tile (decode batch fits in one tile row)
@@ -66,8 +44,6 @@ class Matmul1dProgOverrides:
 
 
 # LM-head 1D multicast tuning (edit in source; ``None`` = auto heuristics).
-# Defaults for GLM-4.7-Flash full vocab on 110 cores: in0_block_w=4, per_core_M=1 (decode),
-# per_core_N=44, out_subblock_h=1, out_subblock_w=4.
 LM_HEAD_MATMUL_OVERRIDES = Matmul1dProgOverrides(
     in0_block_w=None,
     per_core_M=None,
@@ -509,9 +485,7 @@ def dram_sharded_mlp(
     return result_dram
 
 
-# Gate/up projection decode tuning — M=32, K=2048, N=3072
-# Nt=96 / per_core_N=2 => 48 cores (fits 8×6 sub-grid on WH-B0).
-# WIDTH_SHARDED output avoids cross-NOC DRAM writes during the matmul kernel.
+# Gate/up decode tuning: per_core_N=2, out_subblock_w=2, WIDTH_SHARDED L1 output.
 _GATE_UP_PER_CORE_N = 2
 _GATE_UP_OUT_SUBBLOCK_W = 2
 
@@ -590,10 +564,7 @@ def mlp_gate_up_linear(
         mcast_in0=True,
     )
 
-    # WIDTH_SHARDED output: each of num_cores compute cores writes its
-    # [m_tiles*TILE x per_core_N*TILE] result to its own L1 bank (core-local,
-    # no NOC hop during the matmul kernel).  to_memory_config below gathers
-    # all shards to the downstream interleaved format in one amortized pass.
+    # WIDTH_SHARDED output: each core writes its result shard to local L1; to_memory_config gathers downstream.
     out_shard_h = m_tiles * ttnn.TILE_SIZE
     out_shard_w = _GATE_UP_PER_CORE_N * ttnn.TILE_SIZE
     out_mc = ttnn.create_sharded_memory_config(
@@ -654,18 +625,7 @@ def attn_linear(
             return mlp_linear(a, b, device=device, cfg=cfg)
 
 
-# ---------------------------------------------------------------------------
-# w_kv_a decode matmul tuning — M=32, K=2048, N=1344
-# Default 64-core path gives per_core_N=1 → out_subblock_h*w==1 (SLOW).
-# 21 cores → per_core_N=2 → out_subblock_w=2, matching the down/wo pattern.
-#
-# Nt=42 tiles (N=1344); 42 / per_core_N=2 = 21 cores (fits 7×3 sub-grid).
-# WIDTH_SHARDED L1 output keeps each core's [32×64] result in its own bank;
-# a single to_memory_config gather then materializes to the downstream format,
-# replacing 21 cross-NOC DRAM writes with 21 core-local L1 stores.
-#
-# Edit these constants directly to retune without touching function bodies.
-# ---------------------------------------------------------------------------
+# w_kv_a decode tuning: 21 cores (7×3), per_core_N=2, out_subblock_w=2, WIDTH_SHARDED L1 output.
 _KVA_NUM_CORES = 21  # N=1344 → 42 N-tiles / per_core_N=2 = 21 cores
 _KVA_PER_CORE_N = 2  # N-tiles per core; must divide n_tiles (42 % 2 == 0)
 _KVA_PER_CORE_M = 1  # M=32 → 1 M-tile (decode batch fits in one tile row)
@@ -750,9 +710,7 @@ def attn_kva_linear(
         mcast_in0=_KVA_MCAST_IN0,
     )
 
-    # WIDTH_SHARDED output: each of _KVA_NUM_CORES cores stores its
-    # [per_core_M*TILE × per_core_N*TILE] = [32 × 64] result in its own
-    # L1 bank (core-local write, no NOC hop during the matmul kernel).
+    # WIDTH_SHARDED output: each core stores its [32×64] result in local L1 (no NOC hop).
     out_shard_h = _KVA_PER_CORE_M * ttnn.TILE_SIZE
     out_shard_w = _KVA_PER_CORE_N * ttnn.TILE_SIZE
     out_mc = ttnn.create_sharded_memory_config(
@@ -771,9 +729,7 @@ def attn_kva_linear(
         memory_config=out_mc,
     )
 
-    # Gather the _KVA_NUM_CORES WIDTH_SHARDED L1 shards to interleaved.
-    # Downstream ttnn.slice requires non-sharded layout; keeping in L1 where
-    # possible avoids an extra DRAM round-trip before the nope/rope splits.
+    # Gather WIDTH_SHARDED L1 shards to interleaved; avoids DRAM round-trip before nope/rope splits.
     out = ttnn.to_memory_config(out_sharded, cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(out_sharded, force=False)
     return out
@@ -831,11 +787,7 @@ def attn_wo_linear(
         mcast_in0=_WO_MCAST_IN0,
     )
 
-    # WIDTH_SHARDED output: shard shape [per_core_M*TILE, per_core_N*TILE] = [32, 64].
-    # Core grid matches the compute grid exactly so each core owns its output slice.
-    # ShardStrategy.WIDTH distributes along the N (column) dimension — the natural
-    # decomposition of mcast_in0=True where each core independently computes its
-    # N-column slice of the result.
+    # WIDTH_SHARDED output: shard [32, 64], core grid matches compute grid, distributes along N.
     out_shard_h = _WO_PER_CORE_M * ttnn.TILE_SIZE  # 32 rows
     out_shard_w = _WO_PER_CORE_N * ttnn.TILE_SIZE  # 64 cols
     out_mc = ttnn.create_sharded_memory_config(
@@ -857,10 +809,7 @@ def attn_wo_linear(
     if _WO_ACT_IN_L1:
         ttnn.deallocate(act, force=False)
 
-    # Materialize WIDTH_SHARDED L1 output to the downstream interleaved format.
-    # This is a single flat gather (each core reads its 4 KB shard and writes to
-    # DRAM/L1-interleaved) — cheaper than the 32 cross-NOC DRAM writes the matmul
-    # would have issued if the output memory config were DRAM directly.
+    # Gather WIDTH_SHARDED L1 output to downstream interleaved (cheaper than per-core NOC→DRAM writes).
     out = ttnn.to_memory_config(out_sharded, cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(out_sharded, force=False)
     return out

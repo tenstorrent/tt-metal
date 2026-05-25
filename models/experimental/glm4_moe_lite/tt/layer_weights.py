@@ -58,14 +58,7 @@ def _tp_mesh_mapper(device: Any, *, shard_dim: int) -> Any | None:
 
 
 def _env_experts_dtype() -> ttnn.DataType:
-    """Return TT dtype for routed expert weights.
-
-    Default is BFP4 (bfloat4_b): the routed gate/up/down sparse matmuls on
-    GLM-4.7-Flash are DRAM-bandwidth-saturated (~155-160% effective DRAM bw
-    observed at HiFi2 + BFP8). Halving weight bytes via BFP4 directly reduces
-    DRAM traffic for the dominant `routed_experts` block (~38% of decode).
-    Override via `GLM4_MOE_LITE_EXPERTS_TT_DTYPE` (e.g. set to bf8 to revert).
-    """
+    """Return TT dtype for routed expert weights (default BFP4; override via GLM4_MOE_LITE_EXPERTS_TT_DTYPE)."""
     override = os.environ.get("GLM4_MOE_LITE_EXPERTS_TT_DTYPE", "").strip().lower()
     if not override:
         return ttnn.bfloat4_b
@@ -102,21 +95,6 @@ def _env_dense_dtype() -> ttnn.DataType:
     if override in {"bf4", "bfloat4_b"}:
         return ttnn.bfloat4_b
     raise ValueError(f"Invalid GLM4_MOE_LITE_DENSE_TT_DTYPE={override!r}")
-
-
-_ATTN_DTYPE_TAG = {
-    ttnn.bfloat16: "bf16",
-    ttnn.bfloat8_b: "bf8",
-    ttnn.bfloat4_b: "bf4",
-}
-
-
-def _attn_dtype_tag(dtype: ttnn.DataType) -> str:
-    return _ATTN_DTYPE_TAG.get(dtype, str(dtype))
-
-
-# Back-compat alias — older code paths reference _kvb_dtype_tag.
-_kvb_dtype_tag = _attn_dtype_tag
 
 
 def _env_attn_dp() -> bool:
@@ -637,9 +615,7 @@ def convert_decoder_layer_weights(
     attn_proj_mapper = None if attn_dp else attn_row_mapper
     attn_proj_variant = f"{attn_variant}_attndp" if attn_dp and attn_variant else attn_variant
 
-    # All MLA linear projection weights use BFP8 (DRAM-bandwidth-bound in the
-    # baseline: w_o 32x5120x2048 @ 83% DRAM util; q_a 32x2048x3072 @ 80%;
-    # kv_a 32x2048x1344 @ 63%). BFP8 halves weight-side DRAM traffic.
+    # All MLA projection weights use BFP8 (DRAM-bandwidth-bound; halves weight-side DRAM traffic).
     attn_proj_dtype = ttnn.bfloat8_b
 
     w_q_a = _linear_weight_tt(
@@ -703,9 +679,7 @@ def convert_decoder_layer_weights(
             w_kv_b1_mapper = None  # replicate
             w_kv_b1_variant = f"{attn_variant}_rep"
 
-    # Per-head MLA kv_b weights use BFP8 (DRAM-bandwidth-bound: 16-27%
-    # utilization; BFP8 halves weight traffic). The ``_bf8`` variant suffix is
-    # kept for explicitness in the cache directory (already in use on disk).
+    # Per-head kv_b weights use BFP8 (DRAM-bandwidth-bound); variant suffix kept for cache explicitness.
     kvb_dtype = ttnn.bfloat8_b
     kvb_tag = "bf8"
     w_kv_b1 = _per_head_weight_tt(
@@ -738,9 +712,7 @@ def convert_decoder_layer_weights(
         mesh_mapper=kvb2_mapper,
     )
 
-    # w_o stays row-parallel even when ATTN_DP=1 (it MUST have all_reduce for correctness).
-    # Largest single decode matmul (32x5120x2048 @ 83% DRAM util) → BFP8 weight bytes
-    # halve the dominant bandwidth cost.
+    # w_o stays row-parallel even when ATTN_DP=1 (needs all_reduce); BFP8 halves DRAM traffic.
     w_o = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.o_proj.weight"],
@@ -783,9 +755,7 @@ def convert_decoder_layer_weights(
         mlp_gate_mapper = _tp_mesh_mapper(device, shard_dim=3)
         mlp_down_mapper = _tp_mesh_mapper(device, shard_dim=2)
 
-    # Shared / dense MLP weights use BFP8 (DRAM-bandwidth-saturated: gate_up
-    # 32x2048x3072 @ 80% DRAM; down 32x1536x2048 similar). BFP8 halves the
-    # dominant weight-byte DRAM traffic on every MoE layer decode token.
+    # Shared/dense MLP weights use BFP8 (DRAM-bandwidth-saturated; halves weight DRAM traffic).
     mlp_dtype = ttnn.bfloat8_b
     w_mlp_gate = _linear_weight_tt(
         device=device,
@@ -864,8 +834,7 @@ def convert_decoder_layer_weights(
         moe_intermediate = int(hparams.moe_intermediate_size)
         hidden = int(hparams.hidden_size)
         num_devices = int(device.get_num_devices()) if _is_mesh_device(device) else 1
-        # Cache key includes dtype to prevent silent reuse of BFP8 caches after the
-        # BFP4 default flip (see _env_experts_dtype docstring).
+        # Cache key includes dtype to prevent silent reuse after the BFP4 default flip.
         experts_variant = f"localE_d{num_devices}_dt{str(experts_dtype).split('.')[-1]}_v2"
 
         # Stack experts: [E, in, out] with TT linear conventions.
