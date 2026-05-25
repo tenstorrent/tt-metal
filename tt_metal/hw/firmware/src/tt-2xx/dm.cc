@@ -112,7 +112,6 @@ void device_setup() {
     // clock gating
     set_deassert_addresses();
     setup_isr_csrs();
-    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     // wzeromem
     // invalidate_l1_cache
     // clear_destination_registers
@@ -221,6 +220,7 @@ extern "C" uint32_t _start1() {
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
+        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
         trigger_sync_register_init();
 
         DeviceProfilerInit();
@@ -295,7 +295,6 @@ extern "C" uint32_t _start1() {
                 my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
                 my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
                 overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-                noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 // re-initialize the NoCs
                 // uint8_t cmd_buf;
                 // if (noc_mode == DM_DEDICATED_NOC) {
