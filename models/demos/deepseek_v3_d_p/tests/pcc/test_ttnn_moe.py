@@ -148,6 +148,7 @@ def test_ttnn_moe(
     num_links,
     topology,
     gate_fallback_mode,
+    request,
 ):
     """
     Test TtMoe PCC against TorchMoe reference.
@@ -159,6 +160,8 @@ def test_ttnn_moe(
 
     if variant.supported_meshes is not None and tuple(mesh_device.shape) not in variant.supported_meshes:
         pytest.skip(f"{variant.name!r} not validated on mesh {tuple(mesh_device.shape)}")
+
+    variant_config = variant.get_config(request)
 
     if variant.required_gate_fallback_mode is not None:
         assert (
@@ -326,8 +329,10 @@ def test_ttnn_moe(
             routed_expert_weights=all_routed_weights,
             shared_expert_weights=shared_expert_weights,
             gate_weights=gate_weights,
+            n_expert_groups=variant_config.n_group,
+            n_limited_groups=variant_config.topk_group,
+            route_scale=variant_config.routed_scaling_factor,
         )
-        variant.apply_gate_overrides_to_torch_moe(torch_moe)
         profiler.end("torch_moe_creation")
 
         profiler.start("torch_forward")
@@ -364,8 +369,10 @@ def test_ttnn_moe(
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=moe_cache_dir,
         layer_idx=layer_idx,
+        n_expert_groups=variant_config.n_group,
+        n_limited_groups=variant_config.topk_group,
+        route_scale=variant_config.routed_scaling_factor,
     )
-    variant.apply_gate_overrides_to_tt_moe(tt_moe)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
 
@@ -563,12 +570,11 @@ def test_ttnn_moe(
     profiler.start("reference")
     ref_out = run_reference_moe(
         variant,
+        config=variant_config,
         gate_weights=gate_weights,
         routed_expert_weights=all_routed_weights,
         shared_expert_weights=shared_expert_weights,
         x=x,
-        num_routed_experts=num_routed_experts,
-        num_experts_per_tok=num_experts_per_tok,
     )
     if ref_out is not None and tt_output is not None:
         logger.info("Running upstream MoE reference")

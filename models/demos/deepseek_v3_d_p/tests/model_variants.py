@@ -6,20 +6,17 @@
 Per-variant test configurations for the DeepSeek V3 architecture family.
 
 Adding a new variant: subclass `ModelVariant`, implement
-`build_reference_config()` (return `None` if no reference), instantiate
-`<NAME> = <SubclassName>(...)`, and append it to `MODEL_VARIANTS` at the
-bottom. Wire `reference_*_cls` only if you also vendor that variant's
-upstream reference into `deepseek_v3_d_p/reference/`.
+`build_reference_config()` to return a populated `PretrainedConfig`,
+instantiate `<NAME> = <SubclassName>(...)`, and append it to
+`MODEL_VARIANTS` at the bottom. Wire `reference_*_cls` only if you also
+vendor that variant's upstream reference into `deepseek_v3_d_p/reference/`.
 """
 
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from abc import ABC
 from typing import FrozenSet, Optional, Tuple
 
 from transformers.configuration_utils import PretrainedConfig
 
-from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3Config as DSv3RefConfig
-from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k26.configuration_deepseek import DeepseekV3Config as KimiRefConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k26.kimi_k26_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k26.modeling_deepseek import DeepseekV3Attention as KimiRefAttention
@@ -27,37 +24,30 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k26.modeling_deepseek import De
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 
 
-@dataclass(frozen=True)
-class GateRouting:
-    n_expert_groups: int
-    n_limited_groups: int
-    route_scale: float
-
-
 class ModelVariant(ABC):
     """One variant of the DeepSeek V3 architecture family.
 
-    Subclasses implement `build_reference_config()` — return a
-    `PretrainedConfig` to enable the upstream HF cross-check, or `None` to
-    skip it. `reference_*_cls` must be set on the variant for the cross-check
-    to run.
+    Subclasses implement `build_reference_config()` returning a populated
+    `PretrainedConfig`. The config is built once at construction and is the
+    single source of truth for variant model params; read it via
+    `get_config()`. `reference_*_cls` must be set for the upstream HF
+    cross-check to actually run; without it, the config is still used to
+    parametrize TT/torch constructors.
     """
 
     def __init__(
         self,
         *,
         name: str,
-        gate: GateRouting,
         reference_moe_cls: Optional[type] = None,
         reference_attention_cls: Optional[type] = None,
-        moe_pcc_threshold: float = 0.96,
-        mla_pcc_threshold: float = 0.98,
+        moe_pcc_threshold: float = 0.999,
+        mla_pcc_threshold: float = 0.999,
         supported_meshes: Optional[FrozenSet[Tuple[int, int]]] = None,
         required_gate_fallback_mode: Optional[GateComputeMode] = None,
         supports_pretrained: bool = True,
     ) -> None:
         self.name = name
-        self.gate = gate
         self.reference_moe_cls = reference_moe_cls
         self.reference_attention_cls = reference_attention_cls
         self.moe_pcc_threshold = moe_pcc_threshold
@@ -65,35 +55,20 @@ class ModelVariant(ABC):
         self.supported_meshes = supported_meshes
         self.required_gate_fallback_mode = required_gate_fallback_mode
         self.supports_pretrained = supports_pretrained
+        self._config: Optional[PretrainedConfig] = None
 
-    @abstractmethod
     def build_reference_config(self) -> Optional[PretrainedConfig]:
-        """Variant-specific HF reference config for the reference chech, or None to skip.
-        Subclasses must override."""
+        """Construct an HF config from constants. Default: None (variant
+        overrides `get_config` to source its config elsewhere)."""
+        return None
 
-    def apply_gate_overrides_to_tt_moe(self, tt_moe) -> None:
-        g = self.gate
-        cfg = tt_moe.gate.config
-        cfg.n_expert_groups = g.n_expert_groups
-        cfg.n_limited_groups = g.n_limited_groups
-        cfg.route_scale = g.route_scale
-        ref_cfg = getattr(tt_moe.gate, "ref_config", None)
-        if ref_cfg is not None:
-            ref_cfg.n_group = g.n_expert_groups
-            ref_cfg.topk_group = g.n_limited_groups
-            ref_cfg.routed_scaling_factor = g.route_scale
-        ref_model = getattr(tt_moe.gate, "reference_model", None)
-        if ref_model is not None:
-            ref_model.n_group = g.n_expert_groups
-            ref_model.topk_group = g.n_limited_groups
-            ref_model.routed_scaling_factor = g.route_scale
-
-    def apply_gate_overrides_to_torch_moe(self, torch_moe) -> None:
-        g = self.gate
-        gate = torch_moe.gate
-        gate.n_group = g.n_expert_groups
-        gate.topk_group = g.n_limited_groups
-        gate.routed_scaling_factor = g.route_scale
+    def get_config(self, request) -> PretrainedConfig:
+        """Resolve and cache the variant's HF reference config. Default
+        sources from `build_reference_config()`; variants that load from
+        disk override this and read a fixture off `request`."""
+        if self._config is None:
+            self._config = self.build_reference_config()
+        return self._config
 
 
 # ---------------------------------------------------------------------------
@@ -102,18 +77,10 @@ class ModelVariant(ABC):
 
 
 class DSv3Variant(ModelVariant):
-    def build_reference_config(self) -> DSv3RefConfig:
-        c = DeepSeekV3Config
-        return DSv3RefConfig(
-            hidden_size=c.EMB_SIZE,
-            num_attention_heads=c.NUM_ATTENTION_HEADS,
-            num_key_value_heads=c.NUM_ATTENTION_HEADS,
-            q_lora_rank=c.Q_LORA_RANK,
-            kv_lora_rank=c.KV_LORA_RANK,
-            qk_nope_head_dim=c.QK_NOPE_HEAD_DIM,
-            qk_rope_head_dim=c.QK_ROPE_HEAD_DIM,
-            v_head_dim=c.V_HEAD_DIM,
-        )
+    def get_config(self, request) -> PretrainedConfig:
+        if self._config is None:
+            self._config = request.getfixturevalue("config_only")
+        return self._config
 
 
 class KimiVariant(ModelVariant):
@@ -158,22 +125,10 @@ class KimiVariant(ModelVariant):
         )
 
 
-DSV3 = DSv3Variant(
-    name="dsv3",
-    gate=GateRouting(
-        n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
-        n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
-        route_scale=DeepSeekV3Config.ROUTE_SCALE,
-    ),
-)
+DSV3 = DSv3Variant(name="dsv3")
 
 KIMI = KimiVariant(
     name="kimi",
-    gate=GateRouting(
-        n_expert_groups=KimiK26Config.NUM_EXPERT_GROUPS,
-        n_limited_groups=KimiK26Config.NUM_LIMITED_GROUPS,
-        route_scale=KimiK26Config.ROUTE_SCALE,
-    ),
     reference_moe_cls=KimiRefMoE,
     reference_attention_cls=KimiRefAttention,
     supported_meshes=frozenset({(8, 4)}),

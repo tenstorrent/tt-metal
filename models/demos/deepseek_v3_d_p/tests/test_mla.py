@@ -191,7 +191,7 @@ def test_mla(
         config, sd = request.getfixturevalue("pretrained_transformer_weights")
         weights = sd["layers"][0]["mla_weights"]
     else:
-        config, weights = random_weights(variant.build_reference_config())
+        config, weights = random_weights(variant.get_config(request))
 
     fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
     topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
@@ -365,6 +365,7 @@ def test_mla(
         position_ids_ref = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
         ref_out = run_reference_mla(
             variant,
+            config=config,
             weights=weights,
             hidden_states=hidden_states,
             position_ids=position_ids_ref,

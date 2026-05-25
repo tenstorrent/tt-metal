@@ -153,6 +153,9 @@ class TtMoe(LightweightModule):
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
         overlap_shared_expert_with_dispatch: bool = True,
+        n_expert_groups: int = DeepSeekV3Config.NUM_EXPERT_GROUPS,
+        n_limited_groups: int = DeepSeekV3Config.NUM_LIMITED_GROUPS,
+        route_scale: float = DeepSeekV3Config.ROUTE_SCALE,
     ):
         """
         Initialize TtMoe module.
@@ -224,6 +227,9 @@ class TtMoe(LightweightModule):
         gate_config.sp_dim = seq_len_per_chip
         gate_config.n_routed_experts = num_routed_experts
         gate_config.n_activated_experts = num_experts_per_tok
+        gate_config.n_expert_groups = n_expert_groups
+        gate_config.n_limited_groups = n_limited_groups
+        gate_config.route_scale = route_scale
         gate_config.ccl_config["NUM_LINKS"] = self.col_num_links if isinstance(num_links, tuple) else num_links
 
         # Handle cache-only case (gate_weights=None)

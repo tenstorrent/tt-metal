@@ -21,21 +21,15 @@ from models.demos.deepseek_v3_d_p.tests.model_variants import ModelVariant
 def run_reference_moe(
     variant: ModelVariant,
     *,
+    config,
     gate_weights,
     routed_expert_weights,
     shared_expert_weights,
     x,
-    num_routed_experts: Optional[int] = None,
-    num_experts_per_tok: Optional[int] = None,
 ) -> Optional[torch.Tensor]:
     """Forward the variant's upstream MoE reference on CPU."""
     if variant.reference_moe_cls is None:
         return None
-    config = variant.build_reference_config()
-    if num_routed_experts is not None:
-        config.n_routed_experts = num_routed_experts
-    if num_experts_per_tok is not None:
-        config.num_experts_per_tok = num_experts_per_tok
     moe = variant.reference_moe_cls(config)
     moe.load_state_dict(
         _pack_reference_moe_state_dict(gate_weights, routed_expert_weights, shared_expert_weights),
@@ -49,6 +43,7 @@ def run_reference_moe(
 def run_reference_mla(
     variant: ModelVariant,
     *,
+    config,
     weights,
     hidden_states,
     position_ids,
@@ -57,7 +52,7 @@ def run_reference_mla(
     if variant.reference_attention_cls is None:
         return None
     _, q_len, _ = hidden_states.shape
-    attn = variant.reference_attention_cls(variant.build_reference_config(), layer_idx=0)
+    attn = variant.reference_attention_cls(config, layer_idx=0)
     attn.load_state_dict(weights, strict=False)
     attn = attn.eval().to(torch.bfloat16)
     causal = torch.triu(torch.full((q_len, q_len), float("-inf"), dtype=hidden_states.dtype), diagonal=1)

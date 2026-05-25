@@ -102,6 +102,9 @@ class TorchMoe(nn.Module):
         routed_expert_weights: list = None,
         shared_expert_weights: dict = None,
         gate_weights: dict = None,
+        n_expert_groups: int = None,
+        n_limited_groups: int = None,
+        route_scale: float = None,
     ):
         """
         Initialize MinimalMoE with configuration parameters.
@@ -141,11 +144,11 @@ class TorchMoe(nn.Module):
             ref_config = SimpleNamespace(
                 num_experts_per_tok=num_experts_per_tok,
                 n_routed_experts=num_routed_experts,
-                routed_scaling_factor=DeepSeekV3Config.ROUTE_SCALE,
+                routed_scaling_factor=route_scale if route_scale is not None else DeepSeekV3Config.ROUTE_SCALE,
                 scoring_func="sigmoid",
                 topk_method="noaux_tc",
-                n_group=DeepSeekV3Config.NUM_EXPERT_GROUPS,
-                topk_group=DeepSeekV3Config.NUM_LIMITED_GROUPS,
+                n_group=n_expert_groups if n_expert_groups is not None else DeepSeekV3Config.NUM_EXPERT_GROUPS,
+                topk_group=n_limited_groups if n_limited_groups is not None else DeepSeekV3Config.NUM_LIMITED_GROUPS,
                 norm_topk_prob=True,
                 hidden_size=emb_dim,
             )
