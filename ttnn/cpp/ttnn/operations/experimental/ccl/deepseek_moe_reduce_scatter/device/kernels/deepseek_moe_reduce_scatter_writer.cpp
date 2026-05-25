@@ -153,10 +153,7 @@ void kernel_main() {
         page_size * 2);
 
     // execute pre op barrier wait phase
-    // Legacy primitives retained (#45003 item 4): pre_op_barrier_semaphore is a GlobalSemaphore address
-    // (deepseek_moe_reduce_scatter_program_factory.cpp). GlobalSemaphore exposes only address() — there is no
-    // id(). Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore.
-    // Structural limitation, not a migration backlog item.
+    // Device 2.0 migration: legacy primitives retained, pre_op_barrier_semaphore is a GlobalSemaphore address.
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 0);
 
@@ -253,9 +250,8 @@ void kernel_main() {
                 cb_reduced.wait_front(tile_granularity);
                 uint32_t output_l1_read_addr = cb_reduced.get_read_ptr();
                 for (uint32_t j = 0; j < tile_granularity; ++j) {
-                    // Legacy primitive retained (#45003 item 4): writes a single page
-                    // via TensorAccessor with manual l1-read-addr arithmetic; not a clean
-                    // match for Noc::async_write's endpoint-based forms.
+                    // Device 2.0 migration: no Device 2.0 endpoint for "raw local L1 address as write source."
+                    // Same gap as MEM_ZEROS callsites.
                     noc_async_write_page(tiles_read, output_tensor_accessor, output_l1_read_addr);
                     output_l1_read_addr += page_size;
                     tiles_read++;

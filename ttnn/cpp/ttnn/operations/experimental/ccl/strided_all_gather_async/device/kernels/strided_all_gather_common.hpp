@@ -160,7 +160,7 @@ FORCE_INLINE uint32_t read_chunk(
                 read_output ? output_tensor_Wt : input_tensor_Wt,
                 input_tensor_Ht);
             if (tile_id >= 0) {
-                // Legacy primitive retained (#45003 item 4): precomposed uint64_t address
+                // Device 2.0 migration: legacy primitive retained, precomposed uint64_t address
                 // from get_noc_addr(tile_id, accessor).
                 uint64_t noc_read_addr =
                     get_noc_addr(tile_id, read_output ? output_tensor_addrgen : input_tensor_addrgen);
@@ -305,7 +305,7 @@ FORCE_INLINE uint32_t write_chunk(
                     uint64_t local_noc0_dest_noc_addr_tile_one = output_addrgen.get_noc_addr(tile_one_id);
                     uint64_t local_noc0_dest_noc_addr_tile_two = output_addrgen.get_noc_addr(tile_two_id);
 
-                    // Legacy primitive retained (#45003 item 4): precomposed uint64_t dst addrs.
+                    // Legacy primitive retained: precomposed uint64_t dst addrs.
                     noc_async_write(l1_read_addr, local_noc0_dest_noc_addr_tile_one, output_page_size);
                     noc_async_write(
                         l1_read_addr + output_page_size, local_noc0_dest_noc_addr_tile_two, output_page_size);
@@ -324,7 +324,7 @@ FORCE_INLINE uint32_t write_chunk(
                 if (direction == 1 && write_local) {
                     uint64_t local_noc0_dest_noc_addr = output_addrgen.get_noc_addr(tile_one_id);
 
-                    // Legacy primitive retained (#45003 item 4): precomposed uint64_t dst addr.
+                    // Legacy primitive retained: precomposed uint64_t dst addr.
                     noc_async_write(l1_read_addr, local_noc0_dest_noc_addr, output_page_size);
                     noc_obj.async_write_barrier();
                 }

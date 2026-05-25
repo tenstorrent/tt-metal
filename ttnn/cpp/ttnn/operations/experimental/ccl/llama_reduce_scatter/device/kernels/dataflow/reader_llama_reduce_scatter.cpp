@@ -63,11 +63,7 @@ void kernel_main() {
     constexpr uint32_t total_senders = num_sender_cores * other_devices;
 
     // Runtime arguments
-    // Legacy primitive retained (#45003 item 4): cross_device_semaphore is a GlobalSemaphore
-    // (llama_reduce_scatter_program_factory.cpp). GlobalSemaphore exposes only address() — there is no id().
-    // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore.
-    // Structural limitation, not a migration backlog item. Keep the raw address handle for downstream
-    // noc_semaphore_* calls.
+    // Device 2.0 migration: legacy primitive retained, cross_device_semaphore is a GlobalSemaphore.
     uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
     Semaphore<> local_sem(get_arg_val<uint32_t>(rt_arg_idx++));
     bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
@@ -162,14 +158,14 @@ void kernel_main() {
                 {});
         }
 
-        // Legacy primitive retained (#45003 item 4): see receiver_semaphore_address note.
+        // Legacy primitive retained: see receiver_semaphore_address note.
         noc_semaphore_wait((uint32_t*)receiver_semaphore_address, other_devices);
 
         noc_obj.async_read_barrier();
         cb_fabric_receiver.push_back(num_pages_per_packet * num_devices);
     }
     local_sem.set(INVALID);
-    // Legacy primitive retained (#45003 item 4): see receiver_semaphore_address note.
+    // Legacy primitive retained: see receiver_semaphore_address note.
     noc_semaphore_set((uint32_t*)receiver_semaphore_address, INVALID);
     noc_obj.async_write_barrier();
 }

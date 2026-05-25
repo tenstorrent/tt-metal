@@ -198,7 +198,7 @@ void kernel_main() {
 
         // Process all tiles
         for (uint32_t tile = 0; tile < num_packets; tile++) {
-            // Legacy primitive retained (#45003 item 4): precomposed uint64_t noc_addresses[].
+            // Device 2.0 migration: legacy primitive retained, precomposed uint64_t noc_addresses[]
             noc_async_write(accumulator_l1_addresses[tile], noc_addresses[tile], page_size_bytes);
         }
         noc_obj.async_write_barrier();

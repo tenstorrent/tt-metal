@@ -193,10 +193,10 @@ void kernel_main() {
         // In the linear case, I expect num_targets_forward_direction slices from the right
         // In the ring case, I expect num_targets_forward_direction slices from the right (keep in mind this differs for
         // odd/even chips)
-        // Legacy primitive retained (#45003 item 4): out_ready_sem is the address of a GlobalSemaphore
-        // (std::vector<GlobalSemaphore>& semaphore in the program factory). GlobalSemaphore exposes only address()
-        // — there is no id(). Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a
-        // GlobalSemaphore. Structural limitation, not a migration backlog item.
+
+        // Device 2.0: legacy primitive retained, out_ready_sem is the address of a GlobalSemaphore
+        // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a
+        // GlobalSemaphore.
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), slices_received + 1);
         // Got it
         slices_received++;
@@ -267,7 +267,6 @@ void kernel_main() {
             }
         }
     }
-    // Legacy primitive retained (#45003 item 4): out_ready_sem is a GlobalSemaphore address (see wait_min note
-    // above for the structural reason).
+    // Device 2.0 migration: legacy primitive retained, out_ready_sem is a GlobalSemaphore address.
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }

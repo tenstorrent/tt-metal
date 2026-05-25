@@ -297,7 +297,7 @@ void kernel_main() {
         tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
 
         if constexpr (is_termination_master) {
-            // Legacy primitive retained (#45003 item 4): termination_sync_address is used both
+            // Device 2.0: legacy primitive retained, termination_sync_address is used both
             // as a local L1 pointer here and as a remote noc target via safe_get_noc_addr below.
             auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
             noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
@@ -305,7 +305,7 @@ void kernel_main() {
         } else {
             uint64_t dest_addr =
                 safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
-            // Legacy primitive retained (#45003 item 4): precomposed uint64_t dst addr.
+            // Legacy primitive retained: precomposed uint64_t dst addr.
             noc_semaphore_inc(dest_addr, 1);
             noc_obj.async_atomic_barrier();
         }

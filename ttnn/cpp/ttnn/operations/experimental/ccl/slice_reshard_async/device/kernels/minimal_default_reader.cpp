@@ -33,11 +33,7 @@ inline void zeroPad(uint32_t cb_output_id) {
     const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     uint32_t cb_write_addr = get_write_ptr(cb_output_id);
 
-    // Legacy primitive retained (#45003 item 4): MEM_ZEROS_BASE self-read has no typed Noc trait
-    // (the local x/y are implicit in get_noc_addr(addr)). Both these calls and the Noc instance
-    // used elsewhere in this kernel issue on noc_index — legacy noc_async_read defaults its noc
-    // arg to noc_index (dataflow_api.h), and Noc{} default-constructs noc_id_ to noc_index
-    // (noc.h Noc() ctor) — so the caller's async_read_barrier() flushes these reads too.
+    // Device 2.0 migration: legacy primitive retained, MEM_ZEROS_BASE self-read has no typed Noc trait
     for (uint32_t i = 0; i < num_full_reads; ++i) {
         noc_async_read(zeros_noc_addr, cb_write_addr, MEM_ZEROS_SIZE);
         cb_write_addr += MEM_ZEROS_SIZE;
@@ -117,10 +113,7 @@ void kernel_main() {
         }
     }
 
-    // Legacy primitive retained (#45003 item 4): out_ready_sem is the address of a GlobalSemaphore
-    // (args.final_semaphore in slice_reshard_async_program_factory.cpp). GlobalSemaphore exposes only address() —
-    // there is no id(). Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a
-    // GlobalSemaphore. Structural limitation, not a migration backlog item.
+    // Device 2.0: legacy primitive retained, out_ready_sem is the address of a GlobalSemaphore.
     if (!is_first_chip) {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 1);
     }
