@@ -128,7 +128,11 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         )
         num_of_users = tokens.shape[0]
         if sample_on_device:
-            self._validate_and_initialize_sampling(sampling_params, sample_on_device)
+            self._validate_and_initialize_sampling(
+                sampling_params,
+                sample_on_device,
+                enable_trace=False,
+            )
 
         user_outputs = []
         for i in range(num_of_users):
@@ -159,12 +163,14 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
 
             if sample_on_device:
                 prefill_logits = self._slice_last_token_logits(prefill_logits, prompt_len, expand_to_batch=True)
-                prefill_logits_sampled_device = self._sample_tokens_device(prefill_logits, user_slots=[user_id])
+                prefill_logits_sampled_device = self._sample_tokens_device(
+                    prefill_logits, user_slots=[user_id], skip_precompile=True
+                )
                 prefill_logits_sampled_host = self._tokens_from_device(
-                    prefill_logits_sampled_device, self.mesh_device, batch_size_per_row=1
+                    prefill_logits_sampled_device, self.mesh_device, batch_size_per_row=self.batch_size_per_row
                 )
                 # Device-sampling path emits token ids.
-                user_output = prefill_logits_sampled_host[0].to(torch.int64)
+                user_output = prefill_logits_sampled_host[user_id].to(torch.int64)
             else:
                 assert isinstance(prefill_logits, torch.Tensor), "prefill_logits should be a torch.Tensor on host"
                 user_logits = prefill_logits.squeeze(0).squeeze(0)  # [1, 1, S, V] -> [S, V]
@@ -197,13 +203,18 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         read_from_device = kwargs.get("read_from_device", True)
         sampling_params = kwargs.get("sampling_params", None)
         sample_on_device = bool(sampling_params is not None)
+
         # Set kv_cache if provided and all entries are valid
         if kv_cache is not None and not any(entry is None for entry in kv_cache):
             self.set_kv_cache(kv_cache)
 
         tokens_step = kwargs["tokens"].squeeze(1)
         if sample_on_device:
-            self._validate_and_initialize_sampling(sampling_params, sample_on_device, enable_trace=enable_trace)
+            self._validate_and_initialize_sampling(
+                sampling_params,
+                sample_on_device,
+                enable_trace=enable_trace,
+            )
         decode_step_output = super().decode_forward(
             tokens=tokens_step,
             start_pos=kwargs["start_pos"],
@@ -213,7 +224,11 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         )
 
         if sample_on_device:
-            decode_output = self._sample_tokens_device(decode_step_output, enable_trace=enable_trace)
+            decode_output = self._sample_tokens_device(
+                decode_step_output,
+                enable_trace=enable_trace,
+                skip_precompile=True,
+            )
             if read_from_device:
                 decode_output = self._tokens_from_device(
                     decode_output, self.mesh_device, batch_size_per_row=self.batch_size_per_row

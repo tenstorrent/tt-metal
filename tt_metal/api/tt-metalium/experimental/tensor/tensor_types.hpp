@@ -12,6 +12,7 @@
 #include <algorithm>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/float8.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -34,7 +35,10 @@ enum class DataType {
     UINT8 = 5,
     UINT16 = 6,
     INT32 = 7,
-    INVALID = 8,
+    // WARNING: narrowly supported — Blackhole only, ROW-MAJOR only for now, used exclusively
+    // by the DeepSeek V3 prefill combine and dispatch ops. Check op support before opting in.
+    FP8_E4M3 = 8,
+    INVALID = 9,
 };
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type);
