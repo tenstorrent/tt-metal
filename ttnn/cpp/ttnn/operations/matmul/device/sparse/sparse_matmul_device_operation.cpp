@@ -98,7 +98,10 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         sparsity.layout() == ttnn::Layout::ROW_MAJOR,
         "Sparsity tensor must be ROW_MAJOR layout, got {}",
         sparsity.layout());
-
+    TT_FATAL(
+        sparsity.logical_shape().rank() >= 1,
+        "Sparsity tensor must have rank >= 1, got {}",
+        sparsity.logical_shape().rank());
     TT_FATAL(
         operation_attributes.is_input_a_sparse || operation_attributes.is_input_b_sparse,
         "sparse_matmul requires at least one of is_input_a_sparse or is_input_b_sparse to be true");
@@ -180,9 +183,13 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     // Check that sparsity has enough entries
     TT_FATAL(
         sparsity.logical_volume() == batch_length,
-        "sparsity.logical_volume() ({}) must be equal to the product of all batch dimensions ({})",
+        "sparsity logical_volume ({}) must equal batch_length ({}) "
+        "[sparsity_shape={}, is_input_a_sparse={}, is_input_b_sparse={}]",
         sparsity.logical_volume(),
-        batch_length);
+        batch_length,
+        sparsity.logical_shape(),
+        operation_attributes.is_input_a_sparse,
+        operation_attributes.is_input_b_sparse);
 
     TT_FATAL(
         operation_attributes.nnz.value_or(1) <= batch_length,
