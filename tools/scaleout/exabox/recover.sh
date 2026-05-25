@@ -21,6 +21,14 @@ Optional:
     --skip-reset                            Skip tt-smi reset, only run validation
     --skip-validation                       Skip validation, only run tt-smi reset
     --no-send-traffic                       Disable --send-traffic in cluster validation
+    --check                                 Dry run: verify MPI can reach all hosts via hostname, then exit
+    --mpi-if <interface>                    Network interface for MPI TCP transport (default: ens5f0np0)
+                                            Use a specific interface name to avoid virtual interfaces
+                                            (Kubernetes CNI, flannel, docker) being selected by MPI
+    --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
+                                            e.g. --mpi-args "--tag-output"
+    --log-file <path>                       Log file path (default: recover_YYYYMMDD_HHMMSS.log)
+                                            ANSI color codes and carriage returns are stripped in the log
 
     --cabling-descriptor-path <path>        Path to cabling descriptor file (4x32 only, overrides --config default)
                                             (default: /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto)
@@ -37,6 +45,10 @@ Example:
     $0 --hosts bh-glx-c01u02,bh-glx-c01u08 --config 8x16 --num-iterations 10
 
     $0 --hosts bh-glx-c01u02,bh-glx-c01u08 --skip-reset
+
+    $0 --hosts bh-glx-d03u02,bh-glx-d03u08 --check
+
+    $0 --hosts bh-glx-d03u02,bh-glx-d03u08 --mpi-if ens5f0np0 --mpi-args "--tag-output"
 EOF
 }
 
@@ -48,6 +60,10 @@ SLEEP_DURATION=5
 SKIP_RESET=false
 SKIP_VALIDATION=false
 SEND_TRAFFIC=true
+CHECK=false
+MPI_IF="ens5f0np0"
+MPI_EXTRA_ARGS=()
+LOG_FILE=""
 
 CABLING_DESCRIPTOR_PATH_DEFAULT="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto"
 DEPLOYMENT_DESCRIPTOR_PATH_DEFAULT="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"
@@ -125,6 +141,35 @@ while [[ $# -gt 0 ]]; do
             SEND_TRAFFIC=false
             shift
             ;;
+        --check)
+            CHECK=true
+            shift
+            ;;
+        --mpi-if)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --mpi-if requires a non-empty value"
+                exit 1
+            fi
+            MPI_IF="$2"
+            shift 2
+            ;;
+        --mpi-args)
+            if [[ -z "$2" ]]; then
+                echo "Error: --mpi-args requires a non-empty value"
+                exit 1
+            fi
+            read -ra _extra <<< "$2"
+            MPI_EXTRA_ARGS+=("${_extra[@]}")
+            shift 2
+            ;;
+        --log-file)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --log-file requires a non-empty value"
+                exit 1
+            fi
+            LOG_FILE="$2"
+            shift 2
+            ;;
         --cabling-descriptor-path)
             if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
                 echo "Error: --cabling-descriptor-path requires a non-empty value"
@@ -175,6 +220,30 @@ if [[ "$SKIP_RESET" == true && "$SKIP_VALIDATION" == true ]]; then
     exit 1
 fi
 
+# Set default log file name after parsing (captures actual start time)
+[[ -z "$LOG_FILE" ]] && LOG_FILE="recover_$(date +%Y%m%d_%H%M%S).log"
+
+# Redirect all output: terminal sees colors, log file gets ANSI/CR stripped
+exec > >(tee >(sed 's/\x1b\[[0-9;]*[mJKHABCDfsuGMF]//g; s/\r//g' > "$LOG_FILE")) 2>&1
+echo "Logging to: $LOG_FILE"
+
+# --check: dry run to verify MPI can reach all hosts, then exit
+if [[ "$CHECK" == true ]]; then
+    echo "=========================================="
+    echo "MPI connectivity check"
+    echo "Using hosts: $HOSTS"
+    echo "MPI interface: $MPI_IF"
+    echo "=========================================="
+    mpirun --host "$HOSTS" \
+        --mca btl_tcp_if_include "$MPI_IF" \
+        "${MPI_EXTRA_ARGS[@]}" \
+        hostname
+    echo "=========================================="
+    echo "Check complete at $(date)"
+    echo "=========================================="
+    exit 0
+fi
+
 # Resolve descriptor paths based on config when not explicitly provided
 if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
     : # explicit factory descriptor overrides everything
@@ -199,6 +268,10 @@ echo "=========================================="
 echo "Cluster recovery"
 echo "Using hosts: $HOSTS"
 echo "Configuration: $CONFIG"
+echo "MPI interface: $MPI_IF"
+if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
+    echo "MPI extra args: ${MPI_EXTRA_ARGS[*]}"
+fi
 if [[ -n "$DOCKER_IMAGE" ]]; then
     echo "Docker image: $DOCKER_IMAGE"
 else
@@ -215,13 +288,18 @@ echo "Send traffic: $SEND_TRAFFIC"
 echo "Sleep after reset: ${SLEEP_DURATION}s"
 echo "Skip reset: $SKIP_RESET"
 echo "Skip validation: $SKIP_VALIDATION"
+echo "Log file: $LOG_FILE"
 echo "=========================================="
 echo ""
 
 # Step 1: tt-smi reset
+# Note: tt-smi -glx_reset is deprecated as of tt-smi 3.1.1; use tt-smi -r if available
 if [[ "$SKIP_RESET" == false ]]; then
     echo "Running tt-smi -glx_reset..."
-    mpirun --host "$HOSTS" --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
+    mpirun --host "$HOSTS" \
+        --mca btl_tcp_if_include "$MPI_IF" \
+        "${MPI_EXTRA_ARGS[@]}" \
+        tt-smi -glx_reset
 
     echo ""
     echo "Sleeping ${SLEEP_DURATION}s..."
@@ -249,7 +327,8 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
             "${VALIDATION_ARGS[@]}"
     else
         mpirun --host "$HOSTS" \
-            --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
             --tag-output \
             ./build/tools/scaleout/run_cluster_validation \
             "${VALIDATION_ARGS[@]}"
