@@ -11,7 +11,7 @@
 namespace ckernel {
 
 template <bool APPROXIMATE, uint32_t IN_DTYPE, uint32_t OUT_DTYPE>
-inline void llk_math_eltwise_unary_sfpu_typecast(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+inline void llk_math_eltwise_unary_sfpu_typecast(uint dst_index, VectorMode vector_mode = VectorMode::RC) {
     constexpr DataFormat in_format = static_cast<DataFormat>(IN_DTYPE);
     constexpr DataFormat out_format = static_cast<DataFormat>(OUT_DTYPE);
 

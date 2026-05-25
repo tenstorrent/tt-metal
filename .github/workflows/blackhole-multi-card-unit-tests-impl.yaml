@@ -163,6 +163,11 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          # PERF jobs (tracy profiler on) need a wider hang-detection window because
+          # the heavy traffic (e.g. layer3 isl_6k4 combine) can stall the NOC for >5s
+          # under genuine bandwidth pressure without being deadlocked. Other jobs
+          # keep the default 5s.
+          hang-detection-timeout: ${{ contains(matrix.test-group.name, 'PERF') && '20.0' || '5.0' }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
         with:

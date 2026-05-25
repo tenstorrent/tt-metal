@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_intermediates import TtMoEIntermediates
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
@@ -237,13 +238,18 @@ class TtMoe(LightweightModule):
         self.gate = TtMoEGatePrefill(
             gate_config,
             mesh_device,
-            dispatch_table=expert_dispatch_table,
-            experts_per_chip=experts_per_chip,
             weight=gate_weight,
             bias=gate_bias,
             fallback_mode=gate_fallback_mode,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.gate",
+        )
+
+        self.routing_setup = TtMoERoutingSetup(
+            mesh_device,
+            expert_dispatch_table,
+            num_links=gate_config.ccl_config["NUM_LINKS"],
+            experts_per_chip=experts_per_chip,
         )
         logger.debug(f"Initializing TtMoe")
         logger.debug(f"  mesh_device.shape={mesh_device.shape}")
@@ -323,7 +329,7 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
-            init_zeros=True,
+            init_zeros=False,
         )
 
         # Build (group, chip, local_expert) -> global expert id table, sharded
@@ -410,6 +416,7 @@ class TtMoe(LightweightModule):
             - final_output: MoE output with same sharding as input
             - intermediates: TtMoEIntermediates if return_intermediates=True, else None
         """
+        signpost(header="MoE_START")
         logger.debug(f"[TtMoe.forward] INPUT SHAPES:")
         logger.debug(f"  x.shape={x.shape}")
 
@@ -418,9 +425,16 @@ class TtMoe(LightweightModule):
         # ========================================
         # Reshape 3D -> 2D for gate: (batch, seq, emb) -> (batch*seq, emb)
 
-        scores, indices, gate_logits, tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets = self.gate(
-            ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2]))
+        scores, indices, gate_logits = self.gate(ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2])))
+
+        signpost(header="moe_gate_calculate_dispatch_offsets")
+        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
+            ttnn_top_k_experts_indices=indices,
+            num_routed_experts=self.num_routed_experts,
+            seq_len_per_chip=self.seq_len_per_chip,
+            num_experts_per_tok=self.num_experts_per_tok,
         )
+        signpost(header="moe_gate_calculate_dispatch_offsets")
         gate_logits = (
             ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
             if return_intermediates
@@ -657,4 +671,5 @@ class TtMoe(LightweightModule):
                 expert_token_counts=tt_expert_token_counts,
             )
 
+        signpost(header="MoE_END")
         return final_output, intermediates

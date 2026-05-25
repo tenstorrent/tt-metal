@@ -7,7 +7,7 @@ from typing import List, Tuple
 import torch
 from fuser.block_data import BlockData
 from fuser.fused_fpu import Fpu
-from fuser.fused_loop import FusedLoop, LoopTileByTile
+from fuser.fused_loop import FusedLoop, LoopBlockRow
 from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
@@ -15,7 +15,7 @@ from helpers.golden_generators import ReduceBlockMaxRowGolden, get_golden_genera
 
 
 class ReduceBlockMaxFpu(Fpu):
-    loop: FusedLoop = LoopTileByTile()
+    loop: FusedLoop = LoopBlockRow()
 
     def init(
         self,
@@ -37,14 +37,7 @@ class ReduceBlockMaxFpu(Fpu):
     ) -> str:
         ct_dim = block.block_tiles_x
         dest_acc = config.dest_acc.cpp_enum_value
-        tile_x_in_block = f"(({block.tile_id_block}) % {block.block_tiles_x})"
-        tile_y_in_block = f"(({block.tile_id_block}) / {block.block_tiles_x})"
-        dest_expr = f"(({tile_y_in_block}) * {block.block_tiles_x})"
-        return (
-            f"if (({tile_x_in_block}) % {ct_dim} == 0 ) {{\n"
-            f"    _llk_math_reduce_block_max_row_<{ct_dim}, {dest_acc}>({dest_expr});\n"
-            f"}}\n"
-        )
+        return f"_llk_math_reduce_block_max_row_<{ct_dim}, {dest_acc}>({block.tile_id_block});\n"
 
     def uninit(
         self,

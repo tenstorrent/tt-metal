@@ -70,7 +70,7 @@ void bind_pad(nb::module_& mod) {
             nb::arg("input_tensor_start"),
             nb::arg("value"),
             nb::kw_only(),
-            nb::arg("use_multicore") = false,
+            nb::arg("use_multicore") = true,
             nb::arg("memory_config") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()));
 }

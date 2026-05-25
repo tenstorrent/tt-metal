@@ -465,7 +465,7 @@ def _build_perf_input_set(
 
 @pytest.mark.parametrize(
     "device_params",
-    [pytest.param({"trace_region_size": 500000}, id="trace_region=500k")],
+    [pytest.param({"trace_region_size": 0}, id="trace_region=0")],
     indirect=True,
 )
 @pytest.mark.parametrize(

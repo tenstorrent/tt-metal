@@ -81,7 +81,10 @@ ALWI void sub_bcast_rows_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0, icb1);
 #endif
-    MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::ROW, MathFidelity::LoFi>()));  // TODO(AP)
+    MATH((llk_math_eltwise_binary_init<
+          EltwiseBinaryType::ELWSUB,
+          BroadcastType::ROW,
+          MathFidelity::LoFi>()));  // TODO(AP)
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
 }
@@ -635,7 +638,7 @@ ALWI void sub_tiles_bcast_rows_to_cb(
 #endif
     // sub_bcast_rows_init_short();
     {
-        MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::ROW, MathFidelity::LoFi>()));
+        MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWSUB, BroadcastType::ROW, MathFidelity::LoFi>()));
         UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(0, 1)));
     }
     sub_tiles_bcast<BroadcastType::ROW>(icb0, icb1, itile0, itile1, dst0);

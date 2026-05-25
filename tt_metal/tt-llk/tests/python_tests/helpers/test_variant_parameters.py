@@ -350,6 +350,16 @@ class TO_FROM_INT8(TemplateParameter):
         return f"constexpr bool TO_FROM_INT8 = {str(self.to_from_int8).lower()};"
 
 
+@dataclass
+class IS_MAX_OP(TemplateParameter):
+    """Compile-time flag: true for element-wise max, false for min."""
+
+    is_max_op: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool IS_MAX_OP = {str(self.is_max_op).lower()};"
+
+
 # === RUNTIME PARAMETER IMPLEMENTATIONS ===
 
 

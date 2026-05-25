@@ -141,7 +141,7 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "clip_encoder_1": {
         "wormhole": 40_479_595,  # Average of last 5 main CI runs (May 12-13, 2026); previous 40_995_000 was above observed range causing failures
-        "blackhole": 19_377_824,
+        "blackhole": 19_095_974,  # Average of 21 main CI runs (May 16-19, 2026)
     },
     "clip_encoder_2": {
         "wormhole": 125_300_000,
