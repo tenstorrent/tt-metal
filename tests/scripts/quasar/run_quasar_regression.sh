@@ -182,6 +182,50 @@ fmt_duration() {
 
 sanitize_name() { echo "$1" | tr -cs 'A-Za-z0-9_.-' '_' | sed 's/^_//;s/_$//'; }
 
+# Read gtest --gtest_output=json and set gtest_tests, gtest_skipped, gtest_failures.
+parse_gtest_json() {
+    local json_file="$1"
+    gtest_tests=0
+    gtest_skipped=0
+    gtest_failures=0
+    [[ -f "$json_file" ]] || return 1
+    gtest_tests=$(yq '.tests // 0' "$json_file")
+    gtest_failures=$(yq '.failures // 0' "$json_file")
+    gtest_skipped=$(yq '[.testsuites[].testsuite[]? | select(.result == "SKIPPED")] | length' "$json_file")
+}
+
+record_gtest_result() {
+    local label="$1" elapsed="$2" rc="$3" json_file="$4"
+    if ! parse_gtest_json "$json_file"; then
+        if [[ $rc -eq 0 ]]; then
+            passed=$((passed + 1))
+            results+=("PASS  $label  ($(fmt_duration $elapsed))")
+        else
+            failed=$((failed + 1))
+            results+=("FAIL  $label  ($(fmt_duration $elapsed))")
+        fi
+        return
+    fi
+
+    if [[ $rc -ne 0 || $gtest_failures -gt 0 ]]; then
+        failed=$((failed + 1))
+        results+=("FAIL  $label  ($(fmt_duration $elapsed))")
+        echo "  RESULT: FAIL"
+    elif [[ $gtest_tests -eq 0 ]]; then
+        skipped=$((skipped + 1))
+        results+=("SKIP  $label  ($(fmt_duration $elapsed), no tests matched filter)")
+        echo "  RESULT: SKIP (no tests matched filter)"
+    elif [[ $gtest_skipped -gt 0 ]]; then
+        skipped=$((skipped + 1))
+        results+=("SKIP  $label  ($(fmt_duration $elapsed), ${gtest_skipped} gtest skipped)")
+        echo "  RESULT: SKIP (${gtest_skipped} gtest skipped)"
+    else
+        passed=$((passed + 1))
+        results+=("PASS  $label  ($(fmt_duration $elapsed))")
+        echo "  RESULT: PASS"
+    fi
+}
+
 print_summary() {
     echo ""
     echo "========================================="
@@ -293,13 +337,9 @@ for entry in "${test_entries[@]}"; do
     "${logger_env[@]}" "$binary" --gtest_filter="$filter" "${gtest_log_args[@]}" || rc=$?
 
     elapsed=$((SECONDS - test_start))
-    if [[ $rc -eq 0 ]]; then
-        passed=$((passed + 1))
-        results+=("PASS  $label  ($(fmt_duration $elapsed))")
-    else
-        failed=$((failed + 1))
-        results+=("FAIL  $label  ($(fmt_duration $elapsed))")
-        [[ -n "$LOG_DIR" ]] && echo "  LOG: ${log_base}.log"
+    record_gtest_result "$label" "$elapsed" "$rc" "${log_base}.json"
+    if [[ $rc -ne 0 ]]; then
+        echo "  LOG: ${log_base}.log"
     fi
 
     # Clean up per-test env vars
