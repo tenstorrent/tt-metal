@@ -600,7 +600,6 @@ TEST_F(MultiDeviceTensorCreationTest, H2DStreamService_Replicated_SingleChunk_64
     tt::tt_metal::H2DStreamService::Config cfg{
         .global_spec = global_spec,
         .mapper = create_mesh_mapper(*this->mesh_device_, MeshMapperConfig{.placements = replicate_all}),
-        .recv_core = CoreCoord(0, 0),
         .socket_buffer_type = BufferType::L1,
         .fifo_size_bytes = bytes_per_shard,
         .scratch_cb_size_bytes = bytes_per_shard,
@@ -713,7 +712,6 @@ TEST_F(MultiDeviceTensorCreationTest, H2DStreamService_Replicated_SingleChunk_64
     tt::tt_metal::H2DStreamService::Config cfg{
         .global_spec = global_spec,
         .mapper = create_mesh_mapper(*this->mesh_device_, MeshMapperConfig{.placements = replicate_all}),
-        .recv_core = CoreCoord(0, 0),
         .socket_buffer_type = BufferType::L1,
         .fifo_size_bytes = bytes_per_shard,
         .scratch_cb_size_bytes = bytes_per_shard,

@@ -47,13 +47,11 @@ void py_module_types(nb::module_& mod) {
                uint32_t fifo_size_bytes,
                uint32_t scratch_cb_size_bytes,
                std::unique_ptr<ttnn::distributed::TensorToMesh> mapper,
-               const CoreCoord& recv_core,
                tt::tt_metal::BufferType socket_buffer_type,
                tt::tt_metal::distributed::H2DMode socket_mode) {
                 tt::tt_metal::H2DStreamService::Config cfg{
                     .global_spec = global_spec,
                     .mapper = std::move(mapper),
-                    .recv_core = recv_core,
                     .socket_buffer_type = socket_buffer_type,
                     .fifo_size_bytes = fifo_size_bytes,
                     .scratch_cb_size_bytes = scratch_cb_size_bytes,
@@ -66,7 +64,6 @@ void py_module_types(nb::module_& mod) {
             nb::arg("fifo_size_bytes"),
             nb::arg("scratch_cb_size_bytes"),
             nb::arg("mapper").none() = nb::none(),
-            nb::arg("recv_core") = CoreCoord{0, 0},
             nb::arg("socket_buffer_type") = tt::tt_metal::BufferType::L1,
             nb::arg("socket_mode") = tt::tt_metal::distributed::H2DMode::DEVICE_PULL,
             R"doc(
@@ -98,9 +95,6 @@ void py_module_types(nb::module_& mod) {
                         any mesh shape (1x1 mesh = identity, NxM mesh = full tensor
                         on every device). Sharded distributions must supply an
                         explicit mapper.
-                    recv_core (CoreCoord, optional): Logical core hosting the
-                        receiver kernel and device side of the socket on every mesh
-                        coord. Default: (0, 0).
                     socket_buffer_type (BufferType, optional): Memory type for the
                         socket's device-side FIFO buffer (L1 or DRAM). Default: L1.
                     socket_mode (H2DMode, optional): Transfer mode (HOST_PUSH or

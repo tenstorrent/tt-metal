@@ -13,10 +13,13 @@
 
 #include <optional>
 
+#include <map>
+
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
-#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -37,9 +40,15 @@ namespace tt::tt_metal {
 //     to obtain both the per-shard TensorSpec and the TensorTopology (which mesh
 //     coords participate and how the placement looks),
 //   * allocates the device tensor with that derived per-shard spec & topology,
-//   * creates one H2DSocket per participating mesh coord, each targeting
-//     `Config::recv_core`, and sets each socket's page size,
-//   * allocates a single global termination semaphore on the union of recv cores,
+//   * claims one service core per participating device via
+//     `tt::tt_metal::internal::ServiceCoreManager` — each device's persistent
+//     receiver kernel, socket FIFO, and termination semaphore live on that
+//     core, off the worker grid,
+//   * creates one H2DSocket per mesh coord pointing at that coord's service
+//     core (the socket auto-detects service cores and allocates its config /
+//     data buffers from the per-core service allocator),
+//   * allocates a per-device termination word (uint32) at a service-core L1
+//     address via `ServiceCoreManager::allocate_l1` and zero-initialises it,
 //   * builds one persistent receiver Program per recv core (fixed-shape, fixed
 //     output address, fixed chunking — see persistent_h2d_receiver.cpp), bundles
 //     them into one MeshWorkload, and enqueues it non-blocking. The kernels then
@@ -84,11 +93,6 @@ public:
         // explicitly. Construct via
         // `ttnn::distributed::create_mesh_mapper(mesh_device, mapper_config)`.
         std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
-
-        // Logical core on every participating mesh coord that hosts the receiver
-        // kernel and the device side of the H2D socket. Same coord on every
-        // device for now; per-coord overrides can be added later.
-        CoreCoord recv_core{0, 0};
 
         // Socket / scratch CB sizing. All required.
         BufferType socket_buffer_type = BufferType::L1;
@@ -149,10 +153,22 @@ private:
     Tensor device_tensor_;
     std::vector<std::unique_ptr<distributed::H2DSocket>> sockets_;
 
-    // Termination signal for the persistent receiver kernels. Allocated on the
-    // CoreRangeSet covering every recv core. `std::optional` is required only
-    // because GlobalSemaphore has no default constructor.
-    std::optional<GlobalSemaphore> termination_semaphore_;
+    // Per-coord service core claimed via ServiceCoreManager at construction.
+    // The receiver kernel + socket FIFO + termination semaphore for that coord
+    // all live on this core. Different coords may have different cores (each
+    // device has its own free dispatch-column cores).
+    std::map<distributed::MeshCoordinate, CoreCoord> service_cores_;
+
+    // Per-coord termination signal for the persistent receiver kernels. One
+    // uint32 in L1 per device, at an address allocated from that device's
+    // service core (via ServiceCoreManager::allocate_l1). Initialised to 0
+    // in the ctor (raw `WriteToDeviceL1`); flipped to 1 in
+    // `signal_termination`; deallocated in the dtor. No GlobalSemaphore
+    // wrapper — `GlobalSemaphore::reset_semaphore_value` requires a
+    // MeshBuffer-backed AnyBuffer and crashes on the single-IDevice path we
+    // need here (per-coord service cores can differ across devices, so we
+    // can't use a single mesh-wide semaphore).
+    std::map<distributed::MeshCoordinate, DeviceAddr> termination_addrs_;
 
     // Persistent receiver workload — built and enqueued once in the ctor,
     // drained in the dtor after termination is signalled.

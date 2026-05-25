@@ -100,7 +100,6 @@ void run_h2d_stream_service_case(
     tt::tt_metal::H2DStreamService::Config cfg{
         .global_spec = global_spec,
         .mapper = create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements}),
-        .recv_core = CoreCoord(0, 0),
         .socket_buffer_type = BufferType::L1,
         .fifo_size_bytes = cs.fifo_size_bytes,
         .scratch_cb_size_bytes = cs.scratch_cb_size_bytes,

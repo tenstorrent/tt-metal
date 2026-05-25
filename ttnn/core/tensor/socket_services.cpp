@@ -13,13 +13,14 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/internal/service/service_core_manager.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include "tensor/tensor_ops.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -234,15 +235,34 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     // --- B3: allocate backing device tensor -----------------------------------
     device_tensor_ = create_device_tensor(per_shard_spec, mesh_device_.get(), topology);
 
+    // --- B3.5: claim one service core per participating device ---------------
+    // ServiceCoreManager runs the kernel on a free FD-column core that's outside
+    // the worker grid. Each device may have a different free core; we record the
+    // choice per coord and use it as the recv core for that coord's socket,
+    // semaphore, and persistent program. H2DSocket auto-detects service cores
+    // and allocates its config + data buffers from the service-core L1 region.
+    auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+    const auto& coords = topology.mesh_coords();
+    for (const auto& coord : coords) {
+        auto* d = mesh_device_->get_device(coord);
+        auto claimable = svc.get_claimable_cores(d);
+        TT_FATAL(
+            !claimable.empty(),
+            "H2DStreamService: no claimable service core on device at coord {}",
+            coord);
+        const CoreCoord chosen = claimable.front();
+        svc.claim(d, {chosen});
+        service_cores_.emplace(coord, chosen);
+    }
+
     // --- B4: create one socket per participating mesh coord -------------------
     // Iterating topology.mesh_coords() (not the full mesh shape) keeps replication-
     // collapsed or shape-overridden mappings working correctly.
-    const auto& coords = topology.mesh_coords();
     sockets_.reserve(coords.size());
     for (const auto& coord : coords) {
         sockets_.push_back(std::make_unique<distributed::H2DSocket>(
             mesh_device_,
-            distributed::MeshCoreCoord(coord, cfg_.recv_core),
+            distributed::MeshCoreCoord(coord, service_cores_.at(coord)),
             cfg_.socket_buffer_type,
             cfg_.fifo_size_bytes,
             cfg_.socket_mode));
@@ -266,27 +286,32 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         s->set_page_size(plan.socket_page_size);
     }
 
-    // --- B7: allocate the termination semaphore -------------------------------
-    // Single GlobalSemaphore on the CoreRangeSet covering every recv core
-    // (same logical core on every participating device). Initial value 0;
-    // the dtor flips it to 1.
-    termination_semaphore_.emplace(ttnn::global_semaphore::create_global_semaphore(
-        mesh_device_.get(),
-        CoreRangeSet(CoreRange(cfg_.recv_core)),
-        /*initial_value=*/0,
-        BufferType::L1));
-    const auto termination_addr = static_cast<uint32_t>(termination_semaphore_->address());
+    // --- B7: allocate + zero-init the per-device termination signals ----------
+    // One uint32 in L1 per device, on that device's service core. We manage it
+    // directly via WriteToDeviceL1 — no GlobalSemaphore wrapper, because
+    // GlobalSemaphore's reset_semaphore_value requires a MeshBuffer-backed
+    // AnyBuffer and crashes on the single-IDevice path we'd otherwise need
+    // (one per coord, since service cores can differ per device).
+    std::vector<uint32_t> zero_word{0};
+    for (const auto& coord : coords) {
+        auto* d = mesh_device_->get_device(coord);
+        const CoreCoord chosen = service_cores_.at(coord);
+        const DeviceAddr sem_addr = svc.allocate_l1(d, chosen, sizeof(uint32_t));
+        termination_addrs_.emplace(coord, sem_addr);
+        tt::tt_metal::detail::WriteToDeviceL1(d, chosen, static_cast<uint32_t>(sem_addr), zero_word);
+    }
 
     // --- B8: build one persistent program per socket, bundle into a workload --
     for (auto& s : sockets_) {
         const auto core = s->get_active_cores()[0];
         const Buffer* dbuf = device_tensor_.mesh_buffer().get_device_buffer(core.device_coord);
         TT_FATAL(dbuf != nullptr, "H2DStreamService: device buffer missing for coord {}", core.device_coord);
+        const uint32_t term_addr = static_cast<uint32_t>(termination_addrs_.at(core.device_coord));
         auto program = build_persistent_h2d_program(
             *dbuf,
             core.core_coord,
             s->get_config_buffer_address(),
-            termination_addr,
+            term_addr,
             plan,
             tensor_page_size,
             device_tensor_.dtype());
@@ -308,13 +333,40 @@ H2DStreamService::~H2DStreamService() {
         //    transfer when we signal termination.
         barrier();
 
-        // 2. Flip the semaphore to 1. The kernels exit on the next poll.
+        // 2. Flip the per-device termination semaphores to 1. Each persistent
+        //    kernel exits on its next poll.
         signal_termination();
 
         // 3. Wait for the workload to actually finish before sockets / device
         //    tensor go out of scope.
         if (mesh_device_) {
             distributed::Finish(mesh_device_->mesh_command_queue());
+        }
+
+        // 4. Release the service-core L1 used by the termination words.
+        auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+        if (mesh_device_) {
+            for (const auto& [coord, addr] : termination_addrs_) {
+                auto* d = mesh_device_->get_device(coord);
+                svc.deallocate_l1(d, service_cores_.at(coord), addr);
+            }
+            termination_addrs_.clear();
+
+            // 5. Destroy the sockets BEFORE releasing the service-core claims.
+            //    H2DSocket dtors call `ServiceCoreManager::deallocate_l1` for
+            //    their own config/data buffers, which TT_FATALs if the core
+            //    has already been released. Without this explicit clear, the
+            //    sockets would be destroyed by the `sockets_` member destructor
+            //    AFTER step 6 below, hitting that fatal.
+            sockets_.clear();
+
+            // 6. Release the service core claims. Silent no-op for cores that
+            //    were never claimed (e.g. if construction failed partway), so
+            //    safe to call unconditionally.
+            for (const auto& [coord, core] : service_cores_) {
+                auto* d = mesh_device_->get_device(coord);
+                svc.release(d, {core});
+            }
         }
     } catch (const std::exception& e) {
         log_warning(tt::LogOp, "H2DStreamService: shutdown failed: {}", e.what());
@@ -325,13 +377,23 @@ H2DStreamService::~H2DStreamService() {
 
 void H2DStreamService::barrier() {
     for (auto& s : sockets_) {
+        std::cout << "Barrier on: " << s->get_active_cores()[0].device_coord << " " << s->get_active_cores()[0].core_coord.str() << std::endl;
         s->barrier();
     }
 }
 
 void H2DStreamService::signal_termination() {
-    if (termination_semaphore_.has_value()) {
-        termination_semaphore_->reset_semaphore_value(1);
+    // Flip every per-device termination word from 0 -> 1. Each persistent
+    // kernel polls its own coord's address (the value baked into B8's CT
+    // args). Raw L1 write — no GlobalSemaphore wrapper.
+    if (mesh_device_ == nullptr) {
+        return;
+    }
+    std::vector<uint32_t> one_word{1};
+    for (const auto& [coord, addr] : termination_addrs_) {
+        auto* d = mesh_device_->get_device(coord);
+        const CoreCoord chosen = service_cores_.at(coord);
+        tt::tt_metal::detail::WriteToDeviceL1(d, chosen, static_cast<uint32_t>(addr), one_word);
     }
 }
 
