@@ -436,9 +436,40 @@ void validate_matmul_fused_operations(
                 TT_FATAL(
                     !fused_activation.has_value(),
                     "Fused activation is not supported for MatmulMultiCoreReuseProgramConfig");
+            } else if constexpr (
+                std::is_same_v<
+                    ProgramConfigType,
+                    operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig> ||
+                std::is_same_v<
+                    ProgramConfigType,
+                    operations::matmul::MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
+                TT_FATAL(!optional_bias.has_value(), "Bias is not supported for DRAM-sharded matmul program configs");
             }
         },
         chosen_program_config);
+
+    if (!fused_activation.has_value()) {
+        return;
+    }
+
+    using ttnn::operations::unary::UnaryOpType;
+    const UnaryOpType op_type = fused_activation->op_type;
+    const bool is_supported_op = op_type == UnaryOpType::RELU || op_type == UnaryOpType::GELU ||
+                                 op_type == UnaryOpType::TANH || op_type == UnaryOpType::SILU ||
+                                 op_type == UnaryOpType::RELU6 || op_type == UnaryOpType::SIGMOID ||
+                                 op_type == UnaryOpType::HARDSIGMOID || op_type == UnaryOpType::HARDTANH ||
+                                 op_type == UnaryOpType::SELU || op_type == UnaryOpType::SOFTPLUS;
+    TT_FATAL(
+        is_supported_op,
+        "Unsupported fused activation op type for matmul: {}. Supported types are "
+        "RELU, GELU, TANH, SILU, RELU6, SIGMOID, HARDSIGMOID, HARDTANH, SELU, SOFTPLUS",
+        op_type);
+
+    const auto activation_params = fused_activation->get_params();
+    TT_FATAL(
+        activation_params.size() <= 2,
+        "Fused activation parameter count ({}) exceeds the maximum supported by matmul kernels (2)",
+        activation_params.size());
 }
 
 bool get_broadcast_batch(
