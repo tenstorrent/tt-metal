@@ -25,6 +25,87 @@ namespace ttnn::prim {
 
 using namespace experimental::ccl;
 
+namespace {
+
+void validate_ring_joint_all_gather_on_program_cache_miss(
+    const ttnn::experimental::prim::RingAttentionAllGatherAsyncParams& operation_attributes,
+    const ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs& tensor_args) {
+    const auto& input_tensors = tensor_args.input_tensor;
+    TT_FATAL(
+        !input_tensors.empty(), "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
+    TT_FATAL(input_tensors[0].buffer() != nullptr, "Input tensor 0 must be allocated in buffers on device");
+
+    const auto dtype = input_tensors[0].dtype();
+    const auto page_size = input_tensors[0].buffer()->page_size();
+    for (size_t i = 0; i < input_tensors.size(); ++i) {
+        const auto& input_tensor = input_tensors[i];
+
+        TT_FATAL(input_tensor.layout() == Layout::TILE, "Input tensor {} must be tiled", i);
+        TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor {} must be on device", i);
+        TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor {} must be allocated in buffers on device", i);
+        TT_FATAL(
+            input_tensor.dtype() == dtype,
+            "All input tensors must have the same dtype. Input tensor {} has dtype {} but expected {}",
+            i,
+            input_tensor.dtype(),
+            dtype);
+        TT_FATAL(
+            input_tensor.buffer()->page_size() == page_size,
+            "All input tensors must have the same page size. Input tensor {} has page size {} but expected {}",
+            i,
+            input_tensor.buffer()->page_size(),
+            page_size);
+    }
+
+    TT_FATAL(
+        operation_attributes.num_links > 0,
+        "Error, num_links should be more than 0 but has {}",
+        operation_attributes.num_links);
+
+    const auto& output_tensors = tensor_args.persistent_output_buffer;
+    if (!output_tensors.empty()) {
+        TT_FATAL(
+            output_tensors.size() == input_tensors.size(),
+            "Number of output tensors ({}) must match number of input tensors ({})",
+            output_tensors.size(),
+            input_tensors.size());
+
+        for (size_t i = 0; i < output_tensors.size(); ++i) {
+            TT_FATAL(output_tensors[i].has_value(), "RingJointSDPA requires persistent all-gather output tensor {}", i);
+            const auto& output_tensor = output_tensors[i].value();
+
+            TT_FATAL(output_tensor.layout() == Layout::TILE, "Output tensor {} must be tiled", i);
+            TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor {} must be on device", i);
+            TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor {} must be allocated in buffers on device", i);
+            TT_FATAL(
+                output_tensor.dtype() == dtype,
+                "Output tensor {} dtype should match input tensors but has {}",
+                i,
+                output_tensor.dtype());
+            TT_FATAL(
+                output_tensor.buffer()->page_size() == page_size,
+                "Output tensor {} page size should match input tensors but has {}",
+                i,
+                output_tensor.buffer()->page_size());
+            TT_FATAL(
+                output_tensor.memory_config() == operation_attributes.output_mem_config,
+                "Output tensor {} memory config should match output_mem_config",
+                i);
+
+            auto expected_output_shape = input_tensors[i].logical_shape();
+            expected_output_shape[operation_attributes.dim] *= operation_attributes.ring_size;
+            TT_FATAL(
+                output_tensor.logical_shape() == expected_output_shape,
+                "Output tensor {} shape mismatch. Expected shape with dimension {} scaled by ring_size {}",
+                i,
+                operation_attributes.dim,
+                operation_attributes.ring_size);
+        }
+    }
+}
+
+}  // namespace
+
 void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.input_q;
@@ -44,7 +125,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         joint_tensor_k,
         joint_tensor_v};
 
-    ttnn::experimental::prim::RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
+    validate_ring_joint_all_gather_on_program_cache_miss(
         args.all_gather_operation_attributes, args.all_gather_tensor_args);
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
@@ -422,7 +503,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         gather_dim,
         num_links,
         num_devices,
-        input_tensor_k.memory_config(),
+        persistent_output_buffer_k.memory_config(),
         topology,
         multi_device_global_semaphore,
         subdevice_id,

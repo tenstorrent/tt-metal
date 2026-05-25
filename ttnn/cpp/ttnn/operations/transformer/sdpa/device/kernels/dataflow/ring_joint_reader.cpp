@@ -228,6 +228,26 @@ void kernel_main() {
     // When q_per_core == 1, Q is identical across ring iterations so we only push it once.
     bool q_pushed = false;
 
+    const auto fetch_from_kv_source = [&](const auto& local_generator,
+                                          const auto& gathered_generator,
+                                          const auto& joint_generator,
+                                          bool kv_chunk_is_joint,
+                                          uint32_t current_ring_iter,
+                                          const auto& fetch_fn) {
+        if constexpr (has_joint_k) {
+            if (kv_chunk_is_joint) {
+                fetch_fn(joint_generator);
+                return;
+            }
+        }
+
+        if (current_ring_iter == 0) {
+            fetch_fn(local_generator);
+        } else {
+            fetch_fn(gathered_generator);
+        }
+    };
+
     /**
      * Iterate over ring indices.
      * On the first iteration, read from local K, V.
@@ -397,17 +417,18 @@ void kernel_main() {
                 if (k_chain.should_receive(nb, nq)) {
                     k_chain.receive();
                 } else {
-                    // Injector or non-participant: read K from DRAM. Pick the generator once
-                    // (joint branch elided when has_joint_k is false), then issue one fetch.
-                    const auto& k_gen = [&]() -> const auto& {
-                        if constexpr (has_joint_k) {
-                            if (kv_chunk_is_joint) {
-                                return joint_k_generator;
-                            }
-                        }
-                        return ring_iter == 0 ? local_k_generator : gathered_k_generator;
-                    }();
-                    fetch_block(k_gen, k_slice, end_seq_tile, cb_k_start_address, k_tile_bytes, true /*transpose*/);
+                    // Injector or non-participant: read K from DRAM. Dispatch directly so
+                    // local and gathered tensors may use different accessor types.
+                    const auto fetch_k = [&](const auto& k_gen) {
+                        fetch_block(k_gen, k_slice, end_seq_tile, cb_k_start_address, k_tile_bytes, true /*transpose*/);
+                    };
+                    fetch_from_kv_source(
+                        local_k_generator,
+                        gathered_k_generator,
+                        joint_k_generator,
+                        kv_chunk_is_joint,
+                        ring_iter,
+                        fetch_k);
                 }
 
                 // Forward K chunk via chain (uses K's data size explicitly)
@@ -432,37 +453,40 @@ void kernel_main() {
                 // Placed after K forward so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
                 if (k_chunk == 0 && need_q_read) {
-                    const auto& q_gen = [&]() -> const auto& {
-                        if constexpr (has_joint_q) {
-                            if (is_joint_q) {
-                                return joint_q_generator;
+                    const auto read_q = [&](const auto& q_gen) {
+                        if constexpr (use_q_subblock_push) {
+                            for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
+                                const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
+                                const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
+                                Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
+                                read_block(
+                                    q_gen,
+                                    q_sub_slice,
+                                    q_end_seq_tile,
+                                    cb_q_in,
+                                    q_tile_bytes,
+                                    false /*transpose*/,
+                                    q_barrier_threshold);
                             }
-                        }
-                        return q_generator;
-                    }();
-                    if constexpr (use_q_subblock_push) {
-                        for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                            const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
-                            const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
-                            Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
+                        } else {
                             read_block(
                                 q_gen,
-                                q_sub_slice,
+                                q_slice,
                                 q_end_seq_tile,
                                 cb_q_in,
                                 q_tile_bytes,
                                 false /*transpose*/,
                                 q_barrier_threshold);
                         }
+                    };
+                    if constexpr (has_joint_q) {
+                        if (is_joint_q) {
+                            read_q(joint_q_generator);
+                        } else {
+                            read_q(q_generator);
+                        }
                     } else {
-                        read_block(
-                            q_gen,
-                            q_slice,
-                            q_end_seq_tile,
-                            cb_q_in,
-                            q_tile_bytes,
-                            false /*transpose*/,
-                            q_barrier_threshold);
+                        read_q(q_generator);
                     }
                     q_pushed = true;
                 }
@@ -473,15 +497,17 @@ void kernel_main() {
                 if (v_chain.should_receive(nb, nq)) {
                     v_chain.receive();
                 } else {
-                    const auto& v_gen = [&]() -> const auto& {
-                        if constexpr (has_joint_k) {
-                            if (kv_chunk_is_joint) {
-                                return joint_v_generator;
-                            }
-                        }
-                        return ring_iter == 0 ? local_v_generator : gathered_v_generator;
-                    }();
-                    fetch_block(v_gen, v_slice, end_seq_tile, cb_v_start_address, v_tile_bytes, false /*transpose*/);
+                    const auto fetch_v = [&](const auto& v_gen) {
+                        fetch_block(
+                            v_gen, v_slice, end_seq_tile, cb_v_start_address, v_tile_bytes, false /*transpose*/);
+                    };
+                    fetch_from_kv_source(
+                        local_v_generator,
+                        gathered_v_generator,
+                        joint_v_generator,
+                        kv_chunk_is_joint,
+                        ring_iter,
+                        fetch_v);
                 }
 
                 // Forward V to next core(s) before push_back — prevents compute from
