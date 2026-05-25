@@ -5,24 +5,11 @@
 """
 Per-variant test configurations for the DeepSeek V3 architecture family.
 
-DSv3 and Kimi K2.6 share the DeepSeek V3 architecture (Kimi ships with
-`architectures: ["DeepseekV3ForCausalLM"]`); only hyperparameters differ.
-This module bundles those differences so that a single parametrized test
-body covers both variants — see test_ttnn_moe.py and test_mla.py.
-
-Public surface:
-- ModelVariant (ABC), GateRouting        — variant base class + gate routing dataclass
-- ModelVariant.apply_gate_overrides_to_*  — runtime gate-config patch on TT / Torch MoE
-- MODEL_VARIANTS                         — {name: ModelVariant}
-
-Upstream reference runners (`run_reference_moe`, `run_reference_mla`) live
-in `reference_runners.py` — variants are a pure registry here.
-
 Adding a new variant: subclass `ModelVariant`, implement
-`build_reference_config()` (return `None` if no HF cross-check), instantiate
+`build_reference_config()` (return `None` if no reference), instantiate
 `<NAME> = <SubclassName>(...)`, and append it to `MODEL_VARIANTS` at the
 bottom. Wire `reference_*_cls` only if you also vendor that variant's
-upstream reference into `d_p/reference/` (Kimi does this; DSv3 doesn't).
+upstream reference into `deepseek_v3_d_p/reference/`.
 """
 
 from abc import ABC, abstractmethod
@@ -42,9 +29,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 
 @dataclass(frozen=True)
 class GateRouting:
-    """MoE gate routing knobs. All fields mandatory — defaults would silently
-    encode one variant's values and create a hidden source of truth."""
-
     n_expert_groups: int
     n_limited_groups: int
     route_scale: float
@@ -53,17 +37,10 @@ class GateRouting:
 class ModelVariant(ABC):
     """One variant of the DeepSeek V3 architecture family.
 
-    `name` + `gate` + the torch reference path (TorchMoe / create_mla_reference)
-    drive the always-on PCC comparison with this variant's hyperparameters.
-
     Subclasses implement `build_reference_config()` — return a
     `PretrainedConfig` to enable the upstream HF cross-check, or `None` to
     skip it. `reference_*_cls` must be set on the variant for the cross-check
     to run.
-
-    Test-environment constraints (`supported_meshes`, `required_gate_fallback_mode`,
-    `supports_pretrained`) let tests gate cases generically — no variant-name
-    conditionals required in the test body.
     """
 
     def __init__(
@@ -91,20 +68,10 @@ class ModelVariant(ABC):
 
     @abstractmethod
     def build_reference_config(self) -> Optional[PretrainedConfig]:
-        """Variant-specific HF reference config for the cross-check, or None to skip.
+        """Variant-specific HF reference config for the reference chech, or None to skip.
         Subclasses must override."""
 
     def apply_gate_overrides_to_tt_moe(self, tt_moe) -> None:
-        """Patch gate routing on a `TtMoe` post-construction.
-
-        Why post-construction: TtMoEGateConfig bakes DSv3 defaults at init and
-        doesn't accept variant routing as a parameter — this is the test-side
-        bridge until module configs are taken via constructor args (Marko's
-        Stage 0).
-        Why this is safe today: the host gate path re-reads `self.config.*`
-        at forward time. The init-time `reference_model` snapshot is kept in
-        sync below so any future code path that consults it stays consistent.
-        """
         g = self.gate
         cfg = tt_moe.gate.config
         cfg.n_expert_groups = g.n_expert_groups
@@ -122,8 +89,6 @@ class ModelVariant(ABC):
             ref_model.routed_scaling_factor = g.route_scale
 
     def apply_gate_overrides_to_torch_moe(self, torch_moe) -> None:
-        """Patch gate routing on a `TorchMoe` post-construction. See
-        `apply_gate_overrides_to_tt_moe` for the post-construction rationale."""
         g = self.gate
         gate = torch_moe.gate
         gate.n_group = g.n_expert_groups
@@ -132,7 +97,7 @@ class ModelVariant(ABC):
 
 
 # ---------------------------------------------------------------------------
-# Variants — one subclass per model, implementing build_reference_config().
+# Variants — one subclass per model
 # ---------------------------------------------------------------------------
 
 

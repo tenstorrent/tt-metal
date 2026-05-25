@@ -3,16 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Upstream reference runners — per-variant HF cross-check helpers.
+Reference runners for each model variant.
 
-These run the variant's bundled upstream reference (e.g., HF
-`DeepseekV3MoE` / `DeepseekV3Attention`) on CPU and return a torch tensor
+These run the variant's reference on CPU and return a torch tensor
 suitable for PCC comparison against the TT output. Variants without a
 bundled reference return `None` and the comparison is skipped at the call
 site.
-
-Kept separate from `model_variants.py` so the variant taxonomy stays a pure
-registry; this file is where reference-runner behavior lives.
 """
 
 from typing import Optional
@@ -32,13 +28,7 @@ def run_reference_moe(
     num_routed_experts: Optional[int] = None,
     num_experts_per_tok: Optional[int] = None,
 ) -> Optional[torch.Tensor]:
-    """Forward the variant's upstream MoE reference on CPU. None if not bundled.
-
-    `num_routed_experts` / `num_experts_per_tok` override the variant's canonical
-    values — required when the test runs a scaled-down expert count (the
-    reference model and the supplied state-dict must agree on the expert count
-    or `load_state_dict(strict=True)` raises).
-    """
+    """Forward the variant's upstream MoE reference on CPU."""
     if variant.reference_moe_cls is None:
         return None
     config = variant.build_reference_config()
@@ -63,12 +53,7 @@ def run_reference_mla(
     hidden_states,
     position_ids,
 ) -> Optional[torch.Tensor]:
-    """Forward the variant's upstream MLA reference on CPU. None if not bundled.
-
-    Caller owns the seq_len budget: HF DeepseekV3Attention materializes
-    `[bsz, heads, q_len, q_len]` in fp32 — gate the call yourself at the test
-    site when running with a large q_len.
-    """
+    """Forward the variant's upstream MLA reference on CPU."""
     if variant.reference_attention_cls is None:
         return None
     _, q_len, _ = hidden_states.shape
