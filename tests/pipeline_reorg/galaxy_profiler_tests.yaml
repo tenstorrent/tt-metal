@@ -15,7 +15,7 @@
   cmd: run_device_profiler_test
   skus:
     wh_galaxy:
-      timeout: 15
+      timeout: 30
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
@@ -23,6 +23,6 @@
   cmd: run_realtime_profiler_cross_reference_tg_test
   skus:
     wh_galaxy:
-      timeout: 45
+      timeout: 15
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
