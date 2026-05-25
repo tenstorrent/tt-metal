@@ -41,6 +41,15 @@ struct AllocatorBank {
     }
 };
 
+/**
+ * @brief Wrapper for a fixed L1 address on the local core (e.g. MEM_ZEROS_BASE). Used as a source for
+ * noc self-reads (read from local L1 routed through the NoC) and for noc writes whose source is a
+ * local L1 region. Has no destination form — local L1 is never a NoC destination in current callers.
+ */
+struct LocalL1 {
+    uint64_t get_noc_local_addr(uint32_t addr, uint8_t noc) const { return ::get_noc_addr(addr, noc); }
+};
+
 template <>
 struct noc_traits_t<UnicastEndpoint> {
     struct src_args_type {
@@ -112,5 +121,21 @@ struct noc_traits_t<AllocatorBank<bank_type>> {
         static_assert(address_type == Noc::AddressType::NOC);
         uint64_t noc_addr = dst.template get_noc_addr_from_bank_id(args.bank_id, args.addr, noc.get_noc_id());
         return noc_addr;
+    }
+};
+
+template <>
+struct noc_traits_t<LocalL1> {
+    struct src_args_type {
+        uint32_t addr{};
+    };
+    template <Noc::AddressType address_type>
+    static auto src_addr(const LocalL1& src, const Noc& noc, const src_args_type& args) {
+        if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
+            return args.addr;
+        } else {
+            uint64_t noc_addr = src.get_noc_local_addr(args.addr, noc.get_noc_id());
+            return noc_addr;
+        }
     }
 };
