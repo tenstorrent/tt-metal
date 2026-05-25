@@ -391,26 +391,79 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         prefill_seq_lens,
         enable_trace=True,
         sampling_params=None,
+        empty_slots=None,
     ):
-        """Dispatch to model's row-sharded batched prefill."""
+        """Dispatch to model's row-sharded batched prefill, with users
+        reordered by target row so the underlying array-index routing matches
+        decode's mapping. See tenstorrent/tt-metal#44746."""
         assert (
             self.data_parallel == 1
         ), "Row-sharded batched prefill requires data_parallel=1 (model handles DP internally)"
-        return self.model[0].row_sharded_batched_prefill(
-            tokens,
-            page_table,
+        import torch
+
+        model_args = self.model_args[0]
+        num_rows = self.model[0].mesh_device.shape[0]
+        max_local_batch_size = getattr(model_args, "max_local_batch_size", None) or max(len(prompt_lens) // num_rows, 1)
+        actual_n = len(prompt_lens) if not hasattr(prompt_lens, "shape") else prompt_lens.shape[0]
+        if empty_slots is None:
+            empty_slots = list(range(actual_n))
+
+        users_by_row = [[] for _ in range(num_rows)]
+        for local_idx, slot in enumerate(empty_slots[:actual_n]):
+            target_row = min(int(slot) // max_local_batch_size, num_rows - 1)
+            users_by_row[target_row].append(local_idx)
+
+        max_per_row = max((len(group) for group in users_by_row), default=1) or 1
+        fallback = users_by_row[0][0] if users_by_row[0] else 0
+        for r in range(num_rows):
+            if not users_by_row[r]:
+                users_by_row[r] = [fallback]
+            while len(users_by_row[r]) < max_per_row:
+                users_by_row[r].append(users_by_row[r][0])
+
+        new_order = []
+        for r in range(num_rows):
+            new_order.extend(users_by_row[r])
+
+        tokens_ord = tokens[new_order]
+        prompt_lens_list = list(prompt_lens)
+        prompt_lens_ord = [prompt_lens_list[i] for i in new_order]
+        prefill_seq_lens_list = list(prefill_seq_lens)
+        prefill_seq_lens_ord = [prefill_seq_lens_list[i] for i in new_order]
+        page_table_ord = page_table[new_order] if page_table is not None else None
+
+        result = self.model[0].row_sharded_batched_prefill(
+            tokens_ord,
+            page_table_ord,
             kv_cache[0],
-            prompt_lens,
-            prefill_seq_lens,
+            prompt_lens_ord,
+            prefill_seq_lens_ord,
             enable_trace=enable_trace,
             sampling_params=sampling_params,
-            model_args=self.model_args[0],
+            model_args=model_args,
             trace_cache={
                 "ids": self.trace_id_prefill,
                 "inputs": self.trace_inputs_prefill,
                 "outputs": self.trace_output_prefill,
             },
         )
+
+        if isinstance(result, tuple):
+            tokens_padded, logprobs_padded = result
+        else:
+            tokens_padded, logprobs_padded = result, None
+
+        inverse_order = [-1] * actual_n
+        for new_pos, orig_idx in enumerate(new_order):
+            if 0 <= orig_idx < actual_n and inverse_order[orig_idx] == -1:
+                inverse_order[orig_idx] = new_pos
+        assert all(p >= 0 for p in inverse_order), "internal: not all original users covered in new_order"
+        select_idx = torch.as_tensor(inverse_order, dtype=torch.long)
+        out_tokens = tokens_padded[select_idx]
+        if logprobs_padded is not None:
+            out_logprobs = logprobs_padded[select_idx]
+            return out_tokens, out_logprobs
+        return out_tokens
 
     def _easy_trace_prefill(
         self,
@@ -619,6 +672,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 prefill_seq_lens=prefill_seq_lens,
                 enable_trace=enable_trace,
                 sampling_params=sampling_params,
+                empty_slots=empty_slots,
             )
 
         # Batched prefill: all prompts share the same padded length so they can
