@@ -311,7 +311,7 @@ class TTSeamlessM4Tv2Model:
         decoder_layers: int,
         decoder_attention_heads: int,
         hidden_size: int,
-        max_text_seq_len: int = 2048,
+        max_text_seq_len: int = 4096,
         feature_projection_input_dim: int,
         speech_encoder_attention_heads: int,
         speech_encoder_intermediate_size: int,

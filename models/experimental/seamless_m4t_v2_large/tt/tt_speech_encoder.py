@@ -963,19 +963,19 @@ class TTSeamlessM4Tv2SpeechEncoder:
             .permute(0, 2, 1)
             .contiguous()
         )
-        emb = from_torch_bfloat16_tile(self.device, emb_cpu, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        # The table is ``S * head_dim * S * 2 B`` bf16. For long audio (S ≳ 256) this exceeds
+        # L1, so upload straight to DRAM; otherwise stay in L1 for the hot short-seq path.
+        _L1_POS_TAB_LIMIT = 1 * 1024 * 1024
+        table_bytes = seq_len * seq_len * head_dim * 2
+        upload_mc = ttnn.DRAM_MEMORY_CONFIG if table_bytes > _L1_POS_TAB_LIMIT else ttnn.L1_MEMORY_CONFIG
+        emb = from_torch_bfloat16_tile(self.device, emb_cpu, memory_config=upload_mc)
 
         # Fold scale into the table when non-trivial (stage 7 / stage 8 compatibility).
         if scale != 1.0:
-            emb_scaled = ttnn.multiply(emb, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+            emb_scaled = ttnn.multiply(emb, scale, memory_config=upload_mc)
             ttnn.deallocate(emb)
             emb = emb_scaled
-
-        _L1_POS_TAB_LIMIT = 1 * 1024 * 1024
-        if seq_len * seq_len * head_dim * 2 > _L1_POS_TAB_LIMIT:
-            emb_dram = ttnn.to_memory_config(emb, ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(emb)
-            emb = emb_dram
 
         self._rel_pos_tab_cache[tab_key] = emb
         return emb
