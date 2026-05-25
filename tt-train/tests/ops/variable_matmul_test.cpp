@@ -103,16 +103,11 @@ TEST_F(VariableMatmulTest, OnDeviceOffsets_OutputRow_ActualLessThanParent) {
         kConfig,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
-        std::nullopt,
-        0U,
-        0U,
-        0U,
-        0U,
-        parent_out,
-        0U,
-        offsets,
-        ttml::metal::OffsetsRole::OutputRow,
-        1U);
+        /*compute_kernel_config=*/std::nullopt,
+        /*output_tensor=*/parent_out,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::OutputRow,
+        /*offsets_start_index=*/1U);
 
     auto written = ttml::core::to_vector<float>(parent_out);
 
@@ -172,16 +167,11 @@ TEST_F(VariableMatmulTest, OnDeviceOffsets_OutputRow_MultiExpert) {
             kConfig,
             /*transpose_a=*/false,
             /*transpose_b=*/false,
-            std::nullopt,
-            0U,
-            0U,
-            0U,
-            0U,
-            parent_out,
-            0U,
-            offsets,
-            ttml::metal::OffsetsRole::OutputRow,
-            e);
+            /*compute_kernel_config=*/std::nullopt,
+            /*output_tensor=*/parent_out,
+            /*offsets_tensor=*/offsets,
+            /*offsets_role=*/ttml::metal::OffsetsRole::OutputRow,
+            /*offsets_start_index=*/e);
     }
 
     auto written = ttml::core::to_vector<float>(parent_out);
@@ -223,16 +213,13 @@ TEST_F(VariableMatmulTest, OnDeviceOffsets_InputRow_PreZeroOutput_PadRowsStayZer
         cfg,
         /*transpose_a=*/false,
         /*transpose_b=*/true,
-        std::nullopt,
-        0U,
-        /*effective_M_tiles=*/upper_M_tiles,
-        0U,
-        0U,
-        gate_proj,
-        0U,
-        offsets,
-        ttml::metal::OffsetsRole::InputRow,
-        1U);
+        /*compute_kernel_config=*/std::nullopt,
+        /*output_tensor=*/gate_proj,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::InputRow,
+        /*offsets_start_index=*/1U,
+        /*in0_row_offset_tiles=*/0U,
+        /*effective_M_tiles=*/upper_M_tiles);
 
     auto written = ttml::core::to_vector<float>(gate_proj);
 
@@ -282,16 +269,13 @@ TEST_F(VariableMatmulTest, OnDeviceOffsets_InputRow_ZeroPadRowsProduceZeroOutput
         cfg,
         /*transpose_a=*/false,
         /*transpose_b=*/true,
-        std::nullopt,
-        0U,
-        upper_M_tiles,
-        0U,
-        0U,
-        gate_proj,
-        0U,
-        offsets,
-        ttml::metal::OffsetsRole::InputRow,
-        2U);
+        /*compute_kernel_config=*/std::nullopt,
+        /*output_tensor=*/gate_proj,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::InputRow,
+        /*offsets_start_index=*/2U,
+        /*in0_row_offset_tiles=*/0U,
+        /*effective_M_tiles=*/upper_M_tiles);
 
     auto out = ttml::core::to_vector<float>(gate_proj);
 
@@ -337,16 +321,10 @@ TEST_F(VariableMatmulTest, OnDeviceOffsets_OutputRow_ZeroInputRowsProduceZeroOut
         kConfig,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
-        std::nullopt,
-        0U,
-        0U,
-        0U,
-        0U,
-        parent_out,
-        0U,
-        offsets,
-        ttml::metal::OffsetsRole::OutputRow,
-        0U);
+        /*compute_kernel_config=*/std::nullopt,
+        /*output_tensor=*/parent_out,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::OutputRow);
 
     auto written = ttml::core::to_vector<float>(parent_out);
 
@@ -493,7 +471,11 @@ TEST_F(VariableMatmulTest, MinimalParity_KOffset_In0_NoTranspose) {
         kConfig,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
-        /*bias=*/std::nullopt,
+        /*compute_kernel_config=*/std::nullopt,
+        /*output_tensor=*/std::nullopt,
+        /*offsets_tensor=*/std::nullopt,
+        /*offsets_role=*/ttml::metal::OffsetsRole::None,
+        /*offsets_start_index=*/0,
         /*in0_row_offset_tiles=*/0,
         /*effective_M_tiles=*/0,
         /*in0_k_offset_tiles=*/k_offset_tiles);
@@ -525,7 +507,11 @@ TEST_F(VariableMatmulTest, MinimalParity_KOffset_In1_NoTranspose) {
         kConfig,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
-        /*bias=*/std::nullopt,
+        /*compute_kernel_config=*/std::nullopt,
+        /*output_tensor=*/std::nullopt,
+        /*offsets_tensor=*/std::nullopt,
+        /*offsets_role=*/ttml::metal::OffsetsRole::None,
+        /*offsets_start_index=*/0,
         /*in0_row_offset_tiles=*/0,
         /*effective_M_tiles=*/0,
         /*in0_k_offset_tiles=*/0,
@@ -561,13 +547,8 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputK_TransposeA) {
         cfg,
         /*transpose_a=*/true,
         /*transpose_b=*/false,
-        /*bias=*/std::nullopt,
-        /*in0_row_offset_tiles=*/0,
-        /*effective_M_tiles=*/0,
-        /*in0_k_offset_tiles=*/0,
-        /*in1_k_offset_tiles=*/0,
+        /*compute_kernel_config=*/std::nullopt,
         /*output_tensor=*/std::nullopt,
-        /*out_row_offset_tiles=*/0,
         /*offsets_tensor=*/offsets,
         /*offsets_role=*/ttml::metal::OffsetsRole::InputK,
         /*offsets_start_index=*/kStart);
@@ -603,13 +584,8 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceWeightK_TransposeA) {
         cfg,
         /*transpose_a=*/true,
         /*transpose_b=*/false,
-        /*bias=*/std::nullopt,
-        /*in0_row_offset_tiles=*/0,
-        /*effective_M_tiles=*/0,
-        /*in0_k_offset_tiles=*/0,
-        /*in1_k_offset_tiles=*/0,
+        /*compute_kernel_config=*/std::nullopt,
         /*output_tensor=*/std::nullopt,
-        /*out_row_offset_tiles=*/0,
         /*offsets_tensor=*/offsets,
         /*offsets_role=*/ttml::metal::OffsetsRole::WeightK,
         /*offsets_start_index=*/kStart);
@@ -648,13 +624,8 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA) {
         cfg,
         /*transpose_a=*/true,
         /*transpose_b=*/false,
-        /*bias=*/std::nullopt,
-        /*in0_row_offset_tiles=*/0,
-        /*effective_M_tiles=*/0,
-        /*in0_k_offset_tiles=*/0,
-        /*in1_k_offset_tiles=*/0,
+        /*compute_kernel_config=*/std::nullopt,
         /*output_tensor=*/std::nullopt,
-        /*out_row_offset_tiles=*/0,
         /*offsets_tensor=*/offsets,
         /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
         /*offsets_start_index=*/kStart);
@@ -703,13 +674,8 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA_NonT
         cfg,
         /*transpose_a=*/true,
         /*transpose_b=*/false,
-        /*bias=*/std::nullopt,
-        /*in0_row_offset_tiles=*/0,
-        /*effective_M_tiles=*/0,
-        /*in0_k_offset_tiles=*/0,
-        /*in1_k_offset_tiles=*/0,
+        /*compute_kernel_config=*/std::nullopt,
         /*output_tensor=*/std::nullopt,
-        /*out_row_offset_tiles=*/0,
         /*offsets_tensor=*/offsets,
         /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
         /*offsets_start_index=*/kStart);
@@ -782,16 +748,13 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputRow) {
         kConfig,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
-        /*bias=*/std::nullopt,
-        /*in0_row_offset_tiles=*/0,
-        /*effective_M_tiles=*/effective_M_tiles_upper,
-        /*in0_k_offset_tiles=*/0,
-        /*in1_k_offset_tiles=*/0,
+        /*compute_kernel_config=*/std::nullopt,
         /*output_tensor=*/std::nullopt,
-        /*out_row_offset_tiles=*/0,
         /*offsets_tensor=*/offsets,
         /*offsets_role=*/ttml::metal::OffsetsRole::InputRow,
-        /*offsets_start_index=*/kStart);
+        /*offsets_start_index=*/kStart,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/effective_M_tiles_upper);
 
     auto input_slice = ttnn::slice(
         input,
@@ -832,13 +795,8 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceOutputRow) {
         kConfig,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
-        /*bias=*/std::nullopt,
-        /*in0_row_offset_tiles=*/0,
-        /*effective_M_tiles=*/0,
-        /*in0_k_offset_tiles=*/0,
-        /*in1_k_offset_tiles=*/0,
+        /*compute_kernel_config=*/std::nullopt,
         /*output_tensor=*/parent_out,
-        /*out_row_offset_tiles=*/0,
         /*offsets_tensor=*/offsets,
         /*offsets_role=*/ttml::metal::OffsetsRole::OutputRow,
         /*offsets_start_index=*/kStart);
@@ -891,16 +849,15 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
         kConfig,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
-        /*bias=*/std::nullopt,
-        /*in0_row_offset_tiles=*/0,
-        /*effective_M_tiles=*/M_parent / 32U,  // upper bound = parent_M
-        /*in0_k_offset_tiles=*/0,
-        /*in1_k_offset_tiles=*/0,
+        /*compute_kernel_config=*/std::nullopt,
         /*output_tensor=*/parent_out,
-        /*out_row_offset_tiles=*/0,
         /*offsets_tensor=*/offsets,
         /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
-        /*offsets_start_index=*/kStart);
+        /*offsets_start_index=*/kStart,
+        /*in0_row_offset_tiles=*/0,
+        /*effective_M_tiles=*/M_parent / 32U,
+        /*in0_k_offset_tiles=*/  // upper bound = parent_M
+        /*in0_k_offset_tiles=*/0);
 
     auto input_slice = ttnn::slice(
         input,
@@ -961,16 +918,11 @@ TEST_F(VariableMatmulTest, EmptyExpertProbe_InputAndWeightK_TransposeA) {
         cfg,
         /*transpose_a=*/true,
         /*transpose_b=*/false,
-        std::nullopt,
-        0,
-        0,
-        0,
-        0,
-        std::nullopt,
-        0,
-        offsets,
-        ttml::metal::OffsetsRole::InputAndWeightK,
-        /*start=*/1U);
+        /*compute_kernel_config=*/std::nullopt,
+        /*output_tensor=*/std::nullopt,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
+        /*offsets_start_index=*/1U);
 
     const auto vec = ttml::core::to_vector<float>(result);
     float max_abs = 0.0F;

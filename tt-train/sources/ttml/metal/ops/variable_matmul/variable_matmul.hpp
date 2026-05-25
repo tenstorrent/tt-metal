@@ -50,17 +50,22 @@ ttnn::Tensor variable_matmul(
     bool transpose_a = false,
     bool transpose_b = false,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    // Write-at-offset output (optional). When set, matmul writes into a row range of
+    // this caller-provided parent. EP path overrides the row offset via offsets_tensor.
+    std::optional<ttnn::Tensor> output_tensor = std::nullopt,
+    // EP path: when offsets_tensor is set, the dataflow kernel reads
+    // offsets_tensor[offsets_start_index..start_index+2] at runtime and overrides the
+    // matching scalar offsets below (M-range for InputRow/OutputRow/InputAndOutputRow,
+    // K-range for InputK/WeightK/InputAndWeightK).
+    std::optional<ttnn::Tensor> offsets_tensor = std::nullopt,
+    OffsetsRole offsets_role = OffsetsRole::None,
+    uint32_t offsets_start_index = 0,
+    // Scalar (host-known) offsets — used only when offsets_tensor is std::nullopt or
+    // the role does not cover the relevant axis. EP path overrides these.
     uint32_t in0_row_offset_tiles = 0,
     uint32_t effective_M_tiles = 0,
     uint32_t in0_k_offset_tiles = 0,
     uint32_t in1_k_offset_tiles = 0,
-    std::optional<ttnn::Tensor> output_tensor = std::nullopt,
-    uint32_t out_row_offset_tiles = 0,
-    // EP path: when offsets_tensor is set and offsets_role == OutputRow, the kernel
-    // reads offsets_tensor[offsets_start_index] and uses it (in tiles) as the
-    // write-at-offset row, replacing the scalar out_row_offset_tiles above.
-    std::optional<ttnn::Tensor> offsets_tensor = std::nullopt,
-    OffsetsRole offsets_role = OffsetsRole::None,
-    uint32_t offsets_start_index = 0);
+    uint32_t out_row_offset_tiles = 0);
 
 }  // namespace ttml::metal

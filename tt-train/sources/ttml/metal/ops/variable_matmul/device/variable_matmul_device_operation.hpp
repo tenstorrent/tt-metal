@@ -51,15 +51,15 @@ ttnn::Tensor ttml_variable_matmul(
     bool transpose_a = false,
     bool transpose_b = false,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    std::optional<ttnn::Tensor> output_tensor = std::nullopt,
+    std::optional<ttnn::Tensor> offsets_tensor = std::nullopt,
+    ttml::metal::ops::variable_matmul::device::OffsetsRole offsets_role =
+        ttml::metal::ops::variable_matmul::device::OffsetsRole::None,
+    uint32_t offsets_start_index = 0,
     uint32_t in0_row_offset_tiles = 0,
     uint32_t effective_M_tiles = 0,
     uint32_t in0_k_offset_tiles = 0,
     uint32_t in1_k_offset_tiles = 0,
-    std::optional<ttnn::Tensor> output_tensor = std::nullopt,
-    uint32_t out_row_offset_tiles = 0,
-    std::optional<ttnn::Tensor> offsets_tensor = std::nullopt,
-    ttml::metal::ops::variable_matmul::device::OffsetsRole offsets_role =
-        ttml::metal::ops::variable_matmul::device::OffsetsRole::None,
-    uint32_t offsets_start_index = 0);
+    uint32_t out_row_offset_tiles = 0);
 
 }  // namespace ttnn::prim
