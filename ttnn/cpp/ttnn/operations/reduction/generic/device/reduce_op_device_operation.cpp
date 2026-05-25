@@ -134,8 +134,6 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
-        // ND-sharded output is only reachable on the tilized path; the RM path is interleaved-only
-        // and would have been rejected by the dispatcher before getting here.
         const auto out_spec = compute_output_specs(operation_attributes, tensor_args);
         const auto& output_nd_shard_spec = *out_spec.memory_config().nd_shard_spec();
         const auto& output_shard_grid = output_nd_shard_spec.grid;

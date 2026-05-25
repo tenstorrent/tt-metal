@@ -66,12 +66,15 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
 
     // RM-only constants. ht_tiles_per_chunk (orthogonal dim) is restricted to 1 for now but exposed
     // as a named knob so the chunk size can be lifted later without re-threading through every site.
+    // The `tt::datum_size(...)` calls only make sense for unpacked formats (BF16/FP32); for block
+    // float formats (BFP8/BFP4/BFP2) they throw, so guard them behind `rm_path` since the RM dense
+    // path is gated to BF16/FP32 anyway and the tile path doesn't consume these values.
     constexpr uint32_t k_rm_ht_tiles_per_chunk = 1;
     constexpr uint32_t k_rm_max_wt_tiles_per_chunk = 8;
     const uint32_t rm_rows_per_tile = tile_height;
     const uint32_t wt_tiles_per_chunk = std::min<uint32_t>(k_rm_max_wt_tiles_per_chunk, std::max(1U, Wt));
-    const uint32_t datum_size = tt::datum_size(dst_cb_data_format);
-    const uint32_t src_datum_size = tt::datum_size(src0_cb_data_format);
+    const uint32_t datum_size = rm_path ? tt::datum_size(dst_cb_data_format) : 0u;
+    const uint32_t src_datum_size = rm_path ? tt::datum_size(src0_cb_data_format) : 0u;
     const uint32_t chunk_row_bytes = wt_tiles_per_chunk * tile_width * src_datum_size;
     const uint32_t rm_staging_page_size = rm_rows_per_tile * chunk_row_bytes;
 
