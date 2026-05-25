@@ -119,7 +119,6 @@ def _gate_up_matmul_program_config(input_shape, weight_shape):
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=False,
-        gather_in0=True,
     )
 
 
@@ -168,6 +167,14 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             mesh_mapper=weight_mapper,
             memory_config=_dram_sharded_mem_config_2d(self.device, k=k_per_device, n=int(weight_t.shape[-1])),
         )
+        self.tt_weight_prefill = ttnn.as_tensor(
+            weight_t,
+            device=self.device,
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=weight_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         if bias_chunks:
             bias = torch.cat(bias_chunks, dim=0)
@@ -205,15 +212,19 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         if uses_sharded_matmul:
             input_tensor = ttnn.to_memory_config(input_tensor, _gate_up_input_memory_config(int(input_shape[-1])))
             matmul_mc = _gate_up_output_memory_config()
+            weight = self.tt_weight
         else:
             program_config = _dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape)
             matmul_mc = ttnn.DRAM_MEMORY_CONFIG if needs_ccl else (output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
+            weight = self.tt_weight_prefill
+            if input_tensor.is_sharded():
+                input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
         # Fuse bias into the matmul kernel on single-device (no CCL would scale
         # the bias by num_devices). Saves one BinaryNg per layer when bias is set.
         fused_bias = None if (needs_ccl or uses_sharded_matmul) else self.tt_bias
         tt_output = ttnn.linear(
             input_tensor,
-            self.tt_weight,
+            weight,
             bias=fused_bias,
             dtype=ttnn.bfloat8_b,
             memory_config=matmul_mc,
