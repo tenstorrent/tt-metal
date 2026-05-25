@@ -70,12 +70,11 @@ CASES: dict[str, MLACase] = {
 
 STAGE_ORDER = [
     "q_projection",
-    "q_split",
-    "q_rope",
     "kv_down_split",
-    "k_rope_broadcast",
-    "kv_up_split",
-    "qk_assemble",
+    "k_rope",
+    "kv_up_projection",
+    "qkv_assemble",
+    "q_rope",
     "sdpa",
     "heads_fusion",
     "output_projection",
@@ -148,37 +147,32 @@ def _estimate_stages(case: MLACase) -> dict[str, StageEstimate]:
         q_proj_read = _bf16_bytes(B * S * D + D * q_rank + B * S * q_rank + q_rank * H * qk_head)
     estimates["q_projection"] = StageEstimate(q_proj_read, _bf16_bytes(B * S * H * qk_head), q_proj_flops)
 
-    estimates["q_split"] = StageEstimate(
-        read_bytes=_bf16_bytes(B * S * H * qk_head),
-        write_bytes=_bf16_bytes(B * S * H * qk_head),
-    )
-    estimates["q_rope"] = StageEstimate(
-        read_bytes=_bf16_bytes(B * S * H * qk_head),
-        write_bytes=_bf16_bytes(B * S * H * qk_head),
-        flops=B * S * H * qk_rope * 6,  # rough: sin/cos rotation as mul/sub/adds, caches excluded
-    )
-
     kv_down_flops = _matmul_flops(B * S, D, kv_rank + qk_rope)
     estimates["kv_down_split"] = StageEstimate(
         read_bytes=_bf16_bytes(B * S * D + D * (kv_rank + qk_rope)),
         write_bytes=_bf16_bytes(B * S * (kv_rank + qk_rope)),
         flops=kv_down_flops,
     )
-    estimates["k_rope_broadcast"] = StageEstimate(
+    estimates["k_rope"] = StageEstimate(
         read_bytes=_bf16_bytes(B * S * qk_rope),
-        write_bytes=_bf16_bytes(B * S * H * qk_rope),
+        write_bytes=_bf16_bytes(B * S * qk_rope),
         flops=B * S * qk_rope * 6,
     )
 
     kv_up_flops = _matmul_flops(B * S, kv_rank, H * (qk_nope + v_dim))
-    estimates["kv_up_split"] = StageEstimate(
+    estimates["kv_up_projection"] = StageEstimate(
         read_bytes=_bf16_bytes(B * S * kv_rank + kv_rank * H * (qk_nope + v_dim)),
         write_bytes=_bf16_bytes(B * S * H * (qk_nope + v_dim)),
         flops=kv_up_flops,
     )
-    estimates["qk_assemble"] = StageEstimate(
-        read_bytes=_bf16_bytes(B * S * H * (qk_nope + qk_rope + qk_nope + qk_rope)),
-        write_bytes=_bf16_bytes(B * S * H * (qk_head + qk_head)),
+    estimates["qkv_assemble"] = StageEstimate(
+        read_bytes=_bf16_bytes(B * S * H * (qk_head + qk_nope + v_dim) + B * S * qk_rope),
+        write_bytes=_bf16_bytes(B * S * H * (qk_head + qk_head + v_dim)),
+    )
+    estimates["q_rope"] = StageEstimate(
+        read_bytes=_bf16_bytes(B * S * H * qk_head),
+        write_bytes=_bf16_bytes(B * S * H * qk_head),
+        flops=B * S * H * qk_rope * 6,  # rough: sin/cos rotation as mul/sub/adds, caches excluded
     )
 
     # SDPA lower-bound FLOPs:
@@ -282,16 +276,7 @@ def _run_profiled_forward(module: MultiHeadLatentAttention, x, mask, device, tim
             return module.wq(x)
         return module.wq_b(module.q_norm(module.wq_a(x)))
 
-    q = _time_stage(device, timings_us, "q_projection", q_projection)
-    q = _time_stage(device, timings_us, "q_split", lambda: split_heads(q, n_heads))
-
-    def q_rope():
-        q_nope = autograd_slice(q, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
-        q_pe = autograd_slice(q, [0, 0, 0, qk_nope], [B, n_heads, S, qk_head])
-        q_pe = ttml.ops.rope.rope(q_pe, module.rope_params)
-        return q_nope, q_pe
-
-    q_nope, q_pe = _time_stage(device, timings_us, "q_rope", q_rope)
+    q_pre = _time_stage(device, timings_us, "q_projection", q_projection)
 
     def kv_down_split():
         kv_full = module.wkv_a(x)
@@ -301,27 +286,28 @@ def _run_profiled_forward(module: MultiHeadLatentAttention, x, mask, device, tim
 
     kv, k_pe = _time_stage(device, timings_us, "kv_down_split", kv_down_split)
 
-    def k_rope_broadcast():
-        k_pe_rot = ttml.ops.rope.rope(k_pe, module.rope_params)
-        return autograd_concat([k_pe_rot] * n_heads, dim=1)
+    k_pe = _time_stage(device, timings_us, "k_rope", lambda: ttml.ops.rope.rope(k_pe, module.rope_params))
 
-    k_pe = _time_stage(device, timings_us, "k_rope_broadcast", k_rope_broadcast)
+    kv_up = _time_stage(device, timings_us, "kv_up_projection", lambda: module.wkv_b(module.kv_norm(kv)))
 
-    def kv_up_split():
-        kv_up = module.wkv_b(module.kv_norm(kv))
-        kv_up = split_heads(kv_up, n_heads)
-        k_nope = autograd_slice(kv_up, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
-        v = autograd_slice(kv_up, [0, 0, 0, qk_nope], [B, n_heads, S, qk_nope + module.v_head_dim])
-        return k_nope, v
+    def qkv_assemble():
+        q = split_heads(q_pre, n_heads)
+        kv_up_heads = split_heads(kv_up, n_heads)
+        k_nope = autograd_slice(kv_up_heads, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
+        v = autograd_slice(kv_up_heads, [0, 0, 0, qk_nope], [B, n_heads, S, qk_nope + module.v_head_dim])
+        k_pe_broadcast = autograd_concat([k_pe] * n_heads, dim=1)
+        k_full = autograd_concat([k_nope, k_pe_broadcast], dim=3)
+        return q, k_full, v
 
-    k_nope, v = _time_stage(device, timings_us, "kv_up_split", kv_up_split)
+    q_full, k_full, v = _time_stage(device, timings_us, "qkv_assemble", qkv_assemble)
 
-    def qk_assemble():
-        q_full = autograd_concat([q_nope, q_pe], dim=3)
-        k_full = autograd_concat([k_nope, k_pe], dim=3)
-        return q_full, k_full
+    def q_rope():
+        q_nope = autograd_slice(q_full, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
+        q_pe = autograd_slice(q_full, [0, 0, 0, qk_nope], [B, n_heads, S, qk_head])
+        q_pe = ttml.ops.rope.rope(q_pe, module.rope_params)
+        return autograd_concat([q_nope, q_pe], dim=3)
 
-    q_full, k_full = _time_stage(device, timings_us, "qk_assemble", qk_assemble)
+    q_full = _time_stage(device, timings_us, "q_rope", q_rope)
 
     attn = _time_stage(
         device,
@@ -350,20 +336,10 @@ def _run_marked_forward(module: MultiHeadLatentAttention, x, mask, events: list[
 
     x_q = _mark_backward_boundary(x, "q_projection", "start", events)
     if module.q_lora_rank == 0:
-        q = module.wq(x_q)
+        q_pre = module.wq(x_q)
     else:
-        q = module.wq_b(module.q_norm(module.wq_a(x_q)))
-    q = _mark_backward_boundary(q, "q_projection", "end", events)
-
-    q = _mark_backward_boundary(q, "q_split", "start", events)
-    q = split_heads(q, n_heads)
-    q = _mark_backward_boundary(q, "q_split", "end", events)
-
-    q = _mark_backward_boundary(q, "q_rope", "start", events)
-    q_nope = autograd_slice(q, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
-    q_pe = autograd_slice(q, [0, 0, 0, qk_nope], [B, n_heads, S, qk_head])
-    q_pe = ttml.ops.rope.rope(q_pe, module.rope_params)
-    q_nope, q_pe = _mark_backward_boundaries((q_nope, q_pe), "q_rope", "end", events)
+        q_pre = module.wq_b(module.q_norm(module.wq_a(x_q)))
+    q_pre = _mark_backward_boundary(q_pre, "q_projection", "end", events)
 
     x_kv = _mark_backward_boundary(x, "kv_down_split", "start", events)
     kv_full = module.wkv_a(x_kv)
@@ -371,22 +347,29 @@ def _run_marked_forward(module: MultiHeadLatentAttention, x, mask, events: list[
     k_pe = autograd_slice(kv_full, [0, 0, 0, kv_lora], [B, 1, S, kv_lora + module.qk_rope_head_dim])
     kv, k_pe = _mark_backward_boundaries((kv, k_pe), "kv_down_split", "end", events)
 
-    k_pe = _mark_backward_boundary(k_pe, "k_rope_broadcast", "start", events)
-    k_pe_rot = ttml.ops.rope.rope(k_pe, module.rope_params)
-    k_pe = autograd_concat([k_pe_rot] * n_heads, dim=1)
-    k_pe = _mark_backward_boundary(k_pe, "k_rope_broadcast", "end", events)
+    k_pe = _mark_backward_boundary(k_pe, "k_rope", "start", events)
+    k_pe = ttml.ops.rope.rope(k_pe, module.rope_params)
+    k_pe = _mark_backward_boundary(k_pe, "k_rope", "end", events)
 
-    kv = _mark_backward_boundary(kv, "kv_up_split", "start", events)
+    kv = _mark_backward_boundary(kv, "kv_up_projection", "start", events)
     kv_up = module.wkv_b(module.kv_norm(kv))
-    kv_up = split_heads(kv_up, n_heads)
-    k_nope = autograd_slice(kv_up, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
-    v = autograd_slice(kv_up, [0, 0, 0, qk_nope], [B, n_heads, S, qk_nope + module.v_head_dim])
-    k_nope, v = _mark_backward_boundaries((k_nope, v), "kv_up_split", "end", events)
+    kv_up = _mark_backward_boundary(kv_up, "kv_up_projection", "end", events)
 
-    q_nope, q_pe, k_nope, k_pe = _mark_backward_boundaries((q_nope, q_pe, k_nope, k_pe), "qk_assemble", "start", events)
+    q_pre, kv_up, k_pe = _mark_backward_boundaries((q_pre, kv_up, k_pe), "qkv_assemble", "start", events)
+    q_full = split_heads(q_pre, n_heads)
+    kv_up_heads = split_heads(kv_up, n_heads)
+    k_nope = autograd_slice(kv_up_heads, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
+    v = autograd_slice(kv_up_heads, [0, 0, 0, qk_nope], [B, n_heads, S, qk_nope + module.v_head_dim])
+    k_pe_broadcast = autograd_concat([k_pe] * n_heads, dim=1)
+    k_full = autograd_concat([k_nope, k_pe_broadcast], dim=3)
+    q_full, k_full, v = _mark_backward_boundaries((q_full, k_full, v), "qkv_assemble", "end", events)
+
+    q_full = _mark_backward_boundary(q_full, "q_rope", "start", events)
+    q_nope = autograd_slice(q_full, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
+    q_pe = autograd_slice(q_full, [0, 0, 0, qk_nope], [B, n_heads, S, qk_head])
+    q_pe = ttml.ops.rope.rope(q_pe, module.rope_params)
     q_full = autograd_concat([q_nope, q_pe], dim=3)
-    k_full = autograd_concat([k_nope, k_pe], dim=3)
-    q_full, k_full = _mark_backward_boundaries((q_full, k_full), "qk_assemble", "end", events)
+    q_full = _mark_backward_boundary(q_full, "q_rope", "end", events)
 
     q_full, k_full, v = _mark_backward_boundaries((q_full, k_full, v), "sdpa", "start", events)
     attn = ttml.ops.attention.scaled_dot_product_attention_composite(q_full, k_full, v, mask)
