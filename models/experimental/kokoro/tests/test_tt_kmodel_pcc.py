@@ -73,6 +73,7 @@ if str(_TT_METAL_ROOT) not in sys.path:
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.kokoro.reference.model import KModel
+from models.experimental.kokoro.tests.kmodel_pcc_stage_diagnostic import STFT_PHASE_FALLBACK_KWARGS
 from models.experimental.kokoro.tt.tt_kmodel import TTKModel, preprocess_tt_kmodel
 
 # ---------------------------------------------------------------------------
@@ -323,19 +324,7 @@ def test_tt_kmodel_stft_and_phase_fallback_pcc(device):
     ref, params, phonemes, ref_s = _setup(ckpt_path, device)
     y_ref = _ref_audio(ref, phonemes, ref_s)
 
-    y_hat = _tt_audio(
-        device,
-        ref,
-        params,
-        phonemes,
-        ref_s,
-        use_torch_stft_fallback=True,
-        use_torch_phase_fallback=True,
-        # Default use_torch_f0n_conv_fallback=True (CPU conv). Pass False explicitly to use TT conv (~0.48 PCC).
-        use_torch_sinegen_fallback=False,
-        use_torch_linear_fallback=False,
-        use_torch_tanh_fallback=False,
-    )
+    y_hat = _tt_audio(device, ref, params, phonemes, ref_s, **STFT_PHASE_FALLBACK_KWARGS)
 
     assert y_hat.shape == y_ref.shape, (y_hat.shape, y_ref.shape)
     assert torch.isfinite(y_hat).all(), "TTKModel (stft+phase fallback) produced NaN/Inf"
@@ -348,9 +337,9 @@ def test_tt_kmodel_stft_and_phase_fallback_pcc(device):
         "sinegen_fallback stabilizes long-sequence SineGen outputs; "
         "remaining gap is outside these fallbacked ops]"
     )
-    assert pcc > 0.55, (
-        f"PCC {pcc:.6f} below floor (0.55) with config E fallbacks; "
-        "if regressed, run compare_f0_prosody_fix.py and kmodel_decode_stack_diagnostic.py --full-plan"
+    assert pcc > 0.84, (
+        f"PCC {pcc:.6f} below floor (0.84) with config E fallbacks; "
+        "run kmodel_pcc_stage_diagnostic.py --stft-phase-fallback --write-report"
     )
 
 

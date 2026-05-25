@@ -140,6 +140,7 @@ def _length_valid_mask_b1(
     sequence_lengths: Sequence[int],
     device,
     memory_config: ttnn.MemoryConfig,
+    dtype=ttnn.bfloat16,
 ) -> ttnn.Tensor:
     vm = np.zeros((batch, seq_len, 1), dtype=np.float32)
     for bi, le in enumerate(sequence_lengths):
@@ -147,7 +148,7 @@ def _length_valid_mask_b1(
         vm[bi, :le, 0] = 1.0
     return ttnn.from_torch(
         torch.from_numpy(vm),
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=memory_config,
@@ -177,28 +178,38 @@ def tt_bilstm_nlc(
     compute_kernel_config=None,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     sequence_lengths: Optional[Sequence[int]] = None,
+    fp32_state: bool = False,
 ) -> ttnn.Tensor:
     """
     1-layer BiLSTM over sequence for NLC ``[B, L, in]``.
 
     With ``sequence_lengths``, timesteps ``t >= length[b]`` yield zero output and frozen state
     (``pack_padded_sequence`` semantics). Returns ``[B, L, 2H]``.
+
+    When ``fp32_state`` is True, hidden/cell states are accumulated in fp32 to avoid
+    Hz-level drift in long F0/N decoder chains (shared BiLSTM in ``F0Ntrain``).
     """
     B, L, _ = x_nlc.shape
     H = fwd.hidden_size
+    state_dtype = ttnn.float32 if fp32_state else ttnn.bfloat16
 
     h0 = ttnn.zeros(
-        [B, H], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=memory_config
+        [B, H], dtype=state_dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=memory_config
     )
     c0 = ttnn.zeros(
-        [B, H], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=memory_config
+        [B, H], dtype=state_dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=memory_config
     )
 
     valid_all = None
     if sequence_lengths is not None:
         assert len(sequence_lengths) == B, "sequence_lengths must have one entry per batch row"
         valid_all = _length_valid_mask_b1(
-            batch=B, seq_len=L, sequence_lengths=sequence_lengths, device=x_nlc.device(), memory_config=memory_config
+            batch=B,
+            seq_len=L,
+            sequence_lengths=sequence_lengths,
+            device=x_nlc.device(),
+            memory_config=memory_config,
+            dtype=state_dtype,
         )
 
     h_f = h0

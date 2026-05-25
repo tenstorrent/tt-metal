@@ -207,6 +207,8 @@ class TTDecoder:
         use_torch_sinegen_fallback: bool = False,
         use_torch_f0n_conv_fallback: bool = False,
         use_torch_f0_upsamp_fallback: Optional[bool] = None,
+        use_torch_linear_fallback: bool = False,
+        use_torch_tanh_fallback: bool = False,
     ) -> None:
         self.device = device
         self.params = params
@@ -229,6 +231,8 @@ class TTDecoder:
             use_torch_phase_fallback=use_torch_phase_fallback,
             use_torch_sinegen_fallback=use_torch_sinegen_fallback,
             use_torch_f0_upsamp_fallback=use_torch_f0_upsamp_fallback,
+            use_torch_linear_fallback=use_torch_linear_fallback,
+            use_torch_tanh_fallback=use_torch_tanh_fallback,
         )
 
     def forward(
