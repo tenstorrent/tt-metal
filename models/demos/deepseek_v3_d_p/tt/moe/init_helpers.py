@@ -425,6 +425,7 @@ def compute_constants(
     num_devices,
     dispatch_group_size,
     dispatch_buffer_capacity_factor,
+    experts_per_chip_override: int | None = None,
 ):
     """
     Compute derived constants for MoE configuration.
@@ -439,6 +440,11 @@ def compute_constants(
             buffer; callers must pick the smallest integer such that
             dgs*seq*factor is not smaller than the theoretical worst-case
             required buffer size.
+        experts_per_chip_override: If not None, bypass the
+            num_routed_experts // num_devices derivation and use this value.
+            Required when simulating one Galaxy column on a single-column LB
+            mesh: the table indexes 256 global expert IDs but only 8 of them
+            physically live on each chip (not 256/8=32).
 
     Returns:
         experts_per_chip: Number of experts per chip
@@ -450,7 +456,9 @@ def compute_constants(
         seq_len_per_chip % ttnn.TILE_SIZE == 0
     ), f"seq_len_per_chip ({seq_len_per_chip}) must be a multiple of TILE_SIZE ({ttnn.TILE_SIZE})"
 
-    experts_per_chip = num_routed_experts // num_devices
+    experts_per_chip = (
+        experts_per_chip_override if experts_per_chip_override is not None else num_routed_experts // num_devices
+    )
     metadata_len = 5  # chip, token, topk_idx, routed_expert, weight
 
     # TODO: For now, we are ignoring the num_experts_per_tok, but it will be needed once
@@ -602,6 +610,123 @@ def initialize_predictable_test_inputs(
     logger.debug(f"  weights.shape={weights.shape}")
     logger.debug(f"  indices.shape={indices.shape}")
     return x, weights, indices
+
+
+def load_captured_routing(
+    dispatch_group_size: int,
+    seq_len_per_chip: int,
+    num_routed_experts: int,
+    num_experts_per_tok: int,
+):
+    """Load real captured Galaxy gate indices remapped for an LB 8x1 single-col replay.
+
+    Used by the dispatch/combine perf tests to replay a single Galaxy column's routing
+    on an LB 8x1 mesh. The captured indices encode Galaxy-global expert IDs in [0, 256).
+    On LB the combine kernel uses `first_expert_id=0` (single-col mesh) so all expert IDs
+    must fit in [0, 64) — we remap in-col routes to [0, 64) and out-of-col routes to
+    sentinel 255, then use col 0's (1, 256) dispatch-table row whose entries are chip IDs
+    [0, 8) for [0, 64) and -1 for [64, 256). End result: kernel routes in-col routings
+    1:1 with Galaxy col k and skips out-of-col routings.
+
+    Env vars (all required; raises if any unset):
+        TT_DS_CAPTURED_LAYER          int, MoE layer index (e.g. 27)
+        TT_DS_CAPTURED_COL            int, Galaxy column [0, 4) to simulate
+        TT_DS_USE_CAPTURED_INDICES    optional path override for the safetensors;
+                                      defaults to LONGBOOK_QA_ENG_25600/expert_routing.safetensors
+
+    Returns:
+        (indices, expert_dispatch_table).
+    """
+    import os
+    from pathlib import Path
+
+    layer_str = os.getenv("TT_DS_CAPTURED_LAYER")
+    col_str = os.getenv("TT_DS_CAPTURED_COL")
+    if layer_str is None or col_str is None:
+        raise RuntimeError(
+            "TT_DS_CAPTURED_LAYER and TT_DS_CAPTURED_COL must both be set; "
+            f"got TT_DS_CAPTURED_LAYER={layer_str!r}, TT_DS_CAPTURED_COL={col_str!r}"
+        )
+    layer = int(layer_str)
+    col = int(col_str)
+    if not 0 <= col < 4:
+        raise ValueError(f"TT_DS_CAPTURED_COL must be in [0, 4), got {col}")
+    if num_routed_experts != 256:
+        raise ValueError(
+            f"Captured indices require num_routed_experts=256, got {num_routed_experts}. "
+            "Use a parametrize entry with the matching kernel config (perf_real_indices)."
+        )
+
+    path_str = os.getenv("TT_DS_USE_CAPTURED_INDICES")
+    if path_str:
+        path = Path(path_str)
+    else:
+        # Lazy import: transformer_helpers itself imports from this module in places.
+        from models.demos.deepseek_v3_d_p.utils.transformer_helpers import LONGBOOK_QA_ENG_25600
+
+        path = LONGBOOK_QA_ENG_25600 / "expert_routing.safetensors"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Captured indices file not found at {path}. "
+            "Set TT_DS_USE_CAPTURED_INDICES to override, or configure DEEPSEEK_V3_TRACE_DIR."
+        )
+
+    from safetensors import safe_open
+
+    key = f"expert_ids_layer_{layer}"
+    with safe_open(str(path), framework="pt") as f:
+        available = list(f.keys())
+        if key not in available:
+            raise KeyError(f"Layer key {key!r} not in {path}. Available keys (first 5): {available[:5]}")
+        flat = f.get_tensor(key)
+
+    expected_numel = dispatch_group_size * seq_len_per_chip * num_experts_per_tok
+    if flat.numel() != expected_numel:
+        raise ValueError(
+            f"Captured indices for layer {layer} have shape={tuple(flat.shape)} numel={flat.numel()}; "
+            f"worker expects {expected_numel} "
+            f"(dispatch_group_size={dispatch_group_size}, seq_len_per_chip={seq_len_per_chip}, "
+            f"num_experts_per_tok={num_experts_per_tok})"
+        )
+    indices = flat.view(dispatch_group_size, seq_len_per_chip, num_experts_per_tok).to(torch.int32).contiguous()
+    max_idx = int(indices.max().item())
+    if max_idx >= num_routed_experts:
+        raise ValueError(f"Captured indices contain expert ID {max_idx} >= num_routed_experts={num_routed_experts}")
+
+    # Remap captured Galaxy-global expert IDs [0, 256) → LB-local [0, 64) ∪ {sentinel}.
+    # LB's combine kernel uses first_expert_id=0 on a single-col mesh, so metadata expert
+    # IDs must fit in [0, num_routed_experts_per_col=64). In-col routings get shifted to
+    # [0, 64); out-of-col routings get sentinel 255 which maps to -1 in col 0's dispatch
+    # table → kernel skips (preserving the per-col routing share 1:1 with Galaxy col k).
+    SENTINEL = 255
+    experts_per_col = num_routed_experts // 4
+    in_col_share = (
+        (indices >= col * experts_per_col) & (indices < (col + 1) * experts_per_col)
+    ).float().mean().item() * 100.0
+    in_col_mask = (indices >= col * experts_per_col) & (indices < (col + 1) * experts_per_col)
+    indices = torch.where(
+        in_col_mask,
+        indices - col * experts_per_col,
+        torch.tensor(SENTINEL, dtype=indices.dtype),
+    ).contiguous()
+
+    # Always use col 0's row of the (4, 256) Galaxy dispatch table — chip IDs [0, 8) for
+    # experts [0, 64), and -1 for [64, 256). Combined with the remap above, this routes
+    # in-col indices correctly and skips out-of-col (sentinel) ones.
+    galaxy_table = ExpertMapping.create_dispatch_table(
+        num_routed_experts=num_routed_experts,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=4,
+    )
+    expert_dispatch_table = galaxy_table[0:1].contiguous()
+
+    logger.info(
+        f"[captured_routing] layer={layer} col={col} src={path}: "
+        f"indices.shape={tuple(indices.shape)} in-col share={in_col_share:.1f}% "
+        f"(remapped to [0, {experts_per_col}) ∪ {{{SENTINEL}}})  "
+        f"expert_dispatch_table.shape={tuple(expert_dispatch_table.shape)}"
+    )
+    return indices, expert_dispatch_table
 
 
 def create_fabric_router_config(max_payload_size):
