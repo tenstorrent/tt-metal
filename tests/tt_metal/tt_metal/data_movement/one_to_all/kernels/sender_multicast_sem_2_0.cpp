@@ -8,7 +8,7 @@
 
 // Sender semaphore kernel (device 2.0 API).
 // Mirrors sender_multicast_sem.cpp but uses Noc::async_write_multicast for data and
-// the new Semaphore<>::set_multicast(dst_sem, ...) overload to signal receivers at a
+// the new Semaphore<>::relay_multicast(dst_sem, ...) method to signal receivers at a
 // different sem L1 offset than the sender's local valid_sem.
 void kernel_main() {
     // Compile-time arguments
@@ -75,7 +75,7 @@ void kernel_main() {
                  .addr = sub_base_addr},
                 is_linked);
 
-            sender_valid_sem.template set_multicast<mcast_mode>(
+            sender_valid_sem.template relay_multicast<mcast_mode>(
                 noc, receiver_sem, start_x, start_y, end_x, end_y, num_subordinates, is_linked);
         }
 
@@ -95,7 +95,7 @@ void kernel_main() {
              .noc_y_end = end_y,
              .addr = sub_base_addr});
 
-        sender_valid_sem.template set_multicast<mcast_mode>(
+        sender_valid_sem.template relay_multicast<mcast_mode>(
             noc, receiver_sem, start_x, start_y, end_x, end_y, num_subordinates, false);
     }
 

@@ -1187,7 +1187,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirect
 
 /* ========== MULTICAST WITH SEMAPHORE ========== */
 //
-// Exercises the Semaphore<>::set_multicast(dst_sem, ...) overload.
+// Exercises the Semaphore<>::relay_multicast(dst_sem, ...) method.
 // The sender's `valid_sem` and the receivers' `receiver_sem` are
 // distinct semaphore ids — i.e. they live at different L1 offsets.
 //
@@ -1278,7 +1278,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
 
 /* ========== UNICAST WITH SEMAPHORE 2.0 ========== */
 //
-// Exercises the new Semaphore<>::set_unicast(dst_sem, ...) method added in
+// Exercises the new Semaphore<>::relay_unicast(dst_sem, ...) method added in
 // noc_semaphore.h. Same dst-sem-L1-offset guarantee as the multicast variant.
 //
 

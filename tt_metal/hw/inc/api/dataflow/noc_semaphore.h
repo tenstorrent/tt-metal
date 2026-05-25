@@ -6,6 +6,7 @@
 
 #include "dev_mem_map.h"
 #include "api/dataflow/noc.h"
+#include "api/debug/assert.h"
 
 /**
  * @brief Semaphore synchronization primitive for programmable cores.
@@ -30,11 +31,12 @@
  *  - set(value): Set the semaphore to the specified value.
  *  - set_multicast(...): Set the semaphore value on multiple cores.
  *  - set_multicast_loopback_src(...): Set the semaphore value on multiple cores including the source.
+ *  - relay_unicast(dst_sem, ...): Set a different remote semaphore on one core to this semaphore's local value.
+ *  - relay_multicast(dst_sem, ...): Multicast this semaphore's local value into a different destination semaphore.
  */
 template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX>
 class Semaphore {
-    // Lets set_multicast(dst_sem) / set_unicast(dst_sem)
-    // read dst_sem.local_l1_addr_ without a public accessor.
+    // Lets relay_unicast / relay_multicast read dst_sem's private members without a public accessor.
     template <ProgrammableCoreType OT>
     friend class Semaphore;
 
@@ -116,10 +118,11 @@ public:
     }
 
     /**
-     * @brief Set a remote semaphore on a single core to this semaphore's local value.
-     * @note The destination semaphore is identified by dst_sem and typically has a different sem id
-     *       (i.e. a different L1 offset) than this Semaphore. Writes 4 bytes from this->local_l1_addr_
-     *       to dst_sem.local_l1_addr_ on the remote core (noc_x, noc_y).
+     * @brief Relay this semaphore's local value into a different remote semaphore on a single core.
+     * @note dst_sem must be a different Semaphore than this one (a different L1 offset). To bump the
+     *       same semaphore on a remote core, use up(noc, noc_x, noc_y, value) instead.
+     *       Writes 4 bytes from this->local_l1_addr_ to dst_sem.local_l1_addr_ on the remote core
+     *       (noc_x, noc_y).
      *
      * @param noc The Noc object representing the NoC to use for the transaction.
      * @param dst_sem The destination Semaphore whose L1 offset receives the value.
@@ -128,16 +131,10 @@ public:
      * @tparam dst_core_type Programmable core type of the destination (defaults to this Semaphore's core_type).
      */
     template <ProgrammableCoreType dst_core_type = core_type>
-    void set_unicast(const Noc& noc, const Semaphore<dst_core_type>& dst_sem, uint32_t noc_x, uint32_t noc_y) {
-#ifdef ARCH_QUASAR
-        const uintptr_t src_l1_addr = local_l1_addr_ - MEM_L1_UNCACHED_BASE;
-        const uintptr_t dst_l1_addr = dst_sem.local_l1_addr_ - MEM_L1_UNCACHED_BASE;
-#else
-        const uintptr_t src_l1_addr = local_l1_addr_;
-        const uintptr_t dst_l1_addr = dst_sem.local_l1_addr_;
-#endif
-        const uint64_t dst_noc_addr = ::get_noc_addr(noc_x, noc_y, dst_l1_addr, noc.get_noc_id());
-        noc_semaphore_set_remote(src_l1_addr, dst_noc_addr, noc.get_noc_id());
+    void relay_unicast(const Noc& noc, const Semaphore<dst_core_type>& dst_sem, uint32_t noc_x, uint32_t noc_y) {
+        ASSERT(local_l1_addr_ != dst_sem.local_l1_addr_);
+        const uint64_t dst_noc_addr = ::get_noc_addr(noc_x, noc_y, dst_sem.get_l1_addr(), noc.get_noc_id());
+        noc_semaphore_set_remote(get_l1_addr(), dst_noc_addr, noc.get_noc_id());
     }
 
     /**
@@ -164,23 +161,18 @@ public:
         bool linked = false) {
         const uint64_t multicast_addr =
             get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, noc.get_noc_id());
-#ifdef ARCH_QUASAR
-        const uintptr_t local_l1_addr = local_l1_addr_ - MEM_L1_UNCACHED_BASE;
-#else
-        const uintptr_t local_l1_addr = local_l1_addr_;
-#endif
+        const uintptr_t src_l1_addr = get_l1_addr();
         if constexpr (mcast_mode == Noc::McastMode::INCLUDE_SRC) {
-            noc_semaphore_set_multicast_loopback_src(
-                local_l1_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
+            noc_semaphore_set_multicast_loopback_src(src_l1_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
         } else if constexpr (mcast_mode == Noc::McastMode::EXCLUDE_SRC) {
-            noc_semaphore_set_multicast(local_l1_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
+            noc_semaphore_set_multicast(src_l1_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
         }
     }
 
     /**
-     * @brief Multicast this semaphore's local value into a different destination semaphore on a rectangular region.
-     * @note The destination semaphore L1 slot is identified by dst_sem and typically has a different sem id
-     *       than this Semaphore. Each core in the region receives the 4-byte write at dst_sem's L1 offset.
+     * @brief Relay this semaphore's local value into a different destination semaphore on a rectangular region.
+     * @note dst_sem must be a different Semaphore than this one (a different L1 offset). Each core in the region
+     *       receives the 4-byte write at dst_sem's L1 offset.
      * @note Sender cannot be part of the multicast destinations unless mcast_mode is INCLUDE_SRC.
      *
      * @param noc The Noc object representing the NoC to use for the transaction.
@@ -195,7 +187,7 @@ public:
      * @tparam dst_core_type Programmable core type of the destination (defaults to this Semaphore's core_type).
      */
     template <Noc::McastMode mcast_mode = Noc::McastMode::EXCLUDE_SRC, ProgrammableCoreType dst_core_type = core_type>
-    void set_multicast(
+    void relay_multicast(
         const Noc& noc,
         const Semaphore<dst_core_type>& dst_sem,
         uint32_t noc_x_start,
@@ -204,15 +196,10 @@ public:
         uint32_t noc_y_end,
         uint32_t num_dests,
         bool linked = false) {
-#ifdef ARCH_QUASAR
-        const uintptr_t src_l1_addr = local_l1_addr_ - MEM_L1_UNCACHED_BASE;
-        const uintptr_t dst_l1_addr = dst_sem.local_l1_addr_ - MEM_L1_UNCACHED_BASE;
-#else
-        const uintptr_t src_l1_addr = local_l1_addr_;
-        const uintptr_t dst_l1_addr = dst_sem.local_l1_addr_;
-#endif
-        const uint64_t multicast_addr =
-            ::get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, dst_l1_addr, noc.get_noc_id());
+        ASSERT(local_l1_addr_ != dst_sem.local_l1_addr_);
+        const uint64_t multicast_addr = ::get_noc_multicast_addr(
+            noc_x_start, noc_y_start, noc_x_end, noc_y_end, dst_sem.get_l1_addr(), noc.get_noc_id());
+        const uintptr_t src_l1_addr = get_l1_addr();
         if constexpr (mcast_mode == Noc::McastMode::INCLUDE_SRC) {
             noc_semaphore_set_multicast_loopback_src(src_l1_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
         } else if constexpr (mcast_mode == Noc::McastMode::EXCLUDE_SRC) {
@@ -248,21 +235,21 @@ public:
 private:
     uintptr_t local_l1_addr_;
 
-    uint64_t get_noc_multicast_addr(
-        uint32_t noc_x_start, uint32_t noc_y_start, uint32_t noc_x_end, uint32_t noc_y_end, uint8_t noc) const {
+    // L1 offset of this semaphore as a NoC-addressable address (strips the QUASAR uncached alias).
+    uintptr_t get_l1_addr() const {
 #ifdef ARCH_QUASAR
-        return ::get_noc_multicast_addr(
-            noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr_ - MEM_L1_UNCACHED_BASE, noc);
+        return local_l1_addr_ - MEM_L1_UNCACHED_BASE;
 #else
-        return ::get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr_, noc);
+        return local_l1_addr_;
 #endif
     }
 
+    uint64_t get_noc_multicast_addr(
+        uint32_t noc_x_start, uint32_t noc_y_start, uint32_t noc_x_end, uint32_t noc_y_end, uint8_t noc) const {
+        return ::get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, get_l1_addr(), noc);
+    }
+
     uint64_t get_noc_addr(uint32_t noc_x, uint32_t noc_y, uint8_t noc) const {
-#ifdef ARCH_QUASAR
-        return ::get_noc_addr(noc_x, noc_y, local_l1_addr_ - MEM_L1_UNCACHED_BASE, noc);
-#else
-        return ::get_noc_addr(noc_x, noc_y, local_l1_addr_, noc);
-#endif
+        return ::get_noc_addr(noc_x, noc_y, get_l1_addr(), noc);
     }
 };

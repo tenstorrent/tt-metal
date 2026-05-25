@@ -9,7 +9,7 @@
 // Sender unicast semaphore kernel (device 2.0 API).
 // Per transaction, waits for all subordinates to signal readiness, then for each
 // subordinate: unicasts data via Noc::async_write and signals that subordinate's
-// receiver_sem via the new Semaphore<>::set_unicast(dst_sem, ...) overload (which
+// receiver_sem via the new Semaphore<>::relay_unicast(dst_sem, ...) method (which
 // targets the receiver's distinct L1 offset, not the sender's local valid_sem slot).
 void kernel_main() {
     // Compile-time arguments
@@ -59,7 +59,7 @@ void kernel_main() {
                     {.noc_x = dest_coord_x, .noc_y = dest_coord_y, .addr = sub_base_addr},
                     current_virtual_channel);
 
-                sender_valid_sem.set_unicast(noc, receiver_sem, dest_coord_x, dest_coord_y);
+                sender_valid_sem.relay_unicast(noc, receiver_sem, dest_coord_x, dest_coord_y);
             }
         }
         noc.async_write_barrier();
