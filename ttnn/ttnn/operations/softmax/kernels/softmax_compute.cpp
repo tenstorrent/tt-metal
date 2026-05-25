@@ -156,7 +156,7 @@ void kernel_main() {
             cb_inv_sum,
             reduce_shape,
             ckl::ReduceInputMemoryLayout::contiguous(),
-            NoAccumulation{},
+            ckl::NoAccumulation{},
             [](uint32_t dst_idx) {
                 recip_tile_init();
                 recip_tile(dst_idx);
