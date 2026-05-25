@@ -65,7 +65,7 @@ void kernel_main() {
                         const uint32_t global_row = tile_offset + row_base + m;
                         if (global_row < logical_M_tiles && k_col < logical_K_tiles) {
                             const uint32_t dram_tile = global_row * logical_K_tiles + k_col;
-                            noc_async_read_tile(dram_tile, reader, base_addr + cb_offset);
+                            noc_async_read_page(dram_tile, reader, base_addr + cb_offset);
                         } else {
                             fill_tile_zeros(base_addr + cb_offset, tile_size);
                         }
@@ -85,7 +85,7 @@ void kernel_main() {
                     const uint32_t col = N_start_tile + N_start + n;
                     if (row < logical_M_tiles && col < logical_M_tiles) {
                         const uint32_t tid = row * padded_out_tiles + col;
-                        noc_async_write_tile(tid, out_writer, l1_read_addr + n * out_tile_size);
+                        noc_async_write_page(tid, out_writer, l1_read_addr + n * out_tile_size);
                     }
                 }
                 noc_async_write_barrier();

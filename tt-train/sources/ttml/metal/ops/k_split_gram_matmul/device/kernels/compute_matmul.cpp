@@ -113,10 +113,12 @@ void pack_subblock_pernsb(
         for (uint32_t n = 0; n < current_N; n++) {
             const uint32_t in_tile = m * current_N + n;
             const uint32_t out_tile = n * current_M + m;
-            acquire_dst();
+            tile_regs_acquire();
             transpose_wh_tile(in_cb, in_tile, 0);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile<true>(0, out_cb, out_tile);
-            release_dst();
+            tile_regs_release();
         }
     }
 #else
@@ -125,10 +127,12 @@ void pack_subblock_pernsb(
     pack_reconfig_data_format(out_cb);
 
     for (uint32_t t = 0; t < current_M * current_N; t++) {
-        acquire_dst();
+        tile_regs_acquire();
         copy_tile(in_cb, t, 0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile<true>(0, out_cb, t);
-        release_dst();
+        tile_regs_release();
     }
 #endif
 }
@@ -148,10 +152,12 @@ void add_reduce_block(
     for (uint32_t m = 0; m < M_rows; m++) {
         cb_reserve_back(out_cb, N_cols);
         for (uint32_t n = 0; n < N_cols; n++) {
-            acquire_dst();
+            tile_regs_acquire();
             add_tiles(own_cb, recv_cb, tile_id, tile_id, 0);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, out_cb);
-            release_dst();
+            tile_regs_release();
             tile_id++;
         }
         cb_push_back(out_cb, N_cols);
@@ -179,10 +185,12 @@ void add_transpose_block(
         cb_reserve_back(staging_cb, M_rows);
         for (uint32_t m = 0; m < M_rows; m++) {
             const uint32_t tile_id = n * src_stride + m;
-            acquire_dst();
+            tile_regs_acquire();
             add_tiles(own_cb, recv_cb, tile_id, tile_id, 0);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile<true>(0, staging_cb, m);
-            release_dst();
+            tile_regs_release();
         }
         cb_push_back(staging_cb, M_rows);
 
@@ -193,10 +201,12 @@ void add_transpose_block(
         reconfig_data_format_srca(staging_cb);
         pack_reconfig_data_format(mirror_cb);
         for (uint32_t m = 0; m < M_rows; m++) {
-            acquire_dst();
+            tile_regs_acquire();
             transpose_wh_tile(staging_cb, m, 0);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, mirror_cb);
-            release_dst();
+            tile_regs_release();
         }
         cb_pop_front(staging_cb, M_rows);
         cb_push_back(mirror_cb, M_rows);

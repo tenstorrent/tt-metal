@@ -123,7 +123,7 @@ void kernel_main() {
                         const uint32_t global_row = tile_offset + row_base + m;
                         if (global_row < logical_M_tiles && k_col < logical_K_tiles) {
                             const uint32_t dram_tile = global_row * logical_K_tiles + k_col;
-                            noc_async_read_tile(dram_tile, reader, base_addr + cb_offset);
+                            noc_async_read_page(dram_tile, reader, base_addr + cb_offset);
                         } else {
                             fill_tile_zeros(base_addr + cb_offset, tile_size);
                         }
