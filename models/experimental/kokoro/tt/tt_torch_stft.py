@@ -56,6 +56,12 @@ import ttnn
 _ISTFT_MATRIX_BYTES_LIMIT = 1_073_741_824  # 1 GiB
 
 
+def _to_fp32_if_needed(x: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> tuple[ttnn.Tensor, bool]:
+    if x.dtype == ttnn.float32:
+        return x, False
+    return ttnn.typecast(x, ttnn.float32, memory_config=memory_config), True
+
+
 @dataclass(frozen=True)
 class TTTorchSTFTParams:
     """Pre-computed STFT/iSTFT parameters (device-resident) for a fixed input length."""
@@ -526,8 +532,10 @@ class TTTorchSTFT:
         return X_real, X_imag
 
     def _magnitude_phase_from_xy(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """``sqrt(real^2+imag^2)`` and ``atan2`` on TT."""
+        """``sqrt(real^2+imag^2)`` and ``atan2`` on TT in fp32 (SFPU atan2 still rounds on BH)."""
         mc = ttnn.DRAM_MEMORY_CONFIG
+        X_real, owns_r = _to_fp32_if_needed(X_real, mc)
+        X_imag, owns_i = _to_fp32_if_needed(X_imag, mc)
         mag_sq = ttnn.add(
             ttnn.multiply(X_real, X_real, memory_config=mc),
             ttnn.multiply(X_imag, X_imag, memory_config=mc),
@@ -543,6 +551,10 @@ class TTTorchSTFT:
             ttnn.lt(X_real, 0.0, memory_config=mc),
             memory_config=mc,
         )
+        if owns_r:
+            ttnn.deallocate(X_real)
+        if owns_i:
+            ttnn.deallocate(X_imag)
         pi_fill = ttnn.full_like(phase, np.pi, memory_config=mc)
         phase = ttnn.where(corr_mask, pi_fill, phase, memory_config=mc)
         ttnn.deallocate(corr_mask)
@@ -553,8 +565,6 @@ class TTTorchSTFT:
         ttnn.deallocate(near_zero_mask)
         ttnn.deallocate(zero_phase)
         ttnn.deallocate(mag_sq)
-        ttnn.deallocate(X_real)
-        ttnn.deallocate(X_imag)
         return magnitude, phase
 
     def _atan2_torch_fallback(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:

@@ -171,6 +171,8 @@ class TTKModel:
         use_torch_sinegen_fallback: bool = False,
         use_torch_f0n_conv_fallback: bool = False,
         use_torch_f0_upsamp_fallback: Optional[bool] = None,
+        use_torch_linear_fallback: bool = False,
+        use_torch_tanh_fallback: bool = False,
         use_fp32_prosody_boundary: bool = True,
     ) -> None:
         self.device = device
@@ -185,6 +187,8 @@ class TTKModel:
         self._use_sinegen_fallback = use_torch_sinegen_fallback
         self._use_f0n_conv_fallback = use_torch_f0n_conv_fallback
         self._use_f0_upsamp_fallback = use_torch_f0_upsamp_fallback
+        self._use_linear_fallback = use_torch_linear_fallback
+        self._use_tanh_fallback = use_torch_tanh_fallback
         self._use_fp32_prosody_boundary = use_fp32_prosody_boundary
 
         self._bert = TTCustomAlbert(device, params.bert)
@@ -215,6 +219,8 @@ class TTKModel:
                 use_torch_sinegen_fallback=self._use_sinegen_fallback,
                 use_torch_f0n_conv_fallback=self._use_f0n_conv_fallback,
                 use_torch_f0_upsamp_fallback=self._use_f0_upsamp_fallback,
+                use_torch_linear_fallback=self._use_linear_fallback,
+                use_torch_tanh_fallback=self._use_tanh_fallback,
             )
         return self._decoder_cache[t_mel]
 
@@ -297,15 +303,20 @@ class TTKModel:
         bert_out = self._bert(input_ids, attention_mask=None)
 
         # ------ 2. bert_encoder: Linear(hidden_size → hidden_dim) --------
+        bert_for_enc = bert_out
+        owns_bert_cast = False
+        if self._use_fp32_prosody_boundary and bert_out.dtype != ttnn.float32:
+            bert_for_enc = ttnn.typecast(bert_out, ttnn.float32, memory_config=mc)
+            owns_bert_cast = True
         d_en = ttnn.linear(
-            bert_out,
+            bert_for_enc,
             p.bert_encoder_w,
             bias=p.bert_encoder_b,
             transpose_b=True,
             memory_config=mc,
             compute_kernel_config=ck,
         )
-        ttnn.deallocate(bert_out)
+        ttnn.deallocate(bert_for_enc if owns_bert_cast else bert_out)
 
         # ttnn.linear may prepend a singleton batch dim
         while len(d_en.shape) > 3:
