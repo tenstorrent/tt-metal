@@ -158,8 +158,13 @@ void kernel_main() {
             ckl::ReduceInputMemoryLayout::contiguous(),
             ckl::NoAccumulation{},
             [](uint32_t dst_idx) {
-                recip_tile_init();
-                recip_tile(dst_idx);
+                // legacy_compat=false dispatches to the newer Newton-Raphson recip
+                // (`_calculate_reciprocal_internal_`) which, paired with fp32 DEST,
+                // claims ≤1 ulp precision (recip.h comment in ckernel_sfpu_recip.h).
+                // The default legacy_compat=true path uses an older recip formulation
+                // that empirically lost ~10-11 bits of precision in this kernel.
+                recip_tile_init</*legacy_compat=*/false>();
+                recip_tile</*legacy_compat=*/false>(dst_idx);
             });
 
         // ----- Phase D: mul(exps, 1/Σexp) -----
