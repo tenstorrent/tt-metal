@@ -123,12 +123,6 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
 
         TT_SETADCXX(p_setadc::UNP_A, (unpack_face_r_dim << 4) - 1, 0x0);
     }
-
-    // Disable zero-src flag: any UInt16 with low byte 0x00 (256, 0x8000, ...) shares the bf16 -0 pattern and would be zeroed.
-    if (unpack_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16))
-    {
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
-    }
 }
 
 // TODO NC: Clean up as the part of tt-metal#34499
@@ -174,22 +168,15 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
 
         TT_SETADCXX(p_setadc::UNP_B, (unpack_face_r_dim << 4) - 1, 0x0);
     }
-
-    // Disable zero-src flag: any UInt16 with low byte 0x00 (256, 0x8000, ...) shares the bf16 -0 pattern and would be zeroed.
-    if (unpack_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16))
-    {
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
-    }
 }
 
 // Update ALU_ACC_CTRL_Zero_Flag_disabled_src after a data-format reconfig.
 //
-// The zero-src flag (when enabled) makes the hardware zero any 16-bit SrcA/B
-// datum whose low byte is 0x00 (predicate: !(SrcVal & 0xff)).
-// The substitution is meant to flush bf16 denormals/-0, but it also
-// clobbers valid UInt16 values such as 256 (0x0100), 512 (0x0200), 0x8000, etc.
-// configure_unpack_AB disables the flag whenever either dest format is uint16;
-// the same adjustment is needed every time formats are reconfigured.
+// The zero-src flag causes the hardware to substitute 0 for values whose bit
+// pattern matches -0.0f in bfloat16 (e.g. 0x8000).  configure_unpack_AB
+// disables the flag whenever either dest format is uint16, because 0x8000 is a
+// valid uint16 value (32768) that must not be zeroed.  The same adjustment is
+// needed every time formats are reconfigured.
 //
 // Only disable the flag (write 1) when transitioning TO uint16.  Do NOT
 // re-enable it (write 0) for non-uint16 transitions: other LLK operations
