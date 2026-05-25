@@ -25,7 +25,7 @@ FORCE_INLINE void read_chunk_for_forwarding(
     for (uint32_t row = 0; row < src_rows; ++row) {
         uint32_t write_ptr = dst_addr + row * outer_ptr_stride;
         for (uint32_t col = 0; col < src_cols; ++col) {
-            noc_async_read_tile(tile_id++, reader, write_ptr);
+            noc_async_read_page(tile_id++, reader, write_ptr);
             write_ptr += inner_ptr_stride;
         }
         tile_id += skip_src_cols;
@@ -324,7 +324,7 @@ void kernel_main() {
                 cb_reserve_back(cb_attention_sink, Sq_chunk_t);
                 uint32_t attention_sink_write_ptr = get_write_ptr(cb_attention_sink);
                 const uint32_t sink_tile_id = attention_sink_tile_shape.id_of(0, decoded.nq, 0, 0);
-                noc_async_read_tile(sink_tile_id, attention_sink_reader, attention_sink_write_ptr);
+                noc_async_read_page(sink_tile_id, attention_sink_reader, attention_sink_write_ptr);
                 noc_async_read_barrier();
                 fill_attention_sink_tiles<attention_sink_tile_bytes>(
                     cb_attention_sink, Sq_chunk_t, attention_sink_write_ptr);
@@ -485,7 +485,7 @@ void kernel_main() {
                             const uint32_t global_k_tile = k_chunk * Sk_chunk_t + col;
                             const bool k_valid = !use_padded_mask || (global_k_tile < valid_Skt);
                             if (q_valid && k_valid) {
-                                noc_async_read_tile(mask_row_start + global_k_tile, mask_reader, mask_write_ptr);
+                                noc_async_read_page(mask_row_start + global_k_tile, mask_reader, mask_write_ptr);
                             } else {
                                 fill_neginf_tile<mask_tile_bytes>(cb_mask_in, tile_idx);
                             }

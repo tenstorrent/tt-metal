@@ -49,7 +49,7 @@ void read_prev_output_and_lse(
     cb_reserve_back(cb_lse_in, Sq_chunk_t);
     uint32_t lse_addr = get_write_ptr(cb_lse_in);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_read_tile(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, lse_addr);
+        noc_async_read_page(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, lse_addr);
         lse_addr += stats_tile_bytes;
     }
     noc_async_read_barrier();
@@ -108,7 +108,7 @@ void issue_restore_reads(
     uint32_t max_tile_id = stats_tile_logical.id_of(nb, nq, stats_seq_start_tile, 0);
     uint32_t max_addr = get_write_ptr(cb_max_in);
     for (uint32_t r = 0; r < stats_rows; ++r) {
-        noc_async_read_tile(max_tile_id, stats_writer, max_addr);
+        noc_async_read_page(max_tile_id, stats_writer, max_addr);
         max_tile_id += stats_row_stride;
         max_addr += stats_tile_bytes;
     }
@@ -118,7 +118,7 @@ void issue_restore_reads(
     uint32_t sum_tile_id = stats_tile_logical.id_of(nb, nq, sum_offset + stats_seq_start_tile, 0);
     uint32_t sum_addr = get_write_ptr(cb_sum_in);
     for (uint32_t r = 0; r < stats_rows; ++r) {
-        noc_async_read_tile(sum_tile_id, stats_writer, sum_addr);
+        noc_async_read_page(sum_tile_id, stats_writer, sum_addr);
         sum_tile_id += stats_row_stride;
         sum_addr += stats_tile_bytes;
     }
@@ -181,13 +181,13 @@ void save_accumulators_with_trid(
 
     uint32_t max_write_addr = get_read_ptr(cb_max_out);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_write_tile(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, max_write_addr);
+        noc_async_write_page(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, max_write_addr);
         max_write_addr += stats_tile_bytes;
     }
 
     uint32_t sum_write_addr = get_read_ptr(cb_sum_out);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_write_tile(stats_tile_logical.id_of(nb, nq, sum_offset + i, 0), stats_writer, sum_write_addr);
+        noc_async_write_page(stats_tile_logical.id_of(nb, nq, sum_offset + i, 0), stats_writer, sum_write_addr);
         sum_write_addr += stats_tile_bytes;
     }
 
@@ -240,7 +240,7 @@ void write_output_and_lse(
     cb_wait_front(cb_lse_out, Sq_chunk_t);
     uint32_t lse_addr = get_read_ptr(cb_lse_out);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_write_tile(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, lse_addr);
+        noc_async_write_page(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, lse_addr);
         lse_addr += stats_tile_bytes;
     }
     noc_async_writes_flushed();
