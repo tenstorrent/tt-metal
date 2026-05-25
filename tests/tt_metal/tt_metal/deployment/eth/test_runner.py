@@ -508,8 +508,7 @@ def print_test_summary_per_chip(t: TestCase, runs: list[TestRun]):
         avg = lambda x: sum(x) / len(x)
         headers = ["chip id", "tests", "bw (min)", "bw (max)", "bw (avg)", "errors", "pass"]
         rows = []
-        for c in chips:
-            print("\t", c)
+        for c in sorted(chips.keys(), key=int):
             ch = chips[c]
             bws = ch["bws"]
             err = ch["errors"]
