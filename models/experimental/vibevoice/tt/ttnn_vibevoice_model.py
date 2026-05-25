@@ -6,17 +6,12 @@ TTVibeVoiceModel — Public API for VibeVoice-1.5B TTNN inference.
 
 Usage:
     model = TTVibeVoiceModel.from_checkpoint(mesh_device, model_path)
-    output = model.generate(input_ids_ttnn, attention_mask_ttnn, voice_audio_ttnn)
-
-The processor (VibeVoiceProcessor) and waveform writing (scipy/soundfile) stay
-outside tt/ — use them in demo_ttnn.py only.
+    output = model.generate(**processor_batch, tokenizer=processor.tokenizer)
 """
 
-from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional
 
 import torch
-import ttnn
 
 from models.experimental.vibevoice.tt.vibevoice_config import (
     load_vibevoice_model_config,
@@ -27,6 +22,7 @@ from models.experimental.vibevoice.tt.load_weights import (
     split_submodule_weights,
     remap_lm_keys_to_tt_transformers,
     fold_weight_norm,
+    load_speech_scale_bias,
 )
 from models.experimental.vibevoice.tt.ttnn_vibevoice_lm import (
     preprocess_lm_weights,
@@ -49,12 +45,6 @@ from models.experimental.vibevoice.tt.ttnn_vibevoice_generator import (
 )
 
 
-@dataclass
-class TTVibeVoiceOutput:
-    sequences: torch.Tensor
-    speech_outputs: List[torch.Tensor]
-
-
 class TTVibeVoiceModel:
     """Assembled VibeVoice-1.5B TT model — load once, generate repeatedly."""
 
@@ -69,6 +59,8 @@ class TTVibeVoiceModel:
         scheduler: TTDPMSolverMultistepScheduler,
         config: VibeVoiceModelConfig,
         device,
+        speech_scaling_factor: Optional[float] = None,
+        speech_bias_factor: Optional[float] = None,
     ):
         self._lm = lm
         self._ac_conn = acoustic_connector
@@ -79,6 +71,8 @@ class TTVibeVoiceModel:
         self._scheduler = scheduler
         self._config = config
         self._device = device
+        self._speech_scaling_factor = speech_scaling_factor
+        self._speech_bias_factor = speech_bias_factor
 
     @classmethod
     def from_checkpoint(
@@ -88,30 +82,21 @@ class TTVibeVoiceModel:
         cfg_scale: float = 1.3,
         num_diffusion_steps: int = 10,
     ) -> "TTVibeVoiceModel":
-        """Load all submodule weights and build TT model.
-
-        Args:
-            mesh_device: TTNN mesh device
-            model_path:  Path to VibeVoice-1.5B checkpoint directory
-            cfg_scale:   Classifier-free guidance scale
-            num_diffusion_steps: DPM inference steps
-        """
+        """Load all submodule weights and build TT model."""
         config = load_vibevoice_model_config(model_path)
         state_dict = load_vibevoice_state_dict(model_path)
         sub = split_submodule_weights(state_dict)
+        speech_scale, speech_bias = load_speech_scale_bias(state_dict)
 
-        # ── LM ───────────────────────────────────────────────────────────
         lm_state = remap_lm_keys_to_tt_transformers(sub["lm"])
         lm_weights = preprocess_lm_weights(lm_state, mesh_device, config.decoder)
         lm = TTVibeVoiceLM(lm_weights, mesh_device)
 
-        # ── Connectors ────────────────────────────────────────────────────
         ac_conn_params = preprocess_connector_parameters(sub["acoustic_connector"], mesh_device)
         sem_conn_params = preprocess_connector_parameters(sub["semantic_connector"], mesh_device)
         acoustic_connector = TTSpeechConnector(ac_conn_params)
         semantic_connector = TTSpeechConnector(sem_conn_params)
 
-        # ── Diffusion head ─────────────────────────────────────────────────
         diff_cfg = config.diffusion_head
         diff_head_weights = preprocess_diffusion_head_weights(
             sub["diffusion_head"],
@@ -124,7 +109,6 @@ class TTVibeVoiceModel:
         )
         diffusion_head = TTDiffusionHead(diff_head_weights)
 
-        # ── DPM Scheduler ─────────────────────────────────────────────────
         scheduler = TTDPMSolverMultistepScheduler(
             num_train_timesteps=1000,
             beta_schedule="cosine",
@@ -132,31 +116,22 @@ class TTVibeVoiceModel:
             prediction_type="v_prediction",
         )
 
-        # ── Tokenizers ────────────────────────────────────────────────────
-        # Import lazily to avoid circular deps if tokenizers not yet implemented
-        try:
-            from models.experimental.vibevoice.tt.ttnn_acoustic_tokenizer import (
-                TTAcousticTokenizer,
-                preprocess_acoustic_tokenizer_weights,
-            )
-            from models.experimental.vibevoice.tt.ttnn_semantic_tokenizer import (
-                TTSemanticTokenizer,
-                preprocess_semantic_tokenizer_weights,
-            )
+        from models.experimental.vibevoice.tt.ttnn_acoustic_tokenizer import (
+            TTAcousticTokenizer,
+            preprocess_acoustic_tokenizer_weights,
+        )
+        from models.experimental.vibevoice.tt.ttnn_semantic_tokenizer import (
+            TTSemanticTokenizer,
+            preprocess_semantic_tokenizer_weights,
+        )
 
-            ac_tok_state = fold_weight_norm(sub["acoustic_tokenizer"])
-            sem_tok_state = fold_weight_norm(sub["semantic_tokenizer"])
+        ac_tok_state = fold_weight_norm(sub["acoustic_tokenizer"])
+        sem_tok_state = fold_weight_norm(sub["semantic_tokenizer"])
 
-            ac_tok_weights = preprocess_acoustic_tokenizer_weights(ac_tok_state, mesh_device, config.acoustic_tokenizer)
-            sem_tok_weights = preprocess_semantic_tokenizer_weights(
-                sem_tok_state, mesh_device, config.semantic_tokenizer
-            )
-            acoustic_tokenizer = TTAcousticTokenizer(ac_tok_weights, mesh_device)
-            semantic_tokenizer = TTSemanticTokenizer(sem_tok_weights, mesh_device)
-        except ImportError:
-            # Tokenizer implementations pending — use None placeholders
-            acoustic_tokenizer = None
-            semantic_tokenizer = None
+        ac_tok_weights = preprocess_acoustic_tokenizer_weights(ac_tok_state, mesh_device, config.acoustic_tokenizer)
+        sem_tok_weights = preprocess_semantic_tokenizer_weights(sem_tok_state, mesh_device, config.semantic_tokenizer)
+        acoustic_tokenizer = TTAcousticTokenizer(ac_tok_weights, mesh_device)
+        semantic_tokenizer = TTSemanticTokenizer(sem_tok_weights, mesh_device)
 
         return cls(
             lm=lm,
@@ -168,33 +143,23 @@ class TTVibeVoiceModel:
             scheduler=scheduler,
             config=config,
             device=mesh_device,
+            speech_scaling_factor=speech_scale,
+            speech_bias_factor=speech_bias,
         )
 
-    def generate(
+    def set_speech_scale_bias(self, scaling_factor: float, bias_factor: float) -> None:
+        """Set runtime speech scaling (from reference after voice prefill)."""
+        self._speech_scaling_factor = scaling_factor
+        self._speech_bias_factor = bias_factor
+
+    def _make_generator(
         self,
-        input_ids: torch.Tensor,
-        voice_audio_tt: Optional[ttnn.Tensor] = None,
-        neg_input_ids: Optional[torch.Tensor] = None,
-        neg_voice_audio_tt: Optional[ttnn.Tensor] = None,
-        cfg_scale: float = 1.3,
-        num_diffusion_steps: int = 10,
-        max_new_tokens: int = 512,
-    ) -> TTVibeVoiceOutput:
-        """Run VibeVoice TTS generation.
-
-        Args:
-            input_ids:       [1, S] host torch.LongTensor (text token ids)
-            voice_audio_tt:  [1, 1, 1, T] device ttnn.Tensor (reference voice)
-            neg_input_ids:   [1, S] negative prompt (optional, for CFG)
-            neg_voice_audio_tt: negative voice (optional)
-            cfg_scale:       guidance scale
-            num_diffusion_steps: DPM steps
-            max_new_tokens:  max AR generation steps
-
-        Returns:
-            TTVibeVoiceOutput with sequences and speech_outputs
-        """
-        generator = TTVibeVoiceGenerator(
+        tokenizer,
+        cfg_scale: float,
+        num_diffusion_steps: int,
+        max_new_tokens: Optional[int],
+    ) -> TTVibeVoiceGenerator:
+        return TTVibeVoiceGenerator(
             lm_tt=self._lm,
             acoustic_connector=self._ac_conn,
             semantic_connector=self._sem_conn,
@@ -203,13 +168,45 @@ class TTVibeVoiceModel:
             semantic_tokenizer=self._sem_tok,
             scheduler=self._scheduler,
             device=self._device,
+            speech_start_id=tokenizer.speech_start_id,
+            speech_end_id=tokenizer.speech_end_id,
+            speech_diffusion_id=tokenizer.speech_diffusion_id,
+            eos_token_id=tokenizer.eos_token_id,
+            bos_token_id=getattr(tokenizer, "bos_token_id", None),
             cfg_scale=cfg_scale,
             num_diffusion_steps=num_diffusion_steps,
             max_new_tokens=max_new_tokens,
+            speech_scaling_factor=self._speech_scaling_factor,
+            speech_bias_factor=self._speech_bias_factor,
+            acoustic_fix_std=self._config.acoustic_tokenizer.fix_std,
         )
+
+    def generate(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        speech_tensors: Optional[torch.Tensor] = None,
+        speech_masks: Optional[torch.Tensor] = None,
+        speech_input_mask: Optional[torch.Tensor] = None,
+        tokenizer=None,
+        cfg_scale: float = 1.3,
+        num_diffusion_steps: int = 10,
+        prefill_speech_embeds: Optional[torch.Tensor] = None,
+        max_new_tokens: Optional[int] = None,
+        rng: Optional[torch.Generator] = None,
+    ) -> TTVibeVoiceOutput:
+        """Run VibeVoice TTS generation (processor batch fields + tokenizer)."""
+        if tokenizer is None:
+            raise ValueError("tokenizer is required (VibeVoiceProcessor.tokenizer)")
+
+        generator = self._make_generator(tokenizer, cfg_scale, num_diffusion_steps, max_new_tokens)
         return generator.generate(
             input_ids=input_ids,
-            voice_audio_tt=voice_audio_tt,
-            neg_input_ids=neg_input_ids,
-            neg_voice_audio_tt=neg_voice_audio_tt,
+            attention_mask=attention_mask,
+            speech_tensors=speech_tensors,
+            speech_masks=speech_masks,
+            speech_input_mask=speech_input_mask,
+            prefill_speech_embeds=prefill_speech_embeds,
+            max_new_tokens=max_new_tokens,
+            rng=rng,
         )

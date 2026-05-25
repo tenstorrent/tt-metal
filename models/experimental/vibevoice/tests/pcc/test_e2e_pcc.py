@@ -1,12 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Phase 4 — End-to-end PCC test.
+"""Submodule integration PCC (LM hidden state, DPM scheduler).
 
-Compares intermediate tensors (LM last_hidden_state, DPM latent, waveform)
-against reference generate() output. Uses fixed inputs for determinism.
-
-Requires: all submodule PCC tests to pass first.
+Full reference generate() parity is in test_e2e_generate_pcc.py.
 """
 
 import sys
