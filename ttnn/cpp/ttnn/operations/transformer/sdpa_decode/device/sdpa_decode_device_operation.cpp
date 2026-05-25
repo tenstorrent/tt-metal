@@ -6,7 +6,6 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
-#include <cmath>
 #include <cstdint>
 
 #include <tt-metalium/constants.hpp>
