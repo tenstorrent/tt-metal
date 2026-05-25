@@ -58,8 +58,11 @@ def to_torch_replicated_first_shard(t: ttnn.Tensor) -> Any:
     if num_devices > 1 and dev is not None:
         composer = ttnn.ConcatMeshToTensor(dev, dim=0)
         out = ttnn.to_torch(t, mesh_composer=composer)
-        if out.dim() >= 1 and out.shape[0] >= num_devices:
-            out = out[: out.shape[0] // num_devices]
+        if out.dim() >= 2 and int(out.shape[0]) == 1 and int(out.shape[1]) % num_devices == 0:
+            # Replicated ``[1, L]`` control tensors often concat along width → ``[1, N*L]``.
+            out = out[:, : int(out.shape[1]) // num_devices]
+        elif out.dim() >= 1 and int(out.shape[0]) >= num_devices:
+            out = out[: int(out.shape[0]) // num_devices]
         return out
 
     host = ttnn.from_device(t) if t.storage_type() == ttnn.StorageType.DEVICE else t

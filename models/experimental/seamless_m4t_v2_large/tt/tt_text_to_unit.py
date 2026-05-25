@@ -35,8 +35,12 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     matmul_program_config,
     MATMUL_1D_SEQ_THRESHOLD,
     sdpa_program_config,
+    TILE,
     to_torch_replicated_first_shard,
 )
+
+# Chunk ``H @ enc`` along upsampled rows (same row count as speech-encoder long mel matmuls).
+_HARD_UPSAMPLE_MATMUL_CHUNK_ROWS = TILE
 
 # HF ``torch.finfo(torch.bfloat16).min`` additive padding mask floor (approx.).
 _BF16_MASK_FLOOR = -3.3895313892565356e38
@@ -482,6 +486,58 @@ def _cached_frame_idx_f32(
     return frame_idx
 
 
+def _hard_upsample_matmul(
+    H: ttnn.Tensor,
+    enc: ttnn.Tensor,
+    device: ttnn.Device,
+    *,
+    sum_r: int,
+    enc_seq: int,
+    hidden_size: int,
+) -> ttnn.Tensor:
+    """``H @ enc`` with 1D multicast chunks when ``sum_r`` exceeds the 2D L1 budget."""
+    if sum_r <= MATMUL_1D_SEQ_THRESHOLD:
+        mm_pc = matmul_program_config(device, token_rows=sum_r, in_dim=enc_seq, out_dim=hidden_size)
+        return ttnn.matmul(H, enc, program_config=mm_pc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    chunk_m = _HARD_UPSAMPLE_MATMUL_CHUNK_ROWS
+    chunks: list[ttnn.Tensor] = []
+    for start in range(0, sum_r, chunk_m):
+        end = min(start + chunk_m, sum_r)
+        chunk_rows = end - start
+        H_chunk = ttnn.slice(
+            H,
+            [0, start, 0],
+            [1, end, enc_seq],
+            [1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        mm_pc = matmul_program_config(
+            device,
+            token_rows=chunk_rows,
+            in_dim=enc_seq,
+            out_dim=hidden_size,
+        )
+        out_chunk = ttnn.matmul(H_chunk, enc, program_config=mm_pc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(H_chunk)
+        if chunk_rows < chunk_m:
+            out_chunk = ttnn.slice(
+                out_chunk,
+                [0, 0, 0],
+                [1, chunk_rows, hidden_size],
+                [1, 1, 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        chunks.append(out_chunk)
+
+    if len(chunks) == 1:
+        return chunks[0]
+    out = ttnn.concat(chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for c in chunks:
+        ttnn.deallocate(c)
+    return out
+
+
 def _hard_upsample_nlc(
     enc: ttnn.Tensor,
     repeats: Sequence[int],
@@ -576,9 +632,15 @@ def _hard_upsample_nlc(
 
     # H: [1, sum_r, T] bf16 TILE; enc: [1, T, hidden] bf16 TILE.
     # out: [1, sum_r, hidden]
-    token_m = max(sum_r, 1)
-    mm_pc = matmul_program_config(device, token_rows=token_m, in_dim=enc_seq, out_dim=int(enc.shape[-1]))
-    out = ttnn.matmul(H, enc, program_config=mm_pc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    hidden_size = int(enc.shape[-1])
+    out = _hard_upsample_matmul(
+        H,
+        enc,
+        device,
+        sum_r=sum_r,
+        enc_seq=enc_seq,
+        hidden_size=hidden_size,
+    )
     ttnn.deallocate(H)
     return out
 
