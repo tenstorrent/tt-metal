@@ -50,11 +50,7 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
 
     // Workaround for HW bugs:
     // budabackend#1948: int32 dest and movd2a/b with int8 srcA/B
-    // budabackend#1948: fp32 dest and movd2a/b with UInt16 srcA/B
-    bool uint16_with_fp32_dest = is_fp32_dest_acc_en && ((srca_data_format == ckernel::to_underlying(DataFormat::UInt16)) ||
-                                                         (srcb_data_format == ckernel::to_underlying(DataFormat::UInt16)));
-
-    if (int8_math_enabled || uint16_with_fp32_dest)
+    if (int8_math_enabled)
     {
         _llk_math_dbg_feature_disable_();
     }
