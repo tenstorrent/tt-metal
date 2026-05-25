@@ -170,17 +170,24 @@ class TensorCache:
             data.tensorbin
     """
 
-    def __init__(self, local_root: Path):
+    def __init__(self, local_root: Path, force_cache_override: bool = False):
         self.local_root = Path(local_root)
         self.local_root.mkdir(parents=True, exist_ok=True)
         self._objects_dir = self.local_root / "objects"
+        self.force_cache_override = force_cache_override
 
     def _content_addressed_paths(self, artifact_id: str) -> ContentAddressedStoragePaths:
         object_dir = self._objects_dir / artifact_id[:2] / artifact_id
         return ContentAddressedStoragePaths(object_dir=object_dir, data_path=object_dir / "data.tensorbin")
 
     def _lookup(self, artifact_id: str) -> CacheEntry:
+        logger.info("lookup for: {}", artifact_id)
         paths = self._content_addressed_paths(artifact_id)
+        if self.force_cache_override:
+            if paths.object_dir.exists():
+                shutil.rmtree(paths.object_dir, ignore_errors=True)
+            logger.info("force_cache_override=True: cache lookup for {}, forced to miss", artifact_id)
+            return AbsentCacheEntry(artifact_id=artifact_id)
         if not paths.object_dir.exists():
             return AbsentCacheEntry(artifact_id=artifact_id)
         if paths.data_path.is_file():
@@ -301,7 +308,13 @@ class TensorCache:
 
     def _lookup_compressed(self, artifact_id: str) -> "CacheEntry":
         """Check for compact BSPM cache entry (tiles.bin + assignment.npy)."""
+        logger.info("lookup for: {}", artifact_id)
         obj_dir = self._objects_dir / artifact_id[:2] / artifact_id
+        if self.force_cache_override:
+            if obj_dir.exists():
+                shutil.rmtree(obj_dir, ignore_errors=True)
+            logger.info("force_cache_override=True: cache lookup for {}, forced to miss", artifact_id)
+            return AbsentCacheEntry(artifact_id=artifact_id)
         if not obj_dir.exists():
             return AbsentCacheEntry(artifact_id=artifact_id)
         tiles_path = obj_dir / "tiles.bin"
@@ -406,7 +419,13 @@ class TensorCache:
 
     def _lookup_sram_compressed(self, artifact_id: str) -> "CacheEntry":
         """Check for a present SRAM-compressed CAS entry (shards.bin + metadata.json)."""
+        logger.info("lookup for: {}", artifact_id)
         paths = self._sram_compressed_paths(artifact_id)
+        if self.force_cache_override:
+            if paths.object_dir.exists():
+                shutil.rmtree(paths.object_dir, ignore_errors=True)
+            logger.info("force_cache_override=True: cache lookup for {}, forced to miss", artifact_id)
+            return AbsentCacheEntry(artifact_id=artifact_id)
         if not paths.object_dir.exists():
             return AbsentCacheEntry(artifact_id=artifact_id)
         if paths.data_path.is_file() and (paths.object_dir / "metadata.json").is_file():
@@ -597,6 +616,7 @@ class TensorCache:
                     "use get_or_create_bspm_expert() instead of calling get_or_create() directly."
                 )
             entry = self._lookup_compressed(artifact_id)
+
             if isinstance(entry, PresentCacheEntry):
                 logger.debug("Cache hit (compressed) for {} ({})", logical, artifact_id[:12])
                 inputs = self._load_compressed(entry.paths.object_dir, target)

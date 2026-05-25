@@ -269,12 +269,19 @@ class CacheWeightProvider:
         bspm_dir: Path | None = None,
         bspm_variant: BspmVariant | str = BspmVariant.B,
         bspm_budget: float = 3.5,
+        force_cache_override: bool = False,
     ) -> None:
         cache_path = Path(cache_path)
         model_path = Path(model_path)
         assert model_path.exists(), f"Model path does not exist: {model_path}"
         assert model_path.is_dir(), f"Model path is not a directory: {model_path}"
-        self._cache = TensorCache(cache_path)
+        # if force_cache_override:
+        #     from loguru import logger
+        #     logger.info(
+        #         "force_cache_override=True: all cache lookups will be forced to miss; "
+        #         "every artifact will be rebuilt and re-stored this run"
+        #     )
+        self._cache = TensorCache(cache_path, force_cache_override=force_cache_override)
         self._state_dict = LazyStateDict(model_path)
         self._schema_version = schema_version
         self._hf_model_id = hf_model_id or model_path.name

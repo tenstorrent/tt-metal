@@ -1308,3 +1308,51 @@ class TestSramCompressedRoundTrip:
                 preprocess=lambda t: t,
                 raw_tensors={},
             )
+
+
+class TestForceCacheOverride:
+    @pytest.fixture()
+    def cache_dir(self, tmp_path):
+        return tmp_path / "force_cache_override_caches"
+
+    def test_forced_cache_miss(self, cache_dir, device):
+        prev_run_sim = TensorCache(cache_dir)  # simulate a "previous" run
+
+        raw_data = torch.randn(16, 16, dtype=torch.bfloat16)
+        preprocess_call_count = [0]
+
+        def preprocess(tensors):
+            preprocess_call_count[0] += 1
+            return {"gate_bias": tensors["raw"].reshape(16, 16).T.contiguous()}
+
+        fingerprint = _make_fingerprint(
+            source=SourceTensorSelection(names=("mlp.gate.e_score_correction_bias",)),
+            target=TensorTarget(
+                name="gate_bias",
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                tile_shape=(32, 32),
+            ),
+        )
+
+        result1 = prev_run_sim.get_or_create(
+            fingerprint,
+            device,
+            preprocess=preprocess,
+            raw_tensors=lambda: {"raw": raw_data},
+        )
+        assert preprocess_call_count[0] == 1
+        assert isinstance(result1, ttnn.Tensor)
+
+        override = TensorCache(cache_dir, force_cache_override=True)
+        result2 = override.get_or_create(
+            fingerprint,
+            device,
+            preprocess=preprocess,
+            raw_tensors=lambda: {"raw": raw_data},
+        )
+        assert preprocess_call_count[0] == 2  # preprocess should be called again due to force_cache_override
+
+        ttnn.deallocate(result1, force=True)
+        ttnn.deallocate(result2, force=True)

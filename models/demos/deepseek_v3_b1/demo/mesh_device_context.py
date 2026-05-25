@@ -21,7 +21,7 @@ DEFAULT_WORKER_L1_SIZE = 1431568
 LM_HEAD_WORKER_L1_SIZE = 1453716
 LM_HEAD_RANK_64_PROCS = 62
 LM_HEAD_RANK_16_PROCS = 14
-LM_HEAD_RANK_4_PROCS = 1  # process to rank
+LM_HEAD_RANK_4_PROCS = 1
 
 
 def _fabric_config_for_num_procs(num_procs: int):

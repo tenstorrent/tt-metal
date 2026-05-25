@@ -171,6 +171,12 @@ def create_parser() -> argparse.ArgumentParser:
         default=True,
         help="Enable speculative decode; use --no-enable-speculative-decode for base decode",
     )
+    parser.add_argument(
+        "--force-cache-override",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Skip cache hits and always rebuild + re-store tensors from scratch",
+    )
 
     return parser
 
@@ -203,6 +209,7 @@ def run_demo(
     sram_hot_experts_ceiling: int = 64,
     bspm_dir: Path | None = None,
     bspm_budget: float = 3.5,
+    force_cache_override: bool = False,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     configure_runtime_env(enable_sram_hot_experts=enable_sram_hot_experts)
@@ -234,6 +241,7 @@ def run_demo(
             sram_hot_experts_ceiling=sram_hot_experts_ceiling,
             bspm_dir=bspm_dir,
             bspm_budget=bspm_budget,
+            force_cache_override=force_cache_override,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
@@ -333,6 +341,7 @@ def main(argv: list[str] | None = None) -> int:
         sram_hot_experts_ceiling=args.sram_hot_experts_ceiling,
         bspm_dir=args.bspm_dir,
         bspm_budget=args.bspm_budget,
+        force_cache_override=args.force_cache_override,
     )
     print(end="", file=sys.stdout, flush=True)
     return 0
