@@ -47,7 +47,7 @@
 - **Accuracy**: PCC ≥ 0.9999994 across the 16-cell baseline; max ATOL ≤ 1.06e-3;
   relative RMS ≤ 1.78e-3.
 
-### [ ] Refinement 1 — L1 budget fit for wide reduce dimension
+### [x] Refinement 1 — L1 budget fit for wide reduce dimension
 
 **Goal**: rewrite the reduce-dim path so the per-core L1 CB footprint is bounded by
 a constant (chunking on the reduce dim) rather than scaling linearly with
