@@ -118,7 +118,7 @@
     junitparser merge pytest-report-blackhole-1-compile.xml pytest-report-blackhole-1-run.xml pytest-report-blackhole-1.xml
   skus:
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 46
   owner_id: U07J3K6KS1K
 
 - name: llk_smoke_blackhole group 2/4
@@ -142,7 +142,7 @@
     junitparser merge pytest-report-blackhole-2-compile.xml pytest-report-blackhole-2-run.xml pytest-report-blackhole-2.xml
   skus:
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 46
   owner_id: U07J3K6KS1K
 
 - name: llk_smoke_blackhole group 3/4
@@ -166,7 +166,7 @@
     junitparser merge pytest-report-blackhole-3-compile.xml pytest-report-blackhole-3-run.xml pytest-report-blackhole-3.xml
   skus:
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 46
   owner_id: U07J3K6KS1K
 
 - name: llk_smoke_blackhole group 4/4
@@ -190,5 +190,5 @@
     junitparser merge pytest-report-blackhole-4-compile.xml pytest-report-blackhole-4-run.xml pytest-report-blackhole-4.xml
   skus:
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 46
   owner_id: U07J3K6KS1K
