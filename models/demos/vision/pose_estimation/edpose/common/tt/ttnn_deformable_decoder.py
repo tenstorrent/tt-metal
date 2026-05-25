@@ -136,12 +136,18 @@ class TTDeformableDecoderLayer(LightweightModule):
         attn = ttnn.matmul(q, k_t)
         ttnn.deallocate(q)
         ttnn.deallocate(k_t)
+        old = attn
         attn = ttnn.multiply(attn, scale)
+        ttnn.deallocate(old)
 
         if self_attn_mask is not None:
+            old = attn
             attn = ttnn.add(attn, self_attn_mask)
+            ttnn.deallocate(old)
 
+        old = attn
         attn = ttnn.softmax(attn, dim=-1)
+        ttnn.deallocate(old)
         out = ttnn.matmul(attn, v)
         ttnn.deallocate(attn)
         ttnn.deallocate(v)
@@ -201,7 +207,9 @@ class TTDeformableDecoderLayer(LightweightModule):
                 tgt_resid.to(torch.bfloat16),
                 layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            old = tgt_tt
             tgt_tt = ttnn.layer_norm(tgt_tt, weight=self.norm2_w, bias=self.norm2_b)
+            ttnn.deallocate(old)
             tgt = ttnn.to_torch(tgt_tt).transpose(0, 1).contiguous().float()
             ttnn.deallocate(tgt_tt)
 
@@ -225,14 +233,24 @@ class TTDeformableDecoderLayer(LightweightModule):
             tgt.to(torch.bfloat16).transpose(0, 1).contiguous(),
             layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        old = tgt_tt
         tgt_tt = ttnn.layer_norm(tgt_tt, weight=self.norm1_w, bias=self.norm1_b)
+        ttnn.deallocate(old)
 
         ffn = ttnn.linear(tgt_tt, self.ffn1_w, bias=self.ffn1_b)
+        old = ffn
         ffn = ttnn.relu(ffn)
+        ttnn.deallocate(old)
+        old = ffn
         ffn = ttnn.linear(ffn, self.ffn2_w, bias=self.ffn2_b)
+        ttnn.deallocate(old)
+        old = tgt_tt
         tgt_tt = ttnn.add(tgt_tt, ffn)
+        ttnn.deallocate(old)
         ttnn.deallocate(ffn)
+        old = tgt_tt
         tgt_tt = ttnn.layer_norm(tgt_tt, weight=self.norm3_w, bias=self.norm3_b)
+        ttnn.deallocate(old)
 
         result = ttnn.to_torch(tgt_tt).transpose(0, 1).contiguous().float()
         ttnn.deallocate(tgt_tt)

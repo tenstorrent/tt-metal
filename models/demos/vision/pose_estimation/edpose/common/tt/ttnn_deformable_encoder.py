@@ -22,6 +22,7 @@ class TTDeformableEncoderLayer(LightweightModule):
         super().__init__()
         self.device = device
         self.d_model = d_model
+        self.n_levels = n_levels
         p = f"{prefix}." if prefix else ""
 
         self.self_attn = TTMSDeformAttn(
@@ -63,7 +64,9 @@ class TTDeformableEncoderLayer(LightweightModule):
         )
 
     def forward(self, src, pos, reference_points, spatial_shapes, level_start_index,
-                key_padding_mask=None, normalizer=None, ref_expanded=None):
+                key_padding_mask=None, normalizer=None, ref_expanded=None,
+                ref_levels_tt=None, inv_norm_levels_tt=None,
+                cpu_ref_levels=None, cpu_norm_levels=None):
         """
         Args:
             src: ttnn (N, Len_in, d_model)
@@ -74,6 +77,8 @@ class TTDeformableEncoderLayer(LightweightModule):
             key_padding_mask: optional torch (N, Len_in)
             normalizer: optional precomputed torch (n_levels, 2) float
             ref_expanded: optional precomputed torch (N, Lq, 1, n_levels, 1, 2) float
+            ref_levels_tt: optional list of ttnn per-level ref points (device path)
+            inv_norm_levels_tt: optional list of ttnn per-level inv normalizers (device path)
         Returns:
             ttnn (N, Len_in, d_model)
         """
@@ -81,19 +86,33 @@ class TTDeformableEncoderLayer(LightweightModule):
         src2 = self.self_attn(
             query, reference_points, src, spatial_shapes, level_start_index,
             key_padding_mask, normalizer=normalizer, ref_expanded=ref_expanded,
+            ref_levels_tt=ref_levels_tt, inv_norm_levels_tt=inv_norm_levels_tt,
+            cpu_ref_levels=cpu_ref_levels, cpu_norm_levels=cpu_norm_levels,
         )
         ttnn.deallocate(query)
 
+        old = src
         src = ttnn.add(src, src2)
+        ttnn.deallocate(old)
         ttnn.deallocate(src2)
+        old = src
         src = ttnn.layer_norm(src, weight=self.norm1_w, bias=self.norm1_b)
+        ttnn.deallocate(old)
 
         ffn = ttnn.linear(src, self.ffn1_w, bias=self.ffn1_b)
+        old = ffn
         ffn = ttnn.relu(ffn)
+        ttnn.deallocate(old)
+        old = ffn
         ffn = ttnn.linear(ffn, self.ffn2_w, bias=self.ffn2_b)
+        ttnn.deallocate(old)
+        old = src
         src = ttnn.add(src, ffn)
+        ttnn.deallocate(old)
         ttnn.deallocate(ffn)
+        old = src
         src = ttnn.layer_norm(src, weight=self.norm2_w, bias=self.norm2_b)
+        ttnn.deallocate(old)
 
         return src
 
@@ -103,6 +122,7 @@ class TTDeformableEncoder(LightweightModule):
     def __init__(self, device, state_dict, prefix, n_layers=6, d_model=256, d_ffn=1024,
                  n_levels=5, n_heads=8, n_points=4):
         super().__init__()
+        self.device = device
         p = f"{prefix}." if prefix else ""
         self.layers = []
         for i in range(n_layers):
@@ -119,12 +139,17 @@ class TTDeformableEncoder(LightweightModule):
         normalizer = _torch.stack(
             [spatial_shapes[..., 1], spatial_shapes[..., 0]], -1
         ).float()
-        ref_expanded = reference_points.float()[:, :, None, :, None, :]
+
+        L = len(spatial_shapes)
+        ref_f = reference_points.float()
+        cpu_ref_levels = [ref_f[:, :, lid, :].unsqueeze(2).unsqueeze(3) for lid in range(L)]
+        cpu_norm_levels = [normalizer[lid].view(1, 1, 1, 1, 2) for lid in range(L)]
 
         output = src
         for layer in self.layers:
             output = layer(
                 output, pos, reference_points, spatial_shapes, level_start_index,
-                key_padding_mask, normalizer=normalizer, ref_expanded=ref_expanded,
+                key_padding_mask, normalizer=normalizer,
+                cpu_ref_levels=cpu_ref_levels, cpu_norm_levels=cpu_norm_levels,
             )
         return output

@@ -625,6 +625,9 @@ class TTEDPoseDecoder:
             reference_points = new_reference_points.detach()
             ref_points.append(new_reference_points)
 
+        if tgt_mask2 is not None and isinstance(tgt_mask2, ttnn.Tensor):
+            ttnn.deallocate(tgt_mask2)
+
         return (
             [itm_out.transpose(0, 1) for itm_out in intermediate],
             [itm_ref.transpose(0, 1) for itm_ref in ref_points],
