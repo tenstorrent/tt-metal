@@ -207,34 +207,13 @@ def _topology_from(device_params):
 #       Mixing ND-shard input + interleaved gathered buffer makes the
 #       template instantiations diverge and the ternary can't unify.
 #
-# Architectural conclusion
-# ------------------------
-# The three validation checks above are not arbitrary safety rails — they
-# reflect the reader kernel's structural assumption that all K-side
-# tensors (input K, gathered K) share one accessor type, and likewise for
-# V. The kernel literally cannot be JIT-compiled without this. Relaxing
-# the validation does not unblock the op.
-#
-# For the chunked-MLA caller, this means the
-# ttnn.slice(..., memory_config=ttnn.DRAM_MEMORY_CONFIG) workaround is
-# doing essential work: it produces an interleaved K tensor whose
-# accessor distribution matches the (interleaved) gathered buffer's, so
-# the reader's ternaries type-unify.
-#
-# Dropping the slice requires owners to either:
-#
-#   (a) Make the gathered K buffer ND-shard with the *same* spec as the
-#       input K (forcing all K-side tensors into one shard family).
-#       Doable but rigid — V would need its own parallel ND-shard story,
-#       and the output buffer alloc would need to follow input layout.
-#
-#   (b) Refactor the reader kernel to handle mixed input/gathered layouts
-#       via if-constexpr branches per (input_layout, gathered_layout)
-#       combo. More flexible, more code, more JIT variants.
-#
-# In either case the AG sub-op's three validate checks (lines 41, 52, 84)
-# need to be relaxed/replaced to express per-tensor configs instead of
-# one config-for-all.
+# Current implementation note
+# ---------------------------
+# RingJointSDPA now keeps the standalone AG op's validation unchanged, but
+# uses a RingJoint-specific fused-AG validation and reader dispatch. This
+# allows local K/V inputs to use layouts that differ from the persistent
+# gathered K/V buffers, including ND-sharded local K and ND-sharded local V
+# with different natural head dims.
 #
 # How to reproduce this cascade
 # -----------------------------
@@ -256,8 +235,9 @@ def _topology_from(device_params):
     ids=["line"],
     indirect=True,
 )
+@pytest.mark.parametrize("v_memory_layout", ["interleaved", "nd_sharded"], ids=["v_interleaved", "v_nd_sharded"])
 @pytest.mark.timeout(0)
-def test_nd_sharded_kv_cache_as_k(mesh_device, device_params):
+def test_nd_sharded_kv_cache_as_k(mesh_device, device_params, v_memory_layout):
     sp_axis = 0
     tp_axis = 1
     mesh_shape = list(mesh_device.shape)
@@ -318,17 +298,20 @@ def test_nd_sharded_kv_cache_as_k(mesh_device, device_params):
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=q_shard_dims),
     )
 
-    # Upload V (sharded on sp seq + tp heads) — interleaved DRAM, matching
-    # how V naturally comes out of wkv_b2 in production MLA.
+    # Upload V (sharded on sp seq + tp heads). The nd_sharded case exercises
+    # direct local-V reads with a natural V_HEAD_DIM shard spec.
     v_shard_dims = [None, None]
     v_shard_dims[sp_axis] = 2
     v_shard_dims[tp_axis] = 1
+    v_memory_config = (
+        _nd_shard_memory_config(V_HEAD_DIM) if v_memory_layout == "nd_sharded" else ttnn.DRAM_MEMORY_CONFIG
+    )
     tt_v = ttnn.from_torch(
         v_host,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat8_b,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=v_memory_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=v_shard_dims),
     )
 
@@ -392,7 +375,8 @@ def test_nd_sharded_kv_cache_as_k(mesh_device, device_params):
 
     logger.info(
         f"Calling ring_joint_sdpa with ND-sharded cache as K. "
-        f"K shape={list(tt_cache.shape)}, K memory_config={tt_cache.memory_config()}"
+        f"K shape={list(tt_cache.shape)}, K memory_config={tt_cache.memory_config()}, "
+        f"V memory layout={v_memory_layout}, V memory_config={tt_v.memory_config()}"
     )
 
     # THE EXPERIMENT: pass the ND-sharded cache directly as K, no ttnn.slice.
@@ -423,7 +407,7 @@ def test_nd_sharded_kv_cache_as_k(mesh_device, device_params):
         is_balanced=False,
     )
 
-    logger.success("Op accepted ND-sharded KV cache as K input — no validation error.")
+    logger.success(f"Op accepted ND-sharded KV cache as K input with {v_memory_layout} V.")
 
     # Gather output and verify correctness against a torch reference.
     out_concat_dims = [None, None]
@@ -436,7 +420,7 @@ def test_nd_sharded_kv_cache_as_k(mesh_device, device_params):
 
     ref = _mla_sdpa_reference(q_host, kvpe_host, v_host, scale)
     _, pcc_msg = assert_with_pcc(ref, tt_out_host, 0.97)
-    logger.info(f"ND-sharded K PCC vs torch reference: {pcc_msg}")
+    logger.info(f"ND-sharded K with {v_memory_layout} V PCC vs torch reference: {pcc_msg}")
 
 
 # ===========================================================================
