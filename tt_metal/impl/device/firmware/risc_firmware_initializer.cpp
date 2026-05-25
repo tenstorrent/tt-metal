@@ -627,7 +627,7 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                         if (!cluster_.is_relay_broken(device_id)) {
                             // Re-probe once without clearing — this will throw and mark.
                             try {
-                                cluster_.read_core(
+                                [[maybe_unused]] auto hb_recheck = cluster_.read_core(
                                     device_id, probe_virt, hb_addr_rs, sizeof(uint32_t));
                             } catch (...) {}
                         }
