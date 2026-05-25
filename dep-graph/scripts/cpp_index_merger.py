@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _cpp_lib import read_jsonl  # noqa: E402
 
 
-def merge(shard_root: Path, out_dir: Path) -> dict:
+def merge(shard_root: Path, out_dir: Path, only_tus: set[str] | None = None) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     nodes: dict[str, dict] = {}
     edges_seen: set[tuple] = set()
@@ -34,6 +34,7 @@ def merge(shard_root: Path, out_dir: Path) -> dict:
     edge_count = 0
     binding_count = 0
     shard_count = 0
+    skipped_filter = 0
     start = time.time()
 
     # Stream-write edges/bindings/diagnostics; nodes need dedup so build in memory.
@@ -53,6 +54,9 @@ def merge(shard_root: Path, out_dir: Path) -> dict:
             except Exception:
                 continue
             if m.get("status") != "ok":
+                continue
+            if only_tus is not None and os.path.normpath(m.get("tu", "")) not in only_tus:
+                skipped_filter += 1
                 continue
             shard_count += 1
 
@@ -122,8 +126,20 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--shard-root", default="/workspace/dep-graph/cache/tu_shards")
     ap.add_argument("--out", default="/workspace/dep-graph/cache/cpp_index")
+    ap.add_argument(
+        "--tu-list-file",
+        default="",
+        help="Optional file with TU paths to include (one per line); excludes others",
+    )
     args = ap.parse_args()
-    manifest = merge(Path(args.shard_root), Path(args.out))
+    only_tus: set[str] | None = None
+    if args.tu_list_file:
+        only_tus = {
+            os.path.normpath(line.strip())
+            for line in Path(args.tu_list_file).read_text().splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        }
+    manifest = merge(Path(args.shard_root), Path(args.out), only_tus=only_tus)
     print(f"[merger] {manifest['shards_merged']} shards merged -> {args.out}", file=sys.stderr)
     print(f"  nodes={manifest['counts']['nodes']} edges={manifest['counts']['edges']} "
           f"bindings={manifest['counts']['bindings']} diagnostics={manifest['counts']['diagnostics']}",
