@@ -260,8 +260,13 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
     }
 
     // Validate that all registered kernels with a non-empty RTA/CRTA schema have parameters.
-    // Kernels whose schema declares no named RTAs, no named CRTAs, no vararg RTAs, and no
-    // vararg CRTAs have nothing to supply per enqueue and do not need a kernel_run_params entry.
+    // Kernels whose schema declares no named RTAs, no named CRTAs, no vararg RTAs, no vararg
+    // CRTAs, AND no tensor bindings have nothing to supply per enqueue and do not need a
+    // kernel_run_params entry. Tensor bindings count as "something to supply" because their
+    // base address (and any dynamic accessor fields) are written into the kernel's CRTA buffer
+    // by SetProgramRunParameters from the corresponding TensorArg — and SetProgramRunParameters
+    // only walks kernels present in params.kernel_run_params, so a kernel with tensor bindings
+    // omitted from kernel_run_params would have its binding CRTAs left uninitialized.
     std::vector<KernelSpecName> registered_names = program_impl.get_registered_kernel_names();
     for (const KernelSpecName& name : registered_names) {
         if (kernels_with_params.contains(name)) {
@@ -271,13 +276,17 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
         if (schema == nullptr) {
             continue;
         }
-        const bool has_anything_to_supply =
-            !schema->named_runtime_args.empty() || !schema->named_common_runtime_args.empty() ||
-            !schema->num_runtime_varargs_per_node.empty() || schema->num_common_runtime_varargs > 0;
+        auto kernel = program_impl.get_kernel_by_spec_name(name);
+        const bool has_tensor_bindings = kernel != nullptr && !kernel->tensor_binding_handles().empty();
+        const bool has_anything_to_supply = !schema->named_runtime_args.empty() ||
+                                            !schema->named_common_runtime_args.empty() ||
+                                            !schema->num_runtime_varargs_per_node.empty() ||
+                                            schema->num_common_runtime_varargs > 0 || has_tensor_bindings;
         TT_FATAL(
             !has_anything_to_supply,
             "Kernel '{}' is registered in the Program with a non-empty RTA/CRTA schema but has no "
-            "runtime parameters specified in ProgramRunParams",
+            "runtime parameters specified in ProgramRunParams (the schema is non-empty, or the "
+            "kernel binds tensor parameters whose addresses are filled from kernel_run_params)",
             name);
     }
 

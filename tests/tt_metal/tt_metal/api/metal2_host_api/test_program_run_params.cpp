@@ -1833,6 +1833,39 @@ TEST_F(ProgramRunParamsTestGen1, MatchPaddedShapeOnly_DTypeMismatchStillFails) {
             ::testing::HasSubstr("tensor_layout does not match the binding's declared layout")));
 }
 
+TEST_F(ProgramRunParamsTestGen1, TensorBindingOnlyKernelMissingFromRunParamsFails) {
+    // A kernel with tensor bindings but an empty RTA/CRTA schema must still appear in
+    // kernel_run_params: SetProgramRunParameters fills the binding section CRTAs (base
+    // addresses, dynamic accessor fields) from the per-kernel entries, so omitting the
+    // kernel would leave its binding CRTAs uninitialized.
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding = MakeMinimalTensorParameter("input_tensor");
+    spec.tensor_parameters = {binding};
+    // Bind to dm_kernel (compute_kernel has no bindings). dm_kernel has no named RTAs/CRTAs
+    // and no varargs, so its RTA/CRTA schema is empty — the binding is the only thing forcing
+    // a kernel_run_params entry.
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Omit dm_kernel from kernel_run_params (only supply compute_kernel). Provide a tensor_arg
+    // so that ValidateTensorArgs passes; the failure should come from the kernel-completeness
+    // check on the binding-owning kernel.
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
+    ProgramRunParams params;
+    params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor)},
+    };
+
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Kernel 'dm_kernel' is registered in the Program with a non-empty RTA/CRTA schema "
+                                 "but has no runtime parameters specified in ProgramRunParams")));
+}
+
 TEST_F(ProgramRunParamsTestGen1, MatchPaddedShapeOnly_DynamicWinsWhenBothSet) {
     // When both match_padded_shape_only and dynamic_tensor_shape are set, dynamic is more
     // permissive and wins. A runtime tensor whose padded_shape differs from declared should

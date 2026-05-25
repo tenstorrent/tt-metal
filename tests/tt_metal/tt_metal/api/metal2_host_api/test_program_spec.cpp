@@ -3001,7 +3001,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedKernelHashStableAcross
         auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
         TensorParameter tp{
             .unique_id = "input_tensor",
-            .spec = tt::tt_metal::TensorSpec(shape, std::move(tensor_layout)),
+            .spec = tt::tt_metal::TensorSpec(std::move(shape), std::move(tensor_layout)),
             .dynamic_tensor_shape = true,
         };
         spec.tensor_parameters = {tp};
@@ -3025,7 +3025,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_ShardedKernelHashStableAcrossShap
     // Layout: HEIGHT_SHARDED with shard_shape {32, 32} on 2 cores → 2 shards along height,
     // full width per shard. The declared (64, 32) tensor has 2 shards; the alternate (32, 32)
     // tensor needs only 1 shard (subset of the 2-core grid).
-    auto make_spec = [](tt::tt_metal::Shape shape, bool dynamic) {
+    auto make_spec = [](const tt::tt_metal::Shape& shape, bool dynamic) {
         ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
         auto tp = MakeShardedTensorParameter("input_tensor", shape, {32, 32}, /*num_cores=*/2);
         tp.dynamic_tensor_shape = dynamic;
