@@ -28,12 +28,16 @@ using KernelRTASchema = detail::ProgramImpl::KernelRTASchema;
 // Shared by SetProgramRunParameters (full path) and UpdateTensorArgs (partial path).
 //   - No duplicate tensor_parameter_name entries
 //   - Every entry references a TensorParameter declared in the ProgramSpec
-//   - The supplied MeshTensor's TensorSpec matches the binding's expected TensorSpec
-//       - When the TensorParameter has dynamic_tensor_shape=false (default): full equality.
-//       - When the TensorParameter has dynamic_tensor_shape=true: tensor_layout() must match
-//         exactly (dtype, page_config, memory_config, alignment), and the logical_shape rank
-//         must match. The per-dim values of logical_shape may differ. See the field's doc
-//         comment in tensor_parameter.hpp for the contract.
+//   - The supplied MeshTensor's TensorSpec matches the binding's expected TensorSpec, with the
+//     match relaxed according to the TensorParameter's loosening flags. The three cases form a
+//     lattice from strictest to loosest (dynamic_tensor_shape strictly subsumes
+//     match_padded_shape_only; when both are set, dynamic wins):
+//       - Neither flag set (default): full TensorSpec equality.
+//       - match_padded_shape_only=true (only): tensor_layout() must match exactly, and
+//         padded_shape() must match exactly. logical_shape() may differ.
+//       - dynamic_tensor_shape=true: tensor_layout() must match exactly, and the logical_shape
+//         rank must match. Both logical_shape and padded_shape per-dim values may differ.
+//     See the field doc comments in tensor_parameter.hpp for the full contracts.
 //   - Every declared TensorParameter must be set
 void ValidateTensorArgs(const Program& program, std::span<const ProgramRunParams::TensorArg> tensor_args) {
     const detail::ProgramImpl& program_impl = program.impl();
@@ -53,16 +57,12 @@ void ValidateTensorArgs(const Program& program, std::span<const ProgramRunParams
         const TensorSpec& runtime_spec = tensor_params.tensor.get().tensor_spec();
         const bool dyn_shape =
             program_impl.get_tensor_parameter_dynamic_tensor_shape(tensor_params.tensor_parameter_name);
-        if (!dyn_shape) {
-            TT_FATAL(
-                runtime_spec == *expected_spec,
-                "TensorArg for binding '{}' supplied a MeshTensor whose TensorSpec does not match the binding's "
-                "declared spec. The binding declaration in ProgramSpec is the single source of truth for layout; "
-                "the supplied tensor must conform to it.",
-                tensor_params.tensor_parameter_name);
-        } else {
+        const bool padded_only =
+            program_impl.get_tensor_parameter_match_padded_shape_only(tensor_params.tensor_parameter_name);
+        if (dyn_shape) {
             // dynamic_tensor_shape: tensor_layout must match exactly; logical_shape may differ in
-            // per-dim values, but rank must still match.
+            // per-dim values, but rank must still match. (Wins over match_padded_shape_only if both
+            // are set: dynamic is strictly more permissive.)
             TT_FATAL(
                 runtime_spec.tensor_layout() == expected_spec->tensor_layout(),
                 "TensorArg for binding '{}' supplied a MeshTensor whose tensor_layout does not match the binding's "
@@ -77,6 +77,31 @@ void ValidateTensorArgs(const Program& program, std::span<const ProgramRunParams
                 tensor_params.tensor_parameter_name,
                 runtime_spec.logical_shape().rank(),
                 expected_spec->logical_shape().rank());
+        } else if (padded_only) {
+            // match_padded_shape_only: tensor_layout must match exactly, and padded_shape must
+            // match exactly. logical_shape may differ provided it produces the same padded_shape.
+            // Purely a host-side validation loosening: the accessor's CTAs/CRTAs are unchanged
+            // (tensor_shape_in_pages is derived from padded_shape, which is fixed across binds).
+            TT_FATAL(
+                runtime_spec.tensor_layout() == expected_spec->tensor_layout(),
+                "TensorArg for binding '{}' supplied a MeshTensor whose tensor_layout does not match the binding's "
+                "declared layout. match_padded_shape_only loosens the match only along logical_shape (within the "
+                "constraint that padded_shape is preserved); dtype, page_config, memory_config, and alignment must "
+                "still match exactly.",
+                tensor_params.tensor_parameter_name);
+            TT_FATAL(
+                runtime_spec.padded_shape() == expected_spec->padded_shape(),
+                "TensorArg for binding '{}' supplied a MeshTensor whose padded_shape does not match the binding's "
+                "declared padded_shape. match_padded_shape_only requires padded_shape to be preserved across binds; "
+                "use dynamic_tensor_shape if you need padded_shape to vary as well.",
+                tensor_params.tensor_parameter_name);
+        } else {
+            TT_FATAL(
+                runtime_spec == *expected_spec,
+                "TensorArg for binding '{}' supplied a MeshTensor whose TensorSpec does not match the binding's "
+                "declared spec. The binding declaration in ProgramSpec is the single source of truth for layout; "
+                "the supplied tensor must conform to it.",
+                tensor_params.tensor_parameter_name);
         }
     }
     for (const std::string& declared : program_impl.get_registered_tensor_parameter_names()) {

@@ -28,35 +28,31 @@ struct TensorParameter {
     // Single-device tensor layout
     tt::tt_metal::TensorSpec spec;
 
-    // Dynamic-shape opt-in (ADVANCED).
+    ///////////////////////////////////////////////////////////////////
+    // Advanced options
+    ///////////////////////////////////////////////////////////////////
+
+    // By default, the MeshTensor argument provided at execution time must
+    // EXACTLY match the TensorParameter's declared TensorSpec. The advanced
+    // options below relax this match requirement in particular ways.
     //
-    // By default, a TensorParameter declares an EXACT tensor layout. The MeshTensor
-    // bound at execution time must match `spec` exactly: same logical shape, dtype,
-    // page config, memory config, alignment.
-    //
-    // Setting `dynamic_tensor_shape = true` loosens that match along exactly one
-    // axis: the bound tensor's `logical_shape()` may differ from `spec.logical_shape()`.
-    // Everything else (dtype, page config, memory config including any shard_spec,
-    // alignment) must still match exactly.
-    //
-    // Use case: kernels whose code is genuinely shape-agnostic (e.g., eltwise). The
-    // same compiled kernel can then be bound to tensors of varying shape without
-    // forcing a JIT recompile per shape.
-    //
-    // Mechanics by buffer type:
-    //  - Interleaved: zero device-side change. The accessor's compile-time payload
-    //    never depended on logical shape; this is purely a host-side validation
-    //    loosening so a different-shape tensor can be bound.
-    //  - Sharded: the `tensor_shape_in_pages` words move from compile-time args to
-    //    common runtime args. The CTA payload becomes stable across shape variations
-    //    (so the JIT cache hits across shapes), and the actual tensor's shape is
-    //    written into CRTAs at enqueue time. The shard_spec (grid + shard_shape)
-    //    is part of the layout match and so is fixed across binds; only logical_shape
-    //    varies, and the bound tensor must still fit on the same shard grid.
-    //
-    // Default to false. The JIT compiler gets strictly more information with a
-    // fixed shape; enable this only for kernels that genuinely don't care about
-    // tensor shape at compile time.
+    // NOTE: These options are all default-unsafe; most kernels will NOT function
+    // correctly if the tensor argument's spec deviates from the declared spec.
+
+    // Permit tensor arguments whose logical_shape differs from the declared shape.
+    // The argument's padded_shape must still match exactly.
+    // Effects:
+    //  - Validation checks are relaxed
+    //  - TensorAccessor configuration is completely unchanged
+    bool match_padded_shape_only = false;
+
+    // Permit tensor arguments with dynamic logical shape.
+    // The argument's logical_shape AND padded_shape may differ from the declared shape.
+    // Effects:
+    //  - Validation checks are relaxed
+    //  - For an interleaved tensor, TensorAccessor configuration is unchanged
+    //  - For a sharded tensor, the TensorAccessor configuration dynamically reflects the
+    //    argument's actual shape. (Shape becomes an implicit runtime argument.)
     bool dynamic_tensor_shape = false;
 };
 

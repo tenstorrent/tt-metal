@@ -132,7 +132,8 @@ Kernel::Kernel(
     const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles,
     const std::vector<std::string>& named_runtime_args,
     const std::vector<std::string>& named_common_runtime_args,
-    const std::vector<TensorBindingHandle>& tensor_binding_handles) :
+    const std::vector<TensorBindingHandle>& tensor_binding_handles,
+    const KernelCrtaLayout& crta_layout) :
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
     kernel_src_(kernel_src),
@@ -145,6 +146,7 @@ Kernel::Kernel(
     named_runtime_args_(named_runtime_args),
     named_common_runtime_args_(named_common_runtime_args),
     tensor_binding_handles_(tensor_binding_handles),
+    crta_layout_(crta_layout),
 
     core_with_max_runtime_args_({0, 0}),
     defines_(defines),

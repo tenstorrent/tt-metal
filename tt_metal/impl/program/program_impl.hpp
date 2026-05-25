@@ -343,7 +343,8 @@ public:
     void register_kernel_spec_name(const KernelSpecName& name, KernelHandle handle);
     void register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id);
     void register_semaphore_spec_name(const SemaphoreSpecName& name, uint32_t sem_id);
-    void register_tensor_parameter(const std::string& name, const TensorSpec& spec, bool dynamic_tensor_shape);
+    void register_tensor_parameter(
+        const std::string& name, const TensorSpec& spec, bool dynamic_tensor_shape, bool match_padded_shape_only);
 
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
     KernelHandle get_kernel_handle(const KernelSpecName& name) const;
@@ -354,6 +355,9 @@ public:
     // Returns false if the parameter was not registered with dynamic_tensor_shape=true,
     // or if the name is unknown. (The caller validates known-ness separately.)
     bool get_tensor_parameter_dynamic_tensor_shape(const std::string& name) const;
+    // Returns false if the parameter was not registered with match_padded_shape_only=true,
+    // or if the name is unknown. (The caller validates known-ness separately.)
+    bool get_tensor_parameter_match_padded_shape_only(const std::string& name) const;
     std::vector<std::string> get_registered_tensor_parameter_names() const;
 
     // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
@@ -468,13 +472,14 @@ private:
         std::unordered_map<DFBSpecName, uint32_t> dfb_handles;
         std::unordered_map<SemaphoreSpecName, uint32_t> semaphore_handles;
         std::unordered_map<KernelSpecName, KernelRTASchema> kernel_rta_schemas;
-        // TensorParameter name -> the parameter's declared layout + dynamic-shape opt-in.
+        // TensorParameter name -> the parameter's declared layout + loosening opt-ins.
         // Used by ValidateProgramRunParams to check that the supplied MeshTensor's spec matches
-        // the parameter's declared layout (loosened when dynamic_tensor_shape is set), and as
+        // the parameter's declared layout (with relaxations applied per the opt-in flags), and as
         // the per-parameter lookup for completeness checks.
         struct RegisteredTensorParameter {
             TensorSpec spec;
             bool dynamic_tensor_shape = false;
+            bool match_padded_shape_only = false;
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
 

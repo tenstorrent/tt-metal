@@ -1822,10 +1822,14 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 // Per-kernel resolved tensor binding data:
 //  - All the kernel's TensorBindingHandle (type is defined in kernel.hpp)
 //  - The positional CTAs to append to the kernel's (unnamed) CTAs
+//  - The full CRTA buffer layout (named CRTAs + binding section + vararg-section start),
+//    precomputed here so consumers (headergen, runtime) don't have to re-derive section
+//    boundaries by walking handles. See KernelCrtaLayout in jit_build_settings.hpp.
 struct TensorBindingsForKernel {
     std::vector<TensorBindingHandle> handles;
     std::vector<uint32_t> cta_words;  // appended after any pre-existing positional CTAs
                                       // (currently, this is the only Metal 2.0 use of positional CTAs)
+    KernelCrtaLayout crta_layout;
 };
 
 // Resolve the tensor bindings for a single kernel:
@@ -1836,6 +1840,8 @@ struct TensorBindingsForKernel {
 //     Each binding occupies (1 + extra_crta_words) words: the always-present base address
 //     word, plus any runtime accessor field words (e.g. shape, when dynamic_tensor_shape
 //     is set on a sharded TensorParameter).
+//  4. Record the resulting CRTA buffer layout (the three section sizes) on the output, so
+//     the headergen and runtime can consult it directly instead of re-summing the bindings.
 //
 // (SetProgramRunParameters will fill the address slots and runtime field slots at enqueue
 // time, extracting info from the TensorArgs.)
@@ -1848,6 +1854,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
 
     uint32_t cta_word_offset = 0;
     size_t crta_word_index = base_named_crta_count;
+    uint32_t binding_section_words = 0;
     for (const auto& binding : kernel.tensor_bindings) {
         const ResolvedTensorParameter& resolved = resolved_tensor_parameters.at(binding.tensor_parameter_name);
         const std::vector<uint32_t>& binding_ctas = resolved.cta_payload;
@@ -1861,10 +1868,17 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
 
         out.cta_words.insert(out.cta_words.end(), binding_ctas.begin(), binding_ctas.end());
         cta_word_offset += static_cast<uint32_t>(binding_ctas.size());
-        crta_word_index += 1u + resolved.extra_crta_words;
+        const uint32_t binding_words = 1u + resolved.extra_crta_words;
+        crta_word_index += binding_words;
+        binding_section_words += binding_words;
 
         out.handles.push_back(std::move(handle));
     }
+
+    out.crta_layout.num_named_words = static_cast<uint32_t>(base_named_crta_count);
+    out.crta_layout.binding_section_words = binding_section_words;
+    out.crta_layout.vararg_section_offset = static_cast<uint32_t>(base_named_crta_count) + binding_section_words;
+
     return out;
 }
 
@@ -2313,7 +2327,10 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     // Register TensorParameters with the program for ValidateProgramRunParams to consult at enqueue.
     for (const auto& tensor_parameter : spec.tensor_parameters) {
         program_impl->register_tensor_parameter(
-            tensor_parameter.unique_id, tensor_parameter.spec, tensor_parameter.dynamic_tensor_shape);
+            tensor_parameter.unique_id,
+            tensor_parameter.spec,
+            tensor_parameter.dynamic_tensor_shape,
+            tensor_parameter.match_padded_shape_only);
     }
 
     // Create DataflowBuffers and build name -> ID map.
@@ -2429,7 +2446,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     semaphore_handles,
                     named_rtas,
                     user_named_crtas,
-                    tensor_binding_handles);
+                    tensor_binding_handles,
+                    ta_bindings.crta_layout);
             } else {
                 auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
                 config.compile_args = ta_bindings.cta_words;
@@ -2444,7 +2462,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     semaphore_handles,
                     named_rtas,
                     user_named_crtas,
-                    tensor_binding_handles);
+                    tensor_binding_handles,
+                    ta_bindings.crta_layout);
             }
         } else {  // gen1
             if (kernel_spec.is_dm_kernel()) {
@@ -2459,7 +2478,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     semaphore_handles,
                     named_rtas,
                     user_named_crtas,
-                    tensor_binding_handles);
+                    tensor_binding_handles,
+                    ta_bindings.crta_layout);
             } else {
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_id);
                 config.compile_args = ta_bindings.cta_words;
@@ -2472,7 +2492,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     semaphore_handles,
                     named_rtas,
                     user_named_crtas,
-                    tensor_binding_handles);
+                    tensor_binding_handles,
+                    ta_bindings.crta_layout);
             }
         }
 

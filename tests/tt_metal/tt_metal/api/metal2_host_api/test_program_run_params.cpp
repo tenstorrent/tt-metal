@@ -1726,5 +1726,138 @@ TEST_F(ProgramRunParamsTestGen1, DynamicTensorShape_ShardedUpdateRefreshesShape)
         ReadBindingShapeFromCRTA(program, "dm_kernel", "input_tensor"), ExpectedShapeInPagesFromSpec(smaller_spec));
 }
 
+// ============================================================================
+// SECTION: match_padded_shape_only Run-Params Tests (Gen1 / WH)
+// ============================================================================
+// Exercises the match_padded_shape_only opt-in on TensorParameter:
+//   - tensor_layout must still match exactly (dtype / page_config / memory_config / alignment).
+//   - padded_shape() must match exactly across binds.
+//   - logical_shape() may differ provided the resulting padded_shape is unchanged.
+//   - Strictly weaker than dynamic_tensor_shape; no device-side CTA/CRTA effect.
+
+TEST_F(ProgramRunParamsTestGen1, MatchPaddedShapeOnly_AcceptsDifferentLogicalShape) {
+    // Declared logical shape {1, 1, 32, 32} on TILE layout produces padded_shape {1, 1, 32, 32}.
+    // A runtime tensor with logical_shape {1, 1, 20, 20} pads up to the same {1, 1, 32, 32}, so
+    // match_padded_shape_only accepts the rebind.
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE);
+    auto memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    auto layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
+    auto declared_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32, 32}, layout);
+    TensorParameter binding{
+        .unique_id = "input_tensor",
+        .spec = declared_spec,
+        .match_padded_shape_only = true,
+    };
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Runtime tensor: smaller logical shape that pads up to the same padded_shape (one tile).
+    auto runtime_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 20, 20}, layout);
+    ASSERT_EQ(runtime_spec.padded_shape(), declared_spec.padded_shape())
+        << "Test precondition: runtime logical {1,1,20,20} should pad to the same {1,1,32,32} as declared.";
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, runtime_spec, TensorTopology{});
+
+    auto params = MakeRunParamsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor)},
+    };
+    EXPECT_NO_THROW(SetProgramRunParameters(program, params));
+}
+
+TEST_F(ProgramRunParamsTestGen1, MatchPaddedShapeOnly_PaddedShapeMismatchFails) {
+    // Same TensorLayout, but a logical shape that pads to a DIFFERENT padded_shape is rejected.
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE);
+    auto memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    auto layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
+    auto declared_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32, 32}, layout);
+    TensorParameter binding{
+        .unique_id = "input_tensor",
+        .spec = declared_spec,
+        .match_padded_shape_only = true,
+    };
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Runtime tensor: logical shape that pads up to a DIFFERENT padded_shape (two tiles wide).
+    auto runtime_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32, 33}, layout);
+    ASSERT_NE(runtime_spec.padded_shape(), declared_spec.padded_shape())
+        << "Test precondition: runtime logical {1,1,32,33} should pad to a different padded_shape than declared.";
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, runtime_spec, TensorTopology{});
+
+    auto params = MakeRunParamsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor)},
+    };
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("padded_shape does not match the binding's declared padded_shape")));
+}
+
+TEST_F(ProgramRunParamsTestGen1, MatchPaddedShapeOnly_DTypeMismatchStillFails) {
+    // match_padded_shape_only loosens only along logical_shape. tensor_layout fields (dtype here)
+    // must still match exactly.
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding = MakeMinimalTensorParameter("input_tensor");  // BFLOAT16
+    binding.match_padded_shape_only = true;
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
+    auto memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    auto wrong_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::UINT32, page_config, memory_config);
+    auto wrong_spec = tt::tt_metal::TensorSpec(binding.spec.logical_shape(), wrong_layout);
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec, TensorTopology{});
+
+    auto params = MakeRunParamsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor)},
+    };
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("tensor_layout does not match the binding's declared layout")));
+}
+
+TEST_F(ProgramRunParamsTestGen1, MatchPaddedShapeOnly_DynamicWinsWhenBothSet) {
+    // When both match_padded_shape_only and dynamic_tensor_shape are set, dynamic is more
+    // permissive and wins. A runtime tensor whose padded_shape differs from declared should
+    // be accepted (which match_padded_shape_only alone would reject).
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding = MakeMinimalTensorParameter("input_tensor");  // shape {1, 32}
+    binding.match_padded_shape_only = true;
+    binding.dynamic_tensor_shape = true;
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Different logical shape; for ROW_MAJOR this also gives a different padded_shape, which
+    // dynamic accepts but padded_only alone would not.
+    auto wrong_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 64}, binding.spec.tensor_layout());
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec, TensorTopology{});
+
+    auto params = MakeRunParamsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor)},
+    };
+    EXPECT_NO_THROW(SetProgramRunParameters(program, params));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental::metal2_host_api
