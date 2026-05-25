@@ -46,8 +46,16 @@ inline __attribute__((always_inline)) void invalidate_l1_cache()
 #if !defined(LLK_DEVICE_PRINT_BUFFER_BASE) || !defined(LLK_RUNTIME_ARGS_START)
 #error "LLK_DEVICE_PRINT_BUFFER_BASE and LLK_RUNTIME_ARGS_START must be defined by the build"
 #endif
+
+// On Quasar the buffer base is the uncached alias (since atomics on uncached L1 hang).
+// We strip the alias to compare the physical L1 address against RUNTIME_ARGS.
+#if defined(ARCH_QUASAR)
+constexpr uintptr_t llk_device_print_buffer_l1_base = LLK_DEVICE_PRINT_BUFFER_BASE - MEM_L1_UNCACHED_BASE;
+#else
+constexpr uintptr_t llk_device_print_buffer_l1_base = LLK_DEVICE_PRINT_BUFFER_BASE;
+#endif
 static_assert(
-    LLK_DEVICE_PRINT_BUFFER_BASE + sizeof(DevicePrintMemoryLayout) <= LLK_RUNTIME_ARGS_START,
+    llk_device_print_buffer_l1_base + sizeof(DevicePrintMemoryLayout) <= LLK_RUNTIME_ARGS_START,
     "LLK device print buffer overlaps RUNTIME_ARGS; "
     "adjust TestConfig.DEVICE_PRINT_BUFFER_BASE / DEVICE_PRINT_PER_THREAD_SIZE "
     "in tests/python_tests/helpers/test_config.py.");

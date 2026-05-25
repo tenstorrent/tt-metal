@@ -236,6 +236,9 @@ class TestConfig:
     # sized independently of thread count.
     # 0x15000 fits the L1 gap between TRISC2_LOADER_INIT_MEM end and
     # RUNTIME_ARGS_START (0x20000) on BH/WH/Quasar non-coverage layouts.
+    # Quasar overrides this in setup_arch() with the uncached alias (0x415000): the
+    # locking path in device_print.h subtracts MEM_L1_UNCACHED_BASE to do the AMO on
+    # the cached half (Quasar AMOs hang on uncached L1, see Quasar dev_mem_map.h:34).
     # Coverage builds extend TRISC sections past this address; device print
     # is disabled under coverage so the conflict doesn't matter.
     DEVICE_PRINT_BUFFER_BASE: ClassVar[int] = 0x15000
@@ -292,6 +295,8 @@ class TestConfig:
                 TestConfig.DATA_FORMAT_ENUM = QUASAR_DATA_FORMAT_ENUM_VALUES
                 TestConfig.KERNEL_COMPONENTS = ["unpack", "math", "pack", "sfpu"]
                 TestConfig.PROCESSOR_COUNT = 24
+                # See MEM_L1_UNCACHED_BASE in device_print.h:get_lock_atomic.
+                TestConfig.DEVICE_PRINT_BUFFER_BASE = 0x415000
                 TestConfig.TRISC_START_ADDRS = [
                     0x16DFF0,
                     0x16DFF4,
