@@ -30,6 +30,7 @@ struct RingJointSDPAParams {
     experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args;
     CoreCoord ccl_core_grid_offset;
     std::optional<std::uint32_t> cache_batch_idx = std::nullopt;
+    std::optional<std::uint32_t> kv_actual_isl = std::nullopt;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -45,7 +46,8 @@ struct RingJointSDPAParams {
         experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes,
         experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args,
         CoreCoord ccl_core_grid_offset,
-        std::optional<std::uint32_t> cache_batch_idx = std::nullopt) :
+        std::optional<std::uint32_t> cache_batch_idx = std::nullopt,
+        std::optional<std::uint32_t> kv_actual_isl = std::nullopt) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -58,7 +60,8 @@ struct RingJointSDPAParams {
         all_gather_operation_attributes(std::move(all_gather_operation_attributes)),
         all_gather_tensor_args(std::move(all_gather_tensor_args)),
         ccl_core_grid_offset(ccl_core_grid_offset),
-        cache_batch_idx(cache_batch_idx) {}
+        cache_batch_idx(cache_batch_idx),
+        kv_actual_isl(kv_actual_isl) {}
 
     auto attributes() const {
         using ttsl::reflection::Attribute;
@@ -74,6 +77,9 @@ struct RingJointSDPAParams {
         if (cache_batch_idx.has_value()) {
             attrs.emplace_back("cache_batch_idx", cache_batch_idx.value());
         }
+        if (kv_actual_isl.has_value()) {
+            attrs.emplace_back("kv_actual_isl", kv_actual_isl.value());
+        }
         if (scale.has_value()) {
             attrs.emplace_back("scale", scale);
         }
@@ -88,6 +94,8 @@ struct RingJointSDPAParams {
     std::uint32_t get_k_chunk_size() const { return program_config.has_value() ? program_config->k_chunk_size : 32; }
 
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
+
+    bool has_kv_pad_rotation() const { return kv_actual_isl.has_value(); }
 };
 
 struct RingJointSDPAInputs {

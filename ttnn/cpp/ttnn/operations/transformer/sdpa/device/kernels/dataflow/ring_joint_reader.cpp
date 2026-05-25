@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "dataflow_common.hpp"
+#include "chunked_prefill_utils.hpp"
 #include "chain_link.hpp"
 #include "fused_op_receiver.hpp"
 
@@ -37,18 +38,20 @@ void kernel_main() {
     constexpr uint32_t is_causal = get_compile_time_arg_val(21);
     constexpr uint32_t is_balanced = get_compile_time_arg_val(22);
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
-    // Reader's slot-24 carries chunked_enabled; writer/compute use slot-24/33 for use_streaming_compute.
+    // Reader's slot-24 carries chunked_enabled.
     constexpr bool chunked_enabled = get_compile_time_arg_val(24) == 1;
     constexpr uint32_t num_q_readers = get_compile_time_arg_val(25);
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(26);
     constexpr bool indexed_kv_cache = get_compile_time_arg_val(27) == 1;
+    constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(28) == 1;
+    constexpr uint32_t active_ring_iter_mask = get_compile_time_arg_val(29);
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and joint generator uses.
     constexpr bool has_joint_q = num_joint_q_chunks > 0;
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
 
-    constexpr auto q_args = TensorAccessorArgs<28>();
+    constexpr auto q_args = TensorAccessorArgs<30>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -263,6 +266,9 @@ void kernel_main() {
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+        if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
+            continue;
+        }
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -273,16 +279,9 @@ void kernel_main() {
             }
         }
 
-        // Last tile id holding any real (non-padding) K data (logical_nt is ceil(logical_n / TILE_H)).
-        // When logical_n is not tile-aligned, this tile is partially real — its padding cells are
-        // stamped to -inf by the lightweight mask later, so we still include it as active here.
-        // Chunked-prefill: balanced layout puts one slab of real K per chunk on every device → every iter is active.
-        const uint32_t global_n_tile_id = logical_nt - 1;
-        const uint32_t ring_iter_kv_start_tile = ring_id * kv_local_padded_Nt;
-        const bool ring_iter_processes_KV_chunks =
-            chunked_enabled ? true : (ring_iter_kv_start_tile <= global_n_tile_id);
         uint32_t ring_iter_valid_kv_tiles = kv_local_padded_Nt;
         if constexpr (!chunked_enabled) {
+            const uint32_t ring_iter_kv_start_tile = ring_id * kv_local_padded_Nt;
             ring_iter_valid_kv_tiles = 0;
             if (ring_iter_kv_start_tile < logical_nt) {
                 const uint32_t remaining_kv_tiles = logical_nt - ring_iter_kv_start_tile;
@@ -291,18 +290,7 @@ void kernel_main() {
             }
         }
 
-        // In causal non balanced case when processing KV received from other devices:
-        // - skip over KV received from subsequent devices
-        // - do non-causal attention on the KV from preceding devices
-        const bool joint_contributes = (has_joint_k && L != 0) ? do_joint_kv : false;
-        const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || joint_contributes) &&
-                                         !(is_causal && ring_index < ring_id && !is_balanced);
-
         uint32_t KV_chunks_processed_in_iter = 0;
-        if (!ring_iter_does_work) {
-            continue;
-        }
-
         uint32_t iter_num_kv_chunks = num_kv_chunks;
 
         // In causal balanced case processing KV received from other devices:
@@ -380,10 +368,13 @@ void kernel_main() {
                  * If this k chunk is in the spatial input and beyond the logical N, we will skip it.
                  */
                 const bool kv_chunk_is_joint = has_joint_k ? (k_chunk >= num_local_k_chunks) : false;
-                const uint32_t kv_global_start_tile =
-                    kv_global_tile_for_local<chunked_enabled, kv_local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
-                        ring_id, k_chunk * Sk_chunk_t);
-                const bool kv_chunk_is_beyond_logical_n = !kv_chunk_is_joint && (kv_global_start_tile >= logical_nt);
+                const bool kv_chunk_is_beyond_logical_n =
+                    !kv_chunk_is_joint && !kv_chunk_has_valid_cols<
+                                              kv_pad_rotation_enabled,
+                                              chunked_enabled,
+                                              kv_local_padded_Nt,
+                                              chunk_size_t,
+                                              q_local_padded_Nt>(ring_id, k_chunk * Sk_chunk_t, logical_nt);
 
                 if (kv_chunk_is_beyond_logical_n) {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.

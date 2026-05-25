@@ -48,7 +48,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     bool use_column_major_ccl,
     bool is_causal,
     bool is_balanced,
-    std::optional<uint32_t> cache_batch_idx) {
+    std::optional<uint32_t> cache_batch_idx,
+    std::optional<uint32_t> kv_actual_isl) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
     auto outputs = ttnn::transformer::ring_joint_scaled_dot_product_attention(
@@ -76,7 +77,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         scale,
         compute_kernel_config,
         strategy,
-        cache_batch_idx);
+        cache_batch_idx,
+        kv_actual_isl);
     return outputs;
 }
 
@@ -424,6 +426,9 @@ void bind_sdpa(nb::module_& mod) {
             is_causal (bool): Whether to use causal attention masking. Defaults to False.
             is_balanced (bool): Whether to use balanced attention computation. Defaults to False.
             cache_batch_idx (int, optional): Selects the shared K/V cache batch slot when K and V are full caches.
+            kv_actual_isl (int, optional): Prior valid global KV length before this fixed-size chunk.
+                When passed, enables KV-pad-aware rotation and derives current valid tokens as
+                logical_n - kv_actual_isl.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -432,7 +437,9 @@ void bind_sdpa(nb::module_& mod) {
         Chunked prefill is mathematically causal; callers must pass is_causal=True.
         When cache_batch_idx is provided, input_tensor_k and input_tensor_v may be whole caches.
         The same cache_batch_idx selects the K and V cache slot, and the full K/V sequence
-        dimension is treated as valid.
+        dimension is treated as valid. When kv_actual_isl is provided, the chunked path switches
+        to KV-pad-aware rotation: logical_n remains the total valid KV length after this iteration,
+        while kv_actual_isl marks the prior valid cache length before the current chunk.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -470,7 +477,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("use_column_major_ccl") = false,
         nb::arg("is_causal").noconvert() = false,
         nb::arg("is_balanced").noconvert() = false,
-        nb::arg("cache_batch_idx").noconvert() = nb::none());
+        nb::arg("cache_batch_idx").noconvert() = nb::none(),
+        nb::arg("kv_actual_isl").noconvert() = nb::none());
 
     const auto* exp_ring_joint_doc = R"doc(
         ExpRingJointAttention operation that efficiently performs non-causal attention over two

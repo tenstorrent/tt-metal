@@ -12,8 +12,9 @@ back fast.
 Test scope:
 1. ND-sharded KV cache as K input directly (no slice workaround).
 2. Index-based KV access — desired API showcase in torch.
-3. Per-chunk persistent-buffer reallocation — TODO, needs design input.
-4. ISL smaller than chunk_size — TODO, needs design input.
+3. Persistent K/V buffers reused across chunked-prefill iterations.
+4. KV-pad-aware rotation for small/current ISL, cold start, and multi-slab growth.
+5. cache_batch_idx + chunked-prefill q_start_idx regression.
 
 MLA-shaped knobs used throughout:
   - nhk == 1 (single shared K head broadcast across Q heads)
@@ -1465,5 +1466,893 @@ def test_persistent_buffer_reuse_across_chunks(mesh_device, device_params):
 
 
 # ===========================================================================
-# Test 4 — TODO: ISL smaller than chunk_size (needs design input)
+# Test 4: KV-pad-aware rotation for small/current ISL and multi-slab growth
 # ===========================================================================
+#
+# Production scenario
+# -------------------
+# The op is always handed an input tensor of fixed shape `chunk_size` in
+# the ISL dim (e.g. 5120 in production). Only the first `new_actual_isl`
+# tokens are valid; the rest is padding that the next iteration will
+# overwrite. The prior cache holds `kv_actual_isl` valid tokens, and valid
+# K/V tokens remain dense in global order even when the physical cache has
+# trailing padding in a per-device slab.
+#
+# Kernel contract
+# ---------------
+# The kernel derives global positions for Q rows and K columns from
+# `kv_actual_isl`, `new_actual_isl`, `sp_factor`, and `chunk_size_local`.
+# It then applies a per-(Q row, K col) mask:
+#
+#     mask = -inf if (Q row is padding) OR (K col is padding) OR (K_pos > Q_pos)
+#     mask = 0    otherwise
+#
+# Causality applies on global positions, not local row indices. The torch
+# showcase below spells this out with a two-slab layout, while the TTNN tests
+# use the slab-major multi-slab layout used by the implementation.
+#
+# What this test does
+# -------------------
+# Pure torch, no device. Builds the rotated per-device layout for K, V, Q
+# explicitly, builds the explicit attention mask using global positions,
+# runs torch SDPA with the mask, then verifies the result against a
+# natural-order causal reference (no rotation, full sequence).
+#
+# Test scenario (small)
+# ---------------------
+#   sp_factor          = 4
+#   chunk_size         = 256       (so chunk_size_local = 64)
+#   kv_actual_isl      = 224       (pad on dev 3: 32 valid + 32 pad in its OLD slab)
+#   new_actual_isl     = 64        (much smaller than chunk_size — the "small ISL" case)
+#
+#   Derived:
+#     pad_chip            = 3
+#     pad_offset_in_chip  = 32     (where pad starts on pad_chip's OLD slab)
+#     pad_size_in_chip    = 32     (how many pad cells)
+#
+#   Server reorder of new tokens [0..64]:
+#     tokens [0..32]  -> dev 3 OLD slab cells [32..64]  (global pos 224..256)
+#     tokens [32..64] -> dev 0 NEW slab cells [0..32]   (global pos 256..288)
+#     all other NEW-slab cells are padding.
+#
+# ===========================================================================
+
+
+def _kv_pad_rotation_layout(kv_actual_isl, new_actual_isl, sp_factor, chunk_size_local):
+    """
+    Compute the per-device K/Q layout after the server's kv-pad-aware rotation.
+
+    OLD-slab pad can span multiple chips when kv_actual_isl + pad straddles
+    chunk_size_local boundaries (e.g., kv_actual_isl=128 with sp=4,
+    chunk_size_local=64 leaves devs 2 and 3 OLD slabs entirely as pad).
+    Phase 1 fills these pad cells in global-position order across all
+    affected chips before phase 2 moves to NEW slabs.
+
+    Returns:
+      pad_chip            (int): first chip whose OLD slab contains pad
+        (= (kv_actual_isl // chunk_size_local) % sp_factor).
+      pad_offset_in_chip  (int): position in pad_chip's OLD slab where
+        pad starts (= kv_actual_isl % chunk_size_local).
+      total_pad_in_old    (int): total number of pad cells across all OLD
+        slabs (= sp_factor * chunk_size_local - kv_actual_isl).
+      new_token_destinations (list of (token_idx, chip, slab, cell)):
+        For each new token (index in natural order, 0..new_actual_isl),
+        where it ends up. `slab` is "OLD" or "NEW", `cell` is the position
+        in that slab (0..chunk_size_local).
+    """
+    pad_chip = (kv_actual_isl // chunk_size_local) % sp_factor
+    pad_offset_in_chip = kv_actual_isl % chunk_size_local
+    total_pad_in_old = max(0, sp_factor * chunk_size_local - kv_actual_isl)
+
+    # Per-chip Q row budget = chunk_size_local. Pad-fill rows on a chip
+    # count toward its budget (one Q row per token, regardless of whether
+    # its K write lands in OLD pad or NEW slab).
+    q_rows_per_chip = [0] * sp_factor
+
+    new_token_destinations = []
+    # Phase 1: fill OLD-slab pad cells in global-position order, which can
+    # span multiple chips.
+    fill_count = min(total_pad_in_old, new_actual_isl)
+    for i in range(fill_count):
+        pad_global_pos = kv_actual_isl + i
+        chip = (pad_global_pos // chunk_size_local) % sp_factor
+        cell = pad_global_pos % chunk_size_local
+        new_token_destinations.append((i, chip, "OLD", cell))
+        q_rows_per_chip[chip] += 1
+
+    # Phase 2: remaining tokens go into NEW slabs in chip order, but each
+    # chip can only accept up to (chunk_size_local - pad_fill_rows_on_chip)
+    # more — so chips that received heavy pad-fill in Phase 1 contribute
+    # fewer (possibly zero) NEW-slab cells. This preserves the invariant
+    # that every chip contributes at most chunk_size_local Q rows per iter.
+    remaining = new_actual_isl - fill_count
+    token_idx = fill_count
+    for chip in range(sp_factor):
+        if remaining == 0:
+            break
+        avail = chunk_size_local - q_rows_per_chip[chip]
+        take = min(avail, remaining)
+        for cell in range(take):
+            new_token_destinations.append((token_idx, chip, "NEW", cell))
+            q_rows_per_chip[chip] += 1
+            token_idx += 1
+            remaining -= 1
+    # If remaining > 0 here, the caller asked for more tokens than one
+    # iteration can hold; the test's assert(len == new_actual_isl) catches
+    # that invalid setup.
+
+    return pad_chip, pad_offset_in_chip, total_pad_in_old, new_token_destinations
+
+
+def _kv_pad_rotation_layout_multi_slab(kv_actual_isl, new_actual_isl, sp_factor, chunk_size_local):
+    """Map the current valid token interval into a slab-major multi-slab cache layout."""
+    chunk_size_global = sp_factor * chunk_size_local
+    q_fill_cursor = [0] * sp_factor
+    destinations = []
+    for token_idx in range(new_actual_isl):
+        global_pos = kv_actual_isl + token_idx
+        group = global_pos // chunk_size_global
+        within_group = global_pos % chunk_size_global
+        chip = within_group // chunk_size_local
+        cell = within_group % chunk_size_local
+        cache_row = group * chunk_size_local + cell
+        q_row = q_fill_cursor[chip]
+        assert q_row < chunk_size_local, "current chunk overfilled one chip's Q slab"
+        q_fill_cursor[chip] += 1
+        destinations.append((token_idx, chip, cache_row, q_row, global_pos))
+    return destinations
+
+
+def _kv_pad_rotation_active_ring_slots(logical_n, sp_factor, chunk_size_local, num_cache_slabs):
+    """Return which ring slots have at least one valid K/V token in the slab-major cache."""
+    chunk_size_global = sp_factor * chunk_size_local
+    return [
+        any(group * chunk_size_global + chip * chunk_size_local < logical_n for group in range(num_cache_slabs))
+        for chip in range(sp_factor)
+    ]
+
+
+@pytest.mark.parametrize(
+    "kv_actual_isl, new_actual_isl, expected_pad_chip, expected_pad_offset, expected_total_pad",
+    [
+        # Single-device pad: pad on dev 3 only (32 cells).
+        (224, 64, 3, 32, 32),
+        # Multi-device pad: devs 2 and 3 OLD slabs entirely pad; new fills both fully.
+        (128, 128, 2, 0, 128),
+        # Multi-device pad, partial fill: fills dev 2's pad fully, dev 3's pad partially.
+        (128, 96, 2, 0, 128),
+        # Cold start: every OLD slab is pad; new fills first two devices.
+        (0, 128, 0, 0, 256),
+        # Clean boundary: kv ends on a chunk boundary, no OLD pad anywhere.
+        # All new tokens go to NEW slabs starting from dev 0.
+        (256, 64, 0, 0, 0),
+    ],
+    ids=["single_pad_dev3", "multi_pad_2_full", "multi_pad_2_partial", "cold_start", "no_old_pad"],
+)
+def test_kv_pad_aware_rotation_torch_showcase(
+    kv_actual_isl, new_actual_isl, expected_pad_chip, expected_pad_offset, expected_total_pad
+):
+    """See section header above for the full motivation and math."""
+    # ----- Scenario parameters -----
+    sp_factor = 4
+    chunk_size = 256
+    chunk_size_local = chunk_size // sp_factor  # 64
+    nhq = 4  # torch only — pick anything
+
+    scale = QK_HEAD_DIM**-0.5
+
+    # ----- Layout math -----
+    pad_chip, pad_offset_in_chip, total_pad_in_old, new_token_destinations = _kv_pad_rotation_layout(
+        kv_actual_isl=kv_actual_isl,
+        new_actual_isl=new_actual_isl,
+        sp_factor=sp_factor,
+        chunk_size_local=chunk_size_local,
+    )
+    assert pad_chip == expected_pad_chip
+    assert pad_offset_in_chip == expected_pad_offset
+    assert total_pad_in_old == expected_total_pad
+    assert len(new_token_destinations) == new_actual_isl
+
+    # ----- Generate inputs -----
+    torch.manual_seed(0)
+    # Prior cache (kv_actual_isl tokens in natural order across global positions 0..kv_actual_isl).
+    old_cache_k = torch.randn(1, 1, kv_actual_isl, KVPE_DIM, dtype=torch.bfloat16)
+    old_cache_v = torch.randn(1, nhq, kv_actual_isl, V_HEAD_DIM, dtype=torch.bfloat16)
+    # This iteration's new tokens in NATURAL order (positions kv_actual_isl..kv_actual_isl+new_actual_isl).
+    new_tokens_q = torch.randn(1, nhq, new_actual_isl, KVPE_DIM, dtype=torch.bfloat16)
+    new_tokens_k = torch.randn(1, 1, new_actual_isl, KVPE_DIM, dtype=torch.bfloat16)
+    new_tokens_v = torch.randn(1, nhq, new_actual_isl, V_HEAD_DIM, dtype=torch.bfloat16)
+
+    # ----- Build per-device K/V cache (OLD slab + NEW slab) after the iteration's writes -----
+    # Each device's cache slab is now 2 * chunk_size_local (OLD + NEW).
+    # Per-cell metadata: (is_valid, global_pos, source: "old_cache" or "new_tokens", source_idx).
+    cache_seq_per_dev = 2 * chunk_size_local  # 128
+    k_per_dev = torch.zeros(sp_factor, 1, cache_seq_per_dev, KVPE_DIM, dtype=torch.bfloat16)
+    v_per_dev = torch.zeros(sp_factor, nhq, cache_seq_per_dev, V_HEAD_DIM, dtype=torch.bfloat16)
+    k_global_pos_per_dev = [[None] * cache_seq_per_dev for _ in range(sp_factor)]  # None = padding
+
+    # OLD slab content from prior cache. Each chip's OLD slab holds positions
+    # [chip * chunk_size_local .. (chip+1) * chunk_size_local) of the prior cache;
+    # cells past kv_actual_isl are padding (will be overwritten by rotation).
+    for chip in range(sp_factor):
+        chip_old_start = chip * chunk_size_local
+        chip_old_end = min(chip_old_start + chunk_size_local, kv_actual_isl)
+        n_valid_in_chip = max(0, chip_old_end - chip_old_start)
+        if n_valid_in_chip > 0:
+            k_per_dev[chip, :, :n_valid_in_chip, :] = old_cache_k[0, :, chip_old_start:chip_old_end, :]
+            v_per_dev[chip, :, :n_valid_in_chip, :] = old_cache_v[0, :, chip_old_start:chip_old_end, :]
+            for r in range(n_valid_in_chip):
+                k_global_pos_per_dev[chip][r] = chip_old_start + r
+
+    # Apply the server's rotation: new tokens go into the OLD pad slot first, then NEW slabs.
+    for token_idx, chip, slab, cell in new_token_destinations:
+        global_pos = kv_actual_isl + token_idx
+        cache_row = cell if slab == "OLD" else (chunk_size_local + cell)
+        k_per_dev[chip, :, cache_row, :] = new_tokens_k[0, :, token_idx, :]
+        v_per_dev[chip, :, cache_row, :] = new_tokens_v[0, :, token_idx, :]
+        k_global_pos_per_dev[chip][cache_row] = global_pos
+
+    # ----- Build per-device Q (just this iter's new tokens, padded) -----
+    q_per_dev = torch.zeros(sp_factor, nhq, chunk_size_local, KVPE_DIM, dtype=torch.bfloat16)
+    q_global_pos_per_dev = [[None] * chunk_size_local for _ in range(sp_factor)]
+    # Per-device Q layout follows the same distribution as the NEW writes (one Q row per new token).
+    # Q's chunk_size_local slab per device gets the new tokens that ALSO populate THIS chip's
+    # NEW K/V slab cells (one-to-one mapping by cell index), PLUS the pad-fill tokens get
+    # placed on pad_chip's Q slab too (they're new tokens whose Q rows must be computed).
+    #
+    # Simplest model: Q-on-chip-c row r is THE new token whose K-on-chip-c lands at cell r
+    # of EITHER the pad-fill slot (mapping cell in OLD slab [pad_offset..chunk_size_local)
+    # back to Q row [0..pad_size_in_chip)) OR the NEW slab (cell in NEW slab maps directly to
+    # Q row of the same cell index). pad_chip's Q ends up with both pad-fill tokens (rows
+    # 0..pad_size_in_chip) and any NEW-slab tokens (rows pad_size_in_chip..) — Q row indices
+    # don't directly correspond to "OLD vs NEW slab", they just enumerate this chip's
+    # contribution to the new iteration.
+    #
+    # The mapping we use: for each new_token_destination, the Q row on `chip` is the
+    # next-available row on that chip's Q slab. We track per-chip Q fill cursor.
+    q_fill_cursor = [0] * sp_factor
+    for token_idx, chip, slab, cell in new_token_destinations:
+        global_pos = kv_actual_isl + token_idx
+        q_row = q_fill_cursor[chip]
+        q_per_dev[chip, :, q_row, :] = new_tokens_q[0, :, token_idx, :]
+        q_global_pos_per_dev[chip][q_row] = global_pos
+        q_fill_cursor[chip] += 1
+
+    # ----- Concatenate per-device tensors into one flat sequence for torch SDPA -----
+    # Combined K shape: [1, 1, sp_factor * cache_seq_per_dev, KVPE_DIM]
+    combined_K = k_per_dev.permute(1, 0, 2, 3).reshape(1, 1, sp_factor * cache_seq_per_dev, KVPE_DIM)
+    combined_V = v_per_dev.permute(1, 0, 2, 3).reshape(1, nhq, sp_factor * cache_seq_per_dev, V_HEAD_DIM)
+    combined_Q = q_per_dev.permute(1, 0, 2, 3).reshape(1, nhq, sp_factor * chunk_size_local, KVPE_DIM)
+
+    # Flatten per-device global position maps to match the combined layout.
+    combined_K_global_pos = []
+    for chip in range(sp_factor):
+        combined_K_global_pos.extend(k_global_pos_per_dev[chip])
+    combined_Q_global_pos = []
+    for chip in range(sp_factor):
+        combined_Q_global_pos.extend(q_global_pos_per_dev[chip])
+
+    # ----- Build the explicit attention mask using global positions -----
+    sq_total = len(combined_Q_global_pos)
+    sk_total = len(combined_K_global_pos)
+    mask = torch.zeros(sq_total, sk_total, dtype=torch.float32)
+    for i, q_pos in enumerate(combined_Q_global_pos):
+        for j, k_pos in enumerate(combined_K_global_pos):
+            if q_pos is None or k_pos is None or k_pos > q_pos:
+                mask[i, j] = float("-inf")
+
+    # ----- Run torch SDPA with the explicit mask -----
+    # K head dim differs from Q in MLA flat sense, but the K we built here is the absorbed
+    # form (head_dim=KVPE_DIM=576), matching Q. Broadcast K's single head to nhq.
+    K_b = combined_K.expand(-1, nhq, -1, -1)
+    attn_scores = (combined_Q.float() @ K_b.transpose(-2, -1).float()) * scale
+    attn_scores = attn_scores + mask  # mask is broadcast across batch + heads
+    attn = torch.softmax(attn_scores, dim=-1)
+    rotated_out = (attn @ combined_V.float()).to(torch.bfloat16)
+    # rotated_out shape: [1, nhq, sq_total, V_HEAD_DIM]
+
+    # Extract the valid Q rows in natural global-position order.
+    # For each new token index t (global pos kv_actual_isl+t), find its row in combined_Q.
+    valid_rows = [None] * new_actual_isl
+    for i, q_pos in enumerate(combined_Q_global_pos):
+        if q_pos is not None:
+            t = q_pos - kv_actual_isl
+            assert 0 <= t < new_actual_isl
+            valid_rows[t] = i
+    assert all(r is not None for r in valid_rows), "missing some new tokens in rotated layout"
+    rotated_out_natural_order = rotated_out[:, :, valid_rows, :]
+
+    # ----- Natural-order reference -----
+    natural_K = torch.cat([old_cache_k, new_tokens_k], dim=2)  # [1, 1, kv+new, KVPE_DIM]
+    natural_V = torch.cat([old_cache_v, new_tokens_v], dim=2)  # [1, nhq, kv+new, V_HEAD_DIM]
+    natural_K_b = natural_K.expand(-1, nhq, -1, -1)
+    sq = new_actual_isl
+    sk = kv_actual_isl + new_actual_isl
+    ref_scores = (new_tokens_q.float() @ natural_K_b.transpose(-2, -1).float()) * scale
+    # Causal mask: Q row r (global pos kv_actual_isl+r) attends to K cols [0, kv_actual_isl+r] (inclusive).
+    q_pos_vec = torch.arange(sq) + kv_actual_isl
+    k_pos_vec = torch.arange(sk)
+    ref_mask = (k_pos_vec.unsqueeze(0) > q_pos_vec.unsqueeze(1)).float() * float("-inf")
+    ref_mask = torch.nan_to_num(ref_mask, nan=0.0)  # turn 0*-inf into 0
+    ref_scores = ref_scores + ref_mask
+    ref_attn = torch.softmax(ref_scores, dim=-1)
+    ref_out = (ref_attn @ natural_V.float()).to(torch.bfloat16)
+    # ref_out shape: [1, nhq, new_actual_isl, V_HEAD_DIM]
+
+    # ----- Compare -----
+    torch.testing.assert_close(rotated_out_natural_order, ref_out, rtol=1e-2, atol=1e-2)
+    logger.success(
+        f"KV-pad-aware rotation showcase passed: rotated output matches natural-order "
+        f"causal reference for new_actual_isl={new_actual_isl}, kv_actual_isl={kv_actual_isl}, "
+        f"pad_chip={pad_chip}, total_pad_in_old={total_pad_in_old}."
+    )
+
+
+@pytest.mark.parametrize(
+    "kv_actual_isl, new_actual_isl, expected_active_ring_slots",
+    [
+        (0, 64, [True, False, False, False]),
+        (32, 64, [True, True, False, False]),
+        (96, 64, [True, True, True, False]),
+    ],
+    ids=["cold_start_one_slot", "cold_start_partial_second_slot", "cold_start_one_empty_slot"],
+)
+def test_kv_pad_aware_rotation_cold_start_torch_showcase(kv_actual_isl, new_actual_isl, expected_active_ring_slots):
+    """Torch spec for true cold-start calls where at least one ring iteration has no K/V work."""
+    sp_factor = 4
+    chunk_size_local = 64
+    chunk_size_global = sp_factor * chunk_size_local
+    logical_n = kv_actual_isl + new_actual_isl
+    assert logical_n < chunk_size_global
+    num_cache_slabs = 1
+    nhq = 4
+    scale = QK_HEAD_DIM**-0.5
+
+    new_token_destinations = _kv_pad_rotation_layout_multi_slab(
+        kv_actual_isl=kv_actual_isl,
+        new_actual_isl=new_actual_isl,
+        sp_factor=sp_factor,
+        chunk_size_local=chunk_size_local,
+    )
+    assert len(new_token_destinations) == new_actual_isl
+    assert (
+        _kv_pad_rotation_active_ring_slots(
+            logical_n=logical_n,
+            sp_factor=sp_factor,
+            chunk_size_local=chunk_size_local,
+            num_cache_slabs=num_cache_slabs,
+        )
+        == expected_active_ring_slots
+    )
+
+    torch.manual_seed(17)
+    old_cache_k = torch.randn(1, 1, kv_actual_isl, KVPE_DIM, dtype=torch.bfloat16)
+    old_cache_v = torch.randn(1, nhq, kv_actual_isl, V_HEAD_DIM, dtype=torch.bfloat16)
+    new_tokens_q = torch.randn(1, nhq, new_actual_isl, KVPE_DIM, dtype=torch.bfloat16)
+    new_tokens_k = torch.randn(1, 1, new_actual_isl, KVPE_DIM, dtype=torch.bfloat16)
+    new_tokens_v = torch.randn(1, nhq, new_actual_isl, V_HEAD_DIM, dtype=torch.bfloat16)
+
+    cache_seq_per_dev = num_cache_slabs * chunk_size_local
+    k_per_dev = torch.zeros(sp_factor, 1, cache_seq_per_dev, KVPE_DIM, dtype=torch.bfloat16)
+    v_per_dev = torch.zeros(sp_factor, nhq, cache_seq_per_dev, V_HEAD_DIM, dtype=torch.bfloat16)
+    k_global_pos_per_dev = [[None] * cache_seq_per_dev for _ in range(sp_factor)]
+    for global_pos in range(kv_actual_isl):
+        chip = global_pos // chunk_size_local
+        cell = global_pos % chunk_size_local
+        k_per_dev[chip, :, cell, :] = old_cache_k[0, :, global_pos, :]
+        v_per_dev[chip, :, cell, :] = old_cache_v[0, :, global_pos, :]
+        k_global_pos_per_dev[chip][cell] = global_pos
+
+    q_per_dev = torch.zeros(sp_factor, nhq, chunk_size_local, KVPE_DIM, dtype=torch.bfloat16)
+    q_global_pos_per_dev = [[None] * chunk_size_local for _ in range(sp_factor)]
+    for token_idx, chip, cache_row, q_row, global_pos in new_token_destinations:
+        k_per_dev[chip, :, cache_row, :] = new_tokens_k[0, :, token_idx, :]
+        v_per_dev[chip, :, cache_row, :] = new_tokens_v[0, :, token_idx, :]
+        k_global_pos_per_dev[chip][cache_row] = global_pos
+        q_per_dev[chip, :, q_row, :] = new_tokens_q[0, :, token_idx, :]
+        q_global_pos_per_dev[chip][q_row] = global_pos
+
+    combined_K = k_per_dev.permute(1, 0, 2, 3).reshape(1, 1, sp_factor * cache_seq_per_dev, KVPE_DIM)
+    combined_V = v_per_dev.permute(1, 0, 2, 3).reshape(1, nhq, sp_factor * cache_seq_per_dev, V_HEAD_DIM)
+    combined_Q = q_per_dev.permute(1, 0, 2, 3).reshape(1, nhq, chunk_size_global, KVPE_DIM)
+
+    combined_K_global_pos = []
+    combined_Q_global_pos = []
+    for chip in range(sp_factor):
+        combined_K_global_pos.extend(k_global_pos_per_dev[chip])
+        combined_Q_global_pos.extend(q_global_pos_per_dev[chip])
+
+    attn_scores = (combined_Q.float() @ combined_K.expand(-1, nhq, -1, -1).transpose(-2, -1).float()) * scale
+    for q_row, q_pos in enumerate(combined_Q_global_pos):
+        for k_col, k_pos in enumerate(combined_K_global_pos):
+            if q_pos is None or k_pos is None or k_pos > q_pos:
+                attn_scores[:, :, q_row, k_col] = float("-inf")
+    rotated_out = (torch.softmax(attn_scores, dim=-1) @ combined_V.float()).to(torch.bfloat16)
+
+    valid_rows = [None] * new_actual_isl
+    for row, q_pos in enumerate(combined_Q_global_pos):
+        if q_pos is not None:
+            valid_rows[q_pos - kv_actual_isl] = row
+    assert all(row is not None for row in valid_rows)
+    rotated_out_natural_order = rotated_out[:, :, valid_rows, :]
+
+    natural_k = torch.cat([old_cache_k, new_tokens_k], dim=2)
+    natural_v = torch.cat([old_cache_v, new_tokens_v], dim=2)
+    ref_out = _causal_chunked_mla_sdpa_torch(new_tokens_q, natural_k, natural_v, kv_actual_isl, scale)
+
+    torch.testing.assert_close(rotated_out_natural_order, ref_out, rtol=1e-2, atol=1e-2)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4)], ids=["2x2", "2x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    ids=["line"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "kv_actual_isl, new_actual_isl",
+    [
+        (0, 64),  # cold start: only the first ring slot has K/V work
+        (32, 64),  # cold start: second ring slot is partial, later slots have no K/V work
+        (96, 64),  # old pad on chip 1, then NEW writes on chip 0
+        (64, 64),  # one full-chip OLD pad fill
+        (128, 64),  # no OLD pad; all current tokens go to NEW slabs
+        (416, 64),  # multi-slab history: current tokens stay within a later group
+        (480, 96),  # multi-slab history: current tokens wrap into the next group
+    ],
+    ids=[
+        "cold_start_one_slot",
+        "cold_start_partial_next_slot",
+        "single_pad_then_new",
+        "full_chip_pad",
+        "no_old_pad",
+        "history_later_group",
+        "history_wrap_group",
+    ],
+)
+@pytest.mark.timeout(0)
+def test_kv_pad_aware_rotation_ttnn(mesh_device, device_params, kv_actual_isl, new_actual_isl):
+    """Device regression for the KV-pad-aware rotation modeled by the torch showcase."""
+    sp_axis = 0
+    tp_axis = 1
+    mesh_shape = list(mesh_device.shape)
+    sp = mesh_shape[sp_axis]
+    tp = mesh_shape[tp_axis]
+    num_heads = tp * tp
+    num_heads_local = num_heads // tp
+
+    chunk_size_local = 64
+    logical_n = kv_actual_isl + new_actual_isl
+    scale = QK_HEAD_DIM**-0.5
+    topology = _topology_from(device_params)
+
+    torch.manual_seed(123)
+    old_cache_k = torch.randn(1, 1, kv_actual_isl, KVPE_DIM, dtype=torch.bfloat16)
+    old_cache_v = torch.randn(1, num_heads, kv_actual_isl, V_HEAD_DIM, dtype=torch.bfloat16)
+    new_tokens_q = torch.randn(1, num_heads, new_actual_isl, KVPE_DIM, dtype=torch.bfloat16)
+    new_tokens_k = torch.randn(1, 1, new_actual_isl, KVPE_DIM, dtype=torch.bfloat16)
+    new_tokens_v = torch.randn(1, num_heads, new_actual_isl, V_HEAD_DIM, dtype=torch.bfloat16)
+    q_host, k_host, v_host, valid_rows, num_cache_slabs = _build_kv_pad_rotation_ttnn_inputs(
+        old_cache_k=old_cache_k,
+        old_cache_v=old_cache_v,
+        new_tokens_q=new_tokens_q,
+        new_tokens_k=new_tokens_k,
+        new_tokens_v=new_tokens_v,
+        kv_actual_isl=kv_actual_isl,
+        sp=sp,
+        chunk_size_local=chunk_size_local,
+    )
+    cache_seq_per_dev = num_cache_slabs * chunk_size_local
+    logger.info(
+        f"KV-pad rotation TTNN case: sp={sp}, chunk_size_local={chunk_size_local}, "
+        f"kv_actual_isl={kv_actual_isl}, new_actual_isl={new_actual_isl}, cache_slabs={num_cache_slabs}"
+    )
+
+    tt_ccl = get_tt_ccl(mesh_device)
+    q_shard_dims = [None, None]
+    q_shard_dims[sp_axis] = 2
+    q_shard_dims[tp_axis] = 1
+    tt_q = ttnn.from_torch(
+        q_host,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=q_shard_dims),
+    )
+
+    k_shard_dims = [None, None]
+    k_shard_dims[sp_axis] = 2
+    tt_k = ttnn.from_torch(
+        k_host,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=k_shard_dims),
+    )
+
+    v_shard_dims = [None, None]
+    v_shard_dims[sp_axis] = 2
+    v_shard_dims[tp_axis] = 1
+    tt_v = ttnn.from_torch(
+        v_host,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=v_shard_dims),
+    )
+
+    joint_shard_dims = [None, None]
+    joint_shard_dims[tp_axis] = 1
+    joint_q = ttnn.from_torch(
+        torch.zeros(1, num_heads_local, 0, KVPE_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=joint_shard_dims),
+    )
+    joint_kv = ttnn.from_torch(
+        torch.zeros(1, 1, 0, KVPE_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    joint_v = ttnn.from_torch(
+        torch.zeros(1, num_heads_local, 0, V_HEAD_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=joint_shard_dims),
+    )
+
+    persistent_v_shard_dims = [None, None]
+    persistent_v_shard_dims[tp_axis] = 1
+    persistent_k = ttnn.from_torch(
+        torch.zeros(1, 1, sp * cache_seq_per_dev, KVPE_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]),
+    )
+    persistent_v = ttnn.from_torch(
+        torch.zeros(1, num_heads, sp * cache_seq_per_dev, V_HEAD_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_v_shard_dims
+        ),
+    )
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+    attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+        tt_q,
+        tt_k,
+        tt_v,
+        joint_q,
+        joint_kv,
+        joint_v,
+        persistent_output_buffer_k=persistent_k,
+        persistent_output_buffer_v=persistent_v,
+        joint_strategy="rear",
+        logical_n=logical_n,
+        program_config=_make_program_config(mesh_device),
+        compute_kernel_config=compute_kernel_config,
+        dim=2,
+        multi_device_global_semaphore=tt_ccl.ring_attention_ccl_semaphore_handles,
+        num_links=1,
+        cluster_axis=sp_axis,
+        mesh_device=mesh_device,
+        topology=topology,
+        subdevice_id=tt_ccl.worker_sub_device_id,
+        ccl_core_grid_offset=tt_ccl.ring_attention_ccl_core_grid_offset,
+        use_column_major_ccl=True,
+        is_causal=True,
+        scale=scale,
+        is_balanced=False,
+        kv_actual_isl=kv_actual_isl,
+    )
+
+    out_concat_dims = [None, None]
+    out_concat_dims[sp_axis] = 2
+    out_concat_dims[tp_axis] = 1
+    tt_out_host = ttnn.to_torch(
+        attn_out,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape),
+    ).to(torch.bfloat16)
+    tt_out_valid_natural = tt_out_host[:, :, valid_rows, :]
+
+    natural_k = torch.cat([old_cache_k, new_tokens_k], dim=2)
+    natural_v = torch.cat([old_cache_v, new_tokens_v], dim=2)
+    ref_out = _causal_chunked_mla_sdpa_torch(new_tokens_q, natural_k, natural_v, kv_actual_isl, scale)
+
+    _, pcc_msg = assert_with_pcc(ref_out, tt_out_valid_natural, 0.97)
+    logger.success(f"KV-pad-aware rotation TTNN PCC: {pcc_msg}")
+
+
+def _build_kv_pad_rotation_ttnn_inputs(
+    *,
+    old_cache_k,
+    old_cache_v,
+    new_tokens_q,
+    new_tokens_k,
+    new_tokens_v,
+    kv_actual_isl,
+    sp,
+    chunk_size_local,
+):
+    """Build padded Q/K/V tensors for one KV-pad-aware Ring SDPA call."""
+    num_heads = new_tokens_q.shape[1]
+    new_actual_isl = new_tokens_q.shape[2]
+    chunk_size_global = sp * chunk_size_local
+    logical_n = kv_actual_isl + new_actual_isl
+    num_cache_slabs = max(2, (logical_n + chunk_size_global - 1) // chunk_size_global)
+    cache_seq_per_dev = num_cache_slabs * chunk_size_local
+
+    new_token_destinations = _kv_pad_rotation_layout_multi_slab(
+        kv_actual_isl=kv_actual_isl,
+        new_actual_isl=new_actual_isl,
+        sp_factor=sp,
+        chunk_size_local=chunk_size_local,
+    )
+    assert len(new_token_destinations) == new_actual_isl
+
+    k_per_dev = torch.zeros(sp, 1, cache_seq_per_dev, KVPE_DIM, dtype=torch.bfloat16)
+    v_per_dev = torch.zeros(sp, num_heads, cache_seq_per_dev, V_HEAD_DIM, dtype=torch.bfloat16)
+    for global_pos in range(kv_actual_isl):
+        group = global_pos // chunk_size_global
+        within_group = global_pos % chunk_size_global
+        chip = within_group // chunk_size_local
+        cell = within_group % chunk_size_local
+        cache_row = group * chunk_size_local + cell
+        k_per_dev[chip, :, cache_row, :] = old_cache_k[0, :, global_pos, :]
+        v_per_dev[chip, :, cache_row, :] = old_cache_v[0, :, global_pos, :]
+
+    q_per_dev = torch.zeros(sp, num_heads, chunk_size_local, KVPE_DIM, dtype=torch.bfloat16)
+    q_global_pos_per_dev = [[None] * chunk_size_local for _ in range(sp)]
+    for token_idx, chip, cache_row, q_row, global_pos in new_token_destinations:
+        k_per_dev[chip, :, cache_row, :] = new_tokens_k[0, :, token_idx, :]
+        v_per_dev[chip, :, cache_row, :] = new_tokens_v[0, :, token_idx, :]
+        q_per_dev[chip, :, q_row, :] = new_tokens_q[0, :, token_idx, :]
+        q_global_pos_per_dev[chip][q_row] = global_pos
+
+    q_host = q_per_dev.permute(1, 0, 2, 3).reshape(1, num_heads, chunk_size_global, KVPE_DIM)
+    k_host = k_per_dev.permute(1, 0, 2, 3).reshape(1, 1, sp * cache_seq_per_dev, KVPE_DIM)
+    v_host = v_per_dev.permute(1, 0, 2, 3).reshape(1, num_heads, sp * cache_seq_per_dev, V_HEAD_DIM)
+
+    combined_q_global_pos = []
+    for chip in range(sp):
+        combined_q_global_pos.extend(q_global_pos_per_dev[chip])
+    valid_rows = [None] * new_actual_isl
+    for i, q_pos in enumerate(combined_q_global_pos):
+        if q_pos is not None:
+            valid_rows[q_pos - kv_actual_isl] = i
+    assert all(row is not None for row in valid_rows)
+
+    return q_host, k_host, v_host, valid_rows, num_cache_slabs
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4)], ids=["2x2", "2x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    ids=["line"],
+    indirect=True,
+)
+@pytest.mark.timeout(0)
+def test_kv_pad_aware_rotation_reuse_across_multi_slab_calls(mesh_device, device_params):
+    """Run more than two KV-pad-aware Ring SDPA calls while history grows past two slabs."""
+    sp_axis = 0
+    tp_axis = 1
+    mesh_shape = list(mesh_device.shape)
+    sp = mesh_shape[sp_axis]
+    tp = mesh_shape[tp_axis]
+    num_heads = tp * tp
+    num_heads_local = num_heads // tp
+
+    chunk_size_local = 64
+    chunk_size_global = chunk_size_local * sp
+    tile_size = 32
+    step_new_lengths = [
+        chunk_size_global,
+        tile_size,
+        chunk_size_global - tile_size,
+        chunk_size_local,
+    ]
+    assert len(step_new_lengths) > 2
+    assert len(set(step_new_lengths)) == len(step_new_lengths)
+    assert all(length % tile_size == 0 for length in step_new_lengths)
+    final_logical_n = sum(step_new_lengths)
+    max_cache_slabs = max(2, (final_logical_n + chunk_size_global - 1) // chunk_size_global)
+    assert max_cache_slabs > 2
+
+    scale = QK_HEAD_DIM**-0.5
+    topology = _topology_from(device_params)
+    torch.manual_seed(321)
+    q_global_full = torch.randn(1, num_heads, final_logical_n, KVPE_DIM, dtype=torch.bfloat16)
+    k_global_full = torch.randn(1, 1, final_logical_n, KVPE_DIM, dtype=torch.bfloat16)
+    v_global_full = torch.randn(1, num_heads, final_logical_n, V_HEAD_DIM, dtype=torch.bfloat16)
+
+    tt_ccl = get_tt_ccl(mesh_device)
+
+    joint_shard_dims = [None, None]
+    joint_shard_dims[tp_axis] = 1
+    joint_q = ttnn.from_torch(
+        torch.zeros(1, num_heads_local, 0, KVPE_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=joint_shard_dims),
+    )
+    joint_kv = ttnn.from_torch(
+        torch.zeros(1, 1, 0, KVPE_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    joint_v = ttnn.from_torch(
+        torch.zeros(1, num_heads_local, 0, V_HEAD_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=joint_shard_dims),
+    )
+
+    persistent_v_shard_dims = [None, None]
+    persistent_v_shard_dims[tp_axis] = 1
+    max_seq = sp * max_cache_slabs * chunk_size_local
+    persistent_k = ttnn.from_torch(
+        torch.zeros(1, 1, max_seq, KVPE_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]),
+    )
+    persistent_v = ttnn.from_torch(
+        torch.zeros(1, num_heads, max_seq, V_HEAD_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_v_shard_dims
+        ),
+    )
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    program_config = _make_program_config(mesh_device)
+
+    q_shard_dims = [None, None]
+    q_shard_dims[sp_axis] = 2
+    q_shard_dims[tp_axis] = 1
+    k_shard_dims = [None, None]
+    k_shard_dims[sp_axis] = 2
+    v_shard_dims = [None, None]
+    v_shard_dims[sp_axis] = 2
+    v_shard_dims[tp_axis] = 1
+    out_concat_dims = [None, None]
+    out_concat_dims[sp_axis] = 2
+    out_concat_dims[tp_axis] = 1
+
+    kv_actual_isl = 0
+    slabs_seen = []
+    for call_idx, new_actual_isl in enumerate(step_new_lengths):
+        logical_n = kv_actual_isl + new_actual_isl
+        new_slice = slice(kv_actual_isl, logical_n)
+        new_tokens_q = q_global_full[:, :, new_slice, :]
+        new_tokens_k = k_global_full[:, :, new_slice, :]
+        new_tokens_v = v_global_full[:, :, new_slice, :]
+        q_host, k_host, v_host, valid_rows, num_cache_slabs = _build_kv_pad_rotation_ttnn_inputs(
+            old_cache_k=k_global_full[:, :, :kv_actual_isl, :],
+            old_cache_v=v_global_full[:, :, :kv_actual_isl, :],
+            new_tokens_q=new_tokens_q,
+            new_tokens_k=new_tokens_k,
+            new_tokens_v=new_tokens_v,
+            kv_actual_isl=kv_actual_isl,
+            sp=sp,
+            chunk_size_local=chunk_size_local,
+        )
+        slabs_seen.append(num_cache_slabs)
+
+        tt_q = ttnn.from_torch(
+            q_host,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=q_shard_dims),
+        )
+        tt_k = ttnn.from_torch(
+            k_host,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=k_shard_dims),
+        )
+        tt_v = ttnn.from_torch(
+            v_host,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=v_shard_dims),
+        )
+
+        attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            joint_q,
+            joint_kv,
+            joint_v,
+            persistent_output_buffer_k=persistent_k,
+            persistent_output_buffer_v=persistent_v,
+            joint_strategy="rear",
+            logical_n=logical_n,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=tt_ccl.ring_attention_ccl_semaphore_handles,
+            num_links=1,
+            cluster_axis=sp_axis,
+            mesh_device=mesh_device,
+            topology=topology,
+            subdevice_id=tt_ccl.worker_sub_device_id,
+            ccl_core_grid_offset=tt_ccl.ring_attention_ccl_core_grid_offset,
+            use_column_major_ccl=True,
+            is_causal=True,
+            scale=scale,
+            is_balanced=False,
+            kv_actual_isl=kv_actual_isl,
+        )
+
+        tt_out_host = ttnn.to_torch(
+            attn_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape),
+        ).to(torch.bfloat16)
+        tt_out_valid_natural = tt_out_host[:, :, valid_rows, :]
+
+        ref_out = _causal_chunked_mla_sdpa_torch(
+            new_tokens_q,
+            k_global_full[:, :, :logical_n, :],
+            v_global_full[:, :, :logical_n, :],
+            kv_actual_isl,
+            scale,
+        )
+        _, pcc_msg = assert_with_pcc(ref_out, tt_out_valid_natural, 0.97)
+        logger.info(
+            f"KV-pad multi-call iter {call_idx}: kv_actual_isl={kv_actual_isl}, "
+            f"new_actual_isl={new_actual_isl}, logical_n={logical_n}, "
+            f"cache_slabs={num_cache_slabs}, PCC={pcc_msg}"
+        )
+        kv_actual_isl = logical_n
+
+    assert max(slabs_seen) > 2

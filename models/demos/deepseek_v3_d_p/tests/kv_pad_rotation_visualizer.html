@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>KV pad-aware rotation visualizer (chunked-MLA prefill)</title>
+<style>
+  body {
+    font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    background: #0e1116;
+    color: #d0d6df;
+    margin: 0;
+    padding: 24px 36px;
+    line-height: 1.45;
+  }
+  h1 { margin: 0 0 8px; font-size: 22px; }
+  h2 { margin: 24px 0 10px; font-size: 16px; color: #a3b2c7; font-weight: 600; }
+  p, .desc { color: #94a3b8; font-size: 13px; max-width: 900px; }
+  code { background: #1c2230; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+
+  .controls {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(180px, 1fr));
+    gap: 14px 24px;
+    background: #1a212e;
+    border: 1px solid #283041;
+    border-radius: 8px;
+    padding: 16px 18px;
+    margin-bottom: 18px;
+  }
+  .control label {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #8590a4;
+    margin-bottom: 4px;
+  }
+  .control input {
+    width: 100%;
+    background: #0d1320;
+    border: 1px solid #2c374c;
+    color: #d0d6df;
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+    font-size: 14px;
+    box-sizing: border-box;
+  }
+  .control input:focus { outline: 1px solid #4c7fff; border-color: #4c7fff; }
+  .derived {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px 24px;
+    background: #131923;
+    padding: 12px 18px;
+    border-radius: 6px;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 13px;
+    margin-bottom: 22px;
+  }
+  .derived span.k { color: #8590a4; }
+  .derived span.v { color: #ffdd87; }
+
+  .legend {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    margin-bottom: 14px;
+  }
+  .legend .item { display: flex; align-items: center; gap: 6px; }
+  .legend .swatch {
+    width: 14px; height: 14px; border-radius: 3px; border: 1px solid #00000040;
+  }
+
+  .device-row {
+    display: grid;
+    grid-template-columns: 56px 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 6px;
+    align-items: stretch;
+  }
+  .device-row.header {
+    color: #8590a4;
+    font-size: 11px;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .dev-label {
+    display: flex; align-items: center; justify-content: flex-end;
+    padding-right: 8px; color: #b0bcd1; font-weight: 600;
+    font-family: ui-monospace, Menlo, monospace;
+  }
+  .slab {
+    display: flex;
+    background: #0a0f18;
+    border: 1px solid #1d2433;
+    border-radius: 4px;
+    overflow: hidden;
+    min-height: 38px;
+  }
+  .seg {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    border-right: 1px solid #00000040;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11px;
+    text-align: center;
+    color: #0a0f18;
+    padding: 2px 4px;
+    box-sizing: border-box;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .seg:last-child { border-right: none; }
+  .seg-sub { font-size: 10px; opacity: 0.75; margin-top: 1px; }
+
+  .c-old-valid       { background: #6fa9ff; }
+  .c-old-pad         { background: #424b5e; color: #b0bcd1; background-image:
+                       repeating-linear-gradient(45deg, #424b5e, #424b5e 6px, #2f3645 6px, #2f3645 12px); }
+  .c-old-pad-filled  { background: #ff9648; }
+  .c-new-valid       { background: #66d39c; }
+  .c-new-pad         { background: #d0d6df; color: #424b5e; }
+
+  details { background: #131923; padding: 10px 14px; border-radius: 6px; margin-top: 18px; }
+  details summary { cursor: pointer; color: #a3b2c7; font-size: 13px; }
+  details pre { color: #d0d6df; font-size: 12px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+  <h1>KV pad-aware rotation — chunked MLA prefill</h1>
+  <p class="desc">
+    Shows the per-device KV-cache layout before and after one chunked-prefill iteration,
+    given the prior cache fill (<code>kv_actual_isl</code>) and the new valid tokens
+    arriving this iteration (<code>new_actual_isl</code>). The server pre-rotates the
+    new tokens so the device whose OLD slab has a pad hole gets the first new tokens
+    (filling the hole); remaining new tokens fill NEW slabs starting from device 0.
+    See <code>test_kv_pad_aware_rotation_torch_showcase</code> in
+    <code>test_ring_joint_sdpa_handoff.py</code> for the matching torch reference.
+  </p>
+
+  <div class="controls">
+    <div class="control">
+      <label for="sp_factor">sp_factor</label>
+      <input type="number" id="sp_factor" min="1" max="32" step="1" value="4">
+    </div>
+    <div class="control">
+      <label for="chunk_size_local">chunk_size_local (tokens / device / iter)</label>
+      <input type="number" id="chunk_size_local" min="32" max="2048" step="32" value="64">
+    </div>
+    <div class="control">
+      <label for="kv_actual_isl">kv_actual_isl (prior cache, tile-aligned)</label>
+      <input type="number" id="kv_actual_isl" min="0" step="32" value="224">
+    </div>
+    <div class="control">
+      <label for="new_actual_isl">new_actual_isl (this iter's valid, tile-aligned)</label>
+      <input type="number" id="new_actual_isl" min="0" step="32" value="64">
+    </div>
+  </div>
+
+  <div class="derived" id="derived"></div>
+
+  <div class="legend">
+    <div class="item"><div class="swatch c-old-valid"></div> OLD slab — prior valid (in cache)</div>
+    <div class="item"><div class="swatch c-old-pad"></div> OLD slab — pad (unfilled from prior iter)</div>
+    <div class="item"><div class="swatch c-old-pad-filled"></div> OLD slab — filled this iter (server rotation)</div>
+    <div class="item"><div class="swatch c-new-valid"></div> NEW slab — new valid (this iter)</div>
+    <div class="item"><div class="swatch c-new-pad"></div> NEW slab — pad (trailing this iter)</div>
+  </div>
+
+  <h2>Per-device cache slabs</h2>
+  <div class="device-row header">
+    <div></div>
+    <div>OLD slab (chunk_size_local cells per device)</div>
+    <div>NEW slab (chunk_size_local cells per device — written this iter)</div>
+  </div>
+  <div id="devices"></div>
+
+  <details>
+    <summary>Rotation rule (used by the renderer)</summary>
+    <pre>
+pad_chip            = (kv_actual_isl // chunk_size_local) % sp_factor   # first chip with pad
+pad_offset_in_chip  = kv_actual_isl % chunk_size_local
+total_pad_in_old    = sp_factor * chunk_size_local - kv_actual_isl       # may span multiple chips
+
+Server distributes the new_actual_isl valid tokens like this:
+
+  Phase 1 — fill OLD-slab pad cells in global-position order:
+    for i in [0 .. min(total_pad_in_old, new_actual_isl)):
+        pad_global_pos = kv_actual_isl + i
+        chip = (pad_global_pos // chunk_size_local) % sp_factor
+        cell = pad_global_pos % chunk_size_local
+        new_token[i] -> devices[chip].old[cell]
+    (Pad can span multiple chips when kv_actual_isl + pad > one chip's slab.)
+
+  Phase 2 — fill NEW slabs starting from device 0, in order:
+    each device's NEW slab holds chunk_size_local cells; remaining tokens
+    flow chip by chip until new_actual_isl is exhausted.
+
+Anything beyond that is NEW-slab padding (will be backfilled next iteration).
+    </pre>
+  </details>
+
+<script>
+function computeLayout(params) {
+  const { sp_factor, chunk_size_local, kv_actual_isl, new_actual_isl } = params;
+  if (chunk_size_local <= 0 || sp_factor <= 0) return null;
+
+  const total_old_capacity = sp_factor * chunk_size_local;
+  const has_pad = kv_actual_isl < total_old_capacity;
+  const pad_chip = Math.floor(kv_actual_isl / chunk_size_local) % sp_factor;
+  const pad_offset_in_chip = kv_actual_isl % chunk_size_local;
+  const total_pad_in_old = Math.max(0, total_old_capacity - kv_actual_isl);
+
+  // Build per-device cell arrays. Each cell:
+  //   { kind, global_pos (or null), token_idx (or null) }
+  const devices = [];
+  for (let chip = 0; chip < sp_factor; chip++) {
+    const dev = { chip, old: [], new_slab: [] };
+    const chip_start = chip * chunk_size_local;
+    for (let cell = 0; cell < chunk_size_local; cell++) {
+      const gp = chip_start + cell;
+      if (gp < kv_actual_isl) {
+        dev.old.push({ kind: 'old_valid', global_pos: gp, token_idx: null });
+      } else {
+        dev.old.push({ kind: 'old_pad', global_pos: null, token_idx: null });
+      }
+    }
+    for (let cell = 0; cell < chunk_size_local; cell++) {
+      dev.new_slab.push({ kind: 'new_pad', global_pos: null, token_idx: null });
+    }
+    devices.push(dev);
+  }
+
+  // Phase 1: fill OLD-slab pad cells in GLOBAL-POSITION order. Pad can span
+  // multiple devices when kv_actual_isl + pad_size > one chip's slab.
+  const fill_count = Math.min(total_pad_in_old, new_actual_isl);
+  for (let i = 0; i < fill_count; i++) {
+    const pad_global_pos = kv_actual_isl + i;
+    const chip = Math.floor(pad_global_pos / chunk_size_local) % sp_factor;
+    const cell = pad_global_pos % chunk_size_local;
+    devices[chip].old[cell] = {
+      kind: 'old_pad_filled',
+      global_pos: pad_global_pos,
+      token_idx: i,
+    };
+  }
+  // Phase 2: NEW slabs, chip 0 onward
+  let remaining = new_actual_isl - fill_count;
+  let tok = fill_count;
+  let c = 0, cell = 0;
+  while (remaining > 0 && c < sp_factor) {
+    devices[c].new_slab[cell] = {
+      kind: 'new_valid',
+      global_pos: kv_actual_isl + tok,
+      token_idx: tok,
+    };
+    tok++; remaining--; cell++;
+    if (cell === chunk_size_local) { cell = 0; c++; }
+  }
+  // Any remaining (if NEW slabs across all devices exhausted) we silently drop
+  // (means new_actual_isl > sp_factor * chunk_size_local — caller's bug).
+
+  return {
+    pad_chip, pad_offset_in_chip,
+    total_pad_in_old, has_pad,
+    fill_count,
+    new_tokens_placed: tok,
+    devices,
+  };
+}
+
+// Group consecutive cells with same kind into ranges for compact rendering.
+function rangify(cells) {
+  const ranges = [];
+  let i = 0;
+  while (i < cells.length) {
+    const start = i;
+    const kind = cells[i].kind;
+    while (i < cells.length && cells[i].kind === kind) i++;
+    const end = i;
+    const slice = cells.slice(start, end);
+    ranges.push({ kind, start, end, cells: slice });
+  }
+  return ranges;
+}
+
+function renderRange(range, slab_total_cells) {
+  const len = range.end - range.start;
+  const widthPct = (len / slab_total_cells) * 100;
+  const div = document.createElement('div');
+  div.className = `seg c-${range.kind.replace(/_/g, '-')}`;
+  div.style.flexBasis = widthPct + '%';
+  div.style.flexGrow = 0;
+  div.style.flexShrink = 0;
+
+  const firstCell = range.cells[0];
+  const lastCell = range.cells[range.cells.length - 1];
+  let label, sub;
+  switch (range.kind) {
+    case 'old_valid':
+      label = `cells ${range.start}..${range.end}`;
+      sub = `gp ${firstCell.global_pos}..${lastCell.global_pos + 1}`;
+      break;
+    case 'old_pad':
+      label = `cells ${range.start}..${range.end}`;
+      sub = `OLD pad (${len})`;
+      break;
+    case 'old_pad_filled':
+      label = `cells ${range.start}..${range.end}`;
+      sub = `t${firstCell.token_idx}..${lastCell.token_idx + 1} → gp ${firstCell.global_pos}..${lastCell.global_pos + 1}`;
+      break;
+    case 'new_valid':
+      label = `cells ${range.start}..${range.end}`;
+      sub = `t${firstCell.token_idx}..${lastCell.token_idx + 1} → gp ${firstCell.global_pos}..${lastCell.global_pos + 1}`;
+      break;
+    case 'new_pad':
+      label = `cells ${range.start}..${range.end}`;
+      sub = `NEW pad (${len})`;
+      break;
+    default:
+      label = `cells ${range.start}..${range.end}`;
+      sub = '';
+  }
+  const labEl = document.createElement('div'); labEl.textContent = label; div.appendChild(labEl);
+  const subEl = document.createElement('div'); subEl.className = 'seg-sub'; subEl.textContent = sub; div.appendChild(subEl);
+  div.title = `${range.kind} | cells [${range.start}, ${range.end}) | size ${len}`;
+  return div;
+}
+
+function render() {
+  const sp_factor = parseInt(document.getElementById('sp_factor').value, 10);
+  const chunk_size_local = parseInt(document.getElementById('chunk_size_local').value, 10);
+  const kv_actual_isl = parseInt(document.getElementById('kv_actual_isl').value, 10);
+  const new_actual_isl = parseInt(document.getElementById('new_actual_isl').value, 10);
+
+  const layout = computeLayout({ sp_factor, chunk_size_local, kv_actual_isl, new_actual_isl });
+  if (!layout) return;
+
+  // Derived display
+  const total_new_dev_capacity = sp_factor * chunk_size_local;
+  const derived = document.getElementById('derived');
+  derived.innerHTML = `
+    <div><span class="k">chunk_size</span> = <span class="v">${sp_factor * chunk_size_local}</span> tokens / iter</div>
+    <div><span class="k">total prior cache slots</span> = <span class="v">${sp_factor * chunk_size_local}</span> (sp × chunk_size_local)</div>
+    <div><span class="k">new tokens placed</span> = <span class="v">${layout.new_tokens_placed}</span> / ${new_actual_isl}</div>
+    <div><span class="k">pad_chip (first w/ pad)</span> = <span class="v">${layout.pad_chip}</span></div>
+    <div><span class="k">pad_offset_in_chip</span> = <span class="v">${layout.pad_offset_in_chip}</span></div>
+    <div><span class="k">total_pad_in_old</span> = <span class="v">${layout.total_pad_in_old}</span> ${layout.has_pad ? '(may span multiple chips)' : '(cache fully populates OLD slabs)'}</div>
+  `;
+
+  const devicesEl = document.getElementById('devices');
+  devicesEl.innerHTML = '';
+  for (const dev of layout.devices) {
+    const row = document.createElement('div');
+    row.className = 'device-row';
+    const lab = document.createElement('div'); lab.className = 'dev-label'; lab.textContent = `dev ${dev.chip}${dev.chip === layout.pad_chip ? ' ←pad' : ''}`;
+    const oldSlab = document.createElement('div'); oldSlab.className = 'slab';
+    rangify(dev.old).forEach(r => oldSlab.appendChild(renderRange(r, chunk_size_local)));
+    const newSlab = document.createElement('div'); newSlab.className = 'slab';
+    rangify(dev.new_slab).forEach(r => newSlab.appendChild(renderRange(r, chunk_size_local)));
+    row.appendChild(lab); row.appendChild(oldSlab); row.appendChild(newSlab);
+    devicesEl.appendChild(row);
+  }
+}
+
+['sp_factor', 'chunk_size_local', 'kv_actual_isl', 'new_actual_isl'].forEach(id =>
+  document.getElementById(id).addEventListener('input', render));
+
+render();
+</script>
+</body>
+</html>

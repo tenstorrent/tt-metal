@@ -13,6 +13,14 @@
 #include "compute_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
 
+template <bool kv_pad_rotation_enabled>
+constexpr void assert_kv_pad_rotation_streaming_only() {
+    static_assert(
+        !kv_pad_rotation_enabled,
+        "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
+        "fp32_dest_acc_en=true is not supported.");
+}
+
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
@@ -56,6 +64,13 @@ void kernel_main() {
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(38) == 1;
     constexpr bool chunked_enabled = get_compile_time_arg_val(39) == 1;
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(40);
+    constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(41) == 1;
+    constexpr uint32_t kv_pad_q_old_start_nt = get_compile_time_arg_val(42);
+    constexpr uint32_t kv_pad_q_old_count_nt = get_compile_time_arg_val(43);
+    constexpr uint32_t kv_pad_q_new_start_nt = get_compile_time_arg_val(44);
+    constexpr uint32_t kv_pad_q_valid_nt = get_compile_time_arg_val(45);
+    constexpr uint32_t active_ring_iter_mask = get_compile_time_arg_val(46);
+    constexpr uint32_t last_active_ring_iter = get_compile_time_arg_val(47);
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. kernel_is_causal is masked off by the program factory when chunked is on, so only
     // one of the two paths drives the stamp per program — but they share the CB slot layout.
@@ -78,7 +93,8 @@ void kernel_main() {
     constexpr uint32_t total_mask_tiles =
         1 + (diag_tile_enabled ? 1 : 0) + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
 
-    constexpr uint32_t q_start_idx_t = chunked_enabled ? (kv_local_padded_Nt - q_local_padded_Nt) * ring_size : 0;
+    constexpr uint32_t q_start_idx_t =
+        chunked_enabled && !kv_pad_rotation_enabled ? logical_nt - q_local_padded_Nt * ring_size : 0;
 
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
@@ -93,7 +109,7 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = 41;
+    constexpr uint32_t cb_arg_offset = 48;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -147,32 +163,21 @@ void kernel_main() {
         {cb_sum_B, cb_max_B, cb_out_im_B},  // cur
     };
 
-    const uint32_t last_active_ring_iter = find_last_active_ring_iter(
-        fused_op_indexer.seq, kv_local_padded_Nt, logical_nt - 1, L, is_causal, is_balanced, chunked_enabled);
-
-    uint32_t ring_index = fused_op_indexer.seq.ring_index;
-    uint32_t half_sequence = num_q_chunks / 2;
+    const uint32_t ring_index = fused_op_indexer.seq.ring_index;
+    const uint32_t half_sequence = num_q_chunks / 2;
+    const ChunkedContext chunked_context{
+        q_start_idx_t,
+        ring_index,
+        KVPadRotationContext{kv_pad_q_old_start_nt, kv_pad_q_old_count_nt, kv_pad_q_new_start_nt, kv_pad_q_valid_nt}};
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
-        const bool do_joint_kv = ring_id == ring_size - 1;
-        const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
-
-        // First, find out if this ring iter processes any KV chunks.
-        const uint32_t ring_iter_kv_start_tile = ring_id * kv_local_padded_Nt;
-        const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
-        // Last tile id holding any real K data; partial trailing tile is included here and gets
-        // its padding cells masked downstream (see same line in ring_joint_reader.cpp).
-        const uint32_t global_n_tile_id = logical_nt - 1;
-        const bool ring_iter_processes_KV_chunks =
-            chunked_enabled ? true : (ring_iter_kv_start_tile <= global_n_tile_id);
-        const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) &&
-                                         !(is_causal && ring_index < ring_id && !is_balanced);
-
-        if (!ring_iter_does_work) {
+        if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
+        const bool do_joint_kv = ring_id == ring_size - 1;
+        const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
         const bool is_first_active_iter = !seen_active_iter;
         seen_active_iter = true;
 
@@ -277,7 +282,8 @@ void kernel_main() {
                 global_n_has_padding,
                 local_n_has_padding,
                 joint_has_padding,
-                has_straddle && is_causal && is_balanced>(
+                has_straddle && is_causal && is_balanced,
+                kv_pad_rotation_enabled>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,
@@ -298,9 +304,10 @@ void kernel_main() {
                 lw_mask,
                 skip_first_half_q,
                 use_zigzag_balancing,
-                ChunkedContext{q_start_idx_t, ring_index},
+                chunked_context,
                 is_first_active_iter);
         } else {
+            assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<
                 cb_qk_im,
                 cb_identity_scale_in,
@@ -369,7 +376,7 @@ void kernel_main() {
                 skip_first_half_q,
                 is_last_ring_iter,
                 use_zigzag_balancing,
-                ChunkedContext{q_start_idx_t, ring_index});
+                chunked_context);
         }
     }
 }

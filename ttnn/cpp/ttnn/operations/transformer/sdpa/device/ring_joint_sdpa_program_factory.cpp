@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
+#include "kernels/dataflow/chunked_prefill_utils.hpp"
+#include "kernels/dataflow/ring_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 #include <algorithm>
@@ -27,6 +29,87 @@
 #include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
+
+namespace {
+
+struct RingWorkPlan {
+    uint32_t active_ring_iter_mask = 0;
+    uint32_t last_active_ring_iter = 0;
+    uint32_t single_valid_kv_chunk_mask = 0;
+};
+
+uint32_t kv_global_tile_for_host_ring_plan(
+    bool is_chunked,
+    bool kv_pad_rotation_enabled,
+    uint32_t ring_id,
+    uint32_t local_tile_start,
+    uint32_t chunk_size_t,
+    uint32_t q_local_padded_Nt,
+    uint32_t kv_local_padded_Nt) {
+    if (is_chunked || kv_pad_rotation_enabled) {
+        return chunked_kv_global_tile_for_local(ring_id, local_tile_start, chunk_size_t, q_local_padded_Nt);
+    }
+    return ring_id * kv_local_padded_Nt + local_tile_start;
+}
+
+RingWorkPlan build_ring_work_plan(
+    uint32_t device_index,
+    uint32_t ring_size,
+    uint32_t backward_writes_expected,
+    uint32_t forward_writes_expected,
+    bool is_chunked,
+    bool kv_pad_rotation_enabled,
+    uint32_t chunk_size_t,
+    uint32_t q_local_padded_Nt,
+    uint32_t kv_local_padded_Nt,
+    uint32_t logical_nt,
+    uint32_t num_local_k_chunks,
+    uint32_t Sk_chunk_t,
+    uint32_t num_joint_k_chunks,
+    uint32_t L,
+    bool kernel_is_causal,
+    bool is_balanced) {
+    RingWorkPlan plan;
+    RingIdSequencer seq(device_index, ring_size, backward_writes_expected, forward_writes_expected);
+    auto no_sync = [](uint32_t, uint32_t) {};
+
+    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        const uint32_t ring_id = seq.get_next_ring_id(no_sync);
+        const bool joint_contributes = ring_id == ring_size - 1 && num_joint_k_chunks > 0 && L != 0;
+        uint32_t valid_spatial_kv_chunks = 0;
+        for (uint32_t k_chunk = 0; k_chunk < num_local_k_chunks; ++k_chunk) {
+            const uint32_t local_tile_start = k_chunk * Sk_chunk_t;
+            if (local_tile_start >= kv_local_padded_Nt) {
+                continue;
+            }
+            if (kv_global_tile_for_host_ring_plan(
+                    is_chunked,
+                    kv_pad_rotation_enabled,
+                    ring_id,
+                    local_tile_start,
+                    chunk_size_t,
+                    q_local_padded_Nt,
+                    kv_local_padded_Nt) < logical_nt) {
+                valid_spatial_kv_chunks++;
+            }
+        }
+        const uint32_t valid_kv_chunks = valid_spatial_kv_chunks + (joint_contributes ? num_joint_k_chunks : 0);
+        const bool has_kv_work = (is_chunked && !kv_pad_rotation_enabled) || valid_spatial_kv_chunks > 0;
+        const bool ring_iter_does_work =
+            (has_kv_work || joint_contributes) && !(kernel_is_causal && device_index < ring_id && !is_balanced);
+        if (ring_iter_does_work) {
+            plan.active_ring_iter_mask |= (1u << ring_iter);
+            plan.last_active_ring_iter = ring_iter;
+        }
+        if (valid_kv_chunks <= 1) {
+            plan.single_valid_kv_chunk_mask |= (1u << ring_iter);
+        }
+    }
+
+    return plan;
+}
+
+}  // namespace
 
 namespace ttnn::prim {
 
@@ -189,6 +272,56 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
     const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
+    const bool kv_pad_rotation_enabled = args.has_kv_pad_rotation();
+    const uint32_t kv_actual_nt = kv_pad_rotation_enabled ? args.kv_actual_isl.value() / tt::constants::TILE_HEIGHT : 0;
+    const uint32_t new_actual_nt = kv_pad_rotation_enabled ? logical_nt - kv_actual_nt : 0;
+    uint32_t kv_pad_q_old_start_nt = 0;
+    uint32_t kv_pad_q_old_count_nt = 0;
+    uint32_t kv_pad_q_new_start_nt = 0;
+    uint32_t kv_pad_q_valid_nt = 0;
+    if (kv_pad_rotation_enabled) {
+        const uint32_t chunk_size_nt = ring_size * q_local_padded_Nt;
+        const uint32_t first_group = kv_actual_nt / chunk_size_nt;
+        const uint32_t last_group = (logical_nt - 1) / chunk_size_nt;
+        TT_FATAL(
+            last_group <= first_group + 1,
+            "KV-pad-aware rotation expects the current valid Q to fit in one fixed global chunk. "
+            "Got kv_actual_nt={}, new_actual_nt={}, chunk_size_nt={}",
+            kv_actual_nt,
+            new_actual_nt,
+            chunk_size_nt);
+
+        struct Segment {
+            uint32_t start_nt = 0;
+            uint32_t count_nt = 0;
+        };
+
+        const auto intersect_device_group = [&](uint32_t group) -> Segment {
+            const uint32_t block_start_nt = group * chunk_size_nt + device_index * q_local_padded_Nt;
+            const uint32_t block_end_nt = block_start_nt + q_local_padded_Nt;
+            const uint32_t start_nt = std::max(kv_actual_nt, block_start_nt);
+            const uint32_t end_nt = std::min(logical_nt, block_end_nt);
+            if (end_nt <= start_nt) {
+                return {};
+            }
+            return Segment{start_nt, end_nt - start_nt};
+        };
+
+        const Segment first_segment = intersect_device_group(first_group);
+        const Segment second_segment = last_group == first_group ? Segment{} : intersect_device_group(first_group + 1);
+
+        kv_pad_q_old_start_nt = first_segment.start_nt;
+        kv_pad_q_old_count_nt = first_segment.count_nt;
+        kv_pad_q_new_start_nt = second_segment.start_nt;
+        kv_pad_q_valid_nt = first_segment.count_nt + second_segment.count_nt;
+        TT_FATAL(
+            kv_pad_q_valid_nt <= q_local_padded_Nt,
+            "KV-pad-aware rotation mapped more valid Q tiles to this device than its local Q slab can hold. "
+            "Got q_valid_nt={}, q_local_padded_Nt={}, device_index={}",
+            kv_pad_q_valid_nt,
+            q_local_padded_Nt,
+            device_index);
+    }
 
     /*
     For non-causal case we must provide a padded mask if the K sequence length has been padded
@@ -380,6 +513,10 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     // Ring-joint streaming supports single-Q-subblock shapes; only fp32 dest acc stays on the legacy path.
     const bool use_streaming_compute = !fp32_dest_acc_en;
+    TT_FATAL(
+        !kv_pad_rotation_enabled || use_streaming_compute,
+        "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
+        "fp32_dest_acc_en=true is not supported.");
     log_debug(
         tt::LogOp,
         "use_streaming_compute: {} (is_causal={}, Sq_chunk_t={}, Sk_chunk_t={}, sbh={}, sbw={})",
@@ -463,6 +600,32 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     // so the zigzag asymmetry doesn't apply — gate on kernel_is_causal, not args.is_causal.
     const bool enable_zigzag_balancing = args.is_balanced && kernel_is_causal && (num_q_chunks % 2 == 0);
 
+    TT_FATAL(
+        ring_size <= std::numeric_limits<uint32_t>::digits,
+        "Ring-joint host ring-work masks support up to {} ring iterations. Got ring_size={}",
+        std::numeric_limits<uint32_t>::digits,
+        ring_size);
+    const RingWorkPlan ring_work_plan = build_ring_work_plan(
+        device_index,
+        ring_size,
+        backward_writes_expected,
+        forward_writes_expected,
+        is_chunked,
+        kv_pad_rotation_enabled,
+        chunk_size_t,
+        q_local_padded_Nt,
+        kv_local_padded_Nt,
+        logical_nt,
+        num_local_k_chunks,
+        Sk_chunk_t,
+        num_joint_k_chunks,
+        L,
+        kernel_is_causal,
+        args.is_balanced);
+    const uint32_t active_ring_iter_mask = ring_work_plan.active_ring_iter_mask;
+    const uint32_t last_active_ring_iter = ring_work_plan.last_active_ring_iter;
+    const uint32_t single_valid_kv_chunk_mask = ring_work_plan.single_valid_kv_chunk_mask;
+
     // Cores actually issuing Q reads. When the flat q-chunk distribution is smaller
     // than the grid the trailing cores get zero work; zigzag distributes pairs, so
     // the unit count is total_pairs = all_heads_num_q_chunks / 2.
@@ -494,11 +657,13 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         kernel_is_causal,
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
-        // Reader slot 24: chunked_enabled (writer/compute use slot 24/33 for use_streaming_compute).
+        // Reader slot 24: chunked_enabled. Writer/compute use their corresponding slot for use_streaming_compute.
         static_cast<uint32_t>(is_chunked),
         num_active_cores,
         chunk_size_t,
         static_cast<uint32_t>(indexed_kv_cache),
+        static_cast<uint32_t>(kv_pad_rotation_enabled),
+        active_ring_iter_mask,
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -607,6 +772,9 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         static_cast<std::uint32_t>(out_out_subblock_h),
         static_cast<uint32_t>(is_chunked),
         chunk_size_t,
+        active_ring_iter_mask,
+        last_active_ring_iter,
+        single_valid_kv_chunk_mask,
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -654,7 +822,14 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
         static_cast<uint32_t>(is_chunked),
-        chunk_size_t};
+        chunk_size_t,
+        static_cast<uint32_t>(kv_pad_rotation_enabled),
+        kv_pad_q_old_start_nt,
+        kv_pad_q_old_count_nt,
+        kv_pad_q_new_start_nt,
+        kv_pad_q_valid_nt,
+        active_ring_iter_mask,
+        last_active_ring_iter};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
