@@ -214,6 +214,13 @@ inline void enable_int8_fpu_math()
  * \param unpack_dst_format Unpacker output (register) data format.
  * \return true if both formats are Int32 or Float32; false otherwise.
  */
+inline constexpr bool is_32bit_input(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format)
+{
+    const DataFormat input_df  = static_cast<DataFormat>(masked_data_format(unpack_src_format));
+    const DataFormat output_df = static_cast<DataFormat>(masked_data_format(unpack_dst_format));
+    return (input_df == DataFormat::Int32 || input_df == DataFormat::Float32) && (output_df == DataFormat::Int32 || output_df == DataFormat::Float32);
+}
+
 // Canonical srcA channel-1 X stride in bytes, derived from the unpacker dst format.
 // Used to compute the canonical Y/Z strides programmed into UNP0_ADDR_CTRL_*.
 inline constexpr std::uint32_t canonical_unpA_x_stride(const std::uint32_t unpack_dst_format)
@@ -231,13 +238,6 @@ inline constexpr std::uint32_t canonical_unpA_y_stride(const std::uint32_t unpac
     return FACE_C_DIM * face_r_dim * canonical_unpA_x_stride(unpack_dst_format);
 }
 
-inline constexpr bool is_32bit_input(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format)
-{
-    const DataFormat input_df  = static_cast<DataFormat>(masked_data_format(unpack_src_format));
-    const DataFormat output_df = static_cast<DataFormat>(masked_data_format(unpack_dst_format));
-    return (input_df == DataFormat::Int32 || input_df == DataFormat::Float32) && (output_df == DataFormat::Int32 || output_df == DataFormat::Float32);
-}
-
 /*
  * Single source of truth for whether _llk_unpack_A_ takes the "unpack to dest" (SrcA -> DEST) path.
  * It is only taken for genuinely 32-bit input; otherwise the MOP falls through to the normal/broadcast
@@ -252,7 +252,6 @@ inline constexpr bool should_unpack_to_dest(const bool unpack_to_dest, const std
 {
     return unpack_to_dest && is_32bit_input(unpack_src_format, unpack_dst_format);
 }
-
 /**
  * \brief Checks if the unpacker conversion is supported w.r.t. the FP32 dest accumulation mode.
  *
