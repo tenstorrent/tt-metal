@@ -1,7 +1,3 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Parallelism — how memory is divided across chips.
 
@@ -40,8 +36,6 @@ from .architecture import MemoryModel
 from .hardware import Box
 
 
-# Fraction of model weights that are NOT TP-sharded (embedding, lm_head,
-# norms).  Empirical figure based on Llama-3-style architectures.
 _REPLICATED_FRAC = 0.04
 
 
@@ -156,23 +150,14 @@ def shard(
     pp = max(pcfg.pp, 1)
     arch = model.arch
 
-    # PP splits along layers: weights and KV both scale ÷ pp.
-    # Activations gain a small per-stage replication penalty (the
-    # pipeline bubble) — we model that as 1× residual stream per chip
-    # not divided by PP.
     stage_weights = full_weights // pp
     stage_kv = full_kv // pp
-    stage_act = full_act  # bubble: each PP stage keeps full per-token activations
+    stage_act = full_act
 
-    # TP splits each PP stage's tensors along hidden / kv_heads axes.
-    # Embedding / lm_head / norms are still replicated per TP group.
     replicated_w = int(stage_weights * _REPLICATED_FRAC)
     sharded_w = (stage_weights - replicated_w) // tp
     per_chip_w = replicated_w + sharded_w
 
-    # KV cache is sharded along kv_heads.  When tp exceeds the number of
-    # kv_heads, sharding stops helping (each chip must duplicate at least
-    # one head).
     effective_kv_shards = min(tp, max(arch.num_key_value_heads, 1))
     per_chip_kv = stage_kv // effective_kv_shards
 

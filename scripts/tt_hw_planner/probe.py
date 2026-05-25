@@ -1,20 +1,3 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
-# SPDX-License-Identifier: Apache-2.0
-
-"""
-Static probe of a HuggingFace model.
-
-Pulls the minimal metadata needed for memory planning:
-    - pipeline category (LLM / VLM / STT / TTS / Embed / Image / Video / CNN)
-    - weight file footprint (safetensors + legacy)
-    - dominant on-disk dtype + total parameter count
-    - transformer config (for kv-cache math)
-    - architecture family detected from config (dense / mla / sw / ssm / moe)
-
-NO model weights are downloaded — only metadata + config.json (a few KB).
-"""
-
 from __future__ import annotations
 
 import json
@@ -24,10 +7,6 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 
-# HuggingFace repo-id grammar (mirrors huggingface_hub.utils._validators):
-# either `<name>` or `<org>/<name>`, each part starting with [A-Za-z0-9] and
-# containing only [A-Za-z0-9._-]. Used to gate dynamic input before passing
-# `model_id` to filesystem / subprocess / hub-download operations.
 _HF_ID_PART = r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}"
 _HF_ID_PATTERN = re.compile(rf"^{_HF_ID_PART}(/{_HF_ID_PART})?$")
 
@@ -47,7 +26,6 @@ from .architecture import (
 )
 
 
-# HuggingFace pipeline_tag -> our category bucket.
 PIPELINE_CATEGORY = {
     "text-generation": "LLM",
     "text2text-generation": "LLM",
@@ -73,23 +51,75 @@ PIPELINE_CATEGORY = {
     "depth-estimation": "CNN",
     "image-feature-extraction": "CNN",
     "zero-shot-image-classification": "CNN",
+    "mask-generation": "CNN",
+    "zero-shot-object-detection": "CNN",
+    "keypoint-detection": "CNN",
+    "image-to-3d": "CNN",
+    "video-classification": "Video",
 }
 
 
-# Categories for which we run the transformer config + memory model path.
 TRANSFORMER_CATEGORIES = {"LLM", "VLM", "STT", "Embed"}
+
+
+VISION_ONLY_MODEL_TYPES = {
+    "sam",
+    "sam2",
+    "sam2_video",
+    "sam_hiera",
+    "clip",
+    "siglip",
+    "vit",
+    "dinov2",
+    "swin",
+    "yolos",
+    "detr",
+    "deformable_detr",
+    "segformer",
+    "maskformer",
+    "mask2former",
+    "upernet",
+    "beit",
+    "convnext",
+    "mobilenet_v2",
+    "mobilenet_v1",
+    "resnet",
+    "owlvit",
+}
+
+
+AUDIO_ONLY_MODEL_TYPES = {
+    "whisper",
+    "wav2vec2",
+    "hubert",
+    "wavlm",
+    "sew",
+    "unispeech",
+    "audio_spectrogram_transformer",
+    "clap",
+}
+
+
+def _category_from_model_type(model_type: str) -> Optional[str]:
+    mt = (model_type or "").lower()
+    if not mt:
+        return None
+    if mt in VISION_ONLY_MODEL_TYPES:
+        return "CNN"
+    if mt in AUDIO_ONLY_MODEL_TYPES:
+        return "STT"
+    if mt in {"llava", "blip-2", "blip2", "idefics", "paligemma", "qwen2_5_vl", "qwen2_vl"}:
+        return "VLM"
+    return None
 
 
 @dataclass
 class ModelProbe:
-    """The complete static probe of a HuggingFace model."""
-
     model_id: str
     category: str
     pipeline_tag: Optional[str]
     library: Optional[str]
 
-    # Weight footprint
     weight_bytes_total: int
     weight_bytes_safetensors: int
     weight_bytes_legacy: int
@@ -98,25 +128,14 @@ class ModelProbe:
     total_params: Optional[int]
     bytes_per_param_on_disk: Optional[float]
 
-    # Transformer architecture (None for non-transformer categories)
     arch_spec: Optional[ArchitectureSpec] = None
     arch_family: Optional[str] = None
     memory_model: Optional[MemoryModel] = None
 
-    # Loaded vs missing vs broken — drives confidence
-    #   None    - we never tried (non-transformer)
-    #   True    - config loaded AND transformer fields found
-    #   False   - config loaded BUT fields not at standard paths
-    #   "failed"- failed to load at all
     config_status: object = None
 
     flags: List[str] = field(default_factory=list)
     raw_config: dict = field(default_factory=dict)
-
-
-# ---------------------------------------------------------------------------
-# Internals
-# ---------------------------------------------------------------------------
 
 
 def _classify_category(pipeline_tag: Optional[str], tags: List[str], library: Optional[str]) -> str:
@@ -142,7 +161,6 @@ def _classify_category(pipeline_tag: Optional[str], tags: List[str], library: Op
 
 
 def _sum_weight_files(siblings) -> Tuple[int, int]:
-    """Return (safetensors_bytes, legacy_bytes)."""
     sf, legacy = 0, 0
     legacy_exts = (".bin", ".pt", ".pth", ".ckpt", ".msgpack", ".nemo")
     for s in siblings or []:
@@ -155,7 +173,6 @@ def _sum_weight_files(siblings) -> Tuple[int, int]:
     return sf, legacy
 
 
-# Safetensors per-element-byte mapping (HF reports element counts here, not bytes).
 _DTYPE_ELEMENT_BYTES = {
     "F32": 4,
     "F16": 2,
@@ -185,18 +202,11 @@ _DTYPE_PRETTY = {
 
 
 def _dominant_dtype(parameters, weight_bytes) -> Tuple[str, str, Optional[int], Optional[float]]:
-    """
-    Return (canonical_dtype, pretty_label, total_params, bytes_per_param_on_disk).
-
-    canonical_dtype is one of: bf16 / fp16 / fp32 / fp8 / fp4 / unknown.
-    pretty_label adds (quantized, X.XX B/param on disk) etc.
-    """
     if not parameters:
         return "bf16", "bf16 (assumed)", None, None
 
     total_params = sum(parameters.values())
 
-    # Dominant dtype by *parameter count*, ignoring integer index/routing tables.
     weight_only = {dt: n for dt, n in parameters.items() if not dt.startswith("I") and dt != "BOOL"}
     if weight_only:
         dom = max(weight_only.items(), key=lambda kv: kv[1])[0]
@@ -220,7 +230,6 @@ def _dominant_dtype(parameters, weight_bytes) -> Tuple[str, str, Optional[int], 
 
 
 def _maybe_fetch_config(model_id: str) -> Optional[dict]:
-    """Try AutoConfig, fall back to raw config.json download."""
     safe_id = _validate_hf_id(model_id)
     try:
         from transformers import AutoConfig
@@ -238,11 +247,6 @@ def _maybe_fetch_config(model_id: str) -> Optional[dict]:
             return json.load(f)
     except Exception:
         return None
-
-
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
 
 
 def probe_model(model_id: str) -> ModelProbe:
@@ -285,7 +289,6 @@ def probe_model(model_id: str) -> ModelProbe:
     parameters = info.safetensors.parameters if info.safetensors else None
     canonical_dtype, pretty_dtype, total_params, bytes_per_param = _dominant_dtype(parameters, weight_bytes)
     if total_params is None and weight_bytes > 0:
-        # No safetensors metadata — assume bf16 storage to recover param count.
         total_params = weight_bytes // 2
 
     category = _classify_category(info.pipeline_tag, info.tags or [], info.library_name)
@@ -304,51 +307,70 @@ def probe_model(model_id: str) -> ModelProbe:
         bytes_per_param_on_disk=bytes_per_param,
     )
 
-    if category in TRANSFORMER_CATEGORIES:
-        cfg = _maybe_fetch_config(model_id)
-        if cfg is None:
-            probe.config_status = "failed"
-        else:
-            probe.raw_config = cfg
+    cfg = _maybe_fetch_config(model_id)
+    if cfg is None:
+        probe.config_status = "failed"
+        return probe
 
-            # Walk nested configs to find the transformer fields.
-            NESTED_KEYS = (
-                "text_config",
-                "llm_config",
-                "language_config",
-                "decoder_config",
-                "text_model_config",
-                "language_model_config",
+    probe.raw_config = cfg
+
+    model_type_category = _category_from_model_type(str(cfg.get("model_type", "")))
+    if model_type_category and probe.category in {"LLM", "VLM"} and model_type_category != probe.category:
+        probe.flags.append(
+            f"Reclassified from {probe.category} to {model_type_category} via "
+            f"config.model_type={cfg.get('model_type')!r}"
+        )
+        probe.category = model_type_category
+    elif model_type_category and probe.category == "Unknown":
+        probe.category = model_type_category
+
+    if probe.category not in TRANSFORMER_CATEGORIES:
+        probe.config_status = None
+        return probe
+
+    NESTED_KEYS = (
+        "text_config",
+        "llm_config",
+        "language_config",
+        "decoder_config",
+        "text_model_config",
+        "language_model_config",
+    )
+    candidates = [cfg] + [cfg.get(k) for k in NESTED_KEYS if isinstance(cfg.get(k), dict)]
+    for c in candidates:
+        if c.get("hidden_size") and c.get("num_hidden_layers"):
+            text_cfg = c
+            break
+    else:
+        text_cfg = cfg
+
+    family = detect_architecture(text_cfg)
+    arch_spec = build_arch_spec(text_cfg, family)
+    probe.arch_spec = arch_spec
+    probe.arch_family = family
+
+    if arch_spec.hidden_size and arch_spec.num_layers:
+        probe.config_status = True
+        probe.memory_model = select_model(arch_spec, total_params, weight_bytes)
+
+        if family == "mla":
+            probe.flags.append("MLA (compressed KV cache) detected — DeepSeek family")
+        if family == "moe":
+            probe.flags.append(f"MoE detected ({arch_spec.num_experts} experts, top-{arch_spec.experts_per_token})")
+        if family == "ssm":
+            probe.flags.append("State-space model — no per-token KV cache")
+        if arch_spec.sliding_window:
+            probe.flags.append(f"Sliding-window attention (window={arch_spec.sliding_window})")
+    else:
+        if probe.category in {"LLM", "VLM"}:
+            probe.flags.append(
+                "Category downgraded to CNN after config inspection: no causal-LM fields found in config.json."
             )
-            candidates = [cfg] + [cfg.get(k) for k in NESTED_KEYS if isinstance(cfg.get(k), dict)]
-            for c in candidates:
-                if c.get("hidden_size") and c.get("num_hidden_layers"):
-                    text_cfg = c
-                    break
-            else:
-                text_cfg = cfg
-
-            family = detect_architecture(text_cfg)
-            arch_spec = build_arch_spec(text_cfg, family)
-            probe.arch_spec = arch_spec
-            probe.arch_family = family
-
-            if arch_spec.hidden_size and arch_spec.num_layers:
-                probe.config_status = True
-                probe.memory_model = select_model(arch_spec, total_params, weight_bytes)
-
-                # Surface architectural flags
-                if family == "mla":
-                    probe.flags.append("MLA (compressed KV cache) detected — DeepSeek family")
-                if family == "moe":
-                    probe.flags.append(
-                        f"MoE detected ({arch_spec.num_experts} experts, " f"top-{arch_spec.experts_per_token})"
-                    )
-                if family == "ssm":
-                    probe.flags.append("State-space model — no per-token KV cache")
-                if arch_spec.sliding_window:
-                    probe.flags.append(f"Sliding-window attention (window={arch_spec.sliding_window})")
-            else:
-                probe.config_status = False
+            probe.category = "CNN"
+            probe.arch_spec = None
+            probe.arch_family = None
+            probe.config_status = None
+        else:
+            probe.config_status = False
 
     return probe

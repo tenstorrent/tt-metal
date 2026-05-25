@@ -1,7 +1,3 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Output formatters.
 
@@ -23,11 +19,6 @@ from .hardware import Overhead
 from .kernel_constraints import KernelReport, Severity
 from .probe import ModelProbe
 from .verdict import FitRow, FitVerdict, Tightness
-
-
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
 
 
 def _fmt_gb(x: float, prec: int = 2) -> str:
@@ -64,11 +55,6 @@ def _category_guidance(category: str) -> str:
     }.get(category, "")
 
 
-# ---------------------------------------------------------------------------
-# Table backend
-# ---------------------------------------------------------------------------
-
-
 def _format_overhead(o: Overhead, hbm_per_chip: float) -> str:
     return (
         f"dispatch={o.dispatch_gb:.1f} GB + ccl={o.ccl_gb:.1f} GB + "
@@ -98,14 +84,12 @@ def render_table(
     p(rule)
     p()
 
-    # On-disk footprint
     disk_gb = probe.weight_bytes_total / 1e9
     p(f"  On-disk weights:  {disk_gb:.2f} GB  (saved as {probe.saved_dtype_pretty})")
     if probe.total_params:
         suffix = "exact" if probe.weight_bytes_safetensors > 0 else "inferred from file size"
         p(f"  Total parameters: {probe.total_params / 1e9:.2f} B ({suffix})")
 
-    # Transformer fields
     if probe.arch_spec:
         a = probe.arch_spec
         p(
@@ -129,7 +113,6 @@ def render_table(
     p()
     p(f"  Probe knobs:  batch={batch}  seq/horizon={seq}  KV dtype={kv_dtype}")
 
-    # Memory budget (untouched by parallelism — model-level)
     if probe.memory_model:
         m = probe.memory_model
         w = m.weights_bytes(dtypes[0]) / 1e9
@@ -143,7 +126,6 @@ def render_table(
         p(f"    activations                   {a:>8.2f} GB")
         p(f"    TOTAL                         {w+k+a:>8.2f} GB")
 
-    # Overhead breakdown (replaces the flat-0.80 from the old script).
     if show_overhead:
         p()
         p("  Per-chip overhead (subtracted from HBM before fit-check):")
@@ -202,7 +184,6 @@ def render_table(
         )
     p("  " + "-" * (86 if show_parallel else 72))
 
-    # Recommendation
     p()
     if verdict.best:
         r = verdict.best
@@ -244,11 +225,6 @@ def render_table(
         p("              Exact weight footprint + architecture-aware KV math.")
 
     return "\n".join(out)
-
-
-# ---------------------------------------------------------------------------
-# JSON backend
-# ---------------------------------------------------------------------------
 
 
 def render_json(probe: ModelProbe, verdict: FitVerdict, batch: int, seq: int, kv_dtype: str, dtypes: list) -> str:
@@ -316,11 +292,6 @@ def render_json(probe: ModelProbe, verdict: FitVerdict, batch: int, seq: int, kv
         ),
     }
     return json.dumps(payload, indent=2)
-
-
-# ---------------------------------------------------------------------------
-# Markdown backend
-# ---------------------------------------------------------------------------
 
 
 def render_markdown(probe: ModelProbe, verdict: FitVerdict, batch: int, seq: int, kv_dtype: str, dtypes: list) -> str:

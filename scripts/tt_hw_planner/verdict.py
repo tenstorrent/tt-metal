@@ -1,7 +1,3 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Verdict — given a sharded memory footprint and a box, decide if it fits
 and how tight the fit is.
@@ -134,7 +130,7 @@ def _row_score(row: FitRow) -> tuple:
         _TIGHTNESS_RANK[row.tightness],
         row.box.chips,
         row.box.total_hbm_gb,
-        -row.headroom_gb,  # only matters if all else is equal
+        -row.headroom_gb,
     )
 
 
@@ -174,8 +170,6 @@ def evaluate_all(
     for box in boxes:
         meshes = list(enumerate_meshes(box, explore_pp=explore_pp))
         if not all_meshes:
-            # Keep only the largest chip-count canonical mesh.  All TP×PP
-            # combinations for that chip count are still enumerated.
             best_chips = max(p.chips for _, p in meshes)
             meshes = [(s, p) for s, p in meshes if p.chips == best_chips]
 

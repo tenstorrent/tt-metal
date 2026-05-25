@@ -1,0 +1,93 @@
+[
+  {
+    "model_id": "test/never-going-to-exist",
+    "model_type": "brand_new_xyz",
+    "category": "LLM",
+    "backend_name": "this-backend-does-not-exist-anywhere",
+    "path": "X. test path",
+    "timestamp": 1779559158.6971035,
+    "notes": "invariant pin",
+    "diffs": [
+      {
+        "file": "compatibility.py",
+        "change": "added 'brand_new_xyz' -> 'test/never-going-to-exist' to closest_supported_model()"
+      }
+    ]
+  },
+  {
+    "model_id": "google/gemma-2-27b-it",
+    "model_type": "gemma2",
+    "category": "LLM",
+    "backend_name": "tt_transformers / simple_text_demo",
+    "path": "B. Generic cold-start (prepare --execute via simple_text_demo / hf_eager)",
+    "timestamp": 1779560859.483398,
+    "notes": "Auto-routed via ColdStartScaffoldError handler in cmd_up.",
+    "diffs": [
+      {
+        "file": "family_backends.py",
+        "change": "added model_type_keys=['gemma2'] to backend 'tt_transformers / simple_text_demo'"
+      },
+      {
+        "file": "compatibility.py",
+        "change": "(no-op: 'gemma2' already in closest_supported_model)"
+      }
+    ]
+  },
+  {
+    "model_id": "google/medgemma-4b-it",
+    "model_type": "gemma3",
+    "category": "VLM",
+    "backend_name": "tt_transformers / simple_text_demo (multimodal)",
+    "path": "ALREADY SUPPORTED (auto-routed to prepare --execute)",
+    "timestamp": 1779568778.4358215,
+    "notes": "Model was detected as already-supported; cmd_up auto-routed.",
+    "diffs": [
+      {
+        "file": "family_backends.py",
+        "change": "added model_type_keys=['gemma3'] to backend 'tt_transformers / simple_text_demo (multimodal)'"
+      },
+      {
+        "file": "compatibility.py",
+        "change": "(no-op: 'gemma3' already in closest_supported_model)"
+      }
+    ]
+  },
+  {
+    "model_id": "microsoft/Phi-3.5-mini-instruct",
+    "model_type": "phi3",
+    "category": "LLM",
+    "backend_name": "tt_transformers / simple_text_demo",
+    "path": "ALREADY SUPPORTED (auto-routed to prepare --execute)",
+    "timestamp": 1779650583.9429052,
+    "notes": "Model was detected as already-supported; cmd_up auto-routed.",
+    "diffs": [
+      {
+        "file": "family_backends.py",
+        "change": "appended 'phi3' to backend 'tt_transformers / simple_text_demo'.model_type_keys"
+      },
+      {
+        "file": "compatibility.py",
+        "change": "(no-op: 'phi3' already in closest_supported_model)"
+      }
+    ]
+  },
+  {
+    "model_id": "Qwen/Qwen3-Embedding-8B",
+    "model_type": "qwen3",
+    "category": "Embed",
+    "backend_name": "Qwen3-Embedding (qwen3 decoder)",
+    "path": "ALREADY SUPPORTED (auto-routed to prepare --execute)",
+    "timestamp": 1779707724.3130312,
+    "notes": "Model was detected as already-supported; cmd_up auto-routed.",
+    "diffs": [
+      {
+        "file": "family_backends.py",
+        "change": "(no-op: 'qwen3' already in 'Qwen3-Embedding (qwen3 decoder)'.model_type_keys)"
+      },
+      {
+        "file": "compatibility.py",
+        "change": "(no-op: 'qwen3' already in closest_supported_model)"
+      }
+    ]
+  }
+]

@@ -1,24 +1,3 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
-# SPDX-License-Identifier: Apache-2.0
-
-"""
-Bring-up bridge: turn a planner verdict into a runnable demo invocation.
-
-`plan` answers "which box fits", `compat` answers "do the building blocks
-exist". This module closes the loop: given a HuggingFace model id, it picks
-the recommended (box, mesh, dtype) row, maps that to the `MESH_DEVICE`
-parametrization used by `models/tt_transformers/demo/simple_text_demo.py`,
-checks the two per-model tuning tables that affect first-run behaviour, and
-emits a copy-pasteable pytest invocation (or runs it directly).
-
-Static knowledge of the demo wiring lives here so the rest of the planner
-remains free of `models/` imports.  The two tuning tables we inspect
-(`MAX_PREFILL_CHUNK_SIZES_DIV1024` in `tt/model_config.py` and
-`trace_region_size_dict` in `demo/trace_region_config.py`) are loaded by AST
-parse, so we stay the single source of truth without importing ttnn.
-"""
-
 from __future__ import annotations
 
 import ast
@@ -30,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .compatibility import CompatReport, Status, check_compatibility
 from .discovery import ModelDiscovery, discover_model
+from .family_backends import FamilyBackend, pick_backend
 from .hardware import HARDWARE, find_box
 from .kernel_constraints import KernelReport, Severity, evaluate_kernels
 from .probe import probe_model
@@ -49,10 +29,6 @@ def _quote(s: str) -> str:
 
 
 def _format_argv(argv: List[str], *, indent: int) -> str:
-    """Group pytest-style flag/value pairs onto the same line and emit a
-    backslash-continued multi-line command.  Standalone flags (those that
-    start with `-` and aren't followed by a value, or whose next token is
-    itself a flag) stay on their own line."""
     pad = " " * indent
     chunks: List[str] = []
     i = 0
@@ -68,9 +44,6 @@ def _format_argv(argv: List[str], *, indent: int) -> str:
     return (" \\\n" + pad).join(chunks)
 
 
-# Mirrors the literal dict in `simple_text_demo.py` that maps the
-# MESH_DEVICE env var to the demo's parametrized mesh shape.  Keyed by
-# (arch, mesh_shape) so we can resolve a planner row directly.
 MESH_DEVICE_MAP: Dict[Tuple[str, Tuple[int, int]], str] = {
     ("Wormhole", (1, 1)): "N150",
     ("Wormhole", (1, 2)): "N300",
@@ -86,22 +59,12 @@ MESH_DEVICE_MAP: Dict[Tuple[str, Tuple[int, int]], str] = {
 
 
 def derive_base_model_name(hf_id: str) -> str:
-    """Mirror `trace_region_config.get_base_model_name` so we can index
-    the same per-model tuning tables the demo does."""
     model_name = hf_id.strip("/").split("/")[-1]
     m = re.search(r"(.*?\d+[bB])-", model_name)
     return m.group(1) if m else model_name
 
 
 def mesh_device_for(arch: str, mesh_shape: Tuple[int, int]) -> Tuple[Optional[str], str]:
-    """Resolve (arch, mesh_shape) to a MESH_DEVICE label.
-
-    Returns (label, note). When `label is None`, the demo has no env-var
-    mapping for this physical shape and bring-up must refuse — silently
-    substituting a different shape (e.g. [1,4] for [2,2]) used to happen
-    here but is now disallowed because the substitute shape changes the
-    runtime divisibility constraints (n_kv_heads % cluster_shape[1]).
-    """
     direct = MESH_DEVICE_MAP.get((arch, mesh_shape))
     if direct is not None:
         return direct, ""
@@ -121,16 +84,7 @@ def mesh_device_for(arch: str, mesh_shape: Tuple[int, int]) -> Tuple[Optional[st
     return None, f"no MESH_DEVICE label for {arch} mesh {mesh_shape}; demo cannot be parametrized."
 
 
-# ---------------------------------------------------------------------------
-# Tuning-table inspection
-# ---------------------------------------------------------------------------
-
-
 def _extract_literal_dict(file_path: Path, var_name: str, *, in_func: Optional[str] = None) -> Optional[dict]:
-    """Parse a Python source file and return the literal value of an
-    assignment to `var_name`.  Restrict to a function body if `in_func` is
-    given.  Returns None if the file can't be read, parsed, or the value
-    isn't a literal."""
     try:
         src = file_path.read_text()
     except OSError:
@@ -217,10 +171,6 @@ def _lookup_tuning(
 
 
 def check_chunk_size(base_model_name: str, mesh_device: str) -> TuningCheck:
-    """Look up the prefill chunk size.  If the (model, mesh_device) cell is
-    missing but the model has other (non-None) entries in the same row, pick
-    the largest of those as a `MAX_PREFILL_CHUNK_SIZE` env-var override —
-    that's a more sensible default than the demo's `4×1024` fallback."""
     chunk, _ = _load_tuning_tables()
     check = _lookup_tuning(
         base_model_name,
@@ -259,19 +209,30 @@ def check_trace_region(base_model_name: str, mesh_device: str) -> TuningCheck:
     )
 
 
-# ---------------------------------------------------------------------------
-# Pytest invocation
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class PytestInvocation:
     test_path: str
     args: List[str]
     env: Dict[str, str]
 
+    @staticmethod
+    def per_test_timeout_s() -> int:
+        import os as _os
+
+        try:
+            v = int(_os.environ.get("TT_PLANNER_PER_TEST_TIMEOUT_S", "1800"))
+            return v if v > 0 else 1800
+        except (TypeError, ValueError):
+            return 1800
+
     def argv(self) -> List[str]:
-        return ["pytest", self.test_path] + self.args
+        return (
+            ["pytest", self.test_path]
+            + self.args
+            + [
+                f"--timeout={self.per_test_timeout_s()}",
+            ]
+        )
 
     def shell_form(self, *, cwd: Path) -> str:
         env_lines = "\n".join(f'export {k}="{v}"' for k, v in self.env.items())
@@ -319,11 +280,6 @@ def _build_external_invocation(
     hf_model: str,
     test_path: str,
 ) -> PytestInvocation:
-    """Build a pytest invocation for a model whose demo lives outside
-    `tt_transformers/`. We emit `pytest <test_path> -svv` and pass HF_MODEL
-    so any code that reads the env still gets it. MESH_DEVICE is not set
-    because external demos typically use a singular `device` fixture; if a
-    particular demo needs it, the user can override on the command line."""
     return PytestInvocation(
         test_path=test_path,
         args=["-svv"],
@@ -331,9 +287,62 @@ def _build_external_invocation(
     )
 
 
-# ---------------------------------------------------------------------------
-# Top-level plan
-# ---------------------------------------------------------------------------
+def _build_scaffolded_stubs_invocation(
+    *,
+    hf_model: str,
+) -> Optional[Tuple[PytestInvocation, str, int]]:
+    from .bringup_loop import find_demo_dir
+    from .family_backends import DEFAULT_TEMPLATE_PYTEST_EXCLUDE_K
+
+    demo_dir = find_demo_dir(hf_model)
+    if demo_dir is None:
+        return None
+
+    stubs_dir = demo_dir / "_stubs"
+    pcc_dir = demo_dir / "tests" / "pcc"
+    stub_files = list(stubs_dir.glob("*.py")) if stubs_dir.is_dir() else []
+    if not stub_files:
+        return None
+    if not pcc_dir.is_dir():
+        return None
+
+    matched_tests: List[Path] = []
+    for stub in stub_files:
+        if stub.name == "__init__.py":
+            continue
+        candidate = pcc_dir / f"test_{stub.stem}.py"
+        if candidate.is_file():
+            matched_tests.append(candidate)
+    if not matched_tests:
+        return None
+
+    rel_tests = [str(p.relative_to(REPO_ROOT)) for p in matched_tests]
+    invocation = PytestInvocation(
+        test_path=rel_tests[0],
+        args=[*rel_tests[1:], "-svv", "-k", DEFAULT_TEMPLATE_PYTEST_EXCLUDE_K],
+        env={"HF_MODEL": hf_model, "PLANNER_TARGET_HF_MODEL": hf_model},
+    )
+    return invocation, str(demo_dir.relative_to(REPO_ROOT)), len(stub_files)
+
+
+def _build_family_template_invocation(
+    *,
+    hf_model: str,
+    backend: FamilyBackend,
+) -> PytestInvocation:
+    test_path = backend.smoke_test_entry or backend.demo_path
+    args: List[str] = ["-svv"]
+    exclude_k = backend.effective_pytest_exclude_k()
+    if exclude_k:
+        args.extend(["-k", exclude_k])
+    return PytestInvocation(
+        test_path=test_path,
+        args=args,
+        env={
+            "HF_MODEL": backend.canonical_hf_id or hf_model,
+            "PLANNER_TARGET_HF_MODEL": hf_model,
+        },
+    )
 
 
 @dataclass
@@ -357,19 +366,104 @@ class BringupPlan:
     tuning_checks: List[TuningCheck]
     invocation: Optional[PytestInvocation]
     notes: List[str] = field(default_factory=list)
+    backend_name: Optional[str] = None
+    is_template: bool = False
+    template_canonical_hf_id: Optional[str] = None
 
     @property
     def runnable(self) -> bool:
-        """Permissive: True whenever an invocation was built — which happens
-        for ALREADY SUPPORTED / READY / FEASIBLE WITH WORK (no MISSING blocks)
-        with no TP=1 kernel blockers.  Strict callers should additionally
-        require `compat_overall in {"ALREADY SUPPORTED", "READY"}`."""
         return self.invocation is not None and self.fits
 
 
 class BringupError(RuntimeError):
-    """Raised when a runnable command cannot be produced (and the caller
-    should surface a clean error message to the user)."""
+    pass
+
+
+def _prepare_non_text_family(
+    *,
+    probe,
+    model_id: str,
+    box_override: Optional[str],
+    mesh_override: Optional[Tuple[int, int]],
+) -> BringupPlan:
+    pipeline_tag = getattr(probe, "pipeline_tag", None)
+    model_type = (probe.raw_config or {}).get("model_type") if probe.raw_config else None
+    backend = pick_backend(category=probe.category, model_type=model_type, pipeline_tag=pipeline_tag)
+    if backend is None:
+        raise BringupError(
+            f"{model_id} has category={probe.category} but no tt-metal demo backend "
+            "is registered for that family. Add an entry in "
+            "`scripts/tt_hw_planner/family_backends.py` or port a sibling demo first."
+        )
+
+    boxes = [find_box(box_override)] if box_override else HARDWARE
+    box = boxes[0]
+    if mesh_override is not None and mesh_override not in box.mesh_shapes:
+        raise BringupError(f"mesh {mesh_override} is not canonical for {box.name}; valid: {box.mesh_shapes}")
+    mesh_shape: Tuple[int, int] = mesh_override or (1, 1)
+    arch = box.arch
+    mesh_device, mesh_note = mesh_device_for(arch, mesh_shape)
+    if mesh_device is None:
+        mesh_device = "(unset; external demo manages mesh)"
+
+    notes: List[str] = []
+
+    scaffolded = _build_scaffolded_stubs_invocation(hf_model=model_id)
+    is_template_run = False
+    backend_label = backend.name
+    if scaffolded is not None:
+        invocation, demo_rel, stub_count = scaffolded
+        backend_label = f"scaffolded stubs ({stub_count} component(s)) for {model_id}"
+        notes.append(
+            f"SCAFFOLDED RUN: targeting {demo_rel}/tests/pcc/ — exercises "
+            f"the {stub_count} TTNN stub(s) under {demo_rel}/_stubs/ on TT "
+            f"hardware (one PCC test per NEW component). This is the "
+            f"model's OWN code, not a sibling template."
+        )
+    else:
+        invocation = _build_family_template_invocation(hf_model=model_id, backend=backend)
+        is_template_run = backend.routing_mode == "template"
+        if is_template_run:
+            notes.append(
+                f"TEMPLATE BRING-UP: dispatched to {backend.name} "
+                f"({backend.demo_path}). The demo runs canonical_hf_id="
+                f"{backend.canonical_hf_id!r}; adapt encoder/decoder/IO for "
+                f"{model_id} before expecting correct outputs. (No "
+                f"scaffolded stubs found for {model_id}; run "
+                f"`scaffold {model_id} --apply` to switch this command to "
+                f"running your own TTNN ports instead of a sibling template.)"
+            )
+        else:
+            notes.append(f"Generic backend: {backend.name} ({backend.demo_path}).")
+    if backend.notes:
+        notes.append(backend.notes)
+
+    compat = check_compatibility(model_id, probe.raw_config or {})
+
+    return BringupPlan(
+        model_id=model_id,
+        base_model_name=derive_base_model_name(model_id),
+        box_name=box.name,
+        arch=arch,
+        mesh_shape=mesh_shape,
+        mesh_device=mesh_device,
+        mesh_device_note=mesh_note,
+        dtype="bf16",
+        fit_verdict="n/a (non-LLM family backend)",
+        fits=True,
+        headroom_gb=0.0,
+        compat_overall=compat.overall,
+        compat_summary=compat.effort_summary,
+        compat_blocking=[],
+        compat_porting=[],
+        kernel_blockers=[],
+        tuning_checks=[],
+        invocation=invocation,
+        notes=notes,
+        backend_name=backend_label,
+        is_template=is_template_run,
+        template_canonical_hf_id=backend.canonical_hf_id if is_template_run else None,
+    )
 
 
 def prepare_bringup(
@@ -398,9 +492,11 @@ def prepare_bringup(
             "If it's a gated repo, set HF_TOKEN or `huggingface-cli login`."
         )
     if probe.memory_model is None:
-        raise BringupError(
-            f"{model_id} is not a transformer-family model "
-            f"(category={probe.category}); simple_text_demo doesn't apply."
+        return _prepare_non_text_family(
+            probe=probe,
+            model_id=model_id,
+            box_override=box_override,
+            mesh_override=mesh_override,
         )
 
     compat = check_compatibility(model_id, probe.raw_config)
@@ -450,8 +546,6 @@ def prepare_bringup(
 
     base_name = derive_base_model_name(model_id)
     discovery: ModelDiscovery = compat.discovery if compat.discovery is not None else discover_model(model_id)
-    # tt_transformers tuning tables only apply when the demo is the standard
-    # simple_text_demo. External demos manage their own tuning.
     if discovery.in_external_demo:
         tuning: List[TuningCheck] = []
     else:
@@ -460,10 +554,6 @@ def prepare_bringup(
             check_trace_region(base_name, mesh_device),
         ]
 
-    # When `ALREADY SUPPORTED` overrides the per-block checker (the model is
-    # already in `tt_transformers`'s verified list, or in the external-demo
-    # registry), suppress the per-block warnings — they describe blocks the
-    # checker thinks are missing but reality says exist.
     suppress = compat.overall.startswith("ALREADY SUPPORTED")
     compat_blocking = (
         [] if suppress else [r.block.name for r in compat.results if r.needed and r.status == Status.MISSING]
@@ -519,9 +609,6 @@ def prepare_bringup(
                 test_path=discovery.primary_demo.as_posix(),
             )
         else:
-            # tt_transformers path (or fallback when discovery is empty but
-            # the model is in SUPPORTED_HF_MODELS — still try the standard
-            # demo and let pytest fail loudly if it doesn't apply).
             invocation = _build_tt_transformers_invocation(
                 hf_model=model_id,
                 mesh_device=mesh_device,
@@ -566,21 +653,22 @@ def prepare_bringup(
     )
 
 
-# ---------------------------------------------------------------------------
-# Renderers
-# ---------------------------------------------------------------------------
-
-
 def render_text(plan: BringupPlan) -> str:
     sep = "=" * 78
     out: List[str] = [sep]
-    if plan.runnable:
+    if plan.is_template:
+        head = "BRING-UP TEMPLATE (closest tt-metal demo for this family)"
+    elif plan.runnable:
         head = "BRING-UP READY"
     elif plan.invocation is not None:
         head = "BRING-UP READY (will execute; compat is informational)"
     else:
         head = "BRING-UP BLOCKED"
     out.append(f"  {head} — {plan.model_id} on {plan.box_name} mesh [{plan.mesh_shape[0]},{plan.mesh_shape[1]}]")
+    if plan.backend_name:
+        out.append(f"  Backend: {plan.backend_name}")
+        if plan.template_canonical_hf_id and plan.is_template:
+            out.append(f"  Runs canonical HF id out-of-the-box: {plan.template_canonical_hf_id}")
     out.append(sep)
     out.append("")
 

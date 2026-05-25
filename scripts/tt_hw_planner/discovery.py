@@ -1,7 +1,3 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Automatic model discovery: derive "is this model supported?", "which file
 runs it?", and "what does it need?" from the tt-metal source tree, without
@@ -37,14 +33,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 try:
-    import yaml  # type: ignore
-except ImportError:  # pragma: no cover
-    yaml = None  # type: ignore
+    import yaml
+except ImportError:
+    yaml = None
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# How "interesting" each kind of reference is. Higher = more likely the demo
-# entry point.
+
 _FILE_KIND_PRIORITY = {
     "test_demo": 100,
     "demo_py": 80,
@@ -58,8 +53,8 @@ _FILE_KIND_PRIORITY = {
 
 @dataclass
 class FileMatch:
-    path: Path  # repo-relative
-    kind: str  # see _FILE_KIND_PRIORITY
+    path: Path
+    kind: str
     priority: int
 
 
@@ -68,9 +63,9 @@ class TargetEntry:
     """Subset of a `model_targets.yaml` entry. Captures only the fields the
     planner needs."""
 
-    key: str  # e.g. "llama3.2-1b"
+    key: str
     aliases: List[str]
-    skus: Dict[str, str]  # sku -> "active" | "TODO" (worst-case status)
+    skus: Dict[str, str]
     owner_id: Optional[str] = None
     team: Optional[str] = None
 
@@ -80,11 +75,11 @@ class ModelDiscovery:
     hf_id: str
     references: List[FileMatch] = field(default_factory=list)
     target_entry: Optional[TargetEntry] = None
-    primary_demo: Optional[Path] = None  # repo-relative
+    primary_demo: Optional[Path] = None
     is_supported: bool = False
     in_tt_transformers: bool = False
     in_external_demo: bool = False
-    # Empty set = unconstrained; otherwise a strict arch whitelist.
+
     arch_compatibility: frozenset = field(default_factory=frozenset)
     notes: List[str] = field(default_factory=list)
 
@@ -98,11 +93,6 @@ class ModelDiscovery:
 
     def runnable_on_arch(self, arch: str) -> bool:
         return not self.arch_compatibility or arch in self.arch_compatibility
-
-
-# ---------------------------------------------------------------------------
-# model_targets.yaml loader
-# ---------------------------------------------------------------------------
 
 
 def _model_targets_path(repo_root: Path) -> Path:
@@ -134,7 +124,7 @@ def _load_targets(repo_root: Path) -> Dict[str, TargetEntry]:
         if not isinstance(body, dict):
             continue
         aliases = list(body.get("aliases") or [])
-        # Roll the worst status across all entries on a sku
+
         sku_status: Dict[str, str] = {}
         owner = None
         team = None
@@ -154,7 +144,7 @@ def _load_targets(repo_root: Path) -> Dict[str, TargetEntry]:
             owner_id=owner,
             team=team,
         )
-        # The key itself is searchable too
+
         for alias in [key] + aliases:
             by_alias[alias] = entry
     _TARGETS_CACHE = by_alias
@@ -169,18 +159,11 @@ def _match_target(hf_id: str, repo_root: Path) -> Optional[TargetEntry]:
     tail = hf_id.split("/")[-1]
     if tail in targets:
         return targets[tail]
-    # Case-insensitive contains: HF "Llama-3.1-8B" should match alias
-    # "meta-llama/Llama-3.1-8B-Instruct" (the YAML often lists the Instruct
-    # variant). Look for an alias that contains the tail or vice versa.
+
     for alias, entry in targets.items():
         if tail and (tail in alias or alias in tail):
             return entry
     return None
-
-
-# ---------------------------------------------------------------------------
-# Source-tree reference grep
-# ---------------------------------------------------------------------------
 
 
 def _classify_path(path: Path) -> str:
@@ -204,10 +187,7 @@ def _classify_path(path: Path) -> str:
 def _git_grep(needle: str, repo_root: Path, scope: str = "models/") -> List[Path]:
     """Return repo-relative paths matching `needle` literally. Falls back to
     a Python walker if git isn't available."""
-    # Reject anything that isn't a well-formed HF id (or its tail) before
-    # invoking git. `-F` already tells git grep to treat the needle as a
-    # literal string, but validating up-front means subprocess.run only ever
-    # sees inputs in [A-Za-z0-9._-/].
+
     from .probe import _validate_hf_id
 
     _validate_hf_id(needle)
@@ -221,11 +201,11 @@ def _git_grep(needle: str, repo_root: Path, scope: str = "models/") -> List[Path
                 text=True,
                 timeout=30,
             )
-            if res.returncode in (0, 1):  # 1 == no matches
+            if res.returncode in (0, 1):
                 return [Path(line.strip()) for line in res.stdout.splitlines() if line.strip()]
         except (OSError, subprocess.TimeoutExpired):
             pass
-    # Fallback: walk the tree
+
     out: List[Path] = []
     root = repo_root / scope
     for p in root.rglob("*"):
@@ -261,11 +241,6 @@ def _gather_references(hf_id: str, repo_root: Path) -> List[FileMatch]:
                 priority=_FILE_KIND_PRIORITY.get(kind, 0),
             )
     return sorted(seen.values(), key=lambda m: (-m.priority, str(m.path)))
-
-
-# ---------------------------------------------------------------------------
-# Primary demo picker
-# ---------------------------------------------------------------------------
 
 
 def _pick_primary_demo(refs: List[FileMatch]) -> Optional[FileMatch]:
@@ -323,7 +298,7 @@ def _arch_compatibility_from_path(path: Path) -> frozenset:
         return frozenset({"Wormhole"})
     if "blackhole" in parts:
         return frozenset({"Blackhole"})
-    # `tg/` left unconstrained — could be wormhole-tg or blackhole-tg.
+
     return frozenset()
 
 
@@ -348,11 +323,6 @@ def _path_notes(path: Path, arches: frozenset) -> List[str]:
     return notes
 
 
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
-
-
 def discover_model(hf_id: str, repo_root: Path = REPO_ROOT) -> ModelDiscovery:
     target = _match_target(hf_id, repo_root)
     references = _gather_references(hf_id, repo_root)
@@ -371,8 +341,7 @@ def discover_model(hf_id: str, repo_root: Path = REPO_ROOT) -> ModelDiscovery:
         discovery.in_external_demo = "models/demos/" in s
         discovery.arch_compatibility = _arch_compatibility_from_path(primary.path)
         discovery.notes = _path_notes(primary.path, discovery.arch_compatibility)
-    # Fall back to SKU prefixes only when the path didn't pin an arch — the
-    # path is authoritative because it points at code that actually exists.
+
     if not discovery.arch_compatibility and target is not None:
         sku_archs = _arch_compatibility_from_skus(target.skus)
         if sku_archs and len(sku_archs) < 2:
@@ -383,12 +352,6 @@ def discover_model(hf_id: str, repo_root: Path = REPO_ROOT) -> ModelDiscovery:
                 f"model_targets.yaml lists only {arch_name} SKUs ({sku_list}); " f"treating as {arch_name}-only."
             )
     return discovery
-
-
-# ---------------------------------------------------------------------------
-# Lightweight pretty-printer used by `compat` (full text rendering lives in
-# report.py to keep this module dependency-free).
-# ---------------------------------------------------------------------------
 
 
 def format_inline(discovery: ModelDiscovery, *, indent: str = "  ") -> List[str]:

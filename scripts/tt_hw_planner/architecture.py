@@ -1,7 +1,3 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Architecture-aware memory models.
 
@@ -41,13 +37,12 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 
-# bytes per element for dtypes we report
 DTYPE_BYTES = {
     "bf16": 2.0,
     "fp16": 2.0,
     "fp32": 4.0,
-    "bfp8_b": 1.0625,  # 8 bits + shared exponent per 16-elem block (1 bit/elem)
-    "bfp4_b": 0.5625,  # 4 bits + shared exponent per 16-elem block (1 bit/elem)
+    "bfp8_b": 1.0625,
+    "bfp4_b": 0.5625,
     "fp8": 1.0,
 }
 
@@ -56,7 +51,7 @@ DTYPE_BYTES = {
 class ArchitectureSpec:
     """The narrow set of config fields every memory model needs."""
 
-    family: str  # "dense" | "mla" | "sliding_window" | "ssm" | "moe"
+    family: str
     num_layers: int
     hidden_size: int
     num_attention_heads: int
@@ -65,27 +60,18 @@ class ArchitectureSpec:
     vocab_size: int = 0
     max_position_embeddings: int = 0
 
-    # MLA-only
     kv_lora_rank: Optional[int] = None
     qk_rope_head_dim: Optional[int] = None
 
-    # Sliding-window-only
     sliding_window: Optional[int] = None
-    global_attention_layers: int = 0  # full-attention layers (0 = pure SW)
+    global_attention_layers: int = 0
 
-    # SSM-only
     state_size: Optional[int] = None
     conv_kernel: Optional[int] = None
 
-    # MoE-only
     num_experts: Optional[int] = None
     experts_per_token: Optional[int] = None
     moe_intermediate_size: Optional[int] = None
-
-
-# ---------------------------------------------------------------------------
-# Base
-# ---------------------------------------------------------------------------
 
 
 class MemoryModel(ABC):
@@ -95,10 +81,6 @@ class MemoryModel(ABC):
         self.arch = arch
         self.total_params = total_params
         self.weight_bytes_on_disk = weight_bytes_on_disk
-
-    # ------------------------------------------------------------------
-    # Subclass contract
-    # ------------------------------------------------------------------
 
     @abstractmethod
     def family(self) -> str:
@@ -138,11 +120,6 @@ class MemoryModel(ABC):
         return int(batch * seq * self.arch.hidden_size * 12 * bytes_per_elem)
 
 
-# ---------------------------------------------------------------------------
-# Dense transformer (Llama/Qwen/Mistral GQA)
-# ---------------------------------------------------------------------------
-
-
 class DenseTransformerModel(MemoryModel):
     """Standard transformer with Grouped-Query Attention."""
 
@@ -150,15 +127,9 @@ class DenseTransformerModel(MemoryModel):
         return "dense"
 
     def kv_cache_bytes(self, batch: int, seq: int, kv_dtype_bytes: float = 2.0) -> int:
-        # 2 (K and V) * batch * seq * kv_heads * head_dim * layers
         return int(
             2 * batch * seq * self.arch.num_key_value_heads * self.arch.head_dim * self.arch.num_layers * kv_dtype_bytes
         )
-
-
-# ---------------------------------------------------------------------------
-# MLA (DeepSeek-V2/V3/V4)
-# ---------------------------------------------------------------------------
 
 
 class MLATransformerModel(MemoryModel):
@@ -187,11 +158,6 @@ class MLATransformerModel(MemoryModel):
         return int(batch * seq * per_token * self.arch.num_layers * kv_dtype_bytes)
 
 
-# ---------------------------------------------------------------------------
-# Sliding-window-only attention (early Mistral, parts of Phi-3)
-# ---------------------------------------------------------------------------
-
-
 class SlidingWindowModel(MemoryModel):
     """
     Sliding-window attention — KV cache per layer is capped at `sliding_window`
@@ -218,11 +184,6 @@ class SlidingWindowModel(MemoryModel):
         return int(global_kv + local_kv)
 
 
-# ---------------------------------------------------------------------------
-# State-Space Models (Mamba, RWKV, Falcon-Mamba)
-# ---------------------------------------------------------------------------
-
-
 class SSMModel(MemoryModel):
     """
     State-space models have no per-token KV cache.  They carry a fixed-size
@@ -234,17 +195,12 @@ class SSMModel(MemoryModel):
         return "ssm"
 
     def kv_cache_bytes(self, batch: int, seq: int, kv_dtype_bytes: float = 2.0) -> int:
-        state = self.arch.state_size or 16  # Mamba default
+        state = self.arch.state_size or 16
         per_layer_state = self.arch.hidden_size * state
-        # The conv-kernel state adds (conv_kernel - 1) * hidden per layer.
+
         if self.arch.conv_kernel:
             per_layer_state += (self.arch.conv_kernel - 1) * self.arch.hidden_size
         return int(batch * per_layer_state * self.arch.num_layers * kv_dtype_bytes)
-
-
-# ---------------------------------------------------------------------------
-# MoE (Mixtral, Qwen3-Coder-A3B, DeepSeek-V2/V3/V4)
-# ---------------------------------------------------------------------------
 
 
 class MoEModel(MemoryModel):
@@ -273,37 +229,25 @@ class MoEModel(MemoryModel):
         return self.base.activation_bytes(batch, seq, dtype)
 
 
-# ---------------------------------------------------------------------------
-# Detection / dispatch
-# ---------------------------------------------------------------------------
-
-
 def select_model(arch: ArchitectureSpec, total_params: int, weight_bytes_on_disk: int) -> MemoryModel:
     """Pick the right MemoryModel subclass based on architecture fields."""
 
-    # MLA → DeepSeek-family
     if arch.kv_lora_rank is not None and arch.kv_lora_rank > 0:
         base: MemoryModel = MLATransformerModel(arch, total_params, weight_bytes_on_disk)
-    # SSM → Mamba / RWKV
+
     elif arch.state_size is not None or arch.family == "ssm":
         base = SSMModel(arch, total_params, weight_bytes_on_disk)
-    # Sliding-window
+
     elif arch.sliding_window is not None and arch.sliding_window > 0:
         base = SlidingWindowModel(arch, total_params, weight_bytes_on_disk)
     else:
         base = DenseTransformerModel(arch, total_params, weight_bytes_on_disk)
 
-    # MoE wraps whichever base we picked
     if arch.num_experts and arch.num_experts > 1:
         return MoEModel(arch, total_params, weight_bytes_on_disk, base=base)
     return base
 
 
-# ---------------------------------------------------------------------------
-# Architecture detection from HF config
-# ---------------------------------------------------------------------------
-
-# SSM-class model_types we recognise.
 SSM_MODEL_TYPES = {"mamba", "mamba2", "rwkv", "rwkv4", "rwkv5", "rwkv6", "falcon_mamba"}
 
 
@@ -315,7 +259,7 @@ def detect_architecture(cfg: dict) -> str:
 
     if model_type in SSM_MODEL_TYPES:
         return "ssm"
-    if cfg.get("kv_lora_rank"):  # DeepSeek MLA marker
+    if cfg.get("kv_lora_rank"):
         return "mla"
     if cfg.get("num_local_experts") or cfg.get("n_routed_experts"):
         return "moe"
@@ -332,10 +276,8 @@ def build_arch_spec(cfg: dict, family: str) -> ArchitectureSpec:
     head_dim = cfg.get("head_dim") or (H // Q if Q else 0)
     L = cfg.get("num_hidden_layers") or cfg.get("num_layers") or cfg.get("n_layer") or 0
 
-    # Detect interleaved global/local attention if the config exposes it.
     n_global = cfg.get("num_global_layers") or 0
     if "attention_layers" in cfg and isinstance(cfg["attention_layers"], list):
-        # Some configs list per-layer attention type explicitly.
         n_global = sum(1 for t in cfg["attention_layers"] if t in ("global", "full"))
 
     return ArchitectureSpec(
@@ -354,9 +296,6 @@ def build_arch_spec(cfg: dict, family: str) -> ArchitectureSpec:
         state_size=cfg.get("state_size") or cfg.get("d_state"),
         conv_kernel=cfg.get("conv_kernel") or cfg.get("d_conv"),
         num_experts=(cfg.get("num_local_experts") or cfg.get("n_routed_experts") or cfg.get("num_experts")),
-        # `top_k` ALSO names HF's sampling top-k; only read it when an
-        # MoE-specific marker is present (otherwise we read sampling top_k
-        # as "experts per token" for dense models).
         experts_per_token=(
             cfg.get("num_experts_per_tok")
             or (

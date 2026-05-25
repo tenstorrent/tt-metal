@@ -1,7 +1,3 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
-# SPDX-License-Identifier: Apache-2.0
-
 """
 Kernel-level constraint checker for HuggingFace -> TTNN bring-up.
 
@@ -59,7 +55,10 @@ class KernelFinding:
 
 
 def _text_cfg(cfg: dict) -> dict:
-    return cfg.get("text_config") or cfg
+    """Backwards-compat alias for :func:`compatibility._text_config`."""
+    from .compatibility import _text_config
+
+    return _text_config(cfg)
 
 
 def _g(cfg: dict, *keys, default=None):
@@ -87,10 +86,10 @@ def _head_dim(cfg: dict) -> Optional[int]:
 
 
 def _is_mla(cfg: dict) -> bool:
-    """MLA models use compressed KV (qk_nope_head_dim / kv_lora_rank) and a
-    distinct attention kernel; standard SDPA shape checks don't apply."""
-    t = _text_cfg(cfg)
-    return bool(t.get("kv_lora_rank") or t.get("q_lora_rank") or t.get("qk_rope_head_dim") or t.get("qk_nope_head_dim"))
+    """Backwards-compat alias for :func:`compatibility._is_mla`."""
+    from .compatibility import _is_mla as _is_mla_canonical
+
+    return _is_mla_canonical(cfg)
 
 
 def check_attention_shapes(cfg: dict, tp: int) -> List[KernelFinding]:
@@ -211,22 +210,89 @@ def check_attention_shapes(cfg: dict, tp: int) -> List[KernelFinding]:
 
 
 def check_rope_hf(cfg: dict, _tp: int) -> List[KernelFinding]:
-    """rotary_embedding_hf_device_operation.cpp requires last dim divisible by 64.
+    """RoPE kernel selection. `tt_transformers` has TWO working kernels:
+
+    1. `ttnn.experimental.rotary_embedding_hf` -- requires head_dim % 64 == 0
+       (faster on Blackhole; used when `use_hf_rope=True`)
+    2. `ttnn.experimental.rotary_embedding_llama` (a.k.a. mllama RoPE) --
+       requires head_dim % 32 == 0
+       (the **default** in `tt_transformers/tt/model_config.py:500`;
+       used when `use_hf_rope=False`)
+
+    2026-05-23 bug fix: previously this checker hard-failed the bring-up
+    when (1) didn't fit, even though (2) is the default code path and
+    would have worked fine. That produced false-positives like
+    "Phi-3.5-mini cannot run on QB2" for a model that actually runs out
+    of the box via the mllama RoPE fallback.
+
+    New behavior:
+      - If head_dim % 64 == 0  -> HF RoPE works, [ok], no finding for the fallback.
+      - elif head_dim % 32 == 0 -> HF RoPE fails BUT runtime auto-falls-back
+        to mllama RoPE. Emit a WARN (not BLOCKER) so the compat gate
+        doesn't refuse to scaffold a perfectly-supported model. The
+        runtime config knob is already `use_hf_rope=False` by default,
+        so no user action is required for the common case.
+      - else (head_dim % 32 != 0) -> NEITHER kernel accepts; that's a
+        true BLOCKER.
+
     Skipped for MLA models (DeepSeek uses qk_rope_head_dim, not the same kernel)."""
     if _is_mla(cfg):
         return []
     hd = _head_dim(cfg)
     if hd is None:
         return []
+    if hd % 64 == 0:
+        return [
+            KernelFinding(
+                op="ttnn.experimental.rotary_embedding_hf",
+                field="head_dim",
+                value=hd,
+                constraint="head_dim must be divisible by 64 (HF RoPE kernel layout)",
+                passes=True,
+                severity=Severity.BLOCKER,
+                fix="",
+                source="ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/rotary_embedding_hf_device_operation.cpp",
+            )
+        ]
+    if hd % 32 == 0:
+        return [
+            KernelFinding(
+                op="ttnn.experimental.rotary_embedding_hf",
+                field="head_dim",
+                value=hd,
+                constraint=(
+                    "head_dim must be divisible by 64 (HF RoPE kernel layout); "
+                    "this model has head_dim divisible by 32 so the runtime "
+                    "auto-falls-back to rotary_embedding_llama (mllama RoPE), "
+                    "which is the default in tt_transformers/tt/model_config.py:500. "
+                    "No user action required."
+                ),
+                passes=False,
+                severity=Severity.WARN,
+                fix=(
+                    "No action required -- `use_hf_rope=False` is already the "
+                    "default. If you've explicitly set `use_hf_rope=True`, "
+                    "unset it for this model."
+                ),
+                source="ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/rotary_embedding_hf_device_operation.cpp",
+            )
+        ]
     return [
         KernelFinding(
             op="ttnn.experimental.rotary_embedding_hf",
             field="head_dim",
             value=hd,
-            constraint="head_dim must be divisible by 64 (HF RoPE kernel layout)",
-            passes=(hd % 64 == 0),
+            constraint=(
+                "head_dim must be divisible by 64 (HF RoPE) OR 32 (mllama RoPE); "
+                "this model satisfies neither so both RoPE kernels reject it."
+            ),
+            passes=False,
             severity=Severity.BLOCKER,
-            fix="Fall back to use_hf_rope=False (rotary_embedding_llama, multiple of 32) if model permits.",
+            fix=(
+                "Pad the attention heads to align head_dim to a multiple of 32, "
+                "or extend rotary_embedding_llama_device_operation.cpp to handle "
+                "this head_dim (custom kernel work)."
+            ),
             source="ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/rotary_embedding_hf_device_operation.cpp",
         )
     ]
@@ -399,18 +465,30 @@ def check_moe(cfg: dict, _tp: int) -> List[KernelFinding]:
 
 
 def check_sliding_window(cfg: dict, _tp: int) -> List[KernelFinding]:
-    """attention.py raises NotImplementedError on chunked prefill + sliding window."""
+    """attention.py raises NotImplementedError on chunked prefill + sliding window.
+
+    2026-05-23 audit bug #13/#14:
+      - Previously `passes=True` so the table showed `[ ok ]` for an
+        active incompatibility. Now `passes=False` (still WARN, not
+        BLOCKER, because non-chunked prefill works).
+      - Previously only the scalar `sliding_window` field was read;
+        Gemma-2/hybrid models use `layer_types` containing
+        "sliding_attention" entries. Detect that too."""
     t = _text_cfg(cfg)
     sw = t.get("sliding_window")
-    if not sw:
+    layer_types = t.get("layer_types")
+    has_sliding_layer_type = isinstance(layer_types, list) and any(
+        isinstance(x, str) and "sliding" in x.lower() for x in layer_types
+    )
+    if not sw and not has_sliding_layer_type:
         return []
     return [
         KernelFinding(
             op="ttnn.transformer.scaled_dot_product_attention (sliding)",
-            field="sliding_window",
-            value=sw,
+            field="sliding_window" if sw else "layer_types[*]=sliding_attention",
+            value=sw if sw else layer_types,
             constraint="sliding-window attention is not supported in combination with chunked prefill",
-            passes=True,
+            passes=False,
             severity=Severity.WARN,
             fix="If using long-context prefill, disable chunked prefill for sliding-window layers.",
             source="models/tt_transformers/tt/attention.py",
@@ -419,27 +497,114 @@ def check_sliding_window(cfg: dict, _tp: int) -> List[KernelFinding]:
 
 
 def check_rope_scaling(cfg: dict, _tp: int) -> List[KernelFinding]:
-    """rope.py: warns + drops scaling for 'default' / 'mrope'."""
+    """RoPE scaling. tt_transformers' `rotary_embedding_factory`
+    (models/tt_transformers/tt/rope.py:304) explicitly handles exactly
+    four scaling types: linear, llama3, yarn, longrope. Anything else
+    raises `ValueError(\"Invalid rope_scaling: ...\")` at model
+    instantiation time.
+
+    2026-05-23 audit fixes (3 bugs):
+
+    1. The supported-set previously listed `dynamic`, but tt_transformers
+       does NOT handle `rope_type=dynamic` -- the runtime would raise.
+       Listing it as supported produced false-negatives (compat said
+       "ok", runtime then crashed). Fix: remove `dynamic` from the
+       supported set.
+
+    2. The check read only `cfg.rope_scaling` and ignored the newer HF
+       `cfg.rope_parameters` field (see Phi-3.5's deprecation warning:
+       `rope_parameters['original_max_position_embeddings']`).
+       tt_transformers' model_config.py:2736 also only reads
+       `rope_scaling`, so models that migrated to `rope_parameters`
+       would silently lose their scaling at runtime (the runtime
+       would treat them as no-scaling). Fix: detect the migration
+       case explicitly and WARN.
+
+    3. If `rope_scaling` is set as a dict but its `type`/`rope_type`
+       field is missing, the previous check silently returned [] --
+       hiding a config that the runtime would not interpret correctly.
+       Fix: emit a WARN.
+    """
     t = _text_cfg(cfg)
     rs = t.get("rope_scaling")
+    rp = t.get("rope_parameters")
+    out: List[KernelFinding] = []
+
+    if rp and not rs:
+        out.append(
+            KernelFinding(
+                op="models/tt_transformers/tt/rope.py",
+                field="rope_parameters (HF-newer field)",
+                value="set",
+                constraint=(
+                    "this HF config uses `rope_parameters` (the newer "
+                    "field) but tt_transformers/tt/model_config.py:2736 "
+                    "only reads `rope_scaling`. The runtime will silently "
+                    "treat this model as having NO scaling, potentially "
+                    "diverging from HF reference at long contexts."
+                ),
+                passes=False,
+                severity=Severity.WARN,
+                fix=(
+                    "Mirror `rope_parameters` into `rope_scaling` in the "
+                    "model_params/<model>/config.json override, OR extend "
+                    "tt_transformers/tt/model_config.py to also read "
+                    "`rope_parameters`. Safe at short contexts; matters "
+                    "at the model's full native context."
+                ),
+                source="models/tt_transformers/tt/model_config.py:2736",
+            )
+        )
+
     if not isinstance(rs, dict):
-        return []
+        return out
+
     rtype = (rs.get("type") or rs.get("rope_type") or "").lower()
     if not rtype:
-        return []
-    supported = {"linear", "llama3", "yarn", "longrope", "dynamic"}
-    return [
+        out.append(
+            KernelFinding(
+                op="models/tt_transformers/tt/rope.py",
+                field="rope_scaling.type",
+                value="(missing)",
+                constraint=(
+                    "rope_scaling is set as a dict but has no `type` or "
+                    "`rope_type` field; tt_transformers' factory won't "
+                    "know how to interpret it and will likely fall back "
+                    "to a default RoPE, producing wrong positional "
+                    "embeddings at long contexts."
+                ),
+                passes=False,
+                severity=Severity.WARN,
+                fix=(
+                    'Add `"type": "<linear|llama3|yarn|longrope>"` '
+                    "to the rope_scaling dict (or to a model_params "
+                    "override config.json)."
+                ),
+                source="models/tt_transformers/tt/rope.py:314",
+            )
+        )
+        return out
+
+    supported = {"linear", "llama3", "yarn", "longrope"}
+    out.append(
         KernelFinding(
             op="models/tt_transformers/tt/rope.py",
             field="rope_scaling.type",
             value=rtype,
-            constraint=f"rope_scaling.type must be one of {{{', '.join(sorted(supported))}}} to apply correctly",
+            constraint=(f"rope_scaling.type must be one of " f"{{{', '.join(sorted(supported))}}} to apply correctly"),
             passes=(rtype in supported),
             severity=Severity.BLOCKER,
-            fix="If type is 'mrope', a new RoPE kernel is required - inference will diverge from HF otherwise.",
-            source="models/tt_transformers/tt/rope.py (rope_scaling_model_factory)",
+            fix=(
+                f"tt_transformers/tt/rope.py:304 only handles {sorted(supported)}. "
+                f"Type {rtype!r} would raise ValueError at model "
+                f"instantiation. Either map this type to one of the "
+                f"supported ones in a model_params override, or extend "
+                f"`rotary_embedding_factory` with a new branch."
+            ),
+            source="models/tt_transformers/tt/rope.py:304 (rotary_embedding_factory)",
         )
-    ]
+    )
+    return out
 
 
 def check_alibi(cfg: dict, _tp: int) -> List[KernelFinding]:

@@ -1,7 +1,3 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
-# SPDX-License-Identifier: Apache-2.0
-
 """
 TTNN device helper.
 
@@ -21,11 +17,9 @@ import contextlib
 from typing import Optional, Tuple
 
 
-# ttnn is imported lazily so the module can be imported without tt-metal
-# installed (the rest of the planner runs without it).
 def _ttnn():
     try:
-        import ttnn  # type: ignore
+        import ttnn
 
         return ttnn
     except ImportError as e:
@@ -87,7 +81,6 @@ def usable_bytes_per_chip(
     layout = ttnn.TILE_LAYOUT if probe_layout == "TILE" else ttnn.ROW_MAJOR_LAYOUT
 
     def try_alloc(size_gb: float) -> bool:
-        # Tile-aligned 2D tensor.  We use a square-ish shape rounded to 32.
         bytes_total = int(size_gb * 1e9)
         elems = bytes_total // bytes_per_elem
         side = int(elems**0.5)

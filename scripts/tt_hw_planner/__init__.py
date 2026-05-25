@@ -1,7 +1,3 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
-# SPDX-License-Identifier: Apache-2.0
-
 """
 tt_hw_planner — pre-flight memory planner for Tenstorrent hardware.
 
@@ -24,7 +20,7 @@ See cli.py for the CLI surface.
 
 __version__ = "0.2.0"
 
-from .probe import ModelProbe, probe_model  # noqa: F401
-from .verdict import FitVerdict, FitRow, Tightness  # noqa: F401
-from .hardware import Box, HARDWARE  # noqa: F401
-from .architecture import MemoryModel  # noqa: F401
+from .probe import ModelProbe, probe_model
+from .verdict import FitVerdict, FitRow, Tightness
+from .hardware import Box, HARDWARE
+from .architecture import MemoryModel

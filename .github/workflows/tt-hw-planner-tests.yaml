@@ -1,0 +1,41 @@
+name: tt_hw_planner tests
+
+on:
+  pull_request:
+    paths:
+      - "scripts/tt_hw_planner/**"
+      - ".github/workflows/tt-hw-planner-tests.yaml"
+  push:
+    branches:
+      - main
+    paths:
+      - "scripts/tt_hw_planner/**"
+      - ".github/workflows/tt-hw-planner-tests.yaml"
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    name: scripts/tt_hw_planner unit tests (offline)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install minimal test deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+
+      - name: Run offline tt_hw_planner tests
+        run: |
+          python -m pytest scripts/tt_hw_planner/tests/ \
+            -v --no-header \
+            -m "not network and not gpu and not hardware" \
+            --deselect scripts/tt_hw_planner/tests/test_reuse_registry.py::TestModuleTreeIntegration

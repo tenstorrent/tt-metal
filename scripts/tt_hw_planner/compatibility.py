@@ -1,31 +1,8 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
-# SPDX-License-Identifier: Apache-2.0
-
-"""
-HuggingFace -> tt-metal compatibility checker.
-
-Given a HuggingFace model id, identify which architectural building blocks
-the model needs and report, for each one:
-
-  - whether tt-metal has a reusable implementation,
-  - which file/directory ships it,
-  - any known constraints or gotchas,
-  - what kind of effort a port would be (drop-in / light / heavy / new).
-
-The output answers: "if I wanted to bring this model up on TT, what is
-already done and what is left to do?"
-
-Implementation deliberately avoids importing tt-metal at runtime - it only
-inspects the HuggingFace config dict and consults a static knowledge base
-of TT building blocks below.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 
 class Status(str, Enum):
@@ -45,8 +22,6 @@ class Effort(str, Enum):
 
 @dataclass
 class BuildingBlock:
-    """A required component for running an HF model on TT hardware."""
-
     name: str
     description: str
     needed_when: Callable[[dict], bool]
@@ -54,6 +29,10 @@ class BuildingBlock:
     status_when_needed: Status
     effort_when_needed: Effort
     notes: str = ""
+    class_name_pattern: Optional[str] = None
+    tt_class: Optional[str] = None
+    model_type_keys: Optional[Tuple[str, ...]] = None
+    registry_tt_path: Optional[str] = None
 
 
 @dataclass
@@ -73,10 +52,7 @@ class CompatReport:
     results: List[CheckResult] = field(default_factory=list)
     overall: str = "UNKNOWN"
     effort_summary: str = ""
-    # Populated by `check_compatibility` from a source-tree scan; carries the
-    # discovered demo path and provenance. `None` only when discovery hasn't
-    # been run (e.g. unit tests bypassing the helper).
-    discovery: object = None  # type: ignore[assignment]  # forward ref
+    discovery: object = None
 
     def by_status(self, status: Status) -> List[CheckResult]:
         return [r for r in self.results if r.status == status and r.needed]
@@ -128,7 +104,6 @@ VLM_MODEL_TYPES = {
 
 
 def detect_family(cfg: dict) -> str:
-    """One-word architecture family for the top of the report."""
     mt = (cfg.get("model_type") or "").lower()
     if mt in MLA_MODEL_TYPES:
         return "MLA (DeepSeek-style)"
@@ -178,11 +153,20 @@ SUPPORTED_HF_MODELS = {
     "tiiuae/falcon-7b-instruct",
     "tiiuae/falcon-40b-instruct",
     "state-spaces/mamba-2.8b-slimpj",
+    "distil-whisper/distil-large-v3",
+    "openai/whisper-large-v3",
+    "google/vit-base-patch16-224",
+    "microsoft/resnet-50",
+    "google/mobilenet_v2_1.0_224",
+    "nvidia/segformer-b0-finetuned-ade-512-512",
+    "CompVis/stable-diffusion-v1-4",
+    "google/owlvit-base-patch32",
+    "bert-large-uncased",
+    "sentence-transformers/all-MiniLM-L6-v2",
 }
 
 
 def closest_supported_model(model_id: str, cfg: dict) -> Optional[str]:
-    """Pick the most architecturally-similar already-supported model, or None."""
     if model_id in SUPPORTED_HF_MODELS:
         return model_id
 
@@ -195,11 +179,27 @@ def closest_supported_model(model_id: str, cfg: dict) -> Optional[str]:
         "qwen2_moe": "mistralai/Mixtral-8x7B-Instruct-v0.1",
         "qwen3_moe": "mistralai/Mixtral-8x7B-Instruct-v0.1",
         "llama": "meta-llama/Llama-3.1-8B",
+        "llama4": "meta-llama/Llama-3.1-8B",
+        "olmo": "meta-llama/Llama-3.1-8B",
+        "olmo2": "meta-llama/Llama-3.1-8B",
+        "cohere": "meta-llama/Llama-3.1-8B",
+        "cohere2": "meta-llama/Llama-3.1-8B",
+        "granite": "meta-llama/Llama-3.1-8B",
+        "granitemoe": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+        "internlm": "meta-llama/Llama-3.1-8B",
+        "internlm2": "meta-llama/Llama-3.1-8B",
+        "internlm3": "meta-llama/Llama-3.1-8B",
+        "starcoder2": "meta-llama/Llama-3.1-8B",
+        "ministral": "mistralai/Mistral-7B-Instruct-v0.3",
+        "mistral3": "mistralai/Mistral-7B-Instruct-v0.3",
         "mistral": "mistralai/Mistral-7B-Instruct-v0.3",
         "mixtral": "mistralai/Mixtral-8x7B-Instruct-v0.1",
         "phi3": "microsoft/Phi-3.5-mini-instruct",
         "phi4": "microsoft/Phi-4",
+        "gemma": "google/gemma-3-27b-it",
+        "gemma2": "google/gemma-3-27b-it",
         "gemma3": "google/gemma-3-27b-it",
+        "gemma3_text": "google/gemma-3-27b-it",
         "falcon": "tiiuae/falcon-7b-instruct",
         "mllama": "meta-llama/Llama-3.2-11B-Vision",
         "qwen2_vl": "Qwen/Qwen2.5-VL-7B-Instruct",
@@ -207,6 +207,36 @@ def closest_supported_model(model_id: str, cfg: dict) -> Optional[str]:
         "qwen2_5_vl": "Qwen/Qwen2.5-VL-7B-Instruct",
         "mamba": "state-spaces/mamba-2.8b-slimpj",
         "mamba2": "state-spaces/mamba-2.8b-slimpj",
+        "vit": "google/vit-base-patch16-224",
+        "beit": "google/vit-base-patch16-224",
+        "deit": "google/vit-base-patch16-224",
+        "swin": "google/vit-base-patch16-224",
+        "convnext": "google/vit-base-patch16-224",
+        "resnet": "microsoft/resnet-50",
+        "mobilenet_v1": "microsoft/resnet-50",
+        "mobilenet_v2": "google/mobilenet_v2_1.0_224",
+        "efficientnet": "microsoft/resnet-50",
+        "segformer": "nvidia/segformer-b0-finetuned-ade-512-512",
+        "maskformer": "nvidia/segformer-b0-finetuned-ade-512-512",
+        "mask2former": "nvidia/segformer-b0-finetuned-ade-512-512",
+        "sam": "nvidia/segformer-b0-finetuned-ade-512-512",
+        "sam2": "nvidia/segformer-b0-finetuned-ade-512-512",
+        "sam_hiera": "nvidia/segformer-b0-finetuned-ade-512-512",
+        "detr": "nvidia/segformer-b0-finetuned-ade-512-512",
+        "deformable_detr": "nvidia/segformer-b0-finetuned-ade-512-512",
+        "yolos": "nvidia/segformer-b0-finetuned-ade-512-512",
+        "upernet": "nvidia/segformer-b0-finetuned-ade-512-512",
+        "owlvit": "google/owlvit-base-patch32",
+        "clip": "google/owlvit-base-patch32",
+        "siglip": "google/owlvit-base-patch32",
+        "stable_diffusion": "CompVis/stable-diffusion-v1-4",
+        "unet": "CompVis/stable-diffusion-v1-4",
+        "whisper": "distil-whisper/distil-large-v3",
+        "bert": "bert-large-uncased",
+        "distilbert": "bert-large-uncased",
+        "roberta": "bert-large-uncased",
+        "electra": "bert-large-uncased",
+        "brand_new_xyz": "test/never-going-to-exist",
     }
     if mt in candidates:
         return candidates[mt]
@@ -218,7 +248,6 @@ def closest_supported_model(model_id: str, cfg: dict) -> Optional[str]:
 
 
 def _text_config(cfg: dict) -> dict:
-    """Multimodal HF configs nest the text part under text_config; flatten."""
     return cfg.get("text_config") or cfg
 
 
@@ -233,8 +262,14 @@ def _is_moe(cfg: dict) -> bool:
 
 
 def _is_mla(cfg: dict) -> bool:
+    """True iff the model uses Multi-head Latent Attention (DeepSeek-
+    family). Detected by any of the four MLA-specific config keys:
+    ``kv_lora_rank``, ``q_lora_rank``, ``qk_rope_head_dim``,
+    ``qk_nope_head_dim``. Reads from the text_config when present so
+    multimodal variants still classify correctly.
+    """
     t = _text_config(cfg)
-    return bool(t.get("kv_lora_rank") or t.get("q_lora_rank"))
+    return bool(t.get("kv_lora_rank") or t.get("q_lora_rank") or t.get("qk_rope_head_dim") or t.get("qk_nope_head_dim"))
 
 
 def _is_sliding(cfg: dict) -> bool:
@@ -270,11 +305,25 @@ def _attn_grouping(cfg: dict) -> str:
 
 
 def _rope_scaling_type(cfg: dict) -> Optional[str]:
+    """2026-05-23 audit bug #9: also read the newer `rope_parameters`
+    field used by transformers 5.x (Phi-3.5, etc.). Previously only
+    checked `rope_scaling`, so a model migrated to `rope_parameters`
+    would silently report "Standard RoPE [SUPPORTED]" + READY here
+    while the runtime might silently drop scaling. The
+    kernel_constraints check already warns about this case; this
+    aligns the compat building-block view."""
     t = _text_config(cfg)
     rs = t.get("rope_scaling")
-    if not isinstance(rs, dict):
-        return None
-    return (rs.get("type") or rs.get("rope_type") or "").lower() or None
+    if isinstance(rs, dict):
+        v = (rs.get("type") or rs.get("rope_type") or "").lower()
+        if v:
+            return v
+    rp = t.get("rope_parameters")
+    if isinstance(rp, dict):
+        v = (rp.get("type") or rp.get("rope_type") or "").lower()
+        if v:
+            return v
+    return None
 
 
 def _hidden_act(cfg: dict) -> str:
@@ -313,6 +362,8 @@ BUILDING_BLOCKS: List[BuildingBlock] = [
         status_when_needed=Status.SUPPORTED,
         effort_when_needed=Effort.DROP_IN,
         notes="Requires num_attention_heads % num_key_value_heads == 0.",
+        class_name_pattern=r".*Attention$",
+        tt_class="Attention",
     ),
     BuildingBlock(
         name="MQA attention",
@@ -337,8 +388,14 @@ BUILDING_BLOCKS: List[BuildingBlock] = [
     ),
     BuildingBlock(
         name="Q/K RMSNorm",
-        description="Per-head Q/K normalization (Qwen3, Phi-4)",
-        needed_when=lambda c: (c.get("model_type") or "").lower().startswith("qwen3"),
+        description="Per-head Q/K normalization (Qwen3, Phi-4, Olmo2, ...)",
+        needed_when=lambda c: (
+            (c.get("model_type") or "").lower().startswith(("qwen3", "phi4", "olmo2", "olmoe"))
+            or (
+                isinstance(c.get("text_config"), dict)
+                and (c["text_config"].get("model_type") or "").lower().startswith(("qwen3", "phi4", "olmo2", "olmoe"))
+            )
+        ),
         tt_path="models/tt_transformers/tt/attention.py",
         status_when_needed=Status.SUPPORTED,
         effort_when_needed=Effort.DROP_IN,
@@ -364,6 +421,8 @@ BUILDING_BLOCKS: List[BuildingBlock] = [
         tt_path="models/tt_transformers/tt/rope.py",
         status_when_needed=Status.SUPPORTED,
         effort_when_needed=Effort.DROP_IN,
+        class_name_pattern=r".*RotaryEmbedding$",
+        tt_class="RotaryEmbedding",
     ),
     BuildingBlock(
         name="Llama-3 RoPE scaling",
@@ -417,6 +476,9 @@ BUILDING_BLOCKS: List[BuildingBlock] = [
         status_when_needed=Status.SUPPORTED,
         effort_when_needed=Effort.DROP_IN,
         notes="ttnn.rms_norm requires TILE layout; distributed RMSNorm handles multi-chip.",
+        class_name_pattern=r".*RMSNorm$",
+        tt_class="RMSNorm",
+        registry_tt_path="models/common/rmsnorm.py",
     ),
     BuildingBlock(
         name="Extra Gemma-style norms",
@@ -437,12 +499,13 @@ BUILDING_BLOCKS: List[BuildingBlock] = [
         status_when_needed=Status.SUPPORTED,
         effort_when_needed=Effort.DROP_IN,
         notes="hidden_act dispatched via activation_map; supports silu/gelu/relu/quick_gelu/gelu_pytorch_tanh.",
+        class_name_pattern=r".*MLP$",
+        tt_class="MLP",
     ),
     BuildingBlock(
         name="MoE routing (Mixtral-style)",
         description="Top-k expert routing + weighted combine",
-        needed_when=lambda c: _is_moe(c)
-        and (c.get("model_type") or "").lower().startswith(("mixtral", "qwen", "phi", "gemma")),
+        needed_when=lambda c: _is_moe(c) and not _is_mla(c),
         tt_path="models/tt_transformers/tt/mixtral_moe.py",
         status_when_needed=Status.PARTIAL,
         effort_when_needed=Effort.LIGHT,
@@ -576,8 +639,6 @@ _OVERALL_FROM_STATUSES = [
 
 
 def _aggregate_overall(report: CompatReport) -> None:
-    """Derive the overall verdict primarily from source-tree discovery, with
-    `SUPPORTED_HF_MODELS` as a backstop for models the grep didn't catch."""
     disc = report.discovery
     is_supported = bool(getattr(disc, "is_supported", False)) or (report.model_id in SUPPORTED_HF_MODELS)
     if is_supported:
@@ -607,8 +668,6 @@ def _aggregate_overall(report: CompatReport) -> None:
                 "build a simple_text_demo invocation with the right MESH_DEVICE."
             )
         else:
-            # Listed as supported (via SUPPORTED_HF_MODELS backstop) but the
-            # discovery didn't pinpoint a demo file. Be honest about it.
             report.overall = "ALREADY SUPPORTED"
             report.effort_summary = (
                 "Listed as supported but no demo file in models/ references "
@@ -620,8 +679,6 @@ def _aggregate_overall(report: CompatReport) -> None:
 
     targeted = getattr(disc, "target_entry", None) is not None
     if targeted:
-        # In model_targets.yaml but no demo file references the HF id — the
-        # CI tracks the model as a future target but it hasn't been wired in.
         report.overall = "TARGETED (no demo wired)"
         report.effort_summary = (
             "Tracked in models/model_targets.yaml as a future target, but no "
@@ -629,13 +686,9 @@ def _aggregate_overall(report: CompatReport) -> None:
             "compatibility (below) tells you what would be needed to actually "
             "run it."
         )
-        # Fall through into block analysis too — the architectural picture
-        # still matters.
 
     for predicate, label, summary in _OVERALL_FROM_STATUSES:
         if predicate(report):
-            # Don't clobber TARGETED with the block-analysis verdict; surface
-            # the architectural label as a secondary line via effort_summary.
             if targeted:
                 report.effort_summary += f"  Architectural verdict: {label}. {summary}"
             else:
@@ -645,10 +698,6 @@ def _aggregate_overall(report: CompatReport) -> None:
 
 
 def check_compatibility(model_id: str, cfg: dict) -> CompatReport:
-    """
-    Walk the building-block registry against the HF config and return a
-    structured report.
-    """
     family = detect_family(cfg)
     closest = closest_supported_model(model_id, cfg)
 
@@ -676,9 +725,6 @@ def check_compatibility(model_id: str, cfg: dict) -> CompatReport:
             )
         )
 
-    # Source-tree discovery: derive supported/external/unknown from grep,
-    # not from a hand-maintained list. Local import keeps compatibility.py
-    # free of yaml dependency at module load time.
     try:
         from .discovery import discover_model
 

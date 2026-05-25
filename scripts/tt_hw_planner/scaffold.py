@@ -1,31 +1,10 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
-# SPDX-License-Identifier: Apache-2.0
-
-"""
-First-draft port generator for new HuggingFace models.
-
-`prepare` answers "how do I run a model that tt-metal already knows about".
-`scaffold` answers "what minimal set of edits would make tt-metal know about
-this new model?".
-
-Strictly limited scope: only handles the `READY` compat verdict (all building
-blocks already exist; the model just isn't wired into tt_transformers's
-config tables). For `FEASIBLE WITH WORK` / `BLOCKED` it refuses with a useful
-pointer at the closest sibling / missing block.
-
-Output is a unified diff plus a manifest of new files to copy from the
-closest already-ported sibling. `--apply` writes the changes into the working
-tree; otherwise nothing on disk is touched.
-"""
-
 from __future__ import annotations
 
 import difflib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from .bringup import (
     MODEL_CONFIG_PATH,
@@ -33,18 +12,22 @@ from .bringup import (
     TRACE_REGION_PATH,
     derive_base_model_name,
 )
+from .bringup_plan import (
+    NEW,
+    BringUpPlan,
+    build_bringup_plan,
+    collect_bringup_plan_files,
+)
 from .compatibility import Status, check_compatibility
+from .family_backends import pick_backend
 from .probe import probe_model
+from .scaffold_demo_folder import collect_demo_folder_changes
 
 
 MODEL_PARAMS_DIR = REPO_ROOT / "models" / "tt_transformers" / "model_params"
 
 
 def _find_sibling_params_dir(sibling_tail: str, sibling_base: str) -> Optional[Path]:
-    """Locate the sibling's model_params directory.  The repo names these
-    inconsistently — sometimes the HF tail (`Qwen3-32B`), sometimes with an
-    `-Instruct` / `-it` suffix (`Qwen2.5-7B-Instruct`, `gemma-3-27b-it`).
-    Try the exact tail first, then a one-name-startswith match on the base."""
     if not MODEL_PARAMS_DIR.is_dir():
         return None
     candidate = MODEL_PARAMS_DIR / sibling_tail
@@ -55,18 +38,46 @@ def _find_sibling_params_dir(sibling_tail: str, sibling_base: str) -> Optional[P
 
 
 class ScaffoldError(RuntimeError):
-    """Raised when scaffold can't proceed and the caller should print a clean
-    error to the user."""
+    pass
+
+
+class ColdStartScaffoldError(ScaffoldError):
+    """2026-05-23 cold-start signal: scaffold cannot produce a per-model
+    `tt/` folder (no closest sibling, or the architecture doesn't fit the
+    standard ``tt_transformers`` template), but the caller CAN still attempt
+    to run the model "from scratch" via a generic, architecture-portable
+    demo such as ``models/tt_transformers/demo/simple_text_demo.py``.
+
+    Catchers in ``cli.cmd_up`` are expected to:
+      1. Print a clear warning that this is a Hail-Mary cold-start
+         (no per-model TTNN tuning).
+      2. Re-dispatch to ``prepare --execute`` so the user gets one
+         automated attempt to run the model on tt-metal.
+      3. If ``prepare`` itself fails, surface a coherent message
+         pointing to ``compatibility.py`` + ``family_backends.py``
+         as the spots where someone could add proper support.
+
+    Subclass of ``ScaffoldError`` so existing call sites that only
+    catch ``ScaffoldError`` keep working (the message includes a
+    "(cold-start: try `...`)" hint)."""
+
+    def __init__(self, model_id: str, reason: str, suggested_cmd: Optional[str] = None):
+        self.model_id = model_id
+        self.reason = reason
+        self.suggested_cmd = suggested_cmd
+        suffix = f" (cold-start: try `{suggested_cmd}`)" if suggested_cmd else " (cold-start path available)"
+        super().__init__(reason + suffix)
 
 
 @dataclass
 class ScaffoldChange:
-    kind: str  # "edit" | "create"
-    path: str  # repo-relative
-    diff: Optional[str] = None  # for edits: unified diff for display
-    new_content: Optional[bytes] = None  # full post-change file bytes
-    source: Optional[str] = None  # for creates: copied-from path (repo-relative)
+    kind: str
+    path: str
+    diff: Optional[str] = None
+    new_content: Optional[bytes] = None
+    source: Optional[str] = None
     added_lines: int = 0
+    preserve_if_exists: bool = False
 
 
 @dataclass
@@ -82,18 +93,11 @@ class ScaffoldPlan:
     changes: List[ScaffoldChange] = field(default_factory=list)
     skipped: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# Table-line insertion (line-based, preserves formatting)
-# ---------------------------------------------------------------------------
+    new_demo_dir: Optional[str] = None
+    bringup_plan: Optional[BringUpPlan] = None
 
 
 def _insert_after_sibling_in_table(src: str, sibling_key: str, new_key: str) -> Optional[str]:
-    """Find the line that defines `"<sibling_key>": {...},` and clone it under
-    `"<new_key>": {...},`.  The `{` requirement makes us match only inside the
-    chunk-size / trace-region tables (whose values are dicts), not unrelated
-    tables like `base_model_tokenizer_mapping` (whose values are strings)."""
     lines = src.splitlines(keepends=True)
     pattern = re.compile(rf'^(\s*)"{re.escape(sibling_key)}"\s*:\s*(\{{.*)$')
     for i, line in enumerate(lines):
@@ -107,8 +111,6 @@ def _insert_after_sibling_in_table(src: str, sibling_key: str, new_key: str) -> 
 
 
 def _table_key_present(src: str, key: str) -> bool:
-    """True if `key` is a dict-valued entry anywhere in the file (i.e. an
-    entry in one of the tuning tables, not a tokenizer-mapping string entry)."""
     return bool(re.search(rf'^\s*"{re.escape(key)}"\s*:\s*\{{', src, re.MULTILINE))
 
 
@@ -137,15 +139,13 @@ def _build_table_insert(file_path: Path, sibling_key: str, new_key: str) -> Opti
     )
 
 
-# ---------------------------------------------------------------------------
-# Plan
-# ---------------------------------------------------------------------------
-
-
 def plan_scaffold(new_model_id: str) -> ScaffoldPlan:
     probe = probe_model(new_model_id)
     if not probe.raw_config:
         raise ScaffoldError(f"could not load config.json for {new_model_id} — set HF_TOKEN for gated repos")
+
+    if probe.category not in {"LLM", "VLM"}:
+        return _plan_demo_folder_scaffold(new_model_id=new_model_id, probe=probe)
 
     compat = check_compatibility(new_model_id, probe.raw_config)
 
@@ -170,21 +170,43 @@ def plan_scaffold(new_model_id: str) -> ScaffoldPlan:
             "Scaffolding can't help; new TTNN kernel work is required first."
         )
 
-    # Scaffold accepts READY *and* FEASIBLE WITH WORK provided there are no
-    # MISSING blocks — PARTIAL blocks emit a warning per block but don't
-    # block the diff, because the table entries + JSON copies are valid
-    # regardless of those known runtime limitations.
     if compat.overall not in ("READY", "FEASIBLE WITH WORK"):
         raise ScaffoldError(f"unexpected compat verdict {compat.overall!r}; refusing to scaffold")
+
+    try:
+        from .family_backends import pick_backend
+
+        _be = pick_backend(
+            category=probe.category,
+            model_type=(probe.raw_config or {}).get("model_type"),
+            pipeline_tag=getattr(probe, "pipeline_tag", None),
+        )
+        if _be is not None and getattr(_be, "routing_mode", "") == "generic":
+            raise ColdStartScaffoldError(
+                new_model_id,
+                f"{new_model_id} uses a GENERIC LLM/VLM backend "
+                f"(`{_be.name}` / `{_be.demo_path}`). Scaffolding "
+                f"copies a per-model `tt/` folder from a sibling; "
+                f"generic backends don't have one (the demo is "
+                f"architecture-portable and reads HF_MODEL from the "
+                f"env)",
+                suggested_cmd=(f"python -m scripts.tt_hw_planner prepare " f"{new_model_id} --execute"),
+            )
+    except ScaffoldError:
+        raise
+    except Exception:
+        pass
 
     sibling_id = compat.similar_supported_model
     if not sibling_id:
         family = compat.architecture_family
-        raise ScaffoldError(
-            f"no closest already-ported sibling found for architecture family '{family}'. "
-            "Scaffold needs a sibling to copy from; this model is the first of its kind "
-            "in tt-metal. Add an entry for the model_type in `closest_supported_model()` "
-            "or port a sibling first."
+
+        raise ColdStartScaffoldError(
+            new_model_id,
+            f"no closest already-ported sibling found for architecture "
+            f"family '{family}'. This model is the first of its kind in "
+            f"tt-metal; there's nothing to copy from",
+            suggested_cmd=(f"python -m scripts.tt_hw_planner prepare {new_model_id} --execute"),
         )
 
     new_base = derive_base_model_name(new_model_id)
@@ -252,8 +274,6 @@ def plan_scaffold(new_model_id: str) -> ScaffoldPlan:
     for r in partial_blocks:
         warnings.append(f"{r.block.name} is PARTIAL — {r.notes or r.block.notes or 'see compatibility.py'}")
 
-    # Heuristic: warn when the size mismatch is large enough that the copied
-    # chunk-size row probably wants editing.
     if probe.total_params and edit1:
         sibling_probe = None
         try:
@@ -273,7 +293,10 @@ def plan_scaffold(new_model_id: str) -> ScaffoldPlan:
     if not changes:
         raise ScaffoldError(
             "nothing to scaffold — sibling had no entries to copy, and no new "
-            "model_params files to create. Manual port required."
+            "model_params files to create. This typically means the sibling lives "
+            "outside `tt_transformers/` (e.g. a vision/audio demo). Run "
+            "`tt_hw_planner prepare <model>` to see the routed family backend "
+            "(closest demo) you can adapt manually."
         )
 
     return ScaffoldPlan(
@@ -291,9 +314,99 @@ def plan_scaffold(new_model_id: str) -> ScaffoldPlan:
     )
 
 
-# ---------------------------------------------------------------------------
-# Apply
-# ---------------------------------------------------------------------------
+def _plan_demo_folder_scaffold(*, new_model_id: str, probe: Any) -> ScaffoldPlan:
+    model_type = (probe.raw_config or {}).get("model_type")
+    pipeline_tag = getattr(probe, "pipeline_tag", None)
+    backend = pick_backend(category=probe.category, model_type=model_type, pipeline_tag=pipeline_tag)
+    if backend is None:
+        raise ColdStartScaffoldError(
+            new_model_id,
+            f"no tt-metal family backend registered for " f"category={probe.category!r}",
+            suggested_cmd=(f"python -m scripts.tt_hw_planner auto-onboard " f"{new_model_id} --apply"),
+        )
+
+    creates, skipped, warnings = collect_demo_folder_changes(
+        backend=backend,
+        new_model_id=new_model_id,
+        repo_root=REPO_ROOT,
+    )
+
+    if not creates and not skipped:
+        raise ScaffoldError(
+            f"backend `{backend.name}` produced no files to scaffold — the source "
+            f"demo folder `{backend.demo_path}` may be missing or empty."
+        )
+
+    changes: List[ScaffoldChange] = []
+    for target_rel, new_content, source_rel in creates:
+        changes.append(
+            ScaffoldChange(
+                kind="create",
+                path=str(target_rel),
+                new_content=new_content,
+                source=str(source_rel),
+                added_lines=new_content.count(b"\n"),
+            )
+        )
+
+    sibling_id = backend.canonical_hf_id or backend.name
+    new_tail = new_model_id.split("/")[-1]
+    sibling_tail = backend.canonical_hf_id.split("/")[-1] if backend.canonical_hf_id else Path(backend.demo_path).name
+
+    backend_parent = Path(backend.demo_path).parent
+    from .scaffold_demo_folder import _slug as _scaffold_slug
+
+    new_demo_dir = str(backend_parent / _scaffold_slug(new_tail))
+
+    bplan: Optional[BringUpPlan] = None
+    try:
+        bplan = build_bringup_plan(
+            new_model_id=new_model_id,
+            new_cfg=probe.raw_config or {},
+            backend=backend,
+            repo_root=REPO_ROOT,
+        )
+        for target_rel, content, label in collect_bringup_plan_files(
+            plan=bplan,
+            new_demo_dir_rel=Path(new_demo_dir),
+        ):
+            preserve = "NEW-stub" in label
+            changes.append(
+                ScaffoldChange(
+                    kind="create",
+                    path=str(target_rel),
+                    new_content=content,
+                    source=None,
+                    added_lines=content.count(b"\n"),
+                    preserve_if_exists=preserve,
+                )
+            )
+    except Exception as exc:
+        warnings.append(f"bring-up plan generation failed: {exc}")
+
+    summary_extra = ""
+    if bplan is not None:
+        c = bplan.counts
+        summary_extra = (
+            f" Component plan: {c.get('REUSE', 0)} REUSE / "
+            f"{c.get('ADAPT', 0)} ADAPT / {c.get('NEW', 0)} NEW — see BRING_UP_PLAN.md."
+        )
+
+    return ScaffoldPlan(
+        new_model_id=new_model_id,
+        new_base_name=derive_base_model_name(new_model_id),
+        new_tail=new_tail,
+        sibling_model_id=sibling_id,
+        sibling_base_name=Path(backend.demo_path).name,
+        sibling_tail=sibling_tail,
+        compat_overall=f"FAMILY TEMPLATE ({probe.category})",
+        compat_summary=(f"Scaffolded from `{backend.name}` ({backend.demo_path})." + summary_extra),
+        changes=changes,
+        skipped=skipped,
+        warnings=warnings,
+        new_demo_dir=new_demo_dir,
+        bringup_plan=bplan,
+    )
 
 
 def apply_scaffold(plan: ScaffoldPlan) -> List[str]:
@@ -302,6 +415,9 @@ def apply_scaffold(plan: ScaffoldPlan) -> List[str]:
         target = REPO_ROOT / ch.path
         target.parent.mkdir(parents=True, exist_ok=True)
         if ch.new_content is None:
+            continue
+        if ch.preserve_if_exists and target.exists():
+            applied.append(f"-  {ch.path}  (preserved; already exists)")
             continue
         if ch.kind == "edit":
             target.write_bytes(ch.new_content)
@@ -312,9 +428,31 @@ def apply_scaffold(plan: ScaffoldPlan) -> List[str]:
     return applied
 
 
-# ---------------------------------------------------------------------------
-# Renderers
-# ---------------------------------------------------------------------------
+def _render_bringup_summary(bp: BringUpPlan) -> str:
+    counts = bp.counts
+    lines: List[str] = []
+    lines.append("  Component status (REUSE/ADAPT/NEW):")
+    lines.append(
+        f"    Summary: {counts.get('REUSE', 0)} REUSE, " f"{counts.get('ADAPT', 0)} ADAPT, {counts.get('NEW', 0)} NEW"
+    )
+    lines.append("")
+    name_w = max((len(c.name) for c in bp.components), default=10)
+    name_w = min(max(name_w, 10), 26)
+    for c in bp.components:
+        target = c.tt_reuse_target or c.hf_reference or "—"
+        lines.append(f"    [{c.status:5s}]  {c.name.ljust(name_w)}  {target}")
+    new_only = [c for c in bp.components if c.status == NEW]
+    if new_only:
+        lines.append("")
+        lines.append(
+            f"  Missing components — {len(new_only)} stub(s) generated under `_stubs/` "
+            "(replace `NotImplementedError` with a real TTNN port):"
+        )
+        for c in new_only:
+            ref = c.hf_reference or "(no HF reference resolved)"
+            lines.append(f"    !  {c.name}  ->  ref: {ref}")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def render_text(plan: ScaffoldPlan, *, show_diff: bool = True) -> str:
@@ -339,6 +477,9 @@ def render_text(plan: ScaffoldPlan, *, show_diff: bool = True) -> str:
             if ch.source:
                 out.append(f"          copied from {ch.source}")
     out.append("")
+
+    if plan.bringup_plan is not None:
+        out.append(_render_bringup_summary(plan.bringup_plan))
 
     if plan.warnings:
         out.append("  Warnings (review before applying):")
@@ -384,9 +525,25 @@ def render_apply(plan: ScaffoldPlan, applied: List[str]) -> str:
     out.append(f"    python -m scripts.tt_hw_planner prepare {plan.new_model_id} --execute")
     out.append("")
     out.append("  To undo:")
-    out.append("    git restore models/tt_transformers/tt/model_config.py")
-    out.append("    git restore models/tt_transformers/demo/trace_region_config.py")
-    out.append(f"    rm -rf models/tt_transformers/model_params/{plan.new_tail}/")
+    if plan.compat_overall.startswith("FAMILY TEMPLATE"):
+        if plan.new_demo_dir:
+            out.append(f"    rm -rf {plan.new_demo_dir}")
+        out.append("")
+        if plan.bringup_plan is not None and plan.new_demo_dir:
+            out.append("  Component-level bring-up plan written to:")
+            out.append(f"    {plan.new_demo_dir}/BRING_UP_PLAN.md")
+            out.append(f"    {plan.new_demo_dir}/bringup_status.json")
+            out.append("")
+            out.append(_render_bringup_summary(plan.bringup_plan))
+        out.append("  Workflow:")
+        out.append("    1. Read BRING_UP_PLAN.md.  REUSE rows = import the sibling tt-module unchanged.")
+        out.append("    2. ADAPT rows = edit shape constants in the cloned tt-file (same name).")
+        out.append("    3. NEW rows   = replace the matching `_stubs/*.py` with a real TTNN port.")
+        out.append("    4. Once every NEW stub is implemented, re-run `prepare --execute`.")
+    else:
+        out.append("    git restore models/tt_transformers/tt/model_config.py")
+        out.append("    git restore models/tt_transformers/demo/trace_region_config.py")
+        out.append(f"    rm -rf models/tt_transformers/model_params/{plan.new_tail}/")
     out.append("")
     out.append(sep)
     return "\n".join(out)
@@ -416,9 +573,6 @@ def render_json(plan: ScaffoldPlan, applied: Optional[List[str]] = None) -> str:
 
 
 def render_patch(plan: ScaffoldPlan) -> str:
-    """Concatenate the edit diffs into a single `git apply`-compatible patch.
-    New-file creations are listed in a manifest header (they can't be
-    represented as a clean text diff without dumping the full contents)."""
     parts: List[str] = []
     creates = [ch for ch in plan.changes if ch.kind == "create"]
     if creates:
