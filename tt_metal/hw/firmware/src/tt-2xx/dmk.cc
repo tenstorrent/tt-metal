@@ -82,6 +82,7 @@ uint32_t _start() {
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
 #if defined(NOC_API_V2)
+        overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
         noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 #endif
     }
