@@ -450,11 +450,16 @@ class TTSeamlessM4Tv2Model:
         ttnn.synchronize_device(self.device)
 
     def clear_runtime_program_cache(self) -> None:
-        """Drop JIT programs and per-shape conv prep caches so the next modality fits in L1."""
+        """Drop JIT programs and per-shape conv/matmul prep caches so the next modality fits in L1."""
         self.device.disable_and_clear_program_cache()
         self.vocoder._conv1d_prepared_cache.clear()
+        self.vocoder._matmul_pc_cache.clear()
         self.speech_encoder._conv1d_prepared_cache.clear()
+        self.speech_encoder._matmul_pc_cache.clear()
         self.t2u._conv1d_prepared_cache.clear()
+        self.t2u._matmul_pc_cache.clear()
+        self.text_decoder._matmul_pc_cache.clear()
+        self.text_encoder._dram_matmul_pc_cache.clear()
 
     # ------------------------------------------------------------------
     # Internal pieces
@@ -1633,21 +1638,6 @@ class TTSeamlessM4Tv2Model:
         if int(padding_tt.shape[1]) != unit_seq:
             padding_tt = ttnn.slice(padding_tt, [0, 0], [pad_batch, unit_seq], (1, 1))
 
-        # Scale vocoder timeline with decoded text; cap avoids BH upsample L1 failures on
-        # pathological greedy loops while staying much longer than the old 256-unit cap.
-        _text_new_tokens = max(0, len(seq_host) - seed_len)
-        _vocoder_max_units = min(unit_seq, max(512, _text_new_tokens * 6), 1536)
-        if unit_seq > _vocoder_max_units:
-            unit_seq = _vocoder_max_units
-            padding_tt = ttnn.slice(padding_tt, [0, 0], [pad_batch, unit_seq], (1, 1))
-            t2u_logits_tt = ttnn.slice(
-                t2u_logits_tt,
-                [0, 0, 0],
-                [batch_size, unit_seq, int(t2u_logits_tt.shape[-1])],
-                (1, 1, 1),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
         if t2u_logits_tt.get_layout() != ttnn.TILE_LAYOUT:
             t2u_tile = ttnn.to_layout(t2u_logits_tt, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(t2u_logits_tt)
@@ -1670,8 +1660,6 @@ class TTSeamlessM4Tv2Model:
             unit_rm = ttnn.to_layout(unit_ids_argmax, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(unit_ids_argmax)
             unit_ids_argmax = unit_rm
-        # Preserve a copy for the ``unit_sequences`` output before vocoder remapping.
-        output_unit_ids_tt = ttnn.clone(unit_ids_argmax, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Unit id remap matches HF ``masked_fill`` + offset; done on host for PCC (device ``where`` diverged).
         if padding_tt.dtype != ttnn.bfloat16:
@@ -1697,6 +1685,14 @@ class TTSeamlessM4Tv2Model:
         pad_host = to_torch_replicated_first_shard(pad_bf).to(_torch.float32)
         ttnn.deallocate(unit_ids_argmax)
         ttnn.deallocate(pad_bf)
+
+        output_unit_ids_tt = ttnn.from_torch(
+            unit_host.to(_torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         rm_host = (unit_host == int(self.t2u_eos_token_id)) | (pad_host < 0.5)
 
@@ -1734,8 +1730,6 @@ class TTSeamlessM4Tv2Model:
         # Drop cached conv1d/L1 programs from text decode + T2U before vocoder (long unit_seq
         # otherwise exceeds per-core L1 when programs accumulate in the demo's T2TT→T2ST flow).
         self.clear_runtime_program_cache()
-        self.vocoder._conv1d_prepared_cache.clear()
-        self.vocoder._matmul_pc_cache.clear()
         ttnn.synchronize_device(self.device)
         wav_tt, lengths_tt = self.vocoder.forward(vocoder_input, spk_tt, voc_tt)
         ttnn.deallocate(vocoder_input)
