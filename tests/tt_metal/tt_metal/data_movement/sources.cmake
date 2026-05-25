@@ -21,6 +21,7 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     interleaved_to_sharded_hardcoded/test_interleaved_to_sharded_hardcoded.cpp
     multi_interleaved/test_multi_interleaved.cpp
     dram_sharded/test_dram_sharded.cpp
+    dram_sharded/test_dram_oversubscribed.cpp
     transaction_id/test_transaction_id.cpp
     direct_write/test_direct_write.cpp
     pcie_read_bw/test_pcie_read_bw.cpp
