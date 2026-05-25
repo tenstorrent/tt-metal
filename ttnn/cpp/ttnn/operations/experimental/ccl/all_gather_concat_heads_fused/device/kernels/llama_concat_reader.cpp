@@ -50,8 +50,8 @@ void batch_loop(
     uint32_t start_row) {
     uint32_t q_write_addr = cb_write_ptr_base + start * output_row_size;
     for (uint32_t q = start; q < end; ++q) {
-        // Legacy primitive retained (#45003 item 4): source is a precomposed uint64_t NoC address and destination is
-        // a raw offset into a pre-resolved CB write pointer (cb_write_ptr_base + start * output_row_size + ...).
+        // Device 2.0 migration: legacy primitive retained: source is a precomposed uint64_t NoC address
+        // and destination is a raw offset into a pre-resolved CB write pointer.
         noc_async_read(qkv_read_addr, q_write_addr, output_row_size);
         q_write_addr += output_row_size;
         cur_core_idx++;

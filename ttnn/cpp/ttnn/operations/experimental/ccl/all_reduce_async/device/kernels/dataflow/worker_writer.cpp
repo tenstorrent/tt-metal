@@ -162,10 +162,8 @@ void kernel_main() {
     }
 
     // 2. local semaphore increment
-    // Legacy primitive retained (#45003 item 4): out_ready_sem_bank_addr is the address of a GlobalSemaphore
-    // (operation_attributes.semaphore in all_reduce_async_program_factory.cpp). GlobalSemaphore exposes only
-    // address() — there is no id(). Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot
-    // wrap a GlobalSemaphore. This is structural, not a migration backlog item.
+    // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is the address of a GlobalSemaphore.
+    // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore.
     for (uint32_t i = 0; i < core_id; i++) {
         noc_semaphore_inc(safe_get_noc_addr(core_noc_x[i], core_noc_y[i], out_ready_sem_bank_addr), 1);
     }

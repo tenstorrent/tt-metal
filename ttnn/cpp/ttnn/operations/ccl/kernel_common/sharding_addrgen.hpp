@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -263,8 +263,8 @@ struct ShardedAddrGen {
         return return_val;
     }
 
-    // Legacy shim (#45003 item 4): uses the legacy noc_async_read primitive
-    // because get_sharded_addr produces a precomposed 64-bit noc address.
+    // Uses the legacy noc_async_read primitive because get_sharded_addr
+    // produces a precomposed 64-bit noc address.
     // Consumers migrating to Device 2.0 should use get_noc_addr() / its
     // components together with Noc::async_read directly.
     FORCE_INLINE

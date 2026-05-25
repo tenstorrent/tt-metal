@@ -11,13 +11,10 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <array>
 
-// Legacy shim (#45003 item 4): consumes raw L1 addresses and uses legacy noc_semaphore_* primitives.
-// The semaphores in question are local (created via tt_metal::CreateSemaphore), and OpSignaler already does
-// the id→address translation via get_semaphore(id) on the kernel side before calling this helper, so the
-// shim could be migrated to take an id-based interface. Out of scope here: 12 of the 13 caller kernels are
-// still on the legacy data-movement API, so flipping the interface would either break them all at once or
-// require a parallel id-based overload. Revisit as part of the helper-shim removal PR once callers migrate.
-// Called by the master worker to synchronize with the slave workers
+// Consumes raw L1 addresses and uses legacy noc_semaphore_* primitives.
+// These semaphores are local (created via tt_metal::CreateSemaphore), and OpSignaler already does
+// the id to address translation via get_semaphore(id) on the kernel side before calling this helper.
+// TODO (Issue 45003): refactor to take an id-based interface.
 FORCE_INLINE void master_sync_slaves(
 
     /* Used to get slave worker's sem addrs */
@@ -71,8 +68,7 @@ FORCE_INLINE void master_sync_slaves(
     }
 }
 
-// Legacy shim (#45003 item 4): same status as master_sync_slaves above.
-// Called by the slave worker to synchronize with the master worker
+// TODO (Issue 45003): refactor to take an id-based interface.
 FORCE_INLINE void slave_sync_master(const uint32_t* worker_noc_coords, const uint32_t worker_sync_sem_addr) {
     // Signal the master that the slave has finished its work
     uint64_t remote_master_l1_semaphore_addr =

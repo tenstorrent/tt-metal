@@ -164,11 +164,10 @@ void kernel_main() {
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
-    // Legacy primitive retained (#45003 item 4): out_ready_sem_bank_addr is the address of a GlobalSemaphore
-    // (operation_attributes.semaphore in all_gather_concat_program_factory.cpp). GlobalSemaphore exposes only
-    // address() — there is no id(). Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot
-    // wrap a GlobalSemaphore. Structural limitation, not a migration backlog item.
-    // increment locally
+    // Device 2.0 migration: out_ready_sem_bank_addr is the address of a GlobalSemaphore.
+    // GlobalSemaphore exposes only address() — there is no id(), which is a structural limitation.
+    // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot
+    // wrap a GlobalSemaphore.
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
@@ -180,8 +179,8 @@ void kernel_main() {
     }
 
     // Set up for mcasting to concat workers
-    // Legacy primitives retained (#45003 item 4): defensive set + raw L1 read-check pattern does not map to
-    // Semaphore<> (which exposes set/wait but not raw-pointer value reads).
+    // Device 2.0 migration: legacy primitives retained: set + raw L1 read pattern does not map to
+    // Semaphore<>, which exposes set/wait but not raw-pointer value reads.
     if (wait_output_semaphore) {
         volatile tt_l1_ptr uint32_t* concat_semaphore_send_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(concat_semaphore_send_addr);
@@ -238,8 +237,7 @@ void kernel_main() {
     }
 
     if (reset_global_semaphore) {
-        // Legacy primitive retained (#45003 item 4): out_ready_sem_bank_addr is a GlobalSemaphore address (see
-        // structural-reason note above on the inc site).
+        // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is a GlobalSemaphore address.
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
     }
 
