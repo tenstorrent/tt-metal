@@ -1,523 +1,832 @@
-# Tensix Performance Counters Guide
+# LLK Performance Counters Guide
 
-This guide documents the interface for controlling and reading Tensix hardware performance counters. It covers how to configure and read them from C++ and Python, which useful derived metrics you can compute, and how to test both the interface and the metrics. It consolidates the hardware documentation and aligns it with the implemented interfaces found in this repository.
+## Quick Links
+- C++ macro and HW programming: [tests/helpers/include/counters.h](../../tests/helpers/include/counters.h)
+- Run-type enum and mock helpers: [tests/helpers/include/perf.h](../../tests/helpers/include/perf.h)
+- Profiler zone macros (NC build): [tests/helpers/include/profiler.h](../../tests/helpers/include/profiler.h)
+- Python config + raw read: [tests/python_tests/helpers/counters.py](../../tests/python_tests/helpers/counters.py)
+- Python derived metrics: [tests/python_tests/helpers/metrics.py](../../tests/python_tests/helpers/metrics.py)
+- Python test driver: [tests/python_tests/helpers/perf.py](../../tests/python_tests/helpers/perf.py)
+- Test sources: [tests/sources/](../../tests/sources/) (files ending in `_perf.cpp`)
+- Pytest CLI registration: [tests/python_tests/conftest.py](../../tests/python_tests/conftest.py)
+- Upstream tech report (metal-level): [tech_reports/PerfCounters/perf-counters.md](../../../../tech_reports/PerfCounters/perf-counters.md)
 
 ## Overview
 
-Tensix cores contain five hardware performance counter banks (also referred to as "groups" in some hardware documentation). This guide consistently uses the term "bank".
+This guide documents the LLK test-suite interface for collecting Tensix hardware performance counters. The LLK suite runs bare-metal kernels in `tests/sources/*_perf.cpp` directly on the TRISC cores. There is no firmware or NoC stack involved, so the counter-collection path is implemented entirely inside the test kernels: a C++ macro arms and freezes the hardware counters around a measured scope, writes the snapshot to a fixed L1 buffer, and the host process reads that buffer back from outside the kernel.
+
+Tensix cores contain five hardware performance counter banks. Every bank exposes two values per measurement: total elapsed cycles (`OUT_L`) and an event count for the selected `counter_sel` (`OUT_H`). The Python driver enumerates every per-architecture counter slot, configures the HW, runs the kernel, then iterates each slot to pull both values out into a pandas DataFrame and optionally a CSV. Derived metrics (utilisation %, stall %, backpressure %, composite ratios) are computed in Python on top of the raw counts.
 
 | Bank | Description |
 |------|-------------|
-| INSTRN_THREAD | Instruction issue counts and stall reasons per thread |
-| FPU | FPU and SFPU operation valid signals |
-| TDMA_UNPACK | Unpacker busy signals and math pipeline status |
-| L1 | NoC ring transactions and L1 arbitration events |
-| TDMA_PACK | Packer busy signals and destination register access |
+| INSTRN_THREAD | Per-thread instruction issue counts, availability, and stall reasons |
+| FPU | FPU and SFPU active cycles |
+| TDMA_UNPACK | Unpacker busy signals, math pipeline status, srcA/B write port and overwrite signals |
+| TDMA_PACK | Packer busy, dest-read availability, math availability |
+| L1 | NoC ring transactions and L1 port arbitration (mux-selected) |
 
-Each category has debug registers for control and two output registers:
-- `PERF_CNT_*0`: Reference period (optional, only used in mode 1)
-- `PERF_CNT_*1`: Mode + counter select
-- `PERF_CNT_*2`: Start/stop (rising-edge triggered)
-- `PERF_CNT_OUT_L_*`: Cycles counted in the measurement window
-- `PERF_CNT_OUT_H_*`: Event-specific count for the selected counter
+## How It Works
 
-Special registers:
-- `PERF_CNT_ALL`: Start/stop for FPU and INSTRN_THREAD groups simultaneously
-- `PERF_CNT_MUX_CTRL`: L1 counter multiplexer control register
+### Two builds, one test source
 
-### L1 Mux Control Register
+Every test source under `tests/sources/*_perf.cpp` is compiled twice from the same C++ file. The build is selected by two preprocessor flags:
 
-The L1 bank has 8 counter IDs (0–7), but the hardware provides 16 different signals to monitor. The `PERF_CNT_MUX_CTRL` register (bit 4) selects which set of 8 signals maps to those IDs:
+| Build | `LLK_PROFILER` | `PERF_COUNTERS_COMPILED` | Active macro | What it measures |
+|-------|----------------|--------------------------|--------------|------------------|
+| NC (no counters) | defined | undefined | `ZONE_SCOPED` | Per-zone wall-clock cycles (`RISCV_DEBUG_REG_WALL_CLOCK_L`) |
+| WC (with counters) | defined | defined | `MEASURE_PERF_COUNTERS` | Per-zone HW counter snapshot |
 
-| Bit 4 | Counter ID 0–7 Maps To |
-|-------|------------------------|
-| 0 | NOC Ring 0 transactions, L1 arbitration bundles, unpacker arbitration |
-| 1 | NOC Ring 1 transactions, TDMA bundle arbitration, extended unpacker/packer signals |
+Both macros nest with each other in the source — every `MEASURE_PERF_COUNTERS("name")` is paired 1:1 with a `ZONE_SCOPED("name")` in the same scope. Only one of the two is non-empty in any given build, so wall-clock measurements and counter measurements are **never** taken simultaneously and cannot perturb each other. The host driver runs whichever build is needed and merges the resulting DataFrames by zone name.
 
-You must set this mux bit **before starting** the L1 counters to ensure you're measuring the intended signals. The L1 mux setting is latched at measurement start time. Changing `PERF_CNT_MUX_CTRL` while counters are running results in undefined measurements.
+Source-side, this is the pattern:
 
-### Mode Register Bits
+```cpp
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+    {
+        MEASURE_PERF_COUNTERS("INIT")
+        ZONE_SCOPED("INIT")
+        // ... unpack hw_configure, math_init, pack_init ...
+    }
 
-The mode register (`PERF_CNT_*1`) controls counter selection:
+    for (uint32_t tile = 0; tile < TILE_CNT; ++tile)
+    {
+        MEASURE_PERF_COUNTERS("BODY")
+        ZONE_SCOPED("BODY")
+        // ... per-tile work ...
+    }
+}
+```
 
-| Bits | Field | Description |
-|------|-------|-------------|
-| 7:0 | mode | Counting behavior (see below) |
-| 16:8 | counter_sel | Selects which counter event to read via `OUT_H` (9 bits, supports counter IDs 0–511) |
-| 31:17 | reserved | Reserved for future use |
+### `PerfRunType` and the split arm/freeze model
 
-**Counting modes:**
+Each LLK perf test is associated with a `PerfRunType` (declared in `perf.h`):
 
-| Mode | Behavior |
-|------|----------|
-| 0 (Continuous) | Counter runs until explicitly stopped. Maintains reference cycle count in `OUT_L`. |
-| 1 (Reference period) | Counter automatically stops after the number of cycles specified in `PERF_CNT_*0`. |
-| 2 (Continuous, no ref) | Same as mode 0, but does NOT maintain the reference cycle count. |
+| Run type | Purpose | Arm thread | Freeze thread |
+|----------|---------|-----------|---------------|
+| `L1_TO_L1` | End-to-end pipeline cycles, unpack → pack | UNPACK | PACK |
+| `L1_CONGESTION` | Pipeline cycles under L1 traffic contention | UNPACK | PACK |
+| `UNPACK_ISOLATE` | Unpack-only kernels (no math/pack) | UNPACK | UNPACK |
+| `MATH_ISOLATE` | Math/SFPU-only kernels (no unpack/pack) | MATH | MATH |
+| `PACK_ISOLATE` | Pack-only kernels (no unpack/math) | PACK | PACK |
 
-**Mode 0 vs Mode 2:** Both run continuously until stopped. Mode 0 tracks elapsed cycles in `OUT_L` (needed for rate calculations), while mode 2 omits reference cycle tracking. **Use mode 0 for most cases** since you typically need both event counts and cycle counts. Mode 2 should only be used when cycle counts are not required.
+The arm thread runs first in the natural pipeline, the freeze thread runs last. For end-to-end measurements (`L1_TO_L1`, `L1_CONGESTION`) the window opens when unpack starts producing and closes when pack stops consuming. For single-thread isolate modes the same thread arms and freezes — the other two threads are idle for the run type and only participate in the entry/exit barrier.
 
-**Note:** The reference period register is ignored in modes 0 and 2.
+The arm/freeze split is determined at compile time by `is_arm_thread<run_type>()` and `is_freeze_thread<run_type>()` in `counters.h`.
 
-### Counter Slots
+### The `MEASURE_PERF_COUNTERS` macro
 
-A "counter slot" is a single 32-bit configuration word in the per-thread L1 configuration buffer. Each slot (one config word) specifies which bank/counter/mux combination to read out after measurement. The interface supports up to 86 slots per thread, allowing you to capture multiple events in a single measurement window. Slots are processed in increasing index order; invalid slots (valid bit = 0) are skipped and produce no output entry.
+Expands to a `perf_counter_scoped<PERF_RUN_TYPE>` RAII object. Its constructor and destructor execute the following sequence (only on the WC build):
 
-## Register Map
+1. **Constructor (zone entry).** The **arm thread** writes the rising-edge start bit to `PERF_CNT_ALL` (FPU + INSTRN), `PERF_CNT_TDMA_UNPACK2`, `PERF_CNT_L1_2`, and `PERF_CNT_TDMA_PACK2`, clearing all banks and starting the count. It then posts the entry semaphore (`pc_buf` slot `FPU_SFPU`) twice. The two non-arm threads spinwait on that semaphore, then `semaphore_get` it. The barrier guarantees no thread is inside the measured scope before the arm thread has armed the HW.
 
-The following addresses are used (offsets from `RISCV_DEBUG_REGS_START_ADDR`):
+2. **Body.** All three threads run the work inside the scope. Counters tick continuously on the shared backend.
+
+3. **Destructor (zone exit).** The **freeze thread** writes the rising-edge stop bit to the same four registers, then walks the shared 200-word config buffer at `0x169000` and reads every valid slot. For each slot it programs the bank's mode register with the `counter_sel`, reads `OUT_H` (the event count), and stores the value in the per-zone data area. The bank's elapsed-cycles value (`OUT_L`) is sampled once per bank from the first slot. After all slots are read it posts the exit semaphore (`pc_buf` slot `UNPACK_TO_DEST`) twice. The two non-freeze threads spinwait then `semaphore_get` the exit semaphore.
+
+Each zone gets its own data block in L1 (see [L1 Layout](#l1-layout-and-zone-buffers)) so multiple measurement scopes in the same kernel produce independent snapshots. The kernel may contain up to `PERF_COUNTERS_MAX_ZONES = 8` distinct zone names; identical names share a zone.
+
+The `pc_buf` semaphores are the cheapest synchronisation primitive available on Tensix — they're consumed by the backend without involving the FPU or unpacker pipelines, so the barrier itself contributes negligible cycles to the measured window.
+
+### Configure-once from BRISC
+
+Before any TRISC kernel runs, BRISC executes `configure_and_arm_from_brisc()` once (called from `brisc.cpp` when the WC build flag is set). This:
+
+- Writes the per-architecture `BUILTIN_COUNTER_CONFIG` (130 slots on WH, 169 on BH) into the shared L1 config buffer at `0x169000`.
+- Clears every per-zone data area and sync word.
+- Programs each bank's reference-period and mode registers, sets `PERF_CNT_MUX_CTRL` for L1, and does an initial global arm (later overridden by the first `MEASURE_PERF_COUNTERS` zone).
+
+After BRISC releases the TRISCs, the shared config is read-only for the rest of the run.
+
+### Reading results from host
+
+After the kernel completes:
+
+1. The host process reads the per-zone data area back from device L1.
+2. `read_counters()` decodes each 32-bit config word (bit 31 valid, bits 7:0 bank, bits 16:8 `counter_sel`, bits 19:17 `l1_mux`), looks up the human-readable counter name from the per-architecture inventory, and pairs every event count with that zone's bank cycle count.
+3. The result is a long-format DataFrame: one row per `(zone, bank, counter_id, l1_mux)` tuple with columns `cycles`, `count`, and (optionally) derived metrics from `compute_metrics()`.
+
+Because both wall-clock cycles (NC build, `ZONE_SCOPED` start/end timestamps from `RISCV_DEBUG_REG_WALL_CLOCK_L`) and HW counter cycles (WC build, `OUT_L`) are tagged with the same zone name, the test driver merges them by `(test_variant, zone)`.
+
+## How to Run
+
+The LLK test suite uses a two-phase pytest flow: a compile-producer phase that builds every variant in parallel and a compile-consumer phase that runs them on hardware.
+
+```bash
+cd $LLK_HOME/tests
+export CHIP_ARCH=blackhole   # or wormhole / quasar
+
+# Phase 1 — build all variants (no HW access)
+pytest --compile-producer --enable-perf-counters -n 8 -x ./python_tests/perf_eltwise_binary_fpu.py
+
+# Phase 2 — run on HW
+pytest --compile-consumer --enable-perf-counters -x ./python_tests/perf_eltwise_binary_fpu.py
+```
+
+The `--enable-perf-counters` flag triggers two things:
+
+1. Test sources are compiled with `-DPERF_COUNTERS_COMPILED` (the WC build). BRISC is compiled with the same flag so it runs `configure_and_arm_from_brisc()` once at startup.
+2. The Python driver runs `read_counters()` per variant after the kernel finishes and merges raw counts into the result CSV.
+
+Without the flag the suite still runs the same sources but builds the NC variant, and only `ZONE_SCOPED` wall-clock data is collected.
+
+### CLI flags
+
+| Flag | Implies `--enable-perf-counters` | Effect |
+|------|----------------------------------|--------|
+| `--enable-perf-counters` | — | Build the WC variant and collect raw counters per zone |
+| `--dump-raw-counters` | yes | Print raw HW counter values to the console per variant |
+| `--dump-raw-metrics` | yes | Print derived efficiency metrics (utilisation, stall, BP %) to the console |
+| `--dump-csv-counters` | yes | Export raw counter values to a separate `<test>.counters.csv` alongside the main results CSV |
+
+Any of `--dump-raw-counters`, `--dump-raw-metrics`, or `--dump-csv-counters` implicitly enables counter collection; you don't need to specify `--enable-perf-counters` separately.
+
+### Output
+
+For each test variant, the WC build emits:
+
+- A row per `(zone, bank, counter_id, l1_mux)` in the main results DataFrame, with raw `cycles` and `count` columns.
+- A `*.counters.csv` file if `--dump-csv-counters` was passed.
+- A merged metrics summary (Min / Median / Max / Avg of every derived metric across variants) if `--dump-raw-metrics` was passed.
+
+The NC build emits per-zone wall-clock cycle counts in the same results DataFrame so a single run with both builds (different pytest invocations) can be merged off-line to compare wall-clock cycles against counter-derived cycle counts.
+
+## Architecture Summary
+
+| | Wormhole | Blackhole |
+|---|---|---|
+| INSTRN_THREAD slots in inventory | 59 | 59 |
+| FPU slots | 3 | 3 |
+| TDMA_UNPACK slots | 22 | 22 |
+| TDMA_PACK slots | 14 | 5 |
+| L1 mux positions (Tensix) | 2 | 5 |
+| L1 slots in inventory | 32 (16 × 2 mux) | 80 (16 × 5 mux) |
+| Total slots in `BUILTIN_COUNTER_CONFIG` | 130 | 169 |
+| Total config words in L1 | 200 (rest are zero-padded) | 200 |
+
+**Wormhole** has `PACK_COUNT = 4` (per-engine packer busy signals are live in RTL), so `TDMA_PACK` exposes counters 11–18 for per-engine busy and 267–272 for per-engine dest-read availability and grant counts. The L1 mux is 1-bit wide: position 0 covers NoC Ring 0 plus L1 arbitration, position 1 covers NoC Ring 1 plus TDMA-extended signals.
+
+**Blackhole** has `PACK_COUNT = 1`; per-engine packer busy and dest-read signals for engines 1–3 are tied to constants in RTL and are omitted from the inventory. Only counters 11, 18, 267, 271, 272 remain on the `TDMA_PACK` bank. BH compensates with more L1 mux positions (3 extra) which expose additional NoC rings and miscellaneous L1 ports.
+
+**INSTRN_THREAD bank.** Counters 0–23 are per-thread instruction-type availability (CFG/SYNC/THCON/XSEARCH/MOVE/FPU/UNPACK/PACK, 3 threads each). Counters 24–26 are per-thread total stall cycles. The stall-reason layout differs:
+
+- WH: shared stall reasons (SRCA/B clear/valid) are replicated three times each (counters 27–38), then per-thread stall reasons occupy counters 39–65.
+- BH: shared stall reasons occupy single slots (27–30), per-thread stall reasons occupy 31–57.
+
+Bit-8-extended counters 256/264/272 expose `THREAD_INSTRUCTIONS_{0,1,2}` (one per per-thread instance), and 283 exposes `ANY_THREAD_STALL`. The full per-arch inventory is in `BUILTIN_COUNTER_CONFIG[]` inside `counters.h`.
+
+## L1 Layout and Zone Buffers
+
+Counter state lives at a fixed L1 address determined entirely at compile time. No allocator is involved.
+
+```
+0x169000 +────────────────────────────────────────────+
+         │ Shared config:  200 words × 4 = 800 bytes │  Slot encoding:
+         │   bit 31     = valid                      │   bit 31     valid
+         │   bits 19:17 = l1_mux                     │   bits 19:17 l1_mux
+         │   bits 16:8  = counter_sel                │   bits 16:8  counter_sel
+         │   bits 7:0   = bank_id                    │   bits 7:0   bank_id
+0x169320 +────────────────────────────────────────────+
+         │ Zone 0 cycles (5 words: one per bank)    │
+         │ Zone 0 data   (200 words: counter values) │
+         │ Zone 0 sync   (40 bytes; SYNC flag + pad) │  = PERF_COUNTERS_ZONE_SIZE
+         +────────────────────────────────────────────+
+         │ Zone 1 cycles / data / sync               │
+         │ ...                                       │
+         │ Zone 7 cycles / data / sync               │
+         +────────────────────────────────────────────+
+         │ Enabled flag (4 bytes)                    │
+         │ Bank mask    (4 bytes)                    │
+         │ Per-zone valid counts (8 words)           │
+         +────────────────────────────────────────────+
+```
+
+The layout is bounded by a `static_assert` to stay below `0x16AFF4` (the profiler region boundary). Each zone reserves `PERF_COUNTERS_ZONE_SIZE = (5 + 200) × 4 + 40 = 860` bytes, supporting up to `PERF_COUNTERS_MAX_ZONES = 8` zones per kernel.
+
+The 200-word shared config supplies a single source of truth for which counters are recorded for every zone. There is no per-zone configuration — every zone records the same set of counters but stores its own snapshot.
+
+## Hardware Register Reference
+
+The following addresses are used (offsets from `RISCV_DEBUG_REGS_START_ADDR = 0xFFB12000`):
 
 | Register | Offset | Description |
 |----------|--------|-------------|
-| PERF_CNT_INSTRN_THREAD0 | 0x000 | Reference period |
-| PERF_CNT_INSTRN_THREAD1 | 0x004 | Mode |
-| PERF_CNT_INSTRN_THREAD2 | 0x008 | Start/Stop |
-| PERF_CNT_TDMA_UNPACK0 | 0x00C | Reference period |
-| PERF_CNT_TDMA_UNPACK1 | 0x010 | Mode |
-| PERF_CNT_TDMA_UNPACK2 | 0x014 | Start/Stop |
-| PERF_CNT_FPU0 | 0x018 | Reference period |
-| PERF_CNT_FPU1 | 0x01C | Mode |
-| PERF_CNT_FPU2 | 0x020 | Start/Stop |
-| PERF_CNT_L1_0 | 0x030 | Reference period |
-| PERF_CNT_L1_1 | 0x034 | Mode |
-| PERF_CNT_L1_2 | 0x038 | Start/Stop |
-| PERF_CNT_ALL | 0x03C | Global start/stop |
-| PERF_CNT_TDMA_PACK0 | 0x0F0 | Reference period |
-| PERF_CNT_TDMA_PACK1 | 0x0F4 | Mode |
-| PERF_CNT_TDMA_PACK2 | 0x0F8 | Start/Stop |
-| PERF_CNT_OUT_L_INSTRN_THREAD | 0x100 | Cycle count output |
-| PERF_CNT_OUT_H_INSTRN_THREAD | 0x104 | Counter value output |
-| PERF_CNT_OUT_L_TDMA_UNPACK | 0x108 | Cycle count output |
-| PERF_CNT_OUT_H_TDMA_UNPACK | 0x10C | Counter value output |
-| PERF_CNT_OUT_L_TDMA_PACK | 0x110 | Cycle count output |
-| PERF_CNT_OUT_H_TDMA_PACK | 0x114 | Counter value output |
-| PERF_CNT_OUT_L_DBG_L1 | 0x118 | Cycle count output |
-| PERF_CNT_OUT_H_DBG_L1 | 0x11C | Counter value output |
-| PERF_CNT_OUT_L_FPU | 0x120 | Cycle count output |
-| PERF_CNT_OUT_H_FPU | 0x124 | Counter value output |
-| PERF_CNT_MUX_CTRL | 0x218 | L1 mux control |
+| `PERF_CNT_INSTRN_THREAD0` | 0x000 | Reference period (mode 1) |
+| `PERF_CNT_INSTRN_THREAD1` | 0x004 | Mode + counter_sel |
+| `PERF_CNT_INSTRN_THREAD2` | 0x008 | Start/Stop (rising edge) |
+| `PERF_CNT_TDMA_UNPACK0..2` | 0x00C–0x014 | Same triplet |
+| `PERF_CNT_FPU0..2` | 0x018–0x020 | Same triplet |
+| `PERF_CNT_L1_0..2` | 0x030–0x038 | Same triplet |
+| `PERF_CNT_ALL` | 0x03C | Global start/stop for FPU + INSTRN_THREAD |
+| `PERF_CNT_TDMA_PACK0..2` | 0x0F0–0x0F8 | Same triplet |
+| `PERF_CNT_OUT_L_INSTRN_THREAD` | 0x100 | Elapsed cycles for bank |
+| `PERF_CNT_OUT_H_INSTRN_THREAD` | 0x104 | Event count for selected `counter_sel` |
+| `PERF_CNT_OUT_L_TDMA_UNPACK` | 0x108 | … |
+| `PERF_CNT_OUT_H_TDMA_UNPACK` | 0x10C | … |
+| `PERF_CNT_OUT_L_TDMA_PACK` | 0x110 | … |
+| `PERF_CNT_OUT_H_TDMA_PACK` | 0x114 | … |
+| `PERF_CNT_OUT_L_DBG_L1` | 0x118 | … |
+| `PERF_CNT_OUT_H_DBG_L1` | 0x11C | … |
+| `PERF_CNT_OUT_L_FPU` | 0x120 | … |
+| `PERF_CNT_OUT_H_FPU` | 0x124 | … |
+| `PERF_CNT_MUX_CTRL` | 0x218 | L1 mux selector (bits 6:4) |
 
-Implementation details are in `tests/helpers/include/counters.h`.
+### Mode register (`PERF_CNT_*1`)
 
-## Events and Counters
+| Bits | Field | Description |
+|------|-------|-------------|
+| 7:0 | mode | 0 = continuous with cycle tracking; 1 = stop after `PERF_CNT_*0` cycles; 2 = continuous without cycle tracking |
+| 16:8 | counter_sel | Selects which counter event is routed to `OUT_H` |
+| 31:17 | reserved | — |
 
-### FPU Bank (3 counters)
+The macro path always uses mode 0. Mode 1 is unused in the LLK test suite. The `counter_sel` field is rewritten on each slot read so a single bank can multiplex multiple counters into one measurement window.
 
-| ID | Name | Description |
-|----|------|-------------|
-| 0 | FPU_INSTRUCTION | Cycles that FPU instructions were executed |
-| 1 | SFPU_INSTRUCTION | Cycles that SFPU instructions were executed |
-| 257 | FPU_OR_SFPU_INSTRN | Cycles that either FPU or SFPU instructions were executed (combined) |
+### Start/Stop register (`PERF_CNT_*2`)
 
-Use these to measure compute utilization: `FPU_OR_SFPU_INSTRN / cycles`. Note that all utilization metrics are cycle-based, not instruction-based—they represent the fraction of active cycles, not work completed.
+Rising-edge triggered. Bit 0 = start (0→1 also clears the counter), bit 1 = stop. The macro writes `1` then immediately writes `0` on both arm and freeze paths to guarantee the next arm sees a clean 0→1 transition.
 
-### INSTRN_THREAD Bank (61 counters)
+### L1 mux (`PERF_CNT_MUX_CTRL`)
 
-**Instruction availability counters:** These counters measure cycles where an instruction of a given type was available in the instruction buffer and ready to issue. A high count means the thread frequently had that instruction type queued; a low count (relative to total cycles) suggests the thread was idle or blocked waiting for other work. These are useful for understanding instruction mix and identifying pipeline bottlenecks.
+The L1 bank has 8 `counter_id` values (0–7) but hardware exposes 16 (WH) or 40 (BH) distinct signals. Bits 6:4 of `PERF_CNT_MUX_CTRL` select which set of 8 signals is routed:
 
-| ID | Name | Description |
-|----|------|-------------|
-| 0–2 | CFG_INSTRN_AVAILABLE_[0-2] | CFG instruction available per thread |
-| 3–5 | SYNC_INSTRN_AVAILABLE_[0-2] | SYNC instruction available per thread |
-| 6–8 | THCON_INSTRN_AVAILABLE_[0-2] | THCON instruction available per thread |
-| 9–11 | XSEARCH_INSTRN_AVAILABLE_[0-2] | XSEARCH instruction available per thread |
-| 12–14 | MOVE_INSTRN_AVAILABLE_[0-2] | MOVE instruction available per thread |
-| 15–17 | FPU_INSTRN_AVAILABLE_[0-2] | FPU/SFPU instruction available per thread |
-| 18–20 | UNPACK_INSTRN_AVAILABLE_[0-2] | UNPACK instruction available per thread |
-| 21–23 | PACK_INSTRN_AVAILABLE_[0-2] | PACK instruction available per thread |
-| 24–26 | THREAD_STALLS_[0-2] | Cycles the thread was stalled per thread |
+| Mux | WH meaning | BH meaning |
+|-----|------------|------------|
+| 0 | NoC Ring 0 + L1 arbitration + unpacker | NoC Ring 0 |
+| 1 | NoC Ring 1 + TDMA extended | NoC Ring 1 |
+| 2 | — | NoC Ring 2 |
+| 3 | — | NoC Ring 3 |
+| 4 | — | Misc L1 ports |
 
-**Wait reason counters:** Identify why the thread was waiting.
+The mux is latched at counter-start time. The macro path re-writes it before each slot read during freeze, so a single zone snapshot can contain counters from multiple mux positions interleaved.
 
-| ID | Name | Description |
-|----|------|-------------|
-| 27 | WAITING_FOR_SRCA_CLEAR | Cycles waiting for srcA to be cleared |
-| 28 | WAITING_FOR_SRCB_CLEAR | Cycles waiting for srcB to be cleared |
-| 29 | WAITING_FOR_SRCA_VALID | Cycles waiting for srcA data to be valid |
-| 30 | WAITING_FOR_SRCB_VALID | Cycles waiting for srcB data to be valid |
-| 31–33 | WAITING_FOR_THCON_IDLE_[0-2] | Cycles waiting for THCON idle per thread |
-| 34–36 | WAITING_FOR_UNPACK_IDLE_[0-2] | Cycles waiting for unpack idle per thread |
-| 37–39 | WAITING_FOR_PACK_IDLE_[0-2] | Cycles waiting for pack idle per thread |
-| 40–42 | WAITING_FOR_MATH_IDLE_[0-2] | Cycles waiting for math idle per thread |
-| 43–45 | WAITING_FOR_NONZERO_SEM_[0-2] | Cycles waiting for semaphore > 0 per thread |
-| 46–48 | WAITING_FOR_NONFULL_SEM_[0-2] | Cycles waiting for semaphore < max per thread |
-| 49–51 | WAITING_FOR_MOVE_IDLE_[0-2] | Cycles waiting for MOVE idle per thread |
-| 52–54 | WAITING_FOR_MMIO_IDLE_[0-2] | Cycles waiting for MMIO idle per thread |
-| 55–57 | WAITING_FOR_SFPU_IDLE_[0-2] | Cycles waiting for SFPU idle per thread |
+## Derived Metrics Reference
 
-**Thread instruction counts:** (Counter IDs 256–258, using bit 8 set)
+Derived metrics are computed in `tests/python_tests/helpers/metrics.py` from the raw counter DataFrame. They mirror the metric set in the metal-level [PerfCounters tech report](../../../../tech_reports/PerfCounters/perf-counters.md) but operate on per-zone snapshots from the LLK test suite rather than per-op aggregates. Every metric appears in the merged CSV as well as the `--dump-raw-metrics` console output.
 
-| ID | Name | Description |
-|----|------|-------------|
-| 256–258 | THREAD_INSTRUCTIONS_[0-2] | Total instructions executed per thread |
+---
 
-### TDMA_UNPACK Bank (11 counters)
+### Compute Utilisation
 
-**Note on HF cycles:** "HF" refers to "Half-Fidelity" cycles. In Tensix math operations, fidelity settings control precision vs speed tradeoffs. Higher fidelity (HiFi) uses more cycles per operation for better precision; lower fidelity (LoFi) uses fewer cycles. The HF cycle counts indicate how many half-fidelity-equivalent cycles the instruction consumed.
+**1. FPU Utilisation**
 
-| ID | Name | Description |
-|----|------|-------------|
-| 1 | DATA_HAZARD_STALLS_MOVD2A | Cycles stalled due to data hazards on MOVD2A |
-| 3 | MATH_INSTRN_STARTED | Math instructions started |
-| 4 | MATH_INSTRN_AVAILABLE | Math instructions available in buffer |
-| 5 | SRCB_WRITE_AVAILABLE | Cycles SRCB write port was available |
-| 6 | SRCA_WRITE_AVAILABLE | Cycles SRCA write port was available |
-| 7 | UNPACK0_BUSY_THREAD0 | Unpacker 0 busy cycles (thread 0) |
-| 8 | UNPACK1_BUSY_THREAD0 | Unpacker 1 busy cycles (thread 0) |
-| 9 | UNPACK0_BUSY_THREAD1 | Unpacker 0 busy cycles (thread 1) |
-| 10 | UNPACK1_BUSY_THREAD1 | Unpacker 1 busy cycles (thread 1) |
-| 259 | SRCB_WRITE | Actual SRCB writes completed |
-| 261 | SRCA_WRITE | Actual SRCA writes completed |
+Fraction of elapsed cycles the FPU was executing an instruction.
 
-### TDMA_PACK Bank (3 counters)
-
-| ID | Name | Description |
-|----|------|-------------|
-| 11 | PACKER_DEST_READ_AVAILABLE | Cycles destination data was available for packer to read |
-| 18 | PACKER_BUSY | Cycles packer was actively working |
-| 272 | AVAILABLE_MATH | Cycles math results were available for packing |
-
-### L1 Bank (16 counters via mux)
-
-**Mux bit 4 = 0:**
-
-| ID | Name | Description |
-|----|------|-------------|
-| 0 | NOC_RING0_INCOMING_1 | NOC ring 0 incoming channel 1 read/write |
-| 1 | NOC_RING0_INCOMING_0 | NOC ring 0 incoming channel 0 read/write |
-| 2 | NOC_RING0_OUTGOING_1 | NOC ring 0 outgoing channel 1 read/write |
-| 3 | NOC_RING0_OUTGOING_0 | NOC ring 0 outgoing channel 0 read/write |
-| 4 | L1_ARB_TDMA_BUNDLE_1 | L1 arbitration for TDMA bundle 1 |
-| 5 | L1_ARB_TDMA_BUNDLE_0 | L1 arbitration for TDMA bundle 0 |
-| 6 | L1_ARB_UNPACKER | L1 arbitration for unpacker |
-| 7 | L1_NO_ARB_UNPACKER | L1 no-arbitration unpacker path |
-
-**Mux bit 4 = 1:**
-
-| ID | Name | Description |
-|----|------|-------------|
-| 0 | NOC_RING1_INCOMING_1 | NOC ring 1 incoming channel 1 read/write |
-| 1 | NOC_RING1_INCOMING_0 | NOC ring 1 incoming channel 0 read/write |
-| 2 | NOC_RING1_OUTGOING_1 | NOC ring 1 outgoing channel 1 read/write |
-| 3 | NOC_RING1_OUTGOING_0 | NOC ring 1 outgoing channel 0 read/write |
-| 4 | TDMA_BUNDLE_1_ARB | TDMA bundle 1 arbitration |
-| 5 | TDMA_BUNDLE_0_ARB | TDMA bundle 0 arbitration |
-| 6 | TDMA_EXT_UNPACK_9_10 | TDMA extended unpacker interface |
-| 7 | TDMA_PACKER_2_WR | TDMA packer 2 write interface to L1 |
-
-## Memory Layout (Shared Buffer Architecture)
-
-Configuration and data buffers in L1 use a **single shared buffer** accessed by all TRISC threads (UNPACK, MATH, PACK, SFPU). The layout is architecture-dependent:
-
-- **Wormhole/Blackhole (3 TRISCs):** UNPACK, FPU/SFPU, PACK
-- **Quasar (4 TRISCs):** UNPACK, FPU/SFPU (SFPU optional), PACK, isolated SFPU
-
-Base layout: 86 config words (344 bytes) + 172 data words (688 bytes) + sync region. The sync region size depends on thread count (see below).
-
-| Buffer Component | Address | Size | Description |
-|-----------------|---------|------|-------------|
-| Config Buffer | 0x16A000 | 86 words (344 bytes) | Counter slot configurations (shared) |
-| Data Buffer | 0x16A158 | 172 words (688 bytes) | Counter results (written by last stopper) |
-| Sync Control Word | 0x16A408 | 1 word (4 bytes) | Synchronization state and starter/stopper IDs |
-
-The sync region also includes per-thread ATINCGET counters (start + stop) and a stop-elect ticket used for last-arrival detection. These are internal to the synchronization logic; see `counters.h` for addresses.
-
-**Shared Buffer Semantics:**
-- All threads (UNPACK, MATH, PACK, and SFPU on Quasar) call `start_perf_counters()` to set their start bits
-- The **first thread to call start** (when all start bits are 0) initializes hardware and is recorded as the "starter"
-- All threads call `stop_perf_counters()` to set their stop bits
-- The **last thread to call stop** (when all 3 stop bits become set on Wormhole/Blackhole, or all 4 on Quasar) reads hardware counters, writes results to the shared data buffer, and is recorded as the "stopper"
-- Python `read_counters()` returns the snapshot captured by the stopper, along with both starter and stopper thread IDs
-- **No mutex required**: Each thread atomically sets its own bit; checks are simple bit masks
-- **Reduces memory usage**: One shared config+data buffer instead of per-thread buffers (e.g. 1032 vs 3×1032 bytes for config+data on 3 TRISCs)
-
-**Sync Control Word Format:**
-
-The bit layout differs for 3 vs 4 TRISCs:
-
-*3 TRISCs (Wormhole/Blackhole) – bits 0–2 start, 3–5 stop:*
-
-| Bit(s) | Field | Description |
-|--------|-------|-------------|
-| 0 | started_unpack | UNPACK thread called start_perf_counters() |
-| 1 | started_math | MATH thread called start_perf_counters() |
-| 2 | started_pack | PACK thread called start_perf_counters() |
-| 3 | stopped_unpack | UNPACK thread called stop_perf_counters() |
-| 4 | stopped_math | MATH thread called stop_perf_counters() |
-| 5 | stopped_pack | PACK thread called stop_perf_counters() |
-| 6 | started_global | At least one thread started counters |
-| 7 | stopped_global | All threads stopped counters |
-| 9:8 | starter_id | Which thread started hardware (0=UNPACK, 1=MATH, 2=PACK) |
-| 11:10 | stopper_id | Which thread stopped hardware (0=UNPACK, 1=MATH, 2=PACK) |
-| 31:12 | reserved | Reserved for future use |
-
-*4 TRISCs (Quasar) – bits 0–3 start, 4–7 stop:*
-
-| Bit(s) | Field | Description |
-|--------|-------|-------------|
-| 0 | started_unpack | UNPACK thread called start_perf_counters() |
-| 1 | started_math | MATH thread called start_perf_counters() |
-| 2 | started_pack | PACK thread called start_perf_counters() |
-| 3 | started_sfpu | SFPU thread called start_perf_counters() |
-| 4 | stopped_unpack | UNPACK thread called stop_perf_counters() |
-| 5 | stopped_math | MATH thread called stop_perf_counters() |
-| 6 | stopped_pack | PACK thread called stop_perf_counters() |
-| 7 | stopped_sfpu | SFPU thread called stop_perf_counters() |
-| 8 | started_global | At least one thread started counters |
-| 9 | stopped_global | All threads stopped counters |
-| 11:10 | starter_id | Which thread started hardware (0=UNPACK, 1=MATH, 2=PACK, 3=SFPU) |
-| 13:12 | stopper_id | Which thread stopped hardware (0=UNPACK, 1=MATH, 2=PACK, 3=SFPU) |
-| 31:14 | reserved | Reserved for future use |
-
-**Config word encoding:** Each counter slot is a single 32-bit config word with the following format:
-
-| Bit(s) | Field | Description |
-|--------|-------|-------------|
-| 31 | valid | 1 if this slot is active |
-| 17 | l1_mux | L1 mux bit 4 value (only meaningful for L1 bank) |
-| 16:8 | counter_id | Counter ID within the bank (9 bits, supports IDs 0–511) |
-| 7:0 | bank_id | Bank ID (0=INSTRN_THREAD, 1=FPU, 2=TDMA_UNPACK, 3=L1, 4=TDMA_PACK) |
-
-**Data area:** After measurement, contains interleaved `(cycles, count)` pairs (2 words each) for each valid slot.
-
-## Performance Metrics
-
-Location: `tests/python_tests/helpers/metrics.py`
-
-The metrics module computes derived efficiency metrics from raw counter data. All metrics are ratios (0.0 to 1.0) where higher values indicate better efficiency.
-
-### Base Metrics
-
-**1. Unpacker Write Efficiency**
-
-Measures how efficiently unpackers use their busy cycles for writing data.
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | FPU |
 
 ```
-Unpacker0 Efficiency = SRCA_WRITE / UNPACK0_BUSY_THREAD0
-Unpacker1 Efficiency = SRCB_WRITE / UNPACK1_BUSY_THREAD0
-Combined Efficiency = Average of both unpackers
+FPU Util = FPU_INSTRUCTION / FPU_OUT_L * 100
 ```
 
-- **Higher ratio (→1.0)**: Unpacker spends most busy time writing data (efficient)
-- **Lower ratio (→0.0)**: Unpacker is busy but not writing (stalled/waiting)
+- **High value (>20%)**: FPU is the active compute unit. Expected for matmul, eltwise multiply.
+- **Low value (~0%)**: FPU is idle. Expected for SFPU-only or pure data-movement zones.
 
-**Use case:** Identifies unpacker stalls due to L1 memory contention or data dependencies.
+**Use case:** Primary indicator of compute utilisation for FPU-path kernels.
 
-**2. Packer Efficiency**
+---
 
-Measures how often the packer has valid destination data available when busy.
+**2. SFPU Utilisation**
 
-```
-Packer Efficiency = PACKER_DEST_READ_AVAILABLE / PACKER_BUSY
-```
+Fraction of cycles the SFPU was active.
 
-- **Higher ratio (→1.0)**: Packer has data available when busy (efficient)
-- **Lower ratio (→0.0)**: Packer is busy but waiting for destination data
-
-**Note:** Only valid with HW dvalid-based synchronization, not with STALLWAIT mode.
-
-**Use case:** Detects destination register stalls indicating math stage bottleneck.
-
-**3. FPU Execution Efficiency**
-
-Measures how efficiently the FPU executes when FPU instructions are available.
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | FPU |
 
 ```
-FPU Efficiency = FPU_INSTRUCTION / FPU_INSTRN_AVAILABLE_1
+SFPU Util = SFPU_INSTRUCTION / FPU_OUT_L * 100
 ```
 
-- **Higher ratio (→1.0)**: FPU executes whenever work is available (efficient)
-- **Lower ratio (→0.0)**: FPU instructions available but not executing (pipeline stalls)
+- **High value (>20%)**: SFPU-heavy kernel (sqrt, gelu, exp).
+- **Low value (~0%)**: SFPU unused (FPU-path or data movement).
 
-**Use case:** Distinguishes compute-bound (high FPU efficiency) from memory-bound (low FPU efficiency) workloads.
+**Use case:** Confirms whether a zone exercises the SFPU pipeline.
 
-### Experimental Metrics
+---
 
-These metrics provide additional pipeline analysis but may require additional tests and reviews.
+**3. Math Utilisation**
 
-**4. Math Pipeline Utilization (EXPERIMENTAL)**
+Combined FPU+SFPU active cycles. Counter 257 is the OR of both unit-active signals.
 
-Measures math instruction flow efficiency through the pipeline.
-
-```
-Math Pipeline Utilization = MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE
-```
-
-- **Higher ratio (→1.0)**: Math pipeline efficiently moves instructions (no pipe stalls)
-- **Lower ratio (→0.0)**: Instructions in pipe but not starting (pipeline stalled)
-
-**Use case:** Detects math pipeline stalls. Values consistently at 1.0 indicate excellent pipeline health.
-
-**5. Math-to-Pack Handoff Efficiency (EXPERIMENTAL)**
-
-Measures pipeline balance between math and packer stages.
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | FPU |
 
 ```
-Math-to-Pack Efficiency = AVAILABLE_MATH / PACKER_BUSY
+Math Util = FPU_OR_SFPU_INSTRN / FPU_OUT_L * 100
 ```
 
-- **Higher ratio (→1.0)**: Math keeps up with packer demand (good balance)
-- **Lower ratio (→0.0)**: Packer busy but math output isn't ready (math bottleneck)
+**Use case:** Single-number compute utilisation across FPU and SFPU.
 
-**Use case:** Identifies math stage as bottleneck when packer is starved for data.
+---
 
-**6. Unpacker-to-Math Data Flow (EXPERIMENTAL)**
+### Pipeline Efficiency
 
-Measures backpressure from math stage to unpackers.
+**4. Packer Efficiency**
 
-```
-Unpacker0 Data Flow = SRCA_WRITE_AVAILABLE / UNPACK0_BUSY_THREAD0
-Unpacker1 Data Flow = SRCB_WRITE_AVAILABLE / UNPACK1_BUSY_THREAD0
-Combined Data Flow = Average of both unpackers
-```
+Fraction of packer-busy cycles where destination data was available.
 
-- **Higher ratio (→1.0)**: Unpacker can write when busy, no backpressure (efficient)
-- **Lower ratio (→0.0)**: Unpacker busy but buffers full (math not consuming fast enough)
-
-**Use case:** Detects math stage backpressure causing unpacker stalls. Compare with Unpacker Write Efficiency to distinguish backpressure stalls from other stall types.
-
-### Metrics API
-
-**Functions:**
-
-| Function | Description |
-|----------|-------------|
-| `compute_metrics(df)` | Compute all metrics from counter DataFrame. Returns dictionary with raw counts, ratios, and percentages. |
-| `print_metrics(results)` | Print formatted metrics report with explanations and efficiency ratios. |
-| `export_metrics(results, filename, test_params, worker_id)` | Export metrics to CSV in `perf_data/` directory. |
-
-**Example usage:**
-
-```python
-from helpers.counters import configure_counters, read_counters
-from helpers.metrics import print_metrics
-
-# Configure and run test
-configure_counters(location="0,0")
-# ... run kernel ...
-results = read_counters(location="0,0")
-
-# Display metrics
-print_metrics(results)
-```
-
-**Output format:**
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_PACK |
 
 ```
-======================================================================
-PERFORMANCE METRICS
-======================================================================
-
-──────────────────────────────────────────────────────────────────────
-  UNPACKER WRITE EFFICIENCY
-──────────────────────────────────────────────────────────────────────
-  Measures the fraction of unpacker busy cycles spent writing data.
-  Higher ratio (→1.0) = efficient, unpacker writes when busy
-  Lower ratio (→0.0) = inefficient, unpacker busy but stalled/waiting
-──────────────────────────────────────────────────────────────────────
-  Metric                           Writes         Busy   Efficiency
-  ────────────────────────────── ──────────── ──────────── ────────────
-  Unpacker0 (SRCA):                   1234.0      2468.0         0.50
-  Unpacker1 (SRCB):                   1356.0      2468.0         0.55
-  Combined Average:                                                0.52
-
-[... similar sections for each metric ...]
+Packer Efficiency = PACKER_DEST_READ_AVAILABLE / PACKER_BUSY * 100
 ```
 
-## Interfaces
+- **High value (~100%)**: Packer never waits for math output (no dest-read stalls).
+- **Low value (<80%)**: Packer is busy but math has not finished writing the destination — math is the bottleneck.
 
-### Python API
+**Use case:** Detects destination-register stalls indicating the math stage cannot keep up.
 
-Location: `tests/python_tests/helpers/counters.py`
+---
 
-**Key Features:**
-- Single source of truth: All constants derived from `TestConfig`
-- Comprehensive validation: Detects missing start/stop calls with specific thread identification
-- Shared buffer support: Returns last stopper's counter snapshot
-- Pre-built counter configurations for common measurement scenarios
+**5. Math Pipeline Utilisation**
 
-**Functions:**
+Math-instruction issue rate relative to availability.
 
-| Function | Description |
-|----------|-------------|
-| `configure_counters(location="0,0")` | Write counter configuration to shared L1 buffer. Configures all 94 counter definitions (61 INSTRN_THREAD + 3 FPU + 11 TDMA_UNPACK + 3 TDMA_PACK + 16 L1). Note: Hardware has 86 slots; L1 counters are mux-dependent (8 active at once). Clears data buffer and sync control word. |
-| `read_counters(location="0,0")` | Read counter results from shared buffer. Returns DataFrame with columns: `starter_thread`, `stopper_thread`, `bank`, `counter_name`, `counter_id`, `cycles`, `count`, `l1_mux`. Validates sync state and identifies missing start/stop calls. |
-| `print_counters(results)` | Print counter results in human-readable format with thread identification. |
-| `export_counters(results, filename, test_params, worker_id)` | Export counter DataFrame to CSV in `perf_data/` directory. |
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_UNPACK |
 
-**Validation:**
-
-The `read_counters()` function performs comprehensive validation:
-- **Zero sync word**: Detects if counters were never started (all threads forgot to call `start_perf_counters()`)
-- **Missing global start**: At least one thread must call `start_perf_counters()`
-- **Missing global stop**: All threads must call `stop_perf_counters()`. Reports which specific threads (UNPACK, MATH, PACK, and SFPU on Quasar) are missing stop calls
-- **Invalid thread IDs**: Validates both starter and stopper thread IDs are in valid range (0–2 for 3 TRISCs, 0–3 for Quasar)
-- **Error messages include sync_ctrl value**: All validation errors display the raw sync control word for debugging
-
-**Example validation error:**
 ```
-RuntimeError: Perf counters were not stopped by all threads.
-Missing stop_perf_counters() call from: MATH. sync_ctrl=0x0000006c
+Math Pipeline Utilisation = MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE * 100
 ```
 
-**Pre-built Counter List:**
+- **High value (>95%)**: Math instructions issue as fast as they arrive at the front end.
+- **Low value (<60%)**: Math is stalled in flight (scoreboard, dest port, fidelity).
 
-The module provides `ALL_COUNTERS` list with 94 pre-configured counter definitions:
-- INSTRN_THREAD: 61 counters (instruction availability, wait reasons, thread instruction counts)
-- FPU: 3 counters (FPU, SFPU, combined)
-- TDMA_UNPACK: 11 counters (unpack busy, write availability, math pipeline)
-- L1: 16 counters (8 counter IDs × 2 mux settings)
-  - mux=0: 8 counters (NOC Ring 0, L1 arbitration)
-  - mux=1: 8 counters (NOC Ring 1, TDMA arbitration)
-- TDMA_PACK: 3 counters (packer busy, dest available, math available)
+**Use case:** Distinguishes "math has nothing to do" from "math is stalled while busy".
 
-**Note:** The hardware supports 86 counter slots. L1 counters require setting the mux bit before measurement, so only 8 of the 16 L1 counter definitions can be active simultaneously. This means maximum concurrent counters = 61 + 3 + 11 + 3 + 8 = 86.
+---
 
-### C++ API
+**6. FPU Execution Efficiency**
 
-Location: `tests/helpers/include/counters.h`
+FPU active cycles relative to math-instruction availability on the math thread.
 
-**Types:**
-- `llk_perf::counter_bank`: Enum with values `instrn_thread`, `fpu`, `tdma_unpack`, `l1`, `tdma_pack`
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | FPU + INSTRN_THREAD |
 
-**Singleton Manager: `llk_perf::PerfCounterManager`**
-
-The `PerfCounterManager` class manages performance counter lifecycle using a singleton pattern. Direct access to the singleton is not necessary; use the public API functions instead.
-
-**Public API Functions:**
-
-| Function | Description |
-|----------|-------------|
-| `llk_perf::start_perf_counters()` | Read config from shared L1 buffer and start all configured banks. Atomically sets the thread's start bit in sync control word. First thread to call this (when all start bits are 0) initializes hardware and is recorded as the "starter". **All threads must call this.** Thread-safe via atomic bit operations (no mutex needed). |
-| `llk_perf::stop_perf_counters()` | Stop all configured banks and atomically set the thread's stop bit. Last thread to call this (when all 4 stop bits become set) reads hardware counters, writes results to the shared data buffer, and is recorded as the "stopper". **All threads must call this.** Thread-safe via atomic bit operations (no mutex needed). |
-
-**Example usage (3 TRISCs – Wormhole/Blackhole):**
-```cpp
-#include "counters.h"
-
-void llk_unpack_main() {
-    llk_perf::start_perf_counters();
-    // ... unpack work ...
-    llk_perf::stop_perf_counters();
-}
-
-void llk_math_main() {
-    llk_perf::start_perf_counters();
-    // ... math work ...
-    llk_perf::stop_perf_counters();
-}
-
-void llk_pack_main() {
-    llk_perf::start_perf_counters();
-    // ... pack work ...
-    llk_perf::stop_perf_counters();
-}
+```
+FPU Execution Efficiency = FPU_INSTRUCTION / FPU_INSTRN_AVAILABLE_1 * 100
 ```
 
-**Example usage (4 TRISCs – Quasar):** Same pattern; add `start_perf_counters()` and `stop_perf_counters()` in the SFPU kernel. Required only on Quasar:
-```cpp
-void llk_sfpu_main() {  // Quasar only: 4th TRISC
-    llk_perf::start_perf_counters();
-    // ... SFPU work ...
-    llk_perf::stop_perf_counters();
-}
+- **High value (>80%)**: FPU executes whenever math work is pending — compute-bound.
+- **Low value (<30%)**: Math instructions queued but FPU not running — pipeline-stall-bound.
+
+**Use case:** Compute-bound vs stall-bound discriminator on the math path.
+
+---
+
+**7. Math-to-Pack Handoff Ratio**
+
+Ratio of math-output availability to packer consumption.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_PACK |
+
 ```
+Math-to-Pack Handoff = AVAILABLE_MATH / PACKER_BUSY * 100
+```
+
+- **>100%**: Math produces output faster than packer can consume (packer is the bottleneck).
+- **~100%**: Balanced.
+- **<100%**: Math is stalled — math is the bottleneck.
+
+**Use case:** Identifies math-vs-pack pipeline imbalance.
+
+---
+
+**8. Unpacker-to-Math Data Flow**
+
+Backpressure from math stage onto the unpackers.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_UNPACK |
+
+```
+Unpacker-to-Math = avg(SRCA_WRITE_AVAILABLE, SRCB_WRITE_AVAILABLE) /
+                   avg(UNPACK0_BUSY_THREAD0, UNPACK1_BUSY_THREAD0) * 100
+```
+
+- **High value (>80%)**: Unpackers always have somewhere to write — no backpressure.
+- **Low value (<30%)**: Source-register buffers are full; math is not consuming fast enough.
+
+**Use case:** Cross-check against per-unpacker write efficiency to isolate math-driven backpressure from DMA port contention.
+
+---
+
+### Thread Analysis
+
+**9. Thread N Stall Rate**
+
+Fraction of cycles each TRISC thread was stalled.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | INSTRN_THREAD |
+
+```
+Thread N Stall Rate = THREAD_STALLS_N / INSTRN_OUT_L * 100
+```
+
+Thread mapping: T0 = UNPACK, T1 = MATH, T2 = PACK.
+
+- **High value (>30%)**: Thread waits on resources most of the time.
+- **Low value (<5%)**: Thread keeps the issue pipeline full.
+
+**Use case:** First-pass localisation of which thread is losing time. Follow up with the stall-reason breakdown.
+
+---
+
+**10. Thread N Issue Rate**
+
+Average instructions issued per cycle, per thread.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | INSTRN_THREAD |
+
+```
+TN Issue Rate = THREAD_INSTRUCTIONS_N / INSTRN_OUT_L
+```
+
+- **High (~1.0)**: Thread issues an instruction nearly every cycle.
+- **Low (<0.1)**: Thread is idle or blocked.
+
+**Use case:** Detects threads that look "busy" by stall-rate but actually never issue work.
+
+---
+
+### Pipeline Wait Metrics
+
+**11. SrcA/SrcB Valid Wait**
+
+Cycles math waited for unpack to provide source data.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | INSTRN_THREAD |
+
+```
+SrcA Valid Wait = WAITING_FOR_SRCA_VALID / INSTRN_OUT_L * 100
+SrcB Valid Wait = WAITING_FOR_SRCB_VALID / INSTRN_OUT_L * 100
+```
+
+- **High (>5%)**: Math is starved by the unpacker.
+- **Low (~0%)**: Unpack keeps pace with math.
+
+**Use case:** Detects unpack-side data starvation.
+
+---
+
+**12. SrcA/SrcB Clear Wait**
+
+Cycles unpack waited for math to release a source register before overwriting.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | INSTRN_THREAD |
+
+```
+SrcA Clear Wait = WAITING_FOR_SRCA_CLEAR / INSTRN_OUT_L * 100
+SrcB Clear Wait = WAITING_FOR_SRCB_CLEAR / INSTRN_OUT_L * 100
+```
+
+- **High (>10%)**: Math holds source registers longer than unpack can wait. Common for SFPU-heavy SrcA reuse.
+- **Low (~0%)**: No register pressure between unpack and math.
+
+**Use case:** Identifies source-register contention.
+
+---
+
+**13. Math / Pack / Unpack Idle Wait**
+
+Cycles each thread waited for its primary HW unit to become idle.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | INSTRN_THREAD |
+
+```
+Math Idle Wait T1 = WAITING_FOR_MATH_IDLE_1 / INSTRN_OUT_L * 100
+Pack Idle Wait T2 = WAITING_FOR_PACK_IDLE_2 / INSTRN_OUT_L * 100
+Unpack Idle Wait T0 = WAITING_FOR_UNPACK_IDLE_0 / INSTRN_OUT_L * 100
+```
+
+**Use case:** Pinpoints which HW unit is the bottleneck.
+
+---
+
+### Semaphore Waits
+
+**14. Semaphore Zero/Full Wait per Thread**
+
+Cycles each thread spent blocked on a semaphore.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | INSTRN_THREAD |
+
+```
+Zero Wait TN = WAITING_FOR_NONZERO_SEM_N / INSTRN_OUT_L * 100
+Full Wait TN = WAITING_FOR_NONFULL_SEM_N / INSTRN_OUT_L * 100
+```
+
+- **Zero Wait high**: Thread waits for a producer to signal.
+- **Full Wait high**: Thread waits for a consumer to drain — downstream backpressure.
+
+**Use case:** Identifies producer/consumer imbalance across threads.
+
+---
+
+### TDMA Stall Metrics
+
+**15. Data Hazard Stall Rate**
+
+Fraction of math-valid cycles stalled by dest-to-src hazards (MOVD2A / MOVD2B).
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_UNPACK |
+
+```
+Data Hazard Stall = (MATH_INSTRN_AVAILABLE - DATA_HAZARD_STALLS_MOVD2A) /
+                    MATH_INSTRN_AVAILABLE * 100
+```
+
+`DATA_HAZARD_STALLS_MOVD2A` is `math_instrn_valid & ~dest2src_post_stall` — cycles math was available *and not* D2A-stalled. Subtracting from `MATH_INSTRN_AVAILABLE` gives the stall count.
+
+**Use case:** Surfaces dest-to-src register-movement overhead.
+
+---
+
+**16. SrcA/SrcB Write Port Blocked**
+
+Fraction of srcA/B DMA write attempts blocked by port unavailability.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_UNPACK |
+
+```
+SrcA Port Blocked = (SRCA_WRITE_AVAILABLE - SRCA_WRITE_NOT_BLOCKED_PORT) /
+                    SRCA_WRITE_AVAILABLE * 100
+SrcB Port Blocked = (SRCB_WRITE_AVAILABLE - SRCB_WRITE_NOT_BLOCKED_PORT) /
+                    SRCB_WRITE_AVAILABLE * 100
+```
+
+**Use case:** Isolates DMA-port contention from overwrite contention.
+
+---
+
+**17. SrcA/SrcB Write Overwrite Blocked**
+
+Fraction of write attempts blocked because math has not consumed the previous value.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_UNPACK |
+
+```
+SrcA Overwrite Blocked = (SRCA_WRITE_AVAILABLE - SRCA_WRITE_NOT_BLOCKED_OVR) /
+                         SRCA_WRITE_AVAILABLE * 100
+SrcB Overwrite Blocked = (SRCB_WRITE_AVAILABLE - SRCB_WRITE) /
+                         SRCB_WRITE_AVAILABLE * 100
+```
+
+- **High (>30%)**: Math is slow to consume — typical for SFPU-heavy SrcA reuse.
+
+**Use case:** Separates math-consumer bottleneck from DMA arbitration bottleneck.
+
+---
+
+**18. Dest Read Backpressure**
+
+Fraction of packer dest-read requests not granted.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_PACK |
+
+```
+Dest Read BP = (PACKER_DEST_READ_AVAILABLE - DEST_READ_GRANTED_0) /
+               PACKER_DEST_READ_AVAILABLE * 100
+```
+
+**Use case:** Detects math-to-pack register handoff stalls.
+
+---
+
+**19. Math Scoreboard Stall Rate**
+
+Fraction of math-available cycles stalled by FPU data-hazard scoreboard.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_PACK |
+
+```
+Math Scoreboard Stall = (MATH_INSTRN_AVAILABLE - AVAILABLE_MATH) /
+                        MATH_INSTRN_AVAILABLE * 100
+```
+
+**Use case:** Identifies FPU pipeline hazards (RAW / WAW) blocking math issue.
+
+---
+
+### Instruction Availability
+
+**20. Per-type Instruction Availability**
+
+Fraction of cycles each instruction type was queued in its primary thread's buffer.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | INSTRN_THREAD |
+
+```
+TYPE Avail Rate = TYPE_INSTRN_AVAILABLE_N / INSTRN_OUT_L * 100
+```
+
+Types: CFG, SYNC, THCON, MOVE (T0), FPU/MATH (T1), UNPACK (T0), PACK (T2), XSEARCH.
+
+**Use case:** Shows which instruction types dominate the scheduling pipeline.
+
+---
+
+### Write Port Analysis
+
+**21. SrcA/SrcB Actual Write Efficiency**
+
+Fraction of writes that succeeded at the DMA port.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_UNPACK |
+
+```
+SrcA Actual Eff = SRCA_WRITE / SRCA_WRITE_AVAILABLE * 100
+SrcB Actual Eff = SRCB_WRITE / SRCB_WRITE_AVAILABLE * 100
+```
+
+**Use case:** Effective write throughput per source register.
+
+---
+
+**22. Unpacker N Write Efficiency**
+
+Fraction of unpacker-busy cycles that actually completed a write.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_UNPACK |
+
+```
+Unpacker0 Write Eff = SRCA_WRITE / UNPACK0_BUSY_THREAD0 * 100
+Unpacker1 Write Eff = SRCB_WRITE / UNPACK1_BUSY_THREAD0 * 100
+```
+
+**Use case:** Identifies whether unpacker stalls are from port contention or overwrite blocking — compare with metrics 16 and 17.
+
+---
+
+### L1 Memory and NoC
+
+**23. L1 Port / NoC Ring Utilisation**
+
+Per-port and per-NoC-channel utilisation.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | L1 |
+
+```
+L1 Port Util  = L1_PORT_REQ / L1_OUT_L * 100
+NoC Ring Util = avg(NOC_RINGN_CHANNEL_0, NOC_RINGN_CHANNEL_1) / L1_OUT_L * 100
+```
+
+**Use case:** Identifies which L1 ports and NoC rings carry traffic in the measured zone. BH exposes additional rings via `l1_mux = 2..4`.
+
+---
+
+**24. L1 Backpressure**
+
+Fraction of requested cycles where L1 did not grant.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | L1 |
+
+```
+L1 BP = (REQ - GRANT) / REQ * 100
+```
+
+Computed per port and per NoC channel.
+
+**Use case:** Detects L1 port contention. Compare unpacker port BP with Thread 0 stall rate to confirm L1 is the bottleneck.
+
+---
+
+### Composite
+
+**25. Stall Cause Overlap Factor per Thread**
+
+Ratio of summed per-thread stall reasons to total thread stalls.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | INSTRN_THREAD |
+
+```
+Stall Overlap TN = sum(all WAITING_FOR_*_N) / THREAD_STALLS_N
+```
+
+- **~1.0×**: Single dominant stall reason at any given cycle.
+- **>2.0×**: Multiple HW units busy simultaneously when the thread stalls.
+
+**Use case:** Tells you whether to chase a single bottleneck or a set of interacting ones.
+
+---
+
+**26. Compute-to-Unpack Ratio**
+
+Whether the zone is compute-bound or memory-bound.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | FPU + TDMA_UNPACK |
+
+```
+Compute-to-Unpack = FPU_OR_SFPU_INSTRN / (UNPACK0_BUSY_THREAD0 + UNPACK1_BUSY_THREAD0) * 100
+```
+
+- **>100%**: Compute-bound.
+- **<20%**: Memory-bound (unpackers busier than math).
+
+**Use case:** Quick one-number diagnostic per zone.
+
+---
+
+### Fidelity
+
+**27. Fidelity Stall Rate**
+
+Fraction of math-valid cycles spent in a fidelity phase (multi-HF-cycle math instruction).
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_UNPACK |
+
+```
+Fidelity Stall Rate = MATH_FIDELITY_STALL / MATH_INSTRN_AVAILABLE * 100
+```
+
+- **0%**: Pure LoFi (every math instruction completes in 1 HF cycle).
+- **>0%**: HiFi2 or HiFi4 active — multi-cycle math contributes to wall time.
+
+> **Known issue:** On HiFi variants this metric can exceed 100% because the formula's numerator counts every HF cycle of multi-HF instructions while the denominator counts only the issued instructions. The math is being re-calibrated; treat values >100% as "fidelity is the dominant cost" rather than a literal percentage.
+
+**Use case:** Detects whether fidelity is contributing to the cycle budget.
+
+---
+
+## Notes and Caveats
+
+- **NC vs WC are mutually exclusive.** A given pytest invocation produces one build, so wall-clock and counter data come from separate runs. Merge them off-line by `(test_variant, zone)`.
+- **The arm/freeze split shifts zone boundaries slightly.** For `L1_TO_L1` and `L1_CONGESTION`, the measurement window opens when unpack arms (before unpack issues its first instruction inside the scope) and closes when pack freezes (after pack issues its last). Counter values from these run types are not directly comparable to a hypothetical "all three threads start and stop simultaneously" baseline.
+- **`PERF_COUNTERS_MAX_ZONES = 8` per kernel.** Adding a 9th distinct `MEASURE_PERF_COUNTERS("...")` name silently reuses zone 0. Reuse the same name across multiple call sites if you want them in the same bucket.
+- **L1 mux mutual exclusion is handled inside `MEASURE_PERF_COUNTERS`.** The freeze path re-programs `PERF_CNT_MUX_CTRL` before each L1 slot read, so a single zone snapshot contains counters from multiple mux positions without per-zone configuration changes.
+- **BRISC compile flag.** When `--enable-perf-counters` is set, BRISC is rebuilt with `-DPERF_COUNTERS_COMPILED`. Otherwise BRISC does not touch the counter HW at all — this keeps the NC build free of any counter-armed monitoring overhead.
+- **Test isolation.** As with every LLK test, counter state at kernel entry is whatever the previous test left behind. The BRISC reset path clears the shared config and zone buffers, so each test starts from a known L1 state, but HW counter registers themselves may carry residual values until the first `MEASURE_PERF_COUNTERS` rising-edge clear.
