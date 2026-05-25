@@ -477,11 +477,18 @@ def _convert_device_op_entry(device_op_time: Dict[str, Any], freq: int) -> OpDic
     return device_op
 
 
+def _tracy_strict_device_perf_csv() -> bool:
+    """When set, missing cpp_device_perf_report.csv rows abort enrichment (legacy behavior)."""
+    return os.environ.get("TRACY_STRICT_DEVICE_PERF_CSV", "").lower() in ("1", "true", "yes")
+
+
 def _enrich_ops_from_perf_csv(
     host_ops_by_device: DeviceOpsDict,
     device_perf_by_device: Dict[int, Dict[Tuple[int, Optional[int], Optional[int]], Dict[str, Any]]],
     trace_replays: Optional[TraceReplayDict],
 ) -> DeviceOpsDict:
+    missing_device_ops: Dict[int, List[int]] = defaultdict(list)
+
     for device_id in host_ops_by_device:
         assert (
             device_id in device_perf_by_device
@@ -513,10 +520,16 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                message = (
+                    f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
+                    f"for device {device_id} (trace_id={host_trace_id})"
+                )
+                if _tracy_strict_device_perf_csv():
+                    assert False, message
+                missing_device_ops[device_id].append(op_id)
+                enriched_ops.append(copy.deepcopy(host_op))
+                continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
@@ -542,6 +555,17 @@ def _enrich_ops_from_perf_csv(
                 enriched_ops.append(enriched_op)
 
         host_ops_by_device[device_id] = enriched_ops
+
+    for device_id, missing_op_ids in missing_device_ops.items():
+        sample = missing_op_ids[:5]
+        suffix = f" (and {len(missing_op_ids) - len(sample)} more)" if len(missing_op_ids) > len(sample) else ""
+        logger.warning(
+            f"Keeping {len(missing_op_ids)} host-side op(s) without device metrics on device {device_id} "
+            f"because {PROFILER_CPP_DEVICE_PERF_REPORT} has no matching rows "
+            f"(sample op ids: {sample}{suffix}). "
+            f"Set TRACY_STRICT_DEVICE_PERF_CSV=1 to fail instead."
+        )
+
     return host_ops_by_device
 
 

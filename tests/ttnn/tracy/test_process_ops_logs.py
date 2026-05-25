@@ -272,3 +272,37 @@ def test_enrich_device_logs_still_asserts_on_unrecognized_dispatch_without_trace
 
     with pytest.raises(AssertionError, match="Unrecognized dispatch OPs"):
         process_ops_logs._enrich_ops_from_device_logs(host_ops_by_device, tmp_path, [], None)
+
+
+def test_enrich_perf_csv_keeps_host_ops_when_device_row_missing(monkeypatch):
+    """Host-side ops without cpp_device_perf_report.csv rows should not abort report generation."""
+    device_id = 0
+    host_ops_by_device = {
+        device_id: [
+            {"global_call_count": 1, "metal_trace_id": None},
+            {"global_call_count": 1130496, "metal_trace_id": None},
+        ]
+    }
+    device_perf_by_device = {
+        device_id: {
+            (1, None, None): {"CORE COUNT": 64, "METAL TRACE ID": None},
+        }
+    }
+
+    result = process_ops_logs._enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, None)
+
+    assert len(result[device_id]) == 2
+    assert result[device_id][0]["global_call_count"] == 1
+    assert result[device_id][0]["_device_perf_row"]["CORE COUNT"] == 64
+    assert result[device_id][1]["global_call_count"] == 1130496
+    assert "_device_perf_row" not in result[device_id][1]
+
+
+def test_enrich_perf_csv_strict_mode_asserts_on_missing_device_row(monkeypatch):
+    device_id = 0
+    host_ops_by_device = {device_id: [{"global_call_count": 99, "metal_trace_id": None}]}
+    device_perf_by_device = {device_id: {}}
+    monkeypatch.setenv("TRACY_STRICT_DEVICE_PERF_CSV", "1")
+
+    with pytest.raises(AssertionError, match="Device data missing"):
+        process_ops_logs._enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, None)
