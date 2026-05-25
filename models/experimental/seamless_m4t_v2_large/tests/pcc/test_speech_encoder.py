@@ -96,11 +96,20 @@ def test_seamless_m4t_v2_speech_encoder_long_audio_pcc(mesh_device, device_param
     """PCC check at a longer mel sequence so chunked-attention and adaptor paths are exercised.
 
     HF has no fixed max audio sequence — speech-encoder accepts any length, with chunked attention
-    keyed by ``speech_encoder_chunk_size``. 512 frames (~10 s at 50 fps mel) is ~10× the demo's
-    1-second input and exercises the long-audio path (relative-position table DRAM offload,
-    larger conformer activations) while staying within the speech-encoder PCC fixture's L1 budget.
+    keyed by ``speech_encoder_chunk_size``. 512 frames (~10 s at 50 fps mel) exercises the
+    long-audio path (chunked 1D matmul when mel > 128, relative-position DRAM offload).
     """
     _ = reset_seeds
     _ = device_params
     with mesh_default_device(mesh_device):
         _run_speech_encoder_pcc(mesh_device, seq=256)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_seamless_m4t_v2_speech_encoder_very_long_mel_pcc(mesh_device, device_params, reset_seeds):
+    """PCC at ~13 s mel length (671 frames) — matches full demo T2ST wav fed into S2TT."""
+    _ = reset_seeds
+    _ = device_params
+    with mesh_default_device(mesh_device):
+        _run_speech_encoder_pcc(mesh_device, seq=672)

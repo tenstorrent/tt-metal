@@ -16,6 +16,8 @@ import torch
 
 from models.common.utility_functions import nearest_32
 from models.experimental.seamless_m4t_v2_large.tt.common import (
+    MATMUL_1D_SEQ_THRESHOLD,
+    TILE,
     matmul_program_config,
     pick_largest_height_shard_nhw_cores,
     speech_encoder_matmul_program_config,
@@ -33,6 +35,9 @@ _PROFILER_LAYER_DRAIN_INTERVAL = 8
 # Pad short sequences before block-sharded LN; single M-tile (≤32 rows) falls back to L1 interleaved.
 _MIN_BLOCK_LN_TOKEN_ROWS = 32
 # Short-seq linears use ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` (see ``common.matmul_program_config``).
+# Long mel (> ``MATMUL_1D_SEQ_THRESHOLD``) uses chunked 1D matmuls to avoid 2D multicast L1 overflow.
+_LONG_SEQ_LINEAR_CHUNK_ROWS = TILE
+_LONG_SEQ_LINEAR_DRAM_ROWS = 256
 
 
 def _drain_device_profiler(device: ttnn.Device, *, trace_no_profiler: bool) -> None:
@@ -331,6 +336,107 @@ class TTSeamlessM4Tv2SpeechEncoder:
     def _pointwise_conv_matmul_pc(self, token_rows: int, in_dim: int, out_dim: int):
         return self._tuned_matmul_pc(token_rows, in_dim, out_dim)
 
+    def _chunked_linear_matmul_pc(self, in_dim: int, out_dim: int):
+        """1D multicast PC for one ``_LONG_SEQ_LINEAR_CHUNK_ROWS`` tile of activations."""
+        chunk_rows = _LONG_SEQ_LINEAR_CHUNK_ROWS
+        if (in_dim == 1024 and out_dim in (1024, 2048, 4096, 3072)) or (in_dim == 4096 and out_dim == 1024):
+            return self._tuned_matmul_pc(chunk_rows, in_dim, out_dim)
+        return self._matmul_program_config(chunk_rows, in_dim, out_dim)
+
+    @staticmethod
+    def _pad_linear_rows(x_2d: ttnn.Tensor, actual_rows: int, pad_to: int) -> ttnn.Tensor:
+        if actual_rows >= pad_to:
+            return x_2d
+        k = int(x_2d.shape[-1])
+        pad_rows = pad_to - actual_rows
+        pad = ttnn.full(
+            [pad_rows, k],
+            0.0,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=x_2d.device(),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        out = ttnn.concat([x_2d, pad], dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(pad)
+        return out
+
+    def _linear_chunked(
+        self,
+        x: ttnn.Tensor,
+        weight: ttnn.Tensor,
+        bias: ttnn.Tensor,
+        *,
+        activation: Optional[str] = None,
+        batch: Optional[int] = None,
+        seq: Optional[int] = None,
+    ) -> ttnn.Tensor:
+        """Chunk long mel-seq matmuls into 1D multicast programs (fits L1 vs one 2D prefill)."""
+        k = int(weight.shape[-2])
+        n = int(weight.shape[-1])
+        input_rank = len(x.shape)
+        if input_rank == 3:
+            batch = int(x.shape[0]) if batch is None else batch
+            seq = int(x.shape[1]) if seq is None else seq
+            m_actual = batch * seq
+            x_flat = ttnn.reshape(x, (m_actual, k))
+        elif input_rank == 4 and int(x.shape[1]) == 1:
+            batch = int(x.shape[0]) if batch is None else batch
+            seq = int(x.shape[2]) if seq is None else seq
+            m_actual = batch * seq
+            x_flat = ttnn.reshape(x, (m_actual, k))
+        elif input_rank == 2:
+            m_actual = int(x.shape[0])
+            batch = 1 if batch is None else batch
+            seq = m_actual if seq is None else seq
+            x_flat = x
+        else:
+            raise ValueError(f"chunked linear expects rank 2/3/4, got {input_rank} shape {x.shape}")
+        pc = self._chunked_linear_matmul_pc(k, n)
+        chunk_m = _LONG_SEQ_LINEAR_CHUNK_ROWS
+        concat_mc = ttnn.DRAM_MEMORY_CONFIG if m_actual > _LONG_SEQ_LINEAR_DRAM_ROWS else ttnn.L1_MEMORY_CONFIG
+        chunks: list[ttnn.Tensor] = []
+        for start in range(0, m_actual, chunk_m):
+            end = min(start + chunk_m, m_actual)
+            chunk_rows = end - start
+            chunk = ttnn.slice(x_flat, [start, 0], [end, k], [1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+            if chunk_rows < chunk_m:
+                chunk = self._pad_linear_rows(chunk, chunk_rows, chunk_m)
+            out_chunk = ttnn.linear(
+                chunk,
+                weight,
+                bias=bias,
+                activation=activation,
+                program_config=pc,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self._linear_compute_cfg,
+            )
+            if chunk is not x_flat:
+                ttnn.deallocate(chunk)
+            if chunk_rows < chunk_m:
+                out_chunk = ttnn.slice(
+                    out_chunk,
+                    [0, 0],
+                    [chunk_rows, n],
+                    [1, 1],
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+            if concat_mc is ttnn.DRAM_MEMORY_CONFIG:
+                out_chunk = ttnn.to_memory_config(out_chunk, ttnn.DRAM_MEMORY_CONFIG)
+            chunks.append(out_chunk)
+        # Do not deallocate ``x_flat``: ``reshape`` may alias ``x`` still live in the encoder graph.
+        if len(chunks) == 1:
+            out_flat = chunks[0]
+        else:
+            out_flat = ttnn.concat(chunks, dim=0, memory_config=concat_mc)
+            for c in chunks:
+                ttnn.deallocate(c)
+        if input_rank == 4:
+            return ttnn.reshape(out_flat, (batch, 1, seq, n))
+        if input_rank == 2:
+            return out_flat
+        return ttnn.reshape(out_flat, (batch, seq, n))
+
     def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
         key = (seq_q, seq_k)
         cached = self._sdpa_pc_cache.get(key)
@@ -362,9 +468,19 @@ class TTSeamlessM4Tv2SpeechEncoder:
     ) -> ttnn.Tensor:
         if accept_sharded_input and ttnn.is_sharded(x):
             x = width_sharded_to_l1_interleaved(x)
+        token_rows = self._linear_token_rows(x)
+        if token_rows > MATMUL_1D_SEQ_THRESHOLD:
+            return self._linear_chunked(
+                x,
+                weight,
+                bias,
+                activation=activation,
+                batch=batch,
+                seq=seq,
+            )
         if program_config is None:
             program_config = self._matmul_program_config(
-                self._linear_token_rows(x),
+                token_rows,
                 int(weight.shape[-2]),
                 int(weight.shape[-1]),
             )

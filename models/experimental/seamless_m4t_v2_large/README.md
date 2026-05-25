@@ -366,7 +366,7 @@ models/experimental/seamless_m4t_v2_large/
 
 - **Blackhole only.** PCC and perf tests run on Blackhole (`@run_for_blackhole()`). There is no Wormhole or Grayskull path. Supported meshes are **P150** `MeshShape(1, 1)` and **BH QB** `MeshShape(1, 4)` with `FABRIC_1D` (see `tt/mesh_helpers.py`).
 - **Multi-device mode is replication, not batch parallelism.** On BH QB, batch-1 inputs and weights are replicated on all four chips; each device runs the same forward. Throughput scales via replication accounting in perf logs (`batch_size = 4`), not by sharding a larger user batch across devices.
-- **L1 budget.** Speech-generation paths (T2U + vocoder, and chained S2ST) require `l1_small_size=65536` in device params. Smaller L1 (e.g. 32768) is insufficient for the full speech pipeline (see demo comments).
+- **L1 budget.** Speech-generation paths (T2U + vocoder, and chained S2ST) require `l1_small_size=65536` in device params. Smaller L1 (e.g. 32768) is insufficient for the full speech pipeline (see demo comments). Long mel inputs (>128 frames) use chunked 1D matmul in the speech encoder; the demo chains full-length T2ST audio into S2TT/S2ST/ASR without trimming.
 
 ### API scope versus Hugging Face
 
