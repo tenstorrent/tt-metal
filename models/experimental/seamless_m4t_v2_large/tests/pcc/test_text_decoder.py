@@ -33,11 +33,23 @@ from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
 )
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
     TTSeamlessM4Tv2Decoder,
+    _effective_decode_sdpa_seq_len,
+    _next_power_of_2_cap256,
     init_text_decoder_kv_cache,
     warm_text_decoder_kv_cache_prefill,
 )
 
 PCC_THRESHOLD = 0.99
+
+
+def test_decode_sdpa_bucket_ceil_power_of_two():
+    """SDPA decode buckets must ceil (not floor) live seq len — floor breaks decode past 32 tokens."""
+    assert _next_power_of_2_cap256(32) == 32
+    assert _next_power_of_2_cap256(33) == 64
+    assert _next_power_of_2_cap256(64) == 64
+    assert _next_power_of_2_cap256(65) == 128
+    assert _effective_decode_sdpa_seq_len(33, 4096) == 64
+    assert _effective_decode_sdpa_seq_len(32, 4096) == 32
 
 
 def _run_text_decoder_pcc(device) -> None:
@@ -199,7 +211,7 @@ def _run_text_decoder_kv_cache_pcc(device, cache_dtype, *, max_seq_len: int = 64
     ttnn.deallocate(attn_2d)
     enc_mask_tt = from_torch_uint32_rm(device, enc_mask)
     cross_prefill = build_cross_attn_mask_4d(enc_mask_tt, tgt_seq=padded_prefill, device=device)
-    warm_text_decoder_kv_cache_prefill(
+    warm_out = warm_text_decoder_kv_cache_prefill(
         tt_dec,
         ids_padded,
         pos_prefill,
@@ -210,6 +222,7 @@ def _run_text_decoder_kv_cache_pcc(device, cache_dtype, *, max_seq_len: int = 64
         cross_attn_cache,
         kv_cache_fill_len=prefill_len,
     )
+    ttnn.deallocate(warm_out)
     ttnn.deallocate(ids_padded)
     ttnn.deallocate(pos_prefill)
     ttnn.deallocate(causal_prefill)
@@ -294,6 +307,14 @@ def test_seamless_m4t_v2_text_decoder_kv_cache_pcc(mesh_device, device_params, r
     ids=["bf8_cache"],
 )
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_seamless_m4t_v2_text_decoder_kv_cache_long_decode_pcc(mesh_device, device_params, reset_seeds, cache_dtype):
+    """KV PCC across the SDPA bucket boundary at 33 tokens (regression for floor-vs-ceil chunk size)."""
+    _ = reset_seeds
+    _ = device_params
+    with mesh_default_device(mesh_device):
+        _run_text_decoder_kv_cache_pcc(mesh_device, cache_dtype, max_seq_len=128, decode_start_pos=2, decode_steps=40)
+
+
 def test_seamless_m4t_v2_text_decoder_kv_cache_max_seq_len_pcc(mesh_device, device_params, reset_seeds, cache_dtype):
     """KV-cache PCC at HF ``max_position_embeddings = 4096``.
 

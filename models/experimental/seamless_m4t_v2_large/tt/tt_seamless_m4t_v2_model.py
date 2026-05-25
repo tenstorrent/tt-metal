@@ -426,6 +426,13 @@ class TTSeamlessM4Tv2Model:
         self.vocoder.prewarm_conv1d_weights(batch=batch, seq=int(unit_seq), t_audio=int(t_audio))
         ttnn.synchronize_device(self.device)
 
+    def clear_runtime_program_cache(self) -> None:
+        """Drop JIT programs and per-shape conv prep caches so the next modality fits in L1."""
+        self.device.disable_and_clear_program_cache()
+        self.vocoder._conv1d_prepared_cache.clear()
+        self.speech_encoder._conv1d_prepared_cache.clear()
+        self.t2u._conv1d_prepared_cache.clear()
+
     # ------------------------------------------------------------------
     # Internal pieces
     # ------------------------------------------------------------------
@@ -908,11 +915,14 @@ class TTSeamlessM4Tv2Model:
         kv_cache: list,
         cross_attn_cache: list,
         cross_4d: Optional[ttnn.Tensor] = None,
-    ) -> None:
-        """Populate KV caches with one batched prefill forward (``slice_write`` self + cross copy)."""
+    ) -> Optional[ttnn.Tensor]:
+        """Populate KV caches with one batched prefill forward (``slice_write`` self + cross copy).
+
+        Returns decoder hidden states ``[B, S, H]`` (caller must deallocate), or ``None`` if ``seq==0``.
+        """
         seq = int(input_ids_tt.shape[1])
         if seq == 0:
-            return
+            return None
         batch_size = int(input_ids_tt.shape[0])
         padded_seq = tile_align(seq)
         ids_padded = pad_input_ids_to(input_ids_tt, padded_seq, self.pad_token_id, self.device)
@@ -925,7 +935,7 @@ class TTSeamlessM4Tv2Model:
         if cross_4d is None:
             cross_4d = build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=padded_seq, device=self.device)
 
-        warm_text_decoder_kv_cache_prefill(
+        dec_out = warm_text_decoder_kv_cache_prefill(
             self.text_decoder,
             ids_padded,
             pos_tt,
@@ -944,6 +954,7 @@ class TTSeamlessM4Tv2Model:
         ttnn.deallocate(causal_4d)
         if owns_cross_4d:
             ttnn.deallocate(cross_4d)
+        return dec_out
 
     def _single_token_tt(self, token_id: int, batch_size: int) -> ttnn.Tensor:
         """``[B, 1]`` uint32 on device for one greedy-decode step (tiny H2D)."""
@@ -1339,6 +1350,8 @@ class TTSeamlessM4Tv2Model:
 
         # ---- First encode ----
         if input_features is not None:
+            # Speech encoder conv programs do not coexist with vocoder/T2U JIT in the same L1 budget.
+            self.clear_runtime_program_cache()
             enc_tt, enc_attn_tt, enc_attn_owned = self._encode_speech(input_features, attn_tt_text)
         else:
             enc_tt, enc_attn_tt, enc_attn_owned = self._encode_text(input_ids, attn_tt_text)  # type: ignore[arg-type]
@@ -1390,10 +1403,16 @@ class TTSeamlessM4Tv2Model:
                 encoder_seq_len=enc_seq,
             )
             decode_cross_4d = build_cross_attn_mask_4d(enc_attn_tt, tgt_seq=1, device=self.device)
-            # Cache tokens ``0 .. seed_len-2``; last seed token is consumed on the first decode step.
-            if seed_len > 1:
-                warm_tt = _ttnn_ids_from_list([seq_host[: seed_len - 1]], self.device)
-                self._prefill_text_decoder_kv_cache(
+            # Prefill the full seed (matches ``test_text_decoder`` KV PCC). First new token comes from
+            # ``lm_head`` on the last seed hidden state; decode steps start at ``cur_pos == seed_len``.
+            cross_valid = False
+            cur_pos = seed_len
+            decode_trace_ready = False
+            decode_steps_remaining = max_new_tokens
+
+            if seed_len > 0:
+                warm_tt = _ttnn_ids_from_list([seq_host], self.device)
+                warm_out = self._prefill_text_decoder_kv_cache(
                     warm_tt,
                     enc_tt,
                     enc_attn_tt,
@@ -1401,11 +1420,19 @@ class TTSeamlessM4Tv2Model:
                     cross_attn_cache,
                 )
                 ttnn.deallocate(warm_tt)
-            cross_valid = seed_len > 1
+                cross_valid = True
+                logits = self._lm_head(warm_out)
+                ttnn.deallocate(warm_out)
+                next_tt, next_id = self._greedy_next_token(logits, seed_len)
+                ttnn.deallocate(logits)
+                ttnn.deallocate(next_tt)
+                seq_host.append(next_id)
+                if eos_ids and next_id in eos_ids:
+                    decode_steps_remaining = 0
+                else:
+                    decode_steps_remaining = max_new_tokens - 1
 
-            cur_pos = max(0, seed_len - 1)
-            decode_trace_ready = False
-            for _decode_step in range(max_new_tokens):
+            for _decode_step in range(decode_steps_remaining):
                 cur_tok = int(seq_host[cur_pos])
                 if use_decode_trace and decode_trace_ready:
                     logits = self._decode_token_with_kv_cache_traced(
@@ -1635,6 +1662,9 @@ class TTSeamlessM4Tv2Model:
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # Drop cached conv1d/L1 programs from text decode + T2U before vocoder (long unit_seq
+        # otherwise exceeds per-core L1 when programs accumulate in the demo's T2TT→T2ST flow).
+        self.clear_runtime_program_cache()
         wav_tt, lengths_tt = self.vocoder.forward(vocoder_input, spk_tt, voc_tt)
         ttnn.deallocate(vocoder_input)
         ttnn.deallocate(voc_tt)
