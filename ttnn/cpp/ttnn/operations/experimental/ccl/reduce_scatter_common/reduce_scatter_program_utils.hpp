@@ -78,7 +78,7 @@ void append_fabric_mux_connection_rt_args(
     tt::tt_metal::Program& program,
     std::vector<uint32_t>& worker_rt_args);
 
-// ProgramDescriptor (Contract-2) variant — same wire layout as the legacy helper
+// ProgramDescriptor variant — same wire layout as the legacy helper
 // (17 args in the order listed above), but allocates the five worker-side
 // semaphores by pushing SemaphoreDescriptors onto desc.semaphores and writes
 // the resulting args into a KernelDescriptor::RTArgList so callers can feed
