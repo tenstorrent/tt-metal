@@ -494,6 +494,7 @@ class TtMoe(LightweightModule):
         signpost("shared_expert_and_dispatch_start")
         if self.overlap_shared_expert_with_dispatch:
             self.mesh_device.load_sub_device_manager(self.sd_manager_id)
+            self.mesh_device.set_sub_device_stall_group([self.shared_sd_id])
 
         # ========================================
         # Step 1: Dispatch (enabled)
@@ -517,13 +518,14 @@ class TtMoe(LightweightModule):
         logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
 
         if self.overlap_shared_expert_with_dispatch:
+            self.mesh_device.reset_sub_device_stall_group()
             self.mesh_device.clear_loaded_sub_device_manager()
+        signpost("shared_expert_and_dispatch_end")
+
         ttnn.deallocate(x)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
-
-        signpost("shared_expert_and_dispatch_end")
 
         # ========================================
         # Step 3: Routed experts (enabled)
