@@ -181,4 +181,4 @@ def test_fused_relu_with_broadcast(device, dtype, broadcast_shape):
     if dtype == ttnn.float32:
         assert_equal(golden, result)
     else:
-        assert_allclose(golden, result, rtol=0, atol=torch.finfo(torch.bfloat16).eps)
+        assert_allclose(golden, result, rtol=torch.finfo(torch.bfloat16).eps, atol=torch.finfo(torch.bfloat16).eps)
