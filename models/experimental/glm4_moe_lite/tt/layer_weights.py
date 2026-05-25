@@ -111,83 +111,6 @@ _ATTN_DTYPE_TAG = {
 }
 
 
-def _env_dtype_from(env_var: str, dense_dtype: ttnn.DataType) -> ttnn.DataType:
-    override = os.environ.get(env_var, "").strip().lower()
-    if not override:
-        if dense_dtype == ttnn.bfloat16:
-            return ttnn.bfloat8_b
-        return dense_dtype
-    if override in {"bf8", "bfloat8_b"}:
-        return ttnn.bfloat8_b
-    if override in {"bf16", "bfloat16"}:
-        return ttnn.bfloat16
-    if override in {"bf4", "bfloat4_b"}:
-        return ttnn.bfloat4_b
-    if override in {"f16", "fp16", "float16"}:
-        return ttnn.float16
-    if override in {"f32", "fp32", "float32"}:
-        return ttnn.float32
-    raise ValueError(f"Invalid {env_var}={override!r}")
-
-
-def _env_kvb_dtype(dense_dtype: ttnn.DataType) -> ttnn.DataType:
-    """Per-head MLA kv_b1/kv_b2 weights.
-
-    Per-head batched matmuls (``b={H_per_dev} x 32 x K x N``) are
-    DRAM-bandwidth-bound (16-27% utilization in baseline perf reports).
-    BFP8 halves the weight DRAM traffic. Softmax lives between kv_b1 and
-    kv_b2, so quantization error doesn't compound through the attention
-    nonlinearity.
-
-    Default: BFP8 (when global dense_dtype is BF16). Override with
-    ``GLM4_MOE_LITE_KVB_TT_DTYPE``.
-    """
-    return _env_dtype_from("GLM4_MOE_LITE_KVB_TT_DTYPE", dense_dtype)
-
-
-def _env_mlp_dtype(dense_dtype: ttnn.DataType) -> ttnn.DataType:
-    """Shared-expert / dense-MLP linear weights (w_mlp_gate, w_mlp_up,
-    w_mlp_down, w_mlp_gate_up fused).
-
-    These matmuls are DRAM-bandwidth-saturated in baseline (gate_up
-    ``32 x 2048 x 3072``: 80% DRAM; down ``32 x 1536 x 2048``: similar).
-    BFP8 weights halve weight-byte DRAM traffic for a near-1:1 latency
-    reduction. The shared expert runs on every decode token (unlike
-    routed experts which are sparse), so the savings aggregate across
-    every MoE layer.
-
-    Numerical risk: shared-expert output is summed with routed-expert
-    output and the activation re-normalized by the next layer-norm. BFP4
-    routed experts are already in production, so per-channel BFP8 error
-    on the shared branch is bounded.
-
-    Default: BFP8. Override with ``GLM4_MOE_LITE_MLP_TT_DTYPE``.
-    """
-    return _env_dtype_from("GLM4_MOE_LITE_MLP_TT_DTYPE", dense_dtype)
-
-
-def _env_attn_proj_dtype(dense_dtype: ttnn.DataType) -> ttnn.DataType:
-    """Per-layer MLA linear projection weights (w_q_a, w_q_b, w_kv_a,
-    w_q_kv_a fused, w_o).
-
-    These decode matmuls run at **80%+ DRAM utilization** in the baseline
-    (``32 x 5120 x 2048`` w_o: 83%; ``32 x 2048 x 3072`` q_a: 80%;
-    ``32 x 2048 x 1344`` kv_a: 63%). BFP8 weights halve weight-side DRAM
-    traffic — the dominant cost of a bandwidth-saturated matmul. Each of
-    these is one of the largest single decode matmuls, so the savings
-    aggregate.
-
-    The numerical risk is bounded: q_a/kv_a/q_b are pre-softmax linear
-    projections (their error is bounded by the BFP8 block-scale error and
-    is dwarfed by the per-head softmax dynamic range). w_o accumulates
-    across heads but is the last op before the residual add — error mixes
-    into a hidden-state that the next layernorm rescales.
-
-    Default: BFP8. Override with ``GLM4_MOE_LITE_ATTN_PROJ_TT_DTYPE``.
-    """
-    return _env_dtype_from("GLM4_MOE_LITE_ATTN_PROJ_TT_DTYPE", dense_dtype)
-
-
 def _attn_dtype_tag(dtype: ttnn.DataType) -> str:
     return _ATTN_DTYPE_TAG.get(dtype, str(dtype))
 
@@ -714,11 +637,10 @@ def convert_decoder_layer_weights(
     attn_proj_mapper = None if attn_dp else attn_row_mapper
     attn_proj_variant = f"{attn_variant}_attndp" if attn_dp and attn_variant else attn_variant
 
-    # All MLA linear projection weights default to BFP8 (DRAM-bandwidth-bound
-    # in the baseline — see _env_attn_proj_dtype docstring). ttnn auto-appends
-    # the dtype to its cache filename, so existing BF16 caches stay valid for
-    # users who opt back via GLM4_MOE_LITE_ATTN_PROJ_TT_DTYPE=bf16.
-    attn_proj_dtype = _env_attn_proj_dtype(dense_dtype)
+    # All MLA linear projection weights use BFP8 (DRAM-bandwidth-bound in the
+    # baseline: w_o 32x5120x2048 @ 83% DRAM util; q_a 32x2048x3072 @ 80%;
+    # kv_a 32x2048x1344 @ 63%). BFP8 halves weight-side DRAM traffic.
+    attn_proj_dtype = ttnn.bfloat8_b
 
     w_q_a = _linear_weight_tt(
         device=device,
@@ -781,12 +703,11 @@ def convert_decoder_layer_weights(
             w_kv_b1_mapper = None  # replicate
             w_kv_b1_variant = f"{attn_variant}_rep"
 
-    # Per-head MLA kv_b weights default to BFP8 (see _env_kvb_dtype docstring).
-    # ttnn auto-appends the dtype to its cache filename, so dtype switches
-    # remain cache-safe. The extra manual ``_bf8`` variant suffix is kept for
-    # explicitness in the cache directory (already in use by an earlier opt).
-    kvb_dtype = _env_kvb_dtype(dense_dtype)
-    kvb_tag = _attn_dtype_tag(kvb_dtype)
+    # Per-head MLA kv_b weights use BFP8 (DRAM-bandwidth-bound: 16-27%
+    # utilization; BFP8 halves weight traffic). The ``_bf8`` variant suffix is
+    # kept for explicitness in the cache directory (already in use on disk).
+    kvb_dtype = ttnn.bfloat8_b
+    kvb_tag = "bf8"
     w_kv_b1 = _per_head_weight_tt(
         device=device,
         torch_weight=w_kv_b1_torch,
@@ -819,7 +740,7 @@ def convert_decoder_layer_weights(
 
     # w_o stays row-parallel even when ATTN_DP=1 (it MUST have all_reduce for correctness).
     # Largest single decode matmul (32x5120x2048 @ 83% DRAM util) → BFP8 weight bytes
-    # halve the dominant bandwidth cost; see _env_attn_proj_dtype.
+    # halve the dominant bandwidth cost.
     w_o = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.o_proj.weight"],
@@ -862,10 +783,10 @@ def convert_decoder_layer_weights(
         mlp_gate_mapper = _tp_mesh_mapper(device, shard_dim=3)
         mlp_down_mapper = _tp_mesh_mapper(device, shard_dim=2)
 
-    # Shared / dense MLP weights default to BFP8 (DRAM-bandwidth-bound — see
-    # _env_mlp_dtype). ttnn auto-tags caches with dtype; users can revert via
-    # GLM4_MOE_LITE_MLP_TT_DTYPE=bf16.
-    mlp_dtype = _env_mlp_dtype(dense_dtype)
+    # Shared / dense MLP weights use BFP8 (DRAM-bandwidth-saturated: gate_up
+    # 32x2048x3072 @ 80% DRAM; down 32x1536x2048 similar). BFP8 halves the
+    # dominant weight-byte DRAM traffic on every MoE layer decode token.
+    mlp_dtype = ttnn.bfloat8_b
     w_mlp_gate = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"{mlp_prefix}gate_proj.weight"],
