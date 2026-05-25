@@ -728,3 +728,68 @@ What remains: **which specific bank-asymmetric op produces the numerical differe
 My pick: **(1) hash sdpa_output_cb at end of flash_mla**. Smallest patch, direct measurement of flash_mla's output divergence. If iter-0 and iter-1 emit DIFFERENT output hashes (which they must, since downstream PCC differs), we confirm the divergence point is inside `:747-791`. Then move to (3) to bisect within the block.
 
 ---
+
+## Attempt 19 — Hash `sdpa_output_cb` at end of flash_mla (1-chunk vs 4-chunk)
+
+**What.** Add `hash_cb(sdpa_output_cb, out_chunk_tiles, 0x30)` right after the final `cb_push_back(sdpa_output_cb, out_chunk_tiles)` in `flash_mla.hpp:792`. Run with `num_internal_iterations=[2]` and `position_id ∈ {127, 511}`.
+
+**Motivation.** Directly measure whether flash_mla's *own* per-core output differs between iter-0 and iter-1 — independent of any downstream propagation. position_id=127 is the control: at 1 chunk the MLP PCC alternation vanishes, so we'd expect output hashes to match. position_id=511 is the bug case: alternation present, so output hashes should differ.
+
+**Result.**
+
+| Run | Total 0x30 hashes | Unique 0x30 values | MLP PCC | Pairing |
+|---|---|---|---|---|
+| `position_id=127` (1 chunk) | 32 | **32** (all unique!) | 0.9901647631143314 (iter-0 = iter-1, no alternation) | every emission distinct |
+| `position_id=511` (4 chunks) | 128 | 123 | 0.9916859209677518 (iter-1 of `num_internal_iterations=2`) | 122 distinct, 3 paired |
+
+Spot check at `position_id=127`, core (x=0,y=1) on device 6:
+- iter-0 output hash: `0x982aef42`
+- iter-1 output hash: `0x3c073639`
+
+Completely different 32-bit hashes — FNV-1a is highly nonlinear so we can't infer magnitude, but the two emissions are not bit-identical CBs.
+
+**Conclusion (major revision to the bug picture).**
+
+flash_mla's per-core output is **bank-asymmetric on every single call**, even at 1 chunk where the final MLP PCC doesn't show alternation. The earlier "bug fires once on chunk-0→chunk-1 transition" interpretation (Attempt 16) was misleading — what actually happens:
+
+- flash_mla per-core output divergence between iter-0 (bank 0) and iter-1 (bank 1) is a **universal, every-call phenomenon**.
+- The downstream stack (post-SDPA tree reduce + matmul4/5 + all-reduce + MoE) is **mostly robust** to small per-core SDPA differences — at 1 chunk it cancels them out entirely, producing bit-identical final MLP outputs in both iters.
+- At multi-chunk the cumulative per-chunk asymmetry inside flash_mla (via reduce_max/sum's DEST round-trips and MM2's running accumulator) compounds enough that downstream stops canceling, and the asymmetry surfaces in MLP PCC.
+
+The "saturation" of MLP-PCC gap at ~2-3e-4 from 4 chunks onward (Attempt 16) is consistent: each additional chunk adds a small bank-asymmetric perturbation, but the cumulative effect saturates because the downstream max/sum normalization rebases everything onto the same scale.
+
+**This rewrites the experimental approach.** We can now:
+- Use `position_id=127` (1 chunk) as the **cheapest repro** — much faster JIT/runtime than 8190.
+- Use **hash equality across iter-0 / iter-1** at sdpa_output_cb as the diagnostic, not MLP PCC. MLP PCC is noisy and downstream-dependent; the hash is a direct signal.
+
+The bug zone is the same `flash_mla.hpp:747-791` block, but now we can bisect with much faster iteration cycles.
+
+**State.** Hash sites in tree. Parametrize includes both 127 and 511 for control + bug case. Kernel patches all reverted.
+
+---
+
+## Updated handoff (post-output-hash)
+
+flash_mla compute is **bank-asymmetric on every call**. Per-core SDPA output diverges between iter-0 (bank 0) and iter-1 (bank 1) regardless of chunk count. The MLP-PCC alternation is just the downstream-visible projection of this for multi-chunk runs.
+
+### What we know
+
+- Confirmed (Attempt 18): inputs identical between iters.
+- Confirmed (Attempt 19): flash_mla per-core output differs between iters at 1 chunk, even though MLP PCC doesn't.
+- Bug zone: `flash_mla.hpp:747-791`, specifically inside the `tile_regs_acquire→release` block.
+- 2c partial fix: cross-thread MATH+PACK `MATH_Offset` reset at chunk entry collapses MLP PCC gap 20× (at multi-chunk).
+- 2c-narrow / 2c-move sweep: only the exact "per-chunk, chunk-entry, both threads, not also at tail" recipe works.
+
+### Cheapest next experiments (with hash-equality diagnostic)
+
+1. **2c at position_id=127 — does it equalize hashes?** Apply 2c and hash; if hash pairs across iters (16 unique values × 2 each), 2c fully fixes the bug at 1 chunk. If still 32 unique, 2c only mitigates downstream propagation, not the per-call asymmetry.
+
+2. **Bisect within `compute_sdpa_chunk` by op-skipping.** With 1-chunk repro (`first_chunk=true` path), the ops are: MM1 → reduce_max → bcast_sub → fast_approx_exp (loop) → MM2 → reduce_sum → tail. Skip each in turn (just on iter-0, or just on iter-1, or both, with simplified replacement) and watch hash equality. The op whose skip makes hashes match is the bug op.
+
+3. **2c-address sweep with hash-equality diagnostic.** Vary which DEST offset 2c's SETC16 points at. Quickly detects which tile address is the bug-relevant one.
+
+4. **Pack-DEST-and-hash inside chunk.** Insert intermediate hash points by packing DEST tiles to L1 mid-chunk. More invasive but pinpoints which DEST tile diverges first across iters.
+
+My pick: **(1) 2c at position_id=127 with hash diagnostic** — single-line edit, validates whether 2c addresses the per-call asymmetry or just downstream visibility.
+
+---

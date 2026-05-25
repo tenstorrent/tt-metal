@@ -790,6 +790,11 @@ struct FlashMLADecode {
                 PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));
             }
             cb_push_back(sdpa_output_cb, out_chunk_tiles);
+            // PATCH (#43563 debug): hash flash_mla's output CB right after the
+            // pack loop. Inputs are confirmed identical between iter-0 and iter-1
+            // (Attempt 18); a divergence here would localize the bug to the
+            // tile_regs_acquire→release block above and let us bisect within.
+            hash_cb(sdpa_output_cb, out_chunk_tiles, 0x30);
             tile_regs_commit();
             tile_regs_wait();
             tile_regs_release();

@@ -863,7 +863,7 @@ def test_decoder(
     "position_id",
     [
         # 0,
-        # 127, # disabled for hash-debug run (no alternation at 1 chunk)
+        127,  # control: 1 chunk, no alternation — iter-0 and iter-1 output hashes should match
         511,  # focus for #43563 hash-debug: 4 chunks total, alternation present
         # pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
         # 8190,  # disabled for hash-debug run (64 chunks → too much DPRINT output)
