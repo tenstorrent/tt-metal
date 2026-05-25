@@ -9,6 +9,7 @@ import torch
 from .format_config import DataFormat
 
 format_dict = {
+    DataFormat.Tf32: torch.float32,
     DataFormat.Float32: torch.float32,
     DataFormat.Float16: torch.float16,
     DataFormat.Float16_b: torch.bfloat16,

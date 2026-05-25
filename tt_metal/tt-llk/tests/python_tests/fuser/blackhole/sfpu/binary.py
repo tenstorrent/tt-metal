@@ -60,7 +60,7 @@ class BinarySfpu(Sfpu):
         batch_dims: tuple,
         batch_tile_cnt: int,
     ) -> torch.Tensor:
-        math_format = operation.output.data_format
+        math_format = config.sentinel.golden_format.math
 
         generate_binary_golden = get_golden_generator(BinarySFPUGolden)
         golden_tensor = generate_binary_golden(

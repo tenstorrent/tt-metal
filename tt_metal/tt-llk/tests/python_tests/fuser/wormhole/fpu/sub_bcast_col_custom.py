@@ -34,7 +34,7 @@ class SubBcastColCustomFpu(EltwiseFpu):
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
-        num_faces = operation.output.tile_shape.total_num_faces()
+        num_faces = operation.tile_shape.total_num_faces()
         return (
             f"// Operation {stage}: SubBcastColCustom FPU\n"
             f"_llk_math_eltwise_binary_init_custom_<ELWSUB, BroadcastType::COL>({num_faces});\n"

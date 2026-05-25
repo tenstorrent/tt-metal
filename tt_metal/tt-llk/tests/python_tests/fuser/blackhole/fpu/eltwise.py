@@ -40,7 +40,7 @@ class EltwiseFpu(Fpu):
         config: GlobalConfig,
         compute_unit: ComputeNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        output_format = operation.output.data_format
+        output_format = config.sentinel.golden_format.math
         math_fidelity = compute_unit.math_fidelity
 
         if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
@@ -71,8 +71,8 @@ class EltwiseFpu(Fpu):
         stage = operation.stage_id
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         op = self.operation.cpp_enum_value
-        face_r_dim = operation.output.tile_shape.face_r_dim
-        face_c_dim = operation.output.tile_shape.face_c_dim
+        face_r_dim = operation.tile_shape.face_r_dim
+        face_c_dim = operation.tile_shape.face_c_dim
         num_faces_r_dim = compute_unit.src_a.tile_shape.total_row_dim() // face_r_dim
         num_faces_c_dim = compute_unit.src_a.tile_shape.total_col_dim() // face_c_dim
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
@@ -96,8 +96,8 @@ class EltwiseFpu(Fpu):
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         op = self.operation.cpp_enum_value
-        face_r_dim = operation.output.tile_shape.face_r_dim
-        face_c_dim = operation.output.tile_shape.face_c_dim
+        face_r_dim = operation.tile_shape.face_r_dim
+        face_c_dim = operation.tile_shape.face_c_dim
         num_faces_r_dim = compute_unit.src_a.tile_shape.total_row_dim() // face_r_dim
         num_faces_c_dim = compute_unit.src_a.tile_shape.total_col_dim() // face_c_dim
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value

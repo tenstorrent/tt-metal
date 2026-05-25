@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from .compute_node import ComputeNode
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
+    from .pack_node import PackNode
 
 
 @dataclass
@@ -28,6 +29,7 @@ class FuserSentinel:
     _unpack_format: Optional[FormatConfig] = field(default=None, repr=False)
     _math_format: Optional[FormatConfig] = field(default=None, repr=False)
     _pack_format: Optional[FormatConfig] = field(default=None, repr=False)
+    _output_format: Optional[DataFormat] = field(default=None, repr=False)
     golden_format: Optional[FormatConfig] = field(default=None, repr=False)
 
     @staticmethod
@@ -51,14 +53,14 @@ class FuserSentinel:
     @staticmethod
     def _compute_format_config(
         config: "GlobalConfig",
-        operation: "FusedOperation",
+        output_format: "DataFormat",
         compute_node: "ComputeNode",
     ) -> FormatConfig:
-        """Infer all pipeline formats from a compute node's operands and the operation output.
+        """Infer all pipeline formats from a compute node's operands and the output format.
 
         Args:
             config: Global pipeline configuration (dest_acc, architecture)
-            operation: Current fused operation (provides output format)
+            output_format: Data format of the output operand
             compute_node: Node whose src_a/src_b drive format inference
 
         Returns:
@@ -76,7 +78,7 @@ class FuserSentinel:
         return infer_data_formats(
             input_format=src_a_format,
             input_format_B=src_b_format,
-            output_format=operation.output.data_format,
+            output_format=output_format,
             is_fp32_dest_acc_en=config.dest_acc,
             unpacking_to_dest=compute_node.unpack_to_dest.value,
             chip_arch=config.architecture,
@@ -85,7 +87,7 @@ class FuserSentinel:
     @staticmethod
     def _compute_format_config_from_output(
         config: "GlobalConfig",
-        operation: "FusedOperation",
+        output_format: "DataFormat",
     ) -> FormatConfig:
         """Infer formats for SFPU only operations that have no input operands.
 
@@ -95,18 +97,31 @@ class FuserSentinel:
 
         Args:
             config: Global pipeline configuration
-            operation: Current fused operation (provides output format)
+            output_format: Data format of the output operand
 
         Returns:
-            FormatConfig compatible with the operation's output format
+            FormatConfig compatible with the output format
         """
         return infer_data_formats(
-            input_format=operation.output.data_format,
-            output_format=operation.output.data_format,
+            input_format=output_format,
+            output_format=output_format,
             is_fp32_dest_acc_en=config.dest_acc,
             unpacking_to_dest=True,
             chip_arch=config.architecture,
         )
+
+    def _infer_format(
+        self,
+        config: "GlobalConfig",
+        operation: "FusedOperation",
+        pack_node: "PackNode",
+    ) -> FormatConfig:
+        """Infer format config for an operation using the given pack_node's output format."""
+        compute_node = self._find_format_node(operation)
+        output_format = pack_node.output.data_format
+        if compute_node is not None:
+            return self._compute_format_config(config, output_format, compute_node)
+        return self._compute_format_config_from_output(config, output_format)
 
     @staticmethod
     def _fmt(data_format: DataFormat) -> str:
@@ -145,6 +160,7 @@ class FuserSentinel:
         self,
         config: "GlobalConfig",
         operation: "FusedOperation",
+        pack_node: "PackNode",
     ) -> str:
         """Emit _llk_unpack_hw_configure_ once for the first operation in the pipeline.
 
@@ -157,6 +173,7 @@ class FuserSentinel:
         Args:
             config: Global pipeline configuration
             operation: Current fused operation
+            pack_node: Pack node providing the output format for format inference
 
         Returns:
             C++ hw_configure call string, or "" if already configured or no inputs exist
@@ -165,10 +182,12 @@ class FuserSentinel:
         if compute_node is None:
             return ""
 
+        self._output_format = pack_node.output.data_format
+
         if self._unpack_format is not None:
             return ""
 
-        fmt = self._compute_format_config(config, operation, compute_node)
+        fmt = self._compute_format_config(config, self._output_format, compute_node)
 
         self._unpack_format = fmt
 
@@ -216,7 +235,7 @@ class FuserSentinel:
         Returns:
             C++ reconfig call(s), or "" if formats match current state
         """
-        new_fmt = self._compute_format_config(config, operation, compute_node)
+        new_fmt = self._compute_format_config(config, self._output_format, compute_node)
         old = self._unpack_format
 
         srca_changed = (
@@ -261,6 +280,7 @@ class FuserSentinel:
         self,
         config: "GlobalConfig",
         operation: "FusedOperation",
+        pack_node: "PackNode",
     ) -> str:
         """Emit _llk_math_hw_configure_ once for the first operation in the pipeline.
 
@@ -272,19 +292,17 @@ class FuserSentinel:
         Args:
             config: Global pipeline configuration
             operation: Current fused operation
+            pack_node: Pack node providing the output format for format inference
 
         Returns:
             C++ hw_configure call string, or "" if already configured
         """
-        compute_node = self._find_format_node(operation)
+        self._output_format = pack_node.output.data_format
 
         if self._math_format is not None:
             return ""
 
-        if compute_node is not None:
-            fmt = self._compute_format_config(config, operation, compute_node)
-        else:
-            fmt = self._compute_format_config_from_output(config, operation)
+        fmt = self._infer_format(config, operation, pack_node)
 
         self._math_format = fmt
 
@@ -316,7 +334,7 @@ class FuserSentinel:
         if compute_node.src_a is None:
             return ""
 
-        new_fmt = self._compute_format_config(config, operation, compute_node)
+        new_fmt = self._compute_format_config(config, self._output_format, compute_node)
 
         if self._math_format.math == new_fmt.math:
             return ""
@@ -334,6 +352,7 @@ class FuserSentinel:
         self,
         config: "GlobalConfig",
         operation: "FusedOperation",
+        pack_node: "PackNode",
     ) -> str:
         """Emit pack hw_configure (first operation) or reconfig (subsequent operations).
 
@@ -349,16 +368,13 @@ class FuserSentinel:
         Args:
             config: Global pipeline configuration
             operation: Current fused operation
+            pack_node: Pack node providing the output format and tile shape
 
         Returns:
             C++ hw_configure or reconfig call, or "" if formats unchanged
         """
-        compute_node = self._find_format_node(operation)
-
-        if compute_node is not None:
-            fmt = self._compute_format_config(config, operation, compute_node)
-        else:
-            fmt = self._compute_format_config_from_output(config, operation)
+        self._output_format = pack_node.output.data_format
+        fmt = self._infer_format(config, operation, pack_node)
 
         # Reconfig path: emit _llk_pack_reconfig_data_format_ only if pack formats changed
         if self._pack_format is not None:
@@ -369,7 +385,7 @@ class FuserSentinel:
                 return ""
 
             dest_acc = config.dest_acc.cpp_enum_value
-            pack_size = operation.output.tile_size
+            pack_size = pack_node.output.tile_size
 
             code = (
                 f"_llk_pack_reconfig_data_format_<{dest_acc}>(\n"
@@ -383,9 +399,9 @@ class FuserSentinel:
         self._pack_format = fmt
 
         dest_acc = config.dest_acc.cpp_enum_value
-        pack_size = operation.output.tile_size
-        face_r_dim = operation.output.tile_shape.face_r_dim
-        num_faces = operation.output.tile_shape.total_num_faces()
+        pack_size = pack_node.output.tile_size
+        face_r_dim = pack_node.output.tile_shape.face_r_dim
+        num_faces = pack_node.output.tile_shape.total_num_faces()
 
         if config.architecture == ChipArchitecture.BLACKHOLE:
             bh_pack_mode = operation.bh_tilize.pack_mode_value
@@ -418,16 +434,16 @@ class FuserSentinel:
             fmt_node = self._find_format_node(operation)
             if fmt_node is not None:
                 self.golden_format = self._compute_format_config(
-                    config, operation, fmt_node
+                    config, self._output_format, fmt_node
                 )
             else:
                 self.golden_format = self._compute_format_config_from_output(
-                    config, operation
+                    config, self._output_format
                 )
             return
 
         if compute_node.src_a is None and compute_node.src_b is None:
             return
 
-        new_fmt = self._compute_format_config(config, operation, compute_node)
+        new_fmt = self._compute_format_config(config, self._output_format, compute_node)
         self.golden_format = new_fmt

@@ -10,7 +10,6 @@ from typing import List
 import pandas as pd
 import pytest
 from helpers.chip_architecture import ChipArchitecture
-from helpers.data_format_inference import is_format_combination_outlier
 from helpers.llk_params import DestAccumulation, DestSync, PerfRunType
 from helpers.logger import logger
 from helpers.perf import PerfReport
@@ -54,16 +53,6 @@ class FuserConfig(TestConfig):
 
         if self.global_config.architecture is None:
             self.global_config.architecture = self.CHIP_ARCH
-
-        for operation in self.pipeline:
-            if is_format_combination_outlier(
-                operation.math.operations[0].src_a.data_format,
-                operation.output.data_format,
-                self.global_config.dest_acc,
-            ):
-                raise ValueError(
-                    f"Dest Accumulation must be enabled for {operation.math.operations[0].src_a.data_format} input and {operation.output.data_format} output"
-                )
 
         num_stages = len(self.pipeline)
 

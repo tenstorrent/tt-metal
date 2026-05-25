@@ -15,18 +15,18 @@ from helpers.llk_params import GoldenType, PerfRunType
 from .block_data import BlockData
 from .compute_node import ComputeNode
 from .fused_fpu import Fpu
-from .fused_packer import Packer
 from .fused_sfpu import Sfpu
 from .fused_unpacker import Unpacker
+from .pack_node import PackNode
 
 
 class ComputePipeline:
     operations: List[ComputeNode]
-    packer: Packer
+    pack_nodes: List[PackNode]
 
-    def __init__(self, operations: List[ComputeNode], packer: Packer):
+    def __init__(self, operations: List[ComputeNode], pack_nodes: List[PackNode]):
         self.operations = operations
-        self.packer = packer
+        self.pack_nodes = pack_nodes
 
     def get_unpackers(self) -> List["Unpacker"]:
         unpackers: List["Unpacker"] = []
@@ -54,8 +54,12 @@ class ComputePipeline:
     ) -> str:
         block_tiles_x = operation.block_tiles_x
         block_tiles_y = operation.block_tiles_y
-        tile_count_x = operation.output.tile_count_x
-        tile_count_y = operation.output.tile_count_y
+        tile_count_x = (
+            operation.max_output_dimensions[1] // operation.tile_shape.total_col_dim()
+        )
+        tile_count_y = (
+            operation.max_output_dimensions[0] // operation.tile_shape.total_row_dim()
+        )
 
         full_blocks_x = tile_count_x // block_tiles_x
         full_blocks_y = tile_count_y // block_tiles_y
@@ -133,7 +137,9 @@ class ComputePipeline:
             code += "{\n"
             code += 'ZONE_SCOPED("INIT")\n'
 
-        code += config.sentinel.hw_configure_unpack(config, operation)
+        code += config.sentinel.hw_configure_unpack(
+            config, operation, self.pack_nodes[0]
+        )
 
         if config.profiler_enabled:
             code += "PROFILER_SYNC();\n"
@@ -211,7 +217,7 @@ class ComputePipeline:
             code += "{\n"
             code += 'ZONE_SCOPED("INIT")\n'
 
-        code += config.sentinel.hw_configure_math(config, operation)
+        code += config.sentinel.hw_configure_math(config, operation, self.pack_nodes[0])
 
         stage = operation.stage_id
         dest_acc = config.dest_acc.cpp_enum_value
@@ -298,24 +304,6 @@ class ComputePipeline:
 
         return code
 
-    @staticmethod
-    def _pack_relu_config(config: "GlobalConfig", operation: "FusedOperation") -> str:
-        from helpers.golden_generators import PackGolden
-
-        pack_src_format = config.sentinel._pack_format.pack_src
-
-        relu_config = PackGolden.generate_relu_config(
-            operation.pack_relu, operation.relu_threshold, pack_src_format
-        )
-        return f"_llk_pack_relu_config_({relu_config});\n"
-
-    @staticmethod
-    def _pack_l1_accumulation_config(
-        config: "GlobalConfig", operation: "FusedOperation"
-    ) -> str:
-        l1_acc = operation.pack_l1_accumulation.cpp_enum_value
-        return f"_llk_pack_reconfig_l1_acc_({l1_acc});\n"
-
     def pack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         code = self._pack_constants(operation, config)
 
@@ -323,11 +311,11 @@ class ComputePipeline:
             code += "{\n"
             code += 'ZONE_SCOPED("INIT")\n'
 
-        code += config.sentinel.hw_configure_pack(config, operation)
+        code += config.sentinel.hw_configure_pack(config, operation, self.pack_nodes[0])
         code += self._pack_reduce_mask_config(operation)
-        code += self.packer().init(operation, config, None, None)
-        code += self._pack_relu_config(config, operation)
-        code += self._pack_l1_accumulation_config(config, operation)
+
+        if len(self.pack_nodes) == 1:
+            code += self.pack_nodes[0].configure(operation, config, None)
 
         if config.profiler_enabled:
             code += "PROFILER_SYNC();\n"
@@ -341,7 +329,10 @@ class ComputePipeline:
 
         def batch_body(block: BlockData):
             body = self._packer_wait_for_math(config)
-            body += self.packer().loop.pack_loop(operation, config, block)
+            for pack_node in self.pack_nodes:
+                if len(self.pack_nodes) > 1:
+                    body += pack_node.configure(operation, config, block)
+                body += pack_node.pack_loop(operation, config, block)
             body += self._packer_dest_section_done(operation, config)
             return body
 
@@ -355,7 +346,8 @@ class ComputePipeline:
             code += 'ZONE_SCOPED("INIT")\n'
 
         code += self.packer_sync_with_unpacker(operation, config)
-        code += self.packer().uninit(operation, config, None, None)
+        for pack_node in self.pack_nodes:
+            code += pack_node.uninit(operation, config)
         code += self._pack_reduce_mask_clear(operation)
 
         if config.profiler_enabled:
@@ -364,14 +356,14 @@ class ComputePipeline:
 
         return code
 
-    def golden(
+    def _math_golden(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
         golden_type: GoldenType,
     ) -> torch.Tensor:
-        tensor_a = torch.zeros(operation.math.operations[0].src_a.dimensions)
-        tensor_b = torch.zeros(operation.math.operations[0].src_b.dimensions)
+        tensor_a = torch.zeros(self.operations[0].src_a.dimensions)
+        tensor_b = torch.zeros(self.operations[0].src_b.dimensions)
         tensor_dst = torch.zeros(operation.max_output_dimensions)
         for op in self.operations:
             config.sentinel.configure_golden(config, operation, op)
@@ -400,16 +392,32 @@ class ComputePipeline:
                 operation,
                 config,
             )
+        return tensor_dst
 
-        dimensions = operation.output.dimensions
-        return tensor_dst.reshape(operation.max_output_dimensions)[
-            : dimensions[0], : dimensions[1]
-        ]
+    def golden(self, operation: "FusedOperation", config: "GlobalConfig"):
+        config.sentinel._output_format = self.pack_nodes[0].output.data_format
+
+        for golden_type in (GoldenType.L1_GOLDEN, GoldenType.MASTER_GOLDEN):
+            math_tensor = self._math_golden(operation, config, golden_type)
+
+            for pack_node in self.pack_nodes:
+                dimensions = pack_node.output.dimensions
+                cropped = math_tensor.reshape(operation.max_output_dimensions)[
+                    : dimensions[0], : dimensions[1]
+                ]
+                result = pack_node.golden(cropped, operation, config)
+
+                if golden_type == GoldenType.L1_GOLDEN:
+                    pack_node.output.l1_golden = result
+                else:
+                    pack_node.output._master_golden = result
 
     def __str__(self):
-        str = "Math:"
+        result = "Math:"
         for op in self.operations:
-            str += "\n    "
-            str += op.__str__()
-
-        return str
+            result += "\n    "
+            result += op.__str__()
+        result += f"\n  Pack:"
+        for pn in self.pack_nodes:
+            result += f"\n    {pn.output}"
+        return result

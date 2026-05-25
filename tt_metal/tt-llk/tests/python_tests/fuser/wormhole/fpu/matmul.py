@@ -32,7 +32,7 @@ class MatmulFpu(Fpu):
         config: GlobalConfig,
         compute_unit: ComputeNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        output_format = operation.output.data_format
+        output_format = config.sentinel.golden_format.math
         math_fidelity = compute_unit.math_fidelity
 
         generate_golden = get_golden_generator(MatmulGolden)

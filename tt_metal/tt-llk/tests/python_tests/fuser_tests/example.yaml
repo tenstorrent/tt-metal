@@ -37,8 +37,7 @@ operands:
     format: "Float32"
 
 operations:
-  - output: "datacopy_output"
-    math:
+  - math:
       - type: "Fpu"
         src_a: "input_A"
         src_b: "input_B"
@@ -57,11 +56,12 @@ operations:
         src_b: "input_B1"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
-    packer: "Packer"
     block_size: [64, 64]
 
-  - output: "tilized_output"
-    math:
+    pack:
+      - output: "datacopy_output"
+        packer: "Packer"
+  - math:
       - type: "Fpu"
         src_a: "datacopy_output"
         src_b: "input_B"
@@ -83,11 +83,12 @@ operations:
         src1_dest_tile_index: 0
         src2_dest_tile_index: 1
         dst_dest_tile_index: 1
-    packer: "Packer"
     block_size: [64, 64]
 
-  - output: "elwadd_output"
-    math:
+    pack:
+      - output: "tilized_output"
+        packer: "Packer"
+  - math:
       - type: "Fpu"
         src_a: "tilized_output"
         src_b: "input_B"
@@ -101,11 +102,12 @@ operations:
         operation: "Neg"
         approximation_mode: false
         iterations: 32
-    packer: "Packer"
     dest_sync: "SyncFull"
 
-  - output: "matmul_result"
-    math:
+    pack:
+      - output: "elwadd_output"
+        packer: "Packer"
+  - math:
       - type: "Fpu"
         src_a: "elwadd_output"
         src_b: "input_C"
@@ -120,10 +122,11 @@ operations:
         operation: "Sqrt"
         approximation_mode: false
         iterations: 32
-    packer: "Packer"
 
-  - output: "final_output"
-    math:
+    pack:
+      - output: "matmul_result"
+        packer: "Packer"
+  - math:
       - type: "Fpu"
         src_a: "matmul_result"
         src_b: "input_D"
@@ -141,4 +144,6 @@ operations:
         src1_dest_tile_index: 0
         src2_dest_tile_index: 0
         dst_dest_tile_index: 0
-    packer: "Packer"
+    pack:
+      - output: "final_output"
+        packer: "Packer"

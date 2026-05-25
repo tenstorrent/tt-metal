@@ -57,8 +57,8 @@ class UnarySfpu(Sfpu):
         batch_dims: tuple,
         batch_tile_cnt: int,
     ) -> torch.Tensor:
-        format_input = operation.output.data_format
-        format_output = operation.output.data_format
+        format_input = config.sentinel.golden_format.math
+        format_output = config.sentinel.golden_format.math
         dest_acc = config.dest_acc
 
         generate_sfpu_golden = get_golden_generator(UnarySFPUGolden)

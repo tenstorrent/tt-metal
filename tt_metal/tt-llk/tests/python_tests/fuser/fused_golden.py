@@ -16,12 +16,7 @@ class FusedGolden:
         self.verbose = verbose
         self.results = []
 
-    def check_operation(self, operation: FusedOperation) -> bool:
-        output = operation.output
-
-        if self.verbose:
-            logger.info("{}", operation)
-
+    def _check_output(self, output) -> bool:
         res_tensor = torch.tensor(
             output.raw_data, dtype=format_dict[output.data_format]
         )
@@ -36,7 +31,7 @@ class FusedGolden:
         l1_golden = l1_golden.flatten()
         master_golden = master_golden.flatten()
 
-        logger.info("L1 golden check:")
+        logger.info(f"L1 golden check for {output.name}:")
         l1_passed = passed_test(
             l1_golden,
             res_tensor,
@@ -45,7 +40,7 @@ class FusedGolden:
             custom_atol=0.1,
             custom_rtol=0.1,
         )
-        logger.info("Master golden check:")
+        logger.info(f"Master golden check for {output.name}:")
         master_passed = passed_test(
             master_golden,
             res_tensor,
@@ -55,7 +50,16 @@ class FusedGolden:
             custom_rtol=0.1,
         )
 
-        passed = l1_passed and master_passed
+        return l1_passed and master_passed
+
+    def check_operation(self, operation: FusedOperation) -> bool:
+        if self.verbose:
+            logger.info(f"{operation}")
+
+        passed = True
+        for pack_node in operation.math.pack_nodes:
+            if not self._check_output(pack_node.output):
+                passed = False
 
         if self.verbose:
             if passed:

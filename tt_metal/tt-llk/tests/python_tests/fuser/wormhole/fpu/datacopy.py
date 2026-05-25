@@ -41,10 +41,10 @@ class DatacopyFpu(Fpu):
         golden_generator = get_golden_generator(DataCopyGolden)
         golden_tensor = golden_generator(
             source_tensor,
-            operation.output.data_format,
-            num_faces=operation.output.tile_shape.total_num_faces(),
+            config.sentinel.golden_format.math,
+            num_faces=operation.tile_shape.total_num_faces(),
             input_dimensions=compute_unit.src_a.dimensions,
-            face_r_dim=operation.output.tile_shape.face_r_dim,
+            face_r_dim=operation.tile_shape.face_r_dim,
         )
 
         return (tensor_a, tensor_b, golden_tensor)
@@ -59,7 +59,7 @@ class DatacopyFpu(Fpu):
         dest_acc = config.dest_acc.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         data_copy_type = compute_unit.data_copy_type.cpp_enum_value
-        num_faces = operation.output.tile_shape.total_num_faces()
+        num_faces = operation.tile_shape.total_num_faces()
         _int_fpu_formats = {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
         is_int_fpu_en = (
             "true"

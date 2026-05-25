@@ -201,11 +201,17 @@ class ComputeNode:
             tilized_dst = tilize_block(
                 tensor_dst,
                 operation.max_output_dimensions,
-                operation.output.data_format,
+                config.sentinel.golden_format.math,
             )
 
-            tile_count_x = operation.output.tile_count_x
-            tile_count_y = operation.output.tile_count_y
+            tile_count_x = (
+                operation.max_output_dimensions[1]
+                // operation.tile_shape.total_col_dim()
+            )
+            tile_count_y = (
+                operation.max_output_dimensions[0]
+                // operation.tile_shape.total_row_dim()
+            )
             block_tiles_x = operation.block_tiles_x
             block_tiles_y = operation.block_tiles_y
 
@@ -270,7 +276,7 @@ class ComputeNode:
 
             tensor_dst = untilize_block(
                 tilized_dst.flatten(),
-                operation.output.data_format,
+                config.sentinel.golden_format.math,
                 operation.max_output_dimensions,
             ).reshape(operation.max_output_dimensions)
 
