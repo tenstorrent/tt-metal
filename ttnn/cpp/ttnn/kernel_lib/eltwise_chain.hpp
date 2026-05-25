@@ -451,29 +451,67 @@ enum class OperandKind : uint8_t {
 
 /// Kind × InputLifecycle compatibility.
 ///
-/// Block: every legal lifecycle is allowed — iteration count Ht·Wt matches
-/// operand size.
+/// Only Block carries structural restrictions; non-Block (Scalar / Row / Col)
+/// is caller-sized and works with any lifecycle as long as the caller's
+/// `n_tiles` matches the lifecycle's consumption pattern.
 ///
-/// Row / Col / Scalar: only lifecycles whose total pop count equals the
-/// operand's tile count M (M < Ht·Wt) are legal. PerTile / PerChunk /
-/// Cumulative pop policies would over-consume.
-/// Legal cells for Row/Col/Scalar:
-///   - Bulk             (wait M, pop M)
-///   - CallerManaged    (no chain edges)
-///   - HeldBulk         (wait M, never pop — chain holds for caller)
-///   - HeldCumulative   (cumulative wait to M, never pop)
-///   - DeferredPop      (caller pre-waited, chain bulk-pops M at end)
-/// Note: HeldCumulative on Scalar degenerates to HeldBulk (M=1) but is
-/// kept legal for symmetry.
+/// Block walks absolute CB-front index `base_tile + i` per iter (chain
+/// dispatcher passes the absolute flat index; Chunked is the one exception —
+/// it uses a chunk-local index). Two structural footguns follow:
+///
+///   (a) PerTile pop (Streaming / BulkDrain / NoWaitPop) shifts the CB front
+///       each iter; combined with absolute indexing the chain reads the wrong
+///       tile after iter 0 (idx (base+i) into the now-shifted front yields
+///       original tile (base + 2i)). Caller sizing cannot rescue this.
+///   (b) PerTile wait of 1 (HeldStream) is either redundant (caller pre-pushed
+///       all n — use HeldBulk) or under-waiting (caller streams — chain reads
+///       tile i before producer pushed it). Never tracks the per-iter
+///       requirement for a walking Block reader.
+///
+/// Non-Block kinds dodge both footguns: index is constant (Scalar) or driven
+/// by ht/wt alone (Row/Col), so the CB-front shift from PerTile pop is benign
+/// and PerTile wait of 1 can be satisfied by the producer pushing the single
+/// broadcast tile once. Whether the chain actually drains the right number of
+/// tiles is the caller's responsibility (depends on their `n_tiles`).
+///
+/// Block — legal lifecycles (7):
+///   Bulk / Pipelined / HeldBulk / HeldCumulative / Chunked / CallerManaged / DeferredPop
+///
+/// Scalar / Row / Col — every legal InputLifecycle (caller-sized).
 constexpr bool is_legal_kind_lifecycle(OperandKind kind, InputLifecycle lc) noexcept {
     if (!is_legal_input_lifecycle(lc)) {
         return false;
     }
     if (kind == OperandKind::Block) {
-        return true;  // Block accepts every legal lifecycle
+        // Block walks absolute idx with M = Ht·Wt = iter count. Exclude PerTile-pop
+        // (Streaming / BulkDrain / NoWaitPop — front-shift + absolute-idx footgun)
+        // and PerTile-wait of 1 (HeldStream — never tracks per-iter requirement).
+        // Growing (Cumulative) and chunked (PerChunk) counts ARE legal here because
+        // M = iter count, so the counts never exceed operand size.
+        return lc == Bulk || lc == Pipelined || lc == HeldBulk || lc == HeldCumulative || lc == Chunked ||
+               lc == CallerManaged || lc == DeferredPop;
     }
-    // Row / Col / Scalar: only lifecycles whose pop count matches operand size M.
-    return lc == Bulk || lc == CallerManaged || lc == HeldBulk || lc == HeldCumulative || lc == DeferredPop;
+    // Non-Block (Scalar / Row / Col): M < iter count. Reject lifecycles whose
+    // wait/pop count grows with iter index (Pipelined, HeldCumulative) or scales
+    // with chunk size (Chunked) — these emit counts that exceed M (deadlock past
+    // iter M). Only Block, where M = iter count, can absorb these counts safely.
+    if (lc == Pipelined || lc == HeldCumulative || lc == Chunked) {
+        return false;
+    }
+    if (kind == OperandKind::Scalar) {
+        // Scalar (M=1, single broadcast tile): accepts the remaining 8 lifecycles —
+        // PerTile-pop ones (Streaming / BulkDrain / NoWaitPop) and HeldStream are
+        // caller-sized for n_tiles=1, Bulk / HeldBulk / CallerManaged / DeferredPop
+        // are unconditional.
+        return true;
+    }
+    // Row / Col (2D only — 1D rejects these at entry): the operand window is
+    // re-read across the full Ht·Wt iteration (Row's Wt tiles get read Ht times,
+    // Col's Ht tiles get read Wt times). PerTile-pop lifecycles (Streaming /
+    // BulkDrain / NoWaitPop) drain the operand before re-iteration completes;
+    // HeldStream's PerTile wait of 1 says nothing about which tile arrived.
+    // Only "operand persists across all iters" lifecycles work.
+    return lc == Bulk || lc == HeldBulk || lc == CallerManaged || lc == DeferredPop;
 }
 
 // =============================================================================

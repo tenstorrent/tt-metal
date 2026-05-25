@@ -227,13 +227,13 @@ struct CopyTile : CopyTileTag {
     // ---- compile-time validation ----
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "CopyTile: DEST slot exceeds DEST_AUTO_LIMIT");
-    // Comprehensive (IndexMode, Policy) legality. Catches over-consume cells at
-    // composition time — e.g. Streaming + Scalar (PerTile pop over-consumes M=1),
-    // Pipelined + Row (cumulative wait over-waits past M=Wt). Block accepts every
-    // legal lifecycle; Row / Col / Scalar require Bulk-family.
+    // Comprehensive (IndexMode, Policy) legality. Block rejects PerTile-pop
+    // (Streaming/BulkDrain/NoWaitPop — absolute-idx footgun) and PerTile-wait-of-1
+    // (HeldStream — never tracks per-iter requirement). Scalar/Row/Col accept every
+    // legal lifecycle — caller-sized.
     static_assert(is_legal_kind_lifecycle(IndexMode, Policy),
-                  "CopyTile: (IndexMode, Policy) is not a legal cell — Row/Col/Scalar require "
-                  "Bulk / HeldBulk / HeldCumulative / DeferredPop / CallerManaged");
+                  "CopyTile: (IndexMode, Policy) is illegal for Block — exclude "
+                  "Streaming / HeldStream / BulkDrain / NoWaitPop on Block walkers.");
     // 2D: RowBcast / ColBcast require non-streaming policy (matches binary_op_helpers ROW/SCALAR rule).
     static_assert(detail::valid_policy_mode_2d_v<Policy, IndexMode>,
                   "CopyTile: RowBcast / ColBcast index require non-streaming policy "
@@ -603,20 +603,16 @@ template <uint32_t CbA,
 struct BinaryFpu : BinaryFpuTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "BinaryFpu: DEST slot exceeds DEST_AUTO_LIMIT");
-    // Comprehensive per-side (IndexMode, Policy) legality. Catches over-consume cells
-    // at composition time on either operand.
+    // Comprehensive per-side (IndexMode, Policy) legality. Block rejects PerTile-pop
+    // (Streaming/BulkDrain/NoWaitPop — absolute-idx footgun) and PerTile-wait-of-1
+    // (HeldStream — never tracks per-iter requirement). Scalar/Row/Col accept every
+    // legal lifecycle — caller-sized.
     static_assert(is_legal_kind_lifecycle(AIndex, APolicy),
-                  "BinaryFpu: (AIndex, APolicy) is not a legal cell — Row/Col/Scalar require "
-                  "Bulk / HeldBulk / HeldCumulative / DeferredPop / CallerManaged");
+                  "BinaryFpu: (AIndex, APolicy) is illegal for Block — exclude "
+                  "Streaming / HeldStream / BulkDrain / NoWaitPop on Block walkers.");
     static_assert(is_legal_kind_lifecycle(BIndex, BPolicy),
-                  "BinaryFpu: (BIndex, BPolicy) is not a legal cell — Row/Col/Scalar require "
-                  "Bulk / HeldBulk / HeldCumulative / DeferredPop / CallerManaged");
-    // Per-side BlockIter requires Upfront / NoWait* on that side (caller pre-pushes the
-    // walked range; per-tile wait + pop would not advance the walked index).
-    static_assert(!(APolicy == Streaming && AIndex == OperandKind::Block),
-                  "BinaryFpu: AIndex=BlockIter requires APolicy in {WaitUpfrontPopAtEnd, WaitNoPop, NoWaitPop, NoWaitNoPop}");
-    static_assert(!(BPolicy == Streaming && BIndex == OperandKind::Block),
-                  "BinaryFpu: BIndex=BlockIter requires BPolicy in {WaitUpfrontPopAtEnd, WaitNoPop, NoWaitPop, NoWaitNoPop}");
+                  "BinaryFpu: (BIndex, BPolicy) is illegal for Block — exclude "
+                  "Streaming / HeldStream / BulkDrain / NoWaitPop on Block walkers.");
     // same_cb dedup safety: when CbA == CbB the B-side wait/pop is skipped, so the
     // helper would under-wait if A and B walked different ranges of the shared CB.
     static_assert((CbA != CbB) || AIndex == BIndex,
@@ -922,10 +918,8 @@ struct DestReuseBinary : DestReuseBinaryTag {
     static_assert(to_u32(DstIn) < DEST_AUTO_LIMIT && to_u32(DstOut) < DEST_AUTO_LIMIT,
                   "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(is_legal_kind_lifecycle(IndexMode, Policy),
-                  "DestReuseBinary: (IndexMode, Policy) is not a legal cell — Row/Col/Scalar require "
-                  "Bulk / HeldBulk / HeldCumulative / DeferredPop / CallerManaged");
-    static_assert(!(Policy == Streaming && IndexMode == OperandKind::Block),
-                  "DestReuseBinary: BlockIter index requires Upfront / Cumulative / NoWaitNoPop policy");
+                  "DestReuseBinary: (IndexMode, Policy) is illegal for Block — exclude "
+                  "Streaming / HeldStream / BulkDrain / NoWaitPop on Block walkers.");
     static_assert(detail::valid_policy_mode_2d_v<Policy, IndexMode>,
                   "DestReuseBinary: RowBcast / ColBcast index require non-streaming policy");
     static_assert(is_tile_base_none_v<TileBaseT> || is_legal_input_lifecycle_with_base(Policy),
@@ -1306,6 +1300,43 @@ constexpr bool element_supports_block() {
 
 template <class... Es>
 constexpr bool chain_supports_block_impl_v = (element_supports_block<Es>() && ...);
+
+// 1D-only chain entry points cannot resolve Row/Col indexing — there is no
+// Ht/Wt context to drive `idx_2d<Row>(...) = wt` or `idx_2d<Col>(...) = ht`.
+// In 1D, exec collapses Row/Col to `base` (silently degenerate). Banning these
+// kinds at the 1D dispatch site forces callers to either pick Block/Scalar
+// (the only kinds that make sense without Ht/Wt) or switch to the 2D
+// `eltwise_chain(EltwiseShape, ...)` overload.
+template <class E, class = void>
+struct elem_has_a_index_mode : std::false_type {};
+template <class E>
+struct elem_has_a_index_mode<E, std::void_t<decltype(E::a_index_mode)>> : std::true_type {};
+
+template <class E, class = void>
+struct elem_has_b_index_mode : std::false_type {};
+template <class E>
+struct elem_has_b_index_mode<E, std::void_t<decltype(E::b_index_mode)>> : std::true_type {};
+
+template <class E, class = void>
+struct elem_has_index_mode : std::false_type {};
+template <class E>
+struct elem_has_index_mode<E, std::void_t<decltype(E::index_mode)>> : std::true_type {};
+
+constexpr bool is_2d_only_kind(OperandKind k) noexcept {
+    return k == OperandKind::Row || k == OperandKind::Col;
+}
+
+template <class E>
+constexpr bool element_uses_2d_only_kind() {
+    bool bad = false;
+    if constexpr (elem_has_a_index_mode<E>::value) bad = bad || is_2d_only_kind(E::a_index_mode);
+    if constexpr (elem_has_b_index_mode<E>::value) bad = bad || is_2d_only_kind(E::b_index_mode);
+    if constexpr (elem_has_index_mode<E>::value)   bad = bad || is_2d_only_kind(E::index_mode);
+    return bad;
+}
+
+template <class... Es>
+constexpr bool chain_uses_2d_only_kind_impl_v = (element_uses_2d_only_kind<Es>() || ...);
 }  // namespace detail
 
 template <class Chain>
@@ -1314,6 +1345,16 @@ struct chain_supports_block;
 template <class... Es>
 struct chain_supports_block<EltwiseChain<Es...>>
     : std::bool_constant<detail::chain_supports_block_impl_v<Es...>> {};
+
+template <class Chain>
+struct chain_uses_2d_only_kind;
+
+template <class... Es>
+struct chain_uses_2d_only_kind<EltwiseChain<Es...>>
+    : std::bool_constant<detail::chain_uses_2d_only_kind_impl_v<Es...>> {};
+
+template <class Chain>
+inline constexpr bool chain_uses_2d_only_kind_v = chain_uses_2d_only_kind<Chain>::value;
 
 template <class Chain>
 inline constexpr bool chain_supports_block_v = chain_supports_block<Chain>::value;
@@ -1769,6 +1810,10 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
     static_assert(!chain_pack_writes_collide_v<Chain>,
                   "eltwise_chain: two PackTile elements collide on (cb, dst_slot). "
                   "Pack writes must target distinct (cb, dst) tuples.");
+    static_assert(!chain_uses_2d_only_kind_v<Chain>,
+                  "eltwise_chain (1D): Row / Col OperandKind has no meaning without Ht/Wt "
+                  "context — pick Block (walk) or Scalar (broadcast), or switch to the 2D "
+                  "`eltwise_chain(EltwiseShape, ...)` overload.");
 
     constexpr bool emit_init_per_tile = !chain_is_hoist_safe_v<Chain>;
 
