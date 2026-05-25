@@ -186,7 +186,13 @@
  *  - BinaryDataFormatReconfig::Input → fold emits `reconfig_data_format_srca / _srcb` per side (compile-time-elided per
  * side). Pack-side reconfig is owned by the downstream `PackTile` (`PackTileReconfig::Output`); BinaryFpu writes to
  * DEST, never to a CB.
+ *  - BinaryDataFormatReconfig::SrcA  → fold emits `reconfig_data_format_srca` only (caller asserts srcb is already
+ * programmed). Single-side variant for chains where the other side is already bound by a prior element.
+ *  - BinaryDataFormatReconfig::SrcB  → fold emits `reconfig_data_format_srcb` only (caller asserts srca is already
+ * programmed). Mirror of SrcA.
  *  - DestReuseReconfig::Input        → fold emits per-side reconfig (srca OR srcb depending on ReuseType).
+ *  - DestReuseReconfig::SrcA         → fold emits `reconfig_data_format_srca` only, decoupled from ReuseType.
+ *  - DestReuseReconfig::SrcB         → fold emits `reconfig_data_format_srcb` only, decoupled from ReuseType.
  *  - PackTileReconfig::Output        → fold emits `pack_reconfig_data_format(new_cb)`.
  *  - PackTileReconfig::OutputConditional → currently emits same as ::Output; future extension may
  *    select two-arg `pack_reconfig_data_format(prev, curr)` form when prev_pack is known (D7 note).
@@ -283,6 +289,32 @@ template <class T>
 inline constexpr bool is_fill_tile_op_v = std::is_base_of_v<FillTileTag, T>;
 template <class T>
 inline constexpr bool is_rand_tile_op_v = std::is_base_of_v<RandTileTag, T>;
+
+/// SFPU (DEST-internal, non-RNG, non-fill) element predicate. SFPU ops inherit
+/// from `DestOnlyTag` via `UnaryOp` / `BinaryOp` / `TernaryOp` / `QuaternaryOp`;
+/// Fill / Rand share the `DestOnlyTag` lineage but their init programs PRNG /
+/// fill state, not the SFPU MOP / ADDR_MOD_7 lane. The hoist gate counts distinct
+/// SFPU init types — `is_sfpu_op_v` is the predicate.
+template <class T>
+inline constexpr bool is_sfpu_op_v = is_dest_only_op_v<T> && !is_fill_tile_op_v<T> && !is_rand_tile_op_v<T>;
+
+/// FPU-kind (non-CopyTile, FPU-MOP-touching) element predicate. Groups
+/// `BinaryFpu`, `DestReuseBinary`, `UnaryBcast` — each programs the FPU MOP /
+/// ADDR_MOD_0..3 lane on init via the binary-op init path.
+template <class T>
+inline constexpr bool is_fpu_kind_op_v =
+    is_binary_fpu_op_v<T> || is_dest_reuse_binary_op_v<T> || is_unary_bcast_op_v<T>;
+
+/// MATH-MOP-touching element predicate. Groups every element whose init
+/// programs the MATH MOP / ADDR_MOD_0..3 lane: `CopyTile` (via
+/// `copy_tile_to_dst_init_short`) and the FPU-kind ops (`BinaryFpu`,
+/// `DestReuseBinary`, `UnaryBcast`). The hoist gate (doc G3 + the
+/// CopyTile-versus-FPU clash from the old `chain_has_non_copy_tile_fpu_clash`
+/// predicate) requires all such elements in a chain to be the same
+/// instantiated type — otherwise the boot-time fold leaves only the last
+/// init's MOP programmed and earlier elements run with the wrong MOP.
+template <class T>
+inline constexpr bool is_math_mop_op_v = is_copy_tile_op_v<T> || is_fpu_kind_op_v<T>;
 
 // =============================================================================
 // 1b. 2D shape — (Ht, Wt) tile grid for the 2D chain overload
@@ -680,9 +712,16 @@ enum class BinaryFpuOp : uint8_t { Add, Sub, Mul };
 /// FPU binary dtype-reconfig. Input-side only — pack-side reconfig is owned by
 /// the downstream `PackTile` element (`PackTileReconfig::Output`). BinaryFpu writes
 /// to DEST, never to a CB, so it has no pack-side responsibility.
+///
+/// `Input` is the safe default (both sides folded). `SrcA` / `SrcB` opt into a
+/// single-side fold when the caller knows the *other* side is already programmed
+/// (e.g. previous chain element bound that CB on the same side, or the side is
+/// programmed via external init outside the chain).
 enum class BinaryDataFormatReconfig : uint8_t {
     None,
-    Input,  // srca and/or srcb on entry (default — safest, no skip)
+    Input,  // srca and srcb on entry (default — safest, no skip)
+    SrcA,   // srca only — caller asserts srcb is already programmed
+    SrcB,   // srcb only — caller asserts srca is already programmed
 };
 
 /// FPU broadcast dimension. Caller MUST pass explicitly — no inference.
@@ -717,9 +756,16 @@ enum class DestReuseType : uint8_t {
 };
 
 /// DestReuseBinary reconfig (NEVER a bool — see proposal §2.5).
+///
+/// `Input` folds the side the CB is loaded into (driven by `ReuseType`: DEST_TO_SRCA
+/// reconfigs srcb, DEST_TO_SRCB reconfigs srca). `SrcA` / `SrcB` explicitly pick a
+/// side, decoupled from `ReuseType` — useful when the caller wants to assert which
+/// unpack lane needs reprogramming irrespective of which lane DEST is feeding into.
 enum class DestReuseReconfig : uint8_t {
     None,
     Input,  // srca-or-srcb reconfig per ReuseType
+    SrcA,   // srca only — explicit, independent of ReuseType
+    SrcB,   // srcb only — explicit, independent of ReuseType
 };
 
 /// UnaryBcast reconfig.
@@ -987,6 +1033,12 @@ struct chain_has_duplicate_upfront_cbs;
 template <class Chain>
 struct chain_pack_writes_collide;
 template <class Chain>
+struct chain_per_side_cbs_consistent;
+template <class Chain>
+struct chain_math_mop_uniform;
+template <class Chain>
+struct chain_sfpu_inits_uniform;
+template <class Chain>
 struct chain_is_hoist_safe;
 
 template <class Chain>
@@ -1005,6 +1057,12 @@ template <class Chain>
 inline constexpr bool chain_has_duplicate_upfront_cbs_v = chain_has_duplicate_upfront_cbs<Chain>::value;
 template <class Chain>
 inline constexpr bool chain_pack_writes_collide_v = chain_pack_writes_collide<Chain>::value;
+template <class Chain>
+inline constexpr bool chain_per_side_cbs_consistent_v = chain_per_side_cbs_consistent<Chain>::value;
+template <class Chain>
+inline constexpr bool chain_math_mop_uniform_v = chain_math_mop_uniform<Chain>::value;
+template <class Chain>
+inline constexpr bool chain_sfpu_inits_uniform_v = chain_sfpu_inits_uniform<Chain>::value;
 template <class Chain>
 inline constexpr bool chain_is_hoist_safe_v = chain_is_hoist_safe<Chain>::value;
 
