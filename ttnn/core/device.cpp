@@ -16,7 +16,13 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     const std::optional<tt::tt_metal::DispatchCoreConfig>& dispatch_core_config,
     size_t worker_l1_size) {
     return MeshDevice::create_unit_mesh(
-        device_id, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, {}, worker_l1_size);
+        device_id,
+        l1_small_size,
+        trace_region_size,
+        num_command_queues,
+        dispatch_core_config.value_or(tt::tt_metal::DispatchCoreConfig::create_dispatch_core_config()),
+        {},
+        worker_l1_size);
 }
 
 void enable_program_cache(IDevice& device) { device.enable_program_cache(); }
