@@ -29,7 +29,7 @@ paging in this baseline implementation. SDPA decode uses
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 import torch
 import ttnn
@@ -225,32 +225,33 @@ class TtAttention:
         # position p maps to physical block ``page_table[user, p // block_size]`` at slot
         # ``p % block_size``. Chunked prefill writes block-by-block via ``paged_fill_cache``;
         # decode updates a single position via ``paged_update_cache``.
+        n_kv_blocks = args.kv_num_total_blocks
         self.k_cache = upload_paged_kv_cache_buffer(
-            num_total_blocks=args.kv_num_total_blocks,
+            num_total_blocks=n_kv_blocks,
             n_kv_heads=args.n_local_kv_heads,
             block_size=args.kv_block_size,
             head_dim=args.head_dim,
             mesh_device=mesh_device,
             dtype=args.kv_cache_dtype,
             weight_cache_path=wp,
-            cache_key=f"{pfx}k_cache_paged",
+            cache_key=f"{pfx}k_cache_paged_{n_kv_blocks}",
         )
         self.v_cache = upload_paged_kv_cache_buffer(
-            num_total_blocks=args.kv_num_total_blocks,
+            num_total_blocks=n_kv_blocks,
             n_kv_heads=args.n_local_kv_heads,
             block_size=args.kv_block_size,
             head_dim=args.head_dim,
             mesh_device=mesh_device,
             dtype=args.kv_cache_dtype,
             weight_cache_path=wp,
-            cache_key=f"{pfx}v_cache_paged",
+            cache_key=f"{pfx}v_cache_paged_{n_kv_blocks}",
         )
-        # Page table: ``[batch, blocks_per_user]`` int32 mapping logical block -> physical block.
-        # Identical across all attention layers; step 3 (model) will hoist this to model scope to
-        # save the per-layer duplication. For now each layer holds its own (tiny) replica.
+        # Page table: ``[batch, kv_page_table_blocks_per_user]`` int32 mapping logical block
+        # -> physical block. Width is padded to a multiple of 8 for flexible chunked SDPA and must
+        # match ``k_cache.shape[0] // batch`` for decode ``paged_update_cache``.
         self.page_table = upload_page_table(
             batch_size=args.max_batch_size,
-            num_blocks_per_user=args.kv_num_blocks_per_user,
+            num_blocks_per_user=args.kv_page_table_blocks_per_user,
             mesh_device=mesh_device,
             weight_cache_path=wp,
         )
@@ -382,6 +383,9 @@ class TtAttention:
         *,
         start_pos: int = 0,
         user_id: int = 0,
+        chunk_start_idx_tensor: Optional[ttnn.Tensor] = None,
+        chunk_page_table: Optional[ttnn.Tensor] = None,
+        prefill_rope_tables: Optional[Sequence[ttnn.Tensor]] = None,
     ) -> ttnn.Tensor:
         """One prefill chunk. ``x``: ``(1, 1, S, hidden_size)``, ``S`` a multiple of ``kv_block_size``.
 
@@ -405,22 +409,31 @@ class TtAttention:
         )
         ttnn.deallocate(qkv)
 
-        cos_q, sin_q, cos_k, sin_k = self.rotary_emb.get_prefill_tables(start_pos, S)
+        own_rope_tables = prefill_rope_tables is None
+        if prefill_rope_tables is not None:
+            cos_q, sin_q, cos_k, sin_k = prefill_rope_tables
+        else:
+            cos_q, sin_q, cos_k, sin_k = self.rotary_emb.get_prefill_tables(start_pos, S)
         q_heads, k_heads = self.rotary_emb.apply(q_heads, k_heads, cos_q, sin_q, cos_k, sin_k)
-        # Free the RoPE prefill slices immediately. They sit in L1 (sliced from L1 source tables)
-        # and would otherwise stay alive through SDPA + nlp_concat_heads + o_proj matmul,
-        # where a growing CB region eventually collides with their L1 address.
-        ttnn.deallocate(cos_q)
-        ttnn.deallocate(sin_q)
-        ttnn.deallocate(cos_k)
-        ttnn.deallocate(sin_k)
+        # Free ephemeral RoPE slices only; persistent trace buffers are owned by the caller.
+        if own_rope_tables:
+            ttnn.deallocate(cos_q)
+            ttnn.deallocate(sin_q)
+            ttnn.deallocate(cos_k)
+            ttnn.deallocate(sin_k)
 
-        # Write this chunk's K, V into the paged cache. The chunk_page_table is a contiguous
-        # slice of the full page_table covering only the blocks this chunk fills.
-        chunk_pt = self._chunk_page_table(start_pos, S)
-        ttnn.experimental.paged_fill_cache(self.k_cache, k_heads, chunk_pt, batch_idx=user_id)
-        ttnn.experimental.paged_fill_cache(self.v_cache, v_heads, chunk_pt, batch_idx=user_id)
-        ttnn.deallocate(chunk_pt)
+        # Write this chunk's K, V into the paged cache. For chunk 0 use the full page table;
+        # later chunks use a one-block slice (host-updated before trace replay when tracing).
+        if chunk_page_table is not None:
+            fill_page_table = chunk_page_table
+        elif start_pos > 0:
+            fill_page_table = self._chunk_page_table(start_pos, S)
+        else:
+            fill_page_table = self.page_table
+        ttnn.experimental.paged_fill_cache(self.k_cache, k_heads, fill_page_table, batch_idx=user_id)
+        ttnn.experimental.paged_fill_cache(self.v_cache, v_heads, fill_page_table, batch_idx=user_id)
+        if chunk_page_table is None and start_pos > 0:
+            ttnn.deallocate(fill_page_table)
         # K/V have been persisted; the fresh head tensors are no longer needed — SDPA reads from
         # the cache via the full page_table.
         ttnn.deallocate(k_heads)
@@ -430,15 +443,31 @@ class TtAttention:
         # K/V at ``[0, start_pos+S)`` with a block-causal mask. K/V are read from paged storage.
         # Q/K/V/page_table/chunk_start_idx must be positional (nanobind ``noconvert()`` on tensors).
         # Do not pass ``memory_config`` here; output defaults to interleaved DRAM (see ``test_sdpa_chunked``).
-        attn = ttnn.transformer.chunked_scaled_dot_product_attention(
-            q_heads,
-            self.k_cache,
-            self.v_cache,
-            self.page_table,
-            start_pos,
+        sdpa_kwargs = dict(
             program_config=self._prefill_sdpa_program_config(),
             compute_kernel_config=self._compute_kernel_config,
         )
+        # Flexible SDPA uses ``page_table`` column count (including alignment padding) as the
+        # max prefix length. When cols were padded to 8 but only 4 logical blocks exist, use the
+        # legacy ``start_pos`` path so ``Sk = start_pos + Sq`` stays correct.
+        if chunk_start_idx_tensor is not None and self.args.supports_flexible_chunked_sdpa:
+            attn = ttnn.transformer.chunked_scaled_dot_product_attention(
+                q_heads,
+                self.k_cache,
+                self.v_cache,
+                self.page_table,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
+                **sdpa_kwargs,
+            )
+        else:
+            attn = ttnn.transformer.chunked_scaled_dot_product_attention(
+                q_heads,
+                self.k_cache,
+                self.v_cache,
+                self.page_table,
+                start_pos,
+                **sdpa_kwargs,
+            )
         attn = ttnn.to_memory_config(attn, act_mem)
         ttnn.deallocate(q_heads)
 
@@ -536,9 +565,19 @@ class TtAttention:
         start_pos: int = 0,
         current_pos: Optional[ttnn.Tensor] = None,
         user_id: int = 0,
+        chunk_start_idx_tensor: Optional[ttnn.Tensor] = None,
+        chunk_page_table: Optional[ttnn.Tensor] = None,
+        prefill_rope_tables: Optional[Sequence[ttnn.Tensor]] = None,
     ) -> ttnn.Tensor:
         if mode == "prefill":
-            return self.forward_prefill(x, start_pos=start_pos, user_id=user_id)
+            return self.forward_prefill(
+                x,
+                start_pos=start_pos,
+                user_id=user_id,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
+                chunk_page_table=chunk_page_table,
+                prefill_rope_tables=prefill_rope_tables,
+            )
         if mode == "decode":
             if current_pos is None:
                 raise ValueError("decode mode requires current_pos")

@@ -19,7 +19,7 @@ Weight upload uses host tensors at construction time; the forward path is device
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 import ttnn
 
@@ -145,6 +145,9 @@ class TtMinistral3Model:
         start_pos: int = 0,
         current_pos: Optional[ttnn.Tensor] = None,
         user_id: int = 0,
+        chunk_start_idx_tensor: Optional[ttnn.Tensor] = None,
+        chunk_page_table: Optional[ttnn.Tensor] = None,
+        prefill_rope_tables: Optional[Sequence[ttnn.Tensor]] = None,
     ) -> ttnn.Tensor:
         act_mem = self.args.get_activation_mem_config(mode, self.mesh_device)
         hidden_states = self.embed_tokens(input_ids, memory_config=act_mem)
@@ -156,6 +159,9 @@ class TtMinistral3Model:
                 start_pos=start_pos,
                 current_pos=current_pos,
                 user_id=user_id,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
+                chunk_page_table=chunk_page_table,
+                prefill_rope_tables=prefill_rope_tables,
             )
         return self.norm(hidden_states, memory_config=act_mem, mode=mode)
 
