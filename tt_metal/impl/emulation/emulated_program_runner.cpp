@@ -1100,6 +1100,37 @@ static void collect_kernels(
             auto* qck = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(kernel.get());
             bool is_quasar_compute = is_tensix && (qck != nullptr);
 
+            // Issue tenstorrent/tt-emule#24: emule runs all three TRISC code paths
+            // in a single unified compute thread (no separate UNPACK/MATH/PACK
+            // RISC cores). tt-mlir-generated D2M kernels guard hardware code
+            // paths with `#ifdef TRISC_UNPACK|MATH|PACK`; without these defines
+            // helpers like `experimental::write_row_mask_tile` compile to empty
+            // bodies and the downstream `where_tile` reads stale data. Define
+            // all three so the kernel's `#ifdef TRISC_*` blocks execute exactly
+            // once on the unified thread.
+            //
+            // EXCEPT for tilize kernels: emule's host-side
+            // `tilize_with_val_padding` already produces tiled data, so an
+            // additional kernel-side tilize would re-tilize and corrupt the
+            // layout. Skip TRISC defines when the kernel source mentions
+            // `llk_unpack_tilize` (the tilize compute path).
+            bool is_tilize_kernel = false;
+            if (is_tensix && !is_quasar_compute) {
+                std::ifstream kscan(src_path);
+                if (kscan) {
+                    std::string content((std::istreambuf_iterator<char>(kscan)), std::istreambuf_iterator<char>());
+                    is_tilize_kernel = content.find("llk_unpack_tilize") != std::string::npos;
+                }
+            }
+            if (is_tensix && !is_quasar_compute && !is_tilize_kernel) {
+                auto defines_with_trisc = build_kernel_defines(
+                    *kernel, impl, num_dram_channels, worker_col_map_str, worker_row_map_str, emule_sem_base);
+                defines_with_trisc["TRISC_UNPACK"] = "1";
+                defines_with_trisc["TRISC_MATH"] = "1";
+                defines_with_trisc["TRISC_PACK"] = "1";
+                defines = std::move(defines_with_trisc);
+            }
+
             // Metal 2.0 bindings — same across this Kernel's TRISC variants, so
             // capture the cache-key suffix once and append it to every variant key.
             Metal2BindingsSnapshot bindings = build_metal2_snapshot(*kernel);
