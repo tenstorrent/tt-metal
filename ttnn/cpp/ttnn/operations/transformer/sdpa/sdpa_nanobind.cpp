@@ -47,7 +47,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     CoreCoord ccl_core_grid_offset,
     bool use_column_major_ccl,
     bool is_causal,
-    bool is_balanced) {
+    bool is_balanced,
+    std::optional<uint32_t> cache_batch_idx) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
     auto outputs = ttnn::transformer::ring_joint_scaled_dot_product_attention(
@@ -74,7 +75,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         is_balanced,
         scale,
         compute_kernel_config,
-        strategy);
+        strategy,
+        cache_batch_idx);
     return outputs;
 }
 
@@ -421,12 +423,16 @@ void bind_sdpa(nb::module_& mod) {
                 If False (default), uses row-major allocation. Defaults to False.
             is_causal (bool): Whether to use causal attention masking. Defaults to False.
             is_balanced (bool): Whether to use balanced attention computation. Defaults to False.
+            cache_batch_idx (int, optional): Selects the shared K/V cache batch slot when K and V are full caches.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
         prefix from chunk 0 through the current chunk). The op derives chunk_size and
         the absolute Q-row offset from the shapes plus sp_size — no extra args needed.
         Chunked prefill is mathematically causal; callers must pass is_causal=True.
+        When cache_batch_idx is provided, input_tensor_k and input_tensor_v may be whole caches.
+        The same cache_batch_idx selects the K and V cache slot, and the full K/V sequence
+        dimension is treated as valid.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -463,7 +469,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("ccl_core_grid_offset"),
         nb::arg("use_column_major_ccl") = false,
         nb::arg("is_causal").noconvert() = false,
-        nb::arg("is_balanced").noconvert() = false);
+        nb::arg("is_balanced").noconvert() = false,
+        nb::arg("cache_batch_idx").noconvert() = nb::none());
 
     const auto* exp_ring_joint_doc = R"doc(
         ExpRingJointAttention operation that efficiently performs non-causal attention over two

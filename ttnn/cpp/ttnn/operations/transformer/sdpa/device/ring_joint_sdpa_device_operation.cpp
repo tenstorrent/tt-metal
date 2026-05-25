@@ -92,14 +92,30 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
                 "Output tensor {} memory config should match output_mem_config",
                 i);
 
+            auto output_shape = output_tensor.logical_shape();
             auto expected_output_shape = input_tensors[i].logical_shape();
             expected_output_shape[operation_attributes.dim] *= operation_attributes.ring_size;
-            TT_FATAL(
-                output_tensor.logical_shape() == expected_output_shape,
-                "Output tensor {} shape mismatch. Expected shape with dimension {} scaled by ring_size {}",
-                i,
-                operation_attributes.dim,
-                operation_attributes.ring_size);
+            for (int d = 0; d < static_cast<int>(output_shape.rank()); ++d) {
+                if (d == operation_attributes.dim) {
+                    TT_FATAL(
+                        output_shape[d] >= expected_output_shape[d],
+                        "Output tensor {} gather dim {} too small: got {}, expected >= {} "
+                        "(= input_dim * ring_size {})",
+                        i,
+                        d,
+                        output_shape[d],
+                        expected_output_shape[d],
+                        operation_attributes.ring_size);
+                } else {
+                    TT_FATAL(
+                        output_shape[d] == expected_output_shape[d],
+                        "Output tensor {} non-gather dim {} mismatch: got {}, expected {}",
+                        i,
+                        d,
+                        output_shape[d],
+                        expected_output_shape[d]);
+                }
+            }
         }
     }
 }
@@ -152,12 +168,15 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& joint_k_shape = joint_tensor_k.logical_shape();
     const auto& joint_v_shape = joint_tensor_v.logical_shape();
 
+    const bool has_indexed_kv_cache = args.has_indexed_kv_cache();
+
     // Chunked-prefill (`tensor_args.is_chunked()`): Q is shorter than the per-device K shard
     // (latest slab against a growing K cache). Chunk 0 has equal shapes and uses the regular
     // is_causal=True path.
+    const bool is_chunked = tensor_args.is_chunked();
 
     const auto dtype = input_tensor_q.dtype();
-    if (!args.is_causal && !tensor_args.is_chunked()) {
+    if (!args.is_causal && !is_chunked) {
         for (const auto& tensor : sdpa_input_tensors) {
             TT_FATAL(
                 tensor.dtype() == dtype,
@@ -187,7 +206,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto NKH = k_shape[1];
     const auto NVH = v_shape[1];
     const auto N_local_q = q_shape[2];
-    const auto N_local_kv = tensor_args.input_k.logical_shape()[2];
+    const auto N_local_kv = tensor_args.local_kv_seq_len();
     const auto N_global = k_shape[2];
     const auto L = joint_q_shape[2];
     const auto DH = q_shape[3];
@@ -209,7 +228,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         N_local_kv);
 
     TT_FATAL(
-        !tensor_args.is_chunked() || args.is_causal,
+        !is_chunked || args.is_causal,
         "Chunked-prefill (N_local_q < N_local_kv) is mathematically causal; callers must pass is_causal=True. "
         "Got N_local_q={}, N_local_kv={}, is_causal={}",
         N_local_q,
@@ -220,18 +239,43 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         !(args.is_balanced && (N_local_q / 2) % q_chunk_size != 0),
         "q_chunk_size must divide half of local q seq_len in balanced case");
 
+    if (has_indexed_kv_cache) {
+        const auto K_cache_batch = tensor_args.input_k.logical_shape()[0];
+        const auto V_cache_batch = tensor_args.input_v.logical_shape()[0];
+        TT_FATAL(
+            args.cache_batch_idx.value() < K_cache_batch,
+            "cache_batch_idx={} is outside K cache batch={}",
+            args.cache_batch_idx.value(),
+            K_cache_batch);
+        TT_FATAL(
+            args.cache_batch_idx.value() < V_cache_batch,
+            "cache_batch_idx={} is outside V cache batch={}",
+            args.cache_batch_idx.value(),
+            V_cache_batch);
+        TT_FATAL(
+            k_shape[0] == K_cache_batch,
+            "Gathered K cache batch must match input K cache batch. Got gathered K: {}, input K: {}",
+            k_shape[0],
+            K_cache_batch);
+        TT_FATAL(
+            v_shape[0] == V_cache_batch,
+            "Gathered V cache batch must match input V cache batch. Got gathered V: {}, input V: {}",
+            v_shape[0],
+            V_cache_batch);
+    } else {
+        TT_FATAL(k_shape[0] == B, "K batch size must match Q. Got Q: {}, K: {}", B, k_shape[0]);
+        TT_FATAL(v_shape[0] == B, "V batch size must match Q. Got Q: {}, V: {}", B, v_shape[0]);
+    }
     TT_FATAL(
-        k_shape[0] == B && v_shape[0] == B && joint_q_shape[0] == B && joint_k_shape[0] == B && joint_v_shape[0] == B,
-        "Batch sizes must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+        joint_q_shape[0] == B && joint_k_shape[0] == B && joint_v_shape[0] == B,
+        "Batch sizes must match. Got Q: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
         B,
-        k_shape[0],
-        v_shape[0],
         joint_q_shape[0],
         joint_k_shape[0],
         joint_v_shape[0]);
 
     // Chunked-prefill targets MLA (K head dim == Q != V) — use is_causal's relaxed K-only check.
-    if (!args.is_causal && !tensor_args.is_chunked()) {
+    if (!args.is_causal && !is_chunked) {
         TT_FATAL(
             k_shape[3] == DH && v_shape[3] == DH && joint_q_shape[3] == DH && joint_k_shape[3] == DH &&
                 joint_v_shape[3] == DH,
@@ -249,12 +293,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             DH,
             k_shape[3]);
     }
-
-    TT_FATAL(
-        v_shape[2] == N_global,
-        "V sequence length must be equal to global sequence length. Got V: {}, global sequence length: {}",
-        v_shape[2],
-        N_global);
 
     TT_FATAL(
         args.logical_n <= N_global,
@@ -315,6 +353,11 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         "Per-device K/V seq length must be divisible by TILE_HEIGHT. Got N_local_kv: {}, TILE_HEIGHT: {}",
         N_local_kv,
         tt::constants::TILE_HEIGHT);
+    TT_FATAL(
+        tensor_args.input_v.logical_shape()[2] == N_local_kv,
+        "V local seq length must match K local seq length. Got V: {}, K: {}",
+        tensor_args.input_v.logical_shape()[2],
+        N_local_kv);
 
     // Validate padding: Only the sequence dimension may be padded
     auto validate_padding = [](const Tensor& tensor) {
@@ -385,6 +428,9 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.compute_kernel_config,
         args.program_config,
         args.ccl_core_grid_offset,
+        // cache_batch_idx is a reader runtime arg, but descriptor cache-hit patching only updates buffer rt args.
+        // Keep the value in the op hash so a cached Program never reuses stale scalar rt args for another slot.
+        args.cache_batch_idx,
         ttnn::experimental::prim::RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
             args.all_gather_operation_attributes, args.all_gather_tensor_args) /*all_gather input tensors*/
     );
@@ -468,7 +514,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const bool is_balanced,
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
+    const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
+    const std::optional<uint32_t> cache_batch_idx) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -524,7 +571,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         kernel_config_val,
         std::move(all_gather_operation_attributes),
         std::move(all_gather_tensor_args),
-        ccl_core_grid_offset);
+        ccl_core_grid_offset,
+        cache_batch_idx);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
