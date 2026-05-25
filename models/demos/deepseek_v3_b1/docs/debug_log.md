@@ -884,6 +884,43 @@ Run **2c at position_id=127 with hash diagnostic** — does 2c (cross-thread MAT
 
 ---
 
+## Attempt 22 — 2c at `position_id=127` with hash diagnostic
+
+**What.** Re-apply the original 2c patch (cross-thread MATH+PACK `MATH_Offset` reset at the top of every `compute_sdpa_chunk`, same code as Attempt 7) and run at `position_id=127` (1 chunk, MLP PCC iter-0 = iter-1 = bit-identical baseline). Check whether 2c reduces the per-core sdpa_output_cb hash divergence between iter-0 and iter-1.
+
+**Motivation.** Disambiguate whether 2c is a real per-call fix or just a downstream-visibility masker. Attempt 7 showed it collapses the MLP PCC gap ~20× at `position_id=8190` (64 chunks). The hash diagnostic — sensitive at the per-core SDPA output level — would reveal whether 2c also reduces hash-divergence at 1 chunk where the bug is invisible to MLP PCC.
+
+**Result.**
+
+| Run | iter=1 PCC @ pos=127 | iter=2 PCC @ pos=127 | iter=1 PCC @ pos=511 | iter=2 PCC @ pos=511 | Unique 0x30 hashes @ pos=127 |
+|---|---|---|---|---|---|
+| Baseline | n/a (skipped) | 0.9901647631143314 | n/a | 0.9916859209677518 | 32 / 32 |
+| Attempt 22 (2c) | n/a | 0.9901647631143314 (same) | n/a | 0.9916859209677518 (same) | **31 / 32** |
+
+Only 1 pair of emissions now matches across iter-0 and iter-1 (vs 0 pairs at baseline). MLP PCC unchanged at both `position_id` values.
+
+For reference, the other per-call-state-touching patches gave:
+
+| Patch | Unique 0x30 / 32 @ pos=127 | Cores fixed |
+|---|---|---|
+| Baseline | 32 | 0 |
+| **2c** (this run) | **31** | **1** |
+| Experiment B (uninit-before-push) | 31 | 1 |
+| Experiment A (ZEROACC at boot) | 28 | 4 |
+
+**Conclusion (decisive).** 2c is **not a per-call asymmetry fix**. It moves only 1 pair (basically a no-op at 1 chunk). The ~20× MLP PCC gap collapse at 64 chunks is a **downstream-visibility masking** effect — 2c doesn't change what flash_mla emits per-core; it changes the cumulative state across many chunks such that the downstream aggregation cancels more of the per-core differences. At 1 chunk there is nothing to cumulate, so 2c has no effective work to do.
+
+This sharply revises the picture from earlier attempts:
+- Attempt 7's "20× collapse" interpretation was misleading.
+- Attempts 9-13's tight position-sensitivity story was tracking a downstream-visibility tuning knob, not a real fix.
+- The real bug is the per-call, per-core bank-asymmetric flash_mla compute (Attempt 19 confirmed; Attempt 22 confirms 2c doesn't touch it).
+
+Closest patch we have to a per-call effect remains Experiment A (ZEROACC at kernel boot): 4 cores fixed out of 16. That's evidence that residual DEST state contributes for *some* cores, but most cores remain bank-asymmetric for another reason.
+
+**State.** Reverted.
+
+---
+
 ## Planned next session — tt-exalens dump via `asm("ebreak")`
 
 The hash diagnostic shows **what** diverges (per-core SDPA output) but not **why**. To inspect actual Tensix state (DEST contents, CFG registers, GPRs, ADC counters, etc.) at the moment of divergence, halt the TRISC at a chosen PC and dump state with tt-exalens.
