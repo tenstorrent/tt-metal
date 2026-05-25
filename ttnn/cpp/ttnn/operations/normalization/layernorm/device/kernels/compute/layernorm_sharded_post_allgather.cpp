@@ -57,28 +57,34 @@ void kernel_main() {
     constexpr uint32_t scaler0 = 0;
 
     constexpr uint32_t cb_in0 = dfb::cb_in0;
-    constexpr uint32_t cb_in1 = dfb::cb_inb;
     constexpr uint32_t cb_eps = dfb::cb_eps;
     constexpr uint32_t cb_scaler_global = dfb::cb_scaler_global;
-    constexpr uint32_t cb_gamma = dfb::cb_gamma;
-    constexpr uint32_t cb_beta = dfb::cb_beta;
 
     constexpr uint32_t cb_ex = dfb::cb_ex;
     constexpr uint32_t cb_ex2 = dfb::cb_ex2;
     constexpr uint32_t cb_stats = dfb::cb_stats;
     constexpr uint32_t cb_stats_reduced = dfb::cb_stats_reduced;
     constexpr uint32_t cb_ex_global = dfb::cb_ex_global;
-    constexpr uint32_t cb_reciprocal = dfb::cb_ex2pe;  // c_20 in post-allgather
-    constexpr uint32_t cb_fusion = dfb::cb_xmm;        // c_18 stream gamma/beta
+    constexpr uint32_t cb_reciprocal = dfb::cb_ex2pe;
+    constexpr uint32_t cb_fusion = dfb::cb_xmm;
     constexpr uint32_t cb_out = dfb::cb_out;
     constexpr uint32_t cb_var = dfb::cb_var;
-    constexpr uint32_t cb_ex_sqr = dfb::cb_x;  // c_24 E[x]^2
+    constexpr uint32_t cb_ex_sqr = dfb::cb_x;
+#ifdef FUSE_PRE_ADD
+    constexpr uint32_t cb_in1 = dfb::cb_inb;
+#endif
+#ifdef FUSE_GAMMA
+    constexpr uint32_t cb_gamma = dfb::cb_gamma;
+    DataflowBuffer cb_gamma_obj(cb_gamma);
+#endif
+#ifdef FUSE_BETA
+    constexpr uint32_t cb_beta = dfb::cb_beta;
+    DataflowBuffer cb_beta_obj(cb_beta);
+#endif
 
     DataflowBuffer cb_in0_obj(cb_in0);
     DataflowBuffer cb_eps_obj(cb_eps);
     DataflowBuffer cb_scaler_global_obj(cb_scaler_global);
-    DataflowBuffer cb_gamma_obj(cb_gamma);
-    DataflowBuffer cb_beta_obj(cb_beta);
     DataflowBuffer cb_ex2_obj(cb_ex2);
     DataflowBuffer cb_stats_obj(cb_stats);
     DataflowBuffer cb_stats_reduced_obj(cb_stats_reduced);
@@ -243,11 +249,11 @@ void kernel_main() {
     cb_xmm_obj.push_back(num_tiles_per_block);
 #endif
 
-    if constexpr (do_gamma == 0 && do_beta == 0) {
-        pack_reconfig_data_format(cb_out);
-    } else {
-        pack_reconfig_data_format(cb_im);
-    }
+#if !defined(FUSE_GAMMA) && !defined(FUSE_BETA)
+    pack_reconfig_data_format(cb_out);
+#else
+    pack_reconfig_data_format(cb_im);
+#endif
 
     // (x - Ex) * 1/[sqrt(Var + eps)]
     reconfig_data_format(cb_xmm, cb_ex_global);
@@ -284,11 +290,12 @@ void kernel_main() {
     cb_xmm_obj.pop_front(num_tiles_per_block);
     cb_im_obj.wait_front(num_tiles_per_block);
 
-    if constexpr (do_gamma) {
+#ifdef FUSE_GAMMA
+    {
         reconfig_data_format(cb_im, cb_gamma);
-        if constexpr (do_beta == 0) {
-            pack_reconfig_data_format(cb_out);
-        }
+#ifndef FUSE_BETA
+        pack_reconfig_data_format(cb_out);
+#endif
         mul_bcast_rows_init_short(cb_im, cb_gamma);
         cb_gamma_obj.wait_front(block_w);
         index_h_offset = 0;
@@ -314,8 +321,10 @@ void kernel_main() {
         }
         cb_im_obj.pop_front(num_tiles_per_block);
     }
+#endif
 
-    if constexpr (do_beta) {
+#ifdef FUSE_BETA
+    {
         cb_outgamma_obj.wait_front(num_tiles_per_block);
         reconfig_data_format(cb_fusion, cb_beta);
         pack_reconfig_data_format(cb_out);
@@ -344,4 +353,5 @@ void kernel_main() {
         cb_out_obj.push_back(num_tiles_per_block);
         cb_fusion_obj.pop_front(num_tiles_per_block);
     }
+#endif
 }

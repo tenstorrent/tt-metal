@@ -126,9 +126,6 @@ void kernel_main() {
     // CB definitions
     // ---------------------------------------------------------------------------
     constexpr uint32_t cb_in0 = dfb::cb_in0;
-    constexpr uint32_t cb_in1 = dfb::cb_inb;
-    constexpr uint32_t cb_gamma = dfb::cb_gamma;
-    constexpr uint32_t cb_beta = dfb::cb_beta;
     constexpr uint32_t cb_x = dfb::cb_x;
     constexpr uint32_t cb_xmm = dfb::cb_xmm;
     constexpr uint32_t cb_ex_partial = dfb::cb_ex_partial;
@@ -136,12 +133,21 @@ void kernel_main() {
     constexpr uint32_t cb_ex_external = dfb::cb_ex_external;
     constexpr uint32_t cb_ex_global = dfb::cb_ex_global;
     constexpr uint32_t cb_transpose = dfb::cb_transpose;
-    constexpr uint32_t cb_fusion = dfb::cb_xmm;  // stream gamma/beta (alias of cb_xmm)
+    constexpr uint32_t cb_fusion = dfb::cb_xmm;  // aliased to cb_xmm
     constexpr uint32_t cb_out = dfb::cb_out;
     constexpr uint32_t cb_reciprocals = dfb::cb_reciprocals;
-
+#ifdef FUSE_PRE_ADD
+    constexpr uint32_t cb_in1 = dfb::cb_inb;
+#endif
+#ifdef FUSE_GAMMA
+    constexpr uint32_t cb_gamma = dfb::cb_gamma;
     DataflowBuffer cb_gamma_obj(cb_gamma);
+#endif
+#ifdef FUSE_BETA
+    constexpr uint32_t cb_beta = dfb::cb_beta;
     DataflowBuffer cb_beta_obj(cb_beta);
+#endif
+
     DataflowBuffer cb_xmm_obj(cb_xmm);
     DataflowBuffer cb_ex_partial_obj(cb_ex_partial);
     DataflowBuffer cb_ex_obj(cb_ex);
@@ -460,9 +466,9 @@ void kernel_main() {
 #endif
     cb_xmm_obj.wait_front(num_tiles_per_block);
 
-    if constexpr (do_gamma == 0 && do_beta == 0) {
-        pack_reconfig_data_format(cb_out);
-    }
+#if !defined(FUSE_GAMMA) && !defined(FUSE_BETA)
+    pack_reconfig_data_format(cb_out);
+#endif
 
     // ---------------------------------------------------------------------------
     // Scale by 1/sqrt(Var[x] + eps)
@@ -499,11 +505,12 @@ void kernel_main() {
     // Scale by gamma
     // ---------------------------------------------------------------------------
     cb_im_obj.wait_front(num_tiles_per_block);
-    if constexpr (do_gamma) {
+#ifdef FUSE_GAMMA
+    {
         reconfig_data_format(cb_im, cb_gamma);
-        if constexpr (do_beta == 0) {
-            pack_reconfig_data_format(cb_out);
-        }
+#ifndef FUSE_BETA
+        pack_reconfig_data_format(cb_out);
+#endif
         mul_bcast_rows_init_short(cb_im, cb_gamma);
         cb_gamma_obj.wait_front(block_wt);
         index_h_offset = 0;
@@ -530,11 +537,13 @@ void kernel_main() {
         cb_im_obj.pop_front(num_tiles_per_block);
         cb_outgamma_obj.wait_front(num_tiles_per_block);
     }
+#endif
 
     // ---------------------------------------------------------------------------
     // Add beta
     // ---------------------------------------------------------------------------
-    if constexpr (do_beta) {
+#ifdef FUSE_BETA
+    {
         reconfig_data_format(cb_fusion, cb_beta);
         pack_reconfig_data_format(cb_out);
         add_bcast_rows_init_short(cb_fusion, cb_beta);
@@ -563,4 +572,5 @@ void kernel_main() {
         cb_fusion_obj.pop_front(num_tiles_per_block);
         cb_out_obj.wait_front(num_tiles_per_block);
     }
+#endif
 }

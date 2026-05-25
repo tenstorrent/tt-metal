@@ -459,9 +459,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     m2::KernelSpec reader_spec;
     reader_spec.unique_id = READER_KERNEL;
     reader_spec.source = m2::KernelSpec::SourceFilePath{reader_kernel_path};
+    // Both Gen1 (WH/BH) and Gen2 (Quasar) configs are set so the same ProgramSpec
+    // lowers on both archs. Gen2 uses QuasarDataMovementKernel under the hood — without
+    // a `gen2_data_movement_config` entry, Quasar emulator runs reject the kernel.
     reader_spec.config_spec = m2::DataMovementConfiguration{
-        .gen1_data_movement_config = m2::DataMovementConfiguration::Gen1DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}};
+        .gen1_data_movement_config =
+            m2::DataMovementConfiguration::Gen1DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
+        .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{}};
     // Named CTAs replace the legacy positional list. Slot meaning differs across the
     // four reader variants, so we set `block_size`, `W`, and (variant-specific) others.
     reader_spec.compile_time_arg_bindings = {
@@ -558,8 +563,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     writer_spec.unique_id = WRITER_KERNEL;
     writer_spec.source = m2::KernelSpec::SourceFilePath{writer_kernel_path};
     writer_spec.config_spec = m2::DataMovementConfiguration{
-        .gen1_data_movement_config = m2::DataMovementConfiguration::Gen1DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}};
+        .gen1_data_movement_config =
+            m2::DataMovementConfiguration::Gen1DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+        .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{}};
     writer_spec.compile_time_arg_bindings = {{"block_size", block_size}};
     if (input_is_row_major) {
         writer_spec.compile_time_arg_bindings.push_back(

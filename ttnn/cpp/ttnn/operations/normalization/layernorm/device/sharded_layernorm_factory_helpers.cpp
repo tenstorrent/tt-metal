@@ -441,6 +441,15 @@ KernelDefines KernelDefines::build(
     if (skip_write_back) {
         defines.writer.emplace_back("SKIP_WRITE_BACK", "1");
     }
+    // Writer's gamma/beta DFB bindings are host-conditional; mirror with preprocessor
+    // defines so the kernel can elide the corresponding `dfb::cb_gamma` / `dfb::cb_beta`
+    // references at parse time.
+    if (has_gamma) {
+        defines.writer.emplace_back("FUSE_GAMMA", "1");
+    }
+    if (has_beta) {
+        defines.writer.emplace_back("FUSE_BETA", "1");
+    }
 
     if (has_b) {
         defines.compute.emplace_back("FUSE_PRE_ADD", "1");

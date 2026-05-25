@@ -41,14 +41,22 @@ void kernel_main() {
     tt_l1_ptr uint32_t* segment_args = reinterpret_cast<tt_l1_ptr uint32_t*>(segment_args_buf);
 #endif
 
-    constexpr uint32_t cb_gamma = dfb::cb_gamma;
-    constexpr uint32_t cb_beta = dfb::cb_beta;
     constexpr uint32_t cb_out = dfb::cb_out;
     constexpr uint32_t cb_out_resharded = dfb::cb_out_resharded;
+#ifdef FUSE_GAMMA
+    constexpr uint32_t cb_gamma = dfb::cb_gamma;
+#endif
+#ifdef FUSE_BETA
+    constexpr uint32_t cb_beta = dfb::cb_beta;
+#endif
 
     Noc noc;
+#ifdef FUSE_GAMMA
     DataflowBuffer cb_gamma_obj(cb_gamma);
+#endif
+#ifdef FUSE_BETA
     DataflowBuffer cb_beta_obj(cb_beta);
+#endif
     DataflowBuffer cb_out_obj(cb_out);
     DataflowBuffer cb_out_resharded_obj(cb_out_resharded);
 
@@ -77,7 +85,8 @@ void kernel_main() {
         }
     }
 
-    if constexpr (fuse_gamma) {
+#ifdef FUSE_GAMMA
+    {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
         const auto gamma = TensorAccessor(ta::gamma);
 
@@ -90,8 +99,10 @@ void kernel_main() {
         noc.async_read_barrier();
         cb_gamma_obj.push_back(block_w);
     }
+#endif
 
-    if constexpr (fuse_beta) {
+#ifdef FUSE_BETA
+    {
         const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
         const auto beta = TensorAccessor(ta::beta);
 
@@ -104,6 +115,7 @@ void kernel_main() {
         noc.async_read_barrier();
         cb_beta_obj.push_back(block_w);
     }
+#endif
 
 #ifndef SKIP_WRITE_BACK
     write_resharded_data(

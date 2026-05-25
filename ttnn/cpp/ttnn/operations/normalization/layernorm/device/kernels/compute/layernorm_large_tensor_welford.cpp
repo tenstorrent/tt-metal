@@ -238,24 +238,32 @@ void kernel_main() {
 
     constexpr uint32_t cb_eps = dfb::cb_eps;
     constexpr uint32_t cb_in = dfb::cb_in;
-    constexpr uint32_t cb_inb = dfb::cb_inb;
     constexpr uint32_t cb_out = dfb::cb_out;
-    constexpr uint32_t cb_gamma = dfb::cb_gamma;
-    constexpr uint32_t cb_beta = dfb::cb_beta;
     uint32_t cb_xmm = dfb::cb_xmm;
     constexpr uint32_t cb_ex = dfb::cb_ex;
     constexpr uint32_t cb_ex2 = dfb::cb_ex2;
     constexpr uint32_t cb_ex2pe = dfb::cb_ex2pe;
-    constexpr uint32_t cb_fusion = dfb::cb_fusion;
-    constexpr uint32_t cb_interm_pre_add = dfb::cb_x;
     constexpr uint32_t cb_reciprocals = dfb::cb_reciprocals;
+#ifdef FUSE_PRE_ADD
+    constexpr uint32_t cb_inb = dfb::cb_inb;
+    constexpr uint32_t cb_interm_pre_add = dfb::cb_x;
+    DataflowBuffer cb_inb_obj(cb_inb);
+#endif
+#ifdef FUSE_GAMMA
+    constexpr uint32_t cb_gamma = dfb::cb_gamma;
+    DataflowBuffer cb_gamma_obj(cb_gamma);
+#endif
+#ifdef FUSE_BETA
+    constexpr uint32_t cb_beta = dfb::cb_beta;
+    DataflowBuffer cb_beta_obj(cb_beta);
+#endif
+#if defined FUSE_GAMMA || defined FUSE_BETA
+    constexpr uint32_t cb_fusion = dfb::cb_fusion;
+#endif
 
     DataflowBuffer cb_eps_obj(cb_eps);
     DataflowBuffer cb_in_obj(cb_in);
-    DataflowBuffer cb_inb_obj(cb_inb);
     DataflowBuffer cb_out_obj(cb_out);
-    DataflowBuffer cb_gamma_obj(cb_gamma);
-    DataflowBuffer cb_beta_obj(cb_beta);
     DataflowBuffer cb_ex_obj(cb_ex);
     DataflowBuffer cb_ex2_obj(cb_ex2);
     DataflowBuffer cb_ex2pe_obj(cb_ex2pe);
@@ -264,14 +272,14 @@ void kernel_main() {
 
     // Initialize the hardware based on the first op
     // that will be done
-    if constexpr (fuse_pre_add) {
-        // Init for x = in + b
-        binary_op_init_common(cb_in, cb_inb, cb_interm_pre_add);
-    } else {
-        // Init for transpose
+#ifdef FUSE_PRE_ADD
+    binary_op_init_common(cb_in, cb_inb, cb_interm_pre_add);
+#else
+    {
         constexpr auto first_out_cb = cb_ex;
         unary_op_init_common(cb_in, first_out_cb);
     }
+#endif
 
     cb_eps_obj.wait_front(onetile);  // comes from the reader
 
@@ -286,24 +294,23 @@ void kernel_main() {
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Depending on whether we need to fuse pre-add, the approach for welford is different.
-        // So we move it to a separate function.
-        if constexpr (fuse_pre_add) {
-            welford_fuse_pre_add<
-                cb_in,
-                cb_inb,
-                cb_interm_pre_add,
-                cb_ex,
-                cb_ex2,
-                input_dst,
-                mean_dst,
-                var_dst,
-                Wt,
-                tile_width,
-                W,
-                blk>(*p_reciprocals);
-        } else {
-            welford_no_fuse_pre_add<cb_in, input_dst, mean_dst, Wt, tile_width, W, blk>(*p_reciprocals);
-        }
+#ifdef FUSE_PRE_ADD
+        welford_fuse_pre_add<
+            cb_in,
+            cb_inb,
+            cb_interm_pre_add,
+            cb_ex,
+            cb_ex2,
+            input_dst,
+            mean_dst,
+            var_dst,
+            Wt,
+            tile_width,
+            W,
+            blk>(*p_reciprocals);
+#else
+        welford_no_fuse_pre_add<cb_in, input_dst, mean_dst, Wt, tile_width, W, blk>(*p_reciprocals);
+#endif
         // We should expect that either of the two would have have populated dst regs with mean and
         // variance in mean_dst and var_dst respectively.
 
@@ -401,7 +408,8 @@ void kernel_main() {
             }
             cb_in_obj.pop_front(block.full_block_size());
 
-            if constexpr (fuse_pre_add) {
+#ifdef FUSE_PRE_ADD
+            {
                 // Fuse in = in + b
                 reconfig_data_format_srca(cb_in, cb_inb);
                 binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
@@ -414,6 +422,7 @@ void kernel_main() {
                 cb_inb_obj.pop_front(block.full_block_size());
                 reconfig_data_format_srca(cb_inb, cb_ex2pe);
             }
+#endif
 
             // Multiply by 1/(√(Var(X) + ε))
             reconfig_data_format_srca(fuse_pre_add ? cb_inb : cb_in, cb_ex2pe);
@@ -424,9 +433,9 @@ void kernel_main() {
             }
             tile_regs_commit();
 
-            if constexpr (!(do_gamma == 1 or do_beta == 1)) {
-                cb_xmm = cb_out;
-            }
+#if !defined(FUSE_GAMMA) && !defined(FUSE_BETA)
+            cb_xmm = cb_out;
+#endif
 
             pack_reconfig_data_format(cb_xmm);
             // Sync with writer on full blocks
@@ -438,7 +447,8 @@ void kernel_main() {
             DataflowBuffer(cb_xmm).push_back(block.full_block_size());
             tile_regs_release();
 
-            if constexpr (do_gamma == 1) {
+#ifdef FUSE_GAMMA
+            {
                 // Multiply by gamma
                 reconfig_data_format(cb_xmm, cb_gamma);
                 tile_regs_acquire();
@@ -452,27 +462,29 @@ void kernel_main() {
                 cb_gamma_obj.pop_front(block.full_block_size());
                 DataflowBuffer(cb_xmm).pop_front(block.full_block_size());
 
-                if constexpr (!do_beta) {
-                    pack_reconfig_data_format(cb_out);
-                }
+#ifndef FUSE_BETA
+                pack_reconfig_data_format(cb_out);
+#endif
                 tile_regs_wait();
-                if constexpr (!do_beta) {
-                    cb_out_obj.reserve_back(block.full_block_size());
-                    for (auto i : block.local()) {
-                        pack_tile(i, cb_out);
-                    }
-                    cb_out_obj.push_back(block.full_block_size());
-                } else {
-                    DataflowBuffer(cb_xmm).reserve_back(block.full_block_size());
-                    for (auto i : block.local()) {
-                        pack_tile(i, cb_xmm);
-                    }
-                    DataflowBuffer(cb_xmm).push_back(block.full_block_size());
+#ifndef FUSE_BETA
+                cb_out_obj.reserve_back(block.full_block_size());
+                for (auto i : block.local()) {
+                    pack_tile(i, cb_out);
                 }
+                cb_out_obj.push_back(block.full_block_size());
+#else
+                DataflowBuffer(cb_xmm).reserve_back(block.full_block_size());
+                for (auto i : block.local()) {
+                    pack_tile(i, cb_xmm);
+                }
+                DataflowBuffer(cb_xmm).push_back(block.full_block_size());
+#endif
                 tile_regs_release();
             }
+#endif
 
-            if constexpr (do_beta == 1) {
+#ifdef FUSE_BETA
+            {
                 // Add beta
                 tile_regs_acquire();
                 reconfig_data_format(cb_xmm, cb_beta);
@@ -495,6 +507,7 @@ void kernel_main() {
                 tile_regs_release();
                 cb_out_obj.push_back(block.full_block_size());
             }
+#endif
         }
 
         cb_xmm = dfb::cb_xmm;  // x minus mean
