@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 
 from .._ttnn import get_ttnn
+from ..math_perf_env import ace_step_vae_activation_storage_dtype, ace_step_vae_host_weight_staging_dtype
 from .block import TtOobleckDecoderBlock, _strip_prefix
 from .conv1d import TtConv1d
 from .snake import TtSnake1d
@@ -63,10 +64,8 @@ class TtOobleckDecoder:
         assert (
             len(cm) == len(upsampling_ratios) + 1
         ), f"channel_multiples length {len(channel_multiples)} must equal len(upsampling_ratios)={len(upsampling_ratios)}"
-        self.activation_dtype = activation_dtype or getattr(ttnn, "bfloat16", None)
-        self.weights_dtype = weights_dtype or getattr(ttnn, "bfloat16", None)
-        if self.activation_dtype is None or self.weights_dtype is None:
-            raise RuntimeError("TTNN build missing bfloat16; supply activation_dtype/weights_dtype")
+        self.activation_dtype = activation_dtype or ace_step_vae_activation_storage_dtype(ttnn)
+        self.weights_dtype = weights_dtype or ace_step_vae_host_weight_staging_dtype(ttnn)
 
         from models.demos.ace_step_v1_5.tt_device import ace_step_device_num_chips, ace_step_synchronize_device
 
@@ -174,8 +173,8 @@ class TtOobleckDecoder:
         # Ensure ROW_MAJOR layout: ttnn.slice on TILE tensors requires 32-aligned boundaries,
         # which chunk windows never guarantee, so we must be row-major before any indexing.
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        # Ensure bfloat16: conv weights were packed with input_dtype=activation_dtype (bfloat16).
-        # Diffusion latents arrive as float32; typecast to bfloat16 for correct conv computation.
+        # Ensure storage dtype (BF16 ROW_MAJOR): conv uses compute dtype internally when opt-in env is set.
+        # Diffusion latents arrive as float32.
         if x.dtype != self.activation_dtype:
             x = ttnn.typecast(x, self.activation_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 

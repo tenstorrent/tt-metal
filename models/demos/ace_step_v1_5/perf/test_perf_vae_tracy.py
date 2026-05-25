@@ -25,6 +25,9 @@ CSV / Tracy artifacts land under ``generated/profiler/reports/<timestamp>/`` —
 Production defaults (``math_perf_env``): LoFi conv compute + BF16 activations/weights + L1 interleaved
 buffers on conv / Snake / overlap-add glue — same path as PCC (no env toggle).
 
+Set ``ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=1`` for opt-in ``bfloat8_b`` conv/Snake **compute** (inter-op
+buffers stay BF16 ``ROW_MAJOR``). Validate with ``tests/test_vae_decoder_pcc.py -k bfloat8_activations``.
+
 **Important:** do **not** set ``ACE_STEP_USE_TRACE=1`` for this test (device profiler flush and TTNN
 trace capture are incompatible — same constraint as the DiT / conditioning Tracy harnesses).
 

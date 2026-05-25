@@ -48,6 +48,8 @@ DiT linears are often DRAM-bound at HiFi4 without tuning (reference path only):
 VAE decode exposes large-M matmuls inside ``conv1d`` / ``conv_transpose2d`` im2col (e.g.
 ``1920×512×512``, ``30720×128×128``, ``61440×128×128``). Production VAE uses **LoFi** conv compute + **BF16** activations; **``bfloat8_b``** weights on
 ``k>1`` conv / conv-transpose im2col (DRAM BW). ``k=1`` projections stay ``ttnn.conv1d`` (L1-safe CBs).
+Opt-in **``bfloat8_b`` activation compute** (conv output dtype + Snake TILE chain) via
+``ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=1``; inter-op buffers stay BF16 ``ROW_MAJOR`` (TTNN layout limit).
 
 Memory policy (VAE):
 
@@ -69,6 +71,7 @@ Condition encoder linears (lyric/timbre, ``hidden_size=2048``) are often DRAM-bo
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 
@@ -233,6 +236,54 @@ def ace_step_vae_conv_perf_enabled() -> bool:
 def ace_step_init_vae_conv_compute_kernel_config(device: Any):
     """LoFi compute kernel for Oobleck VAE ``conv1d`` / ``conv_transpose2d`` im2col matmuls."""
     return ace_step_init_lofi_linear_compute_kernel_config(device)
+
+
+def ace_step_vae_bfloat8_activations_enabled() -> bool:
+    """Opt-in ``bfloat8_b`` for VAE conv im2col + Snake eltwise compute (``ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=1``).
+
+    TTNN does not support ``bfloat8_b`` with ``ROW_MAJOR`` activations (conv1d / slice / residual
+    trim). Inter-op buffers stay **BF16 ROW_MAJOR**; :func:`ace_step_vae_activation_compute_dtype`
+    applies inside conv/Snake kernels only.
+    """
+    return os.environ.get("ACE_STEP_VAE_BFLOAT8_ACTIVATIONS", "0").lower() in ("1", "true", "yes", "on")
+
+
+def ace_step_vae_activation_storage_dtype(ttnn: Any) -> Any:
+    """VAE activation buffers between ops: **BF16** ``ROW_MAJOR`` (slice / residual / chunking)."""
+    dtype = getattr(ttnn, "bfloat16", None)
+    if dtype is None:
+        raise RuntimeError("TTNN build missing bfloat16; VAE activation storage requires BF16")
+    return dtype
+
+
+def ace_step_vae_activation_compute_dtype(ttnn: Any) -> Any:
+    """VAE conv im2col + Snake internal compute dtype (``bfloat8_b`` when opt-in env is set)."""
+    if ace_step_vae_bfloat8_activations_enabled():
+        bf8 = getattr(ttnn, "bfloat8_b", None)
+        if bf8 is not None:
+            return bf8
+    return ace_step_vae_activation_storage_dtype(ttnn)
+
+
+def ace_step_vae_activation_dtype(ttnn: Any) -> Any:
+    """Alias for :func:`ace_step_vae_activation_compute_dtype` (Tracy / demo-facing dtype)."""
+    return ace_step_vae_activation_compute_dtype(ttnn)
+
+
+def ace_step_vae_host_weight_staging_dtype(ttnn: Any) -> Any:
+    """Host ROW_MAJOR dtype before ``prepare_conv_weights`` (always BF16)."""
+    return ace_step_vae_activation_storage_dtype(ttnn)
+
+
+def ace_step_vae_normalize_activation_output(ttnn: Any, tensor: Any, *, storage_dtype: Any, compute_dtype: Any) -> Any:
+    """Return a ``ROW_MAJOR`` tensor in *storage_dtype* (post-conv / post-Snake boundary contract)."""
+    if tensor is None:
+        return tensor
+    if compute_dtype != storage_dtype and getattr(tensor, "dtype", None) != storage_dtype:
+        dram = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        kw = {"memory_config": dram} if dram is not None else {}
+        tensor = ttnn.typecast(tensor, storage_dtype, **kw)
+    return ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
 
 
 def ace_step_vae_activation_memory_config(ttnn: Any):

@@ -21,7 +21,9 @@ import numpy as np
 
 from .._ttnn import get_ttnn
 from ..math_perf_env import (
+    ace_step_vae_activation_compute_dtype,
     ace_step_vae_activation_memory_config,
+    ace_step_vae_activation_storage_dtype,
     ace_step_vae_eltwise_kwargs,
     ace_step_vae_typecast_kwargs,
 )
@@ -61,9 +63,12 @@ class TtSnake1d:
         ttnn = _require_ttnn()
         self.ttnn = ttnn
         self.device = device
-        self.dtype = dtype or getattr(ttnn, "bfloat16", None) or getattr(ttnn, "float16", None)
-        if self.dtype is None:
-            raise RuntimeError("TTNN build missing a usable dtype (bfloat16/float16)")
+        self._storage_dtype = ace_step_vae_activation_storage_dtype(ttnn)
+        self._compute_dtype = ace_step_vae_activation_compute_dtype(ttnn)
+        if dtype is not None:
+            self._storage_dtype = dtype
+            self._compute_dtype = dtype
+        self.dtype = self._storage_dtype
 
         # L1 eltwise chain: all intermediate tensors (ax, sin, square, term, y4) live in L1
         # rather than DRAM, eliminating ~5 DRAM round-trips per snake call.
@@ -82,8 +87,8 @@ class TtSnake1d:
         self._out_kw = ace_step_vae_eltwise_kwargs(ttnn, l1_mc=l1_mc)
         self._typecast_kw = ace_step_vae_typecast_kwargs(ttnn, l1_mc=l1_mc)
 
-        # BF16 compute (not FP32): avoids ~784 μs DRAM FP32 BinaryNg per call; see perf19.
-        self.compute_dtype = self.dtype
+        # BF16/BFP8 compute in TILE L1 (see ``ace_step_vae_activation_compute_dtype``).
+        self.compute_dtype = self._compute_dtype
 
         alpha = _snake_param_to_btc(alpha_host)
         beta = _snake_param_to_btc(beta_host)
@@ -155,8 +160,8 @@ class TtSnake1d:
         if x4_compute is not x4:
             ttnn.deallocate(x4_compute)
 
-        if y4.dtype != self.dtype:
-            y4 = ttnn.typecast(y4, self.dtype, **self._typecast_kw)
+        if y4.dtype != self._storage_dtype:
+            y4 = ttnn.typecast(y4, self._storage_dtype, **self._typecast_kw)
 
         # Untilize + stage back to DRAM in one fused to_layout call.
         # DRAM output is required: k>7 conv1d program compilation (warmup) raises
@@ -165,5 +170,7 @@ class TtSnake1d:
         _rm_dram_kw = {"memory_config": dram_mc} if dram_mc is not None else {}
         if squeeze_back:
             y = ttnn.squeeze(y4, 1)
-            return ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, **_rm_dram_kw)
-        return ttnn.to_layout(y4, ttnn.ROW_MAJOR_LAYOUT, **_rm_dram_kw)
+            y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, **_rm_dram_kw)
+        else:
+            y = ttnn.to_layout(y4, ttnn.ROW_MAJOR_LAYOUT, **_rm_dram_kw)
+        return y
