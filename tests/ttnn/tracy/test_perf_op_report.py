@@ -15,7 +15,13 @@ from tracy.process_model_log import (
 )
 from models.common.utility_functions import skip_for_blackhole
 from tracy.compare_ops_logs import compare_ops_logs
-from tracy.common import generate_logs_folder, PROFILER_CPP_DEVICE_PERF_REPORT, PROFILER_DEFAULT_OP_SUPPORT_COUNT
+from tracy.common import (
+    generate_logs_folder,
+    PROFILER_CPP_DEVICE_PERF_REPORT,
+    PROFILER_DEVICE_SIDE_LOG,
+    PROFILER_DEFAULT_OP_SUPPORT_COUNT,
+)
+from tracy import process_ops_logs
 import numpy
 
 
@@ -164,6 +170,87 @@ class TestTensorIO:
             "OUTPUT_0_X_PAD[LOGICAL]": "32[16]",
         }
         verify_columns(received_columns, expected_columns, verify_equal)
+
+
+various_ops_test = {
+    "name": "VariousOps",
+    "command": "pytest tests/ttnn/tracy/test_various_ops_profile.py::test_various_ops_profile",
+}
+
+EXPECTED_VARIOUS_OP_SUBSTRINGS = ("matmul", "add", "multiply", "subtract")
+
+
+@skip_for_blackhole()
+@pytest.mark.parametrize("run_test", [pytest.param(various_ops_test, id=various_ops_test["name"])], indirect=True)
+class TestVariousOpsProfile:
+    def test_sub_device_id_column_present(self, run_test_do_post_proc):
+        res, _request = run_test_do_post_proc
+        assert "SUB DEVICE ID" in res.columns
+        assert "SUB DEVICE MANAGER ID" not in res.columns
+
+    def test_sub_device_ids_are_not_all_zero(self, run_test_do_post_proc):
+        res, _request = run_test_do_post_proc
+        op_rows = res[res["OP TYPE"] != "signpost"]
+        sub_device_ids = pd.to_numeric(op_rows["SUB DEVICE ID"], errors="coerce").dropna()
+        assert not sub_device_ids.empty, "Expected SUB DEVICE ID values in perf report"
+        assert sub_device_ids.nunique() >= 2, (
+            f"Expected ops on multiple sub-devices, but only saw SUB DEVICE ID values: "
+            f"{sorted(sub_device_ids.unique())}"
+        )
+
+    def test_various_op_codes_reported(self, run_test_do_post_proc):
+        res, _request = run_test_do_post_proc
+        op_rows = res[res["OP TYPE"] != "signpost"]
+        op_codes = {str(code).lower() for code in op_rows["OP CODE"].dropna() if str(code).strip()}
+
+        missing_ops = [
+            expected for expected in EXPECTED_VARIOUS_OP_SUBSTRINGS if not any(expected in code for code in op_codes)
+        ]
+        assert not missing_ops, f"Missing ops {missing_ops}. Found OP CODE values: {sorted(op_codes)}"
+
+    def test_device_durations_populated(self, run_test_do_post_proc):
+        res, _request = run_test_do_post_proc
+        device_rows = res[res["DEVICE FW DURATION [ns]"].notna()]
+        assert len(device_rows) >= len(EXPECTED_VARIOUS_OP_SUBSTRINGS), (
+            f"Expected device durations for at least {len(EXPECTED_VARIOUS_OP_SUBSTRINGS)} ops, "
+            f"but only found {len(device_rows)}"
+        )
+        positive_durations = pd.to_numeric(device_rows["DEVICE FW DURATION [ns]"], errors="coerce").fillna(0) > 0
+        assert positive_durations.sum() >= len(
+            EXPECTED_VARIOUS_OP_SUBSTRINGS
+        ), "Expected non-zero DEVICE FW DURATION [ns] for profiled ops"
+
+    def test_sub_device_id_matches_device_csv_when_present(self, run_test_do_post_proc):
+        res, request = run_test_do_post_proc
+        device_csv = generate_logs_folder(get_profiler_folder(request["name"])) / PROFILER_DEVICE_SIDE_LOG
+        lookup = process_ops_logs.build_sub_device_id_lookup_from_device_csv(device_csv)
+        if not lookup:
+            pytest.skip("Device CSV has no sub_device_id metadata for this run")
+
+        mismatches = []
+        for _, row in res.iterrows():
+            if str(row.get("SUB DEVICE ID", "")).strip() in ("", "nan"):
+                continue
+
+            trace_id = -1
+            if pd.notna(row.get("METAL TRACE ID")) and str(row.get("METAL TRACE ID", "")).strip() != "":
+                trace_id = int(row["METAL TRACE ID"])
+
+            trace_id_counter = -1
+            if (
+                pd.notna(row.get("METAL TRACE REPLAY SESSION ID"))
+                and str(row.get("METAL TRACE REPLAY SESSION ID", "")).strip() != ""
+            ):
+                trace_id_counter = int(row["METAL TRACE REPLAY SESSION ID"])
+
+            key = (int(row["DEVICE ID"]), int(row["GLOBAL CALL COUNT"]), trace_id, trace_id_counter)
+            if key not in lookup:
+                continue
+
+            if int(row["SUB DEVICE ID"]) != lookup[key]:
+                mismatches.append(f"{key}: report={row['SUB DEVICE ID']} device_csv={lookup[key]}")
+
+        assert not mismatches, "SUB DEVICE ID mismatches vs device CSV:\n" + "\n".join(mismatches[:10])
 
 
 cpp_post_proc_test = {
