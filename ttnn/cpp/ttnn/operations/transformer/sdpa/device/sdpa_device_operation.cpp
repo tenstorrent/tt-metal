@@ -176,6 +176,12 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         }
         if (flexible_chunked) {
             const auto& csi_tensor = attrs.chunk_start_idx_tensor.value();
+            TT_FATAL(
+                tensors.chunk_start_idx_tensor.has_value(),
+                "chunk_start_idx tensor must be present in tensor args for descriptor cache patching");
+            TT_FATAL(
+                tensors.chunk_start_idx_tensor.value().buffer() == csi_tensor.buffer(),
+                "chunk_start_idx tensor in attrs and tensor args must reference the same buffer");
             TT_FATAL(csi_tensor.storage_type() == StorageType::DEVICE, "chunk_start_idx tensor must be on device");
             TT_FATAL(
                 csi_tensor.dtype() == DataType::INT32,
@@ -520,6 +526,7 @@ Tensor sdpa(
             .v = input_tensor_v,
             .attn_mask = attn_mask,
             .page_table = page_table_tensor,
+            .chunk_start_idx_tensor = chunk_start_idx_tensor,
             .attention_sink = attention_sink,
         });
 }
