@@ -159,3 +159,8 @@ models/experimental/petr/resources/*.pth
 
 .claude
 .cursor/.DS_store
+
+# Claude Code working files for the polyglot dependency-graph project
+opus-instructions.md
+dep-graph/out/
+dep-graph/cache/

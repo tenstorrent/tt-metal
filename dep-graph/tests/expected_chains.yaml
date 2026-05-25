@@ -1,0 +1,129 @@
+# Validation harness for dep-graph.sqlite.
+#
+# Each chain runs a SQL query against the DB and checks the integer result.
+# `expect_min` / `expect_max` / `expect_exact` are mutually compatible; all
+# given bounds must hold. Use `expect_max: 0` for negative assertions.
+#
+# Run with: python dep-graph/scripts/validate.py
+#
+# These chains are deliberately tied to symbols that exist in the *current*
+# validation index (250 curated TUs + full ttnn/ttnn/). Once the full repo
+# pass lands, add chains covering more ops.
+
+chains:
+  # ─── Positive: cross-language slice — ttnn.add ────────────────────────
+  - name: "ttnn.add — Python module binds to C++ overloads"
+    description: >
+      The two `ttnn::add` overloads (Tensor,Tensor and Tensor,float) must be
+      reachable from the Python `ttnn.operations.binary` module via the
+      nanobind `bind_binary_operation<\"add\">` helper.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes ns ON ns.id = e.src
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE ns.qualified_name = 'ttnn.operations.binary'
+        AND nd.qualified_name = 'ttnn::add'
+        AND e.kind = 'binds'
+        AND e.crosses_language = 1
+        AND e.via_helper = 'bind_binary_operation'
+    expect_min: 2
+
+  - name: "ttnn::add — calls invoke_binary_ng twice (one per overload)"
+    description: >
+      Each macro-expanded `ttnn::add` definition forwards to
+      `ttnn::detail::invoke_binary_ng`. Both overloads should emit that
+      edge.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes ns ON ns.id = e.src
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE ns.qualified_name = 'ttnn::add'
+        AND nd.qualified_name = 'ttnn::detail::invoke_binary_ng'
+        AND e.kind = 'calls'
+    expect_min: 2
+
+  # ─── Decorator unwrap — Python-implemented op ─────────────────────────
+  - name: "ttnn.from_torch — decorator-form impl exists"
+    description: >
+      `@ttnn.register_python_operation(name=\"ttnn.from_torch\")` is applied to
+      the Python def in `operations/core.py`; the registration must point at
+      that node.
+    query: |
+      SELECT COUNT(*) FROM py_registrations
+      WHERE python_name = 'ttnn.from_torch'
+        AND impl_node_id LIKE 'py:function:ttnn.operations.core.from_torch%'
+    expect_min: 1
+
+  - name: "ttnn.from_torch — has many callers via decorator"
+    description: >
+      The decorator-unwrapped impl should have >= 10 incoming edges, each
+      attributed to `@ttnn.register_python_operation`. Catches regressions
+      where the unwrap stops working.
+    query: |
+      SELECT COUNT(*) FROM edges
+      WHERE dst IN (SELECT id FROM nodes
+                    WHERE qualified_name = 'ttnn.operations.core.from_torch'
+                      AND language = 'python')
+        AND via_decorator LIKE '%register_python_operation%'
+    expect_min: 10
+
+  - name: "ttnn.to_torch — decorator-form impl + callers"
+    query: |
+      SELECT COUNT(*) FROM edges
+      WHERE dst IN (SELECT id FROM nodes
+                    WHERE qualified_name = 'ttnn.operations.core.to_torch'
+                      AND language = 'python')
+        AND via_decorator LIKE '%register_python_operation%'
+    expect_min: 10
+
+  # ─── Decorator unwrap — call-form pass-through to C++ ─────────────────
+  - name: "ttnn.unsqueeze_to_4D — call-form registration recorded"
+    description: >
+      Module-level `ttnn.register_python_operation(...)(ttnn._ttnn...foo)` form.
+      Stored as impl_chain pointing at the C++ extension path.
+    query: |
+      SELECT COUNT(*) FROM py_registrations
+      WHERE python_name = 'ttnn.unsqueeze_to_4D'
+        AND impl_chain IS NOT NULL
+        AND decorator_label LIKE '%call-form%'
+    expect_exact: 1
+
+  # ─── Overload sets ────────────────────────────────────────────────────
+  - name: "reshape — multiple C++ targets bound under one Python name"
+    description: >
+      `bind_function<\"reshape\">` binds multiple C++ overload/helper functions
+      to a single Python name. Should produce >=2 binding records.
+    query: |
+      SELECT COUNT(*) FROM bindings WHERE python_name = 'reshape'
+    expect_min: 2
+
+  # ─── Negative assertions — Bug A (over-eager binding) regressions ─────
+  - name: "NO nanobind::* leaks into bindings"
+    description: >
+      Regression check for the over-eager binding extractor: a previous
+      version pulled `nanobind::arg::operator=` and `nanobind::none` into the
+      bindings table because they appear in default-value expressions.
+    query: |
+      SELECT COUNT(*) FROM bindings
+      WHERE cpp_qualified_name LIKE 'nanobind::%' OR cpp_qualified_name LIKE 'nb::%'
+    expect_exact: 0
+
+  - name: "NO stdlib functions in bindings"
+    description: >
+      Lambda-body filter regression check: `std::get`, `std::move`,
+      `__builtin_unreachable` previously appeared as bindings under `__init__`.
+    query: |
+      SELECT COUNT(*) FROM bindings
+      WHERE cpp_qualified_name LIKE 'std::%' OR cpp_qualified_name LIKE '\_\_builtin\_%' ESCAPE '\'
+    expect_exact: 0
+
+  # ─── Sanity: total counts ─────────────────────────────────────────────
+  - name: "Total cross-language edges is non-trivial"
+    query: |
+      SELECT COUNT(*) FROM edges WHERE crosses_language = 1
+    expect_min: 100
+
+  - name: "Total bindings is non-trivial"
+    query: |
+      SELECT COUNT(*) FROM bindings
+    expect_min: 100
