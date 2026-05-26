@@ -55,7 +55,8 @@ targets:
         - whisper_3
       trace: [25, 17, 18, 19, 20, 28]
 
-    # N300 models (traces 60-90, n300 1-card)
+    # N300 models (traces 62-90, n300 1-card)
+    # Traces 60,61 dropped (llama-3.2-1b-instruct dup, kept in 62)
     - model:
         - llama-3.2-1b-instruct
         - llama-3.1-8b-instruct
@@ -89,6 +90,7 @@ targets:
       trace: [62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90]
 
     # N150 models (traces 41-59, n150 1-card)
+    # Trace 45 dropped (gemma4 dup, kept in 46)
     - model:
         - llama-3.2-1b_2
         - llama-3.1-8b-instruct_2
