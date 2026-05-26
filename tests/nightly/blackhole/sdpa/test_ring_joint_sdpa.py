@@ -244,6 +244,7 @@ DEFAULT_PCC_THRESHOLD = 0.994
 DEFAULT_RMSE_THRESHOLD = 0.05
 
 from tests.nightly.sdpa_perf_utils import (
+    ARCH_CONSTANTS,
     post_process_ops_log,
     compute_sdpa_flops,
     compute_math_utilization as compute_ring_joint_utilization,
@@ -1686,4 +1687,143 @@ def test_ring_joint_attention_sdpa_chunked_determinism(model_name, q_chunk_size,
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         num_iterations=3,
+    )
+
+
+# === TEST 8: CHUNKED-PREFILL PERF TABLE (skipped on CI) ===
+# Iterates over the chunks of a single chunked-prefill run and prints per-chunk math util.
+# Per-chunk work is rectangle (Q_chunk vs prefix K/V, non-causal) + triangle (Q_chunk vs
+# current K/V, causal half), so later chunks have a larger prefix and should reach higher
+# math utilization than chunk 0 (which is only the triangle).
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
+@pytest.mark.parametrize(
+    "model_name,q_chunk_size,k_chunk_size",
+    CHUNKED_CONFIGS,
+    ids=CHUNKED_CONFIG_IDS,
+)
+def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_size, chunk_size):
+    """Run chunked prefill once with tracy and print a per-chunk math-util table."""
+    from tracy.process_model_log import run_device_profiler
+
+    mesh_config = MESH_CONFIG
+    ring_size = mesh_config.sp_size
+
+    if ring_size < 2:
+        pytest.skip(f"Ring joint chunked prefill requires at least 2 devices, got {ring_size}")
+    if model_name not in MODEL_CONFIGS:
+        pytest.skip(f"Model {model_name} not available for current mesh config")
+
+    model = MODEL_CONFIGS[model_name]
+    total_seq = CHUNKED_PREFILL_TOTAL_SEQ
+    n_chunks = total_seq // chunk_size
+
+    config_id = f"{model_name}-q{q_chunk_size}-k{k_chunk_size}-chunk{chunk_size}"
+    subdir = "ttnn_ring_joint_sdpa_chunked_performance"
+    command = (
+        f"pytest tests/nightly/blackhole/sdpa/"
+        f"test_ring_joint_sdpa.py::"
+        f"test_ring_joint_attention_sdpa_chunked_accuracy"
+        f"[{config_id}]"
+    )
+
+    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]", "PM FPU UTIL (%)"]
+    cols = ["ATTRIBUTES"]
+
+    run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    r = post_process_ops_log(
+        subdir,
+        float_columns=float_cols,
+        columns=cols,
+        op_name="RingJointSDPADeviceOperation",
+        sum_vals=False,
+        has_signposts=False,
+    )
+
+    durations = r["DEVICE KERNEL DURATION [ns]"].tolist()
+    core_counts = r["CORE COUNT"].tolist()
+    fpu_util_col = r.get("PM FPU UTIL (%)", [])
+
+    # Tracy emits one entry per (chunk, device). Group every devs_per_chunk consecutive
+    # entries into a chunk and take the max duration (critical path: chunk completes when
+    # the slowest device finishes).
+    assert (
+        len(durations) % n_chunks == 0
+    ), f"RingJointSDPADeviceOperation entry count ({len(durations)}) is not a multiple of n_chunks ({n_chunks})"
+    devs_per_chunk = len(durations) // n_chunks
+    expected_devs = mesh_config.tp_size * mesh_config.sp_size
+    assert (
+        devs_per_chunk == expected_devs
+    ), f"Expected {expected_devs} entries per chunk (tp_size * sp_size), got {devs_per_chunk}"
+
+    chunk_durations = [max(durations[i * devs_per_chunk : (i + 1) * devs_per_chunk]) for i in range(n_chunks)]
+    chunk_core_counts = [
+        max(int(c) for c in core_counts[i * devs_per_chunk : (i + 1) * devs_per_chunk]) for i in range(n_chunks)
+    ]
+
+    q_per_dev = chunk_size // ring_size
+    nh_per_dev = model.nhq // mesh_config.tp_size
+    d_q, d_v = model.d_q, model.d_v
+    constants = ARCH_CONSTANTS["blackhole"]
+    clock_ghz = constants["clock_ghz"]
+    flops_per_cycle_per_core = constants["mm_flops_per_cycle_per_core"]
+
+    per_chunk_rows = []
+    for i, (dur_ns, ccount) in enumerate(zip(chunk_durations, chunk_core_counts)):
+        prefix_k = i * chunk_size
+        # Rectangle: Q_chunk (q_per_dev rows on this device) vs prefix K/V (i * chunk_size rows), non-causal.
+        rect_flops = 2 * q_per_dev * prefix_k * (d_q + d_v) * nh_per_dev
+        # Triangle: Q_chunk vs current chunk K/V, causal => c*c/2 valid (q,k) pairs.
+        tri_flops = q_per_dev * chunk_size * (d_q + d_v) * nh_per_dev
+        chunk_flops = rect_flops + tri_flops
+
+        # Strip CCL contribution: round measured core count down to multiple of grid_rows.
+        effective_cores = (int(ccount) // mesh_config.grid_rows) * mesh_config.grid_rows
+        cycles = dur_ns * clock_ghz
+        theoretical_flops = effective_cores * cycles * flops_per_cycle_per_core
+        util = (chunk_flops / theoretical_flops) * 100 if theoretical_flops > 0 else 0.0
+
+        per_chunk_rows.append(
+            {
+                "chunk": i,
+                "logical_n": (i + 1) * chunk_size,
+                "prefix_k": prefix_k,
+                "duration_ns": int(dur_ns),
+                "cores": effective_cores,
+                "chunk_flops": chunk_flops,
+                "util": util,
+            }
+        )
+
+    print(f"\n{'='*130}")
+    print(
+        f"Ring Joint Chunked-Prefill Per-Chunk Math Util: model={model_name}, "
+        f"q_chunk={q_chunk_size}, k_chunk={k_chunk_size}, chunk_size={chunk_size}, total_seq={total_seq}"
+    )
+    print(f"Architecture: {mesh_config.arch_type}, Ring size: {ring_size}, TP size: {mesh_config.tp_size}")
+    print(f"Per-device per-chunk Q rows: {q_per_dev}, heads/device: {nh_per_dev}, d_q={d_q}, d_v={d_v}")
+    print(f"{'='*130}")
+    header = "| Chunk | logical_n | prefix_K | Duration (ms) | Cores | Chunk FLOPs (G) | Math Util |"
+    sep = "|-------|-----------|----------|---------------|-------|-----------------|-----------|"
+    print(header)
+    print(sep)
+    for row in per_chunk_rows:
+        print(
+            f"| {row['chunk']:5d} | {row['logical_n']:9d} | {row['prefix_k']:8d} | "
+            f"{row['duration_ns']/1e6:13.3f} | {row['cores']:5d} | {row['chunk_flops']/1e9:15.2f} | "
+            f"{row['util']:8.1f}% |"
+        )
+
+    if len(fpu_util_col) > 0:
+        print(
+            f"\nTracy PM FPU UTIL range across all SDPA cores/chunks: "
+            f"{float(fpu_util_col.min()):.1f}% - {float(fpu_util_col.max()):.1f}%"
+        )
+
+    utils = [row["util"] for row in per_chunk_rows]
+    assert all(0.0 <= u <= 100.0 for u in utils), f"Math util out of [0, 100]: {[f'{u:.1f}' for u in utils]}"
+    assert utils[-1] > utils[0], (
+        f"Expected last chunk util ({utils[-1]:.1f}%) > first chunk util ({utils[0]:.1f}%) "
+        f"— prefix grows with chunk index, so util should increase."
     )
