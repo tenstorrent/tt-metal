@@ -282,18 +282,69 @@ struct KernelInfo {
     uint32_t num_threads = 1;  // number of engines (for get_num_threads())
 };
 
+// Metal 2.0 named-binding snapshot — captured once per Kernel and threaded
+// through DeferredCompile and jit_compile_kernel. Drives both the JIT
+// wrapper's namespace emission (args::/dfb::/sem::/ta::) and the cache-key
+// suffix that distinguishes kernels sharing source/CTAs/defines but differing
+// in binding identity.
+//
+// Design note: we deliberately do NOT reuse write_kernel_bindings_generated_header
+// or write_kernel_args_generated_header from tt_metal/jit_build/genfiles.cpp.
+// Those functions are private to genfiles.cpp; exposing them would add public
+// API surface to the upstream JIT build for emulation-only needs. The cost is
+// a small amount of duplication: emit_metal2_namespaces() below MUST stay
+// text-equivalent to those two upstream generators. Re-check on every
+// Metal 2.0 host-API surface change.
+//
+// Adding a new binding kind: extend this struct, extend cache_key_suffix(),
+// extend build_metal2_snapshot(), extend emit_metal2_namespaces().
+struct Metal2BindingsSnapshot {
+    std::vector<std::string> named_runtime_args;           // RTA names, positional order
+    std::vector<std::string> named_common_runtime_args;    // CRTA names, positional order
+    std::map<std::string, uint32_t> dfb_accessors;         // accessor_name → logical_dfb_id
+    std::map<std::string, uint16_t> sem_accessors;         // accessor_name → semaphore_id
+    std::map<std::string, std::pair<uint32_t, uint32_t>> ta_accessors;  // accessor_name → {cta_off, crta_off}
+
+    bool empty() const {
+        return named_runtime_args.empty() && named_common_runtime_args.empty() &&
+               dfb_accessors.empty() && sem_accessors.empty() && ta_accessors.empty();
+    }
+
+    // Deterministic suffix appended to the JIT cache key for Metal 2.0 kernels.
+    // Two kernels with identical sources/CTAs/defines but different binding
+    // identity (DFB IDs, semaphore IDs, RTA/CRTA name lists, TA offsets) must
+    // produce different keys; otherwise the second silently gets the first's
+    // cached .so with the wrong IDs baked in. Iteration is deterministic
+    // because dfb/sem/ta are std::map (sorted by name) and the RTA/CRTA lists
+    // come from the Kernel in positional order.
+    std::string cache_key_suffix() const {
+        std::string s;
+        for (const auto& [name, id] : dfb_accessors) {
+            s += ":dfb:" + name + "=" + std::to_string(id);
+        }
+        for (const auto& [name, id] : sem_accessors) {
+            s += ":sem:" + name + "=" + std::to_string(id);
+        }
+        for (const auto& [name, offs] : ta_accessors) {
+            s += ":ta:" + name + "=" + std::to_string(offs.first) + "," + std::to_string(offs.second);
+        }
+        for (const auto& name : named_runtime_args) {
+            s += ":rta:" + name;
+        }
+        for (const auto& name : named_common_runtime_args) {
+            s += ":crta:" + name;
+        }
+        return s;
+    }
+};
+
 struct DeferredCompile {
     std::string src_path;
     std::vector<uint32_t> compile_args;
     std::unordered_map<std::string, uint32_t> named_compile_args;
     std::map<std::string, std::string> defines;
     std::string extra_inc;
-    // Metal 2.0 named-binding info — used to emit args:: / dfb:: / ta:: namespaces
-    // in the JIT wrapper so kernels that include experimental/kernel_args.h compile.
-    std::vector<std::string> named_runtime_args;           // positional RTA names
-    std::vector<std::string> named_common_runtime_args;    // positional CRTA names
-    std::map<std::string, uint32_t> dfb_accessors;         // accessor_name → logical_dfb_id
-    std::map<std::string, std::pair<uint32_t, uint32_t>> ta_accessors;  // accessor_name → {cta_off, crta_off}
+    Metal2BindingsSnapshot bindings;
 };
 
 struct PendingKernelInfo {
@@ -495,16 +546,114 @@ static void preprocess_kernel_source_for_x86(const std::string& src_path, const 
     out << src;
 }
 
+// Walks Kernel's public binding-accessor methods to build a snapshot of all
+// named bindings. Single point of truth — adding a new binding kind requires
+// extending Metal2BindingsSnapshot and adding one block here.
+static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& kernel) {
+    Metal2BindingsSnapshot s;
+    s.named_runtime_args = kernel.get_named_runtime_args();
+    s.named_common_runtime_args = kernel.get_named_common_runtime_args();
+    kernel.process_dataflow_buffer_local_accessor_handles(
+        [&s](const std::string& name, uint16_t id) { s.dfb_accessors[name] = id; });
+    kernel.process_semaphore_local_accessor_handles(
+        [&s](const std::string& name, uint16_t id) { s.sem_accessors[name] = id; });
+    kernel.process_tensor_binding_handles(
+        [&s](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off) {
+            s.ta_accessors[name] = {cta_off, addr_crta_off};
+        });
+    return s;
+}
+
+// Emits args::/dfb::/sem::/ta:: namespace blocks into the JIT wrapper .cpp,
+// replacing the kernel_args_generated.h + kernel_bindings_generated.h that
+// the real upstream JIT build pipeline writes via genfiles.cpp.
+//
+// Must stay text-equivalent to the canonical generators:
+//   tt_metal/jit_build/genfiles.cpp::write_kernel_bindings_generated_header
+//   tt_metal/jit_build/genfiles.cpp::write_kernel_args_generated_header
+//
+// Relied-upon types (must be in scope when the wrapper is compiled — they
+// come from the kernel-include surface, not from us):
+//   ::experimental::RtaArg<T>, ::experimental::CrtaArg<T>, ::experimental::CtaVal<T>
+//                                  from "experimental/kernel_args.h"
+//   DFBAccessor                    from "api/dataflow/dataflow_buffer.h"
+//   ::tensor_accessor::TensorAccessorBindingToken<CTA, CRTA>
+//                                  from "api/tensor/tensor_accessor.h"
+//   std::uint32_t                  from <cstdint>
+// If any of these are renamed/moved upstream, fix here.
+static void emit_metal2_namespaces(
+    std::ostream& f,
+    const Metal2BindingsSnapshot& s,
+    const std::unordered_map<std::string, uint32_t>& named_compile_args) {
+    const bool has_args = !s.named_runtime_args.empty() || !s.named_common_runtime_args.empty() ||
+                          !named_compile_args.empty();
+    if (has_args) {
+        f << "#include \"experimental/kernel_args.h\"\n";
+    }
+    if (!s.dfb_accessors.empty()) {
+        f << "#include \"api/dataflow/dataflow_buffer.h\"\n";
+    }
+    if (!s.sem_accessors.empty()) {
+        f << "#include <cstdint>\n";
+    }
+    if (!s.ta_accessors.empty()) {
+        f << "#include \"api/tensor/tensor_accessor.h\"\n";
+    }
+
+    if (has_args) {
+        f << "namespace args {\n";
+        uint32_t rta_offset = 0;
+        for (const auto& name : s.named_runtime_args) {
+            f << "constexpr ::experimental::RtaArg<uint32_t> " << name << "{" << rta_offset << "};\n";
+            rta_offset += sizeof(uint32_t);
+        }
+        uint32_t crta_offset = 0;
+        for (const auto& name : s.named_common_runtime_args) {
+            f << "constexpr ::experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
+            crta_offset += sizeof(uint32_t);
+        }
+        // Named CTAs: sort by name so wrapper text and the cache key (which
+        // sorts via std::map iteration in compute_cache_key) stay aligned.
+        std::vector<std::pair<std::string, uint32_t>> cta_entries(
+            named_compile_args.begin(), named_compile_args.end());
+        std::sort(cta_entries.begin(), cta_entries.end());
+        for (const auto& [name, value] : cta_entries) {
+            f << "constexpr ::experimental::CtaVal<uint32_t> " << name << "{" << value << "u};\n";
+        }
+        f << "}  // namespace args\n";
+    }
+    if (!s.dfb_accessors.empty()) {
+        f << "namespace dfb {\n";
+        for (const auto& [name, id] : s.dfb_accessors) {
+            f << "constexpr DFBAccessor " << name << "{" << id << "};\n";
+        }
+        f << "}  // namespace dfb\n";
+    }
+    if (!s.sem_accessors.empty()) {
+        f << "namespace sem {\n";
+        for (const auto& [name, id] : s.sem_accessors) {
+            f << "constexpr std::uint32_t " << name << " = " << id << "u;\n";
+        }
+        f << "}  // namespace sem\n";
+    }
+    if (!s.ta_accessors.empty()) {
+        f << "namespace ta {\n";
+        for (const auto& [name, offs] : s.ta_accessors) {
+            f << "using " << name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
+              << offs.first << "u, " << offs.second << "u>;\n";
+            f << "constexpr " << name << "_t " << name << "{};\n";
+        }
+        f << "}  // namespace ta\n";
+    }
+}
+
 static std::function<void()> jit_compile_kernel(
     const std::string& kernel_src_path,
     const std::vector<uint32_t>& compile_args,
     const std::unordered_map<std::string, uint32_t>& named_compile_args,
     const std::map<std::string, std::string>& defines,
     const std::string& extra_include_flags,
-    const std::vector<std::string>& named_runtime_args = {},
-    const std::vector<std::string>& named_common_runtime_args = {},
-    const std::map<std::string, uint32_t>& dfb_accessors = {},
-    const std::map<std::string, std::pair<uint32_t, uint32_t>>& ta_accessors = {},
+    const Metal2BindingsSnapshot& bindings = {},
     const std::string& disk_cache_so_path_arg = "") {
     const std::string jit_inc = TT_EMULE_JIT_INCLUDE_DIR;
     const std::string parent_inc = TT_EMULE_INCLUDE_DIR;
@@ -546,56 +695,11 @@ static std::function<void()> jit_compile_kernel(
             }
         }
         f << "#include \"jit_kernel_stubs.hpp\"\n";
-        // Emit Metal 2.0 named-binding namespaces after jit_kernel_stubs.hpp so that
-        // experimental::RtaArg / CrtaArg / CtaVal and DFBAccessor are already defined.
-        // These replace kernel_args_generated.h / kernel_bindings_generated.h from the
-        // real JIT build, allowing kernels that use args:: / dfb:: / ta:: to compile.
-        //
-        // Pull in the type headers needed by the declarations below; these are
-        // normally included by the kernel source itself, but the namespace blocks
-        // appear before the kernel #include so the types must be pre-declared here.
-        if (!named_compile_args.empty() || !named_runtime_args.empty() ||
-            !named_common_runtime_args.empty()) {
-            f << "#include \"experimental/kernel_args.h\"\n";
-        }
-        if (!dfb_accessors.empty()) {
-            f << "#include \"api/dataflow/dataflow_buffer.h\"\n";
-        }
-        if (!ta_accessors.empty()) {
-            f << "#include \"api/tensor/tensor_accessor.h\"\n";
-        }
-        if (!named_compile_args.empty() || !named_runtime_args.empty() ||
-            !named_common_runtime_args.empty()) {
-            f << "namespace args {\n";
-            for (size_t i = 0; i < named_runtime_args.size(); ++i) {
-                f << "constexpr ::experimental::RtaArg<uint32_t> " << named_runtime_args[i]
-                  << "{" << (i * sizeof(uint32_t)) << "u};\n";
-            }
-            for (size_t i = 0; i < named_common_runtime_args.size(); ++i) {
-                f << "constexpr ::experimental::CrtaArg<uint32_t> " << named_common_runtime_args[i]
-                  << "{" << (i * sizeof(uint32_t)) << "u};\n";
-            }
-            for (const auto& [name, val] : named_compile_args) {
-                f << "constexpr ::experimental::CtaVal<uint32_t> " << name << "{" << val << "u};\n";
-            }
-            f << "}  // namespace args\n";
-        }
-        if (!dfb_accessors.empty()) {
-            f << "namespace dfb {\n";
-            for (const auto& [name, id] : dfb_accessors) {
-                f << "constexpr DFBAccessor " << name << "{" << id << "u};\n";
-            }
-            f << "}  // namespace dfb\n";
-        }
-        if (!ta_accessors.empty()) {
-            f << "namespace ta {\n";
-            for (const auto& [name, offs] : ta_accessors) {
-                f << "using " << name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
-                  << offs.first << "u," << offs.second << "u>;\n";
-                f << "constexpr " << name << "_t " << name << "{};\n";
-            }
-            f << "}  // namespace ta\n";
-        }
+        // Emit Metal 2.0 named-binding namespaces (args::/dfb::/sem::/ta::)
+        // after jit_kernel_stubs.hpp. Replaces kernel_args_generated.h and
+        // kernel_bindings_generated.h from the real JIT build. See the
+        // comment on emit_metal2_namespaces() for the contract with upstream.
+        emit_metal2_namespaces(f, bindings, named_compile_args);
         f << "#include \"" << patched_kernel_path << "\"\n";
         f << "extern \"C\" { void __emule_kernel_entry() { kernel_main(); } }\n";
     }
@@ -1015,23 +1119,19 @@ static void collect_kernels(
             bool is_quasar_compute = is_tensix && (qck != nullptr);
 
             // Collect Metal 2.0 named-binding info so the JIT wrapper can emit
-            // args:: / dfb:: / ta:: namespace declarations.
-            std::vector<std::string> named_rt_args = kernel->get_named_runtime_args();
-            std::vector<std::string> named_crta_args = kernel->get_named_common_runtime_args();
-            std::map<std::string, uint32_t> dfb_accessor_map;
-            kernel->process_dataflow_buffer_local_accessor_handles(
-                [&dfb_accessor_map](const std::string& accessor_name, uint16_t logical_dfb_id) {
-                    dfb_accessor_map[accessor_name] = logical_dfb_id;
-                });
-            std::map<std::string, std::pair<uint32_t, uint32_t>> ta_accessor_map;
-            kernel->process_tensor_binding_handles(
-                [&ta_accessor_map](
-                    const std::string& accessor_name, uint32_t cta_offset, uint32_t addr_crta_offset) {
-                    ta_accessor_map[accessor_name] = {cta_offset, addr_crta_offset};
-                });
+            // args::/dfb::/sem::/ta:: namespace declarations. Captured once per
+            // Kernel; identical across this Kernel's TRISC variants (the cache-key
+            // suffix it produces is therefore appended to every variant key).
+            const bool is_metal2 = kernel->is_metal2_kernel();
+            Metal2BindingsSnapshot bindings = build_metal2_snapshot(*kernel);
+            const std::string metal2_key_suffix = is_metal2 ? bindings.cache_key_suffix() : std::string();
 
             // Helper: compute cache key from a defines map (preserves upstream's sorted
-            // iteration of named_compile_args and defines for key stability).
+            // iteration of named_compile_args and defines for key stability). The
+            // metal2_key_suffix captures binding identity (DFB/sem/RTA/CRTA/TA names
+            // and IDs) so two Metal 2.0 kernels sharing source/CTAs/defines but
+            // differing only in bindings produce different keys and don't collide
+            // on the cached .so.
             auto compute_cache_key = [&](const std::map<std::string, std::string>& defs) -> std::string {
                 std::string key;
                 if (ksrc.source_type_ == KernelSource::FILE_PATH) {
@@ -1053,6 +1153,7 @@ static void collect_kernels(
                 for (const auto& [k, v] : defs) {
                     key += ":" + k + "=" + v;
                 }
+                key += metal2_key_suffix;
                 return key;
             };
 
@@ -1072,8 +1173,7 @@ static void collect_kernels(
                         g_jit_cache[key] = disk_fn;
                     } else {
                         deferred_compiles[key] =
-                            DeferredCompile{src_path, compile_args, named_compile_args, defs, extra_inc,
-                                            named_rt_args, named_crta_args, dfb_accessor_map, ta_accessor_map};
+                            DeferredCompile{src_path, compile_args, named_compile_args, defs, extra_inc, bindings};
                     }
                 }
             };
@@ -1151,9 +1251,7 @@ static void jit_compile_pending(
                 key, std::async(std::launch::async, [&dc, cache_path, tmp_path]() {
                     auto fn = jit_compile_kernel(
                         dc.src_path, dc.compile_args, dc.named_compile_args, dc.defines, dc.extra_inc,
-                        dc.named_runtime_args, dc.named_common_runtime_args,
-                        dc.dfb_accessors, dc.ta_accessors,
-                        tmp_path);
+                        dc.bindings, tmp_path);
                     std::filesystem::rename(tmp_path, cache_path);
                     return fn;
                 }));
