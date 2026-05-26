@@ -1834,7 +1834,7 @@ def test_kv_pad_aware_rotation_torch_showcase(
 
 
 # ===========================================================================
-# Test 5: cache_batch_idx + chunked-prefill → wrong q_start_idx (bug demo)
+# Test 5: cache_batch_idx + chunked-prefill q_start_idx regression
 # ===========================================================================
 #
 # Motivation
@@ -1863,17 +1863,17 @@ def test_kv_pad_aware_rotation_torch_showcase(
 #
 # This test asks: does the indexed API also work for chunked prefill?
 #
-# The bug
-# -------
+# The bug this guards against
+# ---------------------------
 # `q_start_idx_t` (= the absolute Q-tile offset of the current chunk) is
 # derived in the compute kernel as
 #
 #   q_start_idx_t = chunked_enabled
-#                   ? (kv_local_padded_Nt - q_local_padded_Nt) * ring_size
+#                   ? logical_nt - q_local_padded_Nt * ring_size
 #                   : 0
-#       — ring_joint_sdpa.cpp:82
 #
-# where kv_local_padded_Nt comes from the *physical* K tensor's seq dim:
+# Before the fix, this used `kv_local_padded_Nt` instead of `logical_nt`.
+# kv_local_padded_Nt comes from the *physical* K tensor's seq dim:
 #
 #   const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len();
 #       — ring_joint_sdpa_program_factory.cpp:178
@@ -1892,9 +1892,9 @@ def test_kv_pad_aware_rotation_torch_showcase(
 # The causal mask is then placed off by (n_chunks_total - 1 - i) chunks
 # for every intermediate chunk.
 #
-# `logical_n` (which is `populated_global` here) limits *which K tiles are
-# valid*, but does NOT feed into q_start_idx — that derivation is purely
-# K's shape.
+# The fixed path derives q_start_idx from `logical_n` (`populated_global`
+# here), so full-cache indexed callers and slice-first callers use the same
+# populated-prefix offset.
 #
 # What this test does
 # -------------------
@@ -1909,22 +1909,9 @@ def test_kv_pad_aware_rotation_torch_showcase(
 #       multiple batch slots — our data in cache_batch_idx, distinct noise
 #       in the other slot so a wrong-slot read would corrupt the answer),
 #       cache_batch_idx set, logical_n = populated_global (same).
-#       Expected today: PCC vs same reference is LOW (≪ 0.97), because
-#       q_start_idx points at the wrong chunk. We assert PCC < 0.9 to
-#       lock in the current broken behavior; once the kernel is fixed
-#       to derive q_start_idx from `logical_nt / ring_size` instead of
-#       `kv_local_padded_Nt`, flip this to assert_with_pcc(... 0.97).
-#
-# Suggested fix shape
-# -------------------
-# Replace the kernel formula
-#       q_start_idx_t = (kv_local_padded_Nt - q_local_padded_Nt) * ring_size
-# with
-#       q_start_idx_t = logical_nt - q_local_padded_Nt * ring_size
-# (or pass q_start_idx as a runtime/CT arg derived from logical_n in the
-# program factory). The current formula is correct only when K's physical
-# seq dim equals the populated prefix — true for slice-first callers, but
-# not for indexed-cache callers.
+#       Expected: PCC vs same reference > 0.97. Before the fix this was
+#       about 0.84 because q_start_idx pointed at the last chunk instead
+#       of the current intermediate chunk.
 # ===========================================================================
 
 
@@ -1936,7 +1923,7 @@ def test_kv_pad_aware_rotation_torch_showcase(
     indirect=True,
 )
 @pytest.mark.timeout(0)
-def test_index_based_kv_cache_chunked_q_start_idx_bug(mesh_device, device_params):
+def test_index_based_kv_cache_chunked_q_start_idx_regression(mesh_device, device_params):
     sp_axis = 0
     tp_axis = 1
     mesh_shape = list(mesh_device.shape)
@@ -2160,10 +2147,10 @@ def test_index_based_kv_cache_chunked_q_start_idx_bug(mesh_device, device_params
     _, pcc_ref_msg = assert_with_pcc(ref_torch, tt_out_ref_host, 0.97)
     logger.success(f"Reference call (slice + no cache_batch_idx): PCC vs torch = {pcc_ref_msg}")
 
-    # ----- Bug call: full-cache K + cache_batch_idx -----
+    # ----- Indexed call: full-cache K + cache_batch_idx -----
     pk_bug, pv_bug = make_pbufs(seq_len_max)
     logger.info(
-        f"Bug call: K seq = seq_len_max = {seq_len_max} (per device {seq_len_max_local}), "
+        f"Indexed call: K seq = seq_len_max = {seq_len_max} (per device {seq_len_max_local}), "
         f"cache_batch_idx = {cache_batch_idx}, logical_n = {populated_global} (same as reference)."
     )
     attn_out_bug, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
@@ -2198,23 +2185,14 @@ def test_index_based_kv_cache_chunked_q_start_idx_bug(mesh_device, device_params
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape),
     ).to(torch.bfloat16)
 
-    # Direct PCC vs the torch reference. Today this is far below threshold for
-    # intermediate chunks; once the kernel uses logical_n for q_start_idx,
-    # this should pass like the reference call does.
-    try:
-        passed, pcc_bug_msg = assert_with_pcc(ref_torch, tt_out_bug_host, 0.97)
-    except AssertionError as e:
-        pcc_bug_msg = str(e)
-        passed = False
-    logger.warning(
-        f"Bug call (full cache + cache_batch_idx): PCC vs torch = {pcc_bug_msg} "
+    # Direct PCC vs the torch reference. This is the regression check for
+    # indexed-cache chunked prefill: q_start_idx must be based on logical_n,
+    # not the full cache's physical sequence length.
+    _, pcc_bug_msg = assert_with_pcc(ref_torch, tt_out_bug_host, 0.97)
+    logger.success(
+        f"Indexed call (full cache + cache_batch_idx): PCC vs torch = {pcc_bug_msg} "
         f"(chunk_idx={chunk_idx}, n_chunks_total={n_chunks_total}, q_abs_offset={q_abs_offset}). "
-        f"Expected: kernel currently uses q_start_idx = "
-        f"(seq_len_max_local/32 - chunk_size_local/32) * sp = {(seq_len_max_local - chunk_size_local) * sp // 32} "
-        f"tiles, but correct value is chunk_idx * chunk_size_global / 32 = {q_abs_offset // 32} tiles."
-    )
-    assert not passed, (
-        "Test 5 expected the indexed+chunked combination to FAIL PCC against torch, but it passed. "
-        "Either the kernel was fixed (good — flip the assertion to assert_with_pcc(..., 0.97)) or the test "
-        "geometry doesn't actually trigger the chunked path. Re-check chunk_idx vs n_chunks_total."
+        f"Correct q_start_idx = logical_nt - q_local_padded_Nt * sp = {q_abs_offset // 32} tiles; "
+        f"the old physical-cache formula would have used "
+        f"{(seq_len_max_local - chunk_size_local) * sp // 32} tiles."
     )
