@@ -6,6 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "sanitizer/api.h"
 #include "llk_assert.h"
 
 #ifdef TRISC_MATH
@@ -34,6 +35,7 @@ ALWI void copy_tile_to_dst_init_short(
     uint32_t transpose = 0,
     uint32_t transpose_within_16x16_face = false,
     uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(cbid, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -55,6 +57,7 @@ ALWI void copy_tile_to_dst_init_short(
  * registers.
  */
 ALWI void copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
     copy_tile_to_dst_init_short(cbid, 0, false, call_line);
 }
 
@@ -70,6 +73,7 @@ ALWI void copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
  */
 // clang-format on
 ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32_t transpose = 0) {
+    LLK_SAN_FUNCTION();
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
 #ifndef ARCH_QUASAR
@@ -101,6 +105,7 @@ ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cb
  * */
 // clang-format on
 ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, in_tile_index)));
@@ -118,6 +123,7 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
 
 ALWI void copy_block_matmul_partials(
     uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, start_in_tile_index, ntiles)));
