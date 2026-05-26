@@ -15,7 +15,7 @@
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
 #include "api/tt-metalium/device.hpp"
-#include "api/tt-metalium/experimental/host_api.hpp"
+#include "impl/experimental/quasar/host_api.hpp"
 #include "api/tt-metalium/experimental/offline_kernel_compile.hpp"
 #include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
