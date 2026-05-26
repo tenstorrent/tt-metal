@@ -193,40 +193,47 @@ void kernel_main() {
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
-    // Sentinel-terminated fabric send loop
-    while (true) {
-        cb_wait_front(cb_route_info_id, 1);
-        volatile tt_l1_ptr uint32_t* route_info =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_route_info_id));
+    {
+        // DeviceZoneScopedN("combine-ethernet-flow");
+        //  Sentinel-terminated fabric send loop
+        while (true) {
+            cb_wait_front(cb_route_info_id, 1);
+            uint32_t cb_base = get_read_ptr(cb_route_info_id);
+            volatile tt_l1_ptr uint32_t* route_info = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
+            uint32_t route = route_info[0];
+            {
+                // DeviceZoneScopedN("combine-waiting-for-route-info");
+                if (route == ROUTE_INFO_SENTINEL) {
+                    cb_pop_front(cb_route_info_id, 1);
+                    break;
+                }
+            }
+            uint32_t distance = route_info[1];
+            uint32_t output_page_idx = route_info[2];
+            uint32_t output_data_addr = cb_base + l1_alignment;
 
-        uint32_t route = route_info[0];
-        if (route == ROUTE_INFO_SENTINEL) {
-            cb_pop_front(cb_route_info_id, 1);
-            break;
-        }
-        uint32_t distance = route_info[1];
-        uint32_t output_page_idx = route_info[2];
-        cb_pop_front(cb_route_info_id, 1);
-
-        cb_wait_front(cb_output_for_writer_id, 1);
-        uint32_t output_data_addr = get_read_ptr(cb_output_for_writer_id);
-
-        DPRINT_COMBINE("Fabric send: route={} distance={} page_idx={}\n", route, distance, output_page_idx);
+            DPRINT_COMBINE << "Fabric send: route=" << route << " distance=" << distance
+                           << " page_idx=" << output_page_idx << ENDL();
 
 #ifdef DEST_CHIP_ID
-        fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
-        fabric_send_noc_unicast<fabric_max_packet_size>(
-            output_addr_gen,
-            fabric_connections[route],
-            unicast_packet_header,
-            output_data_addr,
-            output_page_idx,
-            (int)aligned_output_page_size,
-            l1_alignment);
-        noc_async_writes_flushed();  // Ensure output data departed L1 before freeing CB slot
+            {
+                // DeviceZoneScopedN("FABRIC-send");
+                fabric_set_unicast_route<false>(
+                    (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+                fabric_send_noc_unicast<fabric_max_packet_size>(
+                    output_addr_gen,
+                    fabric_connections[route],
+                    unicast_packet_header,
+                    output_data_addr,
+                    output_page_idx,
+                    (int)aligned_output_page_size,
+                    l1_alignment);
+                noc_async_writes_flushed();  // Ensure output data departed L1 before freeing CB slot
+            }
 #endif
 
         cb_pop_front(cb_output_for_writer_id, 1);
+        }
     }
 
 #ifdef DEST_CHIP_ID
