@@ -211,7 +211,7 @@ python tests/evaluate_coco.py
 | Core utilisation | 56% at max (64 cores) | 1,042 / 1,860 ops at full 64 cores |
 | Top bottleneck | Matmul — 27.5% | Of total device kernel time |
 
-> Full op-level analysis: [`performance_report.md`](./perfromance_report.md) · Trace: `ops_perf_results_rtdetr_2026_05_25_05_51_41.csv`
+> Full op-level analysis: [`performance_report.md`](./performance_report.md) · Trace: `ops_perf_results_rtdetr_2026_05_25_05_51_41.csv`
 ---
 
 ## Implementation Notes
