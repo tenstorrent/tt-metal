@@ -949,13 +949,19 @@ def _build_batched_inputs(
 ):
     """Construct a randomized cache + batched input + page_table for tests.
 
-    The kernel writes cache block_id = page_table[batch][vb] * num_heads + h,
-    so sequential page_table values 0,1,2,... automatically give
-    non-overlapping per-virtual-block regions. We just need the cache big
-    enough to hold them: cache_max_blocks >= (page_table_batch_size *
-    pt_max_blocks_per_seq) * num_input_heads. cache_max_blocks is
-    auto-bumped if the caller passes a smaller value, so multi-head tests
-    don't write past the buffer.
+    Cache is allocated as `[cache_max_blocks, 1, cache_block_size, head_dim]`,
+    matching how `test_paged_fill_cache_variants` and real vLLM/JAX callers
+    set up paged KV caches (cache_num_heads = 1 because GQA-style models share
+    a single KV-head dimension). The device-op now requires
+    `input_num_heads == cache_num_heads`, so callers of this helper must pass
+    `num_input_heads = 1`. The `num_input_heads` parameter is kept in the
+    signature for future use if a multi-head variant is added (which would
+    also need an updated cache shape and reference function).
+
+    cache_max_blocks is auto-bumped to a safe lower bound so all
+    `page_table_batch_size * pt_max_blocks_per_seq` slots fit even after the
+    kernel's per-head spill arithmetic; harmless for num_input_heads=1 (factor
+    of 1).
     """
     torch.manual_seed(seed)
 
@@ -1065,7 +1071,16 @@ def _run_batched_paged_fill_cache(
     assert passing, message
 
 
-@pytest.mark.parametrize("num_input_heads", [1, 8])
+# Only num_input_heads=1 is exercised here. The device-op validation
+# (paged_fill_cache_device_operation.cpp:62) requires
+# `input_num_heads == cache_num_heads`, and the test helper allocates the cache
+# with `cache_num_heads = 1` (matching how real vLLM/JAX callers configure paged
+# KV caches with GQA-style head sharing). Multi-head batched coverage would need
+# a separate helper that allocates cache as `[max_blocks, num_input_heads, ...]`
+# and an adapted reference function; not added here since no in-tree caller uses
+# that shape and the legacy tests (test_paged_fill_cache_variants etc.) only
+# exercise num_input_heads=1 as well.
+@pytest.mark.parametrize("num_input_heads", [1])
 @pytest.mark.parametrize("input_seq_len", [128, 2048])
 @pytest.mark.parametrize(
     "num_input_batch, batch_idxs",
