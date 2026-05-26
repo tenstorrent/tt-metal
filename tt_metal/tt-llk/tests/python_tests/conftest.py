@@ -43,6 +43,7 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import LLKAssertException
 from helpers.exalens_server import ExalensServer
 from helpers.format_config import InputOutputFormat
+from helpers.hardware_controller import HardwareController
 from helpers.logger import configure_logger, logger
 from helpers.perf import PerfConfig, PerfReport, combine_perf_reports
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
@@ -219,6 +220,18 @@ def pytest_addoption(parser):
         help="Path to folder where stimuli should be loaded from",
     )
 
+    parser.addoption(
+        "--reset-card-between-files",
+        action="store_true",
+        default=False,
+        help="With pytest-xdist (-n N) and --compile-consumer: distribute each "
+        "test file's variants across all workers in parallel and synchronise "
+        "the workers between files so HardwareController().reset_card() runs "
+        "once per file boundary. Prevents cross-file hardware state "
+        "contamination at the cost of workers idling at the per-file barrier "
+        "and one extra tt-smi -r per file. No effect when xdist is not active.",
+    )
+
 
 _RECORD_TEST_ORDER: bool = False
 _UNIFIED_ORDER_FILE: str = "DEFAULT"
@@ -308,6 +321,33 @@ def pytest_configure(config):
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
+    # If barrier-mode is on and we are an xdist worker, register the
+    # worker-side barrier plugin. The master forwards barrier metadata via
+    # workerinput in pytest_configure_node; without those keys we cannot
+    # synchronise, so skip silently (e.g. -n was not actually used).
+    if (
+        config.getoption("--reset-card-between-files", default=False)
+        and hasattr(config, "workerinput")
+        and "llk_barrier_dir" in config.workerinput
+    ):
+        from helpers.barrier_plugin import WorkerBarrierPlugin
+
+        controller = HardwareController()
+
+        def _do_reset(scope_name: str):
+            logger.info("Crossing barrier after scope '{}': resetting card", scope_name)
+            controller.reset_card()
+
+        config.pluginmanager.register(
+            WorkerBarrierPlugin(
+                worker_id=config.workerinput["workerid"],
+                num_workers=int(config.workerinput["llk_barrier_num_workers"]),
+                barrier_dir=Path(config.workerinput["llk_barrier_dir"]),
+                on_barrier=_do_reset,
+            ),
+            name="llk_worker_barrier_plugin",
+        )
+
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         if TestConfig.TEST_TARGET.run_simulator:
             if _SIMULATOR_PATH is None:
@@ -337,6 +377,57 @@ def pytest_configure(config):
                 )
         else:
             tt_exalens_init.init_ttexalens(use_4B_mode=False)
+
+
+def _barrier_root_dir() -> Path:
+    """Per-run filesystem location used by the file-barrier coordination.
+
+    Lives under the existing artefacts tree so it inherits the same
+    permissions and cleanup story as everything else this run produces.
+    The pid keeps concurrent pytest invocations from stomping on each
+    other's barrier sentinels.
+    """
+    return TestConfig.ARTEFACTS_DIR / "barriers" / f"run_{os.getpid()}"
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_xdist_make_scheduler(config, log):
+    """Use the file-barrier scheduler when --reset-card-between-files is set.
+
+    Returns None to let pytest-xdist pick the default scheduler otherwise.
+    This hook only runs in the master process; the actual barrier + reset
+    happens worker-side via WorkerBarrierPlugin.
+    """
+    if not config.getoption("--reset-card-between-files", default=False):
+        return None
+
+    from helpers.barrier_scheduler import LoadFileBarrierScheduling
+
+    return LoadFileBarrierScheduling(config, log)
+
+
+def pytest_configure_node(node):
+    """Forward barrier-mode metadata from master into each worker's workerinput.
+
+    xdist invokes this on master once per spawned worker, before the worker
+    starts collecting. ``node.workerinput`` is the same dict the worker sees
+    as ``config.workerinput`` after launch, so this is the documented way to
+    push per-run constants down.
+    """
+    config = node.config
+    if not config.getoption("--reset-card-between-files", default=False):
+        return
+
+    # The barrier needs to know exactly how many arrival sentinels to wait
+    # for. xdist resolves the user's -n flag into one tx spec per worker
+    # before any node is spawned, so counting specs is the most reliable
+    # source for "actual number of workers in this run".
+    from xdist.workermanage import parse_tx_spec_config
+
+    num_workers = len(parse_tx_spec_config(config))
+
+    node.workerinput["llk_barrier_dir"] = str(_barrier_root_dir())
+    node.workerinput["llk_barrier_num_workers"] = num_workers
 
 
 def pytest_collection_modifyitems(config, items):
