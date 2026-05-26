@@ -94,7 +94,7 @@ ttml::autograd::TensorPtr build_grouped_tensor(
     return ttml::autograd::create_tensor(ttml::core::from_xtensor(grouped, device), /*requires_grad=*/true);
 }
 
-Stats summarize(const std::vector<double>& times_us) {
+[[maybe_unused]] Stats summarize(const std::vector<double>& times_us) {
     Stats s;
     if (times_us.empty()) {
         return s;
@@ -131,55 +131,52 @@ CaseResult run_case(const Case& c, uint32_t num_warmup, uint32_t num_measure) {
     const auto w_up = build_expert_weight_list(c.E, c.I, c.H, device, rng);
     const auto w_down = build_expert_weight_list(c.E, c.H, c.I, device, rng);
 
-    auto build_grouped = [&]() { return build_grouped_tensor(T_cap, c.H, offsets_host, c.counts, device, rng); };
+    // Inputs are built once and reused across all warmup + measurement iterations.
+    // The variable_matmul kernels are read-only on the inputs, so reuse is safe.
+    const auto grouped_fwd = build_grouped_tensor(T_cap, c.H, offsets_host, c.counts, device, rng);
+    const auto grouped_fb = build_grouped_tensor(T_cap, c.H, offsets_host, c.counts, device, rng);
 
-    // Forward-only timing pass.
-    std::vector<double> fwd_times;
-    fwd_times.reserve(num_measure);
-
-    auto run_forward = [&]() -> double {
-        const auto grouped = build_grouped();
-        const auto t0 = std::chrono::high_resolution_clock::now();
-        const auto out = ttml::ops::moe_ffn_swiglu_fw(grouped, offsets_tensor, w_gate, w_up, w_down);
-        tt::tt_metal::distributed::Synchronize(device, std::nullopt);
-        const auto t1 = std::chrono::high_resolution_clock::now();
+    // Forward-only: warmup then a single timed batch of N iterations with one Synchronize.
+    auto do_forward = [&]() {
+        const auto out = ttml::ops::moe_ffn_swiglu_fw(grouped_fwd, offsets_tensor, w_gate, w_up, w_down);
         ttml::autograd::ctx().reset_graph();
-        return std::chrono::duration<double, std::micro>(t1 - t0).count();
     };
-
     for (uint32_t i = 0; i < num_warmup; ++i) {
-        (void)run_forward();
+        do_forward();
     }
+    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    const auto t0_fwd = std::chrono::high_resolution_clock::now();
     for (uint32_t i = 0; i < num_measure; ++i) {
-        fwd_times.push_back(run_forward());
+        do_forward();
     }
+    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    const auto t1_fwd = std::chrono::high_resolution_clock::now();
+    const double fwd_total_us = std::chrono::duration<double, std::micro>(t1_fwd - t0_fwd).count();
+    const double fwd_avg_us = fwd_total_us / static_cast<double>(num_measure);
 
-    // Forward+backward timing pass.
-    std::vector<double> fb_times;
-    fb_times.reserve(num_measure);
-
-    auto run_fwd_bwd = [&]() -> double {
-        const auto grouped = build_grouped();
-        const auto t0 = std::chrono::high_resolution_clock::now();
-        const auto out = ttml::ops::moe_ffn_swiglu_fw(grouped, offsets_tensor, w_gate, w_up, w_down);
+    // Forward+backward: same pattern.
+    auto do_fwd_bwd = [&]() {
+        const auto out = ttml::ops::moe_ffn_swiglu_fw(grouped_fb, offsets_tensor, w_gate, w_up, w_down);
         out->set_grad(ttml::core::ones_like(out->get_value()));
         out->backward();
-        tt::tt_metal::distributed::Synchronize(device, std::nullopt);
-        const auto t1 = std::chrono::high_resolution_clock::now();
         ttml::autograd::ctx().reset_graph();
-        return std::chrono::duration<double, std::micro>(t1 - t0).count();
     };
-
     for (uint32_t i = 0; i < num_warmup; ++i) {
-        (void)run_fwd_bwd();
+        do_fwd_bwd();
     }
+    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    const auto t0_fb = std::chrono::high_resolution_clock::now();
     for (uint32_t i = 0; i < num_measure; ++i) {
-        fb_times.push_back(run_fwd_bwd());
+        do_fwd_bwd();
     }
+    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    const auto t1_fb = std::chrono::high_resolution_clock::now();
+    const double fb_total_us = std::chrono::duration<double, std::micro>(t1_fb - t0_fb).count();
+    const double fb_avg_us = fb_total_us / static_cast<double>(num_measure);
 
     CaseResult r;
-    r.forward = summarize(fwd_times);
-    r.forward_backward = summarize(fb_times);
+    r.forward = Stats{.avg_us = fwd_avg_us, .min_us = fwd_avg_us, .max_us = fwd_avg_us, .p50_us = fwd_avg_us};
+    r.forward_backward = Stats{.avg_us = fb_avg_us, .min_us = fb_avg_us, .max_us = fb_avg_us, .p50_us = fb_avg_us};
     return r;
 }
 
@@ -194,7 +191,7 @@ std::vector<uint32_t> uniform_counts(uint32_t E, uint32_t tokens, uint32_t K) {
 }
 
 // Skewed dispatch: one hot expert gets `hot_frac` share of (tokens·K), rest split evenly.
-std::vector<uint32_t> skewed_counts(uint32_t E, uint32_t tokens, uint32_t K, float hot_frac) {
+[[maybe_unused]] std::vector<uint32_t> skewed_counts(uint32_t E, uint32_t tokens, uint32_t K, float hot_frac) {
     const uint32_t total_active = tokens * K;
     const uint32_t hot = static_cast<uint32_t>(static_cast<float>(total_active) * hot_frac);
     const uint32_t rest = (total_active - hot) / (E - 1U);
@@ -207,12 +204,13 @@ std::vector<uint32_t> skewed_counts(uint32_t E, uint32_t tokens, uint32_t K, flo
 // (E_global), not the local one (E_local). Matches real EP deployments where
 // each device holds E_local = E_global / EP experts but the per-expert token
 // share is set by E_global.
-std::vector<uint32_t> uniform_counts_ep(uint32_t E_local, uint32_t tokens, uint32_t K, uint32_t E_global) {
+[[maybe_unused]] std::vector<uint32_t> uniform_counts_ep(
+    uint32_t E_local, uint32_t tokens, uint32_t K, uint32_t E_global) {
     const uint32_t per_expert = (tokens * K) / E_global;
     return std::vector<uint32_t>(E_local, per_expert);
 }
 
-std::vector<uint32_t> skewed_counts_ep(
+[[maybe_unused]] std::vector<uint32_t> skewed_counts_ep(
     uint32_t E_local, uint32_t tokens, uint32_t K, float hot_frac, uint32_t E_global) {
     const uint32_t per_device_total = (tokens * K * E_local) / E_global;
     const uint32_t hot = static_cast<uint32_t>(static_cast<float>(per_device_total) * hot_frac);
@@ -258,7 +256,7 @@ void print_footer() {
 
 int main() {
     try {
-        constexpr uint32_t num_warmup = 2U;
+        constexpr uint32_t num_warmup = 3U;
         constexpr uint32_t num_measure = 10U;
 
         const tt::tt_metal::distributed::MeshShape mesh(1, 1);
