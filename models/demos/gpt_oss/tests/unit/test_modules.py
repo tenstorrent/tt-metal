@@ -697,7 +697,8 @@ def test_decoder(
         from models.tt_transformers.tt.common import PagedAttentionConfig
 
         paged_block_size = 64
-        paged_blocks_per_seq = max(max(seq_len, 128) // paged_block_size, 1)
+        effective_seq_len = max(seq_len, 128)
+        paged_blocks_per_seq = max((effective_seq_len + paged_block_size - 1) // paged_block_size, 1)
         paged_max_blocks = local_batch_size * paged_blocks_per_seq
         paged_attention_config = PagedAttentionConfig(block_size=paged_block_size, max_num_blocks=paged_max_blocks)
         page_table_torch = torch.arange(paged_max_blocks, dtype=torch.int32).reshape(
@@ -900,7 +901,7 @@ def test_decoder(
             )
 
     if should_test("attention"):
-        logger.info("Testing Attention (paged=%s)...", paged)
+        logger.info("Testing Attention (paged={})...", paged)
         run_attention_component(
             setup["mesh_device"],
             hidden_states.shape,
