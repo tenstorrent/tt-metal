@@ -165,6 +165,11 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
                         fabric_node_id,
                         direction,
                         planes_in_direction);
+                    // Wrap-around can mark a direction "applicable" with no underlying fabric edge;
+                    // skip so the planes_in_direction=0 doesn't collapse the overall min to 0.
+                    if (planes_in_direction == 0) {
+                        continue;
+                    }
                     num_available_routing_planes = std::min(num_available_routing_planes, planes_in_direction);
                 }
             }
