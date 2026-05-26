@@ -41,6 +41,7 @@ on:
           - all
           - deepseek_prefill
           - deepseek_decode
+          - deepseek_unit_tests
           - wan22
           - single_galaxy_deepseek
           - sp1_deepseek
