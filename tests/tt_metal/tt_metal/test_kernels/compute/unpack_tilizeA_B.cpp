@@ -11,7 +11,6 @@
 
 // #include "api/debug/dprint.h"
 inline void tilizeA_B_binary_init(uint32_t icb0, uint32_t icb1, uint32_t block) {
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
     UNPACK((llk_unpack_tilizeA_B_init<true, true>(icb0, icb1, block)));
 
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::NONE, MathFidelity::LoFi>(0 /*acc_to_dest*/)));

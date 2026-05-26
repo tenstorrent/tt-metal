@@ -19,6 +19,50 @@
 
 namespace ckernel {
 
+namespace pack_untilize_detail {
+
+template <
+    uint32_t block_ct_dim,
+    uint32_t full_ct_dim,
+    bool narrow_row,
+    std::uint32_t row_num_datums,
+    bool dense,
+    bool configure_remap>
+ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
+    state_configure<Operand::PACK>(ocb, call_line);
+#ifdef ARCH_BLACKHOLE
+    // Needed for setting swizzle_32b on Blackhole; llk_math_reconfig_remap is a no-op on Wormhole.
+    // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
+    if constexpr (configure_remap) {
+        MATH((llk_math_reconfig_remap(true)));
+    }
+#endif
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, dense>(ocb)));
+    PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false>()));
+#else
+    LLK_ASSERT(narrow_row == false, "narrow_row not supported on Quasar");
+    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb)));
+#endif
+}
+
+template <uint32_t block_ct_dim, uint32_t full_ct_dim, bool configure_remap>
+ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
+    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+        false, false, icb)));  // init must be after configure
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+#else
+    UNPACK((llk_unpack_A_init</*TRANSPOSE_EN=*/false, DST_ACCUM_MODE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
+#endif
+    pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, false, TILE_C_DIM, false, configure_remap>(ocb, call_line);
+}
+
+}  // namespace pack_untilize_detail
+
 // clang-format off
 /**
  * Performs the necessary hardware and software initialization for the pack untilize operation. This initialization
@@ -42,6 +86,9 @@ namespace ckernel {
  * the host via CircularBufferConfig::set_unpack_face_geometry / CBFormatDescriptor::face_geometry. Callers that need
  * non-default face geometry must configure it on the output CB at program creation time.
  *
+ * This default init configures BH DEST remap. Use `pack_untilize_dest_init_skip_remap` only when the caller has
+ * already configured BH DEST remap and no intervening operation requires a different DEST remap state.
+ *
  * Return value: None
  *
  * | Param Type | Name           | Description                                      | Type      | Valid Range               | Required              |
@@ -61,19 +108,21 @@ template <
     std::uint32_t row_num_datums = TILE_C_DIM,
     bool dense = false>
 ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-#ifndef ARCH_QUASAR
-    state_configure<Operand::PACK>(ocb, call_line);
-#ifdef ARCH_BLACKHOLE
-    // Needed for setting swizzle_32b:
-    MATH((llk_math_reconfig_remap(true)));
-#endif  // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
-    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, dense>(ocb)));
-    PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false>()));
-#else
-    LLK_ASSERT(narrow_row == false, "narrow_row not supported on Quasar");
-    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb)));
-#endif
+    pack_untilize_detail::
+        pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, true>(
+            ocb, call_line);
+}
+
+template <
+    uint32_t block_ct_dim = 8,
+    uint32_t full_ct_dim = block_ct_dim,
+    bool narrow_row = false,
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    bool dense = false>
+ALWI void pack_untilize_dest_init_skip_remap(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    pack_untilize_detail::
+        pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, false>(
+            ocb, call_line);
 }
 
 // clang-format off
@@ -94,6 +143,9 @@ ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t call_line = __builtin_L
  * NOTE: Face geometry (face_r_dim, num_faces) is derived from the output circular buffer metadata configured on
  * the host via CircularBufferConfig::set_unpack_face_geometry / CBFormatDescriptor::face_geometry.
  *
+ * This default init configures BH DEST remap. Use `pack_untilize_init_skip_remap` only when the caller has already
+ * configured BH DEST remap and no intervening operation requires a different DEST remap state.
+ *
  * Return value: None
  *
  * | Param Type | Name         | Description                                | Type      | Valid Range               | Required                |
@@ -106,16 +158,12 @@ ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t call_line = __builtin_L
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-#ifndef ARCH_QUASAR
-    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        false, false, icb)));  // init must be after configure
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
-#else
-    UNPACK((llk_unpack_A_init</*TRANSPOSE_EN=*/false, DST_ACCUM_MODE>(icb)));
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
-#endif
-    pack_untilize_dest_init<block_ct_dim, full_ct_dim>(ocb);
+    pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, true>(icb, ocb, call_line);
+}
+
+template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
+ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, false>(icb, ocb, call_line);
 }
 
 // clang-format off
