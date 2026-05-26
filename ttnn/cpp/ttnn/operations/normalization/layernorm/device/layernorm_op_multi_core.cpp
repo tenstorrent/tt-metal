@@ -128,7 +128,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     //////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
     IDevice* device = a.device();
-    auto dst_addr = output.buffer()->address();
+    auto dst_addr = output.mesh_tensor().address();
 
     ////////////////////////////////////////////////////////////////////////////
     //                Circular Buffer Data Format Setup
@@ -184,10 +184,10 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         inb_single_tile_size = tt::tile_size(inb_data_format);
     }
 
-    auto a_addr = a.buffer()->address();
-    auto b_dram_addr = b ? b.value().buffer()->address() : 0;
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
+    auto a_addr = a.mesh_tensor().address();
+    auto b_dram_addr = b ? b.value().mesh_tensor().address() : 0;
+    auto gamma_dram_addr = gamma.has_value() ? gamma.value().mesh_tensor().address() : 0;
+    auto beta_dram_addr = beta.has_value() ? beta.value().mesh_tensor().address() : 0;
 
     uint32_t num_tile_rows = NC * Ht;
 
@@ -208,7 +208,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     if (use_welford) {
         TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
         recip_tensor = tensor_args.recip_tensor;
-        reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
+        reciprocal_CB_size_bytes =
+            recip_tensor->mesh_tensor().mesh_buffer().get_reference_buffer()->aligned_size_per_bank();
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -355,10 +356,18 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         reader_compile_time_args.push_back((std::uint32_t)use_welford);
     }
     reader_compile_time_args.push_back(W);
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(b ? b->buffer() : nullptr).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_tensor()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(
+        b ? ttsl::optional_reference<const MeshTensor>(b->mesh_tensor()) : ttsl::optional_reference<const MeshTensor>{})
+        .append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(
+        gamma ? ttsl::optional_reference<const MeshTensor>(gamma->mesh_tensor())
+              : ttsl::optional_reference<const MeshTensor>{})
+        .append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(
+        beta ? ttsl::optional_reference<const MeshTensor>(beta->mesh_tensor())
+             : ttsl::optional_reference<const MeshTensor>{})
+        .append_to(reader_compile_time_args);
 
     if (input_is_row_major) {
         // For rm_input readers: element size of input tensor for address stride calculations
@@ -375,7 +384,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
     // Build compile time args for writer kernel
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_tensor()).append_to(writer_compile_time_args);
     if (input_is_row_major) {
         // RM writer needs elem_size to compute per-row NOC write sizes
         writer_compile_time_args.push_back(static_cast<uint32_t>(output.element_size()));
@@ -829,7 +838,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             .buffer_index = tt::CBIndex::c_25,
             .data_format = reciprocal_cb_data_format,
             .page_size = reciprocal_CB_size_bytes});
-        recip_cb_desc.buffer = recip_tensor.value().buffer();
+        recip_cb_desc.tensor = &recip_tensor.value().mesh_tensor();
         program_descriptor.cbs.push_back(std::move(recip_cb_desc));
     }
     return program_descriptor;

@@ -154,8 +154,8 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     }
 
     // get sharded addr
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
+    auto gamma_dram_addr = gamma.has_value() ? gamma.value().mesh_tensor().address() : 0;
+    auto beta_dram_addr = beta.has_value() ? beta.value().mesh_tensor().address() : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -174,7 +174,8 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     if (use_welford) {
         TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
         recip_tensor = tensor_args.recip_tensor;
-        reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
+        reciprocal_CB_size_bytes =
+            recip_tensor->mesh_tensor().mesh_buffer().get_reference_buffer()->aligned_size_per_bank();
     }
 
     // Compute CB sizes using helper
@@ -276,8 +277,8 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .legacy_rsqrt = legacy_rsqrt,
         .gamma_cb_data_format = gamma_cb_data_format,
         .beta_cb_data_format = beta_cb_data_format,
-        .gamma_buffer = gamma.has_value() ? gamma.value().buffer() : nullptr,
-        .beta_buffer = beta.has_value() ? beta.value().buffer() : nullptr,
+        .gamma_buffer = gamma.has_value() ? gamma.value().mesh_tensor().mesh_buffer().get_reference_buffer() : nullptr,
+        .beta_buffer = beta.has_value() ? beta.value().mesh_tensor().mesh_buffer().get_reference_buffer() : nullptr,
         .gamma_is_row_major = gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR,
         .beta_is_row_major = beta.has_value() && beta.value().layout() == Layout::ROW_MAJOR,
         .gamma_stick_size = gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR
@@ -437,11 +438,15 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     cb_config.stats_single_tile_size = stats_single_tile_size;
     cb_config.bfloat16_tile_size = bfloat16_tile_size;
     cb_config.a_buffer = a.buffer();
-    cb_config.b_buffer = b.has_value() ? b.value().buffer() : nullptr;
-    cb_config.gamma_buffer = gamma.has_value() ? gamma.value().buffer() : nullptr;
-    cb_config.beta_buffer = beta.has_value() ? beta.value().buffer() : nullptr;
-    cb_config.stats_buffer = stats.has_value() ? stats.value().buffer() : nullptr;
-    cb_config.recip_buffer = recip_tensor.has_value() ? recip_tensor.value().buffer() : nullptr;
+    cb_config.b_buffer = b.has_value() ? b.value().mesh_tensor().mesh_buffer().get_reference_buffer() : nullptr;
+    cb_config.gamma_buffer =
+        gamma.has_value() ? gamma.value().mesh_tensor().mesh_buffer().get_reference_buffer() : nullptr;
+    cb_config.beta_buffer =
+        beta.has_value() ? beta.value().mesh_tensor().mesh_buffer().get_reference_buffer() : nullptr;
+    cb_config.stats_buffer =
+        stats.has_value() ? stats.value().mesh_tensor().mesh_buffer().get_reference_buffer() : nullptr;
+    cb_config.recip_buffer =
+        recip_tensor.has_value() ? recip_tensor.value().mesh_tensor().mesh_buffer().get_reference_buffer() : nullptr;
     cb_config.output_buffer = output_buffer;
     cb_config.output_reshard_buffer = output_reshard_buffer;
     cb_config.has_b = b.has_value();
