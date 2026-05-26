@@ -179,11 +179,10 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
 
     if constexpr (dim_stride_target == p_dim_stride_target::FACE_ROW_MAJOR)
     {
-        std::uint32_t unpack_ch1_x_stride = canonical_unpA_x_stride(unpack_dst_format);
-        // FACE_R_DIM constant is used here because data is not stored densely in src/dest registers
-        // so we want to keep standard stride for one face
-        std::uint32_t unpack_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpack_ch1_x_stride;
-        cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(unpack_ch1_z_stride);
+        // Re-establish the canonical Z-stride baseline for srcA. Per-op brackets that mutate
+        // this register (unpack-to-dest in unpack_A / unpack_tilize) restore to this baseline,
+        // so it must be re-committed whenever the dst format changes.
+        cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(canonical_unpA_z_stride(unpack_dst_format));
 
         // Re-establish the canonical Y-stride baseline for srcA. Per-op inits that mutate
         // this register (e.g. bcastA_B) restore back to this baseline on uninit, so the

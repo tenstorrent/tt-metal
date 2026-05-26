@@ -277,7 +277,9 @@ inline void _llk_unpack_tilize_(
 
         if (unpack_to_dest)
         {
-            unpack_to_dest_tile_done(unp_cfg_context);
+            // Pair with set_dst_write_addr above (both keyed on unpack_src_format), so the
+            // canonical Z-stride restore matches the value programmed on entry.
+            unpack_to_dest_tile_done(unp_cfg_context, unpack_src_format);
         }
 
         // Switch unpacker config context

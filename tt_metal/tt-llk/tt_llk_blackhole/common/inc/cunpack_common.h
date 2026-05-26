@@ -252,6 +252,17 @@ inline constexpr bool should_unpack_to_dest(const bool unpack_to_dest, const std
     return unpack_to_dest && is_32bit_input(unpack_src_format, unpack_dst_format);
 }
 
+// Canonical srcA channel-1 Z stride: face-sized row step.
+//
+// Programmed by configure_unpack_AB and the srca data-format reconfig, and re-asserted by
+// unpack-to-dest brackets. Z-stride does not depend on operand face_r_dim; FACE_R_DIM is
+// the constant face row count because data is not stored densely in src/dest registers
+// (matches the explicit comment in _llk_unpack_reconfig_data_format_srca_impl_).
+inline constexpr std::uint32_t canonical_unpA_z_stride(const std::uint32_t unpack_dst_format)
+{
+    return FACE_C_DIM * FACE_R_DIM * canonical_unpA_x_stride(unpack_dst_format);
+}
+
 // Canonical srcA tile-descriptor baseline programmed by configure_unpack_AB.
 // Per-op uninits restore the tile descriptor to this state.
 //
@@ -971,10 +982,15 @@ inline void wait_for_dest_available()
     t6_semaphore_wait_on_max<p_stall::STALL_UNPACK>(semaphore::UNPACK_TO_DEST);
 }
 
-inline void unpack_to_dest_tile_done(std::uint32_t &context_id)
+// Restore srcA channel-1 Z-stride to the canonical baseline derived from unpack_dst_format.
+// This pairs with set_dst_write_addr to bracket the unpack-to-dest section without snapshotting
+// the prior register value into a GPR (per tt-llk#1015: each op restores to a documented
+// baseline rather than preserving caller-side state).
+inline void unpack_to_dest_tile_done(std::uint32_t &context_id, const std::uint32_t unpack_dst_format)
 {
     t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
-    TTI_WRCFG(p_gpr_unpack::UNPACK_STRIDE, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Restore unpack stride
+    TT_SETDMAREG(0, LOWER_HALFWORD(canonical_unpA_z_stride(unpack_dst_format) << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
+    TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Restore canonical Z-stride
     // Restore config context
     if (context_id == 0)
     {
@@ -991,13 +1007,12 @@ inline void unpack_to_dest_tile_done(std::uint32_t &context_id)
 
 inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint32_t &unpack_dst_format)
 {
-    std::uint32_t dst_byte_addr = 16 * (4 + mailbox_read(ThreadId::MathThreadId));  // Apply fixed offset of 4*16 to dest address
-    TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0);                                          // Disable address bit swizzle
-    TTI_RDCFG(p_gpr_unpack::UNPACK_STRIDE, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Save current stride
-    std::uint32_t unpA_ch1_x_stride = datum_size_in_bytes(unpack_dst_format);
-    std::uint32_t unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
-    TT_SETDMAREG(0, LOWER_HALFWORD(unpA_ch1_z_stride << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
-    TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Set unpack stride
+    std::uint32_t dst_byte_addr = 16 * (4 + mailbox_read(ThreadId::MathThreadId)); // Apply fixed offset of 4*16 to dest address
+    TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0);                                         // Disable address bit swizzle
+    // Set unpacker Z-stride to the canonical baseline for unpack_dst_format. Paired with
+    // unpack_to_dest_tile_done's canonical restore; no GPR snapshot of the prior value.
+    TT_SETDMAREG(0, LOWER_HALFWORD(canonical_unpA_z_stride(unpack_dst_format) << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
+    TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     if (context_id == 0)
     {
         cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx0_RMW>(1);
