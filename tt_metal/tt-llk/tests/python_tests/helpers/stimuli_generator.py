@@ -43,8 +43,6 @@ class DistributionKind(str, Enum):
     ULP_SWEEP = "ulp_sweep"
 
 
-
-
 @dataclass
 class StimuliSpec:
     """
