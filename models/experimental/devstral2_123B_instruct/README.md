@@ -66,7 +66,7 @@ export BH_ARCH_YAML=tt_metal/core_descriptors/blackhole_140_arch_eth_dispatch.ya
 
 ### Running the tests
 
-**End-to-end (88-layer, full model) — reports TTFT, prefill tok/s, and decode tok/s/user:**
+**End-to-end (88-layer, full model) — reports TTFT, prefill tok/s, steady-state decode tok/s/user, and end-to-end decode tok/s/user:**
 
 ```sh
 pytest models/experimental/devstral2_123B_instruct/tests/perf/test_e2e_performant.py -k L88
@@ -80,9 +80,19 @@ pytest models/experimental/devstral2_123B_instruct/tests/perf/test_perf.py
 
 ### Results
 
-| Test | System | Mesh | Prompt tokens | Decode iters | TTFT (ms) | Decode tok/s/user |
-|:-----|:-------|:-----|-------------:|-------------:|----------:|------------------:|
-| E2E L88 (2CQ Traced) | BH Loudbox | 1×8 | 128 | 32 | 102.2 | 14.06 |
+Measured with ``pytest models/experimental/devstral2_123B_instruct/tests/perf/test_e2e_performant.py -k L88``
+(2CQ decode trace on, ``DEVSTRAL2_DECODE_TRACE_2CQ=1``). Prefill prompt is synthetic zeros (128 tokens).
+
+| Test | System | Mesh | Prompt tokens | Decode iters | TTFT (ms) | Prefill tok/s | Steady-state tok/s/user | End-to-end tok/s/user |
+|:-----|:-------|:-----|-------------:|-------------:|----------:|--------------:|------------------------:|----------------------:|
+| E2E L88 (2CQ traced) | BH Loudbox | 1×8 | 128 | 32 | 102.2 | 1262 | 14.02 | 8.81 |
+
+**Metric definitions** (aligned with [Devstral Small 2 PR #44834](https://github.com/tenstorrent/tt-metal/pull/44834)):
+
+- **TTFT** — one prefill trace replay after capture (time to first decode logits).
+- **Prefill tok/s** — ``prompt_len / prefill_trace_replay_time`` (compile pass excluded).
+- **Steady-state tok/s/user** — ``decode_iters / decode_trace_replay_total`` (compile + capture excluded).
+- **End-to-end tok/s/user** — ``decode_iters / (TTFT + decode compile + decode capture + decode replays)``.
 
 
 
