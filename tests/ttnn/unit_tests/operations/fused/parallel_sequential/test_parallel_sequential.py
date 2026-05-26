@@ -2665,7 +2665,9 @@ class TestMatmulFactories:
     Covers:
       - MatmulMultiCoreReuseOptimizedProgramFactory (via MatmulMultiCoreReuseProgramConfig)
       - MatmulMultiCoreReuseMcast2DProgramFactory (via MatmulMultiCoreReuseMultiCastProgramConfig)
-      - MatmulMultiCoreReuseMcast1DProgramFactory (via MatmulMultiCoreReuseMultiCast1DProgramConfig)
+      - MatmulMultiCoreReuseMcast1DProgramFactory, mcast_in0=True (in0 broadcast, N split)
+      - MatmulMultiCoreReuseMcast1DProgramFactory, mcast_in0=False (in1 broadcast, M split)
+      - Batched matmul (batch > 1) via reuse_optimized and fuse_batch=True mcast_1d
       - Complex topologies mixing different factories with normalization ops
     """
 
@@ -3406,3 +3408,214 @@ class TestMatmulFactories:
 
         golden = torch_a.float() @ torch_b.float()
         check_pcc(golden, deferred.output_tensors[0], pcc=0.99, label="persistent mcast2d")
+
+    # ------------------------------------------------------------------
+    # mcast_in0=False (in1 broadcast, M split across cores)
+    # ------------------------------------------------------------------
+
+    @stress_test_program_cache
+    def test_mcast_1d_mcast_in1_rms_chain(self, device):
+        """Sequential: RMS -> Mcast1D(mcast_in0=False) -> RMS, exercises in1-broadcast kernels."""
+        from models.experimental.ops.descriptors.fusion import Sequential
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        torch.manual_seed(42)
+        # mcast_in0=False: in1 is broadcast, M rows split across 4 cores (per_core_M=1, per_core_N=4)
+        hidden = 128
+        cr = cores(0, 0, 3, 0)
+
+        torch_input = torch.randn(1, 1, 128, hidden, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+
+        mm_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(4, 1),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            out_block_h=1,
+            out_block_w=4,
+            per_core_M=1,
+            per_core_N=4,
+            fuse_batch=True,
+            mcast_in0=False,
+            gather_in0=False,
+            allowed_worker_cores=cr,
+        )
+
+        rms1 = rms_norm.rms_norm(tt(torch_input, device), core_range_set=cr, weight=tt(torch_w, device), epsilon=1e-5)
+        mm = matmul_desc(
+            rms1.output_tensors[0],
+            tt(torch_b, device),
+            core_range_set=cr,
+            program_config=mm_config,
+            compute_kernel_config=self._compute(),
+        )
+        rms2 = rms_norm.rms_norm(mm.output_tensors[0], core_range_set=cr, weight=tt(torch_w, device), epsilon=1e-5)
+
+        fused = Sequential(rms1, mm, rms2)
+        [out] = fused.run(results=[rms2])
+
+        golden = torch_rms_norm(torch_rms_norm(torch_input.float(), torch_w.float()) @ torch_b.float(), torch_w.float())
+        check_pcc(golden, out, label="mcast_1d_mcast_in1 RMS->MM->RMS")
+
+    @stress_test_program_cache
+    def test_mcast_1d_mcast_in1_parallel(self, device):
+        """Parallel: two Mcast1D(mcast_in0=False) matmuls on disjoint cores."""
+        from models.experimental.ops.descriptors.fusion import Parallel
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        torch.manual_seed(42)
+        # mcast_in0=False: in1 broadcast, M split. Each branch: M=128, 4 cores, per_core_M=1, per_core_N=4.
+        M, K, N = 128, 128, 128
+        torch_a = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+        torch_b1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+        torch_b2 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+
+        def _mcast_in1_cfg(cr):
+            return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(4, 1),
+                in0_block_w=4,
+                out_subblock_h=1,
+                out_subblock_w=4,
+                out_block_h=1,
+                out_block_w=4,
+                per_core_M=1,
+                per_core_N=4,
+                fuse_batch=True,
+                mcast_in0=False,
+                gather_in0=False,
+                allowed_worker_cores=cr,
+            )
+
+        cr_a = cores(0, 0, 3, 0)
+        mm_a = matmul_desc(
+            tt(torch_a, device),
+            tt(torch_b1, device),
+            core_range_set=cr_a,
+            program_config=_mcast_in1_cfg(cr_a),
+            compute_kernel_config=self._compute(),
+        )
+
+        cr_b = cores(4, 0, 7, 0)
+        mm_b = matmul_desc(
+            tt(torch_a, device),
+            tt(torch_b2, device),
+            core_range_set=cr_b,
+            program_config=_mcast_in1_cfg(cr_b),
+            compute_kernel_config=self._compute(),
+        )
+
+        fused = Parallel(mm_a, mm_b)
+        [out_a, out_b] = fused.run(results=[mm_a, mm_b])
+
+        check_pcc(torch_a @ torch_b1, out_a, pcc=0.99, label="mcast_in1 parallel A")
+        check_pcc(torch_a @ torch_b2, out_b, pcc=0.99, label="mcast_in1 parallel B")
+
+    # ------------------------------------------------------------------
+    # Batched matmul (batch > 1, fuse_batch=True)
+    # ------------------------------------------------------------------
+
+    @stress_test_program_cache
+    def test_mcast_1d_fuse_batch_sequential(self, device):
+        """Sequential: RMS -> Mcast1D(fuse_batch=True, batch=2) -> RMS."""
+        from models.experimental.ops.descriptors.fusion import Sequential
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        torch.manual_seed(42)
+        # fuse_batch folds B*M into a single tile dimension: effective_M = 2*32/32 = 2 tiles.
+        # mcast_in0=True: in0 broadcast to all 4 cores, N split (per_core_N=1 per core).
+        B, M, K, N = 2, 32, 128, 128
+        torch_input = torch.randn(B, 1, M, K, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, K, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+
+        cr = cores(0, 0, 3, 0)
+        mm_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(4, 1),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=2,
+            out_block_w=1,
+            per_core_M=2,
+            per_core_N=1,
+            fuse_batch=True,
+            mcast_in0=True,
+            gather_in0=False,
+            allowed_worker_cores=cr,
+        )
+
+        rms1 = rms_norm.rms_norm(tt(torch_input, device), core_range_set=cr, weight=tt(torch_w, device), epsilon=1e-5)
+        mm = matmul_desc(
+            rms1.output_tensors[0],
+            tt(torch_b, device),
+            core_range_set=cr,
+            program_config=mm_config,
+            compute_kernel_config=self._compute(),
+        )
+        rms2 = rms_norm.rms_norm(mm.output_tensors[0], core_range_set=cr, weight=tt(torch_w, device), epsilon=1e-5)
+
+        fused = Sequential(rms1, mm, rms2)
+        [out] = fused.run(results=[rms2])
+
+        golden_rms1 = torch_rms_norm(torch_input.float(), torch_w.float())
+        golden_mm = golden_rms1 @ torch_b.float()
+        golden = torch_rms_norm(golden_mm, torch_w.float())
+        check_pcc(golden, out, label="fuse_batch RMS->MM->RMS")
+
+    @stress_test_program_cache
+    def test_mcast_1d_fuse_batch_parallel(self, device):
+        """Parallel: two Mcast1D(fuse_batch=True, batch=2) matmuls on disjoint cores."""
+        from models.experimental.ops.descriptors.fusion import Parallel
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        torch.manual_seed(42)
+        B, M, K, N = 2, 32, 128, 128
+        torch_a = torch.randn(B, 1, M, K, dtype=torch.bfloat16)
+        torch_b1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+        torch_b2 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+
+        def _fuse_batch_cfg(cr):
+            return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(4, 1),
+                in0_block_w=4,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                out_block_h=2,
+                out_block_w=1,
+                per_core_M=2,
+                per_core_N=1,
+                fuse_batch=True,
+                mcast_in0=True,
+                gather_in0=False,
+                allowed_worker_cores=cr,
+            )
+
+        cr_a = cores(0, 0, 3, 0)
+        mm_a = matmul_desc(
+            tt(torch_a, device),
+            tt(torch_b1, device),
+            core_range_set=cr_a,
+            program_config=_fuse_batch_cfg(cr_a),
+            compute_kernel_config=self._compute(),
+        )
+
+        cr_b = cores(4, 0, 7, 0)
+        mm_b = matmul_desc(
+            tt(torch_a, device),
+            tt(torch_b2, device),
+            core_range_set=cr_b,
+            program_config=_fuse_batch_cfg(cr_b),
+            compute_kernel_config=self._compute(),
+        )
+
+        fused = Parallel(mm_a, mm_b)
+        [out_a, out_b] = fused.run(results=[mm_a, mm_b])
+
+        golden = torch_a.float() @ torch_b1.float()
+        check_pcc(golden, out_a, pcc=0.99, label="fuse_batch parallel A")
+        golden = torch_a.float() @ torch_b2.float()
+        check_pcc(golden, out_b, pcc=0.99, label="fuse_batch parallel B")
