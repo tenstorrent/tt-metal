@@ -297,6 +297,8 @@ else
     fi
 fi
 
+fi
+
 log "Sweep complete. Summary: $SUMMARY"
 python3 - "$SUMMARY" <<'PY'
 import sys
