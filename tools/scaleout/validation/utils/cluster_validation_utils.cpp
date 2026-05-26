@@ -5,6 +5,8 @@
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 
+#include <board/port_lookup.hpp>
+
 #include <iostream>
 #include <iomanip>
 #include <fstream>
@@ -657,33 +659,6 @@ LinkMetricsResult process_link_statuses(
     return result;
 }
 
-struct PortInfo {
-    tt::scaleout_tools::PortType port_type = tt::scaleout_tools::PortType::UNKNOWN;
-    tt::scaleout_tools::PortId port_id{0};
-};
-
-std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<uint8_t, PortInfo>> generate_port_info(
-    const PhysicalSystemDescriptor& physical_system_descriptor) {
-    std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<tt::tt_fabric::chan_id_t, PortInfo>> port_info_map;
-    const auto& asic_connectivity_graph = physical_system_descriptor.get_system_graph().asic_connectivity_graph;
-
-    for (const auto& [asic_id, asic_descriptor] : physical_system_descriptor.get_asic_descriptors()) {
-        auto board_type = asic_descriptor.board_type;
-        auto board = tt::scaleout_tools::create_board(board_type);
-        // PhysicalSystemDescriptor internally validates that hostnames across asic descriptors are part of the graph
-        // This can't throw
-        const auto& asic_edges = asic_connectivity_graph.at(asic_descriptor.host_name).at(asic_id);
-        for (const auto& [dst_asic_id, eth_connections] : asic_edges) {
-            for (const auto& eth_connection : eth_connections) {
-                auto port = board.get_port_for_asic_channel(tt::scaleout_tools::AsicChannel{
-                    *(asic_descriptor.asic_location), tt::scaleout_tools::ChanId{eth_connection.src_chan}});
-                port_info_map[asic_id][eth_connection.src_chan] = PortInfo{port.port_type, port.port_id};
-            }
-        }
-    }
-    return port_info_map;
-}
-
 void dump_link_stats(
     ClusterContext& ctx,
     std::vector<uint32_t>& inputs,
@@ -700,7 +675,6 @@ void dump_link_stats(
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
     auto local_ethernet_metrics =
         query_local_ethernet_metrics(ctx.physical_system_descriptor, driver_ref, &context.hal());
-    auto port_info_map = generate_port_info(ctx.physical_system_descriptor);
 
     struct LinkInfo {
         ChipId chip_id;
@@ -713,12 +687,13 @@ void dump_link_stats(
         auto chip_id = ctx.asic_id_to_chip_id.at(*asic_id);
         const auto& soc_desc = cluster.get_soc_desc(chip_id);
         const auto& asic_desc = asic_descriptors.at(asic_id);
+        auto board = tt::scaleout_tools::create_board(asic_desc.board_type);
         for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
             for (const auto& eth_connection : eth_connections) {
                 auto src_chan = eth_connection.src_chan;
                 auto logical_coord = soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
                 auto ethernet_core = ctx.devices.at(chip_id)->ethernet_core_from_logical_core(logical_coord);
-                const auto& port_info = port_info_map.at(asic_id).at(src_chan);
+                auto port_id = tt::scaleout_tools::resolve_port_id(board, *asic_desc.asic_location, src_chan);
                 links.push_back(
                     {chip_id,
                      ethernet_core,
@@ -728,8 +703,8 @@ void dump_link_stats(
                          .tray_id = asic_desc.tray_id,
                          .asic_location = asic_desc.asic_location,
                          .channel = src_chan,
-                         .port_id = *port_info.port_id,
-                         .port_type = static_cast<uint32_t>(port_info.port_type),
+                         .port_id = *port_id,
+                         .port_type = static_cast<uint32_t>(eth_connection.port_type),
                      }});
             }
         }
@@ -791,8 +766,6 @@ std::vector<ValueType> generate_uniform_random_vector(
 
 void print_ethernet_connectivity(
     bool /*print_connectivity*/, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
-    auto port_info_map = generate_port_info(physical_system_descriptor);
-
     // Collect all connections and organize by: connection_type -> hostname -> port_type -> connections
     // Using map with bool key: true = cross-host, false = local
     std::map<bool, std::map<std::string, std::map<std::string_view, std::vector<ConnectionInfo>>>>
@@ -801,8 +774,10 @@ void print_ethernet_connectivity(
     for (const auto& host : physical_system_descriptor.get_all_hostnames()) {
         const auto& asic_connections = physical_system_descriptor.get_asic_topology(host);
         for (auto asic_id : physical_system_descriptor.get_asics_connected_to_host(host)) {
-            auto tray_id = physical_system_descriptor.get_asic_descriptors().at(asic_id).tray_id;
-            auto asic_location = physical_system_descriptor.get_asic_descriptors().at(asic_id).asic_location;
+            const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(asic_id);
+            auto tray_id = asic_descriptor.tray_id;
+            auto asic_location = asic_descriptor.asic_location;
+            auto board = tt::scaleout_tools::create_board(asic_descriptor.board_type);
 
             for (const auto& asic_connection : asic_connections.at(asic_id)) {
                 auto connected_asic_id = asic_connection.first;
@@ -815,8 +790,8 @@ void print_ethernet_connectivity(
                 for (const auto& eth_connection : asic_connection.second) {
                     auto channel = eth_connection.src_chan;
                     auto connected_channel = eth_connection.dst_chan;
-                    const auto& port_info = port_info_map.at(asic_id).at(channel);
-                    auto port_type_str = enchantum::to_string(port_info.port_type);
+                    auto port_type_str = enchantum::to_string(eth_connection.port_type);
+                    auto port_id = tt::scaleout_tools::resolve_port_id(board, *asic_location, channel);
 
                     ConnectionInfo conn_info{
                         .asic_id = asic_id,
@@ -824,8 +799,8 @@ void print_ethernet_connectivity(
                         .host = host,
                         .tray_id = tray_id,
                         .asic_location = asic_location,
-                        .port_type = port_info.port_type,
-                        .port_id = port_info.port_id,
+                        .port_type = eth_connection.port_type,
+                        .port_id = port_id,
                         .connected_asic_id = connected_asic_id,
                         .connected_channel = connected_channel,
                         .connected_host = connected_host,
