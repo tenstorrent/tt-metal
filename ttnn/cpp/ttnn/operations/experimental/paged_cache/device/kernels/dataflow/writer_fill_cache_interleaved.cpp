@@ -101,6 +101,14 @@ void kernel_main() {
     // once on the first row (cache miss) and then hits for all remaining rows;
     // batched path re-loads on batch boundaries within this core's row range.
     uint32_t cached_batch = (uint32_t)-1;
+    // Bounded sliding-window cache (capacity_t > 0): only the last capacity_t tiles
+    // of each head's input range will survive in the cache (earlier tiles would map
+    // to wrapped slots that get overwritten by later writes). Compute the skip
+    // count once so we can consume those earlier input tiles without committing
+    // them to DRAM — a strict bandwidth win for prefills longer than the bounded
+    // capacity. For prefills <= capacity_t this is 0 and the legacy path runs.
+    const uint32_t skip_tiles =
+        (capacity_t > 0 && num_blocks_of_work_per_head > capacity_t) ? (num_blocks_of_work_per_head - capacity_t) : 0;
 
     for (uint32_t row_id = start_row_num; row_id < start_row_num + num_rows; ++row_id) {
         // Decode row_id → (cur_batch, cur_head, seq_tile_id).
@@ -122,6 +130,15 @@ void kernel_main() {
         const uint32_t cur_head = row_within_batch / num_blocks_of_work_per_head;
         const uint32_t seq_tile_id = row_within_batch % num_blocks_of_work_per_head;
 
+        // Drop the early-prefill tiles whose final slot would be overwritten by a
+        // later iteration anyway. The input CB still has to be drained so the
+        // reader doesn't stall, but no NOC writes go out.
+        if (seq_tile_id < skip_tiles) {
+            cb_wait_front(cb_id_in, Wt);
+            cb_pop_front(cb_id_in, Wt);
+            continue;
+        }
+
         uint32_t batch_idx;
         if constexpr (use_batch_idx_tensor) {
             batch_idx = batch_idx_arr[batched_fill ? cur_batch : 0];
@@ -135,7 +152,6 @@ void kernel_main() {
             noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
             noc_async_read_barrier();
             cached_batch = batch_idx;
-        }
 
         // Bounded sliding-window cache: wrap the virtual tile index into the bounded
         // capacity before the page_table lookup. capacity_t is a multiple of
