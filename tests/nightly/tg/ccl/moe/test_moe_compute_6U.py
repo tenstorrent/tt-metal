@@ -11,6 +11,11 @@ import pytest
 import random
 import torch
 
+# Force torch CPU ops to use all cores. bf16 matmul on CPU is single-thread on
+# some torch builds even with OMP_NUM_THREADS set; this is the runtime knob.
+# Required to keep compute_matmul_golden's fp32-cast fast path actually
+# parallel — without it, the golden compute can take ~30 s/layer on BH-LB
+# shape instead of ~33 ms.
 torch.set_num_threads(os.cpu_count())
 
 import ttnn
@@ -2259,6 +2264,89 @@ def test_moe_compute_bh_lb(
 
 
 # ---------------------------------------------------------------------------
+# BH single Loudbox 2x4 cax=1, DeepSeek shape - #43444 companion
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_BH_LB),
+    reason=f"BH Loudbox test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_BH_LB}",
+)
+@pytest.mark.parametrize("device_params", [MOE_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((2, 4), (2, 4))], indirect=["mesh_device"])
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize(
+    "has_bias",
+    [
+        False,
+        # Same cross-variant teardown leak as test_moe_compute_bh_lb — gate with_bias
+        # behind TT_MOE_BH_LB_RUN_BIAS=1, run variants in separate pytest invocations.
+        pytest.param(
+            True,
+            marks=pytest.mark.skipif(
+                os.environ.get("TT_MOE_BH_LB_RUN_BIAS") != "1",
+                reason="Run with TT_MOE_BH_LB_RUN_BIAS=1 in a fresh pytest invocation; "
+                "see comment on test_moe_compute_bh_lb's parametrize",
+            ),
+        ),
+    ],
+)
+def test_moe_compute_bh_lb_deepseek(mesh_device, mesh_shape, cluster_axis, has_bias):
+    """DeepSeek-shape companion to test_moe_compute_bh_lb (2x4 cax=1, idle replica row).
+
+    Status: **PASSING** as of phase α (arch-conditional `num_buffers` trim 15→14 on BH
+    in `selective_reduce_combine_program_factory.cpp:54-61`). Previously XFAIL'd for
+    ~8KB mux/L1 overlap at hidden=7168; trimming one full-size mux buffer on BH recovers
+    ~32 KB per mux core (3× the overflow). See `BH_LB_DEEPSEEK.md` for the full analysis
+    and `FABRIC_MUX_GUIDE.md` for why the trim doesn't regress MoE perf measurably.
+
+    Why this shape (production DeepSeek-v3 FFN, scaled-down expert count):
+      - hidden=7168 forces output_width_shard_dim=4 (auto_output_width_shard_dim(7168)=4
+        since 7168/32=224 and 224%4==0) — a code path the GPT-OSS smoke at width_dim=3
+        does not exercise.
+      - BH ring=12 (default TT_MOE_BH_N) divides width_dim=4 cleanly: 12 % 4 == 0.
+      - N=2048 → intermediate_tiles=64; with ring=12 the Euclidean rhythm produces
+        (5 or 6) tiles per ring slot — same distribution the WH deepseek_v3 test uses.
+
+    Mesh footprint same as test_moe_compute_bh_lb: EP=4, DP=2 (4 idle replica chips),
+    num_layers=1, num_iterations=2. Total experts = 8 (much smaller than real DeepSeek's
+    256 — shape-correctness test, not a scale test).
+    """
+    experts_per_device = 2
+    tokens_per_device = 8
+    N = 2048
+    hidden_size = 7168
+    output_height_shard_dim = 4
+    output_width_shard_dim = 4  # auto_output_width_shard_dim(7168) = 4
+    dtype = ttnn.bfloat16
+    activation_type = MoEActivationFunction.SILU
+    selected_experts_k = 8
+    num_layers = int(os.environ.get("TT_MOE_BH_LB_LAYERS", "1"))
+    num_iterations = int(os.environ.get("TT_MOE_BH_LB_ITERS", "2"))
+
+    run_moe_compute_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
+        experts_per_device=experts_per_device,
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=selected_experts_k,
+        num_layers=num_layers,
+        num_iterations=num_iterations,
+        N=N,
+        hidden_size=hidden_size,
+        output_height_shard_dim=output_height_shard_dim,
+        output_width_shard_dim=output_width_shard_dim,
+        dtype=dtype,
+        enable_trace=False,
+        activation_type=activation_type,
+        has_bias=has_bias,
+        topology=ttnn.Topology.Linear,  # BH LB is LINE/LINE; force to bypass tensor-coverage heuristic
+        num_links=2,  # BH LB has 2 eth channels per adjacent-chip link
+    )
+
+
+# ---------------------------------------------------------------------------
 # BH single Loudbox 1x8 LINE bring-up (EP=8) - #43444 companion to test_moe_compute_bh_lb
 # ---------------------------------------------------------------------------
 
@@ -2325,6 +2413,103 @@ def test_moe_compute_bh_lb_1x8(mesh_device, mesh_shape, cluster_axis, has_bias):
     selected_experts_k = 8
     # Same num_layers/num_iterations env-var overrides as the (2, 4) test — multi-layer
     # is gated by the same DRAM->L1 reshard hang, gate the same way.
+    num_layers = int(os.environ.get("TT_MOE_BH_LB_LAYERS", "1"))
+    num_iterations = int(os.environ.get("TT_MOE_BH_LB_ITERS", "2"))
+
+    run_moe_compute_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
+        experts_per_device=experts_per_device,
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=selected_experts_k,
+        num_layers=num_layers,
+        num_iterations=num_iterations,
+        N=N,
+        hidden_size=hidden_size,
+        output_height_shard_dim=output_height_shard_dim,
+        output_width_shard_dim=output_width_shard_dim,
+        dtype=dtype,
+        enable_trace=False,
+        activation_type=activation_type,
+        has_bias=has_bias,
+        topology=ttnn.Topology.Linear,  # BH LB has no chassis wraparound; 1x8 view is still LINE
+        num_links=2,  # BH LB has 2 eth channels per adjacent-chip link
+    )
+
+
+# ---------------------------------------------------------------------------
+# BH single Loudbox 1x8 LINE EP=8, DeepSeek shape - #43444 companion
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_BH_LB_1x8),
+    reason=f"BH Loudbox 1x8 LINE test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_BH_LB_1x8}",
+)
+@pytest.mark.parametrize("device_params", [MOE_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 8), (1, 8))], indirect=["mesh_device"])
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize(
+    "has_bias",
+    [
+        False,
+        # Same cross-variant teardown leak — gate with_bias behind TT_MOE_BH_LB_RUN_BIAS=1.
+        pytest.param(
+            True,
+            marks=pytest.mark.skipif(
+                os.environ.get("TT_MOE_BH_LB_RUN_BIAS") != "1",
+                reason="Run with TT_MOE_BH_LB_RUN_BIAS=1 in a fresh pytest invocation; "
+                "see comment on test_moe_compute_bh_lb's parametrize",
+            ),
+        ),
+    ],
+)
+def test_moe_compute_bh_lb_1x8_deepseek(mesh_device, mesh_shape, cluster_axis, has_bias):
+    """DeepSeek-shape EP=8 companion to test_moe_compute_bh_lb_1x8.
+
+    Status: **PASSING** as of phase α (arch-conditional `num_buffers` trim 15→14 on BH
+    in `selective_reduce_combine_program_factory.cpp:54-61`). Previously XFAIL'd for
+    ~11KB mux/L1 overlap at hidden=7168; trimming one full-size mux buffer on BH recovers
+    ~32 KB per mux core (3× the overflow). The 1x8 EP=8 flattening doesn't relieve
+    per-chip L1 pressure since experts_per_device is identical to the 2x4 variant — same
+    fix unlocks both. See `BH_LB_DEEPSEEK.md` for analysis and `FABRIC_MUX_GUIDE.md` for
+    fabric-mux background.
+
+    Why this shape (production DeepSeek-v3 FFN, scaled-down expert count):
+      - hidden=7168 forces output_width_shard_dim=4 (auto_output_width_shard_dim(7168)=4).
+        The GPT-OSS smoke (test_moe_compute_bh_lb_1x8) only exercises width_dim=3, so this
+        is the only BH coverage of the width_dim=4 path on the EP=N>4 1xN code path.
+      - BH ring=12 (default TT_MOE_BH_N) cleanly divides width_dim=4 (12 % 4 == 0).
+      - Mirrors the WH 1x16 deepseek_v3 config (epd=2, K=8, SILU, has_bias=(False, True)).
+
+    Mesh footprint: EP=8, DP=1, num_layers=1, num_iterations=2. Total experts = 16
+    (vs 8 in the 2x4 variant, vs 256 in real DeepSeek-v3). Shape-correctness test, not
+    a scale test.
+
+    Why two tests at this shape:
+      - test_moe_compute_bh_lb_deepseek (2x4 cax=1)     : exercises the 2D cluster-axis
+                                                          path with DeepSeek shape; idle
+                                                          replica row, EP=4 active.
+      - test_moe_compute_bh_lb_1x8_deepseek (1x8 LINE)  : every-chip-active EP=8 with
+                                                          DeepSeek shape; full BH-LB
+                                                          throughput validation.
+    """
+    # experts_per_device=2 mirrors the WH 1x16 deepseek_v3 default
+    # (MoEModelConfig.experts_per_device_values=(2,)). Empirically tested:
+    # reducing to epd=1 only moves the L1 tensor base from 0x9b2c0 → 0x9b6c0
+    # (+1 KB), still ~10 KB short of clearing the mux end at 0x9de30 — confirming
+    # the pinned L1 tensor is an activation/mux buffer, not a weight tensor, and
+    # no expert-count reduction can resolve this overflow.
+    experts_per_device = 2
+    tokens_per_device = 8
+    N = 2048
+    hidden_size = 7168
+    output_height_shard_dim = 4
+    output_width_shard_dim = 4  # auto_output_width_shard_dim(7168) = 4
+    dtype = ttnn.bfloat16
+    activation_type = MoEActivationFunction.SILU
+    selected_experts_k = 8
     num_layers = int(os.environ.get("TT_MOE_BH_LB_LAYERS", "1"))
     num_iterations = int(os.environ.get("TT_MOE_BH_LB_ITERS", "2"))
 

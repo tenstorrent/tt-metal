@@ -53,8 +53,24 @@ auto launch_mux_workers(
     Program& program) {
     const auto num_header_only_channels = tt::div_up(num_workers, num_links);
     const auto num_full_size_channels = tt::div_up(num_workers, num_links);
-    constexpr auto num_buffers_full_size_channels = 15;
-    constexpr auto num_buffers_header_only_channels = 15;
+    // BH single-LB has 2 ethernet channels per inter-chip link (vs 4 on WH 6U), so its mux
+    // cores host 2x the channels per link at the same num_workers. At full-size num_buffers=15
+    // the resulting per-mux-core L1 (~520 KB at DeepSeek hidden=7168) collides with the
+    // tilize_output shared shard by ~11 KB. Trimming by 1 buffer on BH only (1/15 = 6.7%
+    // burst-tolerance reduction) recovers ~32 KB per mux core — ~3x the overflow — with zero
+    // impact on WH.
+    //
+    // Calibration: BH=14 was sized against deepseek_v3 (hidden=7168), the LARGEST MoE shape
+    // currently fitting on WH at epd=2. Per-core mux+tilize_output sums:
+    //   hidden=2880 (GPT-OSS):   448 + 360 = 808 KB    (~590 KB headroom)
+    //   hidden=7168 (DeepSeek):  448 + 896 = 1344 KB   (~ 21 KB headroom)  ← binding
+    //   hidden=8192 (Ling):      448 + 1024 = 1472 KB  (~ 75 KB overflow — future fix needed)
+    // tilize_output scales 1:1 with hidden, mux is shape-independent. Any future MoE shape
+    // with hidden ≤ 7168 fits with equal or wider margin. If hidden > 7168 (or some new
+    // shape variant pushes per-core L1 differently), the TT_FATAL just below will fire with
+    // a clear "mux L1 overlaps tensor" message — at that point either drop to 13 here
+    const uint8_t num_buffers_full_size_channels = (mesh_device.arch() == tt::ARCH::BLACKHOLE) ? 14 : 15;
+    const uint8_t num_buffers_header_only_channels = (mesh_device.arch() == tt::ARCH::BLACKHOLE) ? 14 : 15;
 
     const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const auto l1_unreserved_base_address =
@@ -643,8 +659,7 @@ void selective_reduce_combine_helper_override_runtime_arguments(
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(
-        program, data_cb_handle, *tensor_args.dense_input_tensor.buffer());
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, data_cb_handle, *tensor_args.dense_input_tensor.buffer());
 
     for (const auto& core : cores) {
         auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
