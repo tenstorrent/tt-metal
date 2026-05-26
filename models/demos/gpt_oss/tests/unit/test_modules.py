@@ -819,10 +819,26 @@ def test_decoder(
     modules_to_test = set(test_modules.split(","))
     run_all = "all" in modules_to_test
 
-    logger.info(f"Running tests: {test_modules}")
+    # The paged/unpaged dimension only changes behavior for components that touch
+    # the kv cache (attention + the full decoder layer). Skip the paged variant
+    # for runs that ask for only non-kv components — and inside ``should_test``,
+    # gate non-kv components on ``not paged`` so an "all" invocation doesn't run
+    # router / experts / mlp / rms_norm twice with identical inputs. The kv-using
+    # components still execute under both paged settings.
+    KV_USING_MODULES = {"attention", "decoder"}
+    if paged and not run_all and not (modules_to_test & KV_USING_MODULES):
+        pytest.skip(
+            f"paged variant only exercises kv-cache-using components ({sorted(KV_USING_MODULES)}); "
+            f"requested modules {sorted(modules_to_test)} don't touch the kv cache"
+        )
 
-    # Helper to check if a module should be tested
+    logger.info(f"Running tests: {test_modules} (paged={paged})")
+
+    # Helper to check if a module should be tested. Non-kv components only run on
+    # the unpaged variant (their behavior is independent of paged kv-cache state).
     def should_test(module_name):
+        if paged and module_name not in KV_USING_MODULES:
+            return False
         return run_all or module_name in modules_to_test
 
     if should_test("router"):
