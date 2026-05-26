@@ -590,7 +590,11 @@ class BringupLoopResult:
     notes: List[str] = field(default_factory=list)
 
 
-def find_demo_dir(model_id: str, repo_root: Path = REPO_ROOT) -> Optional[Path]:
+def find_demo_dir(model_id: str, repo_root: Optional[Path] = None) -> Optional[Path]:
+    from .discovery import BRINGUP_ROOT, REPO_ROOT as _CANONICAL_REPO_ROOT
+
+    if repo_root is None or Path(repo_root).resolve() == _CANONICAL_REPO_ROOT.resolve():
+        repo_root = BRINGUP_ROOT()
     demos = repo_root / "models" / "demos"
     if not demos.is_dir():
         return None
@@ -612,7 +616,20 @@ def _safe_id(name: str) -> str:
 
 
 def _stub_import_path(demo_dir: Path, component_safe: str, repo_root: Path) -> str:
-    rel = (demo_dir / "_stubs" / f"{component_safe}.py").relative_to(repo_root)
+    from .discovery import BRINGUP_ROOT, REPO_ROOT as _CANONICAL_REPO_ROOT
+
+    full = demo_dir / "_stubs" / f"{component_safe}.py"
+    candidates = []
+    if Path(repo_root).resolve() == _CANONICAL_REPO_ROOT.resolve():
+        candidates.append(BRINGUP_ROOT())
+    candidates.append(Path(repo_root))
+    for root in candidates:
+        try:
+            rel = full.resolve().relative_to(Path(root).resolve())
+            return ".".join(rel.with_suffix("").parts)
+        except ValueError:
+            continue
+    rel = full.relative_to(repo_root)
     return ".".join(rel.with_suffix("").parts)
 
 

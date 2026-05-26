@@ -321,13 +321,23 @@ def _build_scaffolded_stubs_invocation(
     if not matched_tests:
         return None
 
-    rel_tests = [str(p.relative_to(REPO_ROOT)) for p in matched_tests]
+    from .discovery import BRINGUP_ROOT as _BRINGUP_ROOT
+
+    _root = _BRINGUP_ROOT()
+
+    def _safe_rel(p: Path) -> str:
+        try:
+            return str(p.resolve().relative_to(_root.resolve()))
+        except ValueError:
+            return str(p.relative_to(REPO_ROOT))
+
+    rel_tests = [_safe_rel(p) for p in matched_tests]
     invocation = PytestInvocation(
         test_path=rel_tests[0],
         args=[*rel_tests[1:], "-svv", "-k", DEFAULT_TEMPLATE_PYTEST_EXCLUDE_K],
         env={"HF_MODEL": hf_model, "PLANNER_TARGET_HF_MODEL": hf_model},
     )
-    return invocation, str(demo_dir.relative_to(REPO_ROOT)), len(stub_files)
+    return invocation, _safe_rel(demo_dir), len(stub_files)
 
 
 def _build_family_template_invocation(

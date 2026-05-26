@@ -40,6 +40,25 @@ except ImportError:
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
+def BRINGUP_ROOT() -> Path:
+    """Root for reading/writing model files during a bring-up.
+
+    Returns the worktree path when TT_HW_PLANNER_BRINGUP_CWD env var
+    is set (i.e., the planner is running inside an isolated bring-up
+    session), else REPO_ROOT. Use this anywhere the planner reads or
+    writes files under models/ that should reflect the in-flight
+    bring-up state (overlays applied, scaffold output, LLM edits).
+
+    Tool-side paths (overlay registry, generated/, learned_bringups.json)
+    should still use REPO_ROOT — those are owned by the tool, not the
+    bring-up.
+    """
+    import os
+
+    env = os.environ.get("TT_HW_PLANNER_BRINGUP_CWD")
+    return Path(env) if env else REPO_ROOT
+
+
 _FILE_KIND_PRIORITY = {
     "test_demo": 100,
     "demo_py": 80,

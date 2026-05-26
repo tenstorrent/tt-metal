@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional
 
+from .discovery import BRINGUP_ROOT
 from .bringup import (
     MODEL_CONFIG_PATH,
     REPO_ROOT,
@@ -328,7 +329,7 @@ def _plan_demo_folder_scaffold(*, new_model_id: str, probe: Any) -> ScaffoldPlan
     creates, skipped, warnings = collect_demo_folder_changes(
         backend=backend,
         new_model_id=new_model_id,
-        repo_root=REPO_ROOT,
+        repo_root=BRINGUP_ROOT(),
     )
 
     if not creates and not skipped:
@@ -364,7 +365,7 @@ def _plan_demo_folder_scaffold(*, new_model_id: str, probe: Any) -> ScaffoldPlan
             new_model_id=new_model_id,
             new_cfg=probe.raw_config or {},
             backend=backend,
-            repo_root=REPO_ROOT,
+            repo_root=BRINGUP_ROOT(),
         )
         for target_rel, content, label in collect_bringup_plan_files(
             plan=bplan,
@@ -410,9 +411,12 @@ def _plan_demo_folder_scaffold(*, new_model_id: str, probe: Any) -> ScaffoldPlan
 
 
 def apply_scaffold(plan: ScaffoldPlan) -> List[str]:
+    from .discovery import BRINGUP_ROOT
+
     applied: List[str] = []
+    write_root = BRINGUP_ROOT()
     for ch in plan.changes:
-        target = REPO_ROOT / ch.path
+        target = write_root / ch.path
         target.parent.mkdir(parents=True, exist_ok=True)
         if ch.new_content is None:
             continue

@@ -21,6 +21,7 @@ from .bringup import (
     render_script as render_bringup_script,
     render_text as render_bringup_text,
 )
+from .discovery import BRINGUP_ROOT
 from .bringup_loop import (
     autofill_stubs,
     emit_runnable_demo,
@@ -1404,7 +1405,7 @@ def _check_demo_environment_compat(
     except (ValueError, IndexError):
         major = 0
 
-    mc_path_for_grid = REPO_ROOT / "models" / "tt_transformers" / "tt" / "model_config.py"
+    mc_path_for_grid = BRINGUP_ROOT() / "models" / "tt_transformers" / "tt" / "model_config.py"
     if mc_path_for_grid.is_file():
         try:
             mc_src_grid = mc_path_for_grid.read_text()
@@ -1457,9 +1458,9 @@ def _check_demo_environment_compat(
 
     if major >= 5:
         repo_files_on_demo_path = [
-            REPO_ROOT / "models" / "common" / "llama_models.py",
-            REPO_ROOT / "models" / "tt_transformers" / "tt" / "model_config.py",
-            REPO_ROOT / "models" / "tt_transformers" / "tt" / "common.py",
+            BRINGUP_ROOT() / "models" / "common" / "llama_models.py",
+            BRINGUP_ROOT() / "models" / "tt_transformers" / "tt" / "model_config.py",
+            BRINGUP_ROOT() / "models" / "tt_transformers" / "tt" / "common.py",
         ]
 
         for p in repo_files_on_demo_path:
@@ -1486,7 +1487,7 @@ def _check_demo_environment_compat(
                         f"even loads."
                     )
 
-        mc_path = REPO_ROOT / "models" / "tt_transformers" / "tt" / "model_config.py"
+        mc_path = BRINGUP_ROOT() / "models" / "tt_transformers" / "tt" / "model_config.py"
         if mc_path.is_file():
             try:
                 mc_src = mc_path.read_text()
@@ -1501,7 +1502,7 @@ def _check_demo_environment_compat(
                     "`TypeError: pow(NoneType, Tensor)` at rope.py."
                 )
 
-        common_path = REPO_ROOT / "models" / "tt_transformers" / "tt" / "common.py"
+        common_path = BRINGUP_ROOT() / "models" / "tt_transformers" / "tt" / "common.py"
         if common_path.is_file():
             try:
                 common_src = common_path.read_text()
@@ -5222,7 +5223,7 @@ def _exemplar_role_for(name: str, kind: str) -> Optional[str]:
 
 
 def _find_exemplar(component_name: str, kind: str = "") -> Optional[Path]:
-    base = REPO_ROOT / "models" / "demos"
+    base = BRINGUP_ROOT() / "models" / "demos"
     if not base.is_dir():
         return None
     role = _exemplar_role_for(component_name, kind)
@@ -6217,15 +6218,21 @@ def _cmd_up_isolated(args) -> int:
     prev_env = {
         "TT_HW_PLANNER_BRINGUP_CWD": os.environ.get("TT_HW_PLANNER_BRINGUP_CWD"),
         "TT_HW_PLANNER_OVERLAY_MODEL": os.environ.get("TT_HW_PLANNER_OVERLAY_MODEL"),
+        "PYTHONPATH": os.environ.get("PYTHONPATH"),
     }
     os.environ["TT_HW_PLANNER_BRINGUP_CWD"] = str(session.path)
     os.environ["TT_HW_PLANNER_OVERLAY_MODEL"] = args.model_id
+    _existing_pp = os.environ.get("PYTHONPATH", "")
+    os.environ["PYTHONPATH"] = f"{session.path}:{_existing_pp}" if _existing_pp else str(session.path)
+    prev_cwd = os.getcwd()
+    os.chdir(session.path)
 
     rc = 1
     try:
         rc = _cmd_up_core(args)
         return rc
     finally:
+        os.chdir(prev_cwd)
         for k, v in prev_env.items():
             if v is None:
                 os.environ.pop(k, None)
