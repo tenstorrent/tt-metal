@@ -50,12 +50,9 @@ jobs:
           # Note: This matrix must be kept in sync with the original static matrix
           #
           # The two Gemma4-31B vLLM entries below are temporarily disabled —
-          # vLLM auto-sizes the KV cache to fill available memory and OOMs at
-          # server startup on both 1x4 (BH-QB-GE) and 1x8 (WH-T3K) when the
-          # cache is at unquantized bfloat16. The model itself works on the
-          # same mesh shapes via the gemma4 unit / e2e tests (which set a
-          # bounded PagedAttentionConfig). Re-enable once KV cache
-          # quantization lands — TODO: file follow-up issue.
+          # the full unquantized KV cache for the global-attention layers
+          # runs out of DRAM on both 1x4 (BH-QB-GE) and 1x8 (WH-T3K).
+          # Re-enable once KV cache quantization lands — TODO: file follow-up issue.
           #
           # Disabled entries preserved verbatim for the re-enable:
           #
