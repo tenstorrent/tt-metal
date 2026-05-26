@@ -5,10 +5,12 @@
 
 Mirrors ``models/experimental/devstral2_small/demo/tt_demo_agent.py``:
 
-  * one full TT prefill of the current chat history (untraced, rebuilds KV cache;
-    compiled on demand at the tile-aligned prompt length), then
-  * untraced single-token decode steps via persistent ``(token, current_pos)``
-    device buffers (programs are cached after first compile).
+  * session KV prefix cache: system + tool rules are prefilled once; later turns
+    only prefill new suffix tokens at ``start_pos = kv_seq_len`` (prefix validation
+    with fallback to full re-prefill on mismatch),
+  * chunked paged prefill (``kv_block_size`` tokens per dispatch), then
+  * traced decode (default): one capture per generation, ``execute_trace`` for later
+    tokens; persistent ``(token, current_pos)`` device buffers updated each step.
 
 Sampling is CPU-side (argmax for greedy, multinomial otherwise) on the column-parallel
 ``lm_head`` output, because :class:`TtMinistral3ForCausalLM` already returns logits.
@@ -69,17 +71,24 @@ DEFAULT_SYSTEM_PROMPT = (
     "Help with debugging, implementation, and code review in a local repository."
 )
 DEFAULT_AGENT_RULES = """
-Tools: terminal/bash, read_file, write_file, search_replace, grep, web_search, web_fetch,
+Tools: terminal, bash, read_file, write_file, search_replace, grep, web_search, web_fetch,
 todo, ask_user_question, load_skill, inspect_codebase, delegate_task.
 
-On a tool turn emit only one tool call, using either format:
-<tool_call>
-{"name":"<tool>","arguments":{...}}
-</tool_call>
-or Devstral native: <tool>{"path":"...","content":"..."}  (use "path", not "file_path", for files).
-Always close all JSON braces (e.g. two ``}`` for name+arguments). Keep terminal commands short.
-If the user asks to create code and run/demo it, call write_file then terminal before plain text.
-(Closing </tool_call> is optional.) After <tool_result>...</tool_result> send another tool call or plain text.
+When you need a tool, output ONLY the tool call — no preamble, no markdown code fences, no plain-text
+explanation on that turn. Prefer a single-line Devstral native call, e.g.
+  terminal{"command":"python fibonacci.py 7"}
+or XML:
+  <tool_call>
+  {"name":"terminal","arguments":{"command":"python fibonacci.py 7"}}
+  </tool_call>
+
+Rules:
+- Exactly one tool call per tool turn.
+- Always close all JSON braces (``terminal{"command":"..."}`` needs a final ``}``).
+- Keep ``terminal``/``bash`` commands short (one line). Use ``path``, not ``file_path``, for files.
+- To create then run code: ``write_file`` first, then ``terminal`` on a later turn.
+- After ``<tool_result>...</tool_result>``: another tool call (same format) or a plain-text answer.
+(Closing ``</tool_call>`` is optional.)
 """
 
 _KNOWN_TOOL_NAMES = frozenset(
@@ -241,6 +250,20 @@ def parse_tool_call(text: str) -> Optional[Dict[str, Any]]:
     ``write_file`` content strings.
     """
     return _parse_xml_tool_call(text) or _parse_devstral_native_tool_call(text)
+
+
+def _log_unparsed_tool_output(assistant_text: str) -> None:
+    """Log raw model output when a tool call was started but JSON parsing failed."""
+    preview_len = 2000
+    text = assistant_text.strip()
+    if len(text) <= preview_len:
+        body = text
+    else:
+        body = f"{text[:preview_len]}\n... [{len(text) - preview_len} chars truncated]"
+    logger.warning(
+        "Tool call parse failed (model output looked like a tool but JSON was incomplete). "
+        f"Raw assistant output ({len(assistant_text)} chars):\n{body}"
+    )
 
 
 def _limit_text(text: str, max_chars: int = 12000) -> str:
@@ -520,7 +543,9 @@ def execute_tool_call(tool_call: Dict[str, Any], config: ChatConfig, state: Agen
 # ───────────────────────────── TT runtime (text-only) ─────────────────────────
 
 # Map of friendly --mesh-device names to (rows, cols) — matches text_demo.py.
-# Prefill and decode are compiled on demand (no trace capture).
+# Incremental KV reuse + optional traced decode (see ``--no-decode-trace``).
+
+_TRACE_REGION_SIZE = 100_000_000
 
 _MESH_SHAPES: Dict[str, Tuple[int, int]] = {
     "N150": (1, 1),
@@ -536,6 +561,28 @@ def _round_up(value: int, multiple: int) -> int:
     return ((value + multiple - 1) // multiple) * multiple
 
 
+def _round_down(value: int, multiple: int) -> int:
+    return (value // multiple) * multiple
+
+
+def _longest_common_prefix_len(a: torch.Tensor, b: torch.Tensor) -> int:
+    """Compare two 1-D token-id tensors; return shared prefix length."""
+    n = min(int(a.shape[0]), int(b.shape[0]))
+    if n == 0:
+        return 0
+    diff = (a[:n] != b[:n]).nonzero(as_tuple=False)
+    if diff.numel() == 0:
+        return n
+    return int(diff[0].item())
+
+
+def _prefill_start_for_kv_len(kv_seq_len: int, block_size: int) -> int:
+    """``start_pos`` for the next incremental prefill (may rewind to block boundary)."""
+    if kv_seq_len <= 0:
+        return 0
+    return _round_down(kv_seq_len, block_size)
+
+
 @dataclass
 class TTAgentConfig(ChatConfig):
     """Extends the base chat config with TT-runtime + tokenizer knobs."""
@@ -546,6 +593,8 @@ class TTAgentConfig(ChatConfig):
     max_context_tokens: int = 512
     seed: Optional[int] = None
     prefill_activations_dram: bool = False
+    use_kv_cache: bool = True
+    trace_decode: bool = True
 
 
 @dataclass
@@ -558,9 +607,17 @@ class TtAgentRuntime:
     pad_token_id: int
     eos_ids: List[int]
     cfg: TTAgentConfig
-    # Persistent decode input buffers (reused each decode step).
+    # Persistent decode input buffers (trace binds to these addresses).
     decode_tok_dev: Optional[ttnn.Tensor] = None
     decode_pos_dev: Optional[ttnn.Tensor] = None
+    decode_trace_id: Optional[int] = None
+    decode_trace_logits: Optional[ttnn.Tensor] = None
+    # Persistent prefill chunk buffer (one ``kv_block_size`` frame).
+    prefill_chunk_dev: Optional[ttnn.Tensor] = None
+    # Incremental KV session state (device K/V tensors persist in the model).
+    kv_seq_len: int = 0
+    cached_token_ids: Optional[torch.Tensor] = None
+    system_prefix_warmed: bool = False
 
 
 def _set_fabric_1d_or_warn(enabled: bool) -> bool:
@@ -585,6 +642,7 @@ def _open_mesh(mesh_name: str) -> Tuple[ttnn.MeshDevice, bool]:
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(rows, cols),
         l1_small_size=DEVSTRAL2_LARGE_L1_SMALL_SIZE,
+        trace_region_size=_TRACE_REGION_SIZE,
         num_command_queues=1,
     )
     return mesh_device, fabric_set
@@ -691,6 +749,11 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
         )
         if config.prefill_activations_dram:
             logger.info("Prefill activations: DRAM (decode stays L1).")
+        if config.trace_decode:
+            logger.info(
+                f"Decode trace enabled (trace_region_size={_TRACE_REGION_SIZE}); "
+                "persistent decode_tok/pos buffers per step."
+            )
 
         base_keys = model_prefill_weight_keys(num_layers)
         want_lm_head = not args.tie_word_embeddings
@@ -711,6 +774,11 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
         # Persistent decode-step buffers (host copy + device tensor each decode step).
         decode_tok_dev = _input_ids_to_tt(torch.zeros((1, 1), dtype=torch.long), mesh_device)
         decode_pos_dev = _current_pos_to_tt(torch.tensor([0], dtype=torch.long), mesh_device)
+        block_size = int(args.kv_block_size)
+        prefill_chunk_dev = _input_ids_to_tt(
+            torch.full((1, block_size), int(pad_token_id), dtype=torch.long),
+            mesh_device,
+        )
 
         runtime = TtAgentRuntime(
             mesh_device=mesh_device,
@@ -723,6 +791,7 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
             cfg=config,
             decode_tok_dev=decode_tok_dev,
             decode_pos_dev=decode_pos_dev,
+            prefill_chunk_dev=prefill_chunk_dev,
         )
         # Prefill and decode compile on demand; TTNN caches programs after first use.
         return runtime
@@ -732,19 +801,196 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
 
 
 def _tokenize_messages(rt: TtAgentRuntime, messages: List[Dict[str, str]]) -> torch.LongTensor:
+    return _tokenize_messages_impl(rt, messages, add_generation_prompt=True)
+
+
+def _tokenize_messages_no_gen(rt: TtAgentRuntime, messages: List[Dict[str, str]]) -> torch.LongTensor:
+    return _tokenize_messages_impl(rt, messages, add_generation_prompt=False)
+
+
+def _tokenize_messages_impl(
+    rt: TtAgentRuntime,
+    messages: List[Dict[str, str]],
+    *,
+    add_generation_prompt: bool,
+) -> torch.LongTensor:
     if getattr(rt.tokenizer, "chat_template", None):
         encoded = rt.tokenizer.apply_chat_template(
             messages,
-            add_generation_prompt=True,
+            add_generation_prompt=add_generation_prompt,
             return_tensors="pt",
             return_dict=True,
         )
         ids = encoded["input_ids"]
     else:
-        # Fallback: concatenate role-tagged content as a single string.
-        flat = "\n".join(f"{m.get('role', '')}: {m.get('content', '')}" for m in messages) + "\nassistant:"
+        flat = "\n".join(f"{m.get('role', '')}: {m.get('content', '')}" for m in messages)
+        if add_generation_prompt:
+            flat += "\nassistant:"
         ids = rt.tokenizer(flat, return_tensors="pt")["input_ids"]
     return ids[0].to(torch.long).unsqueeze(0)  # (1, T)
+
+
+def _tokenize_system_prefix(rt: TtAgentRuntime, config: TTAgentConfig) -> torch.LongTensor:
+    """Tokenize the fixed system + tool-rules message (no generation prompt suffix)."""
+    messages = [{"role": "system", "content": _agent_system_content(config)}]
+    if getattr(rt.tokenizer, "chat_template", None):
+        encoded = rt.tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=False,
+            return_tensors="pt",
+            return_dict=True,
+        )
+        return encoded["input_ids"].to(torch.long)
+    text = _agent_system_content(config)
+    return rt.tokenizer(text, return_tensors="pt")["input_ids"].to(torch.long)
+
+
+def _release_decode_trace(rt: TtAgentRuntime) -> None:
+    """Release decode trace (required before prefill; Metal corrupts buffers if trace stays active)."""
+    if rt.decode_trace_id is not None:
+        ttnn.release_trace(rt.mesh_device, rt.decode_trace_id)
+        rt.decode_trace_id = None
+        rt.decode_trace_logits = None
+
+
+def _reset_kv_session(rt: TtAgentRuntime) -> None:
+    """Clear host-side KV session state (device cache is overwritten on next prefill)."""
+    _release_decode_trace(rt)
+    rt.kv_seq_len = 0
+    rt.cached_token_ids = None
+    rt.system_prefix_warmed = False
+
+
+def _ensure_prefill_chunk_dev(rt: TtAgentRuntime, block_size: int, pad_id: int) -> None:
+    if rt.prefill_chunk_dev is None:
+        rt.prefill_chunk_dev = _input_ids_to_tt(
+            torch.full((1, block_size), int(pad_id), dtype=torch.long),
+            rt.mesh_device,
+        )
+
+
+def _resolve_incremental_prefill_start(
+    rt: TtAgentRuntime,
+    input_ids: torch.Tensor,
+    prompt_len: int,
+    block_size: int,
+) -> int:
+    """Return ``start_pos`` for chunked prefill; 0 means full prompt prefill."""
+    if not rt.cfg.use_kv_cache or rt.kv_seq_len <= 0:
+        return 0
+
+    cached = rt.cached_token_ids
+    if cached is None:
+        return 0
+
+    cache_len = int(cached.shape[0])
+    if cache_len > prompt_len:
+        logger.warning(f"Cached prompt ({cache_len} tokens) longer than new prompt ({prompt_len}); full re-prefill.")
+        _reset_kv_session(rt)
+        _warm_system_kv_prefix(rt, rt.cfg)
+        return 0
+
+    new_prefix = input_ids[0, :cache_len]
+    if not torch.equal(cached, new_prefix):
+        common = _longest_common_prefix_len(cached, new_prefix)
+        logger.warning(
+            f"KV prefix token mismatch at {common}/{cache_len}; "
+            f"re-prefill from block boundary (device KV may diverge after decode)."
+        )
+        if common <= 0:
+            _reset_kv_session(rt)
+            _warm_system_kv_prefix(rt, rt.cfg)
+            return 0
+        rt.kv_seq_len = common
+        rt.cached_token_ids = cached[:common].clone()
+        return _prefill_start_for_kv_len(common, block_size)
+
+    start = _prefill_start_for_kv_len(rt.kv_seq_len, block_size)
+    if start >= prompt_len:
+        logger.warning(f"Prompt length {prompt_len} <= cached KV start {start}; full re-prefill.")
+        _reset_kv_session(rt)
+        _warm_system_kv_prefix(rt, rt.cfg)
+        return 0
+    return start
+
+
+def _warm_system_kv_prefix(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
+    """Prefill the static system + tool-rules prefix once per session."""
+    if not config.use_kv_cache or rt.system_prefix_warmed:
+        return
+
+    system_ids = _tokenize_system_prefix(rt, config)
+    system_len = int(system_ids.shape[1])
+    block_size = int(rt.args.kv_block_size)
+    pad_id = rt.pad_token_id
+    num_chunks = max(1, (system_len + block_size - 1) // block_size)
+    padded_len = num_chunks * block_size
+
+    padded = torch.full((padded_len,), int(pad_id), dtype=torch.long)
+    padded[:system_len] = system_ids[0]
+    padded = padded.unsqueeze(0)
+
+    _ensure_prefill_chunk_dev(rt, block_size, pad_id)
+    for chunk_idx in range(num_chunks):
+        chunk_start = chunk_idx * block_size
+        chunk_tokens = padded[:, chunk_start : chunk_start + block_size]
+        ttnn.copy_host_to_device_tensor(
+            _input_ids_host(chunk_tokens, rt.mesh_device),
+            rt.prefill_chunk_dev,
+        )
+        tt_out = rt.model(rt.prefill_chunk_dev, mode="prefill", start_pos=chunk_start)
+        tt_out.deallocate(True)
+    ttnn.synchronize_device(rt.mesh_device)
+
+    rt.kv_seq_len = system_len
+    rt.cached_token_ids = system_ids[0].clone()
+    rt.system_prefix_warmed = True
+    logger.info(f"KV session: prefilled static system prefix ({system_len} tokens, {num_chunks} chunk(s)).")
+
+
+def _sync_kv_cache_from_messages(rt: TtAgentRuntime, messages: List[Dict[str, str]]) -> None:
+    """Update host cache metadata from the current chat (no generation-prompt suffix)."""
+    if not rt.cfg.use_kv_cache:
+        return
+    prompt_ids = _tokenize_messages_no_gen(rt, messages)
+    rt.cached_token_ids = prompt_ids[0].clone()
+    rt.kv_seq_len = int(prompt_ids.shape[1])
+
+
+def _chunked_prefill(
+    rt: TtAgentRuntime,
+    input_ids_padded: torch.Tensor,
+    *,
+    prompt_len: int,
+    prefill_start: int,
+    block_size: int,
+    num_chunks: int,
+    config: TTAgentConfig,
+) -> int:
+    """Run chunked prefill from ``prefill_start``; return first sampled token."""
+    first_chunk = prefill_start // block_size
+    next_token: Optional[int] = None
+    for chunk_idx in range(first_chunk, num_chunks):
+        chunk_start = chunk_idx * block_size
+        chunk_tokens = input_ids_padded[:, chunk_start : chunk_start + block_size]
+        ttnn.copy_host_to_device_tensor(
+            _input_ids_host(chunk_tokens, rt.mesh_device),
+            rt.prefill_chunk_dev,
+        )
+        tt_out = rt.model(rt.prefill_chunk_dev, mode="prefill", start_pos=chunk_start)
+        if chunk_idx == num_chunks - 1:
+            ttnn.synchronize_device(rt.mesh_device)
+            logits_torch = _logits_to_torch(tt_out, rt.mesh_device, rt.args.vocab_size)
+            local_pos = (prompt_len - 1) - chunk_start
+            next_token = _sample_next(
+                logits_torch[local_pos],
+                do_sample=bool(config.do_sample),
+                temperature=float(config.temperature),
+                top_p=float(config.top_p),
+            )
+        tt_out.deallocate(True)
+    assert next_token is not None, "chunked prefill produced no logits"
+    return next_token
 
 
 def _sample_next(logits_row: torch.Tensor, do_sample: bool, temperature: float, top_p: float) -> int:
@@ -792,21 +1038,73 @@ def _decode_one_token(rt: TtAgentRuntime, token_id: int, pos: int, config: TTAge
     return next_token
 
 
+def _run_traced_decode_loop(
+    rt: TtAgentRuntime,
+    *,
+    next_token: int,
+    current_pos: int,
+    config: TTAgentConfig,
+    max_extra_tokens: int,
+) -> List[int]:
+    """Traced decode: compile once, capture once, then ``execute_trace`` for remaining steps.
+
+    Uses persistent ``decode_tok_dev`` / ``decode_pos_dev`` (host→device copy each step).
+    Trace is released before the next prefill in ``generate_assistant_text_tt``.
+    """
+    extra: List[int] = []
+    pos = current_pos
+    tok = next_token
+
+    for iteration in range(max_extra_tokens):
+        if tok in rt.eos_ids:
+            break
+
+        _write_decode_inputs(rt, tok, pos)
+        if iteration == 0:
+            # Untraced compile pass (kernel cache only).
+            tt_out = rt.model(rt.decode_tok_dev, mode="decode", current_pos=rt.decode_pos_dev)
+            tt_out.deallocate(True)
+            ttnn.synchronize_device(rt.mesh_device)
+
+            rt.decode_trace_id = ttnn.begin_trace_capture(rt.mesh_device, cq_id=0)
+            rt.decode_trace_logits = rt.model(rt.decode_tok_dev, mode="decode", current_pos=rt.decode_pos_dev)
+            ttnn.end_trace_capture(rt.mesh_device, rt.decode_trace_id, cq_id=0)
+            ttnn.synchronize_device(rt.mesh_device)
+            if max_extra_tokens > 1:
+                logger.info("Decode trace captured (replay for subsequent tokens this generation).")
+        else:
+            ttnn.execute_trace(rt.mesh_device, rt.decode_trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(rt.mesh_device)
+
+        logits_torch = _logits_to_torch(rt.decode_trace_logits, rt.mesh_device, rt.args.vocab_size)
+        tok = _sample_next(
+            logits_torch[0],
+            do_sample=bool(config.do_sample),
+            temperature=float(config.temperature),
+            top_p=float(config.top_p),
+        )
+        extra.append(tok)
+        pos += 1
+
+    return extra
+
+
 def generate_assistant_text_tt(
     rt: TtAgentRuntime,
     messages: List[Dict[str, str]],
     config: TTAgentConfig,
 ) -> str:
-    """One turn: chunked TT prefill of the chat history, then untraced decode steps.
+    """One turn: incremental chunked prefill + traced or untraced decode.
 
-    Prefill is dispatched one ``kv_block_size`` (128-token) chunk at a time. Each chunk writes
-    its K/V into the paged cache at logical positions ``[chunk_start, chunk_start+block_size)``
-    via ``paged_fill_cache``; ``chunked_scaled_dot_product_attention`` then attends the chunk's Q
-    over the full cached history with a block-causal mask. This keeps every per-call op
-    (LayerNorm, matmul, SDPA) at ``block_h = block_size/TILE_SIZE = 4`` regardless of how long
-    the chat grows, which is what guarantees the dispatch fits in L1 (Wormhole/Blackhole: 1.5 MB
-    / core). Only the final chunk's logits are sampled — earlier chunks' logits are discarded.
+    When ``use_kv_cache`` is enabled, reuses device KV for the shared prefix (system
+    prefix warmed at session start; conversation extended across tool sub-calls).
+    Only token suffixes not already in ``cached_token_ids`` are prefilled.
+
+    Decode trace uses persistent ``(token, current_pos)`` buffers each step. The trace is
+    released before prefill (Metal requirement) and re-captured once per generation.
     """
+    _release_decode_trace(rt)
+
     input_ids = _tokenize_messages(rt, messages)
     prompt_len = int(input_ids.shape[1])
     if prompt_len + config.max_new_tokens > int(rt.args.max_seq_len):
@@ -815,7 +1113,6 @@ def generate_assistant_text_tt(
             f"max_seq_len={rt.args.max_seq_len}. Use /clear or restart with larger --max-seq-len."
         )
 
-    # Pad to a multiple of ``kv_block_size`` so each chunk is exactly one paged-cache block.
     block_size = int(rt.args.kv_block_size)
     num_chunks = max(1, (prompt_len + block_size - 1) // block_size)
     padded_prompt_len = num_chunks * block_size
@@ -827,46 +1124,63 @@ def generate_assistant_text_tt(
     if config.seed is not None:
         torch.manual_seed(int(config.seed))
 
-    # ── Chunked prefill: advance start_pos by block_size each iteration ──────
-    next_token: Optional[int] = None
-    for chunk_idx in range(num_chunks):
-        chunk_start = chunk_idx * block_size
-        chunk_tokens = input_ids_padded[:, chunk_start : chunk_start + block_size]  # (1, block_size)
-        chunk_dev = _input_ids_to_tt(chunk_tokens, rt.mesh_device)
-        try:
-            tt_out = rt.model(chunk_dev, mode="prefill", start_pos=chunk_start)
-            if chunk_idx == num_chunks - 1:
-                # Sample the first assistant token from the position of the final real prompt
-                # token (within this chunk's local frame).
-                ttnn.synchronize_device(rt.mesh_device)
-                logits_torch = _logits_to_torch(tt_out, rt.mesh_device, rt.args.vocab_size)
-                local_pos = (prompt_len - 1) - chunk_start
-                next_token = _sample_next(
-                    logits_torch[local_pos],
-                    do_sample=bool(config.do_sample),
-                    temperature=float(config.temperature),
-                    top_p=float(config.top_p),
-                )
-            tt_out.deallocate(True)
-        finally:
-            chunk_dev.deallocate(True)
-    assert next_token is not None, "chunked prefill produced no logits"
+    _ensure_prefill_chunk_dev(rt, block_size, pad_id)
+    prefill_start = _resolve_incremental_prefill_start(rt, input_ids, prompt_len, block_size)
+    if prefill_start > 0:
+        logger.info(
+            f"Incremental prefill: reusing {prefill_start} cached tokens, "
+            f"prefilling {prompt_len - prefill_start} new "
+            f"({num_chunks - prefill_start // block_size} chunk(s))."
+        )
+    elif rt.cfg.use_kv_cache and rt.system_prefix_warmed:
+        logger.info(f"Full prompt prefill ({num_chunks} chunk(s)).")
+
+    next_token = _chunked_prefill(
+        rt,
+        input_ids_padded,
+        prompt_len=prompt_len,
+        prefill_start=prefill_start,
+        block_size=block_size,
+        num_chunks=num_chunks,
+        config=config,
+    )
 
     generated: List[int] = [next_token]
-    current_pos = prompt_len  # next decode reads from this position
+    current_pos = prompt_len
 
     if next_token in rt.eos_ids or config.max_new_tokens <= 1:
         return rt.tokenizer.decode(generated, skip_special_tokens=True).strip()
 
-    # ── Decode: untraced single-token steps ───────────────────────────────────
-    for _ in range(1, config.max_new_tokens):
-        next_token = _decode_one_token(rt, next_token, current_pos, config)
-        if next_token in rt.eos_ids:
-            break
-        generated.append(next_token)
-        current_pos += 1
+    max_extra = config.max_new_tokens - 1
+    if config.trace_decode:
+        generated.extend(
+            _run_traced_decode_loop(
+                rt,
+                next_token=next_token,
+                current_pos=current_pos,
+                config=config,
+                max_extra_tokens=max_extra,
+            )
+        )
+    else:
+        for _ in range(max_extra):
+            next_token = _decode_one_token(rt, next_token, current_pos, config)
+            if next_token in rt.eos_ids:
+                break
+            generated.append(next_token)
+            current_pos += 1
 
     return rt.tokenizer.decode(generated, skip_special_tokens=True).strip()
+
+
+def _append_assistant_message(
+    rt: TtAgentRuntime,
+    messages: List[Dict[str, str]],
+    content: str,
+) -> None:
+    """Append assistant turn and refresh KV cache metadata for the next incremental prefill."""
+    messages.append({"role": "assistant", "content": content})
+    _sync_kv_cache_from_messages(rt, messages)
 
 
 def chat_loop_tt(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
@@ -876,6 +1190,8 @@ def chat_loop_tt(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
 
     print("\n--- Devstral2 Large Agent Demo (Tenstorrent, text-only) ---")
     print("Type 'quit' or 'exit' to stop. '/clear' resets chat + tools.\n")
+
+    _warm_system_kv_prefix(rt, config)
 
     py_cfg = ChatConfig(
         model_id=config.model_id,
@@ -905,6 +1221,8 @@ def chat_loop_tt(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
         if user_input.lower() == "/clear":
             messages = [{"role": "system", "content": system_content}]
             state = AgentState()
+            _reset_kv_session(rt)
+            _warm_system_kv_prefix(rt, config)
             print("Conversation history and todo state cleared.\n")
             continue
 
@@ -920,23 +1238,24 @@ def chat_loop_tt(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
                 assistant_text = generate_assistant_text_tt(rt, messages, config)
             except RuntimeError as exc:
                 final_response = f"[TT generation error] {exc}"
-                messages.append({"role": "assistant", "content": final_response})
+                _append_assistant_message(rt, messages, final_response)
                 break
 
             tool_call = parse_tool_call(assistant_text)
 
             if tool_call is None:
                 if "<tool_call>" in assistant_text or any(f"{tool}{{" in assistant_text for tool in _KNOWN_TOOL_NAMES):
+                    _log_unparsed_tool_output(assistant_text)
                     final_response = (
                         "I tried to run a tool but the tool-call JSON was incomplete. "
                         "Please try again with a shorter command or use /clear."
                     )
                 else:
                     final_response = assistant_text
-                messages.append({"role": "assistant", "content": final_response})
+                _append_assistant_message(rt, messages, final_response)
                 break
 
-            messages.append({"role": "assistant", "content": assistant_text})
+            _append_assistant_message(rt, messages, assistant_text)
             call_signature = json.dumps(tool_call, sort_keys=True, ensure_ascii=True)
             if call_signature == last_tool_signature:
                 repeated_tool_calls += 1
@@ -959,7 +1278,7 @@ def chat_loop_tt(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
                     out = str(tool_result.get("output", "")).strip()
                     details = err if err else out
                     final_response = f"`{last_tool_name}` failed." + (f" Details: {details}" if details else "")
-                messages.append({"role": "assistant", "content": final_response})
+                _append_assistant_message(rt, messages, final_response)
                 break
 
         if final_response is None:
@@ -979,7 +1298,7 @@ def chat_loop_tt(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
                     "I reached the per-turn tool-call limit before producing a final answer. "
                     "Try narrowing the request."
                 )
-            messages.append({"role": "assistant", "content": final_response})
+            _append_assistant_message(rt, messages, final_response)
 
         print(f"\nAssistant: {final_response}\n")
 
@@ -1037,6 +1356,16 @@ def parse_tt_args() -> TTAgentConfig:
         default=False,
         help="Route prefill activations through DRAM (default: on). Use --no-prefill-dram for L1 prefill.",
     )
+    p.add_argument(
+        "--no-kv-cache",
+        action="store_true",
+        help="Disable incremental KV prefix caching (full prefill every call).",
+    )
+    p.add_argument(
+        "--no-decode-trace",
+        action="store_true",
+        help="Disable traced decode (full model dispatch every token).",
+    )
 
     a = p.parse_args()
 
@@ -1057,6 +1386,8 @@ def parse_tt_args() -> TTAgentConfig:
         max_context_tokens=a.max_context_tokens,
         seed=a.seed,
         prefill_activations_dram=a.prefill_dram,
+        use_kv_cache=not a.no_kv_cache,
+        trace_decode=not a.no_decode_trace,
     )
 
 
@@ -1077,6 +1408,12 @@ def main() -> None:
                 rt.decode_pos_dev.deallocate(True)
         except Exception:  # noqa: BLE001
             pass
+        try:
+            if rt.prefill_chunk_dev is not None:
+                rt.prefill_chunk_dev.deallocate(True)
+        except Exception:  # noqa: BLE001
+            pass
+        _release_decode_trace(rt)
         _close_mesh(rt.mesh_device, fabric_set)
 
 
