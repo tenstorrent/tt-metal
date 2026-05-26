@@ -75,7 +75,7 @@ class Qwen25Coder32BExecutorRuntimeConfig:
     max_batch_size: int
     max_seq_len: int
     cluster_shape: list[int]
-    max_prefill_chunk_size: int = 2048
+    max_prefill_chunk_size: int = 4096
     model_cache_path: Path | None = None
     kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
     optimizations: Any = None
@@ -132,6 +132,23 @@ _LOFI_COMPUTE_KERNEL_CFG = ttnn.WormholeComputeKernelConfig(
 Mirrors TTTv1 ``DecodersPrecision.performance("Qwen2.5-Coder-32B-Instruct")``: the
 non-Qwen2.5-7B branch at ``model_config.py:208-218`` sets ``FF1_FF3 → BFP4`` and
 ``LI_FF1_FF3 → LOFI``. This single delta is the bulk of the perf-mode throughput uplift.
+"""
+
+
+_TTTV1_HIFI2_COMPUTE_KERNEL_CFG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=True,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+"""TTTv1's ``compute_kernel_config_hifi2`` for HIFI2 attention ops in performance mode.
+
+TTTv2's ``Attention1D`` default for HIFI2 ops is ``compute_kernel_hifi2_fp16``
+(``math_approx=False``, ``fp32_dest_acc=False``) — that matches TTTv1's HIFI2_FP16
+setting, **not** TTTv1's plain HIFI2 (``math_approx=True``, ``fp32_dest_acc=True``).
+For Qwen2.5-Coder-32B perf mode, the TTTv1 OpFidelity defaults
+(``model_config.py:292-297``) resolve attention decode kernels to plain HIFI2, so the
+perf recipe explicitly pins this kernel instead of falling back to TTTv2's fp16 variant.
 """
 
 
@@ -198,9 +215,12 @@ QWEN25_CODER_32B_PERFORMANCE = Qwen25Coder32BPrecisionConfig(
     kv_cache_dtype=ttnn.bfloat8_b,
     mlp_w1_w3_dtype=ttnn.bfloat4_b,
     mlp_ff1_3_compute_kernel_cfg=_LOFI_COMPUTE_KERNEL_CFG,
-    attn_li_qkv_kernel_cfg=None,
-    attn_sdpa_kernel_cfg=None,
-    attn_li_o_kernel_cfg=None,
+    # Pin TTTv1's plain HIFI2 (math_approx=True, fp32_dest_acc=True). Without this, the
+    # Attention1D default for the three attention ops is HIFI2_FP16, which mismatches
+    # TTTv1's compute_kernel_config_hifi2 (model_config.py:728-733).
+    attn_li_qkv_kernel_cfg=_TTTV1_HIFI2_COMPUTE_KERNEL_CFG,
+    attn_sdpa_kernel_cfg=_TTTV1_HIFI2_COMPUTE_KERNEL_CFG,
+    attn_li_o_kernel_cfg=_TTTV1_HIFI2_COMPUTE_KERNEL_CFG,
     lm_head_dtype=ttnn.bfloat8_b,
 )
 
@@ -278,13 +298,13 @@ class _Qwen25Coder32BWHTuning:
 def _resolve_qwen_coder_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Qwen25Coder32BWHTuning:
     """Pick WH L1 tuning knobs for Qwen2.5-Coder-32B-Instruct on T3K.
 
-    Mirrors the 7B port's empirical L1 cutoff (``mlp_prefill_len_cutoff=256`` for the wide FF
-    matmul on Wormhole). ``mlp_decode_spill_w1_to_dram`` is currently off on T3K because per-device
-    FF shards (5120×3456 per chip) are smaller than 7B-on-N300; re-evaluate if decode batch-32
-    trips L1 circular-buffer validation.
+    Use TTTv1's Wormhole default (``prefill_len_cutoff=1024`` at ``model_config.py:516``).
+    Coder-32B is not in the "reduce to 512" override list (``model_config.py:583-589``), so
+    TTTv1 keeps 1024 for this model on T3K. ``mlp_decode_spill_w1_to_dram`` is off on T3K
+    because per-device FF shards (5120×3456 per chip) are smaller than 7B-on-N300.
     """
     t = _Qwen25Coder32BWHTuning(
-        mlp_prefill_len_cutoff=256,
+        mlp_prefill_len_cutoff=1024,
         mlp_decode_spill_w1_to_dram=False,
     )
     logger.info(
