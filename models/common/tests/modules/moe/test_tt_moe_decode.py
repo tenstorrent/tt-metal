@@ -68,6 +68,7 @@ def _print_exception_and_fail(reason: str) -> None:
 MESH_GRAPH_DESC_16x1 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto"
 )
+MESH_GRAPH_DESC_BH_LB_8x1 = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_lb_8x1_line_graph_descriptor.textproto"
 
 
 def is_mesh_graph_descriptor_set(expected_path):
@@ -391,13 +392,27 @@ SKIP_LIST = [
 @pytest.mark.parametrize(
     "device_params",
     [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 500_000,
-        }
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "trace_region_size": 500_000,
+            },
+            id="fabric_1D_ring",
+        ),
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": 500_000,
+            },
+            id="fabric_1D",
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_BH_LB_8x1),
+                reason="FABRIC_1D only for BH LB 8x1 line topology",
+            ),
+        ),
     ],
-    ids=["fabric_1D_ring"],
     indirect=True,
 )
 @pytest.mark.parametrize("num_iterations", [3])
@@ -413,13 +428,17 @@ def test_tt_moe_decode(
     torch.manual_seed(2005)
     random.seed(2005)
 
+    mesh_shape = tuple(mesh_device.shape)
+    fabric_config = device_params["fabric_config"]
+    is_line_fabric = fabric_config == ttnn.FabricConfig.FABRIC_1D
+    if is_line_fabric and mesh_shape != (8, 1):
+        pytest.skip("FABRIC_1D only valid for (8,1) BH LB mesh")
+    if not is_line_fabric and mesh_shape == (8, 1):
+        pytest.skip("(8,1) BH LB requires FABRIC_1D (line topology)")
+
     if str(config_path.name) in SKIP_LIST:
         pytest.skip(f"{config_path} is a known failure")
 
-    mesh_shape = tuple(mesh_device.shape)
-    # Derive the topology from the parametrized fabric_config so the config's RS path
-    # matches the fabric the device is actually brought up on.
-    fabric_config = device_params["fabric_config"]
     topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
     config = TTMoEDecodeConfig.from_yaml(config_path.read_text(), topology=topology)
     if config.mesh_shape != mesh_shape:
