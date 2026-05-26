@@ -337,7 +337,13 @@ def test_dots_ocr_vision(mesh_device, image_link):
     indirect=True,
 )
 def test_dots_ocr_decode_one_layer_l1_boundaries(mesh_device):
-    """Exercise one decoder layer in decode mode and require L1 attn/MLP boundaries."""
+    """Exercise one decoder layer in decode mode and require L1 attn/MLP boundaries.
+
+    Also runs the same input through the HF reference layer and compares the
+    output via PCC, so any silent numerical regression in the optimized decode
+    path is caught at the single-layer boundary.
+    """
+    from tests.ttnn.utils_for_testing import assert_with_pcc
     from transformers import AutoConfig, AutoModelForCausalLM
 
     torch.manual_seed(0)
@@ -347,18 +353,23 @@ def test_dots_ocr_decode_one_layer_l1_boundaries(mesh_device):
     model_config.num_hidden_layers = 1
     hf_model = AutoModelForCausalLM.from_config(model_config, trust_remote_code=True).to(dtype=torch.bfloat16).eval()
     model_config = hf_model.config
-    layer = TTNNDotsOCRDecoderLayer.from_torch(hf_model.model.layers[0])
+    # Keep a reference to the HF layer + rotary embedding for the PCC check.
+    # ``from_torch`` only reads weights, so we can safely re-use the same
+    # in-memory layer after building the TTNN version.
+    hf_layer = hf_model.model.layers[0]
+    hf_rotary_emb = hf_model.model.rotary_emb
+    layer = TTNNDotsOCRDecoderLayer.from_torch(hf_layer)
     layer._unique_name = "model.layers.0"
     layer.override_children_module_names()
-    del hf_model
 
     set_device(layer, mesh_device, register_forward_hook=False, dump_visualization=False)
     layer.preprocess_weights()
     layer.move_weights_to_device()
 
     paged_cache = _create_paged_kv_cache(model_config, mesh_device, batch_size=1)
+    hidden_states_torch = torch.randn(1, 1, model_config.hidden_size, dtype=torch.bfloat16)
     hidden_states = ttnn.from_torch(
-        torch.randn(1, 1, model_config.hidden_size, dtype=torch.bfloat16),
+        hidden_states_torch,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
@@ -399,6 +410,42 @@ def test_dots_ocr_decode_one_layer_l1_boundaries(mesh_device):
 
     _assert_l1_resident(output, "decoder layer output")
     assert seen_boundaries == {"attn": True, "mlp": True}
+
+    # ------------------------------------------------------------------
+    # PCC verification against the HF reference at cache_position=0.
+    # ------------------------------------------------------------------
+    # Decode at pos 0 with an empty past: position_ids = [[0]], no mask.
+    position_ids = torch.zeros((1, 1), dtype=torch.long)
+    cos, sin = hf_rotary_emb(hidden_states_torch, position_ids)
+    torch_output = hf_layer(
+        hidden_states_torch,
+        attention_mask=None,
+        position_ids=position_ids,
+        past_key_values=None,
+        use_cache=False,
+        position_embeddings=(cos, sin),
+    )[0]
+
+    num_devices = int(mesh_device.get_num_devices()) if hasattr(mesh_device, "get_num_devices") else 1
+    if num_devices > 1:
+        # Multi-device mesh (e.g. T3K DP (8,1) or TP (1,8)): both DP-with-
+        # batch=1 and TP-after-all-reduce produce the same data on every
+        # device. ``ConcatMeshToTensor(dim=0)`` stacks the per-device slices
+        # along batch, after which we take the first slice as the canonical
+        # output. Without an explicit composer ``ttnn.to_torch`` errors with
+        # "Can't convert a tensor distributed on MeshShape([...]) ...".
+        ttnn_output_torch = ttnn.to_torch(
+            output,
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+        )[:1]
+    else:
+        ttnn_output_torch = ttnn.to_torch(output)
+    ttnn_output_torch = ttnn_output_torch.to(torch.bfloat16).reshape(torch_output.shape)
+    # Random-weight bf16 + paged-SDPA vs. eager attention adds some numerical
+    # drift relative to a fp32 reference; 0.99 is the tight-but-safe bar that
+    # still catches the regressions this test guards against (silent
+    # layout/sharding bugs, wrong RoPE, dropped residual, etc.).
+    assert_with_pcc(torch_output, ttnn_output_torch, pcc=0.99)
 
 
 @pytest.mark.parametrize(

@@ -12,7 +12,12 @@ from models.experimental.tt_symbiote.core.module import (
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWAllReducedFusedGateUp,
     TTNNLinearLLamaIColShardedWRowSharded,
+    _decode_down_proj_dram_sharded_program_config,
+    _decode_down_proj_input_memory_config,
+    _decode_down_proj_mcast1d_program_config,
+    _decode_gate_up_dram_sharded_program_config,
     _dp_matmul_program_config,
+    _dram_sharded_mem_config_2d,
     _tp_requires_ccl,
     _tp_mesh_mapper,
     _linear_mesh_num_devices,
@@ -92,6 +97,33 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             input_shape.insert(1, 1)
         input_tensor = ttnn.reshape(input_tensor, input_shape)
         needs_ccl = _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device)
+
+        # Single-device DRAM-sharded fast path for decode shapes only (prefill
+        # falls back to the existing 2D-mcast path with DRAM_INTERLEAVED weight,
+        # because the prefill kernel cannot consume DRAM_WIDTH_SHARDED operand B).
+        # Input must be L1 width-sharded 16c 8x2 (matches the sharded RMSNorm
+        # output of post_attention_layernorm — no reshard needed). Output lands
+        # L1 width-sharded on the same 16c 8x2 grid, BFP8.
+        dram_shard_cfg = getattr(self, "_gate_up_dram_input_shard_cfg", None)
+        dram_pc = (
+            _decode_gate_up_dram_sharded_program_config(input_shape, self.tt_weight.shape)
+            if (not needs_ccl and dram_shard_cfg is not None)
+            else None
+        )
+        if dram_pc is not None and dram_shard_cfg is not None:
+            dram_weight, dram_bias = self._get_gate_up_dram_sharded_weight()
+            input_tensor = ttnn.to_memory_config(input_tensor, dram_shard_cfg)
+            tt_output = ttnn.linear(
+                input_tensor,
+                dram_weight,
+                bias=dram_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                compute_kernel_config=self._gate_up_decode_compute_kernel_config,
+                program_config=dram_pc,
+            )
+            return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
+
         matmul_mc = ttnn.DRAM_MEMORY_CONFIG if needs_ccl else (output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
         # Fuse bias into the matmul kernel on single-device (no CCL would scale
         # the bias by num_devices). Saves one BinaryNg per layer when bias is set.
@@ -124,8 +156,24 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
         self._weight_dtype = dtype
         return self
 
+    def _down_proj_use_dram_sharded(self) -> bool:
+        # Pattern-match dots.ocr down_proj (K=8960, N=1536) on single-device.
+        if _tp_requires_ccl(self.device):
+            return False
+        return int(self.in_features) == 8960 and int(self.out_features) == 1536
+
     def move_weights_to_device_impl(self):
         weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat4_b)
+        use_dram_sharded = self._down_proj_use_dram_sharded()
+        # Stash raw torch weight/bias BEFORE preprocess overwrites them, so we
+        # can construct the second DRAM_WIDTH_SHARDED copy via ``as_tensor``
+        # (the o_proj-style path that doesn't trigger a 12-core reshard kernel).
+        raw_weight_torch = (
+            self.tt_weight_host.clone() if use_dram_sharded and isinstance(self.tt_weight_host, torch.Tensor) else None
+        )
+        raw_bias_torch = (
+            self.tt_bias_host.clone() if use_dram_sharded and isinstance(self.tt_bias_host, torch.Tensor) else None
+        )
         if isinstance(self.tt_weight_host, torch.Tensor):
             self.tt_weight_host = preprocess_linear_weight(
                 self.tt_weight_host,
@@ -148,6 +196,40 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+        # Second weight (DRAM_WIDTH_SHARDED) for the decode DRAM-sharded matmul.
+        # Allocated via ``as_tensor`` so no reshard kernel is launched. Prefill
+        # uses ``self.tt_weight`` (DRAM_INTERLEAVED). Memory cost: ~7 MB / layer
+        # for down_proj (8960x1536 BFP4; N=1536 is exactly 12*32*4 so no padding).
+        self._down_proj_dram_input_shard_cfg = (
+            _decode_down_proj_input_memory_config(self.in_features) if use_dram_sharded else None
+        )
+        self._down_proj_dram_weight = None
+        self._down_proj_dram_bias = None
+        if use_dram_sharded and raw_weight_torch is not None:
+            weight_t = raw_weight_torch.T.contiguous()
+            self._down_proj_dram_weight = ttnn.as_tensor(
+                weight_t,
+                device=self.device,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
+                memory_config=_dram_sharded_mem_config_2d(
+                    self.device, k=int(weight_t.shape[-2]), n=int(weight_t.shape[-1])
+                ),
+            )
+            if raw_bias_torch is not None:
+                bias_2d = raw_bias_torch.reshape((1, -1))
+                self._down_proj_dram_bias = ttnn.as_tensor(
+                    bias_2d,
+                    device=self.device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=_tp_mesh_mapper(self.device, self.input_dim),
+                    memory_config=_dram_sharded_mem_config_2d(self.device, k=ttnn.TILE_SIZE, n=int(bias_2d.shape[-1])),
+                )
+
+    def _get_down_proj_dram_sharded_weight(self):
+        return self._down_proj_dram_weight, self._down_proj_dram_bias
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor, output_memory_config=None) -> ttnn.Tensor:
@@ -160,6 +242,56 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
         input_tensor = ttnn.reshape(input_tensor, input_shape)
         needs_ccl = _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device)
         fused_bias = None if needs_ccl else self.tt_bias
+
+        # Decode fast path: mcast1d 8x3 with DRAM_INTERLEAVED weight + L1
+        # interleaved I/O (52us standalone). Lets the MLP keep gate/up
+        # L1_INTERLEAVED end-to-end and skips the pair of pre-silu_mul I2S
+        # reshards that the DRAM-sharded 8c path needed. We pick this path
+        # whenever the input is L1 interleaved (the layout the MLP produces
+        # when ``_down_proj_dram_input_shard_cfg`` is left unused).
+        is_input_l1_interleaved = (
+            input_tensor.memory_config().buffer_type == ttnn.BufferType.L1
+            and not input_tensor.memory_config().is_sharded()
+        )
+        mcast1d_pc = (
+            _decode_down_proj_mcast1d_program_config(input_shape, self.tt_weight.shape)
+            if (not needs_ccl and is_input_l1_interleaved)
+            else None
+        )
+        if mcast1d_pc is not None:
+            tt_output = ttnn.linear(
+                input_tensor,
+                self.tt_weight,
+                bias=fused_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=output_memory_config or ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=mcast1d_pc,
+            )
+            return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
+
+        # DRAM-sharded fallback (only triggers if a caller still hands us
+        # L1_WIDTH_SHARDED input; kept for compatibility).
+        dram_shard_cfg = getattr(self, "_down_proj_dram_input_shard_cfg", None)
+        dram_pc = (
+            _decode_down_proj_dram_sharded_program_config(input_shape, self.tt_weight.shape)
+            if (not needs_ccl and dram_shard_cfg is not None and input_tensor.memory_config().is_sharded())
+            else None
+        )
+        if dram_pc is not None and dram_shard_cfg is not None:
+            dram_weight, dram_bias = self._get_down_proj_dram_sharded_weight()
+            input_tensor = ttnn.to_memory_config(input_tensor, dram_shard_cfg)
+            tt_output = ttnn.linear(
+                input_tensor,
+                dram_weight,
+                bias=dram_bias if dram_bias is not None else fused_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=dram_pc,
+            )
+            return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
+
         matmul_mc = ttnn.DRAM_MEMORY_CONFIG if needs_ccl else (output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
         tt_output = ttnn.linear(
             input_tensor,
@@ -239,22 +371,32 @@ class TTNNDotsOCRMLP(TTNNModule):
 
         gate_up = self.fused_gate_up_proj(hidden_states, output_memory_config=activation_mc if is_decode else None)
 
-        if is_decode and gate_up.memory_config().buffer_type != ttnn.BufferType.L1:
+        # In decode the fused gate-up matmul now lands in L1_WIDTH_SHARDED
+        # (16c 8x2 BFP8). Chunk on a sharded TILE tensor falls into the
+        # ``rm_only`` path of ``ttnn.slice`` (untilize+slice+tilize per half,
+        # ~40us). Single brief ``sharded_to_interleaved`` so the chunk stays
+        # on its cheap tile-aware path (~5us combined).
+        gate_up_was_sharded = gate_up.memory_config().is_sharded()
+        if gate_up_was_sharded:
+            gate_up = ttnn.sharded_to_interleaved(gate_up, ttnn.L1_MEMORY_CONFIG)
+        elif is_decode and gate_up.memory_config().buffer_type != ttnn.BufferType.L1:
             gate_up = ttnn.to_memory_config(gate_up, activation_mc)
 
-        # Split the fused gate/up activation in half along the last dim
-        # via ``ttnn.chunk``. Under the hood ``ChunkOperation`` calls
-        # ``ttnn.slice`` per piece with ``slice_step=1``, no explicit
-        # ``memory_config``, and tile-aligned begins (``0`` and
-        # ``intermediate``, which is a multiple of 32). For an
-        # L1_INTERLEAVED TILE tensor this stays on the tile-aware path
-        # of ``slice.cpp`` (``rm_only=false`` because input is not
-        # sharded, all begins satisfy ``begin % tile_shape == 0`` and
-        # step is 1), so no Untilize/TilizeWithValPadding gets inserted
-        # for the seq_len=1 height. Equivalent to two ``ttnn.slice``
-        # calls but expresses intent more cleanly.
+        # Split the fused gate/up activation in half along the last dim.
+        # ``ttnn.chunk`` calls ``ttnn.slice`` per half; for L1_INTERLEAVED
+        # TILE input with tile-aligned begins this stays on the tile-aware
+        # path (no rm_only untilize/tilize).
         gate, up = ttnn.chunk(gate_up, 2, dim=-1)
         ttnn.deallocate(gate_up)
+
+        # Down-proj now runs on the mcast1d 8x3 decode path (DRAM_INTERLEAVED
+        # weight, L1 interleaved I/O). silu_mul therefore stays interleaved
+        # and we skip the pair of I2S reshards that the older DRAM-sharded
+        # 8c down-proj required. The ``_down_proj_dram_input_shard_cfg``
+        # attribute is left intact on the down_proj for compatibility but is
+        # no longer engaged from MLP forward.
+        down_dram_shard_cfg = None
+        silu_mul_mc = activation_mc
 
         # ``fast_and_approximate_mode=True`` routes the fused SILU through
         # the polynomial exp/sigmoid path. SILU dominates this op (the
@@ -267,12 +409,12 @@ class TTNNDotsOCRMLP(TTNNModule):
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             fast_and_approximate_mode=True,
             dtype=ttnn.bfloat8_b,
-            memory_config=activation_mc,
+            memory_config=silu_mul_mc,
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
 
-        down_output_mc = activation_mc if is_decode else None
+        down_output_mc = activation_mc if (is_decode and down_dram_shard_cfg is None) else None
         output = self.down_proj(gate_up_mul, output_memory_config=down_output_mc)
         ttnn.deallocate(gate_up_mul)
 

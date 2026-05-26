@@ -112,14 +112,14 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
             memory_config=shard_in_cfg,
             compute_kernel_config=sharded_compute_kernel_config,
         )
-        # Critical: re-interleave so the caller (QKV/MLP) sees the same input
-        # memory layout as the unsharded path. The QKV/MLP decode matmul
-        # program config uses ``fuse_batch=False`` which refuses sharded
-        # inputs (matmul_device_operation.cpp:416 ``program_config.fuse_batch``).
-        # Land in L1 (not DRAM) to preserve the L1 attn/MLP boundary invariant
-        # checked by test_dots_ocr_decode_one_layer_l1_boundaries and to avoid
-        # an unnecessary DRAM round-trip before the QKV matmul.
-        tt_out = ttnn.sharded_to_interleaved(tt_out, ttnn.L1_MEMORY_CONFIG)
+        # Leave the output L1 width-sharded on the same 16c 8x2 grid we
+        # computed on. Downstream consumers (QKV and gate-up matmuls in
+        # decode) are configured as DRAM-sharded matmuls that take this
+        # exact layout as input; the previous trailing
+        # ``sharded_to_interleaved`` here is what removed the umbrella
+        # across LN -> matmul. If a caller still needs an interleaved
+        # tensor (prefill, non-sharded QKV path), it will reshard itself
+        # via ``to_memory_config``.
         if len(original_shape) == 3 and len(tt_out.shape) == 4:
             tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
         return tt_out

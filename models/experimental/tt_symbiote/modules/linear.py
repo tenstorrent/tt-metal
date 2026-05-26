@@ -204,6 +204,37 @@ _O_PROJ_DRAM_SHARDED_IN0_BLOCK_W = 8
 _O_PROJ_DRAM_SHARDED_PER_CORE_M = 1
 _O_PROJ_DRAM_SHARDED_PER_CORE_N = 8
 
+# QKV DRAM-sharded decode config (verified: 32x1536x2048 BF16/BFP8->BF16 HiFi2,
+# L1 width_sharded in, DRAM width_sharded w, L1 width_sharded out, ~21.7us on
+# 16 cores 8x2, in0_block_w=3, per_core_M=1, per_core_N=4). The 16c 8x2 input
+# layout matches the sharded RMSNorm output exactly, so the LN->QKV
+# sharded_to_interleaved goes away.
+_QKV_DRAM_SHARDED_GRID = (8, 2)
+_QKV_DRAM_SHARDED_NUM_CORES = _QKV_DRAM_SHARDED_GRID[0] * _QKV_DRAM_SHARDED_GRID[1]
+_QKV_DRAM_SHARDED_IN0_BLOCK_W = 3
+_QKV_DRAM_SHARDED_PER_CORE_M = 1
+_QKV_DRAM_SHARDED_PER_CORE_N = 4
+
+# MLP gate-up DRAM-sharded decode config (verified: 32x1536x17920
+# BF16/BFP4->BFP8 LoFi, L1 width_sharded in, DRAM width_sharded w, L1 width_sharded
+# out, ~71us on 16 cores 8x2, in0_block_w=3, per_core_M=1, per_core_N=35). Same
+# 16c 8x2 layout as QKV / sharded RMSNorm so the LN(post-attn)->gate-up S2I
+# also goes away.
+_GATE_UP_DRAM_SHARDED_GRID = (8, 2)
+_GATE_UP_DRAM_SHARDED_NUM_CORES = _GATE_UP_DRAM_SHARDED_GRID[0] * _GATE_UP_DRAM_SHARDED_GRID[1]
+_GATE_UP_DRAM_SHARDED_IN0_BLOCK_W = 3
+_GATE_UP_DRAM_SHARDED_PER_CORE_M = 1
+_GATE_UP_DRAM_SHARDED_PER_CORE_N = 35
+
+# MLP down-proj DRAM-sharded decode config (verified: 32x8960x1536
+# BFP8/BFP4->BFP8 LoFi, L1 width_sharded in, DRAM width_sharded w, L1 width_sharded
+# out, ~44us on 8 cores 8x1, in0_block_w=7, per_core_M=1, per_core_N=6).
+_DOWN_PROJ_DRAM_SHARDED_GRID = (8, 1)
+_DOWN_PROJ_DRAM_SHARDED_NUM_CORES = _DOWN_PROJ_DRAM_SHARDED_GRID[0] * _DOWN_PROJ_DRAM_SHARDED_GRID[1]
+_DOWN_PROJ_DRAM_SHARDED_IN0_BLOCK_W = 7
+_DOWN_PROJ_DRAM_SHARDED_PER_CORE_M = 1
+_DOWN_PROJ_DRAM_SHARDED_PER_CORE_N = 6
+
 _DECODE_WIDTH_SHARDED_INPUT_CORES = 16
 
 
@@ -296,6 +327,127 @@ def _decode_o_proj_dram_sharded_program_config(input_shape, weight_shape):
         per_core_M=_O_PROJ_DRAM_SHARDED_PER_CORE_M,
         per_core_N=_O_PROJ_DRAM_SHARDED_PER_CORE_N,
         fused_activation=None,
+    )
+
+
+def _l1_width_sharded_mem_config(k: int, grid: tuple) -> ttnn.MemoryConfig:
+    """L1 width-sharded mem-config across a (grid_x, grid_y) grid.
+
+    ``k`` is the FULL last-dim size of the tensor; shard width = k / (grid_x*grid_y).
+    Caller is responsible for ensuring k is divisible by grid_x*grid_y*TILE_SIZE so
+    every per-core shard stays tile-aligned (the DRAM-sharded matmul kernel
+    requires this).
+    """
+    grid_x, grid_y = int(grid[0]), int(grid[1])
+    num_cores = grid_x * grid_y
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))])
+    return ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            core_grid,
+            [ttnn.TILE_SIZE, k // num_cores],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+
+def _decode_qkv_input_memory_config(k: int = 1536) -> ttnn.MemoryConfig:
+    """L1 width-sharded input layout for the 16c 8x2 DRAM-sharded QKV matmul.
+
+    Matches the sharded RMSNorm output exactly (see
+    ``_decode_width_sharded_input_memory_config``), so LN->QKV needs no reshard.
+    """
+    return _l1_width_sharded_mem_config(k=k, grid=_QKV_DRAM_SHARDED_GRID)
+
+
+def _decode_qkv_dram_sharded_program_config(input_shape, weight_shape):
+    """QKV DRAM-sharded decode program config: 32x1536x2048 @ 16c 8x2.
+
+    Pattern-matches the dots.ocr QKV shape (K=1536, N=2048) so it cannot
+    accidentally engage for other matmuls in the same class hierarchy.
+    """
+    if int(input_shape[-2]) > ttnn.TILE_SIZE:
+        return None
+    if int(input_shape[-1]) != 1536 or int(weight_shape[-2]) != 1536 or int(weight_shape[-1]) != 2048:
+        return None
+
+    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=_QKV_DRAM_SHARDED_IN0_BLOCK_W,
+        per_core_M=_QKV_DRAM_SHARDED_PER_CORE_M,
+        per_core_N=_QKV_DRAM_SHARDED_PER_CORE_N,
+        fused_activation=None,
+    )
+
+
+def _decode_gate_up_input_memory_config(k: int = 1536) -> ttnn.MemoryConfig:
+    """L1 width-sharded input layout for the 16c 8x2 DRAM-sharded gate-up matmul."""
+    return _l1_width_sharded_mem_config(k=k, grid=_GATE_UP_DRAM_SHARDED_GRID)
+
+
+def _decode_gate_up_dram_sharded_program_config(input_shape, weight_shape):
+    """Gate-up DRAM-sharded decode program config: 32x1536x17920 @ 16c 8x2."""
+    if int(input_shape[-2]) > ttnn.TILE_SIZE:
+        return None
+    if int(input_shape[-1]) != 1536 or int(weight_shape[-2]) != 1536 or int(weight_shape[-1]) != 17920:
+        return None
+
+    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=_GATE_UP_DRAM_SHARDED_IN0_BLOCK_W,
+        per_core_M=_GATE_UP_DRAM_SHARDED_PER_CORE_M,
+        per_core_N=_GATE_UP_DRAM_SHARDED_PER_CORE_N,
+        fused_activation=None,
+    )
+
+
+def _decode_down_proj_input_memory_config(k: int = 8960) -> ttnn.MemoryConfig:
+    """L1 width-sharded input layout for the 8c 8x1 DRAM-sharded down-proj matmul."""
+    return _l1_width_sharded_mem_config(k=k, grid=_DOWN_PROJ_DRAM_SHARDED_GRID)
+
+
+def _decode_down_proj_dram_sharded_program_config(input_shape, weight_shape):
+    """Down-proj DRAM-sharded decode program config: 32x8960x1536 @ 8c 8x1."""
+    if int(input_shape[-2]) > ttnn.TILE_SIZE:
+        return None
+    if int(input_shape[-1]) != 8960 or int(weight_shape[-2]) != 8960 or int(weight_shape[-1]) != 1536:
+        return None
+
+    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=_DOWN_PROJ_DRAM_SHARDED_IN0_BLOCK_W,
+        per_core_M=_DOWN_PROJ_DRAM_SHARDED_PER_CORE_M,
+        per_core_N=_DOWN_PROJ_DRAM_SHARDED_PER_CORE_N,
+        fused_activation=None,
+    )
+
+
+# mcast1d 8x3 decode config for the down-proj (32x8960x1536 BFP8 / BFP4 -> BFP8
+# LoFi, L1 interleaved I/O, DRAM_INTERLEAVED weight). Measured at 52us standalone
+# vs ~44us for the DRAM-sharded 8c path, but lets the MLP keep gate/up
+# L1_INTERLEAVED end-to-end and drops the pair of pre-silu_mul I2S reshards.
+_DOWN_PROJ_MCAST1D_GRID = (8, 3)
+_DOWN_PROJ_MCAST1D_IN0_BLOCK_W = 8
+_DOWN_PROJ_MCAST1D_PER_CORE_M = 1
+_DOWN_PROJ_MCAST1D_PER_CORE_N = 2
+_DOWN_PROJ_MCAST1D_OUT_SUBBLOCK_W = 2
+
+
+def _decode_down_proj_mcast1d_program_config(input_shape, weight_shape):
+    """Down-proj mcast1d decode program config: 32x8960x1536 @ 8x3 grid (24 cores)."""
+    if int(input_shape[-2]) > ttnn.TILE_SIZE:
+        return None
+    if int(input_shape[-1]) != 8960 or int(weight_shape[-2]) != 8960 or int(weight_shape[-1]) != 1536:
+        return None
+
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=_DOWN_PROJ_MCAST1D_GRID,
+        in0_block_w=_DOWN_PROJ_MCAST1D_IN0_BLOCK_W,
+        out_subblock_h=1,
+        out_subblock_w=_DOWN_PROJ_MCAST1D_OUT_SUBBLOCK_W,
+        per_core_M=_DOWN_PROJ_MCAST1D_PER_CORE_M,
+        per_core_N=_DOWN_PROJ_MCAST1D_PER_CORE_N,
+        mcast_in0=True,
+        fused_activation=None,
+        fuse_batch=False,
     )
 
 
@@ -503,19 +655,39 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
         # bias on each N-shard). For single-device, bias is already fused.
         bias_fused = bool(getattr(self, "_bias_fused_into_matmul", False))
         fused_bias = self.tt_bias if (not needs_ccl) or bias_fused else None
-        program_config = (
-            None if needs_ccl else _attn_qkv_decode_matmul_program_config(input_shape, self.tt_weight.shape)
+        # Prefer the DRAM-sharded decode path when the QKV-class weight loader
+        # set it up (single-device, K=1536 N=2048) AND the call is a decode
+        # shape (seq_len <= 1 tile). Prefill keeps the existing 2D/1D-mcast
+        # path with the DRAM_INTERLEAVED weight, because the auto-selected
+        # prefill matmul kernel does not accept DRAM_WIDTH_SHARDED operand B.
+        dram_shard_cfg = getattr(self, "_qkv_dram_input_shard_cfg", None)
+        dram_pc = (
+            _decode_qkv_dram_sharded_program_config(input_shape, self.tt_weight.shape)
+            if (not needs_ccl and dram_shard_cfg is not None)
+            else None
         )
-        if program_config is not None:
-            input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
-            memory_config = ttnn.L1_MEMORY_CONFIG
+        if dram_pc is not None and dram_shard_cfg is not None:
+            program_config = dram_pc
+            input_tensor = ttnn.to_memory_config(input_tensor, dram_shard_cfg)
+            memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            dram_weight, dram_bias = self._get_qkv_dram_sharded_weight()
         else:
-            program_config = _dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape)
-            memory_config = _decode_linear_output_memory_config(self.device, input_shape)
+            dram_weight, dram_bias = None, None
+            program_config = (
+                None if needs_ccl else _attn_qkv_decode_matmul_program_config(input_shape, self.tt_weight.shape)
+            )
+            if program_config is not None:
+                input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
+                memory_config = ttnn.L1_MEMORY_CONFIG
+            else:
+                program_config = _dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape)
+                memory_config = _decode_linear_output_memory_config(self.device, input_shape)
+        weight_tensor = dram_weight if dram_weight is not None else self.tt_weight
+        bias_tensor = dram_bias if dram_bias is not None else fused_bias
         tt_output = ttnn.linear(
             input_tensor,
-            self.tt_weight,
-            bias=fused_bias,
+            weight_tensor,
+            bias=bias_tensor,
             dtype=ttnn.bfloat16,
             memory_config=memory_config,
             compute_kernel_config=self.compute_kernel_config,
@@ -695,9 +867,39 @@ class TTNNLinearLLamaIColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
     contribution from each device's ``bias/k`` adds up to the full bias on
     the relevant N-shard, exactly matching the original behaviour. This
     eliminates one ``ttnn.add`` per layer in TP decode (~28 ops/token).
+
+    DRAM-width-sharded weight (dots.ocr decode QKV): when the weight shape matches
+    the canonical dots.ocr fused QKV (K=1536, N=2048) on single-device, place the
+    weight as DRAM_WIDTH_SHARDED across 12 DRAM banks. The forward then engages
+    ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`` with sharded I/O,
+    so the LN->QKV ``sharded_to_interleaved`` reshard disappears.
     """
 
+    def _qkv_use_dram_sharded(self) -> bool:
+        # Pattern-match the canonical dots.ocr QKV (K=1536, N=2048) on
+        # single-device. Multi-device QKV stays on the existing CCL path
+        # because reduce_scatter needs DRAM_INTERLEAVED output.
+        if _tp_requires_ccl(self.device):
+            return False
+        if self.in_features != 1536 or self.out_features != 2048:
+            return False
+        return True
+
     def move_weights_to_device_impl(self):
+        use_dram_sharded = self._qkv_use_dram_sharded()
+        # Stash the raw torch weight/bias BEFORE preprocess_linear_weight
+        # rewrites ``tt_weight_host`` so we can allocate a second
+        # DRAM_WIDTH_SHARDED copy via ``ttnn.as_tensor`` (which mirrors
+        # the o_proj path that's known-good for the 12-bank DRAM-sharded
+        # matmul). A plain ``to_memory_config(DRAM_INTERLEAVED ->
+        # DRAM_WIDTH_SHARDED)`` triggers a 12-core copy kernel that
+        # exceeds the 8x8 compute grid and fails program creation.
+        raw_weight_torch = (
+            self.tt_weight_host.clone() if use_dram_sharded and isinstance(self.tt_weight_host, torch.Tensor) else None
+        )
+        raw_bias_torch = (
+            self.tt_bias_host.clone() if use_dram_sharded and isinstance(self.tt_bias_host, torch.Tensor) else None
+        )
         if isinstance(self.tt_weight_host, torch.Tensor):
             self.tt_weight_host = preprocess_linear_weight(
                 self.tt_weight_host,
@@ -732,6 +934,40 @@ class TTNNLinearLLamaIColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+        # Second weight (DRAM_WIDTH_SHARDED) for the decode DRAM-sharded matmul.
+        # Created with ``as_tensor`` directly so no reshard kernel is launched.
+        # Memory cost: ~1.7 MB / layer for QKV (1536x2048 BFP8 padded to 2304).
+        self._qkv_dram_input_shard_cfg = _decode_qkv_input_memory_config(self.in_features) if use_dram_sharded else None
+        self._qkv_dram_weight = None
+        self._qkv_dram_bias = None
+        if use_dram_sharded and raw_weight_torch is not None:
+            # raw_weight_torch is [out, in]; the DRAM-sharded matmul expects
+            # [in, out], same as o_proj. Use ``ttnn.as_tensor`` so the tensor
+            # is created on-device in DRAM_WIDTH_SHARDED directly.
+            weight_t = raw_weight_torch.T.contiguous()
+            self._qkv_dram_weight = ttnn.as_tensor(
+                weight_t,
+                device=self.device,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
+                memory_config=_dram_sharded_mem_config_2d(
+                    self.device, k=int(weight_t.shape[-2]), n=int(weight_t.shape[-1])
+                ),
+            )
+            if raw_bias_torch is not None:
+                bias_2d = raw_bias_torch.reshape((1, -1))
+                self._qkv_dram_bias = ttnn.as_tensor(
+                    bias_2d,
+                    device=self.device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=_tp_mesh_mapper(self.device, self.input_dim),
+                    memory_config=_dram_sharded_mem_config_2d(self.device, k=ttnn.TILE_SIZE, n=int(bias_2d.shape[-1])),
+                )
+
+    def _get_qkv_dram_sharded_weight(self):
+        return self._qkv_dram_weight, self._qkv_dram_bias
 
 
 class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColShardedWAllReduced):
@@ -753,8 +989,18 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
         self.tt_weight_host = None
         self.tt_bias_host = None
 
+    def _gate_up_use_dram_sharded(self) -> bool:
+        # Pattern-match dots.ocr gate-up shape (K=1536, N=17920) on single-device.
+        if _tp_requires_ccl(self.device):
+            return False
+        if int(self._gate_weight_torch.shape[1]) != 1536:
+            return False
+        intermediate = int(self._gate_weight_torch.shape[0])
+        return 2 * intermediate == 17920
+
     def move_weights_to_device_impl(self):
         weight_mapper = _tp_mesh_mapper(self.device, self.weight_dim)
+        bias_mapper = _tp_mesh_mapper(self.device, self.input_dim)
         # Concatenate gate/up weights on the host (axis 0 of torch's
         # ``[out, in]`` layout) before preprocessing. The previous flow ran
         # one preprocess+to_device per half plus a device-side
@@ -765,17 +1011,18 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
         # overhead on cold start). Fusing in torch space removes the
         # on-device op outright.
         fused_weight_torch = torch.cat([self._gate_weight_torch, self._up_weight_torch], dim=0)
+        weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat4_b)
         fused_w_host = preprocess_linear_weight(
             fused_weight_torch,
-            dtype=ttnn.bfloat4_b,
+            dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             weights_mesh_mapper=weight_mapper,
         )
         self.tt_weight = ttnn.to_device(fused_w_host, self.device)
 
         has_bias = self._gate_bias_torch is not None or self._up_bias_torch is not None
+        fused_bias_torch = None
         if has_bias:
-            bias_mapper = _tp_mesh_mapper(self.device, self.input_dim)
             intermediate = self._gate_weight_torch.shape[0]
             zeros_dtype = self._gate_weight_torch.dtype
             g = (
@@ -798,6 +1045,54 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+        # Second weight (DRAM_WIDTH_SHARDED) for the decode DRAM-sharded matmul.
+        # Allocated via ``ttnn.as_tensor`` from the original torch weights so no
+        # reshard kernel is launched (mirrors the o_proj path). Prefill keeps
+        # using ``self.tt_weight`` (DRAM_INTERLEAVED). Memory cost: ~7 MB / layer
+        # (1536x17920 BFP4 padded to 18048 cols).
+        use_dram_sharded = self._gate_up_use_dram_sharded()
+        self._gate_up_dram_input_shard_cfg = (
+            _decode_gate_up_input_memory_config(int(self._gate_weight_torch.shape[1])) if use_dram_sharded else None
+        )
+        self._gate_up_dram_weight = None
+        self._gate_up_dram_bias = None
+        # Decode compute_kernel_config matches the verified DRAM-sharded
+        # benchmark (LoFi, 71us). Prefill stays on HiFi2 for BFP4 accuracy.
+        self._gate_up_decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        if use_dram_sharded:
+            # gate / up are stored as [out, in] each; concat on axis=0 and
+            # transpose to [in, 2*out] for the DRAM-sharded matmul layout.
+            decode_weight_t = fused_weight_torch.T.contiguous()
+            self._gate_up_dram_weight = ttnn.as_tensor(
+                decode_weight_t,
+                device=self.device,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=weight_mapper,
+                memory_config=_dram_sharded_mem_config_2d(
+                    self.device,
+                    k=int(decode_weight_t.shape[-2]),
+                    n=int(decode_weight_t.shape[-1]),
+                ),
+            )
+            if fused_bias_torch is not None:
+                bias_2d = fused_bias_torch.reshape((1, -1))
+                self._gate_up_dram_bias = ttnn.as_tensor(
+                    bias_2d,
+                    device=self.device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=bias_mapper,
+                    memory_config=_dram_sharded_mem_config_2d(self.device, k=ttnn.TILE_SIZE, n=int(bias_2d.shape[-1])),
+                )
+
+    def _get_gate_up_dram_sharded_weight(self):
+        return self._gate_up_dram_weight, self._gate_up_dram_bias
 
 
 class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
