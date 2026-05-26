@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "hostdevcommon/config.hpp"
+#include "ttnn/operations/ccl/common/host/moe_core_placement.hpp"
 #include "kernels/moe_ring_common.h"
 #include "moe_compute_device_operation.hpp"
 #include "moe_compute_program_factory.hpp"
@@ -193,6 +193,13 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         "num_shared_experts_per_device ({}) must be <= experts_per_device ({})",
         args.num_shared_experts_per_device,
         experts_per_device);
+
+    // Validate that dynamic core placement succeeds for this hidden size and combine grid.
+    // mux_core_range_set comes from combine_params when in Full mode; ComputeOnly uses an empty set.
+    const CoreRangeSet validate_mux_cores =
+        args.combine_params.has_value() ? args.combine_params->mux_core_range_set : CoreRangeSet{};
+    ttnn::operations::ccl::common::select_moe_compute_cores(
+        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, validate_mux_cores);
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
@@ -437,13 +444,30 @@ std::vector<ttnn::Tensor> moe_compute(
         }
     }
 
-    const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
+    // In compute_only mode, the public-layer must not pass any CCL-related optionals.
+    if (compute_only) {
+        TT_FATAL(!cluster_axis.has_value(), "moe_compute(compute_only=true) requires cluster_axis to be std::nullopt");
+        TT_FATAL(!topology.has_value(), "moe_compute(compute_only=true) requires topology to be std::nullopt");
+        TT_FATAL(!num_links.has_value(), "moe_compute(compute_only=true) requires num_links to be std::nullopt");
+        TT_FATAL(
+            !mux_core_range_set.has_value(),
+            "moe_compute(compute_only=true) requires mux_core_range_set to be std::nullopt");
+        TT_FATAL(
+            !optional_cross_device_semaphore.has_value(),
+            "moe_compute(compute_only=true) requires optional_cross_device_semaphore to be std::nullopt");
+        TT_FATAL(
+            !optional_output_tensor.has_value(),
+            "moe_compute(compute_only=true) requires optional_output_tensor to be std::nullopt");
+    } else {
+        TT_FATAL(cluster_axis.has_value(), "moe_compute(compute_only=false) requires cluster_axis to be provided");
+    }
 
-    TT_FATAL(
-        !(compute_only && cluster_axis.has_value()),
-        "moe_compute: compute_only=True is incompatible with cluster_axis (got cluster_axis={}). "
-        "compute_only skips the combine path, so cluster_axis has no meaning.",
-        cluster_axis.value_or(0));
+    const auto& combine_cores = get_moe_combine_cores(
+        mesh_device,
+        num_token_parallel_cores,
+        num_data_parallel_cores,
+        hidden_size,
+        mux_core_range_set.value_or(CoreRangeSet{}));
 
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
     if (!compute_only) {

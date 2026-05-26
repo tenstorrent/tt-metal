@@ -59,8 +59,21 @@ std::vector<ttnn::Tensor> moe_compute(
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     ttnn::MeshDevice* mesh_device,
     const uint32_t combine_token_parallel_cores,
-    const uint32_t combine_data_parallel_cores) {
-    return ttnn::prim::get_moe_combine_cores(mesh_device, combine_token_parallel_cores, combine_data_parallel_cores);
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set) {
+    return ttnn::prim::get_moe_combine_cores(
+        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, mux_core_range_set);
+}
+
+ttnn::CoreCoord get_moe_tilize_drain_core(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set) {
+    return ttnn::prim::get_moe_tilize_drain_core(
+        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, mux_core_range_set);
 }
 
 ttnn::CoreRange get_moe_worker_mcast_bounding_box(
