@@ -116,6 +116,9 @@
     cp "${SCALEOUT_CONFIG_DIR}/mesh_graph_descriptor.textproto" .
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
 
+    export HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized
+    export TT_MODEL_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI/test_host_io_v3_b1
+    export DEEPSEEK_V3_TRACE_ROOT=/mnt/MLPerf/tt_dnn-models/deepseek-ai/debug_trace
     TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --rank-bindings-mapping rank_bindings_mapping.yaml \
       --mpi-args "--host $PIPELINE_HOSTS --map-by slot --bind-to none --tag-output" \
@@ -125,7 +128,7 @@
     bh_galaxy:
       timeout: 20
   owner_id: U0ALAR9B78T # Brayden Zhang
-  team: scaleout
+  team: models
 
 - name: bh_galaxy_DeepSeek_B1_Unit_Tests_DecoderIntegration
   cmd: |

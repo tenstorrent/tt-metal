@@ -125,7 +125,6 @@ scaleout:
     bh_loudbox: 80
     bh_p300: 80
     bh_quietbox_2: 80
-
 runtime:
   sanity:
     wh_n150_civ2: 13
@@ -211,7 +210,7 @@ models:
     wh_galaxy_perf: 150
     wh_galaxy_perf_uf: 45
     wh_galaxy_release: 345
-    bh_galaxy: 280
+    bh_galaxy: 300
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600

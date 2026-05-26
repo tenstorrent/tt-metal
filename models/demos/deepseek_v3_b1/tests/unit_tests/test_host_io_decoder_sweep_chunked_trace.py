@@ -221,6 +221,11 @@ def test_run_host_io_decoder_sweep_chunked_trace_world_size_4(trace_root: Path, 
     if ttnn.get_num_devices() < 8:
         pytest.skip("HostIoDecoderStage sweep requires 8 devices per rank (4x2 mesh)")
 
+    trace_root_args = (
+        [] if os.environ.get(run_host_io_decoder_sweep.TRACE_ROOT_ENV) else ["--trace-root", str(trace_root)]
+    )
+    hf_model_path = os.environ.get("HF_MODEL", str(run_host_io_decoder_sweep.DEFAULT_HF_MODEL_PATH))
+    cache_path = os.environ.get("TT_MDDEL_CACHE", str(run_host_io_decoder_sweep.DEFAULT_CACHE_PATH))
     exit_code = run_host_io_decoder_sweep.main(
         [
             "--decoder-layer-indices",
@@ -228,8 +233,7 @@ def test_run_host_io_decoder_sweep_chunked_trace_world_size_4(trace_root: Path, 
             "5",
             "6",
             "7",
-            "--trace-root",
-            str(trace_root),
+            *trace_root_args,
             "--model-id",
             model_id,
             "--prompt",
@@ -247,6 +251,10 @@ def test_run_host_io_decoder_sweep_chunked_trace_world_size_4(trace_root: Path, 
             "--no-validate-kv-cache-cross-slot",
             "--no-dump-hidden-states",
             "--no-dump-kv-cache",
+            "--hf-model-path",
+            hf_model_path,
+            "--cache-path",
+            cache_path,
         ]
     )
     assert exit_code == 0
