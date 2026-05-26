@@ -849,17 +849,13 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // in its Gen2DataMovementConfig::disable_implicit_sync_for vector. The opt-out applies to
     // the side(s) of the DFB this kernel binds (producer, consumer, or both for a self-loop).
     //
-    // Per-kernel rules:
-    //   - Every listed name references a DFB the kernel binds.
-    //   - No duplicate names in a single kernel's vector.
+    // Per-kernel rule: every listed name references a DFB the kernel binds (typo guard).
     //
-    // Cross-kernel rules (per DFB):
-    //   - All DM producers must agree: either all list the DFB, or none do.
-    //   - All DM consumers must agree the same way.
-    //   - Producer-side and consumer-side are checked independently — the underlying hardware
-    //     mechanism is per-side.
+    // Cross-kernel rule (per DFB): on each side independently, all DM kernels must agree —
+    // either all list the DFB, or none do. (Producer-side and consumer-side are checked
+    // separately; the underlying hardware mechanism is per-side, with one mask per side.)
     {
-        // Per-kernel pass: typo guards + duplicate guards.
+        // Per-kernel pass: typo guard.
         for (const auto& kernel : spec.kernels) {
             if (!kernel.is_dm_kernel()) {
                 continue;
@@ -872,57 +868,51 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             for (const auto& binding : kernel.dfb_bindings) {
                 bound_dfbs.insert(binding.dfb_spec_name);
             }
-            std::unordered_set<DFBSpecName> entries_seen;
             for (const auto& dfb_name : dm_config.gen2_data_movement_config->disable_implicit_sync_for) {
                 TT_FATAL(
                     bound_dfbs.contains(dfb_name),
                     "Kernel '{}' disable_implicit_sync_for entry references DFB '{}', which the kernel does not bind",
                     kernel.unique_id,
                     dfb_name);
-                TT_FATAL(
-                    entries_seen.insert(dfb_name).second,
-                    "Kernel '{}' has duplicate disable_implicit_sync_for entries for DFB '{}'",
-                    kernel.unique_id,
-                    dfb_name);
             }
         }
 
         // Cross-kernel pass: per-DFB producer-side and consumer-side agreement.
-        auto resolve_vote = [](const KernelSpec* kernel, const DFBSpecName& dfb_name) -> bool {
-            const auto& dm_config = std::get<DataMovementConfiguration>(kernel->config_spec);
-            if (!dm_config.gen2_data_movement_config.has_value()) {
-                return false;
-            }
-            const auto& vec = dm_config.gen2_data_movement_config->disable_implicit_sync_for;
-            return std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
-        };
+        // Note: a single DFB can be bound by multiple producer KernelSpecs and multiple
+        // consumer KernelSpecs — ops sometimes specialize the same kernel source by CTAs,
+        // producing several KernelSpecs that share a DFB.
         auto check_side_agreement =
             [&](const std::vector<CollectedSpecData::DFBEndpointInfo::EndpointRecord>& endpoints,
                 const DFBSpecName& dfb_name,
                 std::string_view side_label) {
                 const KernelSpec* canonical = nullptr;
-                bool canonical_vote = false;
+                bool canonical_lists_dfb = false;
                 for (const auto& ep : endpoints) {
                     if (!ep.kernel->is_dm_kernel()) {
                         continue;
                     }
-                    const bool vote = resolve_vote(ep.kernel, dfb_name);
+                    const auto& dm_config = std::get<DataMovementConfiguration>(ep.kernel->config_spec);
+                    bool lists_dfb = false;
+                    if (dm_config.gen2_data_movement_config.has_value()) {
+                        const auto& vec = dm_config.gen2_data_movement_config->disable_implicit_sync_for;
+                        lists_dfb = std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
+                    }
                     if (canonical == nullptr) {
                         canonical = ep.kernel;
-                        canonical_vote = vote;
+                        canonical_lists_dfb = lists_dfb;
                         continue;
                     }
                     TT_FATAL(
-                        vote == canonical_vote,
+                        lists_dfb == canonical_lists_dfb,
                         "DFB '{}' has disagreeing disable_implicit_sync_for state on the {} side: "
                         "kernel '{}' {} list the DFB, kernel '{}' {}. All DM {} kernels of a DFB "
                         "must agree (the hardware programs a single mask per side).",
                         dfb_name,
                         side_label,
                         canonical->unique_id,
-                        canonical_vote ? "does" : "does not",
+                        canonical_lists_dfb ? "does" : "does not",
                         ep.kernel->unique_id,
-                        vote ? "does" : "does not",
+                        lists_dfb ? "does" : "does not",
                         side_label);
                 }
             };
