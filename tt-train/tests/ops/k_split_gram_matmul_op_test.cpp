@@ -89,6 +89,9 @@ class KSplitGramMatmulVerifyTest : public ::testing::TestWithParam<VerifyCase> {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
+        if (ttml::autograd::ctx().get_device().arch() != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "KSplitGramMatmul is only supported on Blackhole.";
+        }
     }
     void TearDown() override {
         ttml::autograd::ctx().close_device();
