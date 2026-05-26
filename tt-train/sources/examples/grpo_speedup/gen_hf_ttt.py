@@ -169,7 +169,6 @@ def run_ttt(prompts: List[str]) -> List[str]:
         max_batch_size=1,
         max_seq_len=MAX_SEQ_LEN,
     )
-    completer.load_weights(completer.model_args.load_state_dict())
 
     out: List[str] = []
     for prompt in prompts:
