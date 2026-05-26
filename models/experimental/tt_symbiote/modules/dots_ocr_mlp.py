@@ -233,7 +233,6 @@ class TTNNDotsOCRMLP(TTNNModule):
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        batch_size = hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
         is_decode = int(seq_len) == 1
         activation_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
@@ -243,11 +242,18 @@ class TTNNDotsOCRMLP(TTNNModule):
         if is_decode and gate_up.memory_config().buffer_type != ttnn.BufferType.L1:
             gate_up = ttnn.to_memory_config(gate_up, activation_mc)
 
-        # Slice into gate / up halves along the last dim. ttnn.slice on a TILE
-        # tensor is a metadata + small copy op, far cheaper than a second CCL.
-        I = int(gate_up.shape[-1]) // 2
-        gate = ttnn.slice(gate_up, [0, 0, 0], [batch_size, seq_len, I], memory_config=activation_mc)
-        up = ttnn.slice(gate_up, [0, 0, I], [batch_size, seq_len, 2 * I], memory_config=activation_mc)
+        # Split the fused gate/up activation in half along the last dim
+        # via ``ttnn.chunk``. Under the hood ``ChunkOperation`` calls
+        # ``ttnn.slice`` per piece with ``slice_step=1``, no explicit
+        # ``memory_config``, and tile-aligned begins (``0`` and
+        # ``intermediate``, which is a multiple of 32). For an
+        # L1_INTERLEAVED TILE tensor this stays on the tile-aware path
+        # of ``slice.cpp`` (``rm_only=false`` because input is not
+        # sharded, all begins satisfy ``begin % tile_shape == 0`` and
+        # step is 1), so no Untilize/TilizeWithValPadding gets inserted
+        # for the seq_len=1 height. Equivalent to two ``ttnn.slice``
+        # calls but expresses intent more cleanly.
+        gate, up = ttnn.chunk(gate_up, 2, dim=-1)
         ttnn.deallocate(gate_up)
 
         # ``fast_and_approximate_mode=True`` routes the fused SILU through

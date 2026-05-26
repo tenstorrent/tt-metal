@@ -522,20 +522,8 @@ class TTNNDotsOCRAttention(TTNNModule):
             num_heads=self.num_attention_heads,
         )
         if batch_size < 32:
-            # ``nlp_concat_heads_decode`` emits HEIGHT_SHARDED TILE. The TTNN
-            # slice op forces a row-major path whenever ``input.is_sharded()``
-            # is true (see ttnn/cpp/ttnn/operations/data_movement/slice/slice.cpp
-            # rm_only check), inserting an ``Untilize`` before the slice and a
-            # ``TilizeWithValPadding`` for the downstream matmul. Reshard to
-            # interleaved first so slice takes the tile-aware path and the
-            # tilize/untilize round-trip disappears.
-            attn_output = ttnn.sharded_to_interleaved(attn_output, ttnn.L1_MEMORY_CONFIG)
-            attn_output = ttnn.slice(
-                attn_output,
-                [0, 0, 0, 0],
-                [1, 1, batch_size, int(attn_output.shape[-1])],
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
+            attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
+            attn_output = ttnn.slice(attn_output, [0, 0, 0, 0], [1, 1, batch_size, int(attn_output.shape[-1])])
 
         attn_output = self.o_proj(attn_output)
         attn_output = ttnn.squeeze(attn_output, 1)
