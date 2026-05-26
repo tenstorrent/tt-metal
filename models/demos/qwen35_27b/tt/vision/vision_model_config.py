@@ -21,8 +21,13 @@ class ModelOptimizations:
 
 
 class VisionModelArgs(ModelArgs):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, vision_tp: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
+
+        # When True, the vision blocks shard their weights across mesh devices
+        # (Megatron-style tensor parallel). When False (default) every device
+        # holds a full replicated copy of the vision weights.
+        self.vision_tp = vision_tp
 
         # Core dimensions from HF config
         self.dim = self.hf_config.vision_config.hidden_size
@@ -62,6 +67,14 @@ class VisionModelArgs(ModelArgs):
 
         assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
 
+        if self.vision_tp:
+            # Sanity-check the divisibility requirements that the TP code relies on.
+            tp = self.cluster_shape[1]
+            assert self.n_heads % tp == 0, f"vision n_heads ({self.n_heads}) must be divisible by TP={tp}"
+            assert self.qkv_size % tp == 0, f"vision qkv_size ({self.qkv_size}) must be divisible by TP={tp}"
+            assert self.dim % tp == 0, f"vision dim ({self.dim}) must be divisible by TP={tp}"
+            assert self.hidden_dim % tp == 0, f"vision hidden_dim ({self.hidden_dim}) must be divisible by TP={tp}"
+
     def prepare_residual_tensor_prefill(self, x_bsh):
         """
         Prepare inputs for prefill mode.
@@ -92,7 +105,9 @@ class VisionModelArgs(ModelArgs):
         layer_prefix = f"visual.blocks.{layer_num}." if layer_num is not None else ""
         module_map = {
             "MLP": "feed_forward",
+            "MLPTP": "feed_forward",
             "VisionAttention": "attention",
+            "VisionAttentionTP": "attention",
             "VisionBlock": "",
             "VisionTransformer": "visual",
             "PatchMerger": "visual.merger",

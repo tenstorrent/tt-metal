@@ -9,6 +9,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import comp_pcc
 from models.demos.qwen35_27b.tt.vision.functional import qwen3_5_vision_transformer_preprocess
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
@@ -34,6 +35,7 @@ class VisionTransformer(LightweightModule):
         dtype,
         state_dict,
         weight_cache_path,
+        tt_ccl=None,
     ):
         """
         Initialize the Vision Transformer model.
@@ -41,14 +43,22 @@ class VisionTransformer(LightweightModule):
         Args:
             args (VisionModelArgs): Model arguments
             dtype (ttnn.dtype): Data type for computations
-            mesh_device (ttnn.mesh_device): Mesh device for the model
             state_dict (dict): State dictionary containing model weights
             weight_cache_path (str): Path to weight cache
+            tt_ccl (TT_CCL, optional): CCL helper. Required when args.vision_tp=True.
+                If None and TP is requested, one is constructed internally.
         """
         super().__init__()
         self.args = args
         self.dtype = dtype
         self.weight_cache_path = weight_cache_path
+        self.tensor_parallel = bool(getattr(args, "vision_tp", False))
+
+        # If running TP, ensure we have a TT_CCL on hand. Block-level code is a
+        # no-op in the replicated path, so we still pass `tt_ccl=None` there.
+        if self.tensor_parallel and tt_ccl is None:
+            tt_ccl = TT_CCL(args.mesh_device)
+        self.tt_ccl = tt_ccl
 
         # Create transformation matrix for RoPE QK prefill
         transformation_mat_torch = get_rot_transformation_mat(
@@ -76,6 +86,7 @@ class VisionTransformer(LightweightModule):
                 dtype=dtype,
                 transformation_mats=self.transformation_mats,
                 args=args,
+                tt_ccl=self.tt_ccl,
             )
             self.blocks.append(block)
 
@@ -114,20 +125,52 @@ class VisionTransformer(LightweightModule):
         Forward pass through the Vision Transformer blocks.
 
         Args:
-            x (ttnn.Tensor): Input tensor [batch_size, 1, seq_len, hidden_dim]
-            cu_seqlens (torch.Tensor): Cumulative sequence lengths
-            rot_mats (list): Rotation matrices for positional embeddings
+            x (ttnn.Tensor): Input tensor [batch_size, 1, seq_len, hidden_dim].
+                In TP mode this enters as a replicated tensor (from
+                `prepare_residual_tensor_prefill`) and is fractured along
+                dim=3 here so each block sees the LLM-style fractured I/O.
+            unpadded_seq_len (int): Real sequence length before padding.
+            rot_mats (list): Rotation matrices for positional embeddings.
 
         Returns:
-            ttnn.Tensor: Output tensor
+            ttnn.Tensor: Output tensor (replicated).
         """
-        # Forward through each block
+        # In TP mode the blocks consume/produce tensors fractured along dim=3.
+        # The input arrives replicated, so partition it once at entry. This is
+        # a metadata-only op (no comm).
+        if self.tensor_parallel:
+            x = ttnn.mesh_partition(
+                x,
+                memory_config=x.memory_config(),
+                dim=3,
+                cluster_axis=1,
+            )
+
         for i, block in enumerate(self.blocks):
-            # Forward through block
             x = block(
                 x,
                 rot_mats=rot_mats,
             )
+
+        # Patch merger consumes a replicated tensor (its weights are
+        # replicated). Gather along dim=3 to undo the fracture before merging.
+        if self.tensor_parallel:
+            x_gathered = ttnn.experimental.all_gather_async(
+                x,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=self.tt_ccl.get_num_links(1),
+                topology=self.args.ccl_topology(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+            if x_gathered is not x:
+                ttnn.deallocate(x)
+            x = x_gathered
 
         # Merge patches - first remove any sequence length padding
         x = x[:, :, :unpadded_seq_len, :]
@@ -147,15 +190,18 @@ class DropInVisionTransformer(torch.nn.Module):
         model_args: VisionModelArgs,
         dtype=ttnn.bfloat8_b,
         debug=False,
+        tt_ccl=None,
     ):
         """
         Initialize the TorchVisionTransformer wrapper.
 
         Args:
-            tt_model (VisionTransformer): Initialized TT VisionTransformer instance.
             reference_model (Qwen2_5_VisionTransformerPretrainedModel): Initialized reference HF model instance.
             model_args (VisionModelArgs): Model configuration arguments.
-            mesh_device (ttnn.MeshDevice): The mesh device used by the TT model.
+            dtype (ttnn.dtype): Compute dtype for weights.
+            debug (bool): If True, run the reference path alongside and report PCC.
+            tt_ccl (TT_CCL, optional): Reuse a CCL helper across multiple models.
+                Only relevant when `model_args.vision_tp=True`.
         """
         super().__init__()
         self.reference_model = reference_model
@@ -173,6 +219,7 @@ class DropInVisionTransformer(torch.nn.Module):
             state_dict=state_dict,
             weight_cache_path=model_args.weight_cache_path(dtype),
             dtype=dtype,
+            tt_ccl=tt_ccl,
         )
 
     @property
