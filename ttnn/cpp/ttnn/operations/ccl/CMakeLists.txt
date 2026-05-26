@@ -49,6 +49,7 @@ target_sources(
             common/host/ccl_worker_builder.hpp
             common/host/command_backend_runtime_args_overrider.hpp
             common/host/moe_utils.hpp
+            common/host/moe_core_placement.hpp
             common/interpreter_backends/kernel_common/algorithms.hpp
             common/interpreter_backends/kernel_common/io_descriptors.hpp
             common/kernels/command_processor.hpp

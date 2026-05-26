@@ -61,5 +61,6 @@ std::vector<Tensor> moe_compute(
 
 using ttnn::experimental::prim::get_moe_combine_cores;
 using ttnn::experimental::prim::get_moe_worker_mcast_bounding_box;
+using ttnn::experimental::prim::get_moe_tilize_drain_core;
 
 }  // namespace ttnn::prim

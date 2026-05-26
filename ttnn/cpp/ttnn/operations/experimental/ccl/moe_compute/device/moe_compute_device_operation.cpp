@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "hostdevcommon/config.hpp"
+#include "ttnn/operations/ccl/common/host/moe_core_placement.hpp"
 #include "kernels/moe_ring_common.h"
 #include "moe_compute_device_operation.hpp"
 #include "moe_compute_program_factory.hpp"
@@ -157,6 +157,13 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const uint32_t tiles_per_step = (tiles_per_step_raw + 1) & ~1u;
     TT_FATAL(
         tiles_per_step >= 2 && tiles_per_step % 2 == 0, "tiles_per_step ({}) must be even and >= 2", tiles_per_step);
+
+    // Validate that dynamic core placement succeeds for this hidden size and combine grid.
+    // mux_core_range_set comes from combine_params when in Full mode; ComputeOnly uses an empty set.
+    const CoreRangeSet validate_mux_cores =
+        args.combine_params.has_value() ? args.combine_params->mux_core_range_set : CoreRangeSet{};
+    ttnn::operations::ccl::common::select_moe_compute_cores(
+        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, validate_mux_cores);
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
@@ -400,7 +407,23 @@ std::vector<ttnn::Tensor> moe_compute(
         }
     }
 
-    const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
+    // In compute_only mode, the public-layer must not pass any CCL-related optionals.
+    if (compute_only) {
+        TT_FATAL(!cluster_axis.has_value(), "moe_compute(compute_only=true) requires cluster_axis to be std::nullopt");
+        TT_FATAL(!topology.has_value(), "moe_compute(compute_only=true) requires topology to be std::nullopt");
+        TT_FATAL(!num_links.has_value(), "moe_compute(compute_only=true) requires num_links to be std::nullopt");
+        TT_FATAL(
+            !mux_core_range_set.has_value(),
+            "moe_compute(compute_only=true) requires mux_core_range_set to be std::nullopt");
+        TT_FATAL(
+            !optional_cross_device_semaphore.has_value(),
+            "moe_compute(compute_only=true) requires optional_cross_device_semaphore to be std::nullopt");
+        TT_FATAL(
+            !optional_output_tensor.has_value(),
+            "moe_compute(compute_only=true) requires optional_output_tensor to be std::nullopt");
+    } else {
+        TT_FATAL(cluster_axis.has_value(), "moe_compute(compute_only=false) requires cluster_axis to be provided");
+    }
 
     // BH ring size: default 12; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
     // Validate at the API boundary for a clear "moe_compute:" error; get_cores() re-validates
@@ -410,6 +433,14 @@ std::vector<ttnn::Tensor> moe_compute(
         ring_n == 8 || ring_n == 12 || ring_n == 16,
         "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)",
         ring_n);
+
+    // #46863: dynamic combine-core selection (new 5-arg signature taking hidden_size + mux cores).
+    const auto& combine_cores = get_moe_combine_cores(
+        mesh_device,
+        num_token_parallel_cores,
+        num_data_parallel_cores,
+        hidden_size,
+        mux_core_range_set.value_or(CoreRangeSet{}));
 
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
     if (!compute_only) {

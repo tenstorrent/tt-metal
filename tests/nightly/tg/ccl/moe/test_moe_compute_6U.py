@@ -23,7 +23,7 @@ from ttnn.operations.ccl import MoEActivationFunction
 
 from ttnn.experimental.moe_compute_utils import (
     auto_output_width_shard_dim,
-    get_tilize_drain_core,
+    effective_matmul_ring_size,
     _shard_tiles,
     _w2_shard_tiles,
 )
@@ -48,6 +48,12 @@ MESH_GRAPH_DESC_1x8_LINEAR = (
 MESH_GRAPH_DESC_BH_LB_1x8_LINEAR = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_lb_1x8_line_graph_descriptor.textproto"
 )
+MESH_GRAPH_DESC_16x1 = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto"
+)
+MESH_GRAPH_DESC_8x1 = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_8x1_torus_graph_descriptor.textproto"
+)
 # FYI: These tests also work in a MESH_GRAPH_DESC_1x4 setting (~1 minute to set up), but not in a 1x2 setting.
 
 
@@ -71,6 +77,13 @@ MOE_DEVICE_PARAMS_LINEAR = {
     "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
     "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
     "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+    "trace_region_size": 500000,
+}
+
+MOE_DEVICE_PARAMS_ROW = {
+    "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+    "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
     "trace_region_size": 500000,
 }
 
@@ -266,6 +279,17 @@ _MOE_MESH_CONFIGS = [
 
 MOE_COMPUTE_MODEL_TEST_CASES = _expand_mesh_model_test_cases(_MOE_MESH_CONFIGS)
 
+# fmt: off
+_MODELS_16x1_ROW = [
+    MoEModelConfig("deepseek_v3", N=2048, hidden_size=7168, selected_experts_k=8, has_bias_values=(False,), test_modes=("correctness",)),
+]
+_MODELS_8x1_ROW = [
+    MoEModelConfig("gpt_oss", N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("correctness",), activation_types=(MoEActivationFunction.SWIGLU,)),
+]
+# fmt: on
+MODELS_16x1_ROW = _expand_model_configs(_MODELS_16x1_ROW)
+MODELS_8x1_ROW = _expand_model_configs(_MODELS_8x1_ROW)
+
 
 def _run_model_test(
     mesh_device,
@@ -276,8 +300,10 @@ def _run_model_test(
     has_bias,
     experts_per_device,
     activation_type,
-    num_links,
+    num_links=4,
     topology=None,
+    bh_ring_size=12,
+    cluster_axis=1,
 ):
     if test_mode == "perf":
         selected_experts_k = 1
@@ -291,7 +317,7 @@ def _run_model_test(
     _run_moe_compute_impl(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
-        cluster_axis=1,
+        cluster_axis=cluster_axis,
         experts_per_device=experts_per_device,
         tokens_per_device=model_cfg.tokens_per_device,
         selected_experts_k=selected_experts_k,
@@ -1496,14 +1522,24 @@ def _run_moe_compute_impl(
     # CREATE TILIZE INPUT TENSORS AND GOLDENS
     #########################################
 
-    # Drain tilize core: per-arch coordinate where indices/scores are L1-sharded so the
-    # op kernel can read them via NOC. Must match the op's drain tilize core (tilize_cores[0]
-    # in moe_compute_program_factory.cpp's get_layout()), or non-drain tilize cores will
-    # noc_async_read garbage L1 addresses on the drain core (CB overflow caught by watcher).
-    #   WH (max_tilize_cores[0]): (6, 9)
-    #   BH (max_tilize_cores[0]): (10, 9)  — DRAM cols shifted, tilize moved to x=9,10
-    drain_core_coord = get_tilize_drain_core()
-    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(drain_core_coord, drain_core_coord)})
+    mux_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange((1, 1), (3, 3))])
+
+    # Drain tilize core holds height-sharded expert indices/scores in L1.
+    tilize_drain_core_coord = ttnn.experimental.get_moe_tilize_drain_core(
+        mesh_device,
+        output_height_shard_dim,
+        output_width_shard_dim,
+        hidden_size,
+        mux_core_range_set=mux_core_range_set,
+    )
+    tilize_drain_core = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(tilize_drain_core_coord.x, tilize_drain_core_coord.y),
+                ttnn.CoreCoord(tilize_drain_core_coord.x, tilize_drain_core_coord.y),
+            )
+        }
+    )
 
     #### Expert mapping - per-device [num_devices, experts], replicated on every device ###
     # Each device gets its own row after sharding, but since it's replicated,
@@ -1789,11 +1825,14 @@ def _run_moe_compute_impl(
     ttnn.deallocate(tt_w2_prepped)
 
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(
-        mesh_device, output_height_shard_dim, output_width_shard_dim
+        mesh_device,
+        output_height_shard_dim,
+        output_width_shard_dim,
+        hidden_size,
+        mux_core_range_set=mux_core_range_set,
     )
     combine_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in output_shard_cores])
     combine_barrier_semaphore = ttnn.create_global_semaphore(mesh_device, combine_core_range_set, 0)
-    mux_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange((1, 1), (3, 3))])
 
     torch_combine_output_tensor = torch.zeros([selected_experts_k, total_tokens, hidden_size], dtype=torch.bfloat16)
     tt_combine_output_tensors = [
@@ -1947,7 +1986,11 @@ def _run_moe_compute_impl(
     base_pcc_threshold = _get_base_pcc_threshold(activation_type, has_bias)
 
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(
-        mesh_device, output_height_shard_dim, output_width_shard_dim
+        mesh_device,
+        output_height_shard_dim,
+        output_width_shard_dim,
+        hidden_size,
+        mux_core_range_set=mux_core_range_set,
     )
     worker_mcast_bbox = ttnn.experimental.get_moe_worker_mcast_bounding_box(
         mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size
@@ -2086,6 +2129,82 @@ def test_moe_compute(
         activation_type,
         topology=topology,
         num_links=mesh_cfg.num_links,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Parametrized model tests — ROW dispatch (16x1 mesh)
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1),
+    reason=f"16x1 ROW tests require TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_16x1}",
+)
+@pytest.mark.parametrize("device_params", [MOE_DEVICE_PARAMS_ROW], indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((16, 1), (16, 1))], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "model_cfg, test_mode, has_bias, experts_per_device, activation_type, enable_trace, bh_ring_size",
+    MODELS_16x1_ROW,
+)
+def test_moe_compute_16x1_row(
+    mesh_device,
+    mesh_shape,
+    model_cfg,
+    test_mode,
+    has_bias,
+    experts_per_device,
+    activation_type,
+    enable_trace,
+    bh_ring_size,
+):
+    _run_model_test(
+        mesh_device,
+        mesh_shape,
+        enable_trace,
+        model_cfg,
+        test_mode,
+        has_bias,
+        experts_per_device,
+        activation_type,
+        bh_ring_size=bh_ring_size,
+        cluster_axis=0,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Parametrized model tests — ROW dispatch (8x1 mesh)
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_8x1),
+    reason=f"8x1 ROW tests require TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_8x1}",
+)
+@pytest.mark.parametrize("device_params", [MOE_DEVICE_PARAMS_ROW], indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((8, 1), (8, 1))], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "model_cfg, test_mode, has_bias, experts_per_device, activation_type, enable_trace, bh_ring_size",
+    MODELS_8x1_ROW,
+)
+def test_moe_compute_8x1_row(
+    mesh_device,
+    mesh_shape,
+    model_cfg,
+    test_mode,
+    has_bias,
+    experts_per_device,
+    activation_type,
+    enable_trace,
+    bh_ring_size,
+):
+    _run_model_test(
+        mesh_device,
+        mesh_shape,
+        enable_trace,
+        model_cfg,
+        test_mode,
+        has_bias,
+        experts_per_device,
+        activation_type,
+        bh_ring_size=bh_ring_size,
+        cluster_axis=0,
     )
 
 

@@ -69,6 +69,18 @@ void bind_moe_compute(nb::module_& mod) {
           from ``hidden_size``. Use ``auto_output_width_shard_dim(hidden_size)`` from
           ``moe_compute_utils`` to compute the recommended value.
 
+        **Core placement**
+
+        Tilize, matmul, and combine worker cores are selected dynamically on the device
+        worker grid (avoiding DRAM-bank matmul workers). Use
+        ``get_moe_combine_cores(mesh_device, output_height_shard_dim,
+        auto_output_width_shard_dim(hidden_size), hidden_size)`` to query combine cores
+        for memory-config setup before running the op.
+
+        Shard expert indices/scores to the drain tilize core returned by
+        ``get_moe_tilize_drain_core(mesh_device, output_height_shard_dim,
+        auto_output_width_shard_dim(hidden_size), hidden_size)``.
+
         **Bias support (optional)**
 
         - ``has_bias=False`` (default): tensors contain only weights.
@@ -133,16 +145,29 @@ void bind_moe_compute(nb::module_& mod) {
 }
 
 void bind_get_moe_combine_cores(nb::module_& mod) {
-    const auto* doc = R"doc(Return the ordered list of cores assigned to A2A Combine for the MoE module flow )doc";
+    const auto* doc = R"doc(
+        Return the ordered list of cores assigned to selective_reduce_combine for moe_compute.
+
+        Cores are selected dynamically on the worker grid to avoid matmul, tilize, and fabric mux workers.
+        ``hidden_size`` must match the model hidden dimension because tilize core placement
+        depends on ``hidden_tiles = hidden_size // 32``.
+        Pass the same ``mux_core_range_set`` used by ``moe_compute`` when fabric mux cores are reserved.
+    )doc";
     ttnn::bind_function<"get_moe_combine_cores", "ttnn.experimental.">(
         mod,
         doc,
         ttnn::overload_t(
-            nb::overload_cast<ttnn::MeshDevice*, const uint32_t, const uint32_t>(
-                &ttnn::experimental::get_moe_combine_cores),
+            nb::overload_cast<
+                ttnn::MeshDevice*,
+                const uint32_t,
+                const uint32_t,
+                const uint32_t,
+                const ttnn::CoreRangeSet&>(&ttnn::experimental::get_moe_combine_cores),
             nb::arg("mesh_device"),
             nb::arg("combine_token_parallel_cores"),
-            nb::arg("combine_data_parallel_cores")));
+            nb::arg("combine_data_parallel_cores"),
+            nb::arg("hidden_size"),
+            nb::arg("mux_core_range_set") = ttnn::CoreRangeSet()));
 
     const auto* bbox_doc =
         R"doc(Return the logical CoreRange bounding box of tilize + matmul + combine worker cores.
@@ -158,6 +183,32 @@ This matches the `all_worker_cores_bounding_box` used by the tilize kernel's per
             nb::arg("combine_data_parallel_cores"),
             nb::arg("hidden_size"),
             nb::arg("bh_ring_size") = 12));
+}
+
+void bind_get_moe_tilize_drain_core(nb::module_& mod) {
+    const auto* doc = R"doc(
+        Return the drain tilize core for moe_compute (``tilize_cores[0]``).
+
+        Expert indices and scores tensors must be HEIGHT_SHARDED to this core in L1.
+        ``hidden_size`` must match the model hidden dimension because tilize core placement
+        depends on ``hidden_tiles = hidden_size // 32``.
+        Pass the same ``mux_core_range_set`` used by ``moe_compute`` when fabric mux cores are reserved.
+    )doc";
+    ttnn::bind_function<"get_moe_tilize_drain_core", "ttnn.experimental.">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            nb::overload_cast<
+                ttnn::MeshDevice*,
+                const uint32_t,
+                const uint32_t,
+                const uint32_t,
+                const ttnn::CoreRangeSet&>(&ttnn::experimental::get_moe_tilize_drain_core),
+            nb::arg("mesh_device"),
+            nb::arg("combine_token_parallel_cores"),
+            nb::arg("combine_data_parallel_cores"),
+            nb::arg("hidden_size"),
+            nb::arg("mux_core_range_set") = ttnn::CoreRangeSet()));
 }
 
 void bind_moe_compute_utils(nb::module_& mod) {
