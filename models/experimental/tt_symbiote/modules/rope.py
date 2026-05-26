@@ -507,6 +507,7 @@ class BailingRotarySetup:
         TracedRun pre-allocated buffers), uses it directly via device ops to avoid
         host→device transfers that break trace capture.
         """
+        embedding_slice_back_size = None
         # Check if position_ids is already on device (trace-compatible path)
         if (
             isinstance(position_ids, ttnn.Tensor)
@@ -539,12 +540,17 @@ class BailingRotarySetup:
                     # Concat to reach size 32 (pure device op, trace-safe)
                     pos_ttnn = ttnn.concat([pos_ttnn, self._typecast_pad_buffer], dim=-1)
                 pos_ttnn = ttnn.typecast(pos_ttnn, ttnn.uint32)
-                # Slice back to original size
+                # Keep ``pos_ttnn`` tile-aligned in last dim so that
+                # ``ttnn.embedding(..., layout=TILE_LAYOUT)`` takes the
+                # ``EmbeddingsFusedProgramFactory`` path (fused_tilized=True in
+                # embedding.cpp:47-58) and emits TILE output directly. Slicing
+                # back to ``orig_size`` here would set padded_shape[-1]=1 and
+                # force a separate single-core 12 μs ``TilizeWithValPadding`` on
+                # every cos and sin embedding. Defer the trim to after the
+                # embedding lookups, when cos/sin are still in TILE layout and
+                # the slice stays tile-aware (no untilize).
                 if orig_size % 32 != 0:
-                    if len(pos_ttnn.shape) <= 1:
-                        pos_ttnn = ttnn.slice(pos_ttnn, [0], [orig_size])
-                    else:
-                        pos_ttnn = ttnn.slice(pos_ttnn, [0, 0], [pos_ttnn.shape[0], orig_size])
+                    embedding_slice_back_size = orig_size
             # Reshape to [1, batch] if needed for embedding
             if len(pos_ttnn.shape) == 1:
                 pos_ttnn = ttnn.reshape(pos_ttnn, (1, pos_ttnn.shape[0]))
@@ -582,14 +588,23 @@ class BailingRotarySetup:
             pos_ttnn,
             self.cos_cache_row_major,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         sin = ttnn.embedding(
             pos_ttnn,
             self.sin_cache_row_major,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+
+        # Trim batch dim back to ``orig_size`` if we kept ``pos_ttnn`` padded
+        # above to engage the fused-tilize embedding path. Slicing on a
+        # TILE+INTERLEAVED tensor with tile-aligned begins skips the
+        # untilize/tilize round-trip (slice.cpp rm_only path is not taken).
+        if embedding_slice_back_size is not None:
+            rotary_dim = int(cos.shape[-1])
+            cos = ttnn.slice(cos, [0, 0, 0], [1, embedding_slice_back_size, rotary_dim])
+            sin = ttnn.slice(sin, [0, 0, 0], [1, embedding_slice_back_size, rotary_dim])
 
         # Reshape [1, batch, rotary_dim] -> [1, batch, 1, rotary_dim]
         cos = ttnn.unsqueeze_to_4D(cos)
