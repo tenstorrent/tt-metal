@@ -202,6 +202,7 @@ class DecoderBlock:
         persistent_mode=False,
         is_torus=True,
         forward_metadata=False,
+        mla_iter_dump_buffer=None,  # DEBUG #43563: dedicated L1 buffer for flash_mla iter dumps
     ):
         """Build io_tensors and mesh_program_descriptor without executing.
 
@@ -257,6 +258,7 @@ class DecoderBlock:
             fabric_config=fabric_config,
             broadcast_topology_override=broadcast_topology_override,
             forward_metadata=forward_metadata,
+            mla_iter_dump_buffer=mla_iter_dump_buffer,  # DEBUG #43563
         )
 
         moe = MoeOp(

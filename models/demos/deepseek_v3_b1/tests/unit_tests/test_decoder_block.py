@@ -594,6 +594,7 @@ def test_decoder(
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         persistent_mode=False,
         forward_metadata=d["forward_metadata"],
+        mla_iter_dump_buffer=d["mla_iter_dump_buffer"],  # DEBUG #43563
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
@@ -1048,6 +1049,7 @@ def test_decoder_mlp(
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         persistent_mode=False,
         forward_metadata=d["forward_metadata"],
+        mla_iter_dump_buffer=d["mla_iter_dump_buffer"],  # DEBUG #43563
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
@@ -1057,9 +1059,12 @@ def test_decoder_mlp(
     # DEBUG #43563: compare iter-0 vs iter-1 SDPA per-core output byte-for-byte.
     # The flash_mla.hpp debug patch re-packs the final SDPA output into cb_out_in
     # at the end of each flash_mla call (see flash_mla.hpp:789-805). cb_out_in is
-    # bound to `sdpa_out_interm_buffer` at offset 0 with total_size = 48 tiles
-    # (see attention_block/op.py:2611). On consecutive iter-0/iter-1 calls the CB's
-    # internal write pointer advances by out_chunk_tiles (16) each time, so:
+    # *rebound* (via the mla_iter_dump_buffer plumbing in
+    # attention_block/op.py and decoder_block/op.py) to the dedicated
+    # `mla_iter_dump_buffer` ttnn tensor instead of `sdpa_out_interm_buffer`,
+    # so its L1 region is NOT aliased by post-SDPA CBs and survives until host
+    # readback. On consecutive iter-0/iter-1 calls the CB's internal write
+    # pointer advances by out_chunk_tiles (16) each time, so:
     #   tiles  0..15  -> iter-0 SDPA output
     #   tiles 16..31  -> iter-1 SDPA output
     # We to_torch the buffer (host gets un-tilized row-major view), decode tile-by-
@@ -1072,7 +1077,7 @@ def test_decoder_mlp(
     # by sdpa_tail). At multi-chunk this section will see iter-1 data clobbered.
     try:
         sdpa_interm_torch = ttnn.to_torch(
-            d["sdpa_out_interm_buffer"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+            d["mla_iter_dump_buffer"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
         )
         # Shape: (num_devices * num_cores_per_dev * 40, 544) bf16
         shard_h, shard_w, tile_h, tile_w = 40, 544, 8, 32

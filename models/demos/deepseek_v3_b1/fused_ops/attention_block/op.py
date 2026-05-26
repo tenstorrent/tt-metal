@@ -258,6 +258,7 @@ class AttentionBlock:
         fabric_config=None,
         broadcast_topology_override=None,
         forward_metadata=False,
+        mla_iter_dump_buffer=None,  # DEBUG #43563: dedicated L1 buffer for flash_mla iter dumps
     ):
         """
         Execute pre-SDPA fused operation using generic_op.
@@ -2009,6 +2010,12 @@ class AttentionBlock:
         ref_kv_cache_tensor = kv_cache_tensors_per_device[0]
         ref_sdpa_kv_cache_buffer = sdpa_kv_cache_buffers_per_device[0]
         ref_sdpa_out_interm_buffer = sdpa_out_interm_buffers_per_device[0]
+        # DEBUG #43563: dedicated buffer used for the cb_out_in binding when wired
+        # through. Falls back to sdpa_out_interm_buffer if not provided.
+        if mla_iter_dump_buffer is not None:
+            ref_mla_iter_dump_buffer = ttnn.get_device_tensors(mla_iter_dump_buffer)[0]
+        else:
+            ref_mla_iter_dump_buffer = ref_sdpa_out_interm_buffer
         ref_post_sdpa_weights1_fused_tensor = post_sdpa_weights1_fused_tensors_per_device[0]
         ref_post_sdpa_weights2_fused_tensor = post_sdpa_weights2_fused_tensors_per_device[0]
         ref_attention_block_output_tensor = attention_block_output_tensors_per_device[0]
@@ -2608,9 +2615,13 @@ class AttentionBlock:
         if optimized_mla_grid.NUM_TREE_REDUCTION_STEPS > 0:
             # cb_out_in: output input (tiny tile)
             mla_out_in_total_size = mla_intermed_output_tiles * stats_tile_size
+            # DEBUG #43563: bind cb_out_in to the dedicated iter-dump buffer so its
+            # L1 region is *not* aliased by post-SDPA CBs. ref_mla_iter_dump_buffer
+            # equals ref_sdpa_out_interm_buffer when no dedicated buffer is wired
+            # through (default), preserving the original behavior for production.
             mla_out_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                 mla_out_in_cb,
-                ref_sdpa_out_interm_buffer,
+                ref_mla_iter_dump_buffer,
                 address_offset=0,
                 total_size=mla_out_in_total_size,
                 core_ranges=full_device_grid,
