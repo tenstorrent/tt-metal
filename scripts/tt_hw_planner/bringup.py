@@ -276,7 +276,7 @@ def _build_tt_transformers_invocation(
         "full",
         "--enable_trace" if trace else "--disable_trace",
     ]
-    env = {"HF_MODEL": hf_model, "MESH_DEVICE": mesh_device}
+    env = {"HF_MODEL": hf_model, "MESH_DEVICE": mesh_device, "TT_HW_PLANNER_OVERLAY_MODEL": hf_model}
     return PytestInvocation(test_path=DEMO_TEST_PATH, args=args, env=env)
 
 

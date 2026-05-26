@@ -8453,5 +8453,58 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     pao.set_defaults(func=cmd_auto_onboard)
 
+    from .commands.overlay_apply import cmd_overlay_apply
+    from .commands.overlay_drop import cmd_overlay_drop
+    from .commands.overlay_extract import cmd_overlay_extract
+    from .commands.overlay_list import cmd_overlay_list
+    from .commands.overlay_promote import cmd_overlay_promote
+    from .commands.overlay_revert import cmd_overlay_revert
+
+    pol = sub.add_parser("overlay-list", help="List captured overlays (per model or all).")
+    pol.add_argument("model_id", nargs="?", default=None, help="Optional: filter by model_id")
+    pol.set_defaults(func=cmd_overlay_list)
+
+    poa = sub.add_parser("overlay-apply", help="Apply a model's overlays to the working tree.")
+    poa.add_argument("model_id")
+    poa.set_defaults(func=cmd_overlay_apply)
+
+    por = sub.add_parser("overlay-revert", help="Revert applied overlays (counter to overlay-apply).")
+    por.add_argument("model_id")
+    por.set_defaults(func=cmd_overlay_revert)
+
+    pod = sub.add_parser("overlay-drop", help="Permanently delete a stored overlay.")
+    pod.add_argument("model_id")
+    pod.add_argument("rel_path", help="Repo-relative path (e.g. models/tt_transformers/tt/rope.py)")
+    pod.set_defaults(func=cmd_overlay_drop)
+
+    pop = sub.add_parser(
+        "overlay-promote",
+        help="Apply an overlay to the shared file and remove the overlay; you then PR the resulting diff normally.",
+    )
+    pop.add_argument("model_id")
+    pop.add_argument("rel_path")
+    pop.set_defaults(func=cmd_overlay_promote)
+
+    poe = sub.add_parser(
+        "overlay-extract",
+        help="Migration: extract uncommitted shared-file changes from working tree into an overlay, then revert the file.",
+    )
+    poe.add_argument("model_id")
+    poe.add_argument("rel_paths", nargs="+", help="One or more repo-relative paths")
+    poe.add_argument(
+        "--hunks-matching", default=None, help="Only extract hunks whose body matches this regex (e.g. 'gemma3')."
+    )
+    poe.set_defaults(func=cmd_overlay_extract)
+
+    from .commands.commit_tool import cmd_commit_tool
+
+    pct = sub.add_parser(
+        "commit-tool",
+        help="Stage and commit ONLY scripts/tt_hw_planner/** changes; non-tool files (treated as learnings) are excluded.",
+    )
+    pct.add_argument("-m", "--message", required=True, help="Commit message")
+    pct.add_argument("--dry-run", action="store_true", help="Show what would be staged without committing")
+    pct.set_defaults(func=cmd_commit_tool)
+
     args = parser.parse_args(argv)
     return args.func(args)
