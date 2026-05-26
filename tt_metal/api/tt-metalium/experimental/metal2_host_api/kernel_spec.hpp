@@ -68,8 +68,6 @@ struct ComputeConfiguration {
 
 struct DataMovementConfiguration {
     // The DM configuration is different for Gen1 and Gen2.
-    // You can provide either a Gen1 config, a Gen2 config, or both.
-    // If your host code is intended to be architecture-agnostic, provide both.
 
     struct Gen1DataMovementConfig {
         tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
