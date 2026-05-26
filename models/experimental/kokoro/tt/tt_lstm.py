@@ -156,15 +156,16 @@ def _length_valid_mask_b1(
 
 
 def _blend_state(
-    valid_bh: ttnn.Tensor,
+    valid_b1: ttnn.Tensor,
     new_state: ttnn.Tensor,
     old_state: ttnn.Tensor,
     *,
     memory_config: ttnn.MemoryConfig,
 ) -> ttnn.Tensor:
-    one_m = ttnn.add(ttnn.multiply(valid_bh, -1.0, memory_config=memory_config), 1.0, memory_config=memory_config)
+    """Blend LSTM state; ``valid_b1`` is ``[B, 1]`` (broadcasts over hidden dim)."""
+    one_m = ttnn.add(ttnn.multiply(valid_b1, -1.0, memory_config=memory_config), 1.0, memory_config=memory_config)
     return ttnn.add(
-        ttnn.multiply(valid_bh, new_state, memory_config=memory_config),
+        ttnn.multiply(valid_b1, new_state, memory_config=memory_config),
         ttnn.multiply(one_m, old_state, memory_config=memory_config),
         memory_config=memory_config,
     )
@@ -223,12 +224,10 @@ def tt_bilstm_nlc(
         )
         if valid_all is not None:
             vt = ttnn.slice(valid_all, [0, t, 0], [B, t + 1, 1], [1, 1, 1])
-            vt = ttnn.reshape(vt, [B, 1, 1], memory_config=memory_config)
-            vt_h3 = ttnn.repeat(vt, (1, 1, H), memory_config=memory_config)
-            vt_h = ttnn.reshape(vt_h3, [B, H], memory_config=memory_config)
-            h_f = _blend_state(vt_h, h_new, h_old, memory_config=memory_config)
-            c_f = _blend_state(vt_h, c_new, c_old, memory_config=memory_config)
-            outs_f.append(ttnn.multiply(vt_h, h_new, memory_config=memory_config))
+            vt_b1 = ttnn.reshape(vt, [B, 1], memory_config=memory_config)
+            h_f = _blend_state(vt_b1, h_new, h_old, memory_config=memory_config)
+            c_f = _blend_state(vt_b1, c_new, c_old, memory_config=memory_config)
+            outs_f.append(ttnn.multiply(vt_b1, h_new, memory_config=memory_config))
         else:
             h_f, c_f = h_new, c_new
             outs_f.append(h_f)
@@ -244,12 +243,10 @@ def tt_bilstm_nlc(
         )
         if valid_all is not None:
             vt = ttnn.slice(valid_all, [0, t, 0], [B, t + 1, 1], [1, 1, 1])
-            vt = ttnn.reshape(vt, [B, 1, 1], memory_config=memory_config)
-            vt_h3 = ttnn.repeat(vt, (1, 1, H), memory_config=memory_config)
-            vt_h = ttnn.reshape(vt_h3, [B, H], memory_config=memory_config)
-            h_b = _blend_state(vt_h, h_new, h_old, memory_config=memory_config)
-            c_b = _blend_state(vt_h, c_new, c_old, memory_config=memory_config)
-            outs_b_rev.append(ttnn.multiply(vt_h, h_new, memory_config=memory_config))
+            vt_b1 = ttnn.reshape(vt, [B, 1], memory_config=memory_config)
+            h_b = _blend_state(vt_b1, h_new, h_old, memory_config=memory_config)
+            c_b = _blend_state(vt_b1, c_new, c_old, memory_config=memory_config)
+            outs_b_rev.append(ttnn.multiply(vt_b1, h_new, memory_config=memory_config))
         else:
             h_b, c_b = h_new, c_new
             outs_b_rev.append(h_b)

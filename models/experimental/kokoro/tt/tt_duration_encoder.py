@@ -36,6 +36,37 @@ def _cast_if_needed(x: ttnn.Tensor, dtype, *, memory_config: ttnn.MemoryConfig) 
     return out, True
 
 
+def _upload_style_btl_nlc(
+    style_bs: ttnn.Tensor,
+    *,
+    batch: int,
+    seq_len: int,
+    sty_dim: int,
+    wire_dtype,
+    memory_config: ttnn.MemoryConfig,
+) -> tuple[ttnn.Tensor, bool]:
+    """``[B, style_dim]`` → ``[B, T, sty_dim]`` via host expand (no device ``repeat``)."""
+    shape = tuple(int(s) for s in style_bs.shape)
+    if len(shape) == 3 and shape[0] == batch and shape[1] == seq_len and shape[2] == sty_dim:
+        return _cast_if_needed(style_bs, wire_dtype, memory_config=memory_config)
+
+    style_cpu = ttnn.to_torch(style_bs).float()
+    while style_cpu.dim() > 2:
+        style_cpu = style_cpu.squeeze(0)
+    if int(style_cpu.shape[0]) != batch or int(style_cpu.shape[-1]) != sty_dim:
+        raise ValueError(f"style shape {tuple(style_cpu.shape)} vs batch={batch} sty_dim={sty_dim}")
+
+    expanded = style_cpu.unsqueeze(1).expand(batch, seq_len, sty_dim).contiguous()
+    out = ttnn.from_torch(
+        expanded,
+        dtype=wire_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=style_bs.device(),
+        memory_config=memory_config,
+    )
+    return out, True
+
+
 @dataclass(frozen=True)
 class TTDurationEncoderLayerParams:
     """One BiLSTM + following :class:`TTAdaLayerNorm` (reference interleaves them)."""
@@ -124,9 +155,14 @@ class TTDurationEncoder:
         if b != b_style:
             raise ValueError(f"batch mismatch: d_en {b} vs style {b_style}")
 
-        s_bc = ttnn.reshape(style_wired, [b, 1, p.sty_dim], memory_config=memory_config)
-        s_btl = ttnn.repeat(s_bc, (1, t_len, 1), memory_config=memory_config)
-        # Keep s_bc alive: on some backends reshape can alias style_bs storage.
+        s_btl, owns_s_btl = _upload_style_btl_nlc(
+            style_wired,
+            batch=b,
+            seq_len=t_len,
+            sty_dim=p.sty_dim,
+            wire_dtype=wire_dtype,
+            memory_config=memory_config,
+        )
         x_cat = ttnn.concat([x, s_btl], dim=2, memory_config=memory_config)
         if owns_x:
             ttnn.deallocate(x)
@@ -163,7 +199,8 @@ class TTDurationEncoder:
             x = ttnn.multiply(x_cat, keep_wired, memory_config=memory_config)
             ttnn.deallocate(x_cat)
 
-        ttnn.deallocate(s_btl)
+        if owns_s_btl:
+            ttnn.deallocate(s_btl)
         if owns_style:
             ttnn.deallocate(style_wired)
         if owns_mask:
