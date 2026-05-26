@@ -20,24 +20,31 @@
 // the bytes path supports today. Block-float / TILE / non-default memory configs
 // are deliberately out of scope for this file.
 
+#include <cstdint>
 #include <functional>
 #include <future>
 #include <numeric>
+#include <span>
 #include <vector>
 
 #include "gtest/gtest.h"
 
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -82,6 +89,11 @@ struct H2DServiceCase {
     uint32_t scratch_cb_size_bytes = 0;
     uint32_t fifo_size_bytes = 0;
     H2DMode mode = H2DMode::DEVICE_PULL;
+    // Optional inline metadata multicast (0 = disabled). When non-zero, every
+    // forward_to_tensor call ships this many trailing bytes; the helper
+    // generates a deterministic per-iter pattern and the kernel multicasts it
+    // to every worker core's local L1 copy at service.get_metadata_addr().
+    uint32_t metadata_size_bytes = 0;
 };
 
 // Builds the per-coord worker MeshWorkload for the worker-sync handshake test.
@@ -99,7 +111,10 @@ tt::tt_metal::distributed::MeshWorkload build_worker_workload(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const tt::tt_metal::H2DStreamService& service,
     const tt::tt_metal::Tensor& output_tensor,
-    const CoreRange& worker_cores) {
+    const CoreRange& worker_cores,
+    uint32_t metadata_size_bytes,
+    uint32_t metadata_input_addr,
+    uint32_t metadata_output_addr) {
     const tt::tt_metal::Tensor& input_tensor = service.get_backing_tensor();
     auto* input_buf = input_tensor.buffer();
     auto* output_buf = output_tensor.buffer();
@@ -171,6 +186,13 @@ tt::tt_metal::distributed::MeshWorkload build_worker_workload(
             output_tensor_addr,
             page_size,
             static_cast<uint32_t>(scratch_cb_index),
+            // Metadata copy block (indices 5..8). All zero when metadata is
+            // disabled — the kernel's `if constexpr (metadata_enabled)` guard
+            // drops the copy loop entirely.
+            metadata_size_bytes > 0 ? 1u : 0u,
+            metadata_size_bytes,
+            metadata_input_addr,
+            metadata_output_addr,
         };
         ct_args.insert(ct_args.end(), accessor_compile_args.begin(), accessor_compile_args.end());
 
@@ -257,6 +279,7 @@ void run_h2d_stream_service_case(
         .scratch_cb_size_bytes = cs.scratch_cb_size_bytes,
         .socket_mode = cs.mode,
         .worker_cores = worker_cores,
+        .metadata_size_bytes = cs.metadata_size_bytes,
     };
 
     tt::tt_metal::H2DStreamService service(mesh_device, std::move(cfg));
@@ -266,29 +289,82 @@ void run_h2d_stream_service_case(
     // Worker-sync path: allocate an output tensor with the same per-shard spec
     // + topology as the service's backing tensor, build the worker MeshWorkload
     // once (Programs + per-worker RT args persist across enqueues).
+    //
+    // When metadata is enabled we also allocate a *second* L1-sharded buffer
+    // mirroring the service's metadata input buffer (one shard per worker, same
+    // size, same shard layout, REPLICATED across the mesh). The worker kernel
+    // copies metadata_input -> metadata_output before atomic-incing the
+    // consumed counter, so the host's per-iter `ReadFromDeviceL1` can read a
+    // worker-owned region that the service kernel never touches — eliminating
+    // the race where the next iter's multicast overwrites the input region
+    // before the host has finished verifying the current iter.
     std::optional<tt::tt_metal::Tensor> output_tensor;
     tt::tt_metal::distributed::MeshWorkload worker_workload;
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> metadata_output_buffer;
+    tt::tt_metal::DeviceAddr metadata_output_addr = 0;
     if (worker_cores.has_value()) {
         const auto& backing = service.get_backing_tensor();
         output_tensor.emplace(tt::tt_metal::create_device_tensor(
             backing.tensor_spec(), mesh_device.get(), backing.tensor_topology()));
-        worker_workload = build_worker_workload(mesh_device, service, *output_tensor, *worker_cores);
+
+        if (cs.metadata_size_bytes > 0) {
+            const uint32_t l1_align = tt::tt_metal::hal::get_l1_alignment();
+            const tt::tt_metal::DeviceAddr aligned_shard_size = tt::align(
+                static_cast<tt::tt_metal::DeviceAddr>(cs.metadata_size_bytes),
+                static_cast<tt::tt_metal::DeviceAddr>(l1_align));
+            const uint32_t num_workers = (worker_cores->end_coord.x - worker_cores->start_coord.x + 1) *
+                                         (worker_cores->end_coord.y - worker_cores->start_coord.y + 1);
+            const tt::tt_metal::CoreRangeSet shard_grid(*worker_cores);
+
+            tt::tt_metal::distributed::DeviceLocalBufferConfig device_local = {
+                .page_size = aligned_shard_size,
+                .buffer_type = tt::tt_metal::BufferType::L1,
+                .sharding_args = tt::tt_metal::BufferShardingArgs(
+                    tt::tt_metal::ShardSpecBuffer(
+                        shard_grid,
+                        {1, 1},
+                        tt::tt_metal::ShardOrientation::ROW_MAJOR,
+                        {1, 1},
+                        {num_workers, 1}),
+                    tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED),
+                .bottom_up = std::nullopt,
+                .sub_device_id = std::nullopt,
+            };
+            tt::tt_metal::distributed::MeshBufferConfig mesh_config =
+                tt::tt_metal::distributed::ReplicatedBufferConfig{
+                    .size = aligned_shard_size * static_cast<tt::tt_metal::DeviceAddr>(num_workers),
+                };
+            metadata_output_buffer = tt::tt_metal::distributed::MeshBuffer::create(
+                mesh_config, device_local, mesh_device.get());
+            metadata_output_addr = metadata_output_buffer->address();
+        }
+
+        worker_workload = build_worker_workload(
+            mesh_device,
+            service,
+            *output_tensor,
+            *worker_cores,
+            cs.metadata_size_bytes,
+            cs.metadata_size_bytes > 0 ? static_cast<uint32_t>(service.get_metadata_addr()) : 0u,
+            static_cast<uint32_t>(metadata_output_addr));
     }
 
-    // Push `src` through the selected input path. NO host-side synchronisation —
-    // returns as soon as the bytes are in the socket FIFO. Subsequent flow
-    // control (waiting for the kernel to drain) happens either via
-    // service.barrier() in the serial path, or via the device-side worker
-    // handshake in the threaded path.
-    auto push = [&](const std::vector<uint32_t>& src) {
+    // Push `src` through the selected input path, optionally appending an
+    // inline metadata payload (empty span when metadata is disabled). NO
+    // host-side synchronisation — returns as soon as the bytes are in the
+    // socket FIFO. Subsequent flow control (waiting for the kernel to drain)
+    // happens either via service.barrier() in the serial path, or via the
+    // device-side worker handshake in the threaded path.
+    auto push = [&](const std::vector<uint32_t>& src, const std::vector<std::byte>& meta) {
+        const auto meta_span = ttsl::Span<const std::byte>(meta.data(), meta.size());
         if (input_path == InputPath::Bytes) {
             auto bytes = ttsl::Span<const std::byte>(
                 reinterpret_cast<const std::byte*>(src.data()), src.size() * sizeof(uint32_t));
-            service.forward_to_tensor(bytes);
+            service.forward_to_tensor(bytes, meta_span);
         } else {
             auto mapper = create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements});
             auto host = distribute_tensor(Tensor::from_vector<uint32_t>(src, global_spec), *mapper);
-            service.forward_to_tensor(host);
+            service.forward_to_tensor(host, meta_span);
         }
     };
 
@@ -307,7 +383,7 @@ void run_h2d_stream_service_case(
     // against the per-coord shard from an external mapper applied to `src`.
     // Worker-sync path: read from `output_tensor` (where the workers copy
     // input->output). No-worker path: read from the service's backing tensor.
-    auto verify = [&](const std::vector<uint32_t>& src) {
+    auto verify = [&](const std::vector<uint32_t>& src, const std::vector<std::byte>& expected_meta) {
         auto verify_mapper = create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements});
         auto distributed_host = distribute_tensor(Tensor::from_vector<uint32_t>(src, global_spec), *verify_mapper);
         const auto& dhb = distributed_host.host_storage().host_tensor().buffer();
@@ -330,6 +406,42 @@ void run_h2d_stream_service_case(
             auto readback = sub.to_vector<uint32_t>();
             ASSERT_EQ(readback.size(), expected.size()) << "size mismatch at coord " << coord;
             EXPECT_EQ(readback, expected) << "contents mismatch at coord " << coord;
+
+            // Metadata verification: read service.get_metadata_addr() from a
+            // representative worker core on this device and compare against
+            // the host-side expected payload. The metadata buffer is
+            // REPLICATED across the mesh and HEIGHT_SHARDED across worker_cores,
+            // so any single worker core's slice is a valid spot-check — the
+            // multicast hit the whole bbox atomically. Sample worker_cores
+            // start_coord per device. EXPECT_* (not ASSERT_*) so a consumer
+            // thread keeps draining remaining iters on mismatch instead of
+            // wedging the writer in `forward_to_tensor`.
+            if (cs.metadata_size_bytes > 0) {
+                auto* d = mesh_device->get_device(coord);
+                const auto* exp_meta_u8 = reinterpret_cast<const uint8_t*>(expected_meta.data());
+                const std::vector<uint8_t> expected_meta_u8(exp_meta_u8, exp_meta_u8 + expected_meta.size());
+
+                // Verify every worker core in worker_cores received the
+                // multicast and copied the bytes correctly. Reading from the
+                // WORKER-OWNED output region (populated by the worker kernel
+                // before its atomic-inc), not the service-owned input region —
+                // the latter is overwritten by the next iter's multicast and
+                // would race the consumer thread's readback.
+                for (uint32_t y = worker_cores->start_coord.y; y <= worker_cores->end_coord.y; ++y) {
+                    for (uint32_t x = worker_cores->start_coord.x; x <= worker_cores->end_coord.x; ++x) {
+                        const CoreCoord worker_logical{x, y};
+                        std::vector<uint8_t> meta_readback(cs.metadata_size_bytes);
+                        tt::tt_metal::detail::ReadFromDeviceL1(
+                            d,
+                            worker_logical,
+                            static_cast<uint32_t>(metadata_output_addr),
+                            std::span<uint8_t>(meta_readback.data(), meta_readback.size()));
+                        EXPECT_EQ(meta_readback, expected_meta_u8)
+                            << "metadata mismatch at coord " << coord << " (worker logical=(" << worker_logical.x
+                            << "," << worker_logical.y << "))";
+                    }
+                }
+            }
         }
     };
 
@@ -344,35 +456,43 @@ void run_h2d_stream_service_case(
         return v;
     };
 
+    // Deterministic per-iter inline metadata payload, byte-indexed so any
+    // metadata_size_bytes (aligned or not) gets a unique pattern per iter and
+    // per byte offset. Returns an empty vector when metadata is disabled —
+    // the empty span passes the service's exact-size validation against
+    // Config::metadata_size_bytes=0. The 0x9E37u multiplier is the upper half
+    // of the fractional golden ratio (Knuth's multiplicative hash), giving
+    // good spread across iters while keeping the byte-level math trivial.
+    auto make_iter_metadata = [&](uint32_t iter) {
+        std::vector<std::byte> v(cs.metadata_size_bytes);
+        for (uint32_t i = 0; i < cs.metadata_size_bytes; ++i) {
+            v[i] = std::byte{static_cast<uint8_t>((iter * 0x9E37u + i) & 0xFFu)};
+        }
+        return v;
+    };
+
     // --- Iteration loop ---------------------------------------------------------
     // Two execution modes:
+    //   * Threaded (worker-sync ON): writer + consumer threads, ZERO host sync.
+    //     The metadata L1 readback in `verify` reads from a *worker-owned*
+    //     output buffer (the worker kernel copies metadata input -> output
+    //     before atomic-incing consumed_counter), so the next iter's service-
+    //     side multicast can overwrite the metadata input region without
+    //     racing the consumer's readback.
     //   * Serial (no worker-sync): push -> service.barrier() -> verify on the
     //     main thread, one iter at a time.
-    //   * Threaded (worker-sync ON): writer and consumer run concurrently with
-    //     ZERO host-side synchronisation between them. Writer just pushes;
-    //     consumer drives worker workloads + verifies output_tensor. The only
-    //     synchronisation in the system is the device-side handshake (service
-    //     kernel multicast -> workers consume -> consumed_counter ack), which
-    //     gates the consumer's per-iter Finish. Backpressure is automatic:
-    //     writer blocks in `forward_to_tensor`'s `reserve_bytes` when the FIFO
-    //     fills; consumer's worker kernel blocks on data_ready_sem when the
-    //     writer is behind.
-    //
-    //     Thread safety: writer touches H2DSockets / PCIe TLBs only; consumer
-    //     touches the FD mesh command queue (EnqueueMeshWorkload + Finish) and
-    //     reads back output_tensor. Disjoint host state, disjoint hardware paths.
     if (worker_cores.has_value()) {
         auto writer = std::async(std::launch::async, [&] {
             for (uint32_t iter = 0; iter < num_iterations; ++iter) {
                 SCOPED_TRACE(::testing::Message() << "[writer] iteration=" << iter);
-                push(make_iter_data(iter));
+                push(make_iter_data(iter), make_iter_metadata(iter));
             }
         });
         auto consumer = std::async(std::launch::async, [&] {
             for (uint32_t iter = 0; iter < num_iterations; ++iter) {
                 SCOPED_TRACE(::testing::Message() << "[consumer] iteration=" << iter);
                 consume_one();
-                verify(make_iter_data(iter));
+                verify(make_iter_data(iter), make_iter_metadata(iter));
             }
         });
         // Order matters: consumer first so that if a verify failure throws
@@ -386,9 +506,10 @@ void run_h2d_stream_service_case(
         for (uint32_t iter = 0; iter < num_iterations; ++iter) {
             SCOPED_TRACE(::testing::Message() << "iteration=" << iter);
             auto data = make_iter_data(iter);
-            push(data);
+            auto meta = make_iter_metadata(iter);
+            push(data, meta);
             service.barrier();
-            verify(data);
+            verify(data, meta);
         }
     }
 }
@@ -635,6 +756,10 @@ TEST_F(H2DStreamServiceTest, Replicated_WorkerSync_Sweep) {
         uint32_t N;  // tensor pages per device (must satisfy N % num_workers == 0)
         CoreRange worker_cores;
         uint32_t num_iterations;
+        // Inline metadata size in bytes. 0 = metadata path disabled. Must be
+        // <= the smallest socket_page_size across the chunking sweep below
+        // (single-metadata-page constraint enforced by H2DStreamService).
+        uint32_t metadata_size_bytes;
         const char* label;
     };
     // Chunking variants explored for every (shape, worker_cores) row. Values
@@ -649,13 +774,29 @@ TEST_F(H2DStreamServiceTest, Replicated_WorkerSync_Sweep) {
     };
     const Row rows[] = {
         // Baseline: 4 workers in a single row, 4 pages each.
-        {640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 20, "4_workers_row"},
+        {640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 20, 0, "4_workers_row"},
         // Single worker covering all 16 pages — exercises the num_workers==1 path
         // and the degenerate multicast (single destination).
-        {640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}, 20, "1_worker"},
+        {640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}, 20, 0, "1_worker"},
         // Full 12x10 worker grid = 120 cores, one page per worker. Page count is
         // bumped to 120 so the divisibility constraint holds.
-        {640, 120, CoreRange{CoreCoord{0, 0}, CoreCoord{11, 9}}, 100, "120_workers_full_grid"},
+        {640, 120, CoreRange{CoreCoord{0, 0}, CoreCoord{11, 9}}, 100, 0, "120_workers_full_grid"},
+
+        // --- Metadata sweep ----------------------------------------------------
+        // Same 4-worker setup as the baseline above; only the trailing inline
+        // metadata size varies. All sizes are <= 2560 B (smallest socket_page_size
+        // in the chunking sweep below: cb_pages=1, per_row_bytes=2560), so the
+        // service's single-metadata-page constraint holds for every chunking.
+        //
+        // 16 B: sub-L1-alignment payload; exercises the page-pad path with a
+        // tiny metadata head.
+        {640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 20, 16, "4_workers_meta_16B"},
+        // 256 B: common "small struct" size; multiple cache lines.
+        {640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 20, 256, "4_workers_meta_256B"},
+        // 2544 B: just under socket_page_size=2560 in the cb_pages=1 chunking;
+        // upper-bound case where the kernel multicasts almost the entire
+        // trailing page and the host pads only 16 B of zeros.
+        {640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 20, 2544, "4_workers_meta_near_page"},
     };
     const Chunking chunkings[] = {
         // Smallest possible: one tensor page per socket page, FIFO holds one page.
@@ -681,7 +822,8 @@ TEST_F(H2DStreamServiceTest, Replicated_WorkerSync_Sweep) {
             SCOPED_TRACE(
                 ::testing::Message() << "case=" << row.label << " chunk=" << ch.label << " N=" << row.N
                                      << " per_row=" << row.per_row_size << " num_workers=" << num_workers
-                                     << " num_iterations=" << row.num_iterations);
+                                     << " num_iterations=" << row.num_iterations
+                                     << " metadata_size_bytes=" << row.metadata_size_bytes);
 
             const uint32_t per_row_bytes = row.per_row_size * sizeof(uint32_t);
             H2DServiceCase cs{
@@ -689,6 +831,7 @@ TEST_F(H2DStreamServiceTest, Replicated_WorkerSync_Sweep) {
                 .placements = replicate_all(*this->mesh_device_),
                 .scratch_cb_size_bytes = ch.cb_pages * per_row_bytes,
                 .fifo_size_bytes = ch.fifo_pages * per_row_bytes,
+                .metadata_size_bytes = row.metadata_size_bytes,
             };
             for (auto path : {InputPath::Tensor, InputPath::Bytes}) {
                 SCOPED_TRACE(::testing::Message() << "path=" << input_path_name(path));
@@ -722,6 +865,10 @@ TEST_F(H2DStreamServiceTest, Sharded_WorkerSync_Sweep) {
         uint32_t per_row_size;
         uint32_t N;  // per-device page count; must satisfy N % num_workers == 0
         CoreRange worker_cores;
+        // Inline metadata size in bytes. 0 = metadata path disabled. Must be
+        // <= the smallest socket_page_size across the chunking sweep below
+        // (single-metadata-page constraint enforced by H2DStreamService).
+        uint32_t metadata_size_bytes;
         const char* label;
     };
     // Chunking sweep — see comment in Replicated_WorkerSync_Sweep for rationale.
@@ -732,13 +879,24 @@ TEST_F(H2DStreamServiceTest, Sharded_WorkerSync_Sweep) {
     };
     const Row rows[] = {
         // 4-worker row. 16 / 4 = 4 pages per worker.
-        Row{640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, "4_workers_row"},
+        Row{640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 0, "4_workers_row"},
         // Single worker covers all per-device pages. Exercises the
         // num_workers==1 degenerate-multicast path with sharded per-device shapes.
-        Row{640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}, "1_worker"},
+        Row{640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}, 0, "1_worker"},
         // Full 12x10 worker grid = 120 cores, one page per worker. N bumped
         // to 120 to keep divisibility; per-device tensor grows to [1,1,120,640].
-        Row{640, 120, CoreRange{CoreCoord{0, 0}, CoreCoord{11, 9}}, "120_workers_full_grid"},
+        Row{640, 120, CoreRange{CoreCoord{0, 0}, CoreCoord{11, 9}}, 0, "120_workers_full_grid"},
+
+        // --- Metadata sweep ----------------------------------------------------
+        // Same 4-worker setup; only the trailing inline metadata size varies.
+        // All sizes are <= 2560 B (smallest socket_page_size in the chunking
+        // sweep), so the single-metadata-page constraint holds for every
+        // chunking. The metadata cross-product with sharded placements catches
+        // any interaction between the L1 multicast bbox and per-device sharded
+        // shapes.
+        Row{640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 16, "4_workers_meta_16B"},
+        Row{640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 256, "4_workers_meta_256B"},
+        Row{640, 16, CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}, 2544, "4_workers_meta_near_page"},
     };
     const Chunking chunkings[] = {
         {1, 1, "cb1_fifo1"},
@@ -767,12 +925,14 @@ TEST_F(H2DStreamServiceTest, Sharded_WorkerSync_Sweep) {
                     .placements = placements,
                     .scratch_cb_size_bytes = ch.cb_pages * per_row_bytes,
                     .fifo_size_bytes = ch.fifo_pages * per_row_bytes,
+                    .metadata_size_bytes = row.metadata_size_bytes,
                 };
                 for (auto path : {InputPath::Tensor, InputPath::Bytes}) {
                     SCOPED_TRACE(
                         ::testing::Message() << "case=" << row.label << " chunk=" << ch.label
                                              << " path=" << input_path_name(path) << " per_row=" << row.per_row_size
-                                             << " N=" << row.N << " num_workers=" << num_workers);
+                                             << " N=" << row.N << " num_workers=" << num_workers
+                                             << " metadata_size_bytes=" << row.metadata_size_bytes);
                     run_h2d_stream_service_case(this->mesh_device_, cs, path, row.worker_cores, kNumIterations);
                 }
             }

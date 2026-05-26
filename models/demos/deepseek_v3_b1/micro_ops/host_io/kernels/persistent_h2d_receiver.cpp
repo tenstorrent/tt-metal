@@ -38,8 +38,7 @@ constexpr uint32_t output_tensor_addr = get_compile_time_arg_val(4);
 constexpr uint32_t output_tensor_page_size = get_compile_time_arg_val(5);
 constexpr uint32_t pages_per_chunk = get_compile_time_arg_val(6);
 constexpr uint32_t scratch_buffer_cb_index = get_compile_time_arg_val(7);
-// Worker-sync block (indices 8..15). Unused when worker_sync_enabled == 0;
-// step 4 wires up the actual multicast + consumed-counter polling.
+// Worker-sync block (indices 8..15). Unused when worker_sync_enabled == 0.
 constexpr uint32_t worker_sync_enabled = get_compile_time_arg_val(8);
 constexpr uint32_t data_ready_sem_addr = get_compile_time_arg_val(9);
 constexpr uint32_t consumed_counter_addr = get_compile_time_arg_val(10);
@@ -48,7 +47,14 @@ constexpr uint32_t worker_mcast_noc_y_start = get_compile_time_arg_val(12);
 constexpr uint32_t worker_mcast_noc_x_end = get_compile_time_arg_val(13);
 constexpr uint32_t worker_mcast_noc_y_end = get_compile_time_arg_val(14);
 constexpr uint32_t num_workers = get_compile_time_arg_val(15);
-constexpr auto output_tensor_accessor_args = TensorAccessorArgs<16>();
+// Metadata multicast block (indices 16..18). Unused when metadata_enabled == 0.
+// metadata_size_bytes is the un-padded user-specified size; the host pads the
+// trailing socket page to socket_page_size, but the kernel only multicasts
+// these many bytes so the worker reads exactly what was provided.
+constexpr uint32_t metadata_enabled = get_compile_time_arg_val(16);
+constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(17);
+constexpr uint32_t metadata_l1_addr = get_compile_time_arg_val(18);
+constexpr auto output_tensor_accessor_args = TensorAccessorArgs<19>();
 
 // H2D: read one socket page from PCIe host RAM into L1 in NOC_MAX_BURST_SIZE chunks.
 // Caller must call noc_async_read_barrier() after this returns.
@@ -98,6 +104,19 @@ void kernel_main() {
         consumed_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_counter_addr);
     }
 
+    // Metadata multicast destination — same multicast bbox as data_ready_sem
+    // (worker_cores), different in-core L1 address. Hoisted out so the per-
+    // transfer block doesn't recompute it.
+    uint64_t metadata_mcast_addr = 0;
+    if constexpr (metadata_enabled) {
+        metadata_mcast_addr = get_noc_multicast_addr(
+            worker_mcast_noc_x_start,
+            worker_mcast_noc_y_start,
+            worker_mcast_noc_x_end,
+            worker_mcast_noc_y_end,
+            metadata_l1_addr);
+    }
+
     bool terminated = false;
     DPRINT << "Number of socket pages: " << num_socket_pages << ENDL();
     DPRINT << "Socket Page Size: " << socket_page_size << ENDL();
@@ -139,11 +158,52 @@ void kernel_main() {
             noc_async_write_barrier();
 
             // Early host release: data is now in L1, free the pinned FIFO slot so the host can
-            // refill it while we NoC-write this chunk to DRAM.
+            // refill it while we NoC-write this chunk to DRAM. `update_socket_config` is
+            // deferred to the end of the kernel — the local socket struct carries the
+            // updated read_ptr / bytes_acked across the loop without needing to be
+            // written back to L1 on every chunk.
             socket_pop_pages(receiver_socket, 1);
             socket_notify_sender(receiver_socket);
-            update_socket_config(receiver_socket);
         }
+        // Optional inline-metadata multicast. Compile-time-gated; when disabled,
+        // the entire block is dead-code-eliminated.
+        //
+        // The host pushes ONE trailing socket page per transfer carrying
+        // metadata in its first `metadata_size_bytes`, zero-padded to
+        // socket_page_size. We:
+        //   1. wait for that trailing page (termination-aware),
+        //   2. PCIe-read it into the scratch CB,
+        //   3. multicast the first metadata_size_bytes to every worker core's
+        //      local copy at metadata_l1_addr,
+        //   4. pop the metadata page and notify the host.
+        //
+        // The barrier in step 3 must complete BEFORE the data_ready_sem
+        // multicast below, so workers observing data_ready see consistent
+        // (DRAM + L1) state.
+        if constexpr (metadata_enabled) {
+            if (!deepseek_b1_ops::socket_wait_for_pages_with_termination(
+                    receiver_socket, 1, termination_semaphore)) {
+                terminated = true;
+                break;
+            }
+            noc_read_page_chunked(
+                pcie_xy_enc,
+                base_pinned + receiver_socket.read_ptr - receiver_socket.fifo_addr,
+                cb_l1_addr,
+                socket_page_size);
+            noc_async_read_barrier();
+
+            noc_async_write_multicast(
+                cb_l1_addr,
+                metadata_mcast_addr,
+                metadata_size_bytes,
+                /*num_dests=*/num_workers);
+            noc_async_write_barrier();
+
+            socket_pop_pages(receiver_socket, 1);
+            socket_notify_sender(receiver_socket);
+        }
+
 
         // Termination short-circuit: if the inner loop exited via
         // socket_wait_for_pages_with_termination (no transfer actually
@@ -189,4 +249,11 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+
+    // Flush the local socket state (advanced read_ptr / bytes_acked) back to
+    // the L1 config buffer once, on the way out. We avoid doing this on every
+    // pop in the hot path — the local socket struct in this kernel is the
+    // source of truth across the loop, and nothing else reads the L1 config
+    // until the next service run on this core.
+    update_socket_config(receiver_socket);
 }

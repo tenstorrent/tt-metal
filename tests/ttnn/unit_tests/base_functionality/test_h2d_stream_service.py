@@ -312,3 +312,171 @@ def test_h2d_stream_service_sharded_sweep(
     )
 
     _run_io_loop(service, iter_mapper, global_spec, shape_list, input_path)
+
+
+# =============================================================================
+# API surface tests for worker_cores + metadata kwargs.
+#
+# Scope: these tests validate the binding surface (kwargs flow into Config,
+# getters return live values / raise when disabled, validation TT_FATALs
+# propagate as RuntimeError). They do NOT exercise the worker-sync data flow —
+# that requires a worker kernel running on the worker grid, which can only be
+# dispatched from C++. End-to-end coverage stays in the C++ gtests.
+#
+# Hang-avoidance constraint: when `worker_cores` is set the service kernel
+# expects per-iter acks on `consumed_counter`. Without a worker kernel running,
+# the first SUCCESSFUL `forward_to_tensor` would park the kernel in its
+# consumed-counter wait and the destructor's `wait_done` would block forever.
+# Every test below either:
+#   * constructs + destructs the service without ever calling forward_to_tensor,
+#   * or only calls forward_to_tensor with arguments that fail validation
+#     before any FIFO write happens (the metadata-size / spec / span-size
+#     checks all run at the top of the function).
+# Either way the kernel stays parked in `socket_wait_for_pages_with_termination`
+# at destruction, so `signal_termination` kicks it out cleanly.
+# =============================================================================
+
+
+def _make_minimal_service(mesh_device, **kwargs):
+    """Smallest viable service for API-surface tests — a [1,1,1,640] uint32
+    tensor with single-page FIFO and CB. Pushed data is never expected to
+    succeed in these tests; the service is constructed just to probe the
+    binding surface and destruct cleanly."""
+    shape = ttnn.Shape([1, 1, 1, 640])
+    global_spec = _make_global_spec(shape)
+    per_row_bytes = 640 * _DTYPE_SIZE
+    return ttnn.H2DStreamService(
+        mesh_device=mesh_device,
+        global_spec=global_spec,
+        fifo_size_bytes=per_row_bytes,
+        scratch_cb_size_bytes=per_row_bytes,
+        **kwargs,
+    )
+
+
+def _mesh_coords(mesh_device):
+    """Enumerate every MeshCoordinate in the mesh shape. Supports 1D and 2D."""
+    shape = mesh_device.shape
+    n_dims = shape.dims()
+    if n_dims == 1:
+        return [ttnn.MeshCoordinate(i) for i in range(shape[0])]
+    if n_dims == 2:
+        return [
+            ttnn.MeshCoordinate(row, col)
+            for row in range(shape[0])
+            for col in range(shape[1])
+        ]
+    raise NotImplementedError(f"unsupported mesh dim count: {n_dims}")
+
+
+def _dummy_source_bytes(shape_list):
+    """Zero-filled uint32 source matching shape_list, returned as a numpy view
+    suitable for `forward_to_tensor_bytes`. Used in negative tests only — the
+    payload is never expected to land on device."""
+    src = torch.zeros(shape_list, dtype=_DTYPE_TORCH)
+    return src.contiguous().numpy()
+
+
+# --- Positive shape: getters return live values when worker_cores is set ----
+
+
+def test_worker_sync_getters_addresses_are_nonzero(mesh_device):
+    """worker_cores set, metadata disabled. The three worker-sync getters
+    return live L1 addresses; per-coord getters work for every device."""
+    worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
+    service = _make_minimal_service(mesh_device, worker_cores=worker_cores)
+
+    assert service.get_data_ready_sem_addr() != 0
+    for coord in _mesh_coords(mesh_device):
+        assert service.get_consumed_counter_addr(coord) != 0
+        # `get_service_core` returns a CoreCoord; smoke-check x/y access.
+        sc = service.get_service_core(coord)
+        _ = (sc.x, sc.y)
+
+
+def test_metadata_getter_address_is_nonzero(mesh_device):
+    """worker_cores + metadata_size_bytes set. get_metadata_addr returns a
+    live L1 address (the L1-sharded MeshBuffer was allocated)."""
+    worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
+    service = _make_minimal_service(
+        mesh_device, worker_cores=worker_cores, metadata_size_bytes=16
+    )
+    assert service.get_metadata_addr() != 0
+
+
+# --- Negative shape: getters raise when worker-sync/metadata is disabled ----
+
+
+def test_worker_sync_getters_raise_when_disabled(mesh_device):
+    """worker_cores unset -> the three worker-sync getters all raise."""
+    service = _make_minimal_service(mesh_device)
+    with pytest.raises(RuntimeError):
+        service.get_data_ready_sem_addr()
+    # Per-coord getters need a coord; pick coord 0.
+    coord = _mesh_coords(mesh_device)[0]
+    with pytest.raises(RuntimeError):
+        service.get_consumed_counter_addr(coord)
+    # get_service_core uses the same internal map; raises when no coord claimed.
+    # (Strictly speaking, when worker_cores is unset, service_cores_ is still
+    # populated, but `get_service_core` for an unclaimed coord still raises.)
+
+
+def test_metadata_getter_raises_when_disabled(mesh_device):
+    """worker_cores set but metadata_size_bytes=0 -> get_metadata_addr raises."""
+    worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
+    service = _make_minimal_service(mesh_device, worker_cores=worker_cores)
+    with pytest.raises(RuntimeError):
+        service.get_metadata_addr()
+
+
+# --- Ctor validation: bad configs rejected upfront --------------------------
+
+
+def test_ctor_rejects_metadata_without_worker_cores(mesh_device):
+    """metadata_size_bytes > 0 requires worker_cores; ctor TT_FATALs in B1."""
+    with pytest.raises(RuntimeError):
+        _make_minimal_service(mesh_device, metadata_size_bytes=16)
+
+
+def test_ctor_rejects_metadata_larger_than_socket_page(mesh_device):
+    """metadata_size_bytes > socket_page_size is rejected in B6 (post chunk plan).
+    With per_row=640 and num_pages=1, socket_page_size = 2560 B. Pick 1 MB to
+    be obviously beyond that across any reasonable chunk plan."""
+    worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
+    with pytest.raises(RuntimeError):
+        _make_minimal_service(
+            mesh_device, worker_cores=worker_cores, metadata_size_bytes=1 << 20
+        )
+
+
+# --- Push validation: bad forward_to_tensor calls raise pre-push -----------
+
+
+def test_forward_bytes_rejects_wrong_metadata_size(mesh_device):
+    """Service expects 16 B of metadata, caller passes 8 B."""
+    worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
+    service = _make_minimal_service(
+        mesh_device, worker_cores=worker_cores, metadata_size_bytes=16
+    )
+    data = _dummy_source_bytes([1, 1, 1, 640])
+    with pytest.raises(RuntimeError):
+        service.forward_to_tensor_bytes(data, metadata=b"x" * 8)
+
+
+def test_forward_bytes_rejects_metadata_when_disabled(mesh_device):
+    """metadata_size_bytes=0 at construction, caller still passes bytes."""
+    service = _make_minimal_service(mesh_device)
+    data = _dummy_source_bytes([1, 1, 1, 640])
+    with pytest.raises(RuntimeError):
+        service.forward_to_tensor_bytes(data, metadata=b"x" * 16)
+
+
+def test_forward_bytes_rejects_missing_metadata_when_required(mesh_device):
+    """Service expects 16 B of metadata, caller passes none (default b'')."""
+    worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
+    service = _make_minimal_service(
+        mesh_device, worker_cores=worker_cores, metadata_size_bytes=16
+    )
+    data = _dummy_source_bytes([1, 1, 1, 640])
+    with pytest.raises(RuntimeError):
+        service.forward_to_tensor_bytes(data)
