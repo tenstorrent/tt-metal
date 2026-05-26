@@ -80,9 +80,9 @@ struct DataMovementConfiguration {
 
     struct Gen2DataMovementConfig {
         // Opt-out of DFB implicit sync (on a per-DFB basis)
-        // Implicit sync enables streamlined kernel-side syntax, but triggers ISR handling.
-        // You may revert to the legacy explicit sync APIs for specific bound DFBs by
-        // listing their DFBSpecNames here. (This feature is mainly for debug purposes.)
+        //  - Implicit sync enables streamlined kernel-side syntax, but triggers ISR handling.
+        //  - Use this control to revert to legacy explicit sync APIs (for specific bound DFBs).
+        //  - This feature is mainly for debug purposes, or for backwards-compatible code style.
         // Any bound DFB not listed here will use implicit sync by default.
         std::vector<DFBSpecName> disable_implicit_sync_for;
     };
