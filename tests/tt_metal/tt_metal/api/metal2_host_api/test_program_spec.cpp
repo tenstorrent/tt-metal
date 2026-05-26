@@ -706,7 +706,11 @@ TEST_F(ProgramSpecTestQuasar, ComputeKernelExceedingMaxThreadsFails) {
             "KernelSpec 'kernel' has too many threads. The architecture supports up to 4 for compute kernels")));
 }
 
-TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigFails) {
+TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigSucceeds) {
+    // Gen2 config is fully optional even on Quasar: absence is treated as "use defaults"
+    // (empty disable_implicit_sync_for). A Gen1-only DM kernel building on Quasar is
+    // permitted at the spec layer (whether such a kernel actually does anything useful on
+    // Gen2 hardware is a separate question, outside the validator's scope).
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -727,10 +731,7 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigFails) {
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("KernelSpec 'kernel' must specify a Gen2 DM config when targeting Quasar")));
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestQuasar, DMKernelWithNoConfigAtAllFails) {
