@@ -7,8 +7,8 @@ source scripts/tools_setup_common.sh
 set -eo pipefail
 
 run_mid_run_data_dump() {
-    echo "Smoke test, checking mid-run device data dump for hangs"
     remove_default_log_locations
+    echo "Smoke test, checking mid-run device data dump for hangs"
     mkdir -p $PROFILER_ARTIFACTS_DIR
     python -m tracy -v -r -p --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
     runDate=$(ls $PROFILER_OUTPUT_DIR/)
@@ -17,9 +17,9 @@ run_mid_run_data_dump() {
 }
 
 run_async_test() {
+    remove_default_log_locations
     #Some tests here do not skip grayskull
     if [ "$ARCH_NAME" == "wormhole_b0" ]; then
-        remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
         python -m tracy -v -r -p --op-support-count 2000 -m "pytest -svv models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
@@ -38,9 +38,9 @@ run_async_test() {
 }
 
 run_async_tracing_T3000_test() {
+    remove_default_log_locations
     #Some tests here do not skip grayskull
     if [ "$ARCH_NAME" == "wormhole_b0" ]; then
-        remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
 
         python -m tracy -v -r -p -m "pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
@@ -104,9 +104,9 @@ run_async_tracing_T3000_test() {
 }
 
 run_async_tracing_mid_run_dump_T3000_test() {
+    remove_default_log_locations
     #Some tests here do not skip grayskull
     if [ "$ARCH_NAME" == "wormhole_b0" ]; then
-        remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
 
         python -m tracy -v -r -p --dump-device-data-mid-run -m pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0] | tee $PROFILER_ARTIFACTS_DIR/test_out.log
@@ -168,8 +168,8 @@ run_trace_only_resnet() {
 }
 
 run_multi_host_tracy_smoke() {
-    echo "Multi-host tracy smoke test (2 ranks via tt-run)"
     remove_default_log_locations
+    echo "Multi-host tracy smoke test (2 ranks via tt-run)"
     mkdir -p $PROFILER_ARTIFACTS_DIR
 
     set +e
@@ -209,16 +209,18 @@ run_multi_host_tracy_smoke() {
 }
 
 run_device_profiler_test() {
+    remove_default_log_locations
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
 }
 
 run_perf_op_report_test() {
+    remove_default_log_locations
     TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest
 }
 
 run_process_ops_logs_test() {
-    pytest tests/ttnn/tracy/test_process_ops_logs.py --noconftest
     remove_default_log_locations
+    pytest tests/ttnn/tracy/test_process_ops_logs.py --noconftest
 }
 
 # Umbrella that runs every individual test in sequence. Kept for callers that

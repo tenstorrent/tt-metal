@@ -7,10 +7,12 @@ source scripts/tools_setup_common.sh
 set -eo pipefail
 
 run_device_profiler_test() {
+    remove_default_log_locations
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
 }
 
 run_realtime_profiler_cross_reference_tg_test() {
+    remove_default_log_locations
     # Cross-reference real-time profiler durations against device profiler
     # on a full TG (8x4) mesh. This test was consolidated into the unified
     # real-time profiler test suite (tests/ttnn/tracy/test_realtime_profiler.py)

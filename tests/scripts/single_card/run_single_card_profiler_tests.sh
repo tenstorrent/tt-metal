@@ -48,14 +48,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 run_mid_run_data_dump() {
-    echo "Smoke test, checking mid-run device data dump for hangs"
     remove_default_log_locations
+    echo "Smoke test, checking mid-run device data dump for hangs"
     mkdir -p $PROFILER_ARTIFACTS_DIR
     python -m tracy -v -r -p --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
     python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
 }
 
 run_device_profiler_test() {
+    remove_default_log_locations
     device_profiler_marker_args=()
     if [[ "$MODE" == "post_commit" ]]; then
         device_profiler_marker_args=(-m "not skip_post_commit")
@@ -65,10 +66,12 @@ run_device_profiler_test() {
 }
 
 run_perf_op_report_test() {
+    remove_default_log_locations
     TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest -k "not TestOpSupportCount"
 }
 
 run_realtime_profiler_test() {
+    remove_default_log_locations
     # Consolidated real-time profiler test suite: callback smoke test, short-zone
     # regression, host/device correlation, cross-reference vs device profiler,
     # sync-accuracy check (and TG cross-reference, which auto-skips off-Galaxy).
@@ -76,7 +79,6 @@ run_realtime_profiler_test() {
     # (so the pytest parent never takes the PCIe lock) and exports
     # TT_METAL_DEVICE_PROFILER=1 itself when needed.  Per-test timeouts come
     # from @pytest.mark.timeout decorators on the individual tests.
-    remove_default_log_locations
     pytest tests/ttnn/tracy/test_realtime_profiler.py
 }
 
