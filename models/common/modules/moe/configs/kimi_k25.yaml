@@ -1,5 +1,5 @@
 # kimi_k25
-mesh_shape: [16, 4]
+mesh_shape: [16, 8]
 cluster_axis: 0
 batch_per_device: 32
 hidden_size: 7168
