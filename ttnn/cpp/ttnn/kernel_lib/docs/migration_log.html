@@ -87,6 +87,45 @@
   .empty-state { color: #8b949e; padding: 40px; text-align: center; font-style: italic; }
   .commit-link { font-family: "SF Mono", Menlo, Consolas, monospace; background: #ddf4dd; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
   .skip-meta { margin-top: 12px; padding: 12px 16px; background: #fff7d4; border-left: 4px solid #c80; border-radius: 4px; }
+
+  /* Review textarea per kernel */
+  .review-box { margin-top: 20px; border: 1px solid #d0d7de; border-radius: 6px; padding: 12px 14px; background: #fff; }
+  .review-box label { display: block; font-size: 12px; font-weight: 600; color: #57606a; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  .review-box .hint { font-size: 11.5px; color: #8b949e; font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .review-box textarea { width: 100%; min-height: 84px; resize: vertical; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 4px; font: 13px/1.45 "SF Mono", Menlo, Consolas, monospace; box-sizing: border-box; }
+  .review-box textarea:focus { outline: 2px solid #2f81f7; outline-offset: -1px; }
+  .review-state { font-size: 11px; color: #1f6c3e; margin-top: 6px; }
+  .review-state.dirty { color: #9e6a03; }
+  .review-state.empty { color: #8b949e; }
+
+  /* Sticky export bar */
+  .export-bar {
+    position: sticky; top: 0; z-index: 30;
+    background: rgba(255,255,255,0.95); backdrop-filter: blur(4px);
+    margin: -24px -32px 16px; padding: 12px 32px;
+    border-bottom: 1px solid #d0d7de; display: flex; align-items: center; gap: 16px;
+  }
+  .export-bar .count { font-size: 13px; color: #57606a; }
+  .export-bar .count b { color: #222; }
+  .export-bar button { padding: 6px 12px; border: 1px solid #d0d7de; background: #f6f8fa; border-radius: 4px; cursor: pointer; font: inherit; font-size: 13px; font-weight: 500; color: #24292f; }
+  .export-bar button:hover { background: #eaeef2; }
+  .export-bar button.primary { background: #2f81f7; color: #fff; border-color: #2f81f7; }
+  .export-bar button.primary:hover { background: #1f6feb; }
+  .export-bar button.danger { background: #fff; color: #cf222e; border-color: #f1c0c0; }
+  .export-bar button.danger:hover { background: #ffd7d5; }
+  .export-bar .spacer { flex: 1; }
+
+  /* Modal for export preview */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 100; display: none; align-items: center; justify-content: center; }
+  .modal-bg.show { display: flex; }
+  .modal { background: #fff; border-radius: 8px; max-width: 800px; width: 92%; max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 12px 40px rgba(0,0,0,0.25); }
+  .modal-header { padding: 16px 20px; border-bottom: 1px solid #d0d7de; display: flex; justify-content: space-between; align-items: center; }
+  .modal-header h2 { margin: 0; font-size: 16px; }
+  .modal-header .close { background: transparent; border: none; cursor: pointer; font-size: 22px; color: #57606a; line-height: 1; padding: 0 6px; }
+  .modal-body { padding: 16px 20px; overflow-y: auto; flex: 1; }
+  .modal-body textarea { width: 100%; min-height: 280px; padding: 10px 12px; border: 1px solid #d0d7de; border-radius: 4px; font: 12.5px/1.5 "SF Mono", Menlo, Consolas, monospace; resize: vertical; box-sizing: border-box; }
+  .modal-footer { padding: 12px 20px; border-top: 1px solid #d0d7de; display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+  .modal-footer .status { font-size: 12px; color: #1f6c3e; margin-right: auto; }
 </style>
 </head>
 <body>
@@ -147,6 +186,13 @@
 </nav>
 
 <main class="main">
+
+  <div class="export-bar">
+    <div class="count">Reviews drafted: <b id="review-count">0</b> across <b id="review-kernels">0</b> kernels</div>
+    <div class="spacer"></div>
+    <button id="btn-export">Export reviews</button>
+    <button id="btn-clear" class="danger">Clear all</button>
+  </div>
 
   <!-- ===== moreh_clip_grad_norm_step3 ===== -->
   <section class="panel" id="panel-moreh_clip_step3">
@@ -381,7 +427,27 @@
 
 <div class="decision-popover" id="dp"><div class="dp-title" id="dp-title"></div><div id="dp-body"></div></div>
 
+<div class="modal-bg" id="modal-bg">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Exported reviews</h2>
+      <button class="close" id="modal-close">×</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin:0 0 8px;font-size:13px;color:#57606a;">Format: one line per reviewed kernel as <code>&lt;path&gt;: &lt;message&gt;</code>. Edit in place if you want before copying.</p>
+      <textarea id="export-text" spellcheck="false"></textarea>
+    </div>
+    <div class="modal-footer">
+      <span class="status" id="modal-status"></span>
+      <button id="modal-copy" class="primary">Copy to clipboard</button>
+      <button id="modal-download">Download .txt</button>
+    </div>
+  </div>
+</div>
+
 <script>
+  const STORAGE_KEY = 'eltwise_migration_reviews_v1';
+
   // Sidebar tab switch.
   document.querySelectorAll('.sidebar .tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -393,6 +459,134 @@
       if (target) target.classList.add('active');
       else document.getElementById('panel-empty').classList.add('active');
     });
+  });
+
+  // ===== Review boxes =====
+  // Storage shape: { panelId: { path, text } }
+  function loadReviews() {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); }
+    catch (e) { return {}; }
+  }
+  function saveReviews(state) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+  const reviewState = loadReviews();
+
+  function updateExportBar() {
+    const entries = Object.values(reviewState).filter(v => v.text && v.text.trim());
+    document.getElementById('review-count').textContent = entries.length;
+    document.getElementById('review-kernels').textContent = entries.length;
+  }
+
+  // Build a review box in each panel that has a `.path`. Skip the empty placeholder.
+  document.querySelectorAll('.panel').forEach(panel => {
+    if (panel.id === 'panel-empty') return;
+    const pathEl = panel.querySelector('.path');
+    if (!pathEl) return;
+    const path = pathEl.textContent.trim();
+    const id = panel.id;
+
+    const box = document.createElement('div');
+    box.className = 'review-box';
+    box.innerHTML = `
+      <label>Review notes <span class="hint">— stored locally; exported alongside other kernels' reviews. <code>${path}: &lt;message&gt;</code></span></label>
+      <textarea placeholder="Anything you'd want fed back into iteration on this kernel..."></textarea>
+      <div class="review-state empty">No notes yet</div>
+    `;
+    panel.appendChild(box);
+
+    const ta = box.querySelector('textarea');
+    const state = box.querySelector('.review-state');
+    if (reviewState[id]) ta.value = reviewState[id].text || '';
+
+    function refreshState() {
+      const v = ta.value.trim();
+      if (!v) {
+        state.textContent = 'No notes yet';
+        state.className = 'review-state empty';
+      } else {
+        state.textContent = 'Saved · ' + v.length + ' chars';
+        state.className = 'review-state';
+      }
+    }
+    refreshState();
+
+    let saveTimer = null;
+    ta.addEventListener('input', () => {
+      if (ta.value.trim()) {
+        reviewState[id] = { path, text: ta.value };
+      } else {
+        delete reviewState[id];
+      }
+      state.textContent = 'Editing…';
+      state.className = 'review-state dirty';
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        saveReviews(reviewState);
+        refreshState();
+        updateExportBar();
+      }, 250);
+    });
+  });
+
+  updateExportBar();
+
+  // ===== Export / clear =====
+  const modalBg = document.getElementById('modal-bg');
+  const modalText = document.getElementById('export-text');
+  const modalStatus = document.getElementById('modal-status');
+
+  function formatExport() {
+    return Object.values(reviewState)
+      .filter(v => v.text && v.text.trim())
+      .map(v => `${v.path}: ${v.text.trim()}`)
+      .join('\n');
+  }
+
+  document.getElementById('btn-export').addEventListener('click', () => {
+    const txt = formatExport();
+    if (!txt) {
+      modalText.value = '(no reviews yet — type into a kernel\'s review box)';
+    } else {
+      modalText.value = txt;
+    }
+    modalStatus.textContent = '';
+    modalBg.classList.add('show');
+  });
+  document.getElementById('modal-close').addEventListener('click', () => modalBg.classList.remove('show'));
+  modalBg.addEventListener('click', e => { if (e.target === modalBg) modalBg.classList.remove('show'); });
+
+  document.getElementById('modal-copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(modalText.value);
+      modalStatus.textContent = 'Copied to clipboard.';
+    } catch (e) {
+      // Fallback: select the text so user can ⌘C / Ctrl+C.
+      modalText.select();
+      modalStatus.textContent = 'Clipboard blocked — text is selected, press Ctrl+C / ⌘C.';
+    }
+  });
+
+  document.getElementById('modal-download').addEventListener('click', () => {
+    const blob = new Blob([modalText.value], {type: 'text/plain'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+    a.download = `migration-reviews_${stamp}.txt`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    modalStatus.textContent = 'Downloaded.';
+  });
+
+  document.getElementById('btn-clear').addEventListener('click', () => {
+    if (!Object.keys(reviewState).length) return;
+    if (!confirm('Clear all review notes across every kernel? This cannot be undone.')) return;
+    for (const k of Object.keys(reviewState)) delete reviewState[k];
+    saveReviews(reviewState);
+    document.querySelectorAll('.review-box textarea').forEach(t => { t.value = ''; });
+    document.querySelectorAll('.review-state').forEach(s => { s.textContent = 'No notes yet'; s.className = 'review-state empty'; });
+    updateExportBar();
   });
 
   // Decision colour-key mapping.
