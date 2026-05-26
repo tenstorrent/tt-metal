@@ -81,11 +81,7 @@ ALWI void sub_bcast_rows_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0, icb1);
 #endif
-    MATH((llk_math_eltwise_binary_init<
-          EltwiseBinaryType::ELWSUB,
-          BroadcastType::ROW,
-          MathFidelity::LoFi>(icb0, icb1)));  // TODO(AP)
-    // FIXME: API Update needed in compute kernel?
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWSUB, BroadcastType::ROW, MathFidelity::LoFi>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
 }
 
