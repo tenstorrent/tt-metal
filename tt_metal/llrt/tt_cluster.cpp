@@ -1164,6 +1164,10 @@ void Cluster::rediscover_ethernet_links() {
     this->initialize_ethernet_cores_router_mode();
     this->disable_ethernet_cores_with_retrain();
     this->initialize_ethernet_sockets();
+
+    // Tunnels are derived from the cluster descriptor's ethernet connections; recompute so
+    // dispatch/fabric consumers see the refreshed topology instead of a stale cache.
+    this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(*this->get_cluster_desc());
 }
 
 void Cluster::initialize_ethernet_cores_router_mode() {
@@ -1535,11 +1539,6 @@ umd::ClusterDescriptor* Cluster::get_cluster_desc() const {
 const std::unique_ptr<tt::umd::Cluster>& Cluster::get_driver() const {
     TT_FATAL(driver_ != nullptr, "UMD driver is not initialized.");
     return driver_;
-}
-
-tt::umd::Cluster& Cluster::get_driver_mut() const {
-    TT_FATAL(driver_ != nullptr, "UMD driver is not initialized.");
-    return *driver_;
 }
 
 bool Cluster::supports_ethernet_link_retraining() const {

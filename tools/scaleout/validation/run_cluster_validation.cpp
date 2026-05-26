@@ -411,6 +411,8 @@ int main(int argc, char* argv[]) {
         return -1;
     }
     if (links_reset) {
+        log_link_retrain_summary(link_retrain_counts, num_retrains, input_args.output_path);
+        log_output_rank0("Rediscovering ethernet links after successful link retraining");
         cluster.rediscover_ethernet_links();
     }
 
