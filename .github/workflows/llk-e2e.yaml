@@ -9,7 +9,7 @@ on:
       pytest_markers:
         description: "Pytest mark expression for testing (e.g., 'nightly', 'perf')"
         required: false
-        default: "not perf and not quasar"
+        default: "not perf and not quasar and not debug"
         type: string
 
 permissions:

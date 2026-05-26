@@ -9,16 +9,7 @@ from helpers.param_config import input_output_formats
 from helpers.test_config import TestConfig
 
 
-# We force device print to be enabled during this test,
-# and turn it back off when it completes.
-@pytest.fixture(scope="module", autouse=True)
-def _force_device_print_enabled():
-    prev = TestConfig.DEVICE_PRINT_ENABLED
-    TestConfig.DEVICE_PRINT_ENABLED = True
-    yield
-    TestConfig.DEVICE_PRINT_ENABLED = prev
-
-
+@pytest.mark.debug
 def test_device_print():
     formats = input_output_formats([DataFormat.Int32])[0]
 

@@ -15,7 +15,7 @@ on:
         description: "Pytest mark expression for LLK python_tests"
         required: false
         type: string
-        default: "not perf and not nightly and not quasar"
+        default: "not perf and not nightly and not quasar and not debug"
 
 permissions:
   checks: write
