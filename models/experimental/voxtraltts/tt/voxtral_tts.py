@@ -310,8 +310,14 @@ class VoxtralTTSPipeline:
             if debug is not None:
                 debug.set(f"step.{step_idx}.text.hidden_in", last_hidden)
             torch.manual_seed(acoustic_fm_noise_seed(seed, step_idx))
+            # ``collect_semantic_logits`` only stores logits for staged PCC; FM path is unchanged
+            # (acoustic ``return_debug=False`` in both prod and trace modes).
+            ac_out = self.acoustic.forward(
+                last_hidden.unsqueeze(0),
+                cfg_alpha,
+                collect_semantic_logits=debug is not None,
+            )
             if debug is not None:
-                ac_out = self.acoustic.forward(last_hidden.unsqueeze(0), cfg_alpha, collect_semantic_logits=True)
                 assert isinstance(ac_out, tuple)
                 audio_codes, ac_debug = ac_out
                 audio_codes = audio_codes.to(torch.long)
@@ -319,7 +325,7 @@ class VoxtralTTSPipeline:
                     val = v.squeeze(0) if v.dim() > 1 and v.shape[0] == 1 else v
                     debug.set(f"step.{step_idx}.acoustic.{k}", val)
             else:
-                audio_codes = self.acoustic.forward(last_hidden.unsqueeze(0), cfg_alpha).to(torch.long)
+                audio_codes = ac_out.to(torch.long)
             if debug is not None:
                 debug.set(f"step.{step_idx}.acoustic.codes", audio_codes.squeeze(0))
 

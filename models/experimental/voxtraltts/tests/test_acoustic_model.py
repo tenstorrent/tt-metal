@@ -9,6 +9,7 @@ import os
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
@@ -17,11 +18,26 @@ from models.experimental.voxtraltts.reference.cpu_flow_matching_acoustic import 
     FlowMatchingAudioTransformerRef,
     build_audio_model_args_from_voxtral_config,
 )
+from models.experimental.voxtraltts.reference.cpu_reference import VoxtralCPUReference
 from models.experimental.voxtraltts.reference.voxtral_config import load_voxtral_config
 from models.experimental.voxtraltts.tests.common import resolve_voxtral_model_name_or_skip
 from models.experimental.voxtraltts.tt.acoustic_model import VoxtralTTAcousticModel
+from models.experimental.voxtraltts.tt.voxtral_tts import ACOUSTIC_CFG_ALPHA_DEFAULT
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
+from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
 from models.tt_transformers.tt.common import Mode
+
+_E2E_DEMO_TEXT = (
+    "Voxtral is a four billion parameter open weight text to speech model "
+    "released by Mistral AI in two thousand twenty six, designed for low "
+    "latency multilingual voice generation across English, Spanish, French, "
+    "Portuguese, Hindi, German, Dutch, and Italian. It builds on the "
+    "Ministral three billion language backbone with a flow matching acoustic "
+    "decoder and produces audio at twelve point five hertz with high quality, "
+    "suitable for streaming voice applications and real time agent deployments."
+)
+_E2E_DEMO_VOICE = "casual_male"
+_FM_BOUNDARY_WATCH_CBS = (26, 27, 32, 34)
 
 
 def _load_reference_model(model_name_or_path: str):
@@ -182,6 +198,7 @@ def _tt_decode_one_frame_continuous(
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    sampled_tt = ttnn.typecast(sampled_tt, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     tt_llm = ttnn.from_torch(
         llm_hidden.to(torch.bfloat16).unsqueeze(1),
         device=tt_model.mesh_device,
@@ -209,7 +226,10 @@ def _tt_decode_one_frame_continuous(
         dt_val = float((timesteps[i + 1] - timesteps[i]).item())
 
         te = tt_model._time_embedding_tt(t_val, bsz)
-        x_batched = ttnn.concat([sampled_tt, sampled_tt], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_in = tt_model._sampled_tt_for_velocity(sampled_tt)
+        x_batched = ttnn.concat([x_in, x_in], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if x_in is not sampled_tt and x_in.is_allocated():
+            ttnn.deallocate(x_in)
         te_batched = ttnn.concat([te, te], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(te)
         v_tt = tt_model._predict_velocity_impl(
@@ -238,31 +258,12 @@ def _tt_decode_one_frame_continuous(
 
         v_t_3d = ttnn.reshape(v_t_tt, (bsz, 1, tt_model.n_acoustic_out))
         ttnn.deallocate(v_t_tt)
-        v_scaled = ttnn.multiply(v_t_3d, dt_val, dtype=tt_model.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(v_t_3d)
-        new_sampled = ttnn.add(sampled_tt, v_scaled, dtype=tt_model.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(sampled_tt)
-        ttnn.deallocate(v_scaled)
-        sampled_tt = new_sampled
+        sampled_tt = tt_model._euler_integrate_sampled(sampled_tt, v_t_3d, dt_val)
         step_states.append(ttnn.to_torch(sampled_tt).float().reshape(bsz, -1))
 
     ttnn.deallocate(tt_llm_batched)
 
-    clamped_tt = ttnn.clip(sampled_tt, min=-1.0, max=1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(sampled_tt)
-    plus_one_tt = ttnn.add(clamped_tt, 1.0, dtype=tt_model.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(clamped_tt)
-    halved_tt = ttnn.multiply(plus_one_tt, 0.5, dtype=tt_model.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(plus_one_tt)
-    scaled_tt = ttnn.multiply(
-        halved_tt,
-        float(tt_model._acoustic_embeddings_levels - 1),
-        dtype=tt_model.dtype,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    ttnn.deallocate(halved_tt)
-    scaled_host = ttnn.to_torch(scaled_tt).float().reshape(bsz, -1)
-    ttnn.deallocate(scaled_tt)
+    scaled_host = tt_model._fm_pre_round_scaled_from_sampled_tt(sampled_tt, bsz)
     return scaled_host, step_states
 
 
@@ -536,6 +537,65 @@ def test_acoustic_decode_euler_stepwise_pcc(mesh_device, reset_seeds):
     assert (
         ok_final
     ), f"Pre-round scaled acoustic PCC failed: PCC={float(pcc_final):.6f} (required >= 0.99).\n" + "\n".join(lines)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+@torch.no_grad()
+def test_acoustic_fm_e2e_step0_hidden_preround(mesh_device, reset_seeds):
+    """FM decode with real E2E step-0 hidden: log pre-round scaled at boundary codebooks."""
+    model_name_or_path = resolve_voxtral_model_name_or_skip()
+    try:
+        ref, _cfg = _load_reference_model(model_name_or_path)
+        tt_model = _load_tt(mesh_device, model_name_or_path)
+        cpu = VoxtralCPUReference(model_name_or_path=model_name_or_path, dtype="bfloat16", device="cpu")
+    except Exception as exc:  # pragma: no cover
+        pytest.skip(f"Acoustic/E2E hidden load failed: {exc}")
+
+    _, _codes, cpu_trace = cpu.generate(
+        text=_E2E_DEMO_TEXT,
+        voice=_E2E_DEMO_VOICE,
+        max_tokens=8,
+        seed=0,
+        return_tokenizer_codes=True,
+        return_debug=True,
+    )
+    hidden = cpu_trace.tensors["step.0.text.hidden_in"].to(dtype=torch.bfloat16).reshape(1, -1)
+    cfg_alpha = torch.tensor(ACOUSTIC_CFG_ALPHA_DEFAULT, dtype=torch.bfloat16)
+    noise_seed = acoustic_fm_noise_seed(0, 0)
+
+    ref_scaled, ref_steps = _reference_decode_one_frame_continuous(ref, hidden, cfg_alpha, noise_seed=noise_seed)
+    tt_scaled, tt_steps = _tt_decode_one_frame_continuous(tt_model, hidden, cfg_alpha, noise_seed=noise_seed)
+
+    logger.info("=" * 70)
+    logger.info("E2E step-0 hidden FM pre-round (noise_seed=acoustic_fm_noise_seed(0,0))")
+    logger.info("=" * 70)
+    ok_final, pcc_final = comp_pcc(ref_scaled, tt_scaled, pcc=0.99)
+    logger.info(
+        f"  pre-round scaled PCC={float(pcc_final):.6f}  max|Δ|={float((ref_scaled - tt_scaled).abs().max()):.6f}"
+    )
+
+    ref_codes = ref_scaled.round().long()
+    tt_codes = tt_scaled.round().long()
+    n_match = int((ref_codes == tt_codes).sum().item())
+    logger.info(f"  discrete codes: {n_match}/36 match")
+
+    for cb in _FM_BOUNDARY_WATCH_CBS:
+        r = float(ref_scaled[0, cb].item())
+        t = float(tt_scaled[0, cb].item())
+        rc = int(ref_codes[0, cb].item())
+        tc = int(tt_codes[0, cb].item())
+        logger.info(
+            f"  cb{cb}: scaled cpu={r:.6f} tt={t:.6f} Δ={t - r:+.6f} "
+            f"round cpu={rc} tt={tc} {'OK' if rc == tc else 'FLIP'}"
+        )
+
+    if n_match < 36:
+        bad = (ref_codes[0] != tt_codes[0]).nonzero(as_tuple=False).reshape(-1).tolist()
+        logger.info(f"  mismatched codebook indices: {bad}")
+
+    assert ok_final, f"pre-round scaled PCC {float(pcc_final):.6f} below 0.99 on E2E step-0 hidden"
+    assert n_match == 36, f"expected 36/36 FM codes on E2E step-0 hidden, got {n_match}/36"
 
 
 @pytest.mark.timeout(3600)
