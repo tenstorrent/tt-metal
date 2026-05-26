@@ -351,48 +351,41 @@ class FuserSentinel:
         operation: "FusedOperation",
         pack_nodes: List["PackNode"],
     ) -> str:
-        """Emit pack hw_configure (first operation) or reconfig (subsequent operations).
+        """Emit _llk_pack_hw_configure_ once for the first operation in the pipeline.
 
-        Accepts all pack_nodes for the operation. Emits code for the first pack_node's
-        format, then sets sentinel state to the last pack_node's format so that
-        configure_pack() in the loop body correctly detects format changes on re-entry.
+        Called at the top of each operation's pack_body(). On the first call
+        (when _pack_src is None), emits the full hw_configure for the first
+        pack_node's format and sets sentinel state. Subsequent operations
+        rely on configure_pack() to emit reconfig as needed.
         """
+        if self._pack_src is not None:
+            return ""
+
         first = pack_nodes[0]
         pack_src, pack_dst = self._resolve_pack_formats(config, operation, first)
 
-        if self._pack_src is not None:
-            if self._pack_src == pack_src and self._pack_dst == pack_dst:
-                code = ""
-            else:
-                dest_acc = config.dest_acc.cpp_enum_value
-                pack_size = first.output.tile_size
-                code = (
-                    f"_llk_pack_reconfig_data_format_<{dest_acc}>(\n"
-                    f"    {self._fmt(pack_src)}, {self._fmt(pack_dst)}, {pack_size}\n"
-                    f");\n"
-                )
+        dest_acc = config.dest_acc.cpp_enum_value
+        pack_size = first.output.tile_size
+        face_r_dim = first.output.tile_shape.face_r_dim
+        tile_c_dim = first.output.tile_shape.total_col_dim()
+        num_faces = first.output.tile_shape.total_num_faces()
+
+        if config.architecture == ChipArchitecture.BLACKHOLE:
+            bh_pack_mode = operation.bh_tilize.pack_mode_value
+            code = (
+                f"_llk_pack_hw_configure_<{dest_acc}, {bh_pack_mode}>(\n"
+                f"    {self._fmt(pack_src)}, {self._fmt(pack_dst)}, {pack_size}, {face_r_dim}, {tile_c_dim}, {num_faces}\n"
+                f");\n"
+            )
         else:
-            dest_acc = config.dest_acc.cpp_enum_value
-            pack_size = first.output.tile_size
-            face_r_dim = first.output.tile_shape.face_r_dim
-            tile_c_dim = first.output.tile_shape.total_col_dim()
-            num_faces = first.output.tile_shape.total_num_faces()
+            code = (
+                f"_llk_pack_hw_configure_<{dest_acc}, PackMode::Default>(\n"
+                f"    {self._fmt(pack_src)}, {self._fmt(pack_dst)}, {pack_size}, {face_r_dim}, {num_faces}\n"
+                f");\n"
+            )
 
-            if config.architecture == ChipArchitecture.BLACKHOLE:
-                bh_pack_mode = operation.bh_tilize.pack_mode_value
-                code = (
-                    f"_llk_pack_hw_configure_<{dest_acc}, {bh_pack_mode}>(\n"
-                    f"    {self._fmt(pack_src)}, {self._fmt(pack_dst)}, {pack_size}, {face_r_dim}, {tile_c_dim}, {num_faces}\n"
-                    f");\n"
-                )
-            else:
-                code = (
-                    f"_llk_pack_hw_configure_<{dest_acc}, PackMode::Default>(\n"
-                    f"    {self._fmt(pack_src)}, {self._fmt(pack_dst)}, {pack_size}, {face_r_dim}, {num_faces}\n"
-                    f");\n"
-                )
-
-        last_src, last_dst = self._resolve_pack_formats(config, operation, pack_nodes[-1])
+        last = pack_nodes[-1]
+        last_src, last_dst = self._resolve_pack_formats(config, operation, last)
         self._pack_src = last_src
         self._pack_dst = last_dst
 
