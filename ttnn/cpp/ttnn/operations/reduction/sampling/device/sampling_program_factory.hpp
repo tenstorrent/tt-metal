@@ -5,13 +5,13 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal2_artifacts.hpp"
 #include "ttnn/operations/reduction/sampling/device/sampling_device_operation_types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
 struct SamplingProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_spec(
         const SamplingParams& operation_attributes, const SamplingInputs& tensor_args, Tensor& output_tensor);
 };
 
