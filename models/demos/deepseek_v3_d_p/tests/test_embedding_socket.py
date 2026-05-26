@@ -103,32 +103,34 @@ def test_embedding_8x4_galaxy(mesh_device):
     logger.info(f"torch_tokens shape: {torch_tokens.shape}")
     # uint32 bit pattern == int32 bit pattern for non-negative ids (vocab fits in 18 bits).
     flat_tokens = torch_tokens.to(torch.int32).contiguous().numpy()
-    h2d_service.forward_to_tensor_bytes(flat_tokens)
-    # Device-side sync: workers wait on data_ready_sem, copy backing -> fresh
-    # output, ack consumed_counter. No host barrier needed.
-    tt_tokens = h2d_socket_sync(h2d_service, worker_cores)
-    logger.info(f"tt_tokens shape (synced from H2D service): {tt_tokens.shape}")
 
-    tt_output = tt_emb(tt_tokens)
+    for i in range(20):
+        h2d_service.forward_to_tensor_bytes(flat_tokens)
+        # Device-side sync: workers wait on data_ready_sem, copy backing -> fresh
+        # output, ack consumed_counter. No host barrier needed.
+        tt_tokens = h2d_socket_sync(h2d_service, worker_cores)
+        logger.info(f"tt_tokens shape (synced from H2D service): {tt_tokens.shape}")
 
-    # ttnn.embedding squeezes the leading singleton: per-chip output is
-    # [1, isl_per_chip, emb_dim / tp_factor] (3D), not the 4D shape the docstring claims.
-    expected_per_chip_shape = (1, isl_per_chip, emb_dim // tp_factor)
-    assert (
-        tuple(tt_output.shape) == expected_per_chip_shape
-    ), f"Embedding output shape {tuple(tt_output.shape)} != expected {expected_per_chip_shape}"
-    logger.info(f"Embedding output per-chip shape: {tuple(tt_output.shape)}")
+        tt_output = tt_emb(tt_tokens)
 
-    # Host reference: torch.nn.functional.embedding on the same tokens/weight.
-    # F.embedding on tokens [sp_factor, 1, isl_per_chip] returns [sp_factor, 1, isl_per_chip, emb_dim];
-    # squeeze the spare singleton to match the gathered TT shape [sp_factor, isl_per_chip, emb_dim].
-    torch_output = F.embedding(torch_tokens, torch_weight).squeeze(1)
+        # ttnn.embedding squeezes the leading singleton: per-chip output is
+        # [1, isl_per_chip, emb_dim / tp_factor] (3D), not the 4D shape the docstring claims.
+        expected_per_chip_shape = (1, isl_per_chip, emb_dim // tp_factor)
+        assert (
+            tuple(tt_output.shape) == expected_per_chip_shape
+        ), f"Embedding output shape {tuple(tt_output.shape)} != expected {expected_per_chip_shape}"
+        logger.info(f"Embedding output per-chip shape: {tuple(tt_output.shape)}")
 
-    # Gather: TP composer composes mesh dim 0 (SP) along tensor dim 0, mesh dim 1 (TP) along dim -1.
-    tt_host = ttnn.to_torch(tt_output, mesh_composer=get_tp_mesh_composer(mesh_device), dtype=torch.bfloat16)
-    logger.info(f"TT gathered host shape: {tuple(tt_host.shape)}")
+        # Host reference: torch.nn.functional.embedding on the same tokens/weight.
+        # F.embedding on tokens [sp_factor, 1, isl_per_chip] returns [sp_factor, 1, isl_per_chip, emb_dim];
+        # squeeze the spare singleton to match the gathered TT shape [sp_factor, isl_per_chip, emb_dim].
+        torch_output = F.embedding(torch_tokens, torch_weight).squeeze(1)
 
-    pcc_threshold = 0.999
-    _, pcc = comp_pcc(torch_output.float(), tt_host.float())
-    logger.info(f"Embedding PCC vs host reference: {pcc:.6f} (threshold {pcc_threshold})")
-    assert pcc > pcc_threshold, f"Embedding PCC {pcc:.6f} below threshold {pcc_threshold}"
+        # Gather: TP composer composes mesh dim 0 (SP) along tensor dim 0, mesh dim 1 (TP) along dim -1.
+        tt_host = ttnn.to_torch(tt_output, mesh_composer=get_tp_mesh_composer(mesh_device), dtype=torch.bfloat16)
+        logger.info(f"TT gathered host shape: {tuple(tt_host.shape)}")
+
+        pcc_threshold = 0.999
+        _, pcc = comp_pcc(torch_output.float(), tt_host.float())
+        logger.info(f"Embedding PCC vs host reference: {pcc:.6f} (threshold {pcc_threshold})")
+        assert pcc > pcc_threshold, f"Embedding PCC {pcc:.6f} below threshold {pcc_threshold}"
