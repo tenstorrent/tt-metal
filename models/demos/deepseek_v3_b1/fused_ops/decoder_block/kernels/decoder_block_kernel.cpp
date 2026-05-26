@@ -2423,7 +2423,11 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_gate_proj_k_offset"),
                 get_named_compile_time_arg_val("sram_gate_proj_cb_out_sram"),
                 /*compact_in0=*/0,
-                get_named_compile_time_arg_val("enable_routing")>;
+                get_named_compile_time_arg_val("enable_routing"),
+                // TODO: switch back to /*use_compression=*/1 once SRAM experts
+                // can carry BSPM mixed-precision tiles. For now SRAM is uniform
+                // BFP4, so the plain custom_mm path is correct and faster.
+                /*use_compression=*/0>;
 
             // SRAM up_proj Matmul Expert (compute, TRISC) — mirror of gate_proj.
             using SramUpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::ComputeCTArgs<
@@ -2444,7 +2448,10 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_up_proj_k_offset"),
                 get_named_compile_time_arg_val("sram_up_proj_cb_out_sram"),
                 /*compact_in0=*/0,
-                get_named_compile_time_arg_val("enable_routing")>;
+                get_named_compile_time_arg_val("enable_routing"),
+                // TODO: switch back to /*use_compression=*/1 once SRAM experts
+                // can carry BSPM mixed-precision tiles.
+                /*use_compression=*/0>;
 
             // SRAM down_proj Matmul Expert (compute, TRISC) — accum_experts=1 + compact_in0=1.
             using SramDownProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::ComputeCTArgs<
@@ -2465,7 +2472,10 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_down_proj_k_offset"),
                 get_named_compile_time_arg_val("sram_down_proj_cb_out_sram"),
                 get_named_compile_time_arg_val("sram_down_proj_compact_in0"),
-                get_named_compile_time_arg_val("enable_routing")>;
+                get_named_compile_time_arg_val("enable_routing"),
+                // TODO: switch back to /*use_compression=*/1 once SRAM experts
+                // can carry BSPM mixed-precision tiles.
+                /*use_compression=*/0>;
 
             // SRAM gather (A/B) compute — no-op for TRISC, but the lambda body
             // references moe.routed.sram_{a,b}g_args so the member must exist.

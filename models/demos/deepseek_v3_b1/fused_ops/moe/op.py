@@ -1676,10 +1676,29 @@ class MoeRoutedExpertOp:
             # Mirrors the canonical pattern in micro_ops/matmul_expert/op.py:372.
             # Per-device: each mesh coord has its own per-core L1 layout.
             sram_gate_proj_cb_in1_descriptors_per_device = {}
+            # cb_descriptor_from_compressed_tensor declares cb_in1 as a single
+            # bfloat8_b "page" = whole per-core shard — works for the
+            # compressed_custom_mm path (meta-driven strides) but breaks the
+            # plain custom_mm path (which reads fifo_page_size as the per-tile
+            # stride and walks core_size bytes per tile → garbage). Replace
+            # format_descriptor with the actual per-tile shape (576B bfloat4_b)
+            # so plain custom_mm strides correctly; compressed path ignores these.
+            from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import _TILE_SIZES
+
+            _bfp4_tile_size = _TILE_SIZES[1]  # bfp4_b 32x32 = 576 B
+            _tile_32x32 = ttnn.Tile([32, 32])
             for coord in sram_gate_proj_params["sram_fmt_l1_addr_per_device"]:
-                sram_gate_proj_cb_in1_descriptors_per_device[coord] = _ct0.cb_descriptor_from_compressed_tensor(
-                    sram_gate_proj_cb_in1, device_coord=coord
-                )
+                _descs = _ct0.cb_descriptor_from_compressed_tensor(sram_gate_proj_cb_in1, device_coord=coord)
+                for _desc in _descs:
+                    _desc.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=sram_gate_proj_cb_in1,
+                            data_format=ttnn.bfloat4_b,
+                            page_size=_bfp4_tile_size,
+                            tile=ttnn.TileDescriptor(_tile_32x32),
+                        )
+                    ]
+                sram_gate_proj_cb_in1_descriptors_per_device[coord] = _descs
             # cb_out descriptor is built in _overlap_cbs_with_sdpa_buffer
             # (kv_buf-overlaid, mirrors gate_proj_cb_out at cb11).
 
@@ -1725,10 +1744,24 @@ class MoeRoutedExpertOp:
                 accum_experts=False,
             )
             sram_up_proj_cb_in1_descriptors_per_device = {}
+            # See note on sram_gate_proj_cb_in1 above — replace format_descriptor
+            # with the actual per-tile shape (576B bfloat4_b) for plain custom_mm.
+            from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import _TILE_SIZES
+
+            _bfp4_tile_size = _TILE_SIZES[1]
+            _tile_32x32 = ttnn.Tile([32, 32])
             for coord in sram_up_proj_params["sram_fmt_l1_addr_per_device"]:
-                sram_up_proj_cb_in1_descriptors_per_device[coord] = _ct0_up.cb_descriptor_from_compressed_tensor(
-                    sram_up_proj_cb_in1, device_coord=coord
-                )
+                _descs_up = _ct0_up.cb_descriptor_from_compressed_tensor(sram_up_proj_cb_in1, device_coord=coord)
+                for _desc in _descs_up:
+                    _desc.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=sram_up_proj_cb_in1,
+                            data_format=ttnn.bfloat4_b,
+                            page_size=_bfp4_tile_size,
+                            tile=ttnn.TileDescriptor(_tile_32x32),
+                        )
+                    ]
+                sram_up_proj_cb_in1_descriptors_per_device[coord] = _descs_up
             # cb_out descriptor is built in _overlap_cbs_with_sdpa_buffer.
 
         # SRAM routed down_proj setup. Per-expert weight layout mirrors shared_down:
@@ -1767,10 +1800,24 @@ class MoeRoutedExpertOp:
                 accum_experts=True,
             )
             sram_down_proj_cb_in1_descriptors_per_device = {}
+            # See note on sram_gate_proj_cb_in1 above — replace format_descriptor
+            # with the actual per-tile shape (576B bfloat4_b) for plain custom_mm.
+            from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import _TILE_SIZES
+
+            _bfp4_tile_size = _TILE_SIZES[1]
+            _tile_32x32 = ttnn.Tile([32, 32])
             for coord in sram_down_proj_params["sram_fmt_l1_addr_per_device"]:
-                sram_down_proj_cb_in1_descriptors_per_device[coord] = _ct0_dn.cb_descriptor_from_compressed_tensor(
-                    sram_down_proj_cb_in1, device_coord=coord
-                )
+                _descs_dn = _ct0_dn.cb_descriptor_from_compressed_tensor(sram_down_proj_cb_in1, device_coord=coord)
+                for _desc in _descs_dn:
+                    _desc.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=sram_down_proj_cb_in1,
+                            data_format=ttnn.bfloat4_b,
+                            page_size=_bfp4_tile_size,
+                            tile=ttnn.TileDescriptor(_tile_32x32),
+                        )
+                    ]
+                sram_down_proj_cb_in1_descriptors_per_device[coord] = _descs_dn
             # cb_out descriptor is built in _overlap_cbs_with_sdpa_buffer.
 
         # ==================================================================

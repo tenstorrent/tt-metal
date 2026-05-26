@@ -87,7 +87,13 @@ struct MatmulExpertCompressedSRAM {
         //     wires index_l1_addr=0 and cb_index=0. Symmetric with the DRAM
         //     kernel where enable_indexing=0 synthesizes raw_idx = exp_i
         //     (DRAM-flagged), so each kernel runs all iters as its native type.
-        uint32_t enable_indexing_ = 1>
+        uint32_t enable_indexing_ = 1,
+        // 1 (default) = use compressed_custom_mm path (per-tile format codes
+        // read from the fmt table). Required for BSPM (mixed-precision tiles).
+        // 0 = use plain custom_mm path (uniform precision from the cb_in1 tile
+        // descriptor). Faster when every tile is the same format — the fmt
+        // table read and meta_addr arithmetic are skipped at compile time.
+        uint32_t use_compression_ = 1>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -111,6 +117,7 @@ struct MatmulExpertCompressedSRAM {
         // dst CB only carries the SRAM-flagged TopK experts' GR outputs.
         static constexpr bool compact_in0 = compact_in0_ != 0;
         static constexpr bool enable_indexing = enable_indexing_ != 0;
+        static constexpr bool use_compression = use_compression_ != 0;
     };
 
     struct WriterCTArgs {};
@@ -180,7 +187,11 @@ struct MatmulExpertCompressedSRAM {
             } else {
                 cb_wait_front(cb_in0, num_tiles_k);
             }
-            compressed_custom_mm_block_init_short<false, true, true>(cb_in0, cb_in1, cb_out);
+            if constexpr (CTArgs::use_compression) {
+                compressed_custom_mm_block_init_short<false, true, true>(cb_in0, cb_in1, cb_out);
+            } else {
+                custom_mm_block_init_short<false, true, true>(cb_in0, cb_in1, cb_out, out_w);
+            }
 
             uint32_t in0_base = 0;
             UNPACK(({ in0_base = unified_kernels::get_cb_rd_ptr(cb_in0); }));
@@ -233,9 +244,17 @@ struct MatmulExpertCompressedSRAM {
                         }));
 
                         if (++sram_idx < num_sram_experts) {
-                            compressed_custom_mm_block<false>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
+                            if constexpr (CTArgs::use_compression) {
+                                compressed_custom_mm_block<false>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
+                            } else {
+                                custom_mm_block<false>(cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
+                            }
                         } else {
-                            compressed_custom_mm_block<true>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
+                            if constexpr (CTArgs::use_compression) {
+                                compressed_custom_mm_block<true>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
+                            } else {
+                                custom_mm_block<true>(cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
+                            }
                         }
                     }
 
@@ -278,7 +297,16 @@ struct MatmulExpertCompressedSRAM {
                     cb_reserve_back(cb_out, out_w);
                     tile_regs_acquire();
 
-                    compressed_custom_mm_block<true>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
+                    if constexpr (CTArgs::use_compression) {
+                        compressed_custom_mm_block<true>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
+                    } else {
+                        // split_acc=false at init → finalize MUST be false (custom_mm.h:131:
+                        // "finalize ... must be false if split_acc is false"). With
+                        // finalize=true and no split partials, the LLK runs replay+ELWADD
+                        // against bogus dst contents and corrupts the accumulated K-sum
+                        // (manifested as PCC ~0.01 in the unit test).
+                        custom_mm_block<true>(cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
+                    }
 
                     tile_regs_commit();
                     tile_regs_wait();
@@ -286,8 +314,8 @@ struct MatmulExpertCompressedSRAM {
                         pack_tile(w, cb_out, w);
                     }
                     tile_regs_release();
-                    cb_push_back(cb_out, out_w);
                     num_sram_experts_pushed++;
+                    cb_push_back(cb_out, out_w);
                 }
 
                 // Pad total pushes to num_active_experts * out_w so CB push count
@@ -306,7 +334,11 @@ struct MatmulExpertCompressedSRAM {
             }
 
             UNPACK(({ unified_kernels::override_cb_rd_ptr(cb_in0, in0_base); }));
-            compressed_custom_mm_block_uninit<true>();
+            if constexpr (CTArgs::use_compression) {
+                compressed_custom_mm_block_uninit<true>();
+            } else {
+                custom_mm_block_uninit<true>();
+            }
 
             if constexpr (pop_in1) {
                 cb_pop_front(cb_in1, 1);
