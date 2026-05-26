@@ -17,7 +17,6 @@ from ttnn.device import is_blackhole
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
-from models.demos.deepseek_v3_d_p.tests.conftest import random_weights
 from models.demos.deepseek_v3_d_p.tests.model_variants import MODEL_VARIANTS
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
@@ -148,7 +147,11 @@ def run_mla_inference(
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
+@pytest.mark.parametrize(
+    "seq_len",
+    [1 * 1024, 5 * 1024, 25 * 1024, 128 * 1024, 100 * 1024],
+    ids=["seq1k", "seq5k", "seq25k", "seq128k", "seq100k"],
+)
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
 @pytest.mark.parametrize("variant", MODEL_VARIANTS.values(), ids=MODEL_VARIANTS.keys())
@@ -191,7 +194,7 @@ def test_mla(
         config, sd = request.getfixturevalue("pretrained_transformer_weights")
         weights = sd["layers"][0]["mla_weights"]
     else:
-        config, weights = random_weights(variant.get_config(request))
+        config, weights = request.getfixturevalue("random_weights")
 
     fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
     topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear

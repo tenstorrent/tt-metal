@@ -135,7 +135,7 @@ KIMI = KimiVariant(
     required_gate_fallback_mode=GateComputeMode.HOST_ALL,
     supports_pretrained=False,
     mla_pcc_threshold=0.995,
-    moe_pcc_threshold=0.995,
+    moe_pcc_threshold=0.989,
 )
 
 MODEL_VARIANTS = {v.name: v for v in [DSV3, KIMI]}

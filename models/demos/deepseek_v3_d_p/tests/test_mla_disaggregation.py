@@ -13,7 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
-from models.demos.deepseek_v3_d_p.tests.conftest import random_weights
+from models.demos.deepseek_v3_d_p.tests.model_variants import MODEL_VARIANTS
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
 from models.demos.deepseek_v3_d_p.tt.mla.utils import reverse_reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
@@ -46,6 +46,7 @@ from tests.ttnn.utils_for_testing import assert_equal
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
+@pytest.mark.parametrize("variant", [MODEL_VARIANTS["dsv3"]], ids=["dsv3"])
 @pytest.mark.timeout(0)  # Disable timeout — first run computes and caches CPU reference for large seq lengths
 def test_mla_disaggregation(
     use_pretrained,
@@ -55,6 +56,7 @@ def test_mla_disaggregation(
     is_ci_env,
     is_ci_v2_env,
     device_params,
+    variant,
 ):
     """
     Test comparing reference and TT MLA modules with same weights.
@@ -75,7 +77,7 @@ def test_mla_disaggregation(
         config, sd = request.getfixturevalue("pretrained_transformer_weights")
         weights = sd["layers"][0]["mla_weights"]
     else:
-        config, weights = random_weights(request.getfixturevalue("config_only"))
+        config, weights = request.getfixturevalue("random_weights")
 
     fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
     topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear

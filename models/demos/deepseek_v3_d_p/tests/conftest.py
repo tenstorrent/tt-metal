@@ -495,16 +495,15 @@ def weight_cache_path(model_path):
     return cache_dir
 
 
-def random_weights(config):
+@pytest.fixture
+def random_weights(variant, request):
     """
-    Generate random weights for testing using the config.
+    Random MLA weights for the active variant. Returns (config, weights_dict).
 
-    Args:
-        config: HuggingFace config (DSv3 or any variant — shape attrs are read off it)
-
-    Returns:
-        Tuple of (config, weights_dict) in bfloat16
+    Lazy: access via ``request.getfixturevalue("random_weights")`` in branches
+    that need it, so the heavy tensor allocation is skipped on pretrained runs.
     """
+    config = variant.get_config(request)
     torch.manual_seed(42)  # this is tied to already cached reference results, so keep it consistent for now
 
     # Use proper initialization scale from config (typically 0.02)
