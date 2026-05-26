@@ -131,7 +131,16 @@ SUPPORTED = {
     # The kernel itself still requires TILE; the layout decision lives at the
     # data-access boundary, not in the math (see /memory-layouts §1).
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    "alignment": ["tile_aligned"],
+    # Refinement 4: non-tile-aligned shapes. The program descriptor computes
+    # `partial = reduce_dim_size % 32` from the logical shape and routes the
+    # reduce<MAX> / accumulate_reduce_block<SUM> calls through the partial
+    # scaler API (`dataflow_kernel_lib::prepare_partial_reduce_scalers` on the
+    # reader, `compute_kernel_lib::ReducePartialScaler::last_tile_at(1)` on the
+    # compute side). The alignment tag distinguishes the two values, but the
+    # actual partial-scaler decision is made by the reduce dim's size — for
+    # `w_non_aligned + dim=-2`, H is aligned so the reduce runs without a
+    # partial scaler.
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     # Refinement 3: rank-2 (H, W) and rank-3 (B, H, W) inputs canonicalised
     # to rank-4 (1, …, H, W) at the entry point. Higher-rank tensors are still
     # rejected (the design is a 4D kernel; supporting rank-5+ would need a

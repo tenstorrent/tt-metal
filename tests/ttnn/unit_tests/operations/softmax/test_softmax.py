@@ -169,11 +169,15 @@ def test_softmax_rejects_unsupported_dim(device, bad_dim):
         softmax(ttnn_input, dim=bad_dim)
 
 
-def test_softmax_rejects_non_tile_aligned_h(device):
-    # H = 17 (not divisible by 32) — must be rejected by validate().
-    # NOTE: ttnn.from_torch will pad to a tile boundary; we encode the
-    # logical shape via a 4D tensor whose H dimension is 17.
+def test_softmax_accepts_non_tile_aligned_h(device):
+    """Refinement 4: H % 32 != 0 is now in SUPPORTED["alignment"] as
+    ``h_non_aligned``. The kernel handles the partial reduce-axis tile via
+    a (full, partial) scaler pair when dim=-2; for dim=-1 the W axis is
+    aligned so no partial scaler is needed (the non-reduce H axis just
+    produces a wider strip with padded-row output that the read-back
+    discards)."""
     torch_input = torch.randn((1, 1, 17, 64), dtype=torch.float32)
+    torch_expected = torch.softmax(torch_input, dim=-1)
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.float32,
@@ -181,12 +185,17 @@ def test_softmax_rejects_non_tile_aligned_h(device):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    with pytest.raises(VALIDATION_ERRORS):
-        softmax(ttnn_input, dim=-1)
+    ttnn_output = softmax(ttnn_input, dim=-1)
+    assert tuple(ttnn_output.shape) == (1, 1, 17, 64)
+    assert_with_pcc(torch_expected, ttnn.to_torch(ttnn_output), 0.999)
 
 
-def test_softmax_rejects_non_tile_aligned_w(device):
+def test_softmax_accepts_non_tile_aligned_w(device):
+    """Refinement 4: W % 32 != 0 is now in SUPPORTED["alignment"] as
+    ``w_non_aligned``. For dim=-1 the W axis is the reduce dim; the
+    partial-scaler pair masks the padded columns in the last W tile."""
     torch_input = torch.randn((1, 1, 32, 50), dtype=torch.float32)
+    torch_expected = torch.softmax(torch_input, dim=-1)
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.float32,
@@ -194,8 +203,9 @@ def test_softmax_rejects_non_tile_aligned_w(device):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    with pytest.raises(VALIDATION_ERRORS):
-        softmax(ttnn_input, dim=-1)
+    ttnn_output = softmax(ttnn_input, dim=-1)
+    assert tuple(ttnn_output.shape) == (1, 1, 32, 50)
+    assert_with_pcc(torch_expected, ttnn.to_torch(ttnn_output), 0.999)
 
 
 def test_softmax_rejects_bfloat16_with_unsupported_config(device):

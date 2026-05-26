@@ -5,11 +5,24 @@
 Program descriptor for the softmax operation.
 
 Refinement 1 — L1-budget-bounded chunked design.
+Refinement 4 — non-tile-aligned shapes (W % 32 != 0 or H % 32 != 0).
 
 The Phase-0 kernel sized `cb_input_tiles` to `2 × reduce_dim_tiles` and `cb_exps`
 to `reduce_dim_tiles`, which OOMs at wide reduce dims (Wt = 128 / W = 4096
 gave ~2.6 MB on a 1.5 MB L1 budget). The new design's per-core CB footprint is
 bounded by a constant `BLOCK_SIZE` instead of scaling with `reduce_dim_tiles`.
+
+Refinement 4: when the reduce dim's logical size is not a multiple of 32, the
+last tile in the reduce strip is partially valid. The dataflow helper
+`calculate_and_prepare_partial_reduce_scalers<>` emits a (full, partial)
+scaler-tile pair into both `cb_max_scaler` and `cb_sum_scaler`; the compute side
+forwards `ReducePartialScaler::last_tile_at(1)` to `reduce<MAX>` (Pass 1) and
+`accumulate_reduce_block<SUM>` (Pass 2 / Pass 1-of-unstable). The partial
+scaler zeros out padded positions so they contribute neutrally — 0 for SUM, and
+the GMPOOL LLK's pre-multiply-then-max consumes the same mask. Pass 3 (the
+output mul) produces garbage in padded positions; the host-side
+`ttnn.to_layout(..., ROW_MAJOR_LAYOUT)` (or any read-back path that respects
+the logical shape) discards them.
 
 Chunked algorithm (numeric_stable=True, 3 reader passes over `x`):
     Pass 1: reduce<MAX, REDUCE_DIM, WaitAndPopPerTile>(cb_input_tiles, ...) → cb_max
@@ -101,8 +114,13 @@ def create_program_descriptor(
     n, c, h, w = shape
 
     nc = n * c
-    Ht = h // TILE_DIM
-    Wt = w // TILE_DIM
+    # Refinement 4: ceil division so non-aligned H/W produce the correct
+    # *storage* tile count (TILE_LAYOUT pads each H/W up to a tile-aligned
+    # boundary). The reader/writer index into Ht*Wt tiles per NC, regardless
+    # of the logical (non-aligned) size; the partial scaler masks the unused
+    # positions in the last reduce-dim tile.
+    Ht = (h + TILE_DIM - 1) // TILE_DIM
+    Wt = (w + TILE_DIM - 1) // TILE_DIM
 
     # Reduce-strip definition (see op_design.md, "Reduce-strip definition").
     # dim=-1 → strip = 1×Wt tiles, num_strips = NC*Ht, reduce_dim_tiles = Wt.
@@ -110,11 +128,21 @@ def create_program_descriptor(
     if dim == -1:
         num_strips = nc * Ht
         reduce_dim_tiles = Wt
+        reduce_dim_logical = w
     elif dim == -2:
         num_strips = nc * Wt
         reduce_dim_tiles = Ht
+        reduce_dim_logical = h
     else:
         raise ValueError(f"softmax program descriptor: unsupported dim={dim}")
+
+    # Refinement 4 — partial-scaler handling.
+    # `partial` is the number of *valid* reduce-axis elements in the last tile
+    # along the reduce dim (0 when tile-aligned). The reader/compute both gate
+    # on `has_partial`; when nonzero, the scaler CBs each carry a (full,
+    # partial) tile pair instead of a single full tile.
+    partial = reduce_dim_logical % TILE_DIM
+    has_partial = 1 if partial > 0 else 0
 
     BLOCK_SIZE = _pick_block_size(reduce_dim_tiles)
     NUM_BLOCKS = reduce_dim_tiles // BLOCK_SIZE
@@ -200,8 +228,12 @@ def create_program_descriptor(
                 )
             ],
         ),
+        # Refinement 4: when partial > 0 the reader emits TWO scaler tiles per
+        # scaler CB (the full + partial pair); the compute side waits on
+        # both. Size each scaler CB accordingly. Aligned shapes keep the
+        # 1-tile sizing.
         ttnn.CBDescriptor(
-            total_size=1 * scaler_page_size,
+            total_size=(2 if has_partial else 1) * scaler_page_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
@@ -212,7 +244,7 @@ def create_program_descriptor(
             ],
         ),
         ttnn.CBDescriptor(
-            total_size=1 * scaler_page_size,
+            total_size=(2 if has_partial else 1) * scaler_page_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
@@ -279,13 +311,17 @@ def create_program_descriptor(
     #   [2] Wt
     #   [3] reduce_dim_tiles
     #   [4] num_input_passes       — 3 for numeric_stable, 2 otherwise
-    #   [5..] TensorAccessorArgs(input_tensor)
+    #   [5] partial                — Refinement 4: # valid reduce-axis elements in the last
+    #                                tile (0 ⇒ tile-aligned, use single-tile scaler API;
+    #                                1..31 ⇒ non-aligned, use partial scaler API)
+    #   [6..] TensorAccessorArgs(input_tensor)
     reader_ct_args = [
         dim_is_row,
         Ht,
         Wt,
         reduce_dim_tiles,
         num_input_passes,
+        partial,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -311,6 +347,9 @@ def create_program_descriptor(
     #   [4] reduce_dim_tiles
     #   [5] BLOCK_SIZE
     #   [6] NUM_BLOCKS
+    #   [7] has_partial      — Refinement 4: 1 ⇒ partial-scaler routing on the last reduce-dim
+    #                          iteration of reduce<MAX> (Pass 1) and accumulate_reduce_block<SUM>
+    #                          (Pass 2). 0 keeps the aligned single-tile path.
     compute_ct_args = [
         dim_is_row,
         numeric_stable_flag,
@@ -319,6 +358,7 @@ def create_program_descriptor(
         reduce_dim_tiles,
         BLOCK_SIZE,
         NUM_BLOCKS,
+        has_partial,
     ]
 
     # ------- Runtime args (per-core: strip count + starting strip index) -------

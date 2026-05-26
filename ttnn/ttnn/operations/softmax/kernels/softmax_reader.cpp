@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Softmax reader — Refinement 1 (chunked, multi-pass).
+// Softmax reader — Refinement 1 (chunked, multi-pass) + Refinement 4
+// (non-tile-aligned reduce dim).
 //
 // Per-core work:
 //   1. One-shot at boot: emit one MAX scaler tile (value 1.0) into cb_max_scaler
@@ -10,6 +11,13 @@
 //      `calculate_and_prepare_reduce_scaler` so the tile fill pattern is
 //      correct for both REDUCE_ROW (col-0 fill for SUM/AVG, row-0 fill for MAX)
 //      and REDUCE_COL (row-0 fill).
+//
+//      Refinement 4: when the reduce dim's logical size is not a multiple of
+//      32 (`partial > 0`), `calculate_and_prepare_partial_reduce_scalers`
+//      emits TWO scaler tiles per scaler CB instead of one — tile 0 is the
+//      full scaler, tile 1 zeros out the padded positions on the reduce
+//      axis. The compute side picks tile 1 for the last reduce-dim tile via
+//      `ReducePartialScaler::last_tile_at(1)`.
 //   2. Strip loop: for each of `num_strips` strips, stream the strip into
 //      cb_input_tiles ONE TILE AT A TIME, `num_input_passes` times:
 //        - numeric_stable=True  → 3 passes: MAX → SUM(exp) → MUL.
@@ -45,7 +53,8 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(2);
     constexpr uint32_t reduce_dim_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t num_input_passes = get_compile_time_arg_val(4);
-    constexpr auto src_args = TensorAccessorArgs<5>();
+    constexpr uint32_t partial = get_compile_time_arg_val(5);  // Refinement 4
+    constexpr auto src_args = TensorAccessorArgs<6>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_strips = get_arg_val<uint32_t>(1);
@@ -61,24 +70,57 @@ void kernel_main() {
     // pattern (col-0 vs row-0) per (pool, reduce_dim) combo. Using the legacy
     // single-template-arg overload would silently produce wrong values for
     // REDUCE_COL or SUM REDUCE_ROW (matmul-path).
+    //
+    // Refinement 4: when `partial > 0`, the reduce axis is not tile-aligned —
+    // the last reduce-dim tile holds only `partial` valid elements followed
+    // by padding. `calculate_and_prepare_partial_reduce_scalers` emits TWO
+    // tiles per scaler CB (full + partial); the partial tile zeros out the
+    // padded reduce-axis positions so they contribute neutrally (no value to
+    // SUM, no positive bias to MAX beyond the existing zero-pad effect).
     if constexpr (dim_is_row != 0) {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            cb_max_scaler,
-            ckernel::PoolType::MAX,
-            ckernel::ReduceDim::REDUCE_ROW>();
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            cb_sum_scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW>();
+        if constexpr (partial > 0) {
+            dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+                cb_max_scaler,
+                ckernel::PoolType::MAX,
+                ckernel::ReduceDim::REDUCE_ROW,
+                partial>();
+            dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+                cb_sum_scaler,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
+                partial>();
+        } else {
+            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                cb_max_scaler,
+                ckernel::PoolType::MAX,
+                ckernel::ReduceDim::REDUCE_ROW>();
+            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                cb_sum_scaler,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW>();
+        }
     } else {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            cb_max_scaler,
-            ckernel::PoolType::MAX,
-            ckernel::ReduceDim::REDUCE_COL>();
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            cb_sum_scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_COL>();
+        if constexpr (partial > 0) {
+            dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+                cb_max_scaler,
+                ckernel::PoolType::MAX,
+                ckernel::ReduceDim::REDUCE_COL,
+                partial>();
+            dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+                cb_sum_scaler,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_COL,
+                partial>();
+        } else {
+            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                cb_max_scaler,
+                ckernel::PoolType::MAX,
+                ckernel::ReduceDim::REDUCE_COL>();
+            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                cb_sum_scaler,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_COL>();
+        }
     }
 
     // -------- Strip streaming loop --------

@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Softmax compute kernel — Refinement 1 (chunked, L1-budget-bounded).
+// Softmax compute kernel — Refinement 1 (chunked, L1-budget-bounded) +
+// Refinement 4 (partial-scaler routing for non-tile-aligned reduce dim).
 //
 // Computes per-strip numerically-stable softmax in three passes over the input,
 // keeping per-core L1 CB usage bounded by a constant `BLOCK_SIZE` instead of
@@ -101,6 +102,7 @@ void kernel_main() {
     constexpr uint32_t reduce_dim_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t BLOCK_SIZE = get_compile_time_arg_val(5);
     constexpr uint32_t NUM_BLOCKS = get_compile_time_arg_val(6);
+    constexpr uint32_t has_partial = get_compile_time_arg_val(7);  // Refinement 4
     (void)Ht;
     (void)Wt;
     (void)reduce_dim_tiles;
@@ -128,18 +130,36 @@ void kernel_main() {
 
     constexpr bool NUMERIC_STABLE = (numeric_stable_flag != 0);
 
+    // Refinement 4: partial-scaler selector. When the reduce-dim's logical size
+    // is not a multiple of 32, the reader pushed a (full, partial) scaler tile
+    // pair into both scaler CBs; the helper picks tile 1 for the last
+    // reduce-dim iteration. Aligned shapes pass `none()`, which keeps the
+    // single-tile behaviour.
+    constexpr auto partial_scaler =
+        (has_partial != 0) ? ckl::ReducePartialScaler::last_tile_at(1) : ckl::ReducePartialScaler::none();
+
     // ---- Strip loop ----
     for (uint32_t s = 0; s < num_strips; ++s) {
         if constexpr (NUMERIC_STABLE) {
             // ----- Pass 1: stream the full reduce dim, compute MAX -----
             // WaitAndPopPerTile keeps cb_input_tiles bounded at 2 pages — the
             // reduce holds DST across all reduce_dim_tiles tiles and packs once.
+            // partial_scaler is `none()` for tile-aligned shapes and
+            // `last_tile_at(1)` for Refinement 4 non-aligned shapes (the
+            // overrides routed through accordingly).
             ckl::reduce<
                 ckernel::PoolType::MAX,
                 REDUCE_AXIS,
                 ckl::ReduceInputPolicy::WaitAndPopPerTile,
                 ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT>(
-                cb_input_tiles, cb_max_scaler, cb_max, pass1_reduce_shape);
+                cb_input_tiles,
+                cb_max_scaler,
+                cb_max,
+                pass1_reduce_shape,
+                ckl::ReduceInputMemoryLayout::contiguous(),
+                ckl::NoAccumulation{},
+                ckl::NoOp{},
+                partial_scaler);
 
             // ----- Pass 2: stream x again, per-block sub+exp → SUM, recip on last -----
             for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
@@ -160,6 +180,11 @@ void kernel_main() {
                 // accumulate_reduce_block routes the recip postop ONLY to the
                 // last block (b == NUM_BLOCKS-1), so cb_inv_sum ends the loop
                 // holding `1 / Σ exp(x - max)`.
+                //
+                // Refinement 4: the helper forwards `partial_scaler` only on
+                // the last block, where the inner reduce<> uses it for the
+                // last reduce-dim iteration (which is also the strip's last
+                // tile, since NUM_BLOCKS * BLOCK_SIZE = reduce_dim_tiles).
                 ckl::accumulate_reduce_block<ckernel::PoolType::SUM, REDUCE_AXIS>(
                     cb_centered_exp,
                     cb_sum_scaler,
@@ -167,7 +192,7 @@ void kernel_main() {
                     block_reduce_shape,
                     b,
                     NUM_BLOCKS,
-                    ckl::ReducePartialScaler::none(),
+                    partial_scaler,
                     [](uint32_t dst_idx) {
                         // legacy_compat=false picks the Newton-Raphson recip
                         // (≤1 ulp with fp32 DEST); the default legacy path
@@ -217,7 +242,7 @@ void kernel_main() {
                     block_reduce_shape,
                     b,
                     NUM_BLOCKS,
-                    ckl::ReducePartialScaler::none(),
+                    partial_scaler,
                     [](uint32_t dst_idx) {
                         recip_tile_init</*legacy_compat=*/false>();
                         recip_tile</*legacy_compat=*/false>(dst_idx);
