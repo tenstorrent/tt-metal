@@ -12,7 +12,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="${TT_METAL_HOME:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+REPO="${TT_METAL_HOME:-${SLURM_SUBMIT_DIR:-$(cd "${SCRIPT_DIR}/.." REPO="${TT_METAL_HOME:-$(cd "${SCRIPT_DIR}/.." && pwd)}"REPO="${TT_METAL_HOME:-$(cd "${SCRIPT_DIR}/.." && pwd)}" pwd)}}"
 # shellcheck source=scripts/lib/require-bh-glx-compute.sh
 source "${REPO}/scripts/lib/require-bh-glx-compute.sh"
 require_bh_glx_compute

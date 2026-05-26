@@ -9,6 +9,7 @@ PARTITION="${PARTITION:-bh_sc5_B2B9_D12}"
 STAMP="${RESULTS_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
 export RESULTS_STAMP="${STAMP}"
 export CRAQ_SIM="${CRAQ_SIM:-/data/rsong/craq-sim}"
+export TT_METAL_HOME="${TT_METAL_HOME:-$REPO}"
 export PER_CMD_TIMEOUT="${PER_CMD_TIMEOUT:-3600}"
 
 host="$(hostname -s 2>/dev/null || hostname)"
@@ -37,7 +38,7 @@ submit() {
     job_id=$(sbatch ${dep_arg} \
         --partition="${PARTITION}" \
         --nodelist="${NODE}" \
-        --export=ALL,RESULTS_DIR,RESULTS_STAMP,CRAQ_SIM,PER_CMD_TIMEOUT \
+        --export=ALL,RESULTS_DIR,RESULTS_STAMP,CRAQ_SIM,TT_METAL_HOME,PER_CMD_TIMEOUT \
         "$@" \
         "$script" | awk '{print $4}')
     echo "  ${name}: job ${job_id} -> ${RESULTS_DIR}"
