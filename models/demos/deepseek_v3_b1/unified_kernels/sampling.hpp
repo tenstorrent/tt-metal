@@ -121,8 +121,7 @@ template <MathFidelity math_fidelity>
 ALWI void sampling_mul_tiles_bcast_scalar_init_short(
     uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init_with_operands<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, math_fidelity>(
-        icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, math_fidelity>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
 }
 
@@ -141,7 +140,7 @@ ALWI void sampling_mul_tiles_bcast_scalar(
 template <MathFidelity math_fidelity>
 ALWI void sampling_mul_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init_with_operands<EltwiseBinaryType::ELWMUL, BroadcastType::COL, math_fidelity>(
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, math_fidelity>(
         icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1)));
 }
