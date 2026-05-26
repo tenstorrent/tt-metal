@@ -2,15 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Legacy ttml-backed Llama completer (verbatim copy from ``examples/grpo``).
+"""ttml-backed Llama completer (verbatim copy from ``examples/grpo``).
 
-This module preserves the older ``GRPOCompleter`` implementation that drives
+This module preserves the ``GRPOCompleter`` implementation that drives
 the Python ttml ``Llama`` model directly (with the
-``LlamaCompositeKV`` attention override). It is kept here, alongside the
-newer tt-transformers-backed completer in :mod:`utils.llama_completer`, so
+``LlamaCompositeKV`` attention override). It lives alongside the
+tt-transformers-backed completer in :mod:`utils.llama_completer` so
 ``gen_hf_ttt.py`` can compare both backends against HuggingFace on the same
-prompts. The class is intentionally renamed to ``LlamaGRPOCompleterOld`` so
-both completers can be imported into the same script without a name clash.
+prompts. The class is named ``LlamaCompleterTtml`` so both completers can
+be imported into the same script without a name clash.
 """
 
 from __future__ import annotations
@@ -151,7 +151,7 @@ def _ensure_safetensors_dir(model_dir: str) -> str:
     return model_dir
 
 
-class LlamaGRPOCompleterOld(GRPOCompleter):
+class LlamaCompleterTtml(GRPOCompleter):
     """Legacy Llama-specific completion engine (ttml ``Llama`` backend).
 
     Renamed from ``LlamaGRPOCompleter`` so this module can co-exist with
