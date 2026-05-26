@@ -436,6 +436,12 @@ class Qwen35ModelArgs(ModelArgs):
         mapped = module_map.get(module_name, module_name.lower())
         return layer_prefix + mapped
 
+    def reference_mlp(self):
+        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5MLP
+
+        text_config = self.hf_config.text_config
+        return Qwen3_5MLP(text_config, text_config.intermediate_size)
+
 
 # ── Weight Preparation Helpers ─────────────────────────────────────────────
 
