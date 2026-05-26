@@ -8,6 +8,7 @@ import fileinput
 import asyncio
 import pprint
 import json
+import sys
 import re
 
 timeregex = "\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+"
@@ -470,7 +471,7 @@ def print_summary(runs: list[TestRun]):
     for r in runs:
         rows.append([shortname(r.name), r.status])
 
-    print(table("Test summary", headers, rows))
+    print_table(table("Test summary", headers, rows))
 
 
 def link_name(l: TestedLink) -> str:
@@ -488,6 +489,20 @@ def format_rate(r: float) -> str:
         return "<0.1ppm"
 
     return s
+
+
+def format_fail(fail: bool) -> str:
+    return "FAIL" if fail else "OK"
+
+
+refail = re.compile("(FAILED|FAIL)")
+
+
+def print_table(t: str):
+    if not sys.stdout.isatty():
+        print(t)
+    else:
+        print(re.sub(refail, "\x1b[31m\\1\x1b[0m", t))
 
 
 def print_test_summary(t: TestCase, runs: list[TestRun]):
@@ -531,10 +546,10 @@ def print_test_summary(t: TestCase, runs: list[TestRun]):
 
                 rate = max(rate, e["data"]["rate"])
 
-            row += [len(links[k]["errors"]), format_rate(rate), "FAIL" if len(links[k]["errors"]) else "OK"]
+            row += [len(links[k]["errors"]), format_rate(rate), format_fail(bool(links[k]["errors"]))]
             rows.append(row)
 
-        print(table(f"{t} test summary", headers, rows))
+        print_table(table(f"{t} test summary", headers, rows))
 
 
 def print_test_summary_per_chip(t: TestCase, runs: list[TestRun]):
@@ -581,7 +596,7 @@ def print_test_summary_per_chip(t: TestCase, runs: list[TestRun]):
             bdf = ch["bdf"]
             bws = ch["bws"]
             err = ch["errors"]
-            msg = "FAIL" if err > 0 else "OK"
+            msg = format_fail(err > 0)
 
             row = [c, bdf, ch["tests"]]
             if have_bws:
@@ -590,7 +605,7 @@ def print_test_summary_per_chip(t: TestCase, runs: list[TestRun]):
 
             rows.append(row)
 
-        print(table(f"{t} per chip test summary", headers, rows))
+        print_table(table(f"{t} per chip test summary", headers, rows))
 
 
 def print_failing(runs: list[TestRun]):
@@ -605,7 +620,7 @@ def print_failing(runs: list[TestRun]):
                 # print(name, l)
                 rows.append([r.name, name, d, l.proc, errors])
 
-    print(table("Failing tests/links", headers, rows))
+    print_table(table("Failing tests/links", headers, rows))
 
 
 def print_results(runs: list[TestRun]):
