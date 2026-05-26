@@ -5,7 +5,7 @@
 import pytest
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_slow_dispatch, is_wormhole_b0
 from models.tt_dit.tests.models.wan2_2.test_all_gather_minimal_matmul_async import (
     create_fabric_router_config,
     run_test_linear,
@@ -18,7 +18,6 @@ LOUDBOX_MESH_CONFIG = {
 }
 
 
-@pytest.mark.requires_grid_size((11, 10))
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
     [
@@ -26,12 +25,12 @@ LOUDBOX_MESH_CONFIG = {
             (1, 8),
             LOUDBOX_MESH_CONFIG,
             ttnn.Topology.Ring,
-            1,
+            2,
             6,
             0,
             1,
-            11,
-            10,
+            12,
+            9,
             1,
         ],
         [
@@ -96,6 +95,9 @@ def test_linear_loudbox(
 
     assert mesh_device.shape == ttnn.MeshShape(1, 8)
 
+    if core_grid_x > 11 and not is_slow_dispatch():
+        pytest.skip("Fast dispatch mode not supported for core_grid_x > 11")
+
     check_result = run_test_linear(
         mesh_device,
         M,
@@ -132,7 +134,6 @@ def test_linear_loudbox(
 
 #
 # TODO: is this test needed for loudbox?
-# @pytest.mark.requires_grid_size((11, 10))
 # @pytest.mark.parametrize(
 #     "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
 #     [
@@ -167,6 +168,9 @@ def test_linear_loudbox(
 # ):
 #     if is_wormhole_b0():
 #         pytest.skip("Blackhole Loudbox config: core grid (11, 10) exceeds wormhole_b0 compute grid (8x8)")
+
+# if core_grid_x > 11 and not is_slow_dispatch():
+#    pytest.skip("Fast dispatch mode not supported for core_grid_x > 11")
 
 #     assert mesh_device.shape == ttnn.MeshShape(1, 8)
 
