@@ -259,6 +259,32 @@ class SamplingGenerator:
             out[: bitmask.shape[0], :packed_width] = bitmask.to(torch.int32)
         return out
 
+    def _bitmask_mesh_mapper(self):
+        cluster_shape = tuple(self.tt_sampling.cluster_shape)
+        if len(cluster_shape) != 2:
+            raise ValueError(f"Expected 2D cluster shape, got {cluster_shape}")
+
+        # The bitmask is packed over vocab, so its packed-vocab dimension must
+        # be sharded along the same mesh axis that sampling gathers logits
+        # across.  For row-sharded sampling, the other mesh axis carries
+        # independent user batches and must shard the batch dimension too.
+        if cluster_shape[0] == 1 and cluster_shape[1] > 1:
+            sampling_axis = 1
+        elif cluster_shape[1] == 1 and cluster_shape[0] > 1:
+            sampling_axis = 0
+        else:
+            sampling_axis = int(self.tt_sampling.sampling_all_gather_axis)
+
+        sampling_dp = int(self.tt_sampling._sampling_dp)
+        if sampling_axis == 0:
+            dims = (-1, 0) if sampling_dp > 1 else (-1, None)
+        elif sampling_axis == 1:
+            dims = (0, -1) if sampling_dp > 1 else (None, -1)
+        else:
+            raise ValueError(f"sampling_all_gather_axis must be 0 or 1, got {sampling_axis}")
+
+        return ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=cluster_shape)
+
     def apply_bitmask_to_logits(self, logits: ttnn.Tensor, bitmask: torch.Tensor | None) -> ttnn.Tensor:
         if bitmask is None:
             return logits
@@ -270,11 +296,11 @@ class SamplingGenerator:
             device=self.mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device, dims=(-1, None), mesh_shape=self.tt_sampling.cluster_shape
-            ),
+            mesh_mapper=self._bitmask_mesh_mapper(),
         )
-        tt_bitmask = ttnn.reshape(tt_bitmask, (self.seed_manager.max_batch_size, self._bitmask_packed_width, 1), **op_kwargs)
+        tt_bitmask = ttnn.reshape(
+            tt_bitmask, (self.seed_manager.max_batch_size, self._bitmask_packed_width, 1), **op_kwargs
+        )
         tt_bitmask = ttnn.bitwise_right_shift(tt_bitmask, self._bitmask_arange, **op_kwargs)
         tt_bitmask = ttnn.bitwise_and(tt_bitmask, 1, **op_kwargs)
         tt_bitmask = ttnn.reshape(tt_bitmask, (self.seed_manager.max_batch_size, -1), **op_kwargs)
