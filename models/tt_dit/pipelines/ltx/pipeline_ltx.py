@@ -1020,8 +1020,11 @@ class LTXPipeline:
 
         from ...models.transformers.ltx.rope_ltx import LTXRopeType
 
+        # NOTE: positions MUST stay fp32 (was .bfloat16() - introduced catastrophic phase error in
+        # high-frequency RoPE channels: 1700x worse than fp32, completely randomizing cos/sin in the
+        # top half of head_dim).
         cos_freq, sin_freq = precompute_freqs_cis(
-            v_positions.bfloat16(),
+            v_positions,
             dim=self.inner_dim,
             out_dtype=torch.float32,
             theta=self.positional_embedding_theta,
@@ -1224,8 +1227,11 @@ class LTXPipeline:
         a_shape = AudioLatentShape(batch=1, channels=8, frames=audio_N_real, mel_bins=16)
         a_positions = audio_get_patch_grid_bounds(a_shape).float()  # (1, 1, N, 2)
 
+        # NOTE: positions MUST stay fp32 (was .bfloat16() - introduced catastrophic phase error in
+        # high-frequency RoPE channels: 1700x worse than fp32 for audio, completely randomizing
+        # cos/sin in the top half of head_dim. HF reference uses fp32/fp64 throughout.
         a_cos, a_sin = precompute_freqs_cis(
-            a_positions.bfloat16(),
+            a_positions,
             dim=2048,
             out_dtype=torch.float32,
             theta=self.positional_embedding_theta,
@@ -1305,8 +1311,11 @@ class LTXPipeline:
             rope_type=LTXRopeType.SPLIT,
         )
 
-        v_cos, v_sin = precompute_freqs_cis(v_temporal.bfloat16(), **rope_kwargs)  # (1, 32, video_N, 32)
-        a_cos, a_sin = precompute_freqs_cis(a_positions.bfloat16(), **rope_kwargs)  # (1, 32, audio_N_real, 32)
+        # NOTE: positions MUST stay fp32 (was .bfloat16() - introduced catastrophic phase error in
+        # high-frequency RoPE channels: 1700x worse than fp32, completely randomizing cos/sin in the
+        # top half of head_dim).
+        v_cos, v_sin = precompute_freqs_cis(v_temporal, **rope_kwargs)  # (1, 32, video_N, 32)
+        a_cos, a_sin = precompute_freqs_cis(a_positions, **rope_kwargs)  # (1, 32, audio_N_real, 32)
 
         # Pad audio cross-PE to audio_N (matching the audio RoPE padding scheme: cos=1, sin=0).
         if audio_N > audio_N_real:
@@ -1396,9 +1405,14 @@ class LTXPipeline:
             return None, None, None
 
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+        # Column mask only: real/padded queries are barred from attending TO padded keys.
+        # Do NOT mask padded-query rows to -inf — that makes all attention scores in those
+        # rows -inf → softmax NaN → NaN propagates via padded-token outputs (which we then
+        # multiply by 0; IEEE 0*NaN = NaN, not 0). audio_padding_mask already zeros the
+        # padded-query outputs after attention, so column-only masking is sufficient and
+        # numerically safer at high σ where activations have largest magnitude.
         mask = torch.zeros(1, 1, audio_N, audio_N)
         mask[:, :, :, audio_N_real:] = float("-inf")
-        mask[:, :, audio_N_real:, :] = float("-inf")
         mask = mask.to(torch.bfloat16)
         tt_attn_mask = bf16_tensor(
             mask,
@@ -1533,8 +1547,20 @@ class LTXPipeline:
                     audio_padding_mask=tt_pad_mask_sp,
                     audio_padding_mask_full=tt_pad_mask_full,
                 )
-                vv = LTXTransformerModel.device_to_host(v).squeeze(0)
-                av = LTXTransformerModel.device_to_host(a).squeeze(0)
+                vv = LTXTransformerModel.device_to_host(
+                    v,
+                    ccl_manager=self.ccl_manager,
+                    parallel_config=self.parallel_config,
+                    sp_already_gathered=True,
+                    tp_already_gathered=True,
+                ).squeeze(0)
+                av = LTXTransformerModel.device_to_host(
+                    a,
+                    ccl_manager=self.ccl_manager,
+                    parallel_config=self.parallel_config,
+                    sp_already_gathered=True,
+                    tp_already_gathered=True,
+                ).squeeze(0)
                 vd = (video_lat.bfloat16().float() - vv.float() * sigma).bfloat16()
                 ad = (audio_lat.bfloat16().float() - av.float() * sigma).bfloat16()
                 return vd, self._zero_audio_padding(ad, audio_N_real)

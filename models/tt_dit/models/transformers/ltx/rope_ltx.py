@@ -38,6 +38,15 @@ def generate_freq_grid(
 
     Uses a power-law spacing: theta^linspace(log(1)/log(theta), 1, D) * pi/2
     where D = inner_dim // (2 * max_pos_count).
+
+    NOTE: Output is fp32 even though HF's reference uses fp64 when
+    ``frequencies_precision == "float64"``. Empirically upgrading to fp64
+    here (May 2026) made TT vs HF audio correlation *worse* (0.36 → 0.15
+    on the seed=10 benchmark) — the bf16 residual stream tracks a different
+    trajectory better with fp32 grid. The chaotic compounding across
+    8 Euler × 48 blocks × 32 RoPE applies means matching HF's fp64 grid
+    bit-exactly is *not* the right target when downstream storage is bf16.
+    Keep at fp32 unless we move the entire RoPE+residual path to fp32.
     """
     theta = positional_embedding_theta
     n_elem = 2 * positional_embedding_max_pos_count

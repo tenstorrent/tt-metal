@@ -89,8 +89,20 @@ def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
 
 def gelu_tanh(x: ttnn.Tensor) -> ttnn.Tensor:
     # GELU tanh approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+    #
+    # IMPORTANT: do NOT use ``ttnn.pow(x, 3)`` here. Many backends implement
+    # ``pow`` as ``exp(n * log(x))`` which produces NaN/Inf for x < 0. The
+    # pre-activation tensor that lands in this function has ~half its
+    # elements negative (it's a post-AdaLN-modulated activation feeding a
+    # GeLU), so a NaN-producing pow turns most of the FFN output into NaN,
+    # which downstream addcmuls then mix into ``audio_1BND``. The bf16
+    # representation flushes NaN to zero in some places and propagates in
+    # others, producing structured artefacts in the audio decoder (the
+    # "mesh of 4 voices" symptom). Use explicit cubing — three bf16 muls,
+    # numerically safe for any sign.
     sqrt_2_over_pi = math.sqrt(2.0 / math.pi)
-    inner = ttnn.add(x, ttnn.multiply(ttnn.pow(x, 3), 0.044715))
+    x_cubed = ttnn.multiply(ttnn.multiply(x, x), x)
+    inner = ttnn.add(x, ttnn.multiply(x_cubed, 0.044715))
     one_plus_tanh = 1.0 + ttnn.tanh(ttnn.multiply(inner, sqrt_2_over_pi))
     return 0.5 * x * one_plus_tanh
 

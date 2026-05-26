@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import gc
+import os
 import time
 
 import torch
@@ -128,8 +129,20 @@ class LTXFastPipeline(LTXAVPipeline):
                 audio_padding_mask=tt_pad_mask_sp,
                 audio_padding_mask_full=tt_pad_mask_full,
             )
-            v_vel = LTXTransformerModel.device_to_host(v_out).squeeze(0)
-            a_vel = LTXTransformerModel.device_to_host(a_out).squeeze(0)
+            v_vel = LTXTransformerModel.device_to_host(
+                v_out,
+                ccl_manager=self.ccl_manager,
+                parallel_config=self.parallel_config,
+                sp_already_gathered=True,
+                tp_already_gathered=True,
+            ).squeeze(0)
+            a_vel = LTXTransformerModel.device_to_host(
+                a_out,
+                ccl_manager=self.ccl_manager,
+                parallel_config=self.parallel_config,
+                sp_already_gathered=True,
+                tp_already_gathered=True,
+            ).squeeze(0)
 
             v_den = (video_lat.bfloat16().float() - v_vel.float() * sigma).bfloat16()
             a_den = (audio_lat.bfloat16().float() - a_vel.float() * sigma).bfloat16()
@@ -146,6 +159,62 @@ class LTXFastPipeline(LTXAVPipeline):
             logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f}")
 
         return video_lat, audio_lat[:, :audio_N_real, :]
+
+    @staticmethod
+    def _write_stage1_wav(audio_obj, path: str) -> None:
+        """Write decoded audio as stereo WAV (2, T) → (T, 2) for soundfile."""
+        import soundfile as sf
+
+        wav = audio_obj.waveform
+        if wav.dim() == 3:
+            wav = wav[0]
+        if wav.dim() == 2:
+            wav = wav.transpose(0, 1)
+        sf.write(path, wav.cpu().numpy(), int(audio_obj.sampling_rate))
+
+    def generate_stage1_only(
+        self,
+        prompt: str,
+        *,
+        output_path: str,
+        num_frames: int = 121,
+        height: int = 512,
+        width: int = 768,
+        seed: int = 10,
+        fps: int = 24,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Run stage-1 denoise only; optionally dump ``<output_path>_s1.wav``."""
+        assert height % 64 == 0, f"Height must be divisible by 64 (got {height})"
+        assert width % 64 == 0, f"Width must be divisible by 64 (got {width})"
+
+        s1_height, s1_width = height // 2, width // 2
+        results = self.encode_prompts_reference([prompt])
+        v_embeds = results[0].video_encoding.float()
+        a_embeds = results[0].audio_encoding.float()
+
+        self._prepare_transformer()
+        gc.collect()
+
+        s1_video, s1_audio = self._denoise_no_guidance(
+            v_embeds,
+            a_embeds,
+            num_frames=num_frames,
+            height=s1_height,
+            width=s1_width,
+            sigma_values=DISTILLED_SIGMA_VALUES,
+            seed=seed,
+        )
+
+        if os.environ.get("LTX_DECODE_S1_AUDIO", "").lower() in ("1", "true", "yes") or os.environ.get(
+            "LTX_DUMP_STAGE1_AUDIO", ""
+        ).lower() in ("1", "true", "yes"):
+            s1_path = output_path.replace(".mp4", "_s1.wav")
+            audio_obj = self.decode_audio_reference(s1_audio, num_frames, fps=fps)
+            if audio_obj is not None:
+                self._write_stage1_wav(audio_obj, s1_path)
+                logger.info(f"Stage-1 audio dump: wrote {s1_path}")
+
+        return s1_video, s1_audio
 
     def _upsample_latent_reference(self, video_latent: torch.Tensor, upsampler_path: str) -> torch.Tensor:
         import sys
@@ -214,6 +283,14 @@ class LTXFastPipeline(LTXAVPipeline):
             seed=seed,
         )
         logger.info(f"Stage 1: {time.time() - t0:.1f}s")
+
+        if os.environ.get("LTX_DECODE_S1_AUDIO", "").lower() in ("1", "true", "yes"):
+            s1_path = output_path.replace(".mp4", "_s1.wav")
+            audio_obj = self.decode_audio_reference(s1_audio, num_frames, fps=fps)
+            if audio_obj is not None:
+                self._write_stage1_wav(audio_obj, s1_path)
+                logger.info(f"LTX_DECODE_S1_AUDIO: wrote {s1_path}")
+            return output_path
 
         self.transformer = None
         gc.collect()

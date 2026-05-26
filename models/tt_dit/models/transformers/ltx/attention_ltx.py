@@ -106,13 +106,13 @@ class LTXAttention(Module):
             "ccl_manager": ccl_manager,
         }
 
-        kv_input_dim = context_dim if (context_dim is not None and not is_self) else dim
+        self.kv_input_dim = context_dim if (context_dim is not None and not is_self) else dim
 
         if is_self:
             self.to_qkv = ColParallelLinear(dim, 3 * dim, chunks=3, **col_parallel_kwargs)
         else:
             self.to_q = ColParallelLinear(self.query_input_dim, dim, **col_parallel_kwargs)
-            self.to_kv = ColParallelLinear(kv_input_dim, 2 * dim, chunks=2, **col_parallel_kwargs)
+            self.to_kv = ColParallelLinear(self.kv_input_dim, 2 * dim, chunks=2, **col_parallel_kwargs)
 
         self.to_out = ColParallelLinear(
             dim,
@@ -159,11 +159,18 @@ class LTXAttention(Module):
             exp_approx_mode=False,
         )
 
+        # SDPA at HiFi4 (was HiFi2). HiFi2 on long video K/V with concentrated late-block
+        # cross-attn weights compounds into ~5% per-block error in A↔V cross-attn (a2v_out,
+        # v2a_out) that doesn't show in single-step pre_av/post_av but pollutes the video
+        # residual stream by block ~30 and degrades v2a_kv (modulated video) at late blocks
+        # (44+ → 0.92). Bumping to HiFi4 (matches mm and rope kernel configs) trades ~20%
+        # SDPA throughput for stable AV cross-attn quality across 48 blocks × 8 steps.
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -265,28 +272,48 @@ class LTXAttention(Module):
         """Compute per-head gate on host for exact fp32 precision.
 
         Gate logits = linear(x, W_gate, b_gate) → 2*sigmoid(logits)
-        Returns gate tensor on device with shape (B, H_local, N, 1) for BHNE broadcast multiply.
+        Returns gate tensor on device with shape (B, H_local, N_local, 1) for BHNE broadcast multiply.
         Returns None if no gate weights are loaded.
+
+        Must gather the full SP sequence before computing gates: ``forward()`` already
+        TP-gathered ``spatial_1BND`` on dim 3, but reading only device 0 leaves SP
+        shard 1 with shard-0 gate values → audible doubling / harmony on bh_2x4sp1tp0.
         """
         if self._gate_weight_host is None:
             return None
 
-        # Read spatial from device for host-side gate computation
-        spatial_host = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BND)[0]).float()
-        gate_logits = torch.nn.functional.linear(spatial_host, self._gate_weight_host, self._gate_bias_host)
+        sp_factor = self.parallel_config.sequence_parallel.factor
+        tp_factor = self.parallel_config.tensor_parallel.factor
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+
+        if sp_factor > 1 or tp_factor > 1:
+            from models.tt_dit.utils.mesh_gather import gather_host_1bnd
+
+            spatial_host = gather_host_1bnd(
+                spatial_1BND,
+                ccl_manager=self.ccl_manager,
+                parallel_config=self.parallel_config,
+                tp_already_gathered=True,
+                sp_already_gathered=False,
+            )
+        else:
+            spatial_host = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BND)[0]).float()
+
+        gate_logits = torch.nn.functional.linear(spatial_host.float(), self._gate_weight_host, self._gate_bias_host)
         gate_values = 2.0 * torch.sigmoid(gate_logits)  # (1, B, N, H_total) in fp32
 
         # Permute to BHNE format: (B, H_total, N, 1)
         gate_bhne = gate_values.permute(1, 3, 2, 0).contiguous().bfloat16()
 
-        # Shard across TP devices if needed
-        tp_factor = self.parallel_config.tensor_parallel.factor
-        if tp_factor > 1:
-            tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+        if sp_factor > 1 or tp_factor > 1:
             mapper = ttnn.ShardTensor2dMesh(
                 self.mesh_device,
                 mesh_shape=tuple(self.mesh_device.shape),
-                dims=[None if i != tp_axis else 1 for i in range(2)],
+                dims=[
+                    2 if i == sp_axis and sp_factor > 1 else (1 if i == tp_axis and tp_factor > 1 else None)
+                    for i in range(2)
+                ],
             )
             return ttnn.from_torch(
                 gate_bhne,
@@ -295,13 +322,12 @@ class LTXAttention(Module):
                 dtype=ttnn.bfloat16,
                 mesh_mapper=mapper,
             )
-        else:
-            return ttnn.from_torch(
-                gate_bhne,
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-            )
+        return ttnn.from_torch(
+            gate_bhne,
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+        )
 
     @staticmethod
     def _apply_split_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, d_half: int) -> ttnn.Tensor:
@@ -311,6 +337,46 @@ class LTXAttention(Module):
         out1 = ttnn.subtract(ttnn.multiply(x1, cos), ttnn.multiply(x2, sin))
         out2 = ttnn.add(ttnn.multiply(x2, cos), ttnn.multiply(x1, sin))
         return ttnn.concat([out1, out2], dim=-1)
+
+    def _sdpa_gather_q_partition(
+        self,
+        q_BHNE: ttnn.Tensor,
+        k_BHNE: ttnn.Tensor,
+        v_BHNE: ttnn.Tensor,
+        *,
+        attn_mask: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        """SDPA with full K; gather Q (and mask rows) across SP, then partition output.
+
+        Blackhole standard SDPA is wrong for SP-sharded Q × gathered K (audio self + A↔V cross).
+        """
+        sp_factor = self.parallel_config.sequence_parallel.factor
+        if sp_factor <= 1:
+            return ttnn.transformer.scaled_dot_product_attention(
+                q_BHNE,
+                k_BHNE,
+                v_BHNE,
+                attn_mask=attn_mask,
+                is_causal=False,
+                program_config=self.sdpa_program_config,
+                compute_kernel_config=self.sdpa_compute_kernel_config,
+            )
+
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+        q_full = self.ccl_manager.all_gather_persistent_buffer(q_BHNE, dim=2, mesh_axis=sp_axis)
+        mask_full = attn_mask
+        if attn_mask is not None:
+            mask_full = self.ccl_manager.all_gather_persistent_buffer(attn_mask, dim=2, mesh_axis=sp_axis)
+        out_full = ttnn.transformer.scaled_dot_product_attention(
+            q_full,
+            k_BHNE,
+            v_BHNE,
+            attn_mask=mask_full,
+            is_causal=False,
+            program_config=self.sdpa_program_config,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+        )
+        return ttnn.mesh_partition(out_full, dim=2, cluster_axis=sp_axis)
 
     def _apply_split_rope_host(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, d_half: int) -> ttnn.Tensor:
         """Apply split rope on host — fallback for D_half sizes that cause TTNN subtile issues.
@@ -431,6 +497,13 @@ class LTXAttention(Module):
             q_1BNF, k_1BNF, v_1BNF = self.to_qkv(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
         else:
             kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
+            # Cross K/V: ColParallel to_kv needs TP-replicated context; gather only if still sharded.
+            if prompt_1BLP is not None and self.parallel_config.tensor_parallel.factor > 1:
+                local_k = kv_input.shape[-1]
+                if local_k * self.parallel_config.tensor_parallel.factor == self.kv_input_dim:
+                    kv_input = self.ccl_manager.all_gather_persistent_buffer(
+                        kv_input, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+                    )
             q_1BNF = self.to_q(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
             k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
@@ -448,10 +521,26 @@ class LTXAttention(Module):
         k_BHNE = create_heads(k_normed)
         v_BHNE = create_heads(v_1BNF)
 
+        # Cross-attn: gather K/V across SP only when still sharded. A↔V passes context
+        # that was already SP-gathered in LTXTransformerBlock (audio_kv / video_kv);
+        # gathering again concatenates full copies (128 → 512 on SP=4).
+        is_cross = prompt_1BLP is not None
+        sp_factor = self.parallel_config.sequence_parallel.factor
+        _k_cos_pe = k_rope_cos if k_rope_cos is not None else rope_cos
+        if is_cross and sp_factor > 1:
+            sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+            if _k_cos_pe is not None:
+                need_gather = k_BHNE.shape[2] < _k_cos_pe.shape[2]
+            else:
+                need_gather = True
+            if need_gather:
+                k_BHNE = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=sp_axis)
+                v_BHNE = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=sp_axis)
+
         if rope_cos is not None:
             # Determine K RoPE: use separate k_rope if provided (cross-attention),
             # otherwise use same rope as Q (self-attention).
-            _k_cos = k_rope_cos if k_rope_cos is not None else rope_cos
+            _k_cos = _k_cos_pe if _k_cos_pe is not None else rope_cos
             _k_sin = k_rope_sin if k_rope_sin is not None else rope_sin
 
             if trans_mat is not None:
@@ -522,9 +611,14 @@ class LTXAttention(Module):
                     use_column_major_ccl=True,
                 )
             elif sp_factor > 1:
-                # On WH, ring_joint SDPA no longer fits the TENSIX kernel config buffer
-                # (program > 70656 B after recent tt-metal ring_joint_sdpa changes).
-                # Gather K/V across SP and run standard SDPA instead (same as masked path).
+                # Masked audio self-attn: gather K/V; keep Q sharded (mask rows match local Q).
+                # NOTE: forcing this branch off via LTX_AUDIO_NO_ATTN_MASK=1
+                # (drops the mask, takes the ring-joint SDPA path) moves every
+                # audio spectral metric significantly toward HF on
+                # bh_2x4sp1tp0. The mask/gather+SDPA combination is suspect;
+                # we haven't yet pinpointed whether the bug is in (a) the
+                # gather+SDPA branch itself, (b) the column-only mask shape,
+                # or (c) padded K values bleeding through masked attention.
                 sp_axis = self.parallel_config.sequence_parallel.mesh_axis
                 k_full = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=sp_axis)
                 v_full = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=sp_axis)
@@ -548,15 +642,8 @@ class LTXAttention(Module):
                     compute_kernel_config=self.sdpa_compute_kernel_config,
                 )
         else:
-            spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
-                q_BHNE,
-                k_BHNE,
-                v_BHNE,
-                attn_mask=attn_mask,
-                is_causal=False,
-                program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
-            )
+            # Cross-attention: K/V are full-seq after SP gather on dim 2.
+            spatial_BHNE = self._sdpa_gather_q_partition(q_BHNE, k_BHNE, v_BHNE, attn_mask=attn_mask)
 
         # Apply per-head gate in BHNE space (before concatenate_heads).
         # Mathematically equivalent to the reference which applies gate after concat_heads

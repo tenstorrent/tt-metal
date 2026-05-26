@@ -304,7 +304,7 @@ class LTXTransformerBlock(Module):
             else:
                 video_prompt_mod = video_prompt
             video_ca_out = self.attn2(spatial_1BND=video_ca_input, N=video_N, prompt_1BLP=video_prompt_mod)
-            video_1BND = video_1BND + video_ca_out * v_gate_ca
+            video_1BND = ttnn.addcmul(video_1BND, video_ca_out, v_gate_ca)
         else:
             # 6-output mode: cross-attention with fixed norm (no AdaLN shift/scale/gate)
             video_ca_input = self.norm2(video_1BND)
@@ -359,7 +359,7 @@ class LTXTransformerBlock(Module):
             else:
                 audio_prompt_mod = audio_prompt
             audio_ca_out = self.audio_attn2(spatial_1BND=audio_ca_input, N=audio_N, prompt_1BLP=audio_prompt_mod)
-            audio_1BND = audio_1BND + audio_ca_out * a_gate_ca
+            audio_1BND = ttnn.addcmul(audio_1BND, audio_ca_out, a_gate_ca)
         else:
             audio_ca_input = self.audio_norm2(audio_1BND)
             audio_ca_out = self.audio_attn2(spatial_1BND=audio_ca_input, N=audio_N, prompt_1BLP=audio_prompt)
@@ -382,8 +382,8 @@ class LTXTransformerBlock(Module):
             a_scale_a2v, a_shift_a2v, a_scale_v2a, a_shift_v2a, a_ca_gate = ttnn.chunk(shifted_av_a, 5, dim=2)
             a_ca_gate = ttnn.typecast(a_ca_gate, dtype=ttnn.bfloat16)
 
-            video_normed_xattn = self.norm1(video_1BND)
-            audio_normed_xattn = self.audio_norm1(audio_1BND)
+            video_normed_xattn = self.norm3(video_1BND)
+            audio_normed_xattn = self.audio_norm3(audio_1BND)
 
             # A→V: audio provides context for video
             video_q_a2v = video_normed_xattn * (1.0 + v_ca_scale) + v_ca_shift
@@ -409,7 +409,7 @@ class LTXTransformerBlock(Module):
                 k_rope_cos=audio_cross_pe_cos_full,
                 k_rope_sin=audio_cross_pe_sin_full,
             )
-            video_1BND = video_1BND + a2v_output * v_ca_gate
+            video_1BND = ttnn.addcmul(video_1BND, a2v_output, v_ca_gate)
 
             # V→A: video provides context for audio
             audio_q_v2a = audio_normed_xattn * (1.0 + a_scale_v2a) + a_shift_v2a
@@ -431,7 +431,7 @@ class LTXTransformerBlock(Module):
                 k_rope_cos=video_cross_pe_cos_full,
                 k_rope_sin=video_cross_pe_sin_full,
             )
-            audio_1BND = audio_1BND + v2a_output * a_ca_gate
+            audio_1BND = ttnn.addcmul(audio_1BND, v2a_output, a_ca_gate)
 
         # === VIDEO FEEDFORWARD ===
         video_normed = self.norm3(video_1BND)
@@ -930,6 +930,28 @@ class LTXTransformerModel(Module):
         return self.inner_step(**kwargs)
 
     @staticmethod
-    def device_to_host(tt_tensor: ttnn.Tensor) -> torch.Tensor:
-        """Move a ttnn device tensor to a torch host tensor."""
-        return ttnn.to_torch(ttnn.get_device_tensors(tt_tensor)[0])
+    def device_to_host(
+        tt_tensor: ttnn.Tensor,
+        *,
+        ccl_manager: CCLManager | None = None,
+        parallel_config: DiTParallelConfig | None = None,
+        sp_already_gathered: bool = False,
+        tp_already_gathered: bool = False,
+    ) -> torch.Tensor:
+        """Assemble SP/TP shards on host (do not read device 0 alone on multi-device meshes).
+
+        ``inner_step`` already AllGathers velocities on dim=2 before return; pass
+        ``sp_already_gathered=True`` from the denoise loop to avoid concatenating the
+        full sequence twice (audible doubling / ghost vocals).
+        """
+        if ccl_manager is not None and parallel_config is not None:
+            from models.tt_dit.utils.mesh_gather import gather_host_1bnd
+
+            return gather_host_1bnd(
+                tt_tensor,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                sp_already_gathered=sp_already_gathered,
+                tp_already_gathered=tp_already_gathered,
+            )
+        return ttnn.to_torch(ttnn.get_device_tensors(tt_tensor)[0]).float()
