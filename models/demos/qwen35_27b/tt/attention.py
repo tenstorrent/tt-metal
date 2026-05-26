@@ -12,11 +12,19 @@ Differences from standard tt_transformers Attention:
 5. Separate K/V projections (not fused QKV)
 """
 
+import os
+
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen35_27b.tt.model_config import create_prefill_matmul_program_config
+from models.demos.qwen35_27b.tt.model_config import (
+    _replicate,
+    _shard_w,
+    create_prefill_matmul_program_config,
+    prepare_attn_qg,
+    replicate_kv_weight,
+)
 from models.demos.qwen35_27b.tt.rope import apply_partial_rope_decode, apply_partial_rope_prefill, get_prefill_rot_mats
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
@@ -84,8 +92,57 @@ class Qwen35Attention(LightweightModule):
         self.v_caches = None
         self._kv_update_shard_cfg = args.kv_update_shard_cfg
 
-        # Weights set later via set_weights()
-        self.tw = self._load_weights(state_dict, layer_num, mesh_device, weight_cache_path)
+        self.tw = {}
+        cache_dir = str(weight_cache_path / "attention_mesh")
+        os.makedirs(cache_dir, exist_ok=True)
+        tp = args.num_devices
+        p = f"layers.{layer_num}."
+        ld = os.path.join(cache_dir, f"layer_{layer_num:02d}")
+        os.makedirs(ld, exist_ok=True)
+        qg_reordered = prepare_attn_qg(state_dict, p, args.n_heads, args.head_dim, tp)
+        self.tw["wqkv"] = _shard_w(
+            qg_reordered,
+            mesh_device,
+            dim=-1,
+            memory_config=args.attn_qg_weight_memcfg,
+            cache_path=os.path.join(ld, "wqkv"),
+        )
+        k_weight = state_dict[p + "attention.wk.weight"]
+        v_weight = state_dict[p + "attention.wv.weight"]
+        if args.kv_replication:
+            k_weight = replicate_kv_weight(k_weight, args.n_kv_heads, tp, args.head_dim)
+            v_weight = replicate_kv_weight(v_weight, args.n_kv_heads, tp, args.head_dim)
+        self.tw["wk"] = _shard_w(
+            k_weight,
+            mesh_device,
+            dim=-1,
+            memory_config=args.attn_k_weight_memcfg,
+            cache_path=os.path.join(ld, "wk"),
+        )
+        self.tw["wv"] = _shard_w(
+            v_weight,
+            mesh_device,
+            dim=-1,
+            memory_config=args.attn_v_weight_memcfg,
+            cache_path=os.path.join(ld, "wv"),
+        )
+        self.tw["wo"] = _shard_w(
+            state_dict[p + "attention.wo.weight"],
+            mesh_device,
+            dim=0,
+            memory_config=args.attn_wo_weight_memcfg,
+            cache_path=os.path.join(ld, "wo"),
+        )
+        self.tw["q_norm"] = _replicate(
+            state_dict[p + "attention.q_norm.weight"],
+            mesh_device,
+            os.path.join(ld, "q_norm"),
+        )
+        self.tw["k_norm"] = _replicate(
+            state_dict[p + "attention.k_norm.weight"],
+            mesh_device,
+            os.path.join(ld, "k_norm"),
+        )
 
     def _load_weights(self, state_dict, layer_num, mesh_device, weight_cache_path):
         if isinstance(state_dict, dict) and "wqkv" in state_dict:
