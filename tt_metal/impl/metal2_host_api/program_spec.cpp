@@ -677,19 +677,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 "KernelSpec '{}' must specify a DM config for Gen1, Gen2, or both.",
                 kernel.unique_id);
 
-            // The config for the current target architecture must be specified.
-            if (is_gen2_arch()) {
-                TT_FATAL(
-                    data_movement_config.gen2_data_movement_config.has_value(),
-                    "KernelSpec '{}' must specify a Gen2 DM config when targeting Quasar.",
-                    kernel.unique_id);
-            } else if (is_gen1_arch()) {
+            // Gen1 builds still require an explicit Gen1 config (its fields — processor, NOC,
+            // NOC mode — have no universally-safe defaults). Gen2 is fully optional even on
+            // Gen2 builds: absence is treated as "use defaults" (empty disable_implicit_sync_for).
+            if (is_gen1_arch()) {
                 TT_FATAL(
                     data_movement_config.gen1_data_movement_config.has_value(),
                     "KernelSpec '{}' must specify a Gen1 DM config when targeting WH or BH.",
                     kernel.unique_id);
-            } else {
-                TT_FATAL(false, "Unknown architecture");
             }
         }
     }
