@@ -108,7 +108,8 @@ class LoadFileBarrierScheduling(LoadFileScheduling):
         total_scopes = len(scoped)
         for node, ordered_nodeids in per_node.items():
             worker_collection = self.registered_collections[node]
-            indices = [worker_collection.index(nid) for nid in ordered_nodeids]
+            index_map = {nid: i for i, nid in enumerate(worker_collection)}
+            indices = [index_map[nid] for nid in ordered_nodeids]
             self.log(
                 f"Dispatching {len(indices)} tests across {total_scopes} scopes "
                 f"to {node.gateway.id}"
