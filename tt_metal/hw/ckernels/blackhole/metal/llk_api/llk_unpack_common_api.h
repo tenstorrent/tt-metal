@@ -21,33 +21,30 @@
  *************************************************************************/
 
 /**
- * Configure the unpacker hardware with explicit face geometry for operand A.
+ * Configure the unpacker hardware for operands A and B.
  *
- * Unlike the two-argument overload, which derives face_r_dim and num_faces for
- * operand A from its operand metadata, this overload accepts caller-supplied
- * values for unpA_face_r_dim and unpA_num_faces. This is useful when the
- * operand A tile layout differs from what is recorded in the CB interface
- * (e.g. non-standard tile dimensions or partial-face unpacking).
- * Operand B face geometry is still derived from its operand metadata.
+ * Face geometry (face_r_dim, num_faces) and tile size for both operands are
+ * derived from the CB metadata associated with each operand id. This is the
+ * primary entry point: callers no longer need to thread face geometry through
+ * the API, since per-CB face geometry is recorded in the CB descriptor at
+ * program creation time.
  *
  * @tparam is_fp32_dest_acc_en   Enable FP32 accumulation in the destination register.
  * @tparam disable_src_zero_flag When true, disables the source-zero optimisation flag.
  * @param  unpA_operand          Operand index for unpack source A (In0).
  * @param  unpB_operand          Operand index for unpack source B (In1).
- * @param  unpA_face_r_dim       Row dimension of each face for operand A (overrides operand metadata).
- * @param  unpA_num_faces        Number of faces for operand A (overrides operand metadata).
  */
 template <bool is_fp32_dest_acc_en, bool disable_src_zero_flag = false>
-inline void llk_unpack_hw_configure(
-    const std::uint32_t unpA_operand,
-    const std::uint32_t unpB_operand,
-    const std::uint32_t unpA_face_r_dim,
-    const std::uint32_t unpA_num_faces) {
+inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
     // In0 -> unpA
     // In1 -> unpB
     const uint32_t unpA_operand_id = get_operand_id(unpA_operand);
     const uint32_t unpB_operand_id = get_operand_id(unpB_operand);
 
+    // unpA -> srcA
+    // unpB -> srcB
+    const uint32_t unpA_num_faces = get_operand_num_faces(unpA_operand_id);
+    const uint32_t unpA_face_r_dim = get_operand_face_r_dim(unpA_operand_id);
     const uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);
     const uint32_t unpB_face_r_dim = get_operand_face_r_dim(unpB_operand_id);
 
@@ -69,22 +66,15 @@ inline void llk_unpack_hw_configure(
         unpB_tile_size);
 }
 
-template <bool is_fp32_dest_acc_en, bool disable_src_zero_flag = false>
-inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
-    // In0 -> unpA
-    // In1 -> unpB
-    const uint32_t unpA_operand_id = get_operand_id(unpA_operand);
-    const uint32_t unpB_operand_id = get_operand_id(unpB_operand);
-
-    // unpA -> srcA
-    // unpB -> srcB
-    const uint32_t unpA_num_faces = get_operand_num_faces(unpA_operand_id);
-    const uint32_t unpA_face_r_dim = get_operand_face_r_dim(unpA_operand_id);
-
-    llk_unpack_hw_configure<is_fp32_dest_acc_en, disable_src_zero_flag>(
-        unpA_operand, unpB_operand, unpA_face_r_dim, unpA_num_faces);
-}
-
+/**
+ * Single-operand convenience overload that configures both unpack sources from
+ * the same operand id. Equivalent to calling the two-operand overload with
+ * unpA_operand == unpB_operand.
+ *
+ * @tparam is_fp32_dest_acc_en   Enable FP32 accumulation in the destination register.
+ * @tparam disable_src_zero_flag When true, disables the source-zero optimisation flag.
+ * @param  unpA_operand          Operand index used for both unpack source A and B.
+ */
 template <bool is_fp32_dest_acc_en, bool disable_src_zero_flag = false>
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand) {
     llk_unpack_hw_configure<is_fp32_dest_acc_en, disable_src_zero_flag>(unpA_operand, unpA_operand);

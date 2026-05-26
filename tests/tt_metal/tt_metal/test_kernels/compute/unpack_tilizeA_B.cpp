@@ -10,9 +10,9 @@
 #include "api/dataflow/circular_buffer.h"
 
 // #include "api/debug/dprint.h"
-inline void tilizeA_B_binary_init(
-    uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t ocb, uint32_t num_faces = 4, uint32_t face_r_dim = 16) {
-    UNPACK((llk_unpack_tilizeA_B_init<true, true>(icb0, icb1, block, num_faces, face_r_dim, face_r_dim)));
+inline void tilizeA_B_binary_init(uint32_t icb0, uint32_t icb1, uint32_t block) {
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
+    UNPACK((llk_unpack_tilizeA_B_init<true, true>(icb0, icb1, block)));
 
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::NONE, MathFidelity::LoFi>(0 /*acc_to_dest*/)));
 }
@@ -35,7 +35,7 @@ void kernel_main() {
     CircularBuffer cb16(tt::CBIndex::c_16);
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    tilizeA_B_binary_init(tt::CBIndex::c_0, tt::CBIndex::c_1, per_core_block_tile_cnt, tt::CBIndex::c_16);
+    tilizeA_B_binary_init(tt::CBIndex::c_0, tt::CBIndex::c_1, per_core_block_tile_cnt);
 
     for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
         cb0.wait_front(per_core_block_tile_cnt);

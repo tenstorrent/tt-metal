@@ -31,15 +31,11 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
     constexpr uint32_t per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
-    constexpr uint32_t num_faces = get_arg(args::num_faces);
-    constexpr uint32_t num_rows_per_face = get_arg(args::num_rows_per_face);
     DataflowBuffer dfb_in0(dfb::in);
     DataflowBuffer dfb_out0(dfb::out);
 #else
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
-    constexpr uint32_t num_faces = get_compile_time_arg_val(2);
-    constexpr uint32_t num_rows_per_face = get_compile_time_arg_val(3);
     CircularBuffer cb_in0(tt::CBIndex::c_0);
     CircularBuffer cb_out0(tt::CBIndex::c_16);
 #endif
@@ -52,7 +48,7 @@ void kernel_main() {
 #ifndef ARCH_QUASAR
     compute_kernel_hw_startup(cb_in0.get_cb_id(), cb_out0.get_cb_id());
     copy_tile_to_dst_init_short(cb_in0.get_cb_id());
-    pack_untilize_dest_init<block_ct_dim, full_ct_dim>(cb_out0.get_cb_id(), num_rows_per_face, num_faces);
+    pack_untilize_dest_init<block_ct_dim, full_ct_dim>(cb_out0.get_cb_id());
 
     for (uint32_t r = 0; r < per_core_block_cnt; ++r) {
         cb_out0.reserve_back(full_ct_dim);
@@ -64,7 +60,7 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_untilize_dest<block_ct_dim, full_ct_dim>(cb_out0.get_cb_id(), 1, b, num_rows_per_face, num_faces);
+            pack_untilize_dest<block_ct_dim, full_ct_dim>(cb_out0.get_cb_id(), 1, b);
             tile_regs_release();
             cb_in0.pop_front(block_ct_dim);
         }
@@ -75,7 +71,7 @@ void kernel_main() {
 #else
     compute_kernel_hw_startup(dfb_in0.get_id(), dfb_out0.get_id());
     copy_tile_to_dst_init_short(dfb_in0.get_id());
-    pack_untilize_dest_init<block_ct_dim, full_ct_dim>(dfb_out0.get_id(), num_rows_per_face, num_faces);
+    pack_untilize_dest_init<block_ct_dim, full_ct_dim>(dfb_out0.get_id());
 
     for (uint32_t r = 0; r < per_core_block_cnt; ++r) {
         dfb_out0.reserve_back(full_ct_dim);
@@ -87,7 +83,7 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_untilize_dest<block_ct_dim, full_ct_dim>(dfb_out0.get_id(), 1, b, num_rows_per_face, num_faces);
+            pack_untilize_dest<block_ct_dim, full_ct_dim>(dfb_out0.get_id(), 1, b);
             tile_regs_release();
             dfb_in0.pop_front(block_ct_dim);
         }

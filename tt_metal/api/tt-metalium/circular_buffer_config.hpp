@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <utility>
 #include <unordered_set>
 
 #include <tt-metalium/buffer.hpp>
@@ -50,6 +51,7 @@ public:
         const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& data_formats,
         const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& page_sizes,
         const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles,
+        const std::array<std::optional<std::pair<uint32_t, uint32_t>>, NUM_CIRCULAR_BUFFERS>& unpack_face_geometry,
         const std::unordered_set<uint8_t>& buffer_indices,
         const std::unordered_set<uint8_t>& local_buffer_indices,
         const std::unordered_set<uint8_t>& remote_buffer_indices,
@@ -73,7 +75,15 @@ public:
 
     CircularBufferConfig& set_tile_dims(uint8_t buffer_index, const Tile& tile);
 
+    /// Override face row count and logical face count metadata for this buffer index.
+    /// This metadata feeds JIT tile-dimension arrays derived from the same descriptor fields, including
+    /// unpack_tile_* arrays as well as pack/untilize behavior when applicable.
+    /// Use when operand geometry differs from \ref Tile (e.g. pool tilize on compact pages with 2 logical faces).
+    CircularBufferConfig& set_unpack_face_geometry(uint8_t buffer_index, uint32_t face_r_dim, uint32_t num_faces);
+
     const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles() const;
+
+    const std::array<std::optional<std::pair<uint32_t, uint32_t>>, NUM_CIRCULAR_BUFFERS>& unpack_face_geometry() const;
 
     uint32_t total_size() const;
 
@@ -133,6 +143,7 @@ private:
     std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS> data_formats_;
     std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS> page_sizes_;
     std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> tiles_;
+    std::array<std::optional<std::pair<uint32_t, uint32_t>>, NUM_CIRCULAR_BUFFERS> unpack_face_geometry_;
     std::unordered_set<uint8_t> buffer_indices_;
     std::unordered_set<uint8_t> local_buffer_indices_;
     std::unordered_set<uint8_t> remote_buffer_indices_;

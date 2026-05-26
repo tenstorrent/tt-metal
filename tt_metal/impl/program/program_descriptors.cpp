@@ -139,7 +139,8 @@ static inline ttsl::hash::hash_t hash_cb_format_descriptor(const CBFormatDescrip
         format_descriptor.buffer_index,
         format_descriptor.data_format,
         format_descriptor.page_size,
-        format_descriptor.tile);
+        format_descriptor.tile,
+        format_descriptor.face_geometry);
 }
 
 static inline ttsl::hash::hash_t hash_cb_descriptor(const CBDescriptor& cb) {

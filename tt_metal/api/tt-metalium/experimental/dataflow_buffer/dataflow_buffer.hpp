@@ -5,6 +5,8 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
+#include <utility>
 #include <variant>
 
 #include <tt-metalium/core_coord.hpp>
@@ -43,6 +45,9 @@ struct DataflowBufferConfig {
     bool enable_implicit_sync = false;
     DataFormat data_format = tt::DataFormat::Float16_b;
     std::optional<Tile> tile = std::nullopt;
+    /// Optional unpack face override \c (face_r_dim, num_faces) for HLK tile dims (same semantics as
+    /// \ref CircularBufferConfig::set_unpack_face_geometry). When set, overrides \c Tile face layout for unpack.
+    std::optional<std::pair<uint32_t, uint32_t>> unpack_face_geometry = std::nullopt;
     // Set only when both producer and consumer are the same compute kernel
     std::optional<TensixScope> tensix_scope = std::nullopt;
     // When true, the DFB borrows L1 memory from an externally managed buffer

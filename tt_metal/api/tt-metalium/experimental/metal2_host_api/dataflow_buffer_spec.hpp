@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -73,6 +74,9 @@ struct DataflowBufferSpec {
 
     // Optional; used to pass tile type info from host to kernel
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
+
+    // Optional unpack face override (face_r_dim, num_faces); forwarded to DataflowBufferConfig / HLK like CBs
+    std::optional<std::pair<uint32_t, uint32_t>> unpack_face_geometry_metadata = std::nullopt;
 
     //////////////////////////////
     // Advanced options

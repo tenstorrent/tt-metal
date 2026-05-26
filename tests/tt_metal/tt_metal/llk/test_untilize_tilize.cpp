@@ -175,6 +175,10 @@ void run_single_core_tilize_program(
             num_output_tiles * test_config.output_single_tile_size,
             {{ouput_cb_index, output_cb_format}})
             .set_page_size(ouput_cb_index, test_config.output_single_tile_size);
+    if (test_config.untilize_type.has_value() && test_config.untilize_type == UntilizeType::DST) {
+        cb_output_config.set_unpack_face_geometry(
+            ouput_cb_index, test_config.face_r_dim, test_config.num_faces_per_tile);
+    }
     tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
     std::string reader_kernel_path;
@@ -213,10 +217,6 @@ void run_single_core_tilize_program(
             return std::tolower(c);
         });
         compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/" + untilize_type + "_untilize.cpp";
-        if (test_config.untilize_type == UntilizeType::DST) {
-            compute_kernel_args.push_back(test_config.num_faces_per_tile);
-            compute_kernel_args.push_back(test_config.face_r_dim);
-        }
     } else if (test_config.tilize_type.has_value()) {
         compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/";
         compute_kernel += (test_config.tilize_type == TilizeType::UNPACK_A) ? "tilize.cpp" : "unpack_tilizeA_B.cpp";
@@ -656,13 +656,9 @@ static void run_quasar_tilize_untilize_test(
             break;
         case QuasarTestMode::UNTILIZE_DST: {
             compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/dst_untilize.cpp";
-            uint32_t num_faces = 4;
-            uint32_t face_r_dim = 16;
             compute_cta_bindings = {
                 {"per_core_block_cnt", num_tiles_r},
                 {"per_core_block_tile_cnt", num_tiles_c},
-                {"num_faces", num_faces},
-                {"num_rows_per_face", face_r_dim},
             };
             break;
         }

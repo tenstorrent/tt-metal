@@ -1533,11 +1533,33 @@ std::vector<CoreRange> ProgramImpl::dataflow_buffers_unique_coreranges() const {
 
 void ProgramImpl::set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
     // ZoneScoped;
+    // Match detail::ProgramImpl::set_cb_data_fmt_and_tile: DFB logical ids map to CBIndex slots for HLK unpack/pack.
     for (const auto& logical_cr : crs) {
         const auto& dfbs_on_core = this->dataflow_buffers_on_corerange(logical_cr);
         for (const auto& dfb : dfbs_on_core) {
-            build_options.set_cb_data_fmt_and_tile(
-                static_cast<CBIndex>(dfb->id), dfb->config.data_format, dfb->config.tile);
+            const CBIndex cb_index = static_cast<CBIndex>(dfb->id);
+            const DataFormat data_format = dfb->config.data_format;
+            const auto& tile_opt = dfb->config.tile;
+            const auto& unpack_geom = dfb->config.unpack_face_geometry;
+            build_options.set_cb_dataformat_all_cores(cb_index, data_format);
+            if (tile_opt.has_value() || unpack_geom.has_value()) {
+                Tile default_tile{};
+                const Tile& tile = tile_opt.value_or(default_tile);
+                const uint32_t num_faces = unpack_geom.has_value() ? unpack_geom->second : tile.get_num_faces();
+                const uint32_t face_r_dim = unpack_geom.has_value() ? unpack_geom->first : tile.get_face_shape()[0];
+                build_options.set_cb_tile_dims_all_cores(
+                    cb_index,
+                    num_faces,
+                    tile.get_partial_face(),
+                    face_r_dim,
+                    tile.get_narrow_tile(),
+                    tile.get_tile_shape()[0],
+                    tile.get_tile_shape()[1]);
+                build_options.set_cb_tile_size_all_cores(cb_index, tile.get_tile_size(data_format));
+            } else {
+                Tile t;
+                build_options.set_cb_tile_size_all_cores(cb_index, t.get_tile_size(data_format));
+            }
         }
     }
 }

@@ -1625,10 +1625,29 @@ void detail::ProgramImpl::set_cb_data_fmt_and_tile(
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (const auto& circular_buffer : cbs_on_core) {
             for (auto buffer_index : circular_buffer->buffer_indices()) {
-                build_options.set_cb_data_fmt_and_tile(
-                    static_cast<CBIndex>(buffer_index),
-                    circular_buffer->data_format(buffer_index),
-                    circular_buffer->tile(buffer_index));
+                const CBIndex cb_index = static_cast<CBIndex>(buffer_index);
+                const DataFormat data_format = circular_buffer->data_format(buffer_index);
+                const auto& tile_opt = circular_buffer->tile(buffer_index);
+                const auto& unpack_geom = circular_buffer->unpack_face_geometry(buffer_index);
+                build_options.set_cb_dataformat_all_cores(cb_index, data_format);
+                if (tile_opt.has_value() || unpack_geom.has_value()) {
+                    Tile default_tile{};
+                    const Tile& tile = tile_opt.value_or(default_tile);
+                    uint32_t num_faces = unpack_geom.has_value() ? unpack_geom->second : tile.get_num_faces();
+                    uint32_t face_r_dim = unpack_geom.has_value() ? unpack_geom->first : tile.get_face_shape()[0];
+                    build_options.set_cb_tile_dims_all_cores(
+                        cb_index,
+                        num_faces,
+                        tile.get_partial_face(),
+                        face_r_dim,
+                        tile.get_narrow_tile(),
+                        tile.get_tile_shape()[0],
+                        tile.get_tile_shape()[1]);
+                    build_options.set_cb_tile_size_all_cores(cb_index, tile.get_tile_size(data_format));
+                } else {
+                    Tile t;
+                    build_options.set_cb_tile_size_all_cores(cb_index, t.get_tile_size(data_format));
+                }
             }
         }
     }

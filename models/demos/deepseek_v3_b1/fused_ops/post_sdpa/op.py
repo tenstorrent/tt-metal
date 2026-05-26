@@ -337,6 +337,7 @@ class PostSDPA:
             # Get actual tile dimensions from input tensor (matches original op)
             sdpa_tile = sdpa_input_l_sample.tile
             sdpa_tile_height, sdpa_tile_width = sdpa_tile.tile_shape
+            sdpa_l_out_face_geometry = (sdpa_tile.face_shape[0], sdpa_tile.num_faces)
             sdpa_element_size_bytes = _get_element_size_bytes(sdpa_input_l_sample.dtype)
             sdpa_l1_alignment = 16  # L1 alignment for SDPA (matches original op)
             sdpa_shard_spec = sdpa_input_l_sample.memory_config().shard_spec
@@ -999,6 +1000,7 @@ class PostSDPA:
                     sdpa_l_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                         sdpa_cb_l_out, sdpa_output_l_device
                     )
+                    sdpa_l_out_cb_descriptor.format_descriptors[0].face_geometry = sdpa_l_out_face_geometry
                     cb_list.append(sdpa_l_out_cb_descriptor)
 
                 # ========================================================================
