@@ -22,6 +22,8 @@ from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import cre
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_encoder import TTSeamlessM4Tv2Encoder
 
 PCC_THRESHOLD = 0.99
+SHORT_SEQ = 32
+LONG_SEQ = 4096  # HF ``max_position_embeddings``
 
 
 def _create_position_ids_from_input_ids(
@@ -35,12 +37,8 @@ def _create_position_ids_from_input_ids(
     return incremental_indices.long() + padding_idx
 
 
-def _run_text_encoder_pcc(device, *, seq: int = 32) -> None:
-    """Shared PCC body; mesh-safe readback via ``to_torch_replicated_first_shard``.
-
-    ``seq`` parametrises the input length so long-sequence regressions can be checked against the
-    HF ``max_position_embeddings = 4096`` upper bound (the sinusoidal table is sized for that).
-    """
+def _run_text_encoder_pcc(device, *, seq: int) -> None:
+    """Shared PCC body; mesh-safe readback via ``to_torch_replicated_first_shard``."""
     try:
         weights_dir = ensure_seamless_m4t_v2_large_weights()
     except ImportError as e:
@@ -81,7 +79,7 @@ def _run_text_encoder_pcc(device, *, seq: int = 32) -> None:
     )
 
     ok, msg = check_with_pcc(ref, tt_cpu, pcc=PCC_THRESHOLD)
-    logger.info(f"SeamlessM4Tv2 text encoder PCC: {msg} (threshold {PCC_THRESHOLD})")
+    logger.info(f"SeamlessM4Tv2 text encoder PCC (seq={seq}): {msg} (threshold {PCC_THRESHOLD})")
     if ok:
         logger.info("SeamlessM4Tv2 text encoder PCC check passed.")
     else:
@@ -91,28 +89,19 @@ def _run_text_encoder_pcc(device, *, seq: int = 32) -> None:
 
 
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
-def test_seamless_m4t_v2_text_encoder_pcc(mesh_device, device_params, reset_seeds):
+def test_seamless_m4t_v2_text_encoder_short_seq_pcc(mesh_device, device_params, reset_seeds):
+    """PCC at ``seq=32`` — width-sharded LN/matmul fast path (``m == TILE``)."""
     _ = reset_seeds
     _ = device_params
     with mesh_default_device(mesh_device):
-        _run_text_encoder_pcc(mesh_device)
+        _run_text_encoder_pcc(mesh_device, seq=SHORT_SEQ)
 
 
 @pytest.mark.timeout(1800)
-@pytest.mark.parametrize("seq", [128, 4096], ids=["seq128", "seq4096"])
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
-def test_seamless_m4t_v2_text_encoder_max_seq_len_pcc(mesh_device, device_params, reset_seeds, seq):
-    """PCC at long sequences, capped at HF ``max_position_embeddings = 4096``.
-
-    Exercises the chunked DRAM-sharded matmul path in ``TTSeamlessM4Tv2Encoder._linear`` —
-    the kernel is hard-coded to ``M == TILE`` (per_core_M=1), so long-seq prefill runs the
-    matmul ``ceil(m_actual / TILE)`` times per call and concatenates the results. PCC is
-    preserved because each chunk uses the same kernel as the short-seq fast path.
-
-    ``seq=128`` is a small-multi-chunk smoke case; ``seq=4096`` covers HF's upper bound and
-    exercises the long-seq DRAM activation path (FC1 intermediate would be 64 MB in L1).
-    """
+def test_seamless_m4t_v2_text_encoder_long_seq_pcc(mesh_device, device_params, reset_seeds):
+    """PCC at ``seq=4096`` — chunked DRAM-sharded matmul and DRAM activation path."""
     _ = reset_seeds
     _ = device_params
     with mesh_default_device(mesh_device):
-        _run_text_encoder_pcc(mesh_device, seq=seq)
+        _run_text_encoder_pcc(mesh_device, seq=LONG_SEQ)
