@@ -145,8 +145,9 @@ void kernel_main() {
         if (cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
-            // Read cur_pos from CB using mailbox-based synchronization (issue #27979)
-            constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
+            // Read cur_pos from CB using mailbox-based synchronization (issue #27979).
+            // #44366: compute uses c_15 (writer uses c_8) — see reader_decode_all.cpp.
+            constexpr uint32_t cb_index_id = tt::CBIndex::c_15;
             cb_wait_front(cb_index_id, 1);
             cur_pos = read_tile_value(cb_index_id, 0, cur_batch / q_heads_parallel_factor);
             cb_pop_front(cb_index_id, 1);

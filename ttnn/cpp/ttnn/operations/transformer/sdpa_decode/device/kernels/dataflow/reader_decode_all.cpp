@@ -97,30 +97,28 @@ void kernel_main() {
         if (cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
-            // #44366: cur_pos CB c_8 is consumed by BOTH the writer
-            // (cb_wait_front + read, no pop) and compute (cb_wait_front +
-            // read + cb_pop_front). With a single push, compute can pop the
-            // only token before the writer's cb_wait_front returns and the
-            // writer then hangs forever in CWFW. The fix is to push one
-            // token per consumer (2 tokens) with the same data duplicated
-            // across both CB slots, and have *both* consumers pop their
-            // own token. CB capacity in the program factory is set to 2
-            // slots so the second cb_reserve_back doesn't block.
-            constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
-            constexpr uint32_t cur_pos_cb_push_count = is_cur_pos_tensor_sharded ? 1 : 2;
-            cb_reserve_back(cb_index_id, cur_pos_cb_push_count);
-            uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
+            // #44366: cur_pos is consumed by both the writer (c_8) and
+            // compute (c_15). Using one shared CB races — whichever consumer
+            // pops first drains the count and the other hangs in
+            // cb_wait_front. We give each consumer its own CB. The reader
+            // fills c_8 first (from DRAM, or via the aliased sharded buffer)
+            // then copies the same stick into c_15 via an L1->L1 read.
+            constexpr uint32_t cb_writer = tt::CBIndex::c_8;
+            constexpr uint32_t cb_compute = tt::CBIndex::c_15;
+            cb_reserve_back(cb_writer, 1);
+            uint32_t index_cb_wr_ptr = get_write_ptr(cb_writer);
             if constexpr (!is_cur_pos_tensor_sharded) {
                 const auto addrg = TensorAccessor(pos_args, pos_addr);
                 uint64_t tensor_index_noc_addr = addrg.get_noc_addr(0);
-                // Read the cur_pos stick into slot 0, then read the same
-                // data into slot 1 so each consumer sees correct data at
-                // its own front-of-CB regardless of pop order.
                 noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
-                noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr + index_stick_size_B, index_stick_size_B);
                 noc_async_read_barrier();
             }
-            cb_push_back(cb_index_id, cur_pos_cb_push_count);
+            cb_reserve_back(cb_compute, 1);
+            uint32_t index_cb_compute_wr_ptr = get_write_ptr(cb_compute);
+            noc_async_read(get_noc_addr(index_cb_wr_ptr), index_cb_compute_wr_ptr, index_stick_size_B);
+            noc_async_read_barrier();
+            cb_push_back(cb_writer, 1);
+            cb_push_back(cb_compute, 1);
             volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
             cur_pos = index_ptr[cur_batch / q_heads_parallel_factor];
         }

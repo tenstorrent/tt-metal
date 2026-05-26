@@ -44,9 +44,6 @@ void kernel_main() {
     constexpr bool has_block_padding = original_block_size > 0 && original_block_size < 32;
 
     constexpr auto out_args = TensorAccessorArgs<28>();
-    // #44366: appended after the TensorAccessor's CT-args so we can decide
-    // whether to cb_pop_front(c_8, 1) below — see comment on reader_decode_all.cpp
-    constexpr bool is_cur_pos_tensor_sharded = get_compile_time_arg_val(out_args.next_compile_time_args_offset()) == 1;
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -101,23 +98,15 @@ void kernel_main() {
         if (cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
-            // #44366: cur_pos CB c_8 is co-owned with compute (sdpa_flash_decode).
-            // Compute pops its token after reading; we must pop ours too so the
-            // count drains back to zero. Reader now pushes one token per
-            // consumer (see reader_decode_all.cpp), with the same data in
-            // each slot so our read returns the correct cur_pos regardless of
-            // which consumer pops first.
+            // #44366: c_8 is the writer-only cur_pos CB after the split.
+            // Compute reads from c_15 (see sdpa_flash_decode.cpp), so the
+            // writer owns c_8 alone and can always pop it.
             constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
             cb_wait_front(cb_index_id, 1);
             uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
             volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
             cur_pos = index_ptr[(uint32_t)(cur_batch / q_heads_parallel_factor)];
-            // In sharded mode the reader still pushes only 1 token because the
-            // CB is aliased to the cur_pos buffer (capacity 1). Don't pop in
-            // that path — it would underflow.
-            if constexpr (!is_cur_pos_tensor_sharded) {
-                cb_pop_front(cb_index_id, 1);
-            }
+            cb_pop_front(cb_index_id, 1);
         }
 
         if (cur_pos == UINT32_MAX) {
