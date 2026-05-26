@@ -33,6 +33,7 @@ reuse (**tall-M** ``MultiCast1D``, ``mcast_in0=0``) by default — including und
 ``ttnn.conv1d`` does not probe 640 M-tiles as 640 cores. Set ``ACE_STEP_VAE_LARGE_M_MATMUL=0``
 to force the default conv path.
 
+
 **Important:** do **not** set ``ACE_STEP_USE_TRACE=1`` for this test (device profiler flush and TTNN
 trace capture are incompatible — same constraint as the DiT / conditioning Tracy harnesses).
 
