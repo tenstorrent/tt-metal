@@ -22,8 +22,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    const auto& a = tensor_args;
-    auto& output = tensor_return_value;
+    const auto& a = tensor_args.mesh_tensor();
+    auto& output = tensor_return_value.mesh_tensor();
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
@@ -35,7 +35,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     uint32_t HtWt = Ht * Wt;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
+        get_compute_kernel_config_args(a.device_mut().arch(), operation_attributes.compute_kernel_config);
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
@@ -45,7 +45,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    tt_metal::IDevice* device = a.device();
+    tt_metal::IDevice* device = &a.device_mut();
 
     bool use_width_sharding = a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
                               output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
@@ -108,7 +108,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
                 .data_format = src0_cb_data_format,
                 .page_size = src0_single_tile_size,
             }}},
-            .buffer = a.buffer(),
+            .tensor = &a,
         });
     } else {
         uint32_t num_input_tiles = operation_attributes.negate ? chunk_size : 2;
@@ -145,7 +145,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
                 .data_format = dst_cb_data_format,
                 .page_size = dst_single_tile_size,
             }}},
-            .buffer = output.buffer(),
+            .tensor = &output,
         });
     } else {
         uint32_t num_output_tiles = operation_attributes.negate ? chunk_size : 2;
@@ -159,7 +159,6 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             }}},
         });
     }
-    tt_metal::Buffer* src0_buffer = a.buffer();
     uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scaler);
     // Packed fp32 scalar passed to the compute kernel for mul_unary_tile post-reduction scaling.
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
@@ -280,7 +279,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         reader_desc.defines = {reader_defines.begin(), reader_defines.end()};
     } else {
         std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, scaler_bits, /*use_welford=*/0};
-        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+        TensorAccessorArgs(a).append_to(reader_compile_time_args);
 
         // Pass DEST config so reader can compute DEST_AUTO_LIMIT
         std::map<std::string, std::string> reader_defines;
@@ -294,8 +293,6 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         reader_desc.compile_time_args = reader_compile_time_args;
         reader_desc.defines = {reader_defines.begin(), reader_defines.end()};
     }
-
-    tt_metal::Buffer* dst_buffer = output.buffer();
 
     KernelDescriptor writer_desc;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -311,7 +308,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         writer_desc.compile_time_args = writer_ct_args;
     } else {
         std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
-        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+        TensorAccessorArgs(output).append_to(writer_compile_time_args);
 
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
@@ -416,16 +413,12 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
                 TT_THROW("Core not in specified core ranges");
             }
             reader_desc.emplace_runtime_args(
-                core,
-                {a.buffer(),
-                 (num_cols_read / Wt * HtWt) + (num_cols_read % Wt),
-                 num_cols_read % Wt,
-                 num_cols_per_core});
+                core, {a, (num_cols_read / Wt * HtWt) + (num_cols_read % Wt), num_cols_read % Wt, num_cols_per_core});
 
             writer_desc.emplace_runtime_args(
                 core,
                 {
-                    output.buffer(),
+                    output,
                     num_cols_per_core,  // number of tiles to write
                     num_cols_read       // output tile start index
                 });

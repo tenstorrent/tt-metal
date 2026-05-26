@@ -114,7 +114,8 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
     const bool keepdim = operation_attributes.keepdim;
 
     ProgramDescriptor desc;
-    const tt::tt_metal::IDevice* device = output.device();
+    const auto& dst_mesh = output.mesh_tensor();
+    const tt::tt_metal::IDevice* device = &dst_mesh.device_mut();
     const bool reduce_all = not dim.has_value();
 
     // Circular buffers
@@ -130,8 +131,9 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
     validate_reduce_op_program_grid(
         "Argmax single-core", all_cores, device->compute_with_storage_grid_size(), nullptr, true, {});
 
-    const tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const auto& src_mesh = input.mesh_tensor();
+    const tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(src_mesh.dtype());
+    const tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(dst_mesh.dtype());
     const auto [src_page_size, dst_page_size] = get_page_sizes_single_core(input, output, keepdim, reduce_all);
 
     // Create input CB
@@ -160,14 +162,12 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
     std::vector<uint32_t> ctime_args = get_ctime_args_single_core(
         input, src_page_size, dst_page_size, src_cb_index, dst_cb_index, keepdim, reduce_all);
 
-    auto* const src_buffer = input.buffer();
-    auto* const dst_buffer = output.buffer();
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(ctime_args);
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(ctime_args);
+    tt::tt_metal::TensorAccessorArgs(src_mesh).append_to(ctime_args);
+    tt::tt_metal::TensorAccessorArgs(dst_mesh).append_to(ctime_args);
 
     // Kernel
     std::string kernel_path =
-        input.layout() == Layout::ROW_MAJOR
+        src_mesh.layout() == Layout::ROW_MAJOR
             ? "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp"
             : "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_tile_layout.cpp";
 
@@ -181,7 +181,7 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
     // Runtime args
     const auto cores = grid_to_cores(num_cores, grid_size.x, grid_size.y, false);
     for (const auto& core : cores) {
-        reader_desc.emplace_runtime_args(core, {src_buffer, dst_buffer});
+        reader_desc.emplace_runtime_args(core, {src_mesh, dst_mesh});
     }
 
     desc.kernels.push_back(std::move(reader_desc));

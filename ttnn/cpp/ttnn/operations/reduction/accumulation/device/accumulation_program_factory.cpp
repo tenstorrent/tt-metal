@@ -46,18 +46,16 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
     using namespace tt;
     using namespace tt::tt_metal;
 
-    const auto& input_tensor{tensor_args.input_tensor};
+    const auto& input_tensor{tensor_args.input_tensor.mesh_tensor()};
     auto& output_tensor{tensor_return_value};
+    const MeshTensor& dst_tensor = output_tensor.mesh_tensor();
     const auto& input_shape{input_tensor.padded_shape()};
 
     ProgramDescriptor desc;
 
-    IDevice* device{input_tensor.device()};
+    IDevice* device{&input_tensor.device_mut()};
 
-    auto* src_buffer{input_tensor.buffer()};
-    auto* dst_buffer{output_tensor.buffer()};
-
-    const auto dst_cb_data_format{datatype_to_dataformat_converter(output_tensor.dtype())};
+    const auto dst_cb_data_format{datatype_to_dataformat_converter(dst_tensor.dtype())};
 
     const uint32_t input_rank{input_tensor.padded_shape().rank()};
 
@@ -93,14 +91,14 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
     constexpr uint32_t acc_tiles = 1;
     constexpr uint32_t out_tiles = 4;
 
-    auto acc_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
+    auto acc_dataformat = datatype_to_dataformat_converter(dst_tensor.dtype());
     if (!is_integer_format(acc_dataformat)) {
         acc_dataformat = DataFormat::Float32;
     }
     auto acc_dataformat_name = fmt::format("DataFormat::{}", acc_dataformat);
 
     const auto input_dataformat = datatype_to_dataformat_converter(input_tensor.dtype());
-    const auto output_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
+    const auto output_dataformat = datatype_to_dataformat_converter(dst_tensor.dtype());
 
     auto push_cb = [&](const tt::DataFormat& data_format,
                        AccumulationProgramFactory::AccumulationCB accumulation_cb,
@@ -163,13 +161,13 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
     // fp32_dest_acc_en will be True for FLOAT32 inputs (set below), so use HiFi3 as default on Wormhole B0.
     const auto is_wormhole = device->arch() == tt::ARCH::WORMHOLE_B0;
     const auto default_math_fidelity =
-        (is_wormhole && output_tensor.dtype() == DataType::FLOAT32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
+        (is_wormhole && dst_tensor.dtype() == DataType::FLOAT32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
 
     std::vector<uint32_t> reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = AccumulationProgramFactory::KERNEL_PATHS[0];
@@ -233,7 +231,7 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
 
         reader_desc.emplace_runtime_args(
             core,
-            {src_buffer,
+            {input_tensor,
              num_tiles_per_core,
              tiles_per_row,
              input_tile_offset,
@@ -244,7 +242,7 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
 
         writer_desc.emplace_runtime_args(
             core,
-            {dst_buffer,
+            {dst_tensor,
              num_tiles_per_core,
              tiles_per_row,
              input_tile_offset,
