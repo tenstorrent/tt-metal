@@ -32,7 +32,7 @@ The readiness runner imports a generator by **convention**:
         def build_generator(model_dir: str | Path, mesh_device, **kwargs) -> Generator: ...
 
 `model_dir` is the path the user passes on the CLI (e.g.
-`models/autoports/llama31_8b_readiness_shim`). `**kwargs` is the escape valve for
+`models/autoports/<model_name>`). `**kwargs` is the escape valve for
 per-model knobs (override_num_layers, max_seq_len, dtype, …).
 
 # Teacher forcing
