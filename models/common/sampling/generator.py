@@ -295,7 +295,7 @@ class SamplingGenerator:
             bitmask,
             device=self.mesh_device,
             dtype=ttnn.int32,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=self._bitmask_mesh_mapper(),
         )
         tt_bitmask = ttnn.reshape(
