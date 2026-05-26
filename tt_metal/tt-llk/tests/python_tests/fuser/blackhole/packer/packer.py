@@ -27,7 +27,7 @@ class Packer(BasePacker):
     def golden(
         self,
         tensor: torch.Tensor,
-        pack_node: "PackNode",
+        pack_node: PackNode,
         operation: FusedOperation,
         config: GlobalConfig,
     ) -> torch.Tensor:
@@ -41,26 +41,23 @@ class Packer(BasePacker):
 
     def init(
         self,
-        pack_node: "PackNode",
+        pack_node: PackNode,
         operation: FusedOperation,
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
-        dest_acc = config.dest_acc.cpp_enum_value
         bh_pack_mode = operation.bh_tilize.pack_mode_value
         face_r_dim = pack_node.output.tile_shape.face_r_dim
         num_faces = pack_node.output.tile_shape.total_num_faces()
-        dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         return (
             f"    _llk_pack_init_<{bh_pack_mode}, false /* zero_output */, false /* skip_addrmod_config */>(\n"
             f"        {config.sentinel.pack_src_format}, {face_r_dim}, TILE_C_DIM, {num_faces}, 1 /* num_tiles */\n"
             f"    );\n"
-            f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc}>();\n"
         )
 
     def pack(
         self,
-        pack_node: "PackNode",
+        pack_node: PackNode,
         operation: FusedOperation,
         config: GlobalConfig,
         block: BlockData,

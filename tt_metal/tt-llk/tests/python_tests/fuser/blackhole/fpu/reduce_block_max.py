@@ -66,7 +66,7 @@ class ReduceBlockMaxFpu(Fpu):
         config: GlobalConfig,
         compute_unit: ComputeNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        output_format = config.sentinel.golden_format.math
+        output_format = config.sentinel.golden_math_format
 
         golden_tensor = torch.zeros_like(tensor_dst)
         src_a_reduced_tensor = torch.zeros_like(tensor_a)

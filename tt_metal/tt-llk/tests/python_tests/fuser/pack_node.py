@@ -42,7 +42,7 @@ class PackNode:
         self.pack_l1_accumulation = pack_l1_accumulation
 
     def _relu_config(self, config: "GlobalConfig") -> str:
-        pack_src_format = config.sentinel._pack_format.pack_src
+        pack_src_format = config.sentinel._pack_src
         relu_config = PackGolden.generate_relu_config(
             self.pack_relu, self.relu_threshold, pack_src_format
         )
@@ -58,7 +58,8 @@ class PackNode:
         config: "GlobalConfig",
         block: BlockData,
     ) -> str:
-        code = self.packer.init(self, operation, config, block)
+        code = config.sentinel.configure_pack(config, operation, self)
+        code += self.packer.init(self, operation, config, block)
         code += self._relu_config(config)
         code += self._l1_accumulation_config()
         return code

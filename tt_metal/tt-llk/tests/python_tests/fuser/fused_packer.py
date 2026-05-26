@@ -80,7 +80,7 @@ class Packer:
         config: "GlobalConfig",
     ) -> torch.Tensor:
         """Golden helper: apply packer ReLU activation."""
-        intermediate_format = config.sentinel.golden_format.pack_src
+        intermediate_format = config.sentinel.golden_pack_src
         relu_config = PackGolden.generate_relu_config(
             pack_node.pack_relu, pack_node.relu_threshold, intermediate_format
         )

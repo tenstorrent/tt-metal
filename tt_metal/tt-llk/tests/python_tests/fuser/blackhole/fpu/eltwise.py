@@ -40,7 +40,7 @@ class EltwiseFpu(Fpu):
         config: GlobalConfig,
         compute_unit: ComputeNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        output_format = config.sentinel.golden_format.math
+        output_format = config.sentinel.golden_math_format
         math_fidelity = compute_unit.math_fidelity
 
         if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:

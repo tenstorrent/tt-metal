@@ -14,7 +14,6 @@ from .fuser_config import FuserConfig
 class FusedGolden:
     def __init__(self, verbose: bool = True):
         self.verbose = verbose
-        self.results = []
 
     def _check_output(self, output) -> bool:
         res_tensor = torch.tensor(

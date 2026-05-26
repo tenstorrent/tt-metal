@@ -137,9 +137,7 @@ class ComputePipeline:
             code += "{\n"
             code += 'ZONE_SCOPED("INIT")\n'
 
-        code += config.sentinel.hw_configure_unpack(
-            config, operation, self.pack_nodes[0]
-        )
+        code += config.sentinel.hw_configure_unpack(config, operation)
 
         if config.profiler_enabled:
             code += "PROFILER_SYNC();\n"
@@ -217,7 +215,7 @@ class ComputePipeline:
             code += "{\n"
             code += 'ZONE_SCOPED("INIT")\n'
 
-        code += config.sentinel.hw_configure_math(config, operation, self.pack_nodes[0])
+        code += config.sentinel.hw_configure_math(config, operation)
 
         stage = operation.stage_id
         dest_acc = config.dest_acc.cpp_enum_value
@@ -273,6 +271,13 @@ class ComputePipeline:
         dest_acc = config.dest_acc.cpp_enum_value
         return f"_llk_pack_dest_section_done_<{dest_sync}, {dest_acc}>();\n"
 
+    def _pack_dest_init(
+        self, operation: "FusedOperation", config: "GlobalConfig"
+    ) -> str:
+        dest_sync = operation.dest_sync.cpp_enum_value
+        dest_acc = config.dest_acc.cpp_enum_value
+        return f"_llk_pack_dest_init_<{dest_sync}, {dest_acc}>();\n"
+
     def _pack_constants(
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
@@ -311,7 +316,8 @@ class ComputePipeline:
             code += "{\n"
             code += 'ZONE_SCOPED("INIT")\n'
 
-        code += config.sentinel.hw_configure_pack(config, operation, self.pack_nodes[0])
+        code += config.sentinel.hw_configure_pack(config, operation, self.pack_nodes)
+        code += self._pack_dest_init(operation, config)
         code += self._pack_reduce_mask_config(operation)
 
         if len(self.pack_nodes) == 1:
@@ -362,8 +368,13 @@ class ComputePipeline:
         config: "GlobalConfig",
         golden_type: GoldenType,
     ) -> torch.Tensor:
-        tensor_a = torch.zeros(self.operations[0].src_a.dimensions)
-        tensor_b = torch.zeros(self.operations[0].src_b.dimensions)
+        first_fpu = next((op for op in self.operations if op.src_a is not None), None)
+        if first_fpu is not None:
+            tensor_a = torch.zeros(first_fpu.src_a.dimensions)
+            tensor_b = torch.zeros(first_fpu.src_b.dimensions)
+        else:
+            tensor_a = torch.zeros(operation.max_output_dimensions)
+            tensor_b = torch.zeros(operation.max_output_dimensions)
         tensor_dst = torch.zeros(operation.max_output_dimensions)
         for op in self.operations:
             config.sentinel.configure_golden(config, operation, op)
@@ -395,12 +406,14 @@ class ComputePipeline:
         return tensor_dst
 
     def golden(self, operation: "FusedOperation", config: "GlobalConfig"):
-        config.sentinel._output_format = self.pack_nodes[0].output.data_format
-
         for golden_type in (GoldenType.L1_GOLDEN, GoldenType.MASTER_GOLDEN):
             math_tensor = self._math_golden(operation, config, golden_type)
 
             for pack_node in self.pack_nodes:
+                config.sentinel.configure_golden(
+                    config, operation, output_format=pack_node.output.data_format
+                )
+
                 dimensions = pack_node.output.dimensions
                 cropped = math_tensor.reshape(operation.max_output_dimensions)[
                     : dimensions[0], : dimensions[1]
@@ -419,5 +432,6 @@ class ComputePipeline:
             result += op.__str__()
         result += f"\n  Pack:"
         for pn in self.pack_nodes:
-            result += f"\n    {pn.output}"
+            result += f"\n    "
+            result += pn.output.__str__()
         return result

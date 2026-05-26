@@ -45,15 +45,12 @@ class Packer(BasePacker):
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
-        dest_acc = config.dest_acc.cpp_enum_value
         face_r_dim = pack_node.output.tile_shape.face_r_dim
         num_faces = pack_node.output.tile_shape.total_num_faces()
-        dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         return (
             f"    _llk_pack_init_<PackMode::Default, false /* zero_output */>(\n"
             f"        {config.sentinel.pack_dst_format}, {face_r_dim}, {num_faces}\n"
             f"    );\n"
-            f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc}, PackMode::Default>();\n"
         )
 
     def pack(

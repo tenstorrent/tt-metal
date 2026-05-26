@@ -41,7 +41,7 @@ class DatacopyFpu(Fpu):
         golden_generator = get_golden_generator(DataCopyGolden)
         golden_tensor = golden_generator(
             source_tensor,
-            config.sentinel.golden_format.math,
+            config.sentinel.golden_math_format,
             num_faces=operation.tile_shape.total_num_faces(),
             input_dimensions=compute_unit.src_a.dimensions,
             face_r_dim=operation.tile_shape.face_r_dim,

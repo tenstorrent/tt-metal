@@ -201,7 +201,7 @@ class ComputeNode:
             tilized_dst = tilize_block(
                 tensor_dst,
                 operation.max_output_dimensions,
-                config.sentinel.golden_format.math,
+                config.sentinel.golden_math_format,
             )
 
             tile_count_x = (
@@ -276,7 +276,7 @@ class ComputeNode:
 
             tensor_dst = untilize_block(
                 tilized_dst.flatten(),
-                config.sentinel.golden_format.math,
+                config.sentinel.golden_math_format,
                 operation.max_output_dimensions,
             ).reshape(operation.max_output_dimensions)
 
