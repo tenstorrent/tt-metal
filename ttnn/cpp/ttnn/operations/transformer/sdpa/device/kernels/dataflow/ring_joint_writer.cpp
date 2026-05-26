@@ -49,7 +49,7 @@ void read_prev_output_and_lse(
     cb_reserve_back(cb_lse_in, Sq_chunk_t);
     uint32_t lse_addr = get_write_ptr(cb_lse_in);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_read_tile(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, lse_addr);
+        noc_async_read_page(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, lse_addr);
         lse_addr += stats_tile_bytes;
     }
     noc_async_read_barrier();
@@ -108,7 +108,7 @@ void issue_restore_reads(
     uint32_t max_tile_id = stats_tile_logical.id_of(nb, nq, stats_seq_start_tile, 0);
     uint32_t max_addr = get_write_ptr(cb_max_in);
     for (uint32_t r = 0; r < stats_rows; ++r) {
-        noc_async_read_tile(max_tile_id, stats_writer, max_addr);
+        noc_async_read_page(max_tile_id, stats_writer, max_addr);
         max_tile_id += stats_row_stride;
         max_addr += stats_tile_bytes;
     }
@@ -118,7 +118,7 @@ void issue_restore_reads(
     uint32_t sum_tile_id = stats_tile_logical.id_of(nb, nq, sum_offset + stats_seq_start_tile, 0);
     uint32_t sum_addr = get_write_ptr(cb_sum_in);
     for (uint32_t r = 0; r < stats_rows; ++r) {
-        noc_async_read_tile(sum_tile_id, stats_writer, sum_addr);
+        noc_async_read_page(sum_tile_id, stats_writer, sum_addr);
         sum_tile_id += stats_row_stride;
         sum_addr += stats_tile_bytes;
     }
@@ -181,13 +181,13 @@ void save_accumulators_with_trid(
 
     uint32_t max_write_addr = get_read_ptr(cb_max_out);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_write_tile(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, max_write_addr);
+        noc_async_write_page(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, max_write_addr);
         max_write_addr += stats_tile_bytes;
     }
 
     uint32_t sum_write_addr = get_read_ptr(cb_sum_out);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_write_tile(stats_tile_logical.id_of(nb, nq, sum_offset + i, 0), stats_writer, sum_write_addr);
+        noc_async_write_page(stats_tile_logical.id_of(nb, nq, sum_offset + i, 0), stats_writer, sum_write_addr);
         sum_write_addr += stats_tile_bytes;
     }
 
@@ -240,7 +240,7 @@ void write_output_and_lse(
     cb_wait_front(cb_lse_out, Sq_chunk_t);
     uint32_t lse_addr = get_read_ptr(cb_lse_out);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_write_tile(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, lse_addr);
+        noc_async_write_page(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, lse_addr);
         lse_addr += stats_tile_bytes;
     }
     noc_async_writes_flushed();
@@ -359,22 +359,21 @@ void kernel_main() {
         false, /* wait_for_op_signal */
         argidx);
 
-    // TODO: CB indices below are hardcoded and duplicated from the program factory.
-    // They should be passed as compile-time args so the factory is the single source of truth.
     // The stats CB is aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm.
-    constexpr uint32_t cb_max_in = tt::CBIndex::c_6;  // deferred norm: DRAM → compute (running max)
-    constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;  // eager norm: DRAM → compute (LSE)
-    constexpr uint32_t cb_prev_out = tt::CBIndex::c_7;
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_max_out = tt::CBIndex::c_17;  // deferred norm: compute → DRAM (running max)
-    constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;  // eager norm: compute → DRAM (LSE)
-    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
-    constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
-    constexpr uint32_t cb_signal = tt::CBIndex::c_12;
-    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
-    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
-    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+    constexpr uint32_t cb_arg_offset = stats_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
+    constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 4);
+    constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
+    constexpr uint32_t cb_max_in = get_compile_time_arg_val(cb_arg_offset + 6);  // deferred norm: DRAM -> compute
+    constexpr uint32_t cb_lse_in = cb_max_in;                                    // eager norm: DRAM -> compute
+    constexpr uint32_t cb_prev_out = get_compile_time_arg_val(cb_arg_offset + 7);
+    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 8);
+    constexpr uint32_t cb_sum_out = get_compile_time_arg_val(cb_arg_offset + 10);
+    constexpr uint32_t cb_sum_in = get_compile_time_arg_val(cb_arg_offset + 11);
+    constexpr uint32_t cb_signal = get_compile_time_arg_val(cb_arg_offset + 12);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 13);
+    constexpr uint32_t cb_max_out = get_compile_time_arg_val(cb_arg_offset + 14);  // deferred norm: compute -> DRAM
+    constexpr uint32_t cb_lse_out = cb_max_out;                                    // eager norm: compute -> DRAM
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_max_in);
