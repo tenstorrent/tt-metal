@@ -11,7 +11,8 @@
 
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 namespace ttnn::operations::pool {
-// Return a single bf16 scalar for the pool type in u32 (packed in the least 16 bits)
+// Return a single bf16 scalar for the pool type in u32 (packed in the upper 16 bits).
+// Kernels extract the value via bf16_scalar >> 16.
 // For the maxpool it is 1, for the avg pool it is 1/kernel_size or the divisor override used to initialize compile
 // time argument sent to kernels. If there are multiple scalars needed call get_bf16_avg_pool_config_scalars
 uint32_t get_bf16_pool_scalar(
@@ -29,8 +30,7 @@ uint32_t get_bf16_pool_scalar(
             break;
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
-    // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-    return std::bit_cast<uint16_t>(bfloat16::truncate(value)) << 16;
+    return std::bit_cast<uint16_t>(bfloat16(value)) << 16;
 }
 
 // Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
@@ -41,8 +41,7 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
         case Pool2DType::AVG_POOL2D: value = 0.; break;
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
-    // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-    return std::bit_cast<uint16_t>(bfloat16::truncate(value));
+    return std::bit_cast<uint16_t>(bfloat16(value));
 }
 
 bool is_pool_op_one_scalar_per_core(
@@ -176,7 +175,9 @@ FactoryParameters get_factory_parameters(
     if (return_indices) {
         TT_FATAL(!is_avg_pool, "return_indices only applies for MaxPool");
     }
-    const uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
+    // Avg pool always uses fp32 destination accumulation for accuracy, which limits the destination
+    // register file to 4 tiles (fp32 uses twice the register space of bf16).
+    const uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : is_avg_pool ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     return FactoryParameters{

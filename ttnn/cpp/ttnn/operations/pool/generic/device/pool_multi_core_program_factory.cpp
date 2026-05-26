@@ -97,8 +97,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
             if (!scalars.empty()) {
                 scalars.back().end = i;
             }
-            // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-            scalars.push_back({i, std::bit_cast<uint16_t>(bfloat16::truncate(value)), i});
+            scalars.push_back({i, std::bit_cast<uint16_t>(bfloat16(value)), i});
             first_scalar = false;
         }
         last_pool_area = static_cast<uint32_t>(pool_area);
@@ -790,7 +789,7 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         pre_tilize_cb_id,               // 13
         is_output_tiled,                // 14
         is_output_block_format,         // 15
-        0,                              // 16: force_max_tiles_per_reduction_4 (off for pool2d)
+        params.is_avg_pool ? 1U : 0U,   // 16: force_max_tiles_per_reduction_4 (on for all avg pool — fp32 dest acc)
         // MPWI-only args start here (for compute_mpwi.cpp, not used by compute_pool_2d.cpp)
         in_idx_cb_id,                           // 17
         pack_tmp_cb_id,                         // 18
@@ -823,10 +822,10 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         device_arch,
         compute_kernel_config,
         tt::tt_metal::MathFidelity::HiFi4,
-        false,                                                             // math_approx_mode
-        (params.is_avg_pool && params.is_large_kernel) || indexes_32_bit,  // fp32_dest_acc_en
-        false,                                                             // packer_l1_acc
-        (params.is_large_kernel && return_indices) || indexes_32_bit       // dst_full_sync_en
+        false,                                 // math_approx_mode
+        params.is_avg_pool || indexes_32_bit,  // fp32_dest_acc_en: always on for avg pool for accumulation accuracy
+        false,                                 // packer_l1_acc
+        (params.is_large_kernel && return_indices) || indexes_32_bit  // dst_full_sync_en
     );
 
     const auto pool_defines_map = get_defines(pool_type);
