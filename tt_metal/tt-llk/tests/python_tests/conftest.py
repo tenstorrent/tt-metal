@@ -279,6 +279,16 @@ def pytest_configure(config):
         or TestConfig.DUMP_RAW_METRICS
         or TestConfig.DUMP_CSV_COUNTERS
     )
+
+    # Device print is enabled on debug or trace.
+    resolved_log_level = (
+        config.getoption("--logging-level", default=None)
+        or os.getenv("LOGURU_LEVEL", "INFO")
+    ).upper()
+    TestConfig.DEVICE_PRINT_ENABLED = (
+        resolved_log_level in ("DEBUG", "TRACE") and not config.coverage_enabled
+    )
+
     TestConfig.setup_build(
         Path(os.environ["LLK_HOME"]),
         config.getoption("--coverage", default=False),

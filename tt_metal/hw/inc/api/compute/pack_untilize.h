@@ -19,7 +19,7 @@
 
 namespace ckernel {
 
-namespace detail {
+namespace pack_untilize_detail {
 
 template <
     uint32_t block_ct_dim,
@@ -59,7 +59,7 @@ ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
     pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, false, TILE_C_DIM, false, configure_remap>(ocb);
 }
 
-}  // namespace detail
+}  // namespace pack_untilize_detail
 
 // clang-format off
 /**
@@ -109,8 +109,9 @@ template <
     bool dense = false>
 ALWI void pack_untilize_dest_init(
     uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4, uint32_t call_line = __builtin_LINE()) {
-    detail::pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, true>(
-        ocb, face_r_dim, num_faces, call_line);
+    pack_untilize_detail::
+        pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, true>(
+            ocb, face_r_dim, num_faces, call_line);
 }
 
 template <
@@ -121,8 +122,9 @@ template <
     bool dense = false>
 ALWI void pack_untilize_dest_init_skip_remap(
     uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4, uint32_t call_line = __builtin_LINE()) {
-    detail::pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, false>(
-        ocb, face_r_dim, num_faces, call_line);
+    pack_untilize_detail::
+        pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, false>(
+            ocb, face_r_dim, num_faces, call_line);
 }
 
 // clang-format off
@@ -157,12 +159,12 @@ ALWI void pack_untilize_dest_init_skip_remap(
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, true>(icb, ocb, call_line);
+    pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, true>(icb, ocb, call_line);
 }
 
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, false>(icb, ocb, call_line);
+    pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, false>(icb, ocb, call_line);
 }
 
 // clang-format off
