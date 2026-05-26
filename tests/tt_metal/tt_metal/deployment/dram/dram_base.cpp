@@ -30,7 +30,7 @@ static uint32_t get_dram_insert_errors_pattern_id_from_env_once() {
         return 0u;
     }
 
-    return static_cast<uint32_t>(value);
+    return value;
 }
 
 namespace tt::tt_metal {
