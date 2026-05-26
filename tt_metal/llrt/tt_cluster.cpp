@@ -374,8 +374,11 @@ void Cluster::get_metal_desc_from_tt_desc() {
         silicon_dram_metadata_yaml = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
     }
     for (const auto& id : this->driver_->get_target_device_ids()) {
-        this->sdesc_per_chip_.emplace(
-            id, metal_SocDescriptor(this->driver_->get_soc_descriptor(id), this->get_cluster_desc()->get_board_type(id)));
+        tt::umd::SocDescriptor umd_soc = this->driver_->get_soc_descriptor(id);
+        if (this->target_type_ == TargetDevice::Silicon) {
+            umd_soc.device_descriptor_file_path = silicon_dram_metadata_yaml;
+        }
+        this->sdesc_per_chip_.emplace(id, metal_SocDescriptor(umd_soc, this->get_cluster_desc()->get_board_type(id)));
     }
 }
 
