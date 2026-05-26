@@ -488,33 +488,48 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
     *reinterpret_cast<volatile std::uint32_t*>(sync_addr) = SYNC_ZONE_COMPLETE;
 }
 
-// Per-run-type designation of which thread does the real 169-counter read.
-// Other threads spinwait on the sync flag so cross-thread wall_clock stays symmetric.
+// Per-run-type split: arm thread opens the counter window, freeze thread closes it.
+// L1_TO_L1 / L1_CONGESTION: unpack arms (pipeline source), pack freezes (pipeline sink).
+// *_ISOLATE: same isolated thread arms and freezes its own zone.
+// Non-arm/non-freeze threads spinwait on the pc_buf semaphores so zone boundaries
+// stay symmetric across all three threads.
 template <PerfRunType run_type>
-constexpr bool is_active_perf_thread()
+constexpr bool is_arm_thread()
+{
+#if defined(LLK_TRISC_UNPACK)
+    return run_type == PerfRunType::L1_TO_L1 || run_type == PerfRunType::L1_CONGESTION || run_type == PerfRunType::UNPACK_ISOLATE;
+#elif defined(LLK_TRISC_MATH)
+    return run_type == PerfRunType::MATH_ISOLATE;
+#elif defined(LLK_TRISC_PACK)
+    return run_type == PerfRunType::PACK_ISOLATE;
+#else
+    return false;
+#endif
+}
+
+template <PerfRunType run_type>
+constexpr bool is_freeze_thread()
 {
 #if defined(LLK_TRISC_UNPACK)
     return run_type == PerfRunType::UNPACK_ISOLATE;
 #elif defined(LLK_TRISC_MATH)
     return run_type == PerfRunType::MATH_ISOLATE;
 #elif defined(LLK_TRISC_PACK)
-    return run_type == PerfRunType::L1_TO_L1 || run_type == PerfRunType::PACK_ISOLATE || run_type == PerfRunType::L1_CONGESTION;
+    return run_type == PerfRunType::L1_TO_L1 || run_type == PerfRunType::L1_CONGESTION || run_type == PerfRunType::PACK_ISOLATE;
 #else
     return false;
 #endif
 }
 
-// Strict single-active-thread + pc_buf-semaphore barrier:
+// pc_buf-semaphore barrier with split arm/freeze:
 //   perf_ctor:
-//     ACTIVE thread:     fence → arm (4 MMIO writes) → fence
-//     NON-ACTIVE thread: fence → spinwait on entry-sem → semget → fence
-//                        — blocks until active has armed; counter window starts cleanly.
+//     ARM thread:  fence → arm (4 MMIO writes) → sempost ×N → fence
+//     others:      fence → spinwait on entry-sem → semget → fence
+//                  — blocks until arm thread has cleared+started HW.
 //   perf_dtor:
-//     ACTIVE thread:     fence → freeze + 169-iter read + sync_addr write → sempost ×N → fence
-//     NON-ACTIVE thread: fence → spinwait on exit-sem → semget → fence
-// Net: counter prozor = ACTIVE arms → ACTIVE freezes. Niko drugi ne dira counter regs.
-// Both perf_ctor and perf_dtor act as cross-thread barriers — all threads exit
-// these phases at near-identical wall_clock moments → symmetric zone boundaries.
+//     FREEZE thread: fence → freeze + 200-iter read + sync_addr write → sempost ×N → fence
+//     others:        fence → spinwait on exit-sem → semget → fence
+// Counter window = ARM arms → FREEZE freezes. No other thread touches counter regs.
 constexpr std::uint8_t PERF_ENTRY_SEM        = ckernel::semaphore::FPU_SFPU;       // entry barrier
 constexpr std::uint8_t PERF_EXIT_SEM         = ckernel::semaphore::UNPACK_TO_DEST; // exit barrier
 constexpr std::uint32_t PERF_NUM_SPINWAITERS = 2;
@@ -532,7 +547,7 @@ struct perf_counter_scoped
     inline __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t zid) : zone_id(zid)
     {
         asm volatile("" ::: "memory");
-        if constexpr (is_active_perf_thread<run_type>())
+        if constexpr (is_arm_thread<run_type>())
         {
             arm_all_counters();
             for (std::uint32_t i = 0; i < PERF_NUM_SPINWAITERS; ++i)
@@ -554,7 +569,7 @@ struct perf_counter_scoped
     inline __attribute__((always_inline)) ~perf_counter_scoped()
     {
         asm volatile("" ::: "memory");
-        if constexpr (is_active_perf_thread<run_type>())
+        if constexpr (is_freeze_thread<run_type>())
         {
             freeze_and_read_all_counters(zone_id);
             for (std::uint32_t i = 0; i < PERF_NUM_SPINWAITERS; ++i)
