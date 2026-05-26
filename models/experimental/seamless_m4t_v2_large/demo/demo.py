@@ -299,6 +299,7 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         if not isinstance(t2tt_out, TTSeamlessM4Tv2GreedySearchOutput):
             raise TypeError(f"T2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(t2tt_out)}")
         print(f"  Output text ({tgt_translate}): {_decode(tokenizer, t2tt_out.sequences)}")
+        ttnn.deallocate(t2tt_out.sequences)
 
         # T2TT compiles many text-decoder programs; clear before T2ST so vocoder conv1d fits in L1.
         tt_model.clear_runtime_program_cache()
@@ -316,7 +317,6 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
             return_intermediate_token_ids=True,
             tgt_lang=tgt_translate,
             speaker_id=0,
-            text_sequences=t2tt_out.sequences,
             **gen_common,
         )
         if not isinstance(t2st_out, TTSeamlessM4Tv2GenerationOutput):

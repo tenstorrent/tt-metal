@@ -28,9 +28,20 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_text_to_unit import (
 )
 
 PCC_THRESHOLD = 0.99
+# Full T2U at ``encoder_seq=4096`` accumulates chunked-matmul / SDPA / conv halo error across
+# encoder + decoder; logits PCC stays ~0.973 with current Blackhole kernels (see max test).
+PCC_THRESHOLD_MAX_ENCODER = 0.97
+SHORT_ENCODER_SEQ = 32
+MAX_ENCODER_SEQ = 4096  # HF ``t2u_max_position_embeddings``
 
 
-def _run_text_to_unit_pcc(device) -> None:
+def _run_text_to_unit_pcc(
+    device,
+    *,
+    encoder_seq_len: int,
+    chars_per_encoder_step: int = 2,
+    pcc_threshold: float = PCC_THRESHOLD,
+) -> None:
     """
     Shared PCC body. Compares TT vs HF for the full T2U module (encoder + decoder + ``lm_head``).
     Mesh-safe readbacks go through ``to_torch_replicated_first_shard``.
@@ -45,11 +56,12 @@ def _run_text_to_unit_pcc(device) -> None:
     torch.manual_seed(1)
     t2u, cfg = load_pretrained_text_to_unit(weights_dir, dtype=torch.bfloat16)
 
-    batch, encoder_seq_len = 1, 32
+    batch = 1
     inputs_embeds, attention_mask, char_input_ids, char_count_per_id = synthetic_t2u_inputs(
         cfg,
         batch=batch,
         encoder_seq_len=encoder_seq_len,
+        chars_per_encoder_step=chars_per_encoder_step,
         seed=1,
         dtype=torch.bfloat16,
     )
@@ -121,22 +133,39 @@ def _run_text_to_unit_pcc(device) -> None:
         tt_pad_cpu.shape == ref_padding_mask.shape
     ), f"TT padding_mask {tuple(tt_pad_cpu.shape)} vs HF {tuple(ref_padding_mask.shape)}."
 
-    ok_logits, msg_logits = check_with_pcc(ref_logits, tt_logits_cpu, pcc=PCC_THRESHOLD)
-    ok_pad, msg_pad = check_with_pcc(ref_padding_mask, tt_pad_cpu, pcc=PCC_THRESHOLD)
-    logger.info(f"SeamlessM4Tv2 text-to-unit PCC logits={msg_logits} padding={msg_pad} (threshold {PCC_THRESHOLD})")
+    ok_logits, msg_logits = check_with_pcc(ref_logits, tt_logits_cpu, pcc=pcc_threshold)
+    ok_pad, msg_pad = check_with_pcc(ref_padding_mask, tt_pad_cpu, pcc=pcc_threshold)
+    logger.info(
+        f"SeamlessM4Tv2 text-to-unit PCC (encoder_seq={encoder_seq_len}): "
+        f"logits={msg_logits} padding={msg_pad} (threshold {pcc_threshold})"
+    )
     assert ok_logits, msg_logits
     assert ok_pad, msg_pad
 
 
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
-def test_seamless_m4t_v2_text_to_unit(mesh_device, device_params, reset_seeds):
-    """
-    PCC vs Hugging Face ``SeamlessM4Tv2TextToUnitForConditionalGeneration`` (encoder + decoder + ``lm_head``).
+def test_seamless_m4t_v2_text_to_unit_short_seq_pcc(mesh_device, device_params, reset_seeds):
+    """PCC at ``encoder_seq_len=32`` — default 1D matmul / short hard-upsampling path."""
+    _ = reset_seeds
+    _ = device_params
+    with mesh_default_device(mesh_device):
+        _run_text_to_unit_pcc(mesh_device, encoder_seq_len=SHORT_ENCODER_SEQ)
 
-    Uses HF discrete durations as ``reference_discrete_durations`` so TT matches HF unit length while the
-    TT duration stack converges.
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_seamless_m4t_v2_text_to_unit_max_encoder_seq_pcc(mesh_device, device_params, reset_seeds):
+    """PCC at HF ``t2u_max_position_embeddings = 4096``.
+
+    Exercises the chunked ``_hard_upsample_matmul`` path (``sum_r > MATMUL_1D_SEQ_THRESHOLD``) on both
+    char and unit upsamplers. Uses one character per encoder frame so upsampled lengths stay at 4096.
     """
     _ = reset_seeds
     _ = device_params
     with mesh_default_device(mesh_device):
-        _run_text_to_unit_pcc(mesh_device)
+        _run_text_to_unit_pcc(
+            mesh_device,
+            encoder_seq_len=MAX_ENCODER_SEQ,
+            chars_per_encoder_step=1,
+            pcc_threshold=PCC_THRESHOLD_MAX_ENCODER,
+        )
