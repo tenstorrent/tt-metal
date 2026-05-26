@@ -19,6 +19,7 @@ using namespace tt::tt_metal::blackhole::active_eth;
 #include "eth_l1_address_map.h"
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
+#include "tensix.h"
 #include "llrt/hal.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include "noc/noc_parameters.h"
@@ -163,6 +164,19 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
         (uint64_t)&((eth_live_status_t*)MEM_SYSENG_ETH_LIVE_STATUS)->rx_link_up;
     fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::PORT_STATUS)] =
         (uint64_t)&((eth_status_t*)MEM_SYSENG_ETH_STATUS)->port_status;
+    fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::POSTCODE)] =
+        (uint64_t)&((eth_status_t*)MEM_SYSENG_ETH_STATUS)->postcode;
+    fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::TRAIN_STATUS)] =
+        (uint64_t)&((eth_status_t*)MEM_SYSENG_ETH_STATUS)->train_status;
+    fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::SERDES_RESET_STATUS)] =
+        (uint64_t)&((boot_results_t*)MEM_SYSENG_BOOT_RESULTS_BASE)->serdes_results.serdes_reset_status;
+
+    std::vector<uint32_t> eth_debug_regs(static_cast<std::size_t>(EthDebugReg::COUNT), 0);
+    eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::PCS_STATUS)] =
+        ETH_CORE_A_ETH_CTRL_A_PCS_STATUS_REG_ADDR;
+    eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::ERISC0_RESET_PC)] = AERISC_RESET_PC;
+    eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::ERISC1_RESET_PC)] = SUBORDINATE_AERISC_RESET_PC;
+    eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::RISC_SOFT_RESET)] = RISCV_DEBUG_REG_SOFT_RESET_0;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes;
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names;
@@ -192,7 +206,8 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
         false /*supports_receiving_multicast_cmds*/,
         active_eth_dev_msgs::create_factory(),
         active_eth_fabric_telemetry::create_factory(),
-        active_eth_realtime_profiler_msgs::create_factory()};
+        active_eth_realtime_profiler_msgs::create_factory(),
+        std::move(eth_debug_regs)};
 }
 
 }  // namespace tt::tt_metal::blackhole

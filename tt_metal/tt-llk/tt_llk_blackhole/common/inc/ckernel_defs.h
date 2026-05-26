@@ -126,6 +126,9 @@ constexpr auto to_underlying(T t) noexcept
     return static_cast<std::underlying_type_t<T>>(t);
 }
 
+template <ThreadId thread_id>
+constexpr bool IS_TRISC_THREAD = thread_id == MathThreadId || thread_id == PackThreadId || thread_id == UnpackThreadId;
+
 inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_format)
 {
     return data_format & DATA_FORMAT_CONFIG_MASK;

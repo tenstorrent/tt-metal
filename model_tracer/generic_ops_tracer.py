@@ -601,6 +601,24 @@ def _strip_object_addresses(value):
     return value
 
 
+_SHAPE_RE = re.compile(r"^Shape\(\[([0-9,\s]+)\]\)$")
+
+
+def _parse_shape_object(obj):
+    """Convert a serialized Shape dict to a plain int list.
+
+    The tracer sometimes serializes ttnn.Shape as
+    {"type": "Shape", "value": "Shape([1, 32, 32, 384])"} instead of a
+    plain list [1, 32, 32, 384].  Canonicalize to the list form so the
+    hash is stable regardless of serialization path.
+    """
+    if isinstance(obj, dict) and obj.get("type") == "Shape" and isinstance(obj.get("value"), str):
+        m = _SHAPE_RE.match(obj["value"])
+        if m:
+            return [int(x.strip()) for x in m.group(1).split(",")]
+    return None
+
+
 def _normalize_for_hash(obj):
     """
     Normalize arguments in-place for stable config_hash computation.
@@ -620,7 +638,11 @@ def _normalize_for_hash(obj):
 
         for k in list(obj.keys()):
             v = obj[k]
-            if isinstance(v, str):
+            # Serialized Shape objects → plain int lists
+            parsed = _parse_shape_object(v) if isinstance(v, dict) else None
+            if parsed is not None:
+                obj[k] = parsed
+            elif isinstance(v, str):
                 obj[k] = _strip_object_addresses(v)
             else:
                 _normalize_for_hash(v)

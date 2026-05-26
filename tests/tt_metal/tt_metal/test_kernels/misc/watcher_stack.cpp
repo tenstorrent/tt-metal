@@ -7,17 +7,8 @@
 #include "api/compile_time_args.h"
 #include "internal/debug/stack_usage.h"
 
-#ifdef ARCH_QUASAR
-#include "experimental/kernel_args.h"
-#endif
-
 void kernel_main() {
-#ifdef ARCH_QUASAR
-    // Quasar: use named CTA (Metal 2.0 API)
-    uint32_t usage = get_arg(args::usage);
-#else
     uint32_t usage = get_compile_time_arg_val(0);
-#endif
     uint32_t* stack_base = get_stack_base();
     auto point = &stack_base[usage / sizeof(uint32_t)];
     uint32_t *sp;

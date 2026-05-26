@@ -57,3 +57,32 @@ FORCE_INLINE uint32_t remap_q_index(uint32_t linear_index, uint32_t num_q_chunks
     }
     return linear_index;
 }
+
+/**
+ * Result of decomposing a global Q index into (batch, head, q_chunk) coordinates.
+ */
+struct GlobalQIndex {
+    uint32_t nb;
+    uint32_t nq;
+    uint32_t q_chunk;
+};
+
+/**
+ * Decompose a linear global Q index in [0, B*NQH*num_q_chunks) into (nb, nq, q_chunk).
+ *
+ * Applies the remap (linear or zigzag) first, then splits the remapped index as:
+ *   nb      = idx / (NQH * num_q_chunks)
+ *   nq      = (idx / num_q_chunks) % NQH
+ *   q_chunk = idx % num_q_chunks
+ *
+ * Used by SDPA reader/writer kernels under global Q scheduling to fetch the right
+ * Q/K/V and write outputs for each (batch, head, q_chunk) triple a core is assigned.
+ */
+FORCE_INLINE GlobalQIndex decompose_global_q_index(uint32_t idx, uint32_t num_q_chunks, uint32_t NQH, bool use_zigzag) {
+    const uint32_t remapped = remap_q_index(idx, num_q_chunks, use_zigzag);
+    return {
+        /*nb=*/remapped / (NQH * num_q_chunks),
+        /*nq=*/(remapped / num_q_chunks) % NQH,
+        /*q_chunk=*/remapped % num_q_chunks,
+    };
+}

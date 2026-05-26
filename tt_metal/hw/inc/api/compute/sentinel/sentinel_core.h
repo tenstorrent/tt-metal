@@ -184,7 +184,12 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
             return;
         }
         if (m_enabled) {
+#ifdef ARCH_QUASAR
+            // Quasar unpack reconfig does not support stride/tile-dim changes; force is_tile_dim_reconfig_en=false.
+            reconfig_data_format_srca<false /* to_from_int8 */, false /* is_tile_dim_reconfig_en */>(m_srca_cb, cb);
+#else
             reconfig_data_format_srca<false /* to_from_int8 */, true /* is_tile_dim_reconfig_en */>(m_srca_cb, cb);
+#endif
         }
 
         DPRINT("reconfig_data_format_srca - ");
@@ -194,7 +199,12 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
             return;
         }
         if (m_enabled) {
+#ifdef ARCH_QUASAR
+            // Quasar unpack reconfig does not support stride/tile-dim changes; force is_tile_dim_reconfig_en=false.
+            reconfig_data_format_srcb<false /* to_from_int8 */, false /* is_tile_dim_reconfig_en */>(m_srcb_cb, cb);
+#else
             reconfig_data_format_srcb<false /* to_from_int8 */, true /* is_tile_dim_reconfig_en */>(m_srcb_cb, cb);
+#endif
         }
 
         DPRINT("reconfig_data_format_srcb - ");
