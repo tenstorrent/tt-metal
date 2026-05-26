@@ -28,7 +28,7 @@ Use this reference while bringing up a TTNN decoder layer. It folds in relevant 
 
 - Prefer a layer-only HF reference over full causal LM loading.
 - Inspect the decoder layer constructor, rotary/position embedding inputs, attention mask semantics, and cache API before writing the test.
-- Use real weights to record tensor stats, not to run normal tests.
+- Use real weights to record tensor stats and to validate that `from_state_dict` can load a real checkpoint path when available. Treat the real HF state dict as the canonical key and shape contract. Normal CI tests should use synthetic weights generated from those stats so they do not require HF weight downloads.
 - For each tensor used by the TTNN layer, store at least name, shape, dtype, mean, and std.
 - Generate synthetic weights deterministically from those stats in pytest.
 - Synthetic input activations should approximate the distribution entering the decoder layer after embeddings/norms, not arbitrary huge random values.
@@ -88,7 +88,7 @@ python tools/tracy/process_ops_logs.py --date
 For functional-decoder artifacts, copy the relevant ops CSV into the artifact directory before running `tt-perf-report`:
 
 ```bash
-export ARTIFACT_DIR="models/demos/<model>/doc/functional_decoder"
+export ARTIFACT_DIR="models/autoports/<model>/doc/functional_decoder"
 cp <ops_perf_results_*.csv> "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_ops.csv"
 tt-perf-report "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_ops.csv" \
   --start-signpost PERF_DECODE \
@@ -117,7 +117,7 @@ When calculating latency from the report, prefer the filtered `tt-perf-report` C
 ## Fallback And Watcher Audit
 
 - Runtime prefill/decode should not call torch, `ttnn.from_torch`, or `ttnn.to_torch` except at explicit boundaries.
-- Setup-time conversion, input construction, final PCC comparison, and a named temporary prefill-to-decode boundary are allowed in the test harness.
+- Setup-time conversion inside `from_state_dict`, input construction, final PCC comparison, and a named temporary prefill-to-decode boundary are allowed in the test harness.
 - Host fallback hidden in helpers is still fallback; inspect wrappers as well as the layer file.
 - `models/tt_transformers/tt/model.py` contains host-side last-token extraction patterns for batched prefill. Treat that as an existing production compromise, not as a pattern to copy silently.
 - Run watcher-enabled tests. A clean watcher run is part of done; a suspected false positive needs evidence.

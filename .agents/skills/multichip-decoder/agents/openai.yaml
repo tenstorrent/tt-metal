@@ -1,4 +1,4 @@
 interface:
   display_name: "Multichip Decoder"
   short_description: "Parallelize TTNN decoder layers across chips"
-  default_prompt: "Use $multichip-decoder to parallelize a TTNN decoder layer across the current multi-chip hardware, preserve decoder correctness, and produce golden multichip evidence."
+  default_prompt: "Use $multichip-decoder to produce models/autoports/<model>/tt/multichip_decoder.py with a MultichipDecoder LightweightModule preserving the decoder from_state_dict/prefill_forward/decode_forward interface, loading real or synthetic weights, parallelizing across the current hardware, preserving correctness, and producing golden multichip evidence."
