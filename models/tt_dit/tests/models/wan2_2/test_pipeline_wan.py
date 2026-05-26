@@ -15,6 +15,7 @@ import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
 from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
+from models.tt_dit.utils.vbench import assert_vbench_quality
 
 from ....utils.test import line_params, ring_params
 
@@ -176,15 +177,19 @@ def test_pipeline_inference(
                 f"Per-frame scores: {[f'{s:.2f}' for s in scores]}"
             )
 
-    def check_output_with_vbench(prompt, number):
+    def check_output_with_vbench(
+        prompt,
+        number,
+        vbench_thresholds={
+            "subject_consistency": 0.85,
+            "background_consistency": 0.90,
+            "motion_smoothness": 0.95,
+            "dynamic_degree": 0.50,
+        },
+    ):
         if int(ttnn.distributed_context_get_rank()) == 0:
             output_filename = f"wan_t2v_{width}x{height}_{number}.mp4"
-            try:
-                from models.tt_dit.utils.vbench import assert_vbench_quality
-
-                assert_vbench_quality(output_filename, prompt=prompt)
-            except ImportError:
-                logger.info("VBench not installed, skipping quality check")
+            scores = assert_vbench_quality(output_filename, prompt=prompt, thresholds=vbench_thresholds)
 
     if no_prompt:
         frames = run(prompt=prompt, number=0, seed=42)
