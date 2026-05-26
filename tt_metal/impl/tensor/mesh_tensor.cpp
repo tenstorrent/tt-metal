@@ -5,6 +5,7 @@
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "mesh_tensor_impl.hpp"
 
@@ -90,6 +91,20 @@ void MeshTensor::update_tensor_topology(TensorTopology tensor_topology) {
 
 MeshTensor MeshTensor::allocate_on_device(
     distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology) {
+    // FP8_E4M3 has narrow tensor infra support: ROW_MAJOR layout (enforced in TensorSpec)
+    // and Blackhole arch only. The warning fires on every FP8 allocation as a signpost of
+    // the limited support; the TT_FATAL guards the device-binding boundary against
+    // allocating on unsupported hardware where kernels would misbehave later.
+    if (spec.data_type() == DataType::FP8_E4M3) {
+        log_warning(
+            tt::LogAlways,
+            "FP8_E4M3 has limited tensor infra support: ROW_MAJOR layout and Blackhole arch only (got arch {}).",
+            mesh_device.arch());
+        TT_FATAL(
+            mesh_device.arch() == tt::ARCH::BLACKHOLE,
+            "FP8_E4M3 is only supported on Blackhole hardware (got arch {})",
+            mesh_device.arch());
+    }
     auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);
     return MeshTensor(std::move(mesh_buffer), spec, topology);
 }

@@ -12,13 +12,22 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
+#include <algorithm>
+#include <functional>
+#include <stdexcept>
 #include <type_traits>
+#include <vector>
 
+#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/float8.hpp>
+#include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -226,6 +235,102 @@ TEST_F(MeshTensorDeviceTest, ConstructionWithTooSmallBufferFails) {
     auto topology = TensorTopology();
 
     EXPECT_ANY_THROW(MeshTensor(mesh_buffer, std::move(spec), std::move(topology)));
+}
+
+// FP8_E4M3 device-side support is intentionally narrow. The TensorSpec validator enforces
+// ROW_MAJOR layout for FP8_E4M3; MeshTensor::allocate_on_device adds the Blackhole-arch
+// requirement (FP8_E4M3's only producer today is the DeepSeek V3 Prefill combine op).
+// These tests pin both constraints and confirm a plain H2D->D2H round-trip works.
+
+TensorSpec make_fp8_row_major_spec(const Shape& shape) {
+    return TensorSpec(
+        shape,
+        TensorLayout(
+            DataType::FP8_E4M3,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+}
+
+TEST_F(MeshTensorDeviceTest, AllocateOnDeviceFp8RowMajorOnBlackholeSucceeds) {
+    if (mesh_device_->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "FP8_E4M3 device allocation requires Blackhole.";
+    }
+    const Shape shape{2, 32};
+    auto spec = make_fp8_row_major_spec(shape);
+
+    testing::internal::CaptureStdout();
+    auto tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology());
+    std::fflush(stdout);
+    const std::string captured = testing::internal::GetCapturedStdout();
+
+    EXPECT_EQ(tensor.dtype(), DataType::FP8_E4M3);
+    EXPECT_EQ(tensor.layout(), Layout::ROW_MAJOR);
+    EXPECT_EQ(tensor.logical_shape(), shape);
+    EXPECT_EQ(tensor.element_size(), sizeof(float8_e4m3));
+    // The unconditional FP8 warning fires even on Blackhole as a signpost of limited support.
+    EXPECT_THAT(captured, ::testing::HasSubstr("FP8_E4M3 has limited tensor infra support"));
+}
+
+TEST_F(MeshTensorDeviceTest, AllocateOnDeviceFp8OnNonBlackholeThrows) {
+    if (mesh_device_->arch() == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Negative arch guard only fires off-Blackhole.";
+    }
+    auto spec = make_fp8_row_major_spec(Shape{2, 32});
+
+    testing::internal::CaptureStdout();
+    bool threw_with_message = false;
+    try {
+        (void)MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology());
+    } catch (const std::runtime_error& e) {
+        threw_with_message =
+            std::string(e.what()).find("FP8_E4M3 is only supported on Blackhole hardware") != std::string::npos;
+    }
+    std::fflush(stdout);
+    const std::string captured = testing::internal::GetCapturedStdout();
+
+    EXPECT_TRUE(threw_with_message) << "Expected std::runtime_error with the Blackhole-only message; captured stdout: "
+                                    << captured;
+    EXPECT_THAT(captured, ::testing::HasSubstr("FP8_E4M3 has limited tensor infra support"));
+}
+
+TEST_F(MeshTensorDeviceTest, Fp8H2DToD2HRoundTripPreservesBytes) {
+    if (mesh_device_->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "H2D/D2H for FP8_E4M3 requires Blackhole.";
+    }
+
+    const Shape shape{2, 32};
+    auto spec = make_fp8_row_major_spec(shape);
+
+    const auto& mesh_shape = mesh_device_->shape();
+    auto dhb = DistributedHostBuffer::create(mesh_shape);
+    distributed::MeshCoordinateRange range(mesh_shape);
+    std::vector<distributed::MeshCoordinate> coords(range.begin(), range.end());
+    // Per-shard distinct fills make cross-shard corruption easy to spot; exact FP8 quantization
+    // doesn't matter since we compare raw bytes after the round-trip.
+    dhb.emplace_shards(coords, [&, idx = size_t{0}](const distributed::MeshCoordinate&) mutable {
+        const float v = 0.5f * static_cast<float>(idx++ + 1);
+        return HostBuffer(std::vector<float8_e4m3>(shape.volume(), float8_e4m3(v)));
+    });
+    auto topology = TensorTopology::create_sharded_tensor_topology(mesh_shape);
+    HostTensor host_tensor(std::move(dhb), spec, topology);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
+    HostTensor result = enqueue_read_tensor(cq, device_tensor);
+
+    const auto& exp_coords = host_tensor.buffer().shard_coords();
+    const auto& act_coords = result.buffer().shard_coords();
+    ASSERT_EQ(exp_coords, act_coords);
+    for (const auto& coord : exp_coords) {
+        auto exp_shard = host_tensor.buffer().get_shard(coord);
+        auto act_shard = result.buffer().get_shard(coord);
+        ASSERT_TRUE(exp_shard.has_value());
+        ASSERT_TRUE(act_shard.has_value());
+        const auto exp_bytes = exp_shard->view_bytes();
+        const auto act_bytes = act_shard->view_bytes();
+        ASSERT_EQ(exp_bytes.size(), act_bytes.size());
+        EXPECT_TRUE(std::equal(exp_bytes.begin(), exp_bytes.end(), act_bytes.begin()));
+    }
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
