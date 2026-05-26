@@ -321,7 +321,9 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
     if [[ -n "$DOCKER_IMAGE" ]]; then
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
+            --mpi-interface "$MPI_IF" \
             --volume /data/scaleout_configs \
+            "${MPI_EXTRA_ARGS[@]}" \
             --host "$HOSTS" \
             ./build/tools/scaleout/run_cluster_validation \
             "${VALIDATION_ARGS[@]}"
