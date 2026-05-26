@@ -15,11 +15,19 @@ This effort is only for deterministic runtime/code failures.
   - reproducible test failures with concrete failing test IDs (`FAILED ...`)
   - failures that occur in 3 consecutive runs on `main`
 - Out of scope:
-  - plain job timeouts (not the same as a proven hung test)
+  - failures that are at least partially due to job timeouts (including plain job timeouts; not the same as a proven hung test)
   - flaky/non-consecutive failures
   - infra/runner/network/download/environment faults
 
 Do not disable tests for out-of-scope failures.
+
+## Timeout-Tracking Issue Workflow (Mandatory)
+
+For each out-of-scope failure that is at least partially due to job timeouts:
+
+- Track it in a separate timeout-tracking issue (distinct from the pipeline disable-tracking issue).
+- Explicitly designate that timeout-tracking issue for pipeline re-org follow-up.
+- Whenever the timeout-tracking issue is created or updated, record its link and current status in `disabling-work-so-far.md`.
 
 ## Session Start Requirements (Mandatory)
 
