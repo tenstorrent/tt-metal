@@ -10,5 +10,6 @@ namespace ttnn::operations::experimental::ccl {
 namespace nb = nanobind;
 void bind_moe_compute(nb::module_& mod);
 void bind_get_moe_combine_cores(nb::module_& mod);
+void bind_get_moe_tilize_drain_core(nb::module_& mod);
 void bind_moe_compute_utils(nb::module_& mod);
 }  // namespace ttnn::operations::experimental::ccl
