@@ -189,7 +189,7 @@ def test_pipeline_inference(
     ):
         if int(ttnn.distributed_context_get_rank()) == 0:
             output_filename = f"wan_t2v_{width}x{height}_{number}.mp4"
-            scores = assert_vbench_quality(output_filename, prompt=prompt, thresholds=vbench_thresholds)
+            assert_vbench_quality(output_filename, prompt=prompt, thresholds=vbench_thresholds)
 
     if no_prompt:
         frames = run(prompt=prompt, number=0, seed=42)
