@@ -63,24 +63,23 @@ void kernel_main() {
         }
     };
 
-    auto swap_bytes = [](uint8_t* a, uint8_t* b, uint32_t len) {
-        for (uint32_t i = 0; i < len; i++) {
-            uint8_t t = a[i];
-            a[i] = b[i];
-            b[i] = t;
+    auto swap_bytes = [](uint8_t* a, uint8_t* b, uint32_t len_bytes) {
+        uint32_t* wa = reinterpret_cast<uint32_t*>(a);
+        uint32_t* wb = reinterpret_cast<uint32_t*>(b);
+        for (uint32_t i = 0; i < len_bytes / sizeof(uint32_t); i++) {
+            uint32_t t = wa[i]; wa[i] = wb[i]; wb[i] = t;
         }
     };
 
     auto reverse_line = [&](uint8_t* p) {
-        uint32_t lo = 0, hi = FACE_W - 1;
-        while (lo < hi) {
-            for (uint32_t b = 0; b < element_size; b++) {
-                uint8_t t = p[lo * element_size + b];
-                p[lo * element_size + b] = p[hi * element_size + b];
-                p[hi * element_size + b] = t;
-            }
-            lo++;
-            hi--;
+        if constexpr (element_size == 2) {
+            uint16_t* q = reinterpret_cast<uint16_t*>(p);
+            uint32_t lo = 0, hi = FACE_W - 1;
+            while (lo < hi) { uint16_t t = q[lo]; q[lo++] = q[hi]; q[hi--] = t; }
+        } else if constexpr (element_size == 4) {
+            uint32_t* q = reinterpret_cast<uint32_t*>(p);
+            uint32_t lo = 0, hi = FACE_W - 1;
+            while (lo < hi) { uint32_t t = q[lo]; q[lo++] = q[hi]; q[hi--] = t; }
         }
     };
 
@@ -131,64 +130,90 @@ void kernel_main() {
             uint32_t l1_addr = get_write_ptr(cb_id);
             noc_async_read_tile(make_tile_id(src_md), s0, l1_addr);
             noc_async_read_barrier();
+            cb_push_back(cb_id, 1);
 
             uint8_t* tp = reinterpret_cast<uint8_t*>(l1_addr);
 
             if (is_bfp8) {
                 if (is_hflip && !is_vflip) {
-                    swap_bytes(tp + face_data_off(0), tp + face_data_off(1), FACE_HW_BYTES);
-                    swap_bytes(tp + face_data_off(2), tp + face_data_off(3), FACE_HW_BYTES);
-                    swap_bytes(tp + face_exp_off(0), tp + face_exp_off(1), FACE_H);
-                    swap_bytes(tp + face_exp_off(2), tp + face_exp_off(3), FACE_H);
-                } else if (is_vflip && !is_hflip) {
-                    swap_bytes(tp + face_data_off(0), tp + face_data_off(2), FACE_HW_BYTES);
-                    swap_bytes(tp + face_data_off(1), tp + face_data_off(3), FACE_HW_BYTES);
-                    swap_bytes(tp + face_exp_off(0), tp + face_exp_off(2), FACE_H);
-                    swap_bytes(tp + face_exp_off(1), tp + face_exp_off(3), FACE_H);
-                } else if (is_hflip && is_vflip) {
-                    swap_bytes(tp + face_data_off(0), tp + face_data_off(3), FACE_HW_BYTES);
-                    swap_bytes(tp + face_data_off(1), tp + face_data_off(2), FACE_HW_BYTES);
-                    swap_bytes(tp + face_exp_off(0), tp + face_exp_off(3), FACE_H);
-                    swap_bytes(tp + face_exp_off(1), tp + face_exp_off(2), FACE_H);
-                }
-
-                for (uint32_t fi = 0; fi < NUM_FACES_H * NUM_FACES_W; fi++) {
-                    uint8_t* fp = tp + face_data_off(fi);
-                    if (is_vflip) {
-                        for (uint32_t row = 0; row < FACE_H / 2; row++) {
-                            swap_bytes(
-                                fp + row * SUBTILE_LINE_BYTES,
-                                fp + (FACE_H - 1 - row) * SUBTILE_LINE_BYTES,
-                                SUBTILE_LINE_BYTES);
-                        }
-                        // Mirror the exponent array so exponent[row] tracks its row.
-                        uint8_t* ep = tp + face_exp_off(fi);
-                        uint32_t lo = 0, hi = FACE_H - 1;
-                        while (lo < hi) {
-                            uint8_t t = ep[lo];
-                            ep[lo] = ep[hi];
-                            ep[hi] = t;
-                            lo++;
-                            hi--;
-                        }
-                    }
-                    if (is_hflip) {
+                    for (uint32_t fh = 0; fh < NUM_FACES_H; fh++) {
+                        uint16_t* left  = (uint16_t*)(tp + face_data_off(fh * NUM_FACES_W + 0));
+                        uint16_t* right = (uint16_t*)(tp + face_data_off(fh * NUM_FACES_W + 1));
                         for (uint32_t row = 0; row < FACE_H; row++) {
-                            reverse_line(fp + row * SUBTILE_LINE_BYTES);
+                            uint16_t* lr = left  + row * FACE_W;
+                            uint16_t* rr = right + row * FACE_W;
+                            for (uint32_t col = 0; col < FACE_W; col++) {
+                                uint16_t t = lr[col];
+                                lr[col] = rr[FACE_W - 1 - col];
+                                rr[FACE_W - 1 - col] = t;
+                            }
                         }
                     }
-                }
-            } else {
-                // Non-BFP8: faces are laid out contiguously with no header.
-                if (is_hflip && is_vflip) {
-                    swap_bytes(tp, tp + 3 * FACE_HW_BYTES, FACE_HW_BYTES);
-                    swap_bytes(tp + FACE_HW_BYTES, tp + 2 * FACE_HW_BYTES, FACE_HW_BYTES);
-                } else if (is_hflip) {
-                    swap_bytes(tp, tp + FACE_HW_BYTES, FACE_HW_BYTES);
-                    swap_bytes(tp + 2 * FACE_HW_BYTES, tp + 3 * FACE_HW_BYTES, FACE_HW_BYTES);
-                } else if (is_vflip) {
-                    swap_bytes(tp, tp + 2 * FACE_HW_BYTES, FACE_HW_BYTES);
-                    swap_bytes(tp + FACE_HW_BYTES, tp + 3 * FACE_HW_BYTES, FACE_HW_BYTES);
+                } else if (is_vflip && !is_hflip) {
+                    for (uint32_t fw = 0; fw < NUM_FACES_W; fw++) {
+                        uint16_t* top    = (uint16_t*)(tp + face_data_off(0 * NUM_FACES_W + fw));
+                        uint16_t* bottom = (uint16_t*)(tp + face_data_off(1 * NUM_FACES_W + fw));
+                        for (uint32_t row = 0; row < FACE_H; row++) {
+                            uint16_t* tr = top    + row * FACE_W;
+                            uint16_t* br = bottom + (FACE_H - 1 - row) * FACE_W;
+                            for (uint32_t col = 0; col < FACE_W; col++) {
+                                uint16_t t = tr[col]; tr[col] = br[col]; br[col] = t;
+                            }
+                        }
+                    }
+                } else if (is_hflip && is_vflip) {
+                    if constexpr (element_size == 2) {
+                        for (uint32_t fh = 0; fh < NUM_FACES_H; fh++) {
+                            for (uint32_t fw = 0; fw < NUM_FACES_W; fw++) {
+                                uint32_t fi_a = fh * NUM_FACES_W + fw;
+                                uint32_t fi_b = (NUM_FACES_H - 1 - fh) * NUM_FACES_W + (NUM_FACES_W - 1 - fw);
+                                if (fi_a >= fi_b) continue;
+                                uint16_t* fa = (uint16_t*)(tp + face_data_off(fi_a));
+                                uint16_t* fb = (uint16_t*)(tp + face_data_off(fi_b));
+                                for (uint32_t row = 0; row < FACE_H; row++) {
+                                    uint16_t* ra = fa + row * FACE_W;
+                                    uint16_t* rb = fb + (FACE_H - 1 - row) * FACE_W;
+                                    for (uint32_t col = 0; col < FACE_W; col++) {
+                                        uint16_t t = ra[col];
+                                        ra[col] = rb[FACE_W - 1 - col];
+                                        rb[FACE_W - 1 - col] = t;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else if constexpr (element_size == 4) {
+                        for (uint32_t fh = 0; fh < NUM_FACES_H; fh++) {
+                            for (uint32_t fw = 0; fw < NUM_FACES_W; fw++) {
+                                uint32_t fi_a = fh * NUM_FACES_W + fw;
+                                uint32_t fi_b = (NUM_FACES_H - 1 - fh) * NUM_FACES_W + (NUM_FACES_W - 1 - fw);
+                                if (fi_a >= fi_b) continue;
+                                uint32_t* fa = (uint32_t*)(tp + face_data_off(fi_a));
+                                uint32_t* fb = (uint32_t*)(tp + face_data_off(fi_b));
+                                for (uint32_t row = 0; row < FACE_H; row++) {
+                                    uint32_t* ra = fa + row * FACE_W;
+                                    uint32_t* rb = fb + (FACE_H - 1 - row) * FACE_W;
+                                    for (uint32_t col = 0; col < FACE_W; col++) {
+                                        uint32_t t = ra[col];
+                                        ra[col] = rb[FACE_W - 1 - col];
+                                        rb[FACE_W - 1 - col] = t;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    if (is_hflip && is_vflip) {
+                        swap_bytes(tp, tp + 3 * FACE_HW_BYTES, FACE_HW_BYTES);
+                        swap_bytes(tp + FACE_HW_BYTES, tp + 2 * FACE_HW_BYTES, FACE_HW_BYTES);
+                    } else if (is_hflip) {
+                        swap_bytes(tp, tp + FACE_HW_BYTES, FACE_HW_BYTES);
+                        swap_bytes(tp + 2 * FACE_HW_BYTES, tp + 3 * FACE_HW_BYTES, FACE_HW_BYTES);
+                    } else if (is_vflip) {
+                        swap_bytes(tp, tp + 2 * FACE_HW_BYTES, FACE_HW_BYTES);
+                        swap_bytes(tp + FACE_HW_BYTES, tp + 3 * FACE_HW_BYTES, FACE_HW_BYTES);
+                    }
+
                 }
 
                 for (uint32_t fi = 0; fi < NUM_FACES_H * NUM_FACES_W; fi++) {
