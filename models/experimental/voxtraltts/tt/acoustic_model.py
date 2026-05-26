@@ -14,7 +14,10 @@ from models.experimental.voxtraltts.reference.cpu_flow_matching_acoustic import 
 from models.experimental.voxtraltts.tt.attention import VoxtralTTAttention
 from models.experimental.voxtraltts.tt.mlp import VoxtralTTMLP
 from models.experimental.voxtraltts.tt.rmsnorm import VoxtralAcousticRMSNorm
-from models.experimental.voxtraltts.utils.config_helpers import COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC
+from models.experimental.voxtraltts.utils.config_helpers import (
+    COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC,
+    COMPUTE_KERNEL_CONFIG_VOXTRAL_SEMANTIC,
+)
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
 from models.tt_transformers.tt.common import Mode
@@ -93,6 +96,7 @@ class VoxtralTTAcousticModel:
         self.w_semantic = _linear_weight_ttnn(sd["semantic_codebook_output.weight"], mesh_device, dtype)
 
         _sem_size = sd["semantic_codebook_output.weight"].shape[0]
+        self._sem_vocab_size = _sem_size
         _sem_mask = torch.zeros(1, 1, _sem_size)
         _sem_mask[0, 0, self._empty_audio_token_id] = float("-inf")
         _sem_mask[0, 0, self._tail_mask_start :] = float("-inf")
@@ -105,6 +109,7 @@ class VoxtralTTAcousticModel:
         )
 
         self._compute_kernel_config = COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC
+        self._semantic_compute_kernel_config = COMPUTE_KERNEL_CONFIG_VOXTRAL_SEMANTIC
         # FM trunk uses short sequences (3 concat tokens); keep matmul activations in L1 (weights in DRAM).
         self._matmul_act_mem_config = ttnn.L1_MEMORY_CONFIG
 
@@ -427,12 +432,65 @@ class VoxtralTTAcousticModel:
             te = te_expanded
         return te
 
+    def _sampled_tt_for_velocity(self, sampled_tt: ttnn.Tensor) -> ttnn.Tensor:
+        """Cast FM Euler state to bf16 for the velocity trunk (weights are bf16)."""
+        if sampled_tt.dtype == self.dtype:
+            return sampled_tt
+        return ttnn.typecast(sampled_tt, self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def _euler_integrate_sampled(
+        self,
+        sampled_tt: ttnn.Tensor,
+        v_t_3d: ttnn.Tensor,
+        dt_val: float,
+    ) -> ttnn.Tensor:
+        """``sampled += v*dt`` with fp32 state (matches CPU PyTorch bf16 add accumulation)."""
+        mem = ttnn.DRAM_MEMORY_CONFIG
+        v_scaled = ttnn.multiply(v_t_3d, dt_val, dtype=ttnn.float32, memory_config=mem)
+        ttnn.deallocate(v_t_3d)
+        if sampled_tt.dtype == ttnn.float32:
+            sampled_f32 = sampled_tt
+        else:
+            sampled_f32 = ttnn.typecast(sampled_tt, ttnn.float32, memory_config=mem)
+            ttnn.deallocate(sampled_tt)
+        new_sampled = ttnn.add(sampled_f32, v_scaled, dtype=ttnn.float32, memory_config=mem)
+        ttnn.deallocate(sampled_f32)
+        ttnn.deallocate(v_scaled)
+        return new_sampled
+
+    def _fm_round_acoustic_codes_from_sampled_tt(self, sampled_tt: ttnn.Tensor, bsz: int) -> torch.Tensor:
+        """Clamp → scale → ``round`` in fp32; host ``[bsz, n_acoustic]`` long (pre special-token offset)."""
+        mem = ttnn.DRAM_MEMORY_CONFIG
+        if sampled_tt.dtype == ttnn.float32:
+            sampled_f32 = sampled_tt
+        else:
+            sampled_f32 = ttnn.typecast(sampled_tt, ttnn.float32, memory_config=mem)
+            ttnn.deallocate(sampled_tt)
+        clamped = ttnn.clip(sampled_f32, min=-1.0, max=1.0, memory_config=mem)
+        ttnn.deallocate(sampled_f32)
+        plus_one = ttnn.add(clamped, 1.0, dtype=ttnn.float32, memory_config=mem)
+        ttnn.deallocate(clamped)
+        halved = ttnn.multiply(plus_one, 0.5, dtype=ttnn.float32, memory_config=mem)
+        ttnn.deallocate(plus_one)
+        scaled = ttnn.multiply(
+            halved,
+            float(self._acoustic_embeddings_levels - 1),
+            dtype=ttnn.float32,
+            memory_config=mem,
+        )
+        ttnn.deallocate(halved)
+        scaled_host = ttnn.to_torch(scaled).float().reshape(bsz, -1)
+        ttnn.deallocate(scaled)
+        return scaled_host.round().long()
+
     def _decode_one_frame(
         self,
         semantic_code: torch.Tensor,
         llm_hidden: torch.Tensor,
         cfg_alpha: torch.Tensor,
-    ) -> torch.Tensor:
+        *,
+        collect_fm_debug: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Euler FM + CFG; same as ``FlowMatchingAudioTransformerRef.decode_one_frame``."""
         bsz = semantic_code.shape[0]
         device = llm_hidden.device
@@ -449,6 +507,7 @@ class VoxtralTTAcousticModel:
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        sampled_tt = ttnn.typecast(sampled_tt, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         tt_llm = ttnn.from_torch(
             llm_hidden.to(torch.bfloat16).unsqueeze(1),
             device=self.mesh_device,
@@ -470,23 +529,40 @@ class VoxtralTTAcousticModel:
             cfg_a = ca
         cfg_scalar = float(cfg_a.flatten()[0].item())
 
+        fm_debug: dict[str, torch.Tensor] | None = {} if collect_fm_debug else None
         for i in range(len(timesteps) - 1):
             t_val = float(timesteps[i].item())
             dt_val = float((timesteps[i + 1] - timesteps[i]).item())
 
             te = self._time_embedding_tt(t_val, bsz)
-            x_batched = ttnn.concat([sampled_tt, sampled_tt], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x_in = self._sampled_tt_for_velocity(sampled_tt)
+            x_batched = ttnn.concat([x_in, x_in], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if x_in is not sampled_tt and x_in.is_allocated():
+                ttnn.deallocate(x_in)
             te_batched = ttnn.concat([te, te], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(te)
-            v_tt = self._predict_velocity_impl(
-                None,
-                None,
-                None,
-                _tt_xt=x_batched,
-                _tt_te=te_batched,
-                _tt_llm=tt_llm_batched,
-                return_debug=False,
-            )
+            if collect_fm_debug and i == 0:
+                v_out = self._predict_velocity_impl(
+                    None,
+                    None,
+                    None,
+                    _tt_xt=x_batched,
+                    _tt_te=te_batched,
+                    _tt_llm=tt_llm_batched,
+                    return_debug=True,
+                )
+                assert isinstance(v_out, tuple)
+                v_tt, fm_debug = v_out
+            else:
+                v_tt = self._predict_velocity_impl(
+                    None,
+                    None,
+                    None,
+                    _tt_xt=x_batched,
+                    _tt_te=te_batched,
+                    _tt_llm=tt_llm_batched,
+                    return_debug=False,
+                )
 
             v_shape = tuple(v_tt.shape)
             v_cond = ttnn.slice(v_tt, [0, 0, 0, 0], [bsz, v_shape[1], v_shape[2], v_shape[3]])
@@ -504,34 +580,18 @@ class VoxtralTTAcousticModel:
 
             v_t_3d = ttnn.reshape(v_t_tt, (bsz, 1, self.n_acoustic_out))
             ttnn.deallocate(v_t_tt)
-            v_scaled = ttnn.multiply(v_t_3d, dt_val, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(v_t_3d)
-            new_sampled = ttnn.add(sampled_tt, v_scaled, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(sampled_tt)
-            ttnn.deallocate(v_scaled)
-            sampled_tt = new_sampled
+            sampled_tt = self._euler_integrate_sampled(sampled_tt, v_t_3d, dt_val)
 
         ttnn.deallocate(tt_llm_batched)
 
-        clamped_tt = ttnn.clip(sampled_tt, min=-1.0, max=1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(sampled_tt)
-        plus_one_tt = ttnn.add(clamped_tt, 1.0, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(clamped_tt)
-        halved_tt = ttnn.multiply(plus_one_tt, 0.5, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(plus_one_tt)
-        scaled_tt = ttnn.multiply(
-            halved_tt,
-            float(self._acoustic_embeddings_levels - 1),
-            dtype=self.dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(halved_tt)
-        scaled_host = ttnn.to_torch(scaled_tt).float().reshape(bsz, -1)
-        ttnn.deallocate(scaled_tt)
-        output_codes = scaled_host.round().long()
+        output_codes = self._fm_round_acoustic_codes_from_sampled_tt(sampled_tt, bsz)
         output_codes[~should_decode] = self._empty_audio_token_id
         offset = len(AudioSpecialTokens.all_special_tokens())
-        return output_codes + offset
+        codes = output_codes + offset
+        if collect_fm_debug:
+            assert fm_debug is not None
+            return codes, fm_debug
+        return codes
 
     def _decode_one_frame_tt(
         self,
@@ -542,7 +602,11 @@ class VoxtralTTAcousticModel:
     ) -> ttnn.Tensor:
         """Euler FM on device for trace replay; returns rounded acoustic codes ``[bsz, n_acoustic]`` on device."""
         bsz = int(llm_hidden_tt.shape[0])
-        sampled_tt = ttnn.clone(noise_tt)
+        sampled_tt = ttnn.typecast(
+            ttnn.clone(noise_tt),
+            ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         tt_llm = llm_hidden_tt
         tt_llm_zero = ttnn.zeros_like(tt_llm)
         tt_llm_batched = ttnn.concat([tt_llm, tt_llm_zero], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -553,7 +617,10 @@ class VoxtralTTAcousticModel:
             dt_val = float((self._timesteps_cpu[i + 1] - self._timesteps_cpu[i]).item())
 
             te = self._time_embedding_tt(t_val, bsz)
-            x_batched = ttnn.concat([sampled_tt, sampled_tt], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x_in = self._sampled_tt_for_velocity(sampled_tt)
+            x_batched = ttnn.concat([x_in, x_in], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if x_in is not sampled_tt and x_in.is_allocated():
+                ttnn.deallocate(x_in)
             te_batched = ttnn.concat([te, te], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(te)
             v_tt = self._predict_velocity_impl(
@@ -582,54 +649,72 @@ class VoxtralTTAcousticModel:
 
             v_t_3d = ttnn.reshape(v_t_tt, (bsz, 1, self.n_acoustic_out))
             ttnn.deallocate(v_t_tt)
-            v_scaled = ttnn.multiply(v_t_3d, dt_val, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(v_t_3d)
-            new_sampled = ttnn.add(sampled_tt, v_scaled, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(sampled_tt)
-            ttnn.deallocate(v_scaled)
-            sampled_tt = new_sampled
+            sampled_tt = self._euler_integrate_sampled(sampled_tt, v_t_3d, dt_val)
 
         ttnn.deallocate(tt_llm_batched)
 
-        clamped_tt = ttnn.clip(sampled_tt, min=-1.0, max=1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(sampled_tt)
-        plus_one_tt = ttnn.add(clamped_tt, 1.0, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(clamped_tt)
-        halved_tt = ttnn.multiply(plus_one_tt, 0.5, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(plus_one_tt)
-        scaled_tt = ttnn.multiply(
-            halved_tt,
-            float(self._acoustic_embeddings_levels - 1),
-            dtype=self.dtype,
+        codes_host = self._fm_round_acoustic_codes_from_sampled_tt(sampled_tt, bsz)
+        return ttnn.from_torch(
+            codes_host.to(torch.int32).reshape(bsz, 1, self.n_acoustic_out),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn.deallocate(halved_tt)
-        return ttnn.round(scaled_tt, decimals=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    def forward_semantic_trace(self, llm_hidden_tt: ttnn.Tensor) -> ttnn.Tensor:
-        """Trace-safe semantic head: linear (bf16) → fp32-promoted argmax (matches CPU).
+    def _semantic_logits_tt(
+        self,
+        llm_hidden_tt: ttnn.Tensor,
+        *,
+        output_dtype: ttnn.DataType = ttnn.float32,
+        input_fp32: bool = True,
+    ) -> torch.Tensor:
+        """TT ``w_semantic`` linear → masked fp32 logits on host.
 
-        Matches the CPU reference's exact path (cpu_flow_matching_acoustic.py:368-375):
-        bf16 linear → cast to fp32 → apply mask in fp32 → argmax in fp32. Without this,
-        boundary cases where top-1 and top-2 logits are within bf16 noise pick different
-        semantic tokens between CPU and TT, and the divergence amplifies through the AR loop.
+        Root cause of near-tie argmax flips (e.g. indices 855/6114/6286): using
+        ``dtype=bfloat16`` on ``ttnn.linear`` packs matmul results to bf16 before
+        readback. Global PCC stays ~0.999 but top logits can shift ~0.25 and reorder
+        ties. CPU reference keeps fp32 logits (``.float()`` after bf16 linear).
 
-        This is the same precision-promotion pattern :meth:`forward` already uses (see lines
-        703-708); without it, ``forward_acoustic_trace_codes`` would diverge from ``forward``.
+        Fix (still TT): fp32 activations + ``dtype=ttnn.float32`` output with
+        ``COMPUTE_KERNEL_CONFIG_VOXTRAL_SEMANTIC`` (HiFi4_FP32 / dst_full_sync_en=False).
+        FM trunk keeps ``COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC``.
         """
+        if input_fp32 and llm_hidden_tt.dtype != ttnn.float32:
+            llm_in = ttnn.typecast(llm_hidden_tt, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            owned_cast = llm_in is not llm_hidden_tt
+        else:
+            llm_in = llm_hidden_tt
+            owned_cast = False
         sem_tt = ttnn.linear(
-            llm_hidden_tt,
+            llm_in,
             self.w_semantic,
-            dtype=self.dtype,
+            dtype=output_dtype,
             memory_config=self._matmul_act_mem_config,
-            compute_kernel_config=self._compute_kernel_config,
+            compute_kernel_config=self._semantic_compute_kernel_config,
         )
-        # Download bf16 logits, promote to fp32 on host, apply mask in fp32, argmax in fp32.
-        # This matches CPU's path exactly (no bf16 mask addition that could perturb close ties).
+        if owned_cast and llm_in.is_allocated():
+            ttnn.deallocate(llm_in)
         sem_logits = ttnn.to_torch(sem_tt).float()
         ttnn.deallocate(sem_tt)
+        if sem_logits.dim() == 4:
+            sem_logits = sem_logits.squeeze(1)
+        if sem_logits.dim() == 3:
+            sem_logits = sem_logits.squeeze(1)
+        sem_logits = sem_logits[..., : self._sem_vocab_size]
         sem_logits[..., self._empty_audio_token_id] = float("-inf")
         sem_logits[..., self._tail_mask_start :] = float("-inf")
+        return sem_logits
+
+    def forward_semantic_trace(self, llm_hidden_tt: ttnn.Tensor) -> ttnn.Tensor:
+        """Trace-safe semantic head: TT fp32 linear → masked fp32 argmax on host."""
+        if llm_hidden_tt.dtype != ttnn.float32:
+            llm_hidden_fp32 = ttnn.typecast(llm_hidden_tt, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            llm_hidden_fp32 = llm_hidden_tt
+        sem_logits = self._semantic_logits_tt(llm_hidden_fp32, input_fp32=False)
+        if llm_hidden_fp32 is not llm_hidden_tt and llm_hidden_fp32.is_allocated():
+            ttnn.deallocate(llm_hidden_fp32)
         sem_code_host = sem_logits.argmax(dim=-1, keepdim=True).to(torch.int32).contiguous()
         # Upload semantic code back as TT tensor; _decode_one_frame_tt consumes [B, 1, 1] uint32 RM.
         semantic_code_tt = ttnn.from_torch(
@@ -683,36 +768,46 @@ class VoxtralTTAcousticModel:
         assert isinstance(out, tuple)
         return out
 
-    def forward(self, llm_hidden: torch.Tensor, cfg_alpha: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        llm_hidden: torch.Tensor,
+        cfg_alpha: torch.Tensor,
+        *,
+        return_debug: bool = False,
+        collect_semantic_logits: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Semantic logits (TT) + on-device masked argmax + FM decode (device loop).
 
         Returns ``[B, 1 + n_acoustic_codebook]``: semantic token column-major compatible with reference.
         """
         bsz = llm_hidden.shape[0]
+        need_debug = return_debug or collect_semantic_logits
+        debug: dict[str, torch.Tensor] | None = {} if need_debug else None
 
-        tt_llm = ttnn.from_torch(
-            llm_hidden.unsqueeze(1),
+        # Semantic: fp32 activations × bf16 w_semantic → fp32 logits (CPU ref: bf16 linear, fp32 logits).
+        llm_sem = llm_hidden.to(dtype=torch.bfloat16).float().unsqueeze(1)
+        tt_llm_sem = ttnn.from_torch(
+            llm_sem,
             device=self.mesh_device,
-            dtype=self.dtype,
+            dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        sem_tt = ttnn.linear(
-            tt_llm,
-            self.w_semantic,
-            dtype=self.dtype,
-            memory_config=self._matmul_act_mem_config,
-            compute_kernel_config=self._compute_kernel_config,
-        )
-        ttnn.deallocate(tt_llm)
-
-        # Match CPU reference: float logits + mask before argmax (BF16 argmax can flip near ties).
-        sem_logits = ttnn.to_torch(sem_tt).float()
-        ttnn.deallocate(sem_tt)
-        sem_logits[:, :, self._empty_audio_token_id] = float("-inf")
-        sem_logits[:, :, self._tail_mask_start :] = float("-inf")
+        sem_logits = self._semantic_logits_tt(tt_llm_sem, input_fp32=False)
+        ttnn.deallocate(tt_llm_sem)
         semantic_code = sem_logits.argmax(dim=-1, keepdim=True).long().reshape(bsz, 1)
+        if debug is not None:
+            debug["semantic_logits"] = sem_logits
 
-        acoustic_codes = self._decode_one_frame(semantic_code.squeeze(1), llm_hidden, cfg_alpha)
+        if return_debug:
+            frame_out = self._decode_one_frame(semantic_code.squeeze(1), llm_hidden, cfg_alpha, collect_fm_debug=True)
+            assert isinstance(frame_out, tuple)
+            acoustic_codes, fm_debug = frame_out
+            debug.update({f"fm.{k}": v for k, v in fm_debug.items()})
+        else:
+            acoustic_codes = self._decode_one_frame(semantic_code.squeeze(1), llm_hidden, cfg_alpha)
 
-        return torch.cat([semantic_code, acoustic_codes], dim=1)
+        codes = torch.cat([semantic_code, acoustic_codes], dim=1)
+        if need_debug:
+            return codes, debug
+        return codes
