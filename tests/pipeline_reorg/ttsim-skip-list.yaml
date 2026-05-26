@@ -20,10 +20,6 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
-  # Likely OOM killer related failures -- probably need to run these tests serially
-  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_extract.py
-  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_insert.py
-
   # Numeric mismatches, likely caused by issue #41163
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
   - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py
@@ -67,8 +63,6 @@ blackhole:
 
   # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
-  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_extract.py
-  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_insert.py
 
   # MOVD2B failures
   # https://github.com/tenstorrent/tt-metal/issues/41286
@@ -106,7 +100,6 @@ blackhole:
   - tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_val_padding.py
   - tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_zero_padding.py
   - tests/ttnn/unit_tests/operations/data_movement/test_tilizer.py
-  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_moe_post_combine_reduce.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py

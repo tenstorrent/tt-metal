@@ -176,7 +176,7 @@
   merge_gate: false
 
 - name: "ttnn misc ops group"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/debug tests/ttnn/unit_tests/operations/deepseek tests/ttnn/unit_tests/operations/point_to_point tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"'
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/debug tests/ttnn/unit_tests/operations/point_to_point tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
       timeout: 40
