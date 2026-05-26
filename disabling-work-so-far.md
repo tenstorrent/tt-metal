@@ -1,6 +1,6 @@
 # CI Disable Work — Running Status Log
 
-Last updated: **2026-05-26T18:02 UTC** (polled active verification run 26460410854)
+Last updated: **2026-05-26T19:15 UTC** (verification run 26460410854 completed; log analysis)
 
 Operational policy: **one workflow run at a time**, draft PRs only, artifact reuse for verification, Galaxy out of scope.
 
@@ -12,11 +12,7 @@ Operational policy: **one workflow run at a time**, draft PRs only, artifact reu
 
 ## Active Runs
 
-| Run | Pipeline | Branch | Started (UTC) | Jobs | Artifact source | Status |
-|-----|----------|--------|---------------|------|-----------------|--------|
-| [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) | `(T3K) T3000 e2e tests` | `verify/ci-disable-t3000-e2e-20260526` | 2026-05-26 16:13 | `models_tttv2_llama31_8B_tests [wh_llmbox]` (**success** @ 17:15 UTC), `t3k_ccl_tests [wh_llmbox]` (**in progress** — pytest since 17:18 UTC, runner `t3k-05`) | `26445104085` (Merge Gate Release, main `5e9f894`) | **ACTIVE** — pruned targeted verification for PR #45108 |
-
-> Do **not** dispatch another workflow until this run completes.
+_None — safe to dispatch at most one new verification run when needed._
 
 ---
 
@@ -24,6 +20,7 @@ Operational policy: **one workflow run at a time**, draft PRs only, artifact reu
 
 | Run | Pipeline | Branch | Started | Ended | Result | Notes |
 |-----|----------|--------|---------|-------|--------|-------|
+| [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) | `(T3K) T3000 e2e tests` | `verify/ci-disable-t3000-e2e-20260526` | 2026-05-26 16:13 | 2026-05-26 18:49 | **failure** | Pruned verify for PR #45108: Llama job **success**; CCL job **failure** — one pytest failure (trace buffer overflow on `rs_input_shape2` fabric_ring param) then **90m job timeout**; artifact reuse `26445104085` |
 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) | `(T3K) T3000 e2e tests` | `main` | 2026-05-26 07:27 | 2026-05-26 09:25 | **failure** | Main revalidation: Llama job green; `t3k_ccl_tests` failed (keeps CCL disables) |
 | [26368616671](https://github.com/tenstorrent/tt-metal/actions/runs/26368616671) | `(T3K) T3000 e2e tests` | verify branch (prior) | — | — | — | Prior targeted verification for PR #45108 (see PR body) |
 | [26295163268](https://github.com/tenstorrent/tt-metal/actions/runs/26295163268) | `t3000-demo-tests` | `ci/disable-failing-tests-t3000-demo-tests-20260521` | — | 2026-05-22 21:04 | **success** | PR #44938 verification passed |
@@ -41,9 +38,9 @@ Operational policy: **one workflow run at a time**, draft PRs only, artifact reu
 | Branch | `ci/disable-failing-tests-t3000-e2e-tests-20260524` |
 | Workflow | `t3000-e2e-tests.yaml` |
 
-**Last rebase on main:** 2026-05-26 ~17:18 UTC — rebased onto [`2feb3d47dee`](https://github.com/tenstorrent/tt-metal/commit/2feb3d47dee477530551c19f2b67c6f20c6ac4ea) (PR head: [`32e4d9b9c29`](https://github.com/tenstorrent/tt-metal/commit/32e4d9b9c296af8680f4f8ce30ff785fab3880bf)). **Behind main** as of 2026-05-26 18:02 UTC — current `main` tip [`231c7223899`](https://github.com/tenstorrent/tt-metal/commit/231c7223899cc1c42763498a13a3bee138decb78); rebase after verification completes.
+**Last rebase on main:** 2026-05-26 ~19:15 UTC — branch up to date with [`4b466c68cf3`](https://github.com/tenstorrent/tt-metal/commit/4b466c68cf3702d7d3f75cedf1e387eeb102ed5b) (`main` tip at rebase check); PR head [`362a0074c85`](https://github.com/tenstorrent/tt-metal/commit/362a0074c85842a7dbc56e189520b461a2d4c2c3).
 
-**Status:** Targeted verification [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) **ACTIVE** — Llama pruned job **green**; CCL pruned job running pytest.
+**Status:** Targeted verification [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) **completed failure** — Llama pruned job **green** (confirms Llama skip removal); CCL pruned job still red. Existing 14 CCL disables validated; **no new disables added** (trace-buffer candidate below fails 3× rule — only 1/5 recent main runs).
 
 **Latest disable-set change (2026-05-26):**
 - **Removed:** Llama 3.1 batch-32 demo skips — passing on main (see removed-test row below)
@@ -77,7 +74,13 @@ Operational policy: **one workflow run at a time**, draft PRs only, artifact reu
 | `test_mlp1d_llama_demo[…-batch-32-performance-…]` | **Passing** — job green | 2026-05-26 09:25 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
 | `test_mlp1d_llama_demo[…-batch-32-accuracy-…]` | **Passing** — job green | 2026-05-26 09:25 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
 
-**Next after verification:** If CCL job passes on verify branch, update PR/issue and consider undraft handoff. If CCL fails, analyze logs for minimal additional disables (3× same-error rule only). Do not dispatch a second run while 26460410854 is active.
+**Pending disable candidate (NOT added — 3× rule):**
+
+| Test ID | Error (same on verify + main 26438570812) | Consecutive main failures | Last checked (UTC) |
+|---------|-------------------------------------------|---------------------------|--------------------|
+| `test_reduce_scatter_async_sharded_to_interleaved[wormhole_b0-fabric_ring-rs_input_shape2-…-HEIGHT_SHARDED-…-L1-…]` | `TT_FATAL: Creating trace buffers of size 1409024B … only 1271456B allocated` | **1/5** recent main runs (26438570812 only; absent in 26389759743, 26354956826, 26326515951, 26274534025) | 2026-05-26 19:15 |
+
+**Next:** Wait for 2 more consecutive main runs with same trace-buffer error before disabling; then CCL-only pruned verify with artifact reuse. Do not chase the 90m global job timeout on CCL (pytest continued after first failure).
 
 ---
 
@@ -121,7 +124,7 @@ Operational policy: **one workflow run at a time**, draft PRs only, artifact reu
 | `t3000-perf-tests` | Done | #44771 (merged) |
 | Runtime unit tests | Done | merged |
 | `t3000-demo-tests` | Ready to merge | #44938 |
-| `(T3K) T3000 e2e tests` | In progress — awaiting verification | #45108 |
+| `(T3K) T3000 e2e tests` | In progress — verify done; pending 3× trace-buffer or next disable cycle | #45108 |
 | Nightly L2 tests | Out of scope | #44860 (separate agent) |
 | Galaxy workflows | Out of scope | — |
 
@@ -131,14 +134,22 @@ Operational policy: **one workflow run at a time**, draft PRs only, artifact reu
 
 | Blocker | Status | Notes |
 |---------|--------|-------|
-| Active verification run blocks new dispatch | **Active** | Run 26460410854 — Llama job done (success); CCL job in pytest (polled 2026-05-26 18:02 UTC) |
+| Active verification run blocks new dispatch | **Resolved** | Run 26460410854 completed 2026-05-26 18:49 UTC |
+| Trace-buffer disable candidate | **Watch** | `rs_input_shape2` / fabric_ring — only 1/5 main runs; need 3× same error before skip |
+| CCL job 90m timeout after first failure | **Out of scope** | Global job timeout; not a disable target |
 | GitHub REST `Bad credentials` with Bearer token | **Workaround** | Use `gh` CLI or `Authorization: token` header |
-| PR #45108 behind main | **Watch** | Rebased/synced 2026-05-26; re-check before undraft |
-| No compatible artifact source | **Resolved** | Used Merge Gate run `26445104085` for current verification |
+| PR #45108 behind main | **Resolved** | Up to date with `main` @ `4b466c68cf3` (2026-05-26 19:15 UTC) |
+| No compatible artifact source | **Resolved** | Used Merge Gate run `26445104085` for verification |
 
 ---
 
 ## Change Log (append-only)
+
+### 2026-05-26 ~19:15 UTC — verification complete (no code changes)
+- Run 26460410854 **completed failure**: Llama **success**, CCL **failure** (trace buffer `rs_input_shape2` + 90m timeout)
+- Log analysis: 14 existing disables still appropriate; trace-buffer param **not** disabled (1/5 main runs only)
+- PR #45108 rebased/current with `main` @ `4b466c68cf3`; issue/PR bodies updated
+- No new workflow dispatch this cycle
 
 ### 2026-05-26 ~18:02 UTC — automation poll (no code changes)
 - Polled run 26460410854: workflow `in_progress`; Llama job **success**; CCL job **in_progress** (pytest)
