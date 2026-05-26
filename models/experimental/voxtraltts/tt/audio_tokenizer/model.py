@@ -714,6 +714,7 @@ class VoxtralTTAudioTokenizer:
                 ttnn.deallocate(mel_rm)
             return out
 
+        # Long mel: slice+reshape per chunk, then pairwise concat under P150 L1 page limit.
         chunks_flat: list[ttnn.Tensor] = []
         pos = 0
         while pos < t:
@@ -735,11 +736,55 @@ class VoxtralTTAudioTokenizer:
 
         if len(chunks_flat) == 1:
             return chunks_flat[0]
-        result = ttnn.concat(chunks_flat, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        for c in chunks_flat:
-            if c.is_allocated():
-                ttnn.deallocate(c)
-        return result
+        return self._merge_pretransform_flat_chunks(chunks_flat)
+
+    def _merge_pretransform_flat_chunks(self, chunks: list[ttnn.Tensor]) -> ttnn.Tensor:
+        """Pairwise ``ttnn.concat`` under P150 L1; host-stitch only if two large segments remain."""
+        # P150 concat CB page limit ≈768k bf16 elems on dim=2 (1.536 MiB); stay below that.
+        max_concat_flat = 640_000
+        tensors = chunks
+        while len(tensors) > 1:
+            merged_any = False
+            next_level: list[ttnn.Tensor] = []
+            i = 0
+            while i < len(tensors):
+                left = tensors[i]
+                left_len = int(left.shape[2])
+                if i + 1 < len(tensors):
+                    right = tensors[i + 1]
+                    right_len = int(right.shape[2])
+                    if left_len + right_len <= max_concat_flat:
+                        merged = ttnn.concat([left, right], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                        if left.is_allocated():
+                            ttnn.deallocate(left)
+                        if right.is_allocated():
+                            ttnn.deallocate(right)
+                        next_level.append(merged)
+                        merged_any = True
+                        i += 2
+                        continue
+                next_level.append(left)
+                i += 1
+            if not merged_any:
+                break
+            tensors = next_level
+
+        if len(tensors) == 1:
+            return tensors[0]
+
+        # Final segments are individually too large to concat on device; stitch on host.
+        host_parts = [ttnn.to_torch(part).float() for part in tensors]
+        for part in tensors:
+            if part.is_allocated():
+                ttnn.deallocate(part)
+        stitched = torch.cat(host_parts, dim=-1).to(torch.bfloat16)
+        return ttnn.from_torch(
+            stitched,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def pretransform_decode_torch(self, mel_b1tc: ttnn.Tensor) -> torch.Tensor:
         """``[B,1,T,C_mel]`` TT mel → ``[B,1,T*C_mel]`` float32 host tensor."""

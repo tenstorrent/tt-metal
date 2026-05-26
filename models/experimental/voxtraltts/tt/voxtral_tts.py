@@ -33,8 +33,9 @@ from models.experimental.voxtraltts.tt.audio_tokenizer.model import (
 from models.experimental.voxtraltts.tt.text_model import VoxtralTTTextModel, patch_text_model_fp32_rms_norms
 from models.experimental.voxtraltts.tt.voxtral_tt_args import (
     _load_safetensors_state_dict,
-    voxtral_text_default_optimizations,
+    voxtral_text_high_accuracy_optimizations,
 )
+from models.experimental.voxtraltts.utils.debug_trace import VoxtralTTSDebugTrace
 from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
 
 ACOUSTIC_CFG_ALPHA_DEFAULT = 1.2
@@ -48,6 +49,7 @@ class VoxtralTTSGenerateOutput:
     codes_b37t: torch.Tensor
     shifted_codes_t37: torch.Tensor
     hit_end_audio: bool
+    debug: VoxtralTTSDebugTrace | None = None
 
 
 @dataclass
@@ -79,10 +81,11 @@ class VoxtralTTSPipeline:
         *,
         text_max_seq_len: int = 256,
         text_dtype: ttnn.DataType = ttnn.bfloat16,
-        text_optimizations=voxtral_text_default_optimizations,
+        text_optimizations=voxtral_text_high_accuracy_optimizations,
         acoustic_dtype: ttnn.DataType = ttnn.bfloat16,
         tokenizer_dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> "VoxtralTTSPipeline":
+        """Build TT TTS pipeline. Default text stack uses HiFi4 + BF16 weights for E2E PCC."""
         full = _load_safetensors_state_dict(model_name_or_path)
         cfg = load_voxtral_config(model_name_or_path)
         sd_at = extract_audio_tokenizer_state_dict(full)
@@ -275,24 +278,50 @@ class VoxtralTTSPipeline:
         *,
         fixed_step_count: bool = False,
         include_waveform_decode: bool = True,
+        return_debug: bool = False,
     ) -> VoxtralTTSGenerateOutput:
-        """Same AR loop as :meth:`forward`; final waveform decode on TT device."""
+        """Same AR loop as :meth:`forward`; final waveform decode on TT device.
+
+        ``return_debug`` only controls trace collection. It must not change numerics;
+        staged PCC and ``test_ttnn_trial.py`` share the same compute path.
+        """
         torch.manual_seed(seed)
+        debug = VoxtralTTSDebugTrace() if return_debug else None
 
         request = compose_speech_request(text, self.model_name_or_path, voice=voice)
         prompt_token_ids: list[int] = request["prompt_token_ids"]
         S_prompt = len(prompt_token_ids)
 
         inputs_embeds = self._build_voice_injected_embeds(prompt_token_ids, voice)
+        if debug is not None:
+            debug.set("embeds.prompt", inputs_embeds)
+
+        # Production prefill path only; debug must not call collect_layer_hiddens here
+        # (that path reads every layer to host and can change the last-token hidden).
         last_hidden = self.text.prefill_from_embeds(inputs_embeds, start_pos=0)
+        if debug is not None:
+            debug.set("text.prefill.hidden", last_hidden)
 
         cfg_alpha = torch.tensor(ACOUSTIC_CFG_ALPHA_DEFAULT, dtype=torch.bfloat16)
         generated_codes: list[torch.Tensor] = []
         current_pos = S_prompt
 
         for step_idx in range(max_tokens):
+            if debug is not None:
+                debug.set(f"step.{step_idx}.text.hidden_in", last_hidden)
             torch.manual_seed(acoustic_fm_noise_seed(seed, step_idx))
-            audio_codes = self.acoustic.forward(last_hidden.unsqueeze(0), cfg_alpha).to(torch.long)
+            if debug is not None:
+                ac_out = self.acoustic.forward(last_hidden.unsqueeze(0), cfg_alpha, collect_semantic_logits=True)
+                assert isinstance(ac_out, tuple)
+                audio_codes, ac_debug = ac_out
+                audio_codes = audio_codes.to(torch.long)
+                for k, v in ac_debug.items():
+                    val = v.squeeze(0) if v.dim() > 1 and v.shape[0] == 1 else v
+                    debug.set(f"step.{step_idx}.acoustic.{k}", val)
+            else:
+                audio_codes = self.acoustic.forward(last_hidden.unsqueeze(0), cfg_alpha).to(torch.long)
+            if debug is not None:
+                debug.set(f"step.{step_idx}.acoustic.codes", audio_codes.squeeze(0))
 
             generated_codes.append(audio_codes[0].detach().cpu())
             if not fixed_step_count and int(audio_codes[0, 0].item()) == self.end_audio_id:
@@ -300,6 +329,9 @@ class VoxtralTTSPipeline:
 
             mm_embed = self._audio_codes_to_mm_embed(audio_codes)
             last_hidden = self.text.decode_step_from_embeds(mm_embed, current_pos)
+            ttnn.synchronize_device(self.mesh_device)
+            if debug is not None:
+                debug.set(f"step.{step_idx}.text.hidden_out", last_hidden)
             current_pos += 1
 
         ttnn.synchronize_device(self.mesh_device)
@@ -311,6 +343,7 @@ class VoxtralTTSPipeline:
                 codes_b37t=torch.empty((1, 37, 0), dtype=torch.long),
                 shifted_codes_t37=torch.empty((0, 37), dtype=torch.long),
                 hit_end_audio=False,
+                debug=debug,
             )
 
         stacked = torch.stack(generated_codes, dim=0)
@@ -326,6 +359,7 @@ class VoxtralTTSPipeline:
                 codes_b37t=torch.empty((1, 37, 0), dtype=torch.long),
                 shifted_codes_t37=shifted_audio_tokens.long(),
                 hit_end_audio=hit_end_audio,
+                debug=debug,
             )
         codes_b37t = audio_tokens.T.unsqueeze(0).long()
 
@@ -346,9 +380,11 @@ class VoxtralTTSPipeline:
                 ttnn.deallocate(codes_t_tt)
 
             latent_tt = self.audio_tokenizer.latent_from_codes_tt(codes_b37t_tt)
-            if codes_b37t_tt.is_allocated():
-                ttnn.deallocate(codes_b37t_tt)
+            if debug is not None:
+                debug.set("tokenizer.latent", ttnn.to_torch(latent_tt).squeeze(1).float())
             mel_tt = self.audio_tokenizer.decode_latent_to_mel_b1tc(latent_tt)
+            if debug is not None:
+                debug.set("tokenizer.mel", ttnn.to_torch(mel_tt).squeeze(1).float())
             ttnn.deallocate(latent_tt)
             wav_tt = self.audio_tokenizer.pretransform_decode_tt(mel_tt)
             ttnn.deallocate(mel_tt)
@@ -360,11 +396,17 @@ class VoxtralTTSPipeline:
             waveform = wav.reshape(-1)[:expected_samples].reshape(1, 1, -1)
         else:
             waveform = torch.zeros(1, 1, 0, dtype=torch.float32)
+
+        if debug is not None:
+            debug.set("output.codes", codes_b37t.float())
+            debug.set("output.waveform", waveform)
+
         return VoxtralTTSGenerateOutput(
             waveform=waveform,
             codes_b37t=codes_b37t,
             shifted_codes_t37=shifted_audio_tokens.long(),
             hit_end_audio=hit_end_audio,
+            debug=debug,
         )
 
     __call__ = forward_device_resident
