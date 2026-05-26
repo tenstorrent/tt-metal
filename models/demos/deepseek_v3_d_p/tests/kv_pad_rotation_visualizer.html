@@ -231,6 +231,9 @@ function computeLayout(params) {
     devices.push(dev);
   }
 
+  // Per-chip Q row budget = chunk_size_local. Pad-fill rows count toward it.
+  const q_rows_per_chip = new Array(sp_factor).fill(0);
+
   // Phase 1: fill OLD-slab pad cells in GLOBAL-POSITION order. Pad can span
   // multiple devices when kv_actual_isl + pad_size > one chip's slab.
   const fill_count = Math.min(total_pad_in_old, new_actual_isl);
@@ -243,22 +246,29 @@ function computeLayout(params) {
       global_pos: pad_global_pos,
       token_idx: i,
     };
+    q_rows_per_chip[chip] += 1;
   }
-  // Phase 2: NEW slabs, chip 0 onward
+  // Phase 2: NEW slabs from chip 0, respecting per-chip Q row budget.
+  // A chip that received heavy pad-fill in Phase 1 contributes fewer
+  // NEW-slab cells (possibly zero), so every chip stays <= chunk_size_local
+  // Q rows total per iter.
   let remaining = new_actual_isl - fill_count;
   let tok = fill_count;
-  let c = 0, cell = 0;
-  while (remaining > 0 && c < sp_factor) {
-    devices[c].new_slab[cell] = {
-      kind: 'new_valid',
-      global_pos: kv_actual_isl + tok,
-      token_idx: tok,
-    };
-    tok++; remaining--; cell++;
-    if (cell === chunk_size_local) { cell = 0; c++; }
+  for (let c = 0; c < sp_factor && remaining > 0; c++) {
+    const avail = chunk_size_local - q_rows_per_chip[c];
+    const take = Math.min(avail, remaining);
+    for (let cell = 0; cell < take; cell++) {
+      devices[c].new_slab[cell] = {
+        kind: 'new_valid',
+        global_pos: kv_actual_isl + tok,
+        token_idx: tok,
+      };
+      q_rows_per_chip[c] += 1;
+      tok++; remaining--;
+    }
   }
-  // Any remaining (if NEW slabs across all devices exhausted) we silently drop
-  // (means new_actual_isl > sp_factor * chunk_size_local — caller's bug).
+  // If remaining > 0, new_actual_isl exceeds sp_factor * chunk_size_local
+  // (caller bug). Silently drop the unplaced tokens — UI shows new_tokens_placed < new_actual_isl.
 
   return {
     pad_chip, pad_offset_in_chip,

@@ -1617,17 +1617,53 @@ def _kv_pad_rotation_active_ring_slots(logical_n, sp_factor, chunk_size_local, n
     [
         # Single-device pad: pad on dev 3 only (32 cells).
         (224, 64, 3, 32, 32),
+        # Single-device pad, exactly filled: no NEW writes at all (boundary case).
+        (224, 32, 3, 32, 32),
+        # Single-device pad + NEW span across dev 0 and dev 1.
+        (224, 128, 3, 32, 32),
         # Multi-device pad: devs 2 and 3 OLD slabs entirely pad; new fills both fully.
         (128, 128, 2, 0, 128),
         # Multi-device pad, partial fill: fills dev 2's pad fully, dev 3's pad partially.
         (128, 96, 2, 0, 128),
+        # Multi-device pad, full fill + extra NEW writes on dev 0.
+        (128, 160, 2, 0, 128),
+        # Pad spans 3 devices (dev 1, 2, 3); new fills only dev 1's pad portion.
+        (64, 64, 1, 0, 192),
+        # Pad spans 3 devices; new exactly fills all three.
+        (64, 192, 1, 0, 192),
         # Cold start: every OLD slab is pad; new fills first two devices.
         (0, 128, 0, 0, 256),
         # Clean boundary: kv ends on a chunk boundary, no OLD pad anywhere.
         # All new tokens go to NEW slabs starting from dev 0.
         (256, 64, 0, 0, 0),
+        # Full iter with pad: max valid new — exactly sp*chunk_size_local. Pad
+        # fill consumes pad_size_in_chip Q rows on dev 3; the rest of dev 3's
+        # budget plus full budgets of devs 0-2 are used by NEW slabs.
+        (224, 256, 3, 32, 32),
+        # Full iter, clean boundary: no OLD pad; all 256 new tokens go to NEW slabs.
+        (256, 256, 0, 0, 0),
+        # No new tokens at all: should be a no-op.
+        (224, 0, 3, 32, 32),
+        # Sub-tile-aligned cold case: pad in OLD slab is exactly one chunk_size_local
+        # short of full; new is exactly enough to fill just that. Tests Phase 1 only.
+        (192, 64, 3, 0, 64),
     ],
-    ids=["single_pad_dev3", "multi_pad_2_full", "multi_pad_2_partial", "cold_start", "no_old_pad"],
+    ids=[
+        "single_pad_dev3",
+        "single_pad_exact_fill",
+        "single_pad_then_cross_chip_new",
+        "multi_pad_2_full",
+        "multi_pad_2_partial",
+        "multi_pad_2_with_extra_new",
+        "pad_3_devices_partial",
+        "pad_3_devices_full",
+        "cold_start",
+        "no_old_pad",
+        "full_iter_with_pad",
+        "full_iter_no_pad",
+        "new_zero",
+        "single_full_slab_pad",
+    ],
 )
 def test_kv_pad_aware_rotation_torch_showcase(
     kv_actual_isl, new_actual_isl, expected_pad_chip, expected_pad_offset, expected_total_pad
