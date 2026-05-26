@@ -6183,6 +6183,71 @@ def _maybe_escalate_pcc_fail(
 
 
 def cmd_up(args) -> int:
+    if not getattr(args, "isolation", "none") == "worktree":
+        return _cmd_up_core(args)
+    return _cmd_up_isolated(args)
+
+
+def _cmd_up_isolated(args) -> int:
+    from .overlay_manager import apply_for, capture, using_repo
+    from .worktree import create as _wt_create, destroy as _wt_destroy
+
+    session = _wt_create(args.model_id)
+    print(f"  [isolation] worktree: {session.path}")
+
+    with using_repo(session.path):
+        n_shared, _ = apply_for("_shared")
+        n_model, _ = apply_for(args.model_id)
+    if n_shared or n_model:
+        print(f"  [isolation] applied {n_shared} _shared + {n_model} model overlay(s)")
+
+    prev_env = {
+        "TT_HW_PLANNER_BRINGUP_CWD": os.environ.get("TT_HW_PLANNER_BRINGUP_CWD"),
+        "TT_HW_PLANNER_OVERLAY_MODEL": os.environ.get("TT_HW_PLANNER_OVERLAY_MODEL"),
+    }
+    os.environ["TT_HW_PLANNER_BRINGUP_CWD"] = str(session.path)
+    os.environ["TT_HW_PLANNER_OVERLAY_MODEL"] = args.model_id
+
+    rc = 1
+    try:
+        rc = _cmd_up_core(args)
+        return rc
+    finally:
+        for k, v in prev_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+        if rc == 0:
+            print(f"  [isolation] success — capturing edits as overlay for {args.model_id}")
+            captured = 0
+            try:
+                proc = subprocess.run(
+                    ["git", "diff", "--name-only", "HEAD"],
+                    cwd=session.path,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                changed = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+                with using_repo(session.path):
+                    for f in changed:
+                        rec = capture(args.model_id, f)
+                        if rec:
+                            captured += 1
+            except Exception as exc:
+                print(f"  [isolation] capture failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            print(f"  [isolation] captured {captured} edit(s); destroying worktree")
+            _wt_destroy(session)
+        else:
+            print(f"  [isolation] bring-up rc={rc}; worktree preserved at:")
+            print(f"     {session.path}")
+            print(f"  [isolation] cd there to debug. To clean up later:")
+            print(f"     git worktree remove --force {session.path}")
+
+
+def _cmd_up_core(args) -> int:
     MODEL = args.model_id
     BOX = args.box
     sep = "=" * 78
@@ -7813,6 +7878,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             "`TT_PLANNER_NO_DEVICE_RESET=1` env var."
         ),
     )
+    pup.add_argument(
+        "--isolation",
+        choices=["worktree", "none"],
+        default="worktree",
+        help=(
+            "Run the bring-up in an isolated git worktree (default: 'worktree'). "
+            "Pytest + LLM agents operate inside /tmp/tt_hw_planner_<slug>/, "
+            "original repo working tree stays untouched. On success, LLM edits get captured "
+            "into scripts/tt_hw_planner/overlays/<model>/ and the worktree is destroyed. "
+            "On failure, the worktree is preserved for debug. Pass --isolation none to opt out."
+        ),
+    )
     pup.set_defaults(func=cmd_up)
 
     pprom = sub.add_parser(
@@ -8500,6 +8577,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Mark the overlay as a production-PR candidate (metadata only; does not change apply behavior). Use for generalized fixes you plan to upstream later.",
     )
     poe.set_defaults(func=cmd_overlay_extract)
+
+    from .commands.worktree_cleanup import cmd_worktree_cleanup
+    from .commands.worktree_list import cmd_worktree_list
+
+    pwl = sub.add_parser("worktree-list", help="List active tt_hw_planner bring-up worktrees (active + orphaned).")
+    pwl.set_defaults(func=cmd_worktree_list)
+
+    pwc = sub.add_parser("worktree-cleanup", help="Remove orphan worktrees (creators no longer alive).")
+    pwc.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt and remove all orphans.")
+    pwc.set_defaults(func=cmd_worktree_cleanup)
 
     from .commands.commit_tool import cmd_commit_tool
 

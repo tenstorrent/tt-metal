@@ -1841,11 +1841,13 @@ def _run_auto_iterate_loop(
                 _expected_targets.append(_responses_dir / f"{_safe_id(_comp_for_deliv)}.py")
             if iter_target_component and iter_target_component not in (last_failed_components or []):
                 _expected_targets.append(_responses_dir / f"{_safe_id(iter_target_component)}.py")
+            from .agent import _bringup_cwd as _bcwd
+
             rc = _invoke_agent(
                 prompt,
                 provider=provider,
                 agent_bin=agent_bin,
-                cwd=REPO_ROOT,
+                cwd=_bcwd(),
                 model=_iter_model,
                 timeout_s=agent_timeout_s,
                 complexity_bonus=_iter_complexity_bonus,

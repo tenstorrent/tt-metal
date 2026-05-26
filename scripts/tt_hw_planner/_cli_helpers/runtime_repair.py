@@ -117,11 +117,13 @@ def _runtime_repair_loop(
         agent_log_dir.mkdir(parents=True, exist_ok=True)
         provider = "claude" if agent_bin.endswith("claude") or agent_bin == "claude" else "cursor"
         try:
+            from .agent import _bringup_cwd as _bcwd
+
             agent_rc = _invoke_agent(
                 prompt,
                 provider=provider,
                 agent_bin=agent_bin,
-                cwd=REPO_ROOT,
+                cwd=_bcwd(),
                 model=_iter_model,
                 timeout_s=agent_timeout_s,
                 iter_tag=f"repair_iter_{iter_idx}",

@@ -10,6 +10,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
+def _bringup_cwd() -> Path:
+    env = os.environ.get("TT_HW_PLANNER_BRINGUP_CWD")
+    if env:
+        return Path(env)
+    from ..discovery import REPO_ROOT
+
+    return REPO_ROOT
+
+
 def _invoke_agent(
     prompt: str,
     *,

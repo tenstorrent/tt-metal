@@ -353,11 +353,13 @@ def _pcc_repair_loop(
             agent_rc = 0
         else:
             try:
+                from .agent import _bringup_cwd as _bcwd
+
                 agent_rc = _invoke_agent(
                     prompt,
                     provider=provider,
                     agent_bin=agent_bin,
-                    cwd=REPO_ROOT,
+                    cwd=_bcwd(),
                     model=_iter_model,
                     timeout_s=agent_timeout_s,
                     iter_tag=f"pcc_repair_iter_{iter_idx}",

@@ -88,7 +88,9 @@ def cmd_prepare(args) -> int:
             except Exception as exc:
                 print(f"\nERROR: pre-download failed: {exc}", file=sys.stderr)
                 return 2
-        print(f"\nExecuting in {REPO_ROOT} …", file=sys.stderr)
+        _bringup_cwd_env = os.environ.get("TT_HW_PLANNER_BRINGUP_CWD")
+        bringup_cwd = Path(_bringup_cwd_env) if _bringup_cwd_env else REPO_ROOT
+        print(f"\nExecuting in {bringup_cwd} …", file=sys.stderr)
 
         _cap_path = globals().get("_pytest_capture_sink", None)
 
@@ -117,7 +119,7 @@ def cmd_prepare(args) -> int:
             _cap_fh = open(_cap_path, "w", buffering=1)
             proc = subprocess.Popen(
                 plan.invocation.argv(),
-                cwd=REPO_ROOT,
+                cwd=bringup_cwd,
                 env=full_env,
                 start_new_session=True,
                 stdout=subprocess.PIPE,
@@ -143,7 +145,7 @@ def cmd_prepare(args) -> int:
             _pump_t = None
             proc = subprocess.Popen(
                 plan.invocation.argv(),
-                cwd=REPO_ROOT,
+                cwd=bringup_cwd,
                 env=full_env,
                 start_new_session=True,
             )

@@ -7,9 +7,10 @@ import re
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -33,7 +34,23 @@ _DEMO_CATEGORY_DIRS = frozenset(
 )
 
 
+_REPO_OVERRIDE: Optional[Path] = None
+
+
+@contextmanager
+def using_repo(repo_dir: Path) -> Iterator[None]:
+    global _REPO_OVERRIDE
+    prev = _REPO_OVERRIDE
+    _REPO_OVERRIDE = Path(repo_dir).resolve()
+    try:
+        yield
+    finally:
+        _REPO_OVERRIDE = prev
+
+
 def _repo_root() -> Path:
+    if _REPO_OVERRIDE is not None:
+        return _REPO_OVERRIDE
     out = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         check=True,
