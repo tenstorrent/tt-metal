@@ -25,16 +25,18 @@ from .probe import probe_model
 from .scaffold_demo_folder import collect_demo_folder_changes
 
 
-MODEL_PARAMS_DIR = REPO_ROOT / "models" / "tt_transformers" / "model_params"
+def _model_params_dir() -> Path:
+    return BRINGUP_ROOT() / "models" / "tt_transformers" / "model_params"
 
 
 def _find_sibling_params_dir(sibling_tail: str, sibling_base: str) -> Optional[Path]:
-    if not MODEL_PARAMS_DIR.is_dir():
+    base = _model_params_dir()
+    if not base.is_dir():
         return None
-    candidate = MODEL_PARAMS_DIR / sibling_tail
+    candidate = base / sibling_tail
     if candidate.is_dir():
         return candidate
-    matches = [p for p in MODEL_PARAMS_DIR.iterdir() if p.is_dir() and p.name.startswith(sibling_base)]
+    matches = [p for p in base.iterdir() if p.is_dir() and p.name.startswith(sibling_base)]
     return matches[0] if len(matches) == 1 else None
 
 
@@ -248,7 +250,7 @@ def plan_scaffold(new_model_id: str) -> ScaffoldPlan:
         )
 
     sibling_params_dir = _find_sibling_params_dir(sibling_tail, sibling_base)
-    new_params_dir = MODEL_PARAMS_DIR / new_tail
+    new_params_dir = _model_params_dir() / new_tail
     if sibling_params_dir is not None:
         if new_params_dir.exists():
             skipped.append(f"model_params/{new_tail}/ already exists — leaving untouched")

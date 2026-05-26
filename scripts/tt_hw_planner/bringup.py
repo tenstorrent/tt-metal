@@ -141,7 +141,7 @@ def _load_tuning_tables() -> Tuple[dict, dict]:
     if _CHUNK_TABLE is None:
         _CHUNK_TABLE = (
             _extract_literal_dict(
-                MODEL_CONFIG_PATH,
+                _model_config_path(),
                 "MAX_PREFILL_CHUNK_SIZES_DIV1024",
                 in_func="get_max_prefill_chunk_size",
             )
@@ -150,7 +150,7 @@ def _load_tuning_tables() -> Tuple[dict, dict]:
     if _TRACE_TABLE is None:
         _TRACE_TABLE = (
             _extract_literal_dict(
-                TRACE_REGION_PATH,
+                _trace_region_path(),
                 "trace_region_size_dict",
                 in_func="get_supported_trace_region_size",
             )
@@ -195,7 +195,7 @@ def check_chunk_size(base_model_name: str, mesh_device: str) -> TuningCheck:
         mesh_device,
         chunk,
         table_name="MAX_PREFILL_CHUNK_SIZES_DIV1024",
-        file_path=MODEL_CONFIG_PATH,
+        file_path=_model_config_path(),
         fallback_when_missing=("would fall back to MAX_PREFILL_CHUNK_SIZE=4 (×1024) — slow."),
     )
     if not check.found:
@@ -219,7 +219,7 @@ def check_trace_region(base_model_name: str, mesh_device: str) -> TuningCheck:
         mesh_device,
         trace,
         table_name="trace_region_size_dict",
-        file_path=TRACE_REGION_PATH,
+        file_path=_trace_region_path(),
         fallback_when_missing=(
             "will use the demo's parametrize default (50M–100M). "
             "Add an entry if you need to override for a specific model/SKU."

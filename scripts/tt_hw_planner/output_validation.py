@@ -1,5 +1,3 @@
-from .discovery import safe_relative_to_root
-
 """Real PCC gate for ``tt_hw_planner up --auto``.
 
 Background — the "false green" problem
@@ -67,6 +65,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional, Sequence
+
+from .discovery import safe_relative_to_root
 
 
 _LOG = logging.getLogger(__name__)
