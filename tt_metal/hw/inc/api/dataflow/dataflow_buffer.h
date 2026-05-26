@@ -39,6 +39,13 @@
 // Here my_dfb_name is a constexpr DFBAccessor, auto-included in kernel_bindings_generated.h.
 //
 struct DFBAccessor {
+    // Reserved id value indicating that the host did not bind a DataflowBufferSpec for this accessor.
+    // See Metal 2.0 Optional Resource Bindings design: a kernel may declare `dfb::<name>` for
+    // conditional use (inside `if constexpr` guarded by a CTA); when the host's ProgramSpec omits
+    // the underlying DataflowBufferSpec, the framework emits the accessor with this sentinel id.
+    // The `DataflowBuffer(DFBAccessor)` ctor traps the sentinel via ASSERT.
+    static constexpr uint16_t SENTINEL_ID = 0xFFFFu;
+
     explicit constexpr DFBAccessor(uint16_t id) noexcept : id_(id) {}
 
     // Constexpr behavior for ID extraction:
@@ -74,7 +81,15 @@ public:
     // Preferred constructor for Metal 2.0 / ProgramSpec kernels.
     // Pass the named binding constant from kernel_bindings_generated.h:
     //   DataflowBuffer dfb(my_dfb_name);
-    DataflowBuffer(DFBAccessor accessor) : DataflowBuffer(accessor.resolve_id()) {}
+    //
+    // If the host did not bind a DataflowBufferSpec for this accessor (optional binding pattern),
+    // the accessor carries DFBAccessor::SENTINEL_ID. Constructing a DataflowBuffer on it means the
+    // kernel reached the use-site under a configuration where the host expected the resource to be
+    // unused. ASSERT traps this in debug builds; release builds proceed and will hang downstream
+    // on the first sync call (parity with legacy CB misuse).
+    DataflowBuffer(DFBAccessor accessor) : DataflowBuffer(accessor.resolve_id()) {
+        ASSERT(accessor.resolve_id() != DFBAccessor::SENTINEL_ID);
+    }
 
     // Low-level constructor: prefer DFBAccessor overload above for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
