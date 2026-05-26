@@ -50,9 +50,9 @@ Before starting, check if outputs from previous runs exist:
 
 1. `agent_logs/{category_slug}/catalog_*.md` → skip Phase 0
 2. `{category}_investigation.md` → skip Phase 1
-3. `{category}_helper_proposal.md` → skip Phase 3 (still requires Gate 1
+3. `{category}_helper_proposal.html` → skip Phase 3 (still requires Gate 1
    sign-off in conversation history before resuming downstream phases)
-4. `{category}_test_plan.md` → skip Phase 3.5 (still requires Gate 2 sign-off)
+4. `{category}_test_plan.html` → skip Phase 3.5 (still requires Gate 2 sign-off)
 5. Existing `.hpp`/`.inl` → start at Phase 4 (validation only)
 
 If prior outputs exist, resume from the earliest phase with missing outputs. Never ask the human to choose a path — the pipeline decides based on what exists.
@@ -198,7 +198,7 @@ INCORRECT verdicts are high-value — they directly change the helper design.
 - Side-effect operations -> correctness requirements to preserve
 - CB compile-time analysis -> template vs runtime param decisions
 
-**Output**: `{category}_helper_proposal.md`
+**Output**: `{category}_helper_proposal.html`
 
 ### STOP — Gate 1: API proposal sign-off
 
@@ -231,7 +231,7 @@ test kernel or pytest is written.
 
 **Input**: Approved proposal.
 
-**Output**: `{category}_test_plan.md` containing per-test:
+**Output**: `{category}_test_plan.html` containing per-test:
 - Kernel name + source path it will live at
 - What it covers (which proposal section)
 - `num_tiles` parameterization

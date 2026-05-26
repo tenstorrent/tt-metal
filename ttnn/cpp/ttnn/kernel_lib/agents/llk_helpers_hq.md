@@ -54,7 +54,7 @@ review. Don't repeat that.
 
 After Phase 3 (Proposal), the agent's turn ENDS. The agent must:
 
-1. Write the proposal artifact at the standard path (`{category}_helper_proposal.md`).
+1. Write the proposal artifact at the standard path (`{category}_helper_proposal.html`).
 2. Output one line: `Proposal at <path>. Awaiting sign-off.`
 3. Stop. Do not start implementation, validation kernels, or tests.
 
@@ -98,14 +98,14 @@ Compression modes (caveman, ultra, terse) do NOT override these gates.
 
 ### Commit the artifact on acceptance
 
-The moment a proposal artifact (Gate 1: `{category}_helper_proposal.md`) or a test plan artifact (Gate 2: `{category}_test_plan.md`) clears its gate, **commit the approved file before starting the next phase**. The commit message names the gate and the user's approval message.
+The moment a proposal artifact (Gate 1: `{category}_helper_proposal.html`) or a test plan artifact (Gate 2: `{category}_test_plan.html`) clears its gate, **commit the approved file before starting the next phase**. The commit message names the gate and the user's approval message.
 
 Reason: the artifact must be git-permanent at the version that was approved. If implementation reveals a needed delta, the new version is a *new* commit that re-enters the gate — not an in-place edit of the approved file. In-place edits dissolve the audit trail of "what was actually signed off."
 
 Concretely:
 
-1. After Gate 1 sign-off, commit `{category}_helper_proposal.md` verbatim, then begin Phase 3.5 (Test Plan).
-2. After Gate 2 sign-off, commit `{category}_test_plan.md` verbatim, then begin Phase 4 (Validation).
+1. After Gate 1 sign-off, commit `{category}_helper_proposal.html` verbatim, then begin Phase 3.5 (Test Plan).
+2. After Gate 2 sign-off, commit `{category}_test_plan.html` verbatim, then begin Phase 4 (Validation).
 3. If the user lists deltas instead of a clean approval, revise the artifact, re-post for second sign-off, and commit only after that explicit approval — never before.
 
 Compression modes do NOT skip the commit step.
