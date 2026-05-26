@@ -316,13 +316,21 @@ void kernel_main() {
                     output_rd_ptr += output_tile_bytes;
                     output_tile_idx++;
                 }
-                noc_async_write_barrier();
+                // Use _flushed (write request committed to NoC) instead of
+                // _barrier (round-trip ACK) — composite post_allgather pattern.
+                // The L1 source slot is safe to reuse once the write request
+                // has left the core. Final _barrier at end of kernel ensures
+                // all in-flight writes complete before MUX disconnect.
+                noc_async_writes_flushed();
                 cb_pop_front(output_cb, block_size);
             }
         }
 
         row_processed += rows_in_chunk;
     }
+    // Final barrier — all in-flight output writes must complete before
+    // we disconnect from the fabric MUX.
+    noc_async_write_barrier();
 
     // Reset sem for any subsequent invocation.
     noc_semaphore_set(out_ready_sem_ptr, 0);

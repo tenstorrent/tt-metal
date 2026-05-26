@@ -188,8 +188,14 @@ void kernel_main() {
                 output_rd_ptr += output_tile_bytes;
                 output_tile_idx++;
             }
-            noc_async_write_barrier();
+            // _flushed (write request committed to NoC) instead of _barrier
+            // (round-trip ACK). L1 source can be reused once the write has
+            // left the core. Final barrier at end of kernel ensures all
+            // writes complete before exit.
+            noc_async_writes_flushed();
             cb_pop_front(output_cb, block_size);
         }
     }
+    // Final barrier — all in-flight output writes must complete before exit.
+    noc_async_write_barrier();
 }
