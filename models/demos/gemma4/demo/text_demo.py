@@ -424,7 +424,8 @@ def run_generation(
         def _extract_token(decode_output):
             """Extract next token from model output (token IDs or logits)."""
             if on_device_sampling:
-                sampled = model.sampling.sample(decode_output, enable_trace=enable_decode_trace)
+                # Keep main behavior: decode sampling in this demo remains untraced.
+                sampled = model.sampling.sample(decode_output, enable_trace=False)
                 sampled_cpu = (
                     ttnn.to_torch(ttnn.get_device_tensors(sampled)[0]) if is_mesh else ttnn.to_torch(sampled)
                 )
