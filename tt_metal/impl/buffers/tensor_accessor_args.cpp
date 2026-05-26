@@ -120,6 +120,12 @@ TensorAccessorArgs::TensorAccessorArgs(
 TensorAccessorArgs::TensorAccessorArgs(const MeshTensor& tensor, tensor_accessor::ArgsConfig args_config) :
     TensorAccessorArgs(tensor.mesh_buffer(), args_config) {}
 
+TensorAccessorArgs::TensorAccessorArgs(
+    ttsl::optional_reference<const MeshTensor> tensor, tensor_accessor::ArgsConfig args_config) :
+    buffer_(tensor ? tensor->mesh_buffer().get_reference_buffer() : nullptr), args_config_(args_config) {
+    update_args_config();
+}
+
 TensorAccessorArgs TensorAccessorArgs::create_dram_interleaved() {
     TensorAccessorArgs args;
     args.args_config_ = tensor_accessor::ArgConfig::IsDram;

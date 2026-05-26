@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 
-from models.common.utility_functions import pad_by_zero, torch2tt_tensor, run_for_blackhole
+from models.common.utility_functions import torch2tt_tensor, run_for_blackhole
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42

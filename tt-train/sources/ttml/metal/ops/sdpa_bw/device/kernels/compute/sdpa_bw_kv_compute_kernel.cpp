@@ -177,7 +177,8 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 
             // u_scaler is precomputed by Q kernel and loaded by reader into cb_u_scalar_row
 
-            compute_grad_attn_weights(cb_grad_output, cb_value, v_tiles, cb_grad_attn_weights, scaler_bits);
+            compute_grad_attn_weights(
+                cb_grad_output, cb_value, v_tiles, cb_grad_attn_weights, cb_grad_value_accum, scaler_bits);
 
             compute_grad_scores(
                 cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
