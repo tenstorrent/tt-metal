@@ -10,9 +10,10 @@ filesystem as the coordination medium:
 
 1. Every worker computes the ordered list of scopes (file paths) from its
    collection during ``pytest_collection_modifyitems``.
-2. Before a test runs (``pytest_runtest_setup``), the worker checks whether
-   its scope has advanced past the one we are currently "in". If so, it
-   crosses the FS barriers for every intermediate scope, in order.
+2. Wrapping ``pytest_runtest_protocol`` (outermost, see below), each worker
+   checks whether its scope has advanced past the one it is currently "in".
+   If so, it crosses the FS barriers for every intermediate scope, in order,
+   *before* yielding control to the actual test protocol.
 3. At session finish, the worker crosses every barrier it has not yet
    crossed. This is the safety net for workers whose round-robin slice
    happened to end before the last scope -- without it, peers that are still
@@ -35,13 +36,16 @@ Crossing a single barrier:
   reset those caches are stale and would cause the next test to hang trying
   to use an ELF that is no longer on the device.
 
-Why setup-time instead of teardown-time:
+Why ``pytest_runtest_protocol`` (tryfirst hookwrapper) and not setup:
 
-Doing the barrier in ``pytest_runtest_setup`` of the *first* test of a new
-scope (rather than ``pytest_runtest_teardown`` of the *last* test of the old
-scope) ensures the previous test has already reported back to the master.
-That keeps master's view of "test N completed" perfectly accurate even
-though workers may then idle for seconds at the barrier.
+The barrier wait + ``tt-smi -r`` can easily exceed the per-test budget set
+by ``pytest-timeout`` (default 60s in CI), and the wait is not test work
+that should be billed against the test. ``pytest-timeout`` arms its timer
+from inside its own ``pytest_runtest_protocol`` hookwrapper, so wrapping
+the same hook with ``tryfirst=True`` puts our pre-yield (barrier crossing)
+code strictly *outside* its arm/disarm pair. The first test of a new file
+also runs only after the previous test has finished reporting back -- which
+is exactly the semantic the previous setup-hook version aimed for.
 """
 
 from __future__ import annotations
@@ -101,7 +105,18 @@ class WorkerBarrierPlugin:
                 seen.append(scope)
         self._ordered_scopes = seen
 
-    def pytest_runtest_setup(self, item):
+    @pytest.hookimpl(hookwrapper=True, tryfirst=True)
+    def pytest_runtest_protocol(self, item, nextitem):
+        # By being a ``tryfirst`` hookwrapper we sit outside pytest-timeout's
+        # own ``pytest_runtest_protocol`` wrapper -- the per-test timer is
+        # armed *after* the yield below and cancelled *before* control
+        # returns here, so the barrier wait does not count against the test's
+        # timeout budget. (CI was hitting "Timeout (>60s) from pytest-timeout"
+        # while a worker was polling the FileLock during a slow tt-smi -r.)
+        self._cross_barriers_up_to(item)
+        yield
+
+    def _cross_barriers_up_to(self, item) -> None:
         if not self._ordered_scopes:
             return
         scope = self._scope_of(item.nodeid)
