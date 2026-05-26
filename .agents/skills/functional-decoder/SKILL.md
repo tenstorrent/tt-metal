@@ -1,15 +1,15 @@
 ---
 name: functional-decoder
-description: Bring up functionally complete TTNN implementations of HuggingFace transformer decoder layers in tt-metal. Use when implementing each unique decoder-layer kind for an LLM, reading HF decoder architecture, targeting single-user prefill/decode, validating MoE gate-plus-active-expert behavior, generating synthetic weights from real tensor statistics, writing full-length or capacity-proven paged prefill/decode PCC pytests, proving KV-cache correctness, tracing warmed decode, profiling warmed prefill/decode with Tracy, and auditing for watcher-clean execution with no runtime torch or host fallback except explicit boundaries.
+description: Bring up functionally complete TTNN implementations of HuggingFace transformer decoder layers under models/autoports/{model} in tt-metal. Use when implementing models/autoports/{model}/tt/functional_decoder.py with a FunctionalDecoder LightweightModule class, reading HF decoder architecture, targeting single-user paged prefill/decode, validating MoE gate-plus-active-expert behavior, supporting real or synthetic weight loading through from_state_dict, writing PCC pytests, tracing warmed decode, profiling with Tracy, and auditing watcher-clean execution with no runtime torch or host fallback except explicit boundaries.
 ---
 
 # Functional Decoder Bringup
 
 ## Goal
 
-Build working TTNN code and pytests for each unique HuggingFace decoder-layer kind in a target model. "Functional" means functionally complete, not a smoke test: the decoder should have the semantics, cache behavior, sequence coverage, and evidence needed to roll it into a full model and use it as-is. This is not a planning-only skill: success means checked-in implementation, tests, and evidence.
+Build working TTNN code and pytests for each unique HuggingFace decoder-layer kind in `models/autoports/<model>/`. "Functional" means functionally complete, not a smoke test: the decoder should have the semantics, cache behavior, sequence coverage, and evidence needed to roll it into a full model and use it as-is. This is not a planning-only skill: success means checked-in implementation, tests, and evidence.
 
-The final tests must run without downloading model weights. Use real model weights only to collect per-tensor statistics, then generate meaningful synthetic weights from those statistics for CI and local tests.
+The final tests must run without downloading model weights. Use real model weights to collect per-tensor statistics, then generate meaningful synthetic weights from those statistics for CI and local tests. The implementation itself must still load real weights when a real state dict is supplied, because the full model port will depend on the same decoder class.
 
 Target single-user prefill and decode by default. Multi-user throughput is a later optimization unless the user explicitly asks for it. For MoE models, the primary path should run the real gate/router and then compute only the experts selected by that gate, aiming to use `ttnn.sparse_matmul` so DRAM traffic and compute follow active experts rather than dense all-expert matmuls.
 
@@ -45,6 +45,30 @@ Do not skip these reads. The `SKILL.md` body defines the workflow; the reference
 - Include an optional stress mode that loops for about five minutes to catch hangs.
 - No runtime torch, `ttnn.from_torch`, `ttnn.to_torch`, or host-device fallback inside prefill/decode logic except explicit input/output boundaries and any named temporary prefill-to-decode boundary.
 
+## Autoport Output Contract
+
+Create the implementation under:
+
+```text
+models/autoports/<model>/tt/functional_decoder.py
+```
+
+This file must export:
+
+```python
+class FunctionalDecoder(LightweightModule):
+    @classmethod
+    def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, **kwargs): ...
+
+    def prefill_forward(self, ...): ...
+
+    def decode_forward(self, ...): ...
+```
+
+`FunctionalDecoder` must subclass `models.common.lightweightmodule.LightweightModule`. `from_state_dict` is the general weight-loading boundary used by tests and by the later full-model port. It must load real checkpoint tensors when a real state dict is provided. It must also accept synthetic state dicts generated from `weight_stats.json` for CI. Setup-time torch work, tensor reshaping, dtype conversion, `ttnn.as_tensor`, and cache construction belong in `from_state_dict` or helper code it calls, not in `prefill_forward` or `decode_forward`.
+
+Keep exact prefill/decode signatures model-appropriate and keyword-friendly. The tests and `implementation_contract.json` must document the actual method signatures, tensor layout contract, required runtime inputs, state-dict key contract, and whether one class instance handles all layer kinds or one representative layer kind.
+
 ## HF Reading Workflow
 
 Fold HF model reading into the bringup. Before coding, write down the model facts needed to implement and test the layer:
@@ -72,7 +96,7 @@ Prefer partial weight access:
 - Load only shard files that contain tensors for the selected representative layer indices when practical.
 - Full model download is acceptable when HF makes partial loading hard, but record the reason.
 
-For every real tensor used by the TTNN layer, record at least name, shape, dtype, mean, and standard deviation in a small checked-in stats artifact. Final pytests must synthesize weights from those stats and must not require HF weight downloads. Inputs should be drawn from a distribution that matches what the model's normalization path is expected to produce.
+For every real tensor used by the TTNN layer, record at least name, shape, dtype, mean, and standard deviation in a small checked-in stats artifact. Final pytests must synthesize weights from those stats and must not require HF weight downloads. Real HF state-dict keys and shapes are the canonical contract for `FunctionalDecoder.from_state_dict`; synthetic weights should use the same keys and shapes unless a documented key transform is unavoidable. Inputs should be drawn from a distribution that matches what the model's normalization path is expected to produce.
 
 For MoE models, collect enough router and expert tensor statistics to synthesize the gate and the experts selected by that gate. Do not validate only a hand-picked expert path unless it is clearly labeled as debug-only and followed by the full gated decoder PCC.
 
@@ -80,7 +104,7 @@ For MoE models, collect enough router and expert tensor statistics to synthesize
 
 - Prefer `models/common` modules when their contracts fit the target architecture.
 - Write model-specific modules when the target needs MLA, unusual RoPE, shared KV, MoE routing, 2D/Galaxy mapping, custom masks, or shape/layout decisions that `models/common` does not represent cleanly.
-- Keep setup-time conversion separate from runtime forward paths. Lazy or cached weight conversion is fine; hidden torch work in forward paths is not.
+- Keep setup-time conversion and weight loading separate from runtime forward paths. Real or synthetic weights should enter through `from_state_dict`; lazy or cached weight conversion is fine there. Hidden torch work in `prefill_forward` or `decode_forward` is not.
 - Start correctness-first with BF16, tile layout, and DRAM memory where useful, then optimize layout/sharding after PCC is stable.
 - Treat host movement between prefill and decode as an explicit boundary. It may be used in a layer bringup test, but the decoder implementation should not depend on host interaction once layers are stacked into a full model.
 - For MoE, use the gate output to drive sparse expert execution. Prefer the GPT-OSS pattern in `models/demos/gpt_oss/tt/topk.py` plus `models/demos/gpt_oss/tt/experts/decode.py` and `models/demos/gpt_oss/tt/experts/prefill.py`: top-k router output feeds sparse expert matmuls instead of running every expert densely.
@@ -100,12 +124,12 @@ Only write a final `fail` artifact after this ladder has been attempted or is im
 
 ## Required Tests
 
-Write pytest coverage near the model bringup, usually under `models/demos/<model>/tests/` or the local convention for that model.
+Write pytest coverage near the model bringup, usually under `models/autoports/<model>/tests/` or the local convention for that model.
 
 Required test behavior:
 
 - Instantiate the HF decoder layer directly when possible; use full `AutoModelForCausalLM` only when layer isolation is impractical.
-- Load no real weights in normal test execution; use checked-in synthetic weights generated from recorded real-tensor stats.
+- Normal test execution must not require real weights; instantiate `FunctionalDecoder` through `from_state_dict` with checked-in synthetic state dicts generated from recorded real-tensor stats.
 - Compare TTNN vs HF for prefill and decode with `PCC >= 0.995`.
 - For MoE layers, the required prefill/decode PCC compares the full decoder output after the TTNN gate selects experts and the TTNN expert path computes/weights/reduces those selected experts. Optional gate-only or expert-only PCC checks may be recorded as diagnostics.
 - Exercise paged prefill, paged decode update, and paged SDPA decode.
@@ -157,22 +181,28 @@ Treat watcher findings, tensor allocation after trace capture, host reads in run
 
 ## Golden Artifact Layout
 
-Keep the functional decoder proof simple: the final golden artifacts live directly in the functional-decoder doc directory. Later phases should use sibling directories such as `doc/optimized_decoder/` or `doc/multidevice/`.
+Keep the functional decoder proof simple: the final golden artifacts live directly in the functional-decoder doc directory. Later phases should use sibling directories such as `doc/optimized_decoder/` or `doc/multichip_decoder/`.
 
 ```text
-models/demos/<model>/doc/
-  functional_decoder/
-  optimized_decoder/
-  multidevice/
+models/autoports/<model>/
+  tt/
+    functional_decoder.py
+    optimized_decoder.py
+    multichip_decoder.py
+  tests/
+  doc/
+    functional_decoder/
+    optimized_decoder/
+    multichip_decoder/
 ```
 
 This skill writes only the `functional_decoder` step:
 
 ```text
-models/demos/<model>/doc/functional_decoder/
+models/autoports/<model>/doc/functional_decoder/
 ```
 
-Do not save every debug attempt under `models/demos/<model>/doc/functional_decoder/`. Intermediate failing or exploratory runs belong in scratch space such as `generated/functional_decoder/debug/`, `/tmp`, or an uncommitted local artifact directory. Once the implementation is ready, rerun the final proof commands and copy only that golden set of logs, reports, and JSON summaries into `doc/functional_decoder/`.
+Do not save every debug attempt under `models/autoports/<model>/doc/functional_decoder/`. Intermediate failing or exploratory runs belong in scratch space such as `generated/functional_decoder/debug/`, `/tmp`, or an uncommitted local artifact directory. Once the implementation is ready, rerun the final proof commands and copy only that golden set of logs, reports, and JSON summaries into `doc/functional_decoder/`.
 
 `commands.sh` and `manifest.json` should record the final proof commands, not the entire trial-and-error history. Capacity probes that justify reduced sequence length are final proof commands, not discarded debug attempts; record their command IDs, logs, and failure signatures in `sequence_limits.json`. If a failed intermediate run exposed an important limitation, summarize it in `functional_decoder.md` or `fallback_audit.md` only when it explains a remaining limitation or a final design decision.
 
@@ -184,6 +214,7 @@ functional_decoder.md
 commands.sh
 model_facts.json
 layer_kinds.json
+implementation_contract.json
 weight_stats.json
 sequence_limits.json
 fallback_audit.md
@@ -219,6 +250,7 @@ Required JSON contents:
 - `manifest.json`: step id, status, model id, model slug, git commit, dirty flag, host, hardware, arch, TTNN/tt-metal version evidence, start/end UTC, artifact schema version, and paths to all required artifacts.
 - `model_facts.json`: HF config fields, decoder-layer class names, attention/MLP/MoE/RoPE/cache facts, and source files inspected.
 - `layer_kinds.json`: one object per representative layer kind with layer kind id, representative layer index, reason it is unique, features, implementation files, pytest ids, expected max prefill length, and expected max decode context length.
+- `implementation_contract.json`: exported class name `FunctionalDecoder`, implementation path `models/autoports/<model>/tt/functional_decoder.py`, `LightweightModule` subclass evidence, `from_state_dict` weight-loading contract, prefill/decode method signatures, real HF state-dict key mapping, runtime input contract, input/output layout contract, real-weight load evidence when available, and synthetic-weight CI evidence.
 - `weight_stats.json`: one object per real tensor used to seed synthetic weights with layer kind id, layer index, tensor name, shape, dtype, mean, std, and deterministic synthetic seed.
 - `sequence_limits.json`: requested reference max lengths, tested max lengths, pass/fail, command IDs, logs, and evidence for any reduction caused by KV-cache DRAM, L1, or other measured device limits. If any entry has `reduced: true`, it must prove the blocker with capacity evidence or name an explicit user-approved reduced scope; otherwise the manifest status must not be `pass`.
 - `results/pcc_results.json`: one full-decoder object per layer kind and mode with PCC, threshold, pass/fail, output shape, dtype, input seed, whether trace replay was used, and the command id from `commands.sh`. For MoE, this full-decoder object must include gate and selected experts end-to-end; optional gate-only or expert-only component PCCs are diagnostics.
@@ -230,6 +262,7 @@ Required JSON contents:
 `functional_decoder.md` should be short and human-readable. It must summarize:
 
 - model facts and selected representative layer indices;
+- implementation contract and exported `FunctionalDecoder` class;
 - real-tensor mean/std stats used for synthetic weights;
 - pytest command lines and logs;
 - PCC results for prefill and decode;

@@ -1,7 +1,7 @@
 interface:
   display_name: "Functional Decoder"
   short_description: "Bring up TTNN decoder layers with PCC tests"
-  default_prompt: "Use $functional-decoder to bring up a HuggingFace decoder layer in TTNN with paged KV-cache tests, full-length traced decode or capacity proof, and profiling evidence."
+  default_prompt: "Use $functional-decoder to produce models/autoports/<model>/tt/functional_decoder.py with a FunctionalDecoder LightweightModule that loads real or synthetic weights via from_state_dict, passes paged KV-cache PCC tests, proves full-length traced decode or capacity limits, and records profiling evidence."
 
 policy:
   allow_implicit_invocation: true

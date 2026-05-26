@@ -1,6 +1,6 @@
 ---
 name: optimize-decoder
-description: Optimize a functional TTNN transformer decoder layer implementation after functional-decoder bringup. Use when taking an already-correct paged prefill/decode decoder layer and improving performance with L1-sharded activations, explicit memory/program configs, DRAM-sharded decode matmuls, lower-precision weights/activations/KV cache, MoE gate-selected active-expert execution, compute-kernel fidelity tuning, tt-perf-report advice, PCC preservation, required passing stress, watcher-clean proof, and final golden optimized-decoder artifacts.
+description: Optimize a functional TTNN transformer decoder layer implementation under models/autoports/{model} after functional-decoder bringup. Use when producing models/autoports/{model}/tt/optimized_decoder.py with an OptimizedDecoder LightweightModule class matching the functional decoder interface, improving performance with L1-sharded activations, explicit memory/program configs, DRAM-sharded decode matmuls, lower precision weights/activations/KV cache, MoE active-expert execution, tt-perf-report advice, PCC preservation, stress, watcher-clean proof, and golden optimized-decoder artifacts.
 ---
 
 # Optimize Decoder
@@ -25,6 +25,7 @@ Also read the target model's `doc/functional_decoder/` artifacts before changing
 ## Definition Of Done
 
 - Start from `doc/functional_decoder/manifest.json` with `"status": "pass"` and preserve the same public test surface.
+- Produce `models/autoports/<model>/tt/optimized_decoder.py` exporting `OptimizedDecoder(LightweightModule)` with the same `from_state_dict`, `prefill_forward`, and `decode_forward` interface contract as `FunctionalDecoder`.
 - Rerun the functional decoder prefill, decode, PCC, KV-cache, determinism, stress, trace, and watcher checks against the optimized implementation. Optimized tests are additions to that contract, not replacements, unless the original test is cleanly parameterized to exercise the optimized backend with identical assertions.
 - Run and pass the optimized stress test for every representative layer kind and exercised mode; final optimized artifacts must not mark stress as skipped.
 - Pass optimized prefill and decode PCC with `PCC >= 0.995` for every representative layer kind and mode.
@@ -44,9 +45,33 @@ Also read the target model's `doc/functional_decoder/` artifacts before changing
 - Install and run `tt-perf-report`; follow every actionable item until no useful advice remains or evidence shows a specific item does not improve performance.
 - Avoid adding runtime torch, `ttnn.from_torch`, `ttnn.to_torch`, or host-device fallback inside prefill/decode.
 
+## Autoport Output Contract
+
+Create the optimized implementation under:
+
+```text
+models/autoports/<model>/tt/optimized_decoder.py
+```
+
+This file must export:
+
+```python
+class OptimizedDecoder(LightweightModule):
+    @classmethod
+    def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, **kwargs): ...
+
+    def prefill_forward(self, ...): ...
+
+    def decode_forward(self, ...): ...
+```
+
+`OptimizedDecoder` must subclass `models.common.lightweightmodule.LightweightModule`. `from_state_dict` is the optimized decoder's general weight-loading boundary: it must load real checkpoint tensors when provided and must also accept synthetic state dicts generated from the functional artifact stats for CI. Real HF state-dict keys and shapes remain canonical unless the optimized implementation records an explicit transform. Weight conversion, dtype selection, layout selection, cache construction, and `ttnn.as_tensor` calls belong in `from_state_dict` or setup helpers, not in `prefill_forward` or `decode_forward`.
+
+The optimized class may reuse, wrap, or subclass the functional implementation only if the exported class still satisfies this contract and tests exercise the optimized path. Record the actual signatures, state-dict keys, input/output layout contract, and real/synthetic weight support in `implementation_contract.json`.
+
 ## Optimization Workflow
 
-1. Read the functional artifacts under `models/demos/<model>/doc/functional_decoder/` and confirm `manifest.json` has `"status": "pass"`.
+1. Read the functional artifacts under `models/autoports/<model>/doc/functional_decoder/` and confirm `manifest.json` has `"status": "pass"`.
 2. Reproduce the functional decoder's final PCC and perf commands before optimizing, unless the prompt provides fresh baseline evidence.
 3. Profile warmed prefill and warmed decode separately with signposts around only the measured windows.
 4. Run `tt-perf-report` on each profile and classify ops as DRAM-bound, compute-bound, communication-bound, or data-movement-only.
@@ -98,7 +123,7 @@ Treat `tt-perf-report` as required but not an oracle. Try its optimization advic
 Final golden optimized-decoder evidence lives directly under:
 
 ```text
-models/demos/<model>/doc/optimized_decoder/
+models/autoports/<model>/doc/optimized_decoder/
 ```
 
 Do not save every debug attempt under `doc/optimized_decoder/`. Intermediate experiments belong in scratch space such as `generated/optimized_decoder/debug/`, `/tmp`, or an uncommitted local artifact directory. Once the optimized implementation is ready, rerun the final proof commands and copy only that golden evidence into `doc/optimized_decoder/`.
@@ -109,6 +134,7 @@ Required files:
 manifest.json
 optimized_decoder.md
 commands.sh
+implementation_contract.json
 baseline_summary.json
 functional_regression_results.json
 optimization_plan.json

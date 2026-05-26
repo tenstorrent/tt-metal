@@ -1,20 +1,26 @@
 # Functional Decoder Artifact Formats
 
-All paths in JSON are relative to `models/demos/<model>/doc/functional_decoder/` unless stated otherwise. Use strict JSON, UTF-8, two-space indentation, and `"schema_version": 1`. Use `null` for unavailable values and empty arrays for no entries. Timestamps are UTC ISO-8601 strings ending in `Z`.
+All paths in JSON are relative to `models/autoports/<model>/doc/functional_decoder/` unless stated otherwise. Use strict JSON, UTF-8, two-space indentation, and `"schema_version": 1`. Use `null` for unavailable values and empty arrays for no entries. Timestamps are UTC ISO-8601 strings ending in `Z`.
 
 ## Directory Contract
 
 The final golden functional-decoder evidence lives directly under:
 
 ```text
-models/demos/<model>/doc/functional_decoder/
+models/autoports/<model>/doc/functional_decoder/
 ```
 
 Do not create per-debug-run or per-attempt directories in this doc tree. Later bringup phases should use sibling directories such as:
 
 ```text
-models/demos/<model>/doc/optimized_decoder/
-models/demos/<model>/doc/multidevice/
+models/autoports/<model>/doc/optimized_decoder/
+models/autoports/<model>/doc/multichip_decoder/
+```
+
+The functional implementation itself must live at:
+
+```text
+models/autoports/<model>/tt/functional_decoder.py
 ```
 
 ## Status Values
@@ -68,6 +74,7 @@ Final `pass` artifacts must satisfy the sequence-length contract. If any represe
     "commands": "commands.sh",
     "model_facts": "model_facts.json",
     "layer_kinds": "layer_kinds.json",
+    "implementation_contract": "implementation_contract.json",
     "weight_stats": "weight_stats.json",
     "sequence_limits": "sequence_limits.json",
     "fallback_audit": "fallback_audit.md",
@@ -96,7 +103,7 @@ Plain executable shell transcript. Each command block must start with a command 
 ```bash
 # command_id: pytest_dense_prefill
 # purpose: prefill PCC
-pytest models/demos/example/tests/test_layer.py -k "dense and prefill" -vv 2>&1 | tee pytest/dense_prefill.log
+pytest models/autoports/example/tests/test_layer.py -k "dense and prefill" -vv 2>&1 | tee pytest/dense_prefill.log
 ```
 
 If full prefill/decode length is reduced, include the capacity probe command(s) here. These are final evidence commands, not debug attempts, and their ids must appear in `sequence_limits.json`.
@@ -151,7 +158,7 @@ If full prefill/decode length is reduced, include the capacity probe command(s) 
       "hf_layer_type": "full_attention",
       "features": ["paged-attention", "gqa", "rope", "dense-mlp"],
       "implementation_files": [
-        "models/demos/example/tt/layer.py"
+        "models/autoports/example/tt/functional_decoder.py"
       ],
       "pytest_ids": [
         "test_example_decoder_layer[dense-prefill]",
@@ -163,6 +170,84 @@ If full prefill/decode length is reduced, include the capacity probe command(s) 
   ]
 }
 ```
+
+## implementation_contract.json
+
+Record the concrete Python interface that the later optimized, multichip, and full-model ports will consume. `from_state_dict` is the general weight-loading API, not a synthetic-only test hook.
+
+```json
+{
+  "schema_version": 1,
+  "artifact_type": "functional_decoder_implementation_contract",
+  "implementation": {
+    "path": "models/autoports/example/tt/functional_decoder.py",
+    "class_name": "FunctionalDecoder",
+    "base_class": "models.common.lightweightmodule.LightweightModule",
+    "subclasses_lightweight_module": true
+  },
+  "methods": {
+    "from_state_dict": {
+      "kind": "classmethod",
+      "signature": "from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, **kwargs)",
+      "loads_real_weights": true,
+      "loads_synthetic_weights": true,
+      "real_weights_are_canonical": true,
+      "allowed_setup_work": [
+        "torch state-dict tensor reads",
+        "weight reshape or transpose",
+        "dtype conversion",
+        "ttnn.as_tensor or equivalent device loading",
+        "KV-cache and static tensor allocation"
+      ],
+      "notes": []
+    },
+    "prefill_forward": {
+      "signature": "prefill_forward(self, hidden_states, *, page_table, position_ids, **kwargs)",
+      "runtime_torch_allowed": false,
+      "runtime_from_torch_allowed": false,
+      "runtime_to_torch_allowed": false,
+      "input_layout": "model-specific",
+      "output_layout": "model-specific",
+      "notes": []
+    },
+    "decode_forward": {
+      "signature": "decode_forward(self, hidden_states, *, page_table, position_ids, **kwargs)",
+      "runtime_torch_allowed": false,
+      "runtime_from_torch_allowed": false,
+      "runtime_to_torch_allowed": false,
+      "trace_replay_supported": true,
+      "input_layout": "model-specific",
+      "output_layout": "model-specific",
+      "notes": []
+    }
+  },
+  "state_dict_contract": {
+    "real_weight_supported": true,
+    "synthetic_weight_supported": true,
+    "real_weight_evidence": {
+      "status": "pass",
+      "command_id": "pytest_dense_real_weight_load",
+      "reason_not_run": null
+    },
+    "synthetic_weight_evidence": {
+      "status": "pass",
+      "command_id": "pytest_dense_prefill"
+    },
+    "required_keys_by_layer_kind": [
+      {
+        "layer_kind_id": "dense",
+        "keys": [
+          "model.layers.0.self_attn.q_proj.weight"
+        ]
+      }
+    ],
+    "key_transforms": [],
+    "notes": []
+  }
+}
+```
+
+Set `real_weight_evidence.status` to `pass` when a real state dict was available and the load path was exercised. Use `skipped` with a concrete `reason_not_run` only when no real weights were available for the final artifact. The synthetic path must pass for CI-oriented final artifacts.
 
 ## weight_stats.json
 
