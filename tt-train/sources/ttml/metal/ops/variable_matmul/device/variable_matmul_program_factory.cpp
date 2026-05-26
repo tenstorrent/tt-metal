@@ -131,10 +131,12 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         (operation_attributes.effective_M_tiles > 0) ? operation_attributes.effective_M_tiles : parent_M_tiles;
     const uint32_t actual_M = actual_M_tiles * tt::constants::TILE_HEIGHT;
 
-    // Two-program strategy: transpose_core_grid from PARENT-M vs N (not effective_M) so the
-    // grid decision is stable across offset-read calls on the same parent tensor.
-    // At most 2 cached programs (one per transpose variant).
-    const bool transpose_core_grid = parent_M > N;
+    // Pick the grid orientation based on the matmul-M extent the caller actually uses
+    // (effective_M_tiles when set, else parent_M_tiles). For EP shared-tensor callers
+    // (moe_ffn), parent_M = T_cap but actual_M_tiles is the per-call upper bound, so this
+    // gets the right orientation per shape instead of being skewed by T_cap. Stable across
+    // calls as long as the caller passes a stable effective_M_tiles value.
+    const bool transpose_core_grid = actual_M_tiles > N_tiles;
 
     const uint32_t M_block_tiles = config.M_block_size;
     const uint32_t K_block_tiles = config.K_block_size;

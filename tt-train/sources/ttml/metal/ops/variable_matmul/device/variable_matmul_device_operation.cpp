@@ -237,14 +237,16 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     const bool use_offset =
         operation_attributes.effective_M_tiles > 0 || in0_parent_k_mode || input_and_weight_k_active;
     const bool use_offset_in1 = in1_parent_k_mode || input_and_weight_k_active;
-    // physical_volume / padded[-1] gives the count along the *stored* outer dim. With
-    // transpose_a that's K-tiles; without, M-tiles. Either way, actual_M (for the matmul) is
-    // along the stored *other* dim: padded_shape[-2] when transpose_a, [-1] otherwise — both
-    // equal physical_volume/padded[-1] only when transpose_a is false. Use logical shape to
-    // disambiguate for the hash's M-vs-N comparison (purely for transpose_core_grid).
-    uint32_t actual_M = transpose_a ? a.logical_shape()[-1] : (a.physical_volume() / a.padded_shape()[-1]);
-    uint32_t N = transpose_b ? w.logical_shape()[-2] : w.logical_shape()[-1];
-    bool transpose_core_grid = actual_M > N;
+    // Mirror the program factory's transpose_core_grid decision exactly: use the caller's
+    // effective_M_tiles when set (per-call M upper bound), else fall back to the input's
+    // full M dimension. Comparison in tile units.
+    const uint32_t parent_M_for_hash = transpose_a ? a.logical_shape()[-1] : a.logical_shape()[-2];
+    const uint32_t parent_M_tiles_for_hash = tt::div_up(parent_M_for_hash, tt::constants::TILE_HEIGHT);
+    const uint32_t actual_M_tiles_for_hash =
+        (operation_attributes.effective_M_tiles > 0) ? operation_attributes.effective_M_tiles : parent_M_tiles_for_hash;
+    const uint32_t N = transpose_b ? w.logical_shape()[-2] : w.logical_shape()[-1];
+    const uint32_t N_tiles_for_hash = N / tt::constants::TILE_WIDTH;
+    const bool transpose_core_grid = actual_M_tiles_for_hash > N_tiles_for_hash;
 
     // Variable-K: only N must be in the hash (matmul-K is RT-driven, fully variable).
     const uint32_t N_dim = transpose_b ? w.logical_shape()[-2] : w.logical_shape()[-1];
