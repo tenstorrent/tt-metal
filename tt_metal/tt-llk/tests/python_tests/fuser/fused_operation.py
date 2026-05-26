@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 
 from helpers.llk_params import (
     DestSync,
+    GoldenType,
     ReduceDimension,
     StochasticRounding,
     Tilize,
@@ -48,7 +49,11 @@ class FusedOperation:
         return self.math.pack_body(self, config)
 
     def golden(self, config):
-        self.math.golden(self, config)
+        # calculate l1 golden
+        self.math.golden(self, config, GoldenType.L1_GOLDEN)
+
+        # calculate master golden
+        self.math.golden(self, config, GoldenType.MASTER_GOLDEN)
 
     def __str__(self):
         return (

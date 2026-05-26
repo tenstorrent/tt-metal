@@ -405,25 +405,24 @@ class ComputePipeline:
             )
         return tensor_dst
 
-    def golden(self, operation: "FusedOperation", config: "GlobalConfig"):
-        for golden_type in (GoldenType.L1_GOLDEN, GoldenType.MASTER_GOLDEN):
-            math_tensor = self._math_golden(operation, config, golden_type)
+    def golden(self, operation: "FusedOperation", config: "GlobalConfig", golden_type: GoldenType):
+        math_tensor = self._math_golden(operation, config, golden_type)
 
-            for pack_node in self.pack_nodes:
-                config.sentinel.configure_golden(
-                    config, operation, output_format=pack_node.output.data_format
-                )
+        for pack_node in self.pack_nodes:
+            config.sentinel.configure_golden(
+                config, operation, output_format=pack_node.output.data_format
+            )
 
-                dimensions = pack_node.output.dimensions
-                cropped = math_tensor.reshape(operation.max_output_dimensions)[
-                    : dimensions[0], : dimensions[1]
-                ]
-                result = pack_node.golden(cropped, operation, config)
+            dimensions = pack_node.output.dimensions
+            cropped = math_tensor.reshape(operation.max_output_dimensions)[
+                : dimensions[0], : dimensions[1]
+            ]
+            result = pack_node.golden(cropped, operation, config)
 
-                if golden_type == GoldenType.L1_GOLDEN:
-                    pack_node.output.l1_golden = result
-                else:
-                    pack_node.output._master_golden = result
+            if golden_type == GoldenType.L1_GOLDEN:
+                pack_node.output.l1_golden = result
+            else:
+                pack_node.output._master_golden = result
 
     def __str__(self):
         result = "Math:"
