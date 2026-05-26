@@ -53,16 +53,11 @@ on:
         type: boolean
         default: true
         description: "Run ops unit tests"
-      run-ttsim-unit-tests:
+      run-ttsim-tests:
         required: false
         type: boolean
         default: true
-        description: "Run TTSim unit tests (metal-cpp)"
-      run-ttsim-integration-tests:
-        required: false
-        type: boolean
-        default: true
-        description: "Run TTSim integration tests"
+        description: "Run TTSim tests (unit + integration)"
       enable-watcher:
         required: false
         type: boolean
@@ -163,11 +158,11 @@ on:
         default: true
         type: boolean
         description: "Run ops unit tests"
-      run-ttsim-integration-tests:
+      run-ttsim-tests:
         required: false
         default: true
         type: boolean
-        description: "Run TTSim integration tests"
+        description: "Run TTSim tests (unit + integration)"
       enable-watcher:
         required: false
         default: false
@@ -272,8 +267,7 @@ jobs:
       run-profiler-tests: ${{ steps.set-run-profiler-tests.outputs.should-run }}
       t3000-apc-fast-tests: ${{ steps.set-t3000-apc-fast-tests.outputs.should-run }}
       ops-unit-tests: ${{ steps.set-ops-unit-tests.outputs.should-run }}
-      ttsim-unit-tests: ${{ steps.set-ttsim-unit-tests.outputs.should-run }}
-      ttsim-integration-tests: ${{ steps.set-ttsim-integration-tests.outputs.should-run }}
+      ttsim-tests: ${{ steps.set-ttsim-tests.outputs.should-run }}
     steps:
       - id: set-ttnn-unit-tests
         run: |
@@ -293,12 +287,9 @@ jobs:
       - id: set-ops-unit-tests
         run: |
           echo "should-run=${{ github.event_name == 'push' || inputs.run-ops-unit-tests }}" >> "$GITHUB_OUTPUT"
-      - id: set-ttsim-unit-tests
+      - id: set-ttsim-tests
         run: |
-          echo "should-run=${{ github.event_name == 'push' || inputs.run-ttsim-unit-tests }}" >> "$GITHUB_OUTPUT"
-      - id: set-ttsim-integration-tests
-        run: |
-          echo "should-run=${{ github.event_name == 'push' || inputs.run-ttsim-integration-tests }}" >> "$GITHUB_OUTPUT"
+          echo "should-run=${{ github.event_name == 'push' || inputs.run-ttsim-tests }}" >> "$GITHUB_OUTPUT"
 
   # TTNN FD Unit tests
   ttnn-unit-tests:
@@ -414,24 +405,9 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
 
-  ttsim-unit-tests:
+  ttsim-tests:
     needs: [resolve-artifacts, tests-to-run]
-    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ttsim-unit-tests == 'true' }}
-    strategy:
-      fail-fast: false
-    uses: ./.github/workflows/ttsim.yaml
-    secrets: inherit
-    with:
-      basic-docker-image: ${{ needs.resolve-artifacts.outputs.basic-dev-docker-image }}
-      test-docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
-      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
-      run-ttsim-integration-tests: false
-      run-metal-cpp-unit-tests: true
-
-  ttsim-integration-tests:
-    needs: [resolve-artifacts, tests-to-run]
-    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ttsim-integration-tests == 'true' }}
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ttsim-tests == 'true' }}
     strategy:
       fail-fast: false
     uses: ./.github/workflows/ttsim.yaml
@@ -440,6 +416,7 @@ jobs:
       basic-docker-image: ${{ needs.resolve-artifacts.outputs.basic-dev-docker-image }}
       test-docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.resolve-artifacts.outputs.packages-artifact-name }}
+      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       run-ttsim-integration-tests: true
-      run-metal-cpp-unit-tests: false
+      run-metal-cpp-unit-tests: true
