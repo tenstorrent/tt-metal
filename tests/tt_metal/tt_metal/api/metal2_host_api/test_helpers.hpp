@@ -20,6 +20,7 @@
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/work_split.hpp>
 
 // This file contains shortcut helper functions to create minimal valid ProgramSpec
 // objects for unit tests. This cuts boilerplate in a unit testing context.
@@ -175,6 +176,30 @@ inline void BindTensorParameterToKernel(
         .tensor_parameter_name = tensor_parameter_name,
         .accessor_name = accessor_name,
     });
+}
+
+// Helper to create a height-sharded TensorParameter for tests that exercise the
+// sharded TAA CTA payload (rank/num_banks/tensor_shape/shard_shape/bank_coords).
+//
+// Defaults give a simple legal layout: BFLOAT16 tile-layout tensor of `logical_shape`,
+// sharded across the first `num_cores` cores of the worker grid with shard shape
+// `shard_shape`. Caller is responsible for choosing a shape that fits the grid.
+inline TensorParameter MakeShardedTensorParameter(
+    const std::string& name,
+    const tt::tt_metal::Shape& logical_shape,
+    const std::array<uint32_t, 2>& shard_shape,
+    uint32_t num_cores) {
+    auto shard_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, CoreCoord{num_cores, 1}, /*row_wise=*/true);
+    tt::tt_metal::ShardSpec shard_spec{
+        shard_grid, {shard_shape[0], shard_shape[1]}, tt::tt_metal::ShardOrientation::ROW_MAJOR};
+    tt::tt_metal::MemoryConfig memory_config{
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE);
+    auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
+    return TensorParameter{
+        .unique_id = name,
+        .spec = tt::tt_metal::TensorSpec(logical_shape, std::move(tensor_layout)),
+    };
 }
 
 // Helper to create a minimal valid ProgramSpec for Gen1 (WH/BH): DM producer (RISCV_0) + compute consumer
