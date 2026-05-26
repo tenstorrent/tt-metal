@@ -534,7 +534,7 @@ PortType resolve_port_type(const ASICDescriptor& asic_descriptor, uint8_t src_ch
             .port_type;
     } catch (const std::runtime_error&) {
         // Mock clusters and incomplete board maps may reference channels with no port mapping.
-        return PortType::TRACE;
+        return PortType::UNKNOWN;
     }
 }
 

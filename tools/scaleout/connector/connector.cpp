@@ -68,6 +68,7 @@ std::vector<AsicChannelConnection> get_asic_channel_connections(
         case PortType::LINKING_BOARD_2:
         case PortType::LINKING_BOARD_3:
         case PortType::TRACE: return connection_mappers::linear_mapping(start_channels, end_channels);
+        case PortType::UNKNOWN: break;
     }
     throw std::runtime_error("Invalid port type");
 }

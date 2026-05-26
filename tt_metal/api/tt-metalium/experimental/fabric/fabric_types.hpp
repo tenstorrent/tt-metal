@@ -144,6 +144,7 @@ namespace tt::tt_metal {
 
 // Physical port / cable type for ethernet connections
 enum class PortType {
+    UNKNOWN,
     TRACE,
     QSFP_DD,
     WARP100,

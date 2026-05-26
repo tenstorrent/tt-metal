@@ -4,13 +4,14 @@ package tt.fabric.proto;
 
 // Physical port / cable type
 enum PortType {
-    TRACE = 0;
-    QSFP_DD = 1;
-    WARP100 = 2;
-    WARP400 = 3;
-    LINKING_BOARD_1 = 4;
-    LINKING_BOARD_2 = 5;
-    LINKING_BOARD_3 = 6;
+    UNKNOWN = 0;
+    TRACE = 1;
+    QSFP_DD = 2;
+    WARP100 = 3;
+    WARP400 = 4;
+    LINKING_BOARD_1 = 5;
+    LINKING_BOARD_2 = 6;
+    LINKING_BOARD_3 = 7;
 }
 
 // Ethernet connection between two ASICs

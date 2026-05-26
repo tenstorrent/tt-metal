@@ -60,7 +60,7 @@ struct EthConnection {
     uint8_t src_chan = 0;
     uint8_t dst_chan = 0;
     bool is_local = false;
-    PortType port_type = PortType::TRACE;
+    PortType port_type = PortType::UNKNOWN;
 
     bool operator==(const EthConnection& other) const {
         return src_chan == other.src_chan && dst_chan == other.dst_chan && other.is_local == is_local &&
@@ -70,13 +70,7 @@ struct EthConnection {
         if (src_chan != other.src_chan) {
             return src_chan < other.src_chan;
         }
-        if (dst_chan != other.dst_chan) {
-            return dst_chan < other.dst_chan;
-        }
-        if (port_type != other.port_type) {
-            return port_type < other.port_type;
-        }
-        return is_local < other.is_local;
+        return dst_chan < other.dst_chan;
     }
 };
 
