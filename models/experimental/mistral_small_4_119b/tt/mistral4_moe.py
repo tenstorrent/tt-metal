@@ -80,6 +80,7 @@ def _load_stacked_experts(
     mesh_device: ttnn.MeshDevice,
     num_devices: int,
     dtype: ttnn.DataType,
+    cache_file_name=None,
 ) -> ttnn.Tensor:
     """
     Load stacked expert projection weights to device, sharded along expert axis.
@@ -146,6 +147,7 @@ def _load_stacked_experts(
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        cache_file_name=cache_file_name,
     )
 
 
@@ -155,6 +157,7 @@ def _load_replicated(
     transpose: bool,
     dtype: ttnn.DataType,
     mesh_device: ttnn.MeshDevice,
+    cache_file_name=None,
 ) -> ttnn.Tensor:
     scale_inv = state_dict.get(key.replace(".weight", ".weight_scale_inv"))
     w = _bf16(state_dict[key], scale_inv)
@@ -167,6 +170,7 @@ def _load_replicated(
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        cache_file_name=cache_file_name,
     )
 
 
@@ -175,6 +179,7 @@ def _load_norm_weight_1d(
     key: str,
     dim: int,
     mesh_device: ttnn.MeshDevice,
+    cache_file_name=None,
 ) -> ttnn.Tensor:
     w = _bf16(state_dict[key]).reshape(1, 1, dim)
     return ttnn.as_tensor(
@@ -184,6 +189,7 @@ def _load_norm_weight_1d(
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        cache_file_name=cache_file_name,
     )
 
 
@@ -205,11 +211,16 @@ def _all_reduce_sum(
     if num_devices == 1:
         return partial
 
+    output_mem = (
+        ttnn.L1_MEMORY_CONFIG
+        if os.environ.get("MISTRAL4_DECODE_L1_COLLECTIVES", "0") == "1"
+        else ttnn.DRAM_MEMORY_CONFIG
+    )
     return ttnn.all_reduce(
         partial,
         num_links=1,
         topology=ttnn.Topology.Ring,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=output_mem,
     )
 
 
@@ -227,10 +238,13 @@ class TtMistral4SharedMLP(LightweightModule):
         intermediate_size: int,
         dtype: ttnn.DataType,
         compute_kernel_config,
+        cache_dir=None,
     ):
         super().__init__()
         self.compute_kernel_config = compute_kernel_config
         self.intermediate_size = intermediate_size
+        self._decode_bf8_output = os.environ.get("MISTRAL4_DECODE_BF8_SHARED_EXPERT", "0") == "1"
+        _cf = (lambda key: str(cache_dir / key)) if cache_dir is not None else (lambda _: None)
 
         # Fused gate+up weight: swiglu(z) = z[:I] * SiLU(z[I:])
         # Place up in the first half and gate in the second so that
@@ -251,6 +265,7 @@ class TtMistral4SharedMLP(LightweightModule):
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            cache_file_name=_cf(prefix + "gate_up_proj"),
         )  # [HIDDEN_SIZE, 2 * intermediate_size]
 
         self.down_proj = _load_replicated(
@@ -259,6 +274,7 @@ class TtMistral4SharedMLP(LightweightModule):
             transpose=True,
             dtype=dtype,
             mesh_device=mesh_device,
+            cache_file_name=_cf(prefix + "down_proj.weight"),
         )  # [intermediate_size, HIDDEN_SIZE]
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -310,7 +326,7 @@ class TtMistral4SharedMLP(LightweightModule):
             x,
             self.gate_up_proj,
             compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b if self._decode_bf8_output else ttnn.bfloat16,
             memory_config=_mem,
             program_config=gu_pc,
         )
@@ -326,7 +342,7 @@ class TtMistral4SharedMLP(LightweightModule):
             hidden,
             self.down_proj,
             compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b if self._decode_bf8_output else ttnn.bfloat16,
             memory_config=_mem,
             program_config=d_pc,
         )
@@ -357,6 +373,7 @@ class TtMistral4MoELayer(LightweightModule):
         state_dict: dict,
         layer_prefix: str,
         expert_dtype: ttnn.DataType = ttnn.bfloat16,
+        cache_dir=None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -387,6 +404,7 @@ class TtMistral4MoELayer(LightweightModule):
         )
 
         mlp_prefix = layer_prefix + "mlp."
+        _cf = (lambda key: str(cache_dir / key)) if cache_dir is not None else (lambda _: None)
 
         # ── Gate (router) weight ───────────────────────────────────────────
         # shape: [num_experts, HIDDEN_SIZE] → [HIDDEN_SIZE, num_experts] for matmul
@@ -397,6 +415,7 @@ class TtMistral4MoELayer(LightweightModule):
             transpose=True,
             dtype=ttnn.bfloat8_b,
             mesh_device=mesh_device,
+            cache_file_name=_cf(mlp_prefix + "gate.weight"),
         )  # [HIDDEN_SIZE, NUM_EXPERTS]
 
         # Gate correction bias (additive, applied before softmax; uploaded to device or None)
@@ -410,7 +429,7 @@ class TtMistral4MoELayer(LightweightModule):
                 device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )  # [1, 1, 1, NUM_EXPERTS] replicated on all devices
+            )  # [1, 1, 1, NUM_EXPERTS] replicated on all devices (tiny; skip caching)
         else:
             self.gate_bias_tt = None
 
@@ -449,6 +468,7 @@ class TtMistral4MoELayer(LightweightModule):
             mesh_device,
             self.num_devices,
             expert_dtype,
+            cache_file_name=_cf(mlp_prefix + "expert_gate_up"),
         )  # per device: [experts_per_device, 1, HIDDEN_SIZE, 2 * intermediate]
 
         self.expert_down = _load_stacked_experts(
@@ -459,6 +479,7 @@ class TtMistral4MoELayer(LightweightModule):
             mesh_device,
             self.num_devices,
             expert_dtype,
+            cache_file_name=_cf(mlp_prefix + "expert_down"),
         )  # per device: [experts_per_device, 1, intermediate, HIDDEN_SIZE]
 
         # ── Shared expert ──────────────────────────────────────────────────
@@ -476,6 +497,7 @@ class TtMistral4MoELayer(LightweightModule):
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             ),
+            cache_dir=cache_dir,
         )
 
         # ── Blackhole: pre-slice expert weights into per-expert list ───────

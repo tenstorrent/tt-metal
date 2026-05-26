@@ -84,6 +84,7 @@ def _load_weight(
     mesh_device: ttnn.MeshDevice,
     mesh_mapper=None,
     transform_fn=None,
+    cache_file_name=None,
 ) -> ttnn.Tensor:
     """Load a weight from state_dict to TTNN device with optional transpose.
     Automatically dequantizes FP8 weights using the companion weight_scale_inv key."""
@@ -104,6 +105,7 @@ def _load_weight(
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mapper,
+        cache_file_name=cache_file_name,
     )
 
 
@@ -112,6 +114,7 @@ def _load_norm_weight(
     key: str,
     dim: int,
     mesh_device: ttnn.MeshDevice,
+    cache_file_name=None,
 ) -> ttnn.Tensor:
     """
     Load RMSNorm ``weight`` for ``ttnn.rms_norm`` with TILE activations.
@@ -131,6 +134,7 @@ def _load_norm_weight(
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        cache_file_name=cache_file_name,
     )
 
 
@@ -222,6 +226,7 @@ class TtMistral4Attention(LightweightModule):
         state_dict: dict,
         layer_prefix: str,
         compute_kernel_config=None,
+        cache_dir=None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -265,6 +270,7 @@ class TtMistral4Attention(LightweightModule):
         self._decode_pcs = self._build_decode_program_configs(grid)
 
         p = layer_prefix + "self_attn."
+        _cf = (lambda key: str(cache_dir / key)) if cache_dir is not None else (lambda _: None)
 
         # ── Replicated weights (small bottleneck projections) ──────────────
         # HF stores [out, in]; we transpose → [in, out] for TTNN matmul
@@ -274,6 +280,7 @@ class TtMistral4Attention(LightweightModule):
             transpose=True,
             dtype=ttnn.bfloat4_b,
             mesh_device=mesh_device,
+            cache_file_name=_cf(p + "q_a_proj.weight"),
         )  # [HIDDEN_SIZE, Q_LORA_RANK]
 
         self.q_a_norm = _load_norm_weight(
@@ -281,6 +288,7 @@ class TtMistral4Attention(LightweightModule):
             p + "q_a_layernorm.weight",
             Q_LORA_RANK,
             mesh_device,
+            cache_file_name=_cf(p + "q_a_layernorm.weight"),
         )  # [1, 1, Q_LORA_RANK / TILE, TILE]
 
         self.q_b_proj = _load_weight(
@@ -290,6 +298,7 @@ class TtMistral4Attention(LightweightModule):
             dtype=ttnn.bfloat16,
             mesh_device=mesh_device,
             transform_fn=_deinterleave_q_b_proj,
+            cache_file_name=_cf(p + "q_b_proj.weight"),
         )  # [Q_LORA_RANK, N_HEADS * HEAD_DIM]
 
         # Pre-split q_b_proj into nope/rope sub-weights for decode (avoids 2 slices/step).
@@ -307,6 +316,7 @@ class TtMistral4Attention(LightweightModule):
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            cache_file_name=_cf(p + "q_nope_w"),
         )
         self.q_rope_w = ttnn.as_tensor(
             _q_rope,
@@ -315,6 +325,7 @@ class TtMistral4Attention(LightweightModule):
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            cache_file_name=_cf(p + "q_rope_w"),
         )
         del _q_b, _q_b3, _q_nope, _q_rope
 
@@ -325,6 +336,7 @@ class TtMistral4Attention(LightweightModule):
             dtype=ttnn.bfloat4_b,
             mesh_device=mesh_device,
             transform_fn=_deinterleave_kv_a_proj,
+            cache_file_name=_cf(p + "kv_a_proj_with_mqa.weight"),
         )  # [HIDDEN_SIZE, KV_A_PROJ_OUT]
 
         self.kv_a_norm = _load_norm_weight(
@@ -332,6 +344,7 @@ class TtMistral4Attention(LightweightModule):
             p + "kv_a_layernorm.weight",
             KV_LORA_RANK,
             mesh_device,
+            cache_file_name=_cf(p + "kv_a_layernorm.weight"),
         )  # [1, 1, KV_LORA_RANK / TILE, TILE]
 
         self.kv_b_proj = _load_weight(
@@ -340,6 +353,7 @@ class TtMistral4Attention(LightweightModule):
             transpose=True,
             dtype=ttnn.bfloat16,
             mesh_device=mesh_device,
+            cache_file_name=_cf(p + "kv_b_proj.weight"),
         )  # [KV_LORA_RANK, KV_B_PROJ_OUT_TOTAL]
 
         # Pre-split kv_b_proj into k_nope/v sub-weights for decode (avoids 2 slices/step).
@@ -355,6 +369,7 @@ class TtMistral4Attention(LightweightModule):
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            cache_file_name=_cf(p + "k_nope_w"),
         )
         self.v_w = ttnn.as_tensor(
             _v,
@@ -363,6 +378,7 @@ class TtMistral4Attention(LightweightModule):
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            cache_file_name=_cf(p + "v_w"),
         )
         del _kv_b, _kv_b3, _k_nope, _v
 
@@ -372,6 +388,7 @@ class TtMistral4Attention(LightweightModule):
             transpose=True,
             dtype=ttnn.bfloat4_b,
             mesh_device=mesh_device,
+            cache_file_name=_cf(p + "o_proj.weight"),
         )  # [N_HEADS * V_HEAD_DIM, HIDDEN_SIZE]
 
     # ------------------------------------------------------------------

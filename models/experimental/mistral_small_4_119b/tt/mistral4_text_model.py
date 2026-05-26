@@ -25,6 +25,7 @@ Usage::
 from __future__ import annotations
 
 import os
+import pathlib
 
 import torch
 
@@ -61,10 +62,23 @@ class TtMistral4TextModel:
         text_config,
         num_decoder_layers: int = EXPECTED_NUM_LAYERS,
         max_seq_len: int = 4096,
+        cache_dir=None,
     ):
         self.mesh_device = mesh_device
         self.num_decoder_layers = num_decoder_layers
         self.max_seq_len = max_seq_len
+
+        # Resolve cache dir: explicit arg > env var > None (no caching).
+        # Encode num_devices in the path so cached sharded tensors don't
+        # bleed across meshes with different device counts.
+        _cache_dir_base = cache_dir or os.environ.get("MISTRAL4_WEIGHT_CACHE_DIR")
+        if _cache_dir_base is not None:
+            num_devices = mesh_device.get_num_devices()
+            _effective_cache_dir = pathlib.Path(_cache_dir_base) / f"n{num_devices}"
+            _effective_cache_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            _effective_cache_dir = None
+        _cf = (lambda key: str(_effective_cache_dir / key)) if _effective_cache_dir is not None else (lambda _: None)
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -83,6 +97,7 @@ class TtMistral4TextModel:
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            cache_file_name=_cf(TEXT_MODEL_EMBED_TOKENS_WEIGHT_KEY),
         )
 
         # ── Decoder layers + per-layer KV caches ───────────────────────
@@ -95,12 +110,19 @@ class TtMistral4TextModel:
                 state_dict=state_dict,
                 layer_idx=i,
                 compute_kernel_config=self.compute_kernel_config,
+                cache_dir=_effective_cache_dir,
             )
             self.decoder_layers.append(layer)
             self.kv_caches.append(layer.attn.allocate_kv_cache(max_seq_len))
 
         # ── Final norm + LM head ────────────────────────────────────────
-        self.final_norm_w = _load_norm_weight(state_dict, "language_model.model.norm.weight", HIDDEN_SIZE, mesh_device)
+        self.final_norm_w = _load_norm_weight(
+            state_dict,
+            "language_model.model.norm.weight",
+            HIDDEN_SIZE,
+            mesh_device,
+            cache_file_name=_cf("language_model.model.norm.weight"),
+        )
 
         lm_head_w = state_dict["language_model.lm_head.weight"].to(torch.bfloat16).T.contiguous()
         # bfloat4_b: ~32 MB per device after sharding across 4 devices (vs 64 MB at bfloat8_b).
@@ -113,6 +135,7 @@ class TtMistral4TextModel:
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+            cache_file_name=_cf("language_model.lm_head.weight"),
         )
         self.lm_head_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -271,12 +294,17 @@ class TtMistral4TextModel:
 
         num_devices = self.mesh_device.get_num_devices()
         if num_devices > 1:
+            gather_mem = (
+                ttnn.L1_MEMORY_CONFIG
+                if os.environ.get("MISTRAL4_DECODE_L1_COLLECTIVES", "0") == "1"
+                else ttnn.DRAM_MEMORY_CONFIG
+            )
             full = ttnn.all_gather(
                 partial,
                 dim=3,
                 num_links=1,
                 topology=ttnn.Topology.Ring,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=gather_mem,
             )  # per device: [1, 1, 1, vocab]
             ttnn.deallocate(partial)
         else:

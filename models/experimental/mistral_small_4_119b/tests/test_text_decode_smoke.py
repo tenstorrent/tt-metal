@@ -45,6 +45,8 @@ pytest.importorskip("transformers.models.mistral4.modeling_mistral4", reason="Mi
 _N_LAYERS = int(os.environ.get("MISTRAL4_DECODE_N_LAYERS", "2"))
 _PREFILL_LEN = int(os.environ.get("MISTRAL4_DECODE_PREFILL_LEN", "4"))
 _N_STEPS = int(os.environ.get("MISTRAL4_DECODE_N_STEPS", "5"))
+_PROFILE_STEPS = max(1, int(os.environ.get("MISTRAL4_DECODE_PROFILE_STEPS", "1")))
+_ON_DEVICE_ARGMAX = os.environ.get("MISTRAL4_DECODE_ON_DEVICE_ARGMAX", "0") == "1"
 _MAX_SEQ_LEN = _PREFILL_LEN + _N_STEPS + 64  # small cache for smoke
 
 
@@ -133,33 +135,41 @@ def test_mistral_small_4_text_decode_smoke(reset_seeds, mesh_device):
     # ── Greedy decode loop ───────────────────────────────────────────────
     next_token = prefill_logits[0, -1, :].argmax().item()
     logger.info(f"First decode token (greedy from prefill): {next_token}")
+    logger.info(f"On-device decode argmax mode: {_ON_DEVICE_ARGMAX}")
 
     # Step 0 is the JIT-compile pass (slow). Steps after the signpost are
     # the perf-measured iterations. Wall-clock is logged for each step so
     # we can see steady-state decode latency.
     decode_times = []
+    profile_start_step = max(1, _N_STEPS - _PROFILE_STEPS)
     for step in range(_N_STEPS):
-        if step == 1:
+        if step == profile_start_step:
             ttnn.synchronize_device(mesh_device)
             signpost("Performance pass")
         current_pos = _PREFILL_LEN + step
         tok_tensor = torch.tensor([[next_token]], dtype=torch.long)
 
         t0 = time.perf_counter()
-        decode_logits = model.decode(tok_tensor, current_pos)
+        if _ON_DEVICE_ARGMAX:
+            next_token = model.decode_next_token(tok_tensor, current_pos)
+            decode_logits = None
+        else:
+            decode_logits = model.decode(tok_tensor, current_pos)
         ttnn.synchronize_device(mesh_device)
         dt = time.perf_counter() - t0
-        if step >= 1:
+        if step >= profile_start_step:
             decode_times.append(dt)
 
-        assert decode_logits.shape == (
-            1,
-            1,
-            vocab,
-        ), f"Step {step}: decode logits shape {tuple(decode_logits.shape)} != (1, 1, {vocab})"
-        assert torch.isfinite(decode_logits.to(torch.float32)).all(), f"Step {step}: non-finite values in decode logits"
-
-        next_token = decode_logits[0, 0, :].argmax().item()
+        if decode_logits is not None:
+            assert decode_logits.shape == (
+                1,
+                1,
+                vocab,
+            ), f"Step {step}: decode logits shape {tuple(decode_logits.shape)} != (1, 1, {vocab})"
+            assert torch.isfinite(
+                decode_logits.to(torch.float32)
+            ).all(), f"Step {step}: non-finite values in decode logits"
+            next_token = decode_logits[0, 0, :].argmax().item()
         logger.info(f"Decode step {step} (pos={current_pos}): {dt*1e3:.2f} ms, next token={next_token}")
 
     if decode_times:
