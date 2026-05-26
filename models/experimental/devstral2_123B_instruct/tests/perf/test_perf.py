@@ -20,6 +20,7 @@ import pytest
 from loguru import logger
 
 import ttnn
+from models.experimental.devstral2_123B_instruct.demo.decode_trace_2cq import num_command_queues_for_decode
 from models.experimental.devstral2_123B_instruct.demo.text_demo import _mesh_device_param
 from models.experimental.devstral2_123B_instruct.tests.perf.test_e2e_performant import _run_devstral2_perf
 from models.experimental.devstral2_123B_instruct.tt.model_args import DEVSTRAL2_LARGE_L1_SMALL_SIZE
@@ -39,7 +40,7 @@ DECODE_ITERS = 32
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
             "trace_region_size": 100_000_000,
-            "num_command_queues": 1,
+            "num_command_queues": num_command_queues_for_decode(),
             "l1_small_size": DEVSTRAL2_LARGE_L1_SMALL_SIZE,
         }
     ],
@@ -67,6 +68,8 @@ def test_perf_device_bare_metal_devstral2_123B_instruct_single_layer(mesh_device
         f"prefill replay={results['prefill_replay_time_s']*1000:.1f}ms "
         f"({results['prefill_throughput_tok_per_s']:.1f} tok/s), "
         f"decode compile={results['decode_compile_time_s']*1000:.0f}ms, "
-        f"decode replay={results['decode_replay_time_s']*1000:.2f}ms "
-        f"({results['decode_throughput_tok_per_s_per_user']:.2f} tok/s/user)"
+        f"decode capture={results['decode_capture_time_s']*1000:.0f}ms, "
+        f"decode replay={results['decode_replay_time_s']*1000:.2f}ms, "
+        f"steady-state={results['steady_state_decode_throughput_tok_per_s']:.2f} tok/s/user, "
+        f"end-to-end={results['end_to_end_throughput_tok_per_s']:.2f} tok/s/user"
     )

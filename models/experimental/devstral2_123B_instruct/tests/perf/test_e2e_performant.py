@@ -11,8 +11,9 @@ steady-state timing windows (compile passes excluded from inference numbers):
   2. Prefill: 1 compile pass -> capture trace -> N trace replays (timed).
   3. Decode:  1 compile pass -> capture trace -> M trace replays (timed).
 
-Reports TTFT (single prefill trace replay), prefill latency, decode tokens/sec/user,
-and a CSV/JSON report via the standard ``prep_perf_report`` + ``BenchmarkData`` plumbing.
+Reports TTFT, prefill tok/s, **steady-state decode tok/s/user** (trace replay only), and
+**end-to-end decode tok/s/user** (TTFT + decode compile/capture + all decode steps), plus
+CSV/JSON via ``prep_perf_report`` + ``BenchmarkData``.
 
 Run::
 
@@ -178,7 +179,7 @@ def _run_devstral2_perf(
             f"({padded_prompt_len/prefill_replay_time:.1f} tok/s)"
         )
 
-        # Decode compile pass (untimed).
+        # Decode compile pass (kernel cache; untimed for steady-state, included in end-to-end).
         decode_token = 0
         decode_pos = padded_prompt_len
         t = time.time()
@@ -190,7 +191,8 @@ def _run_devstral2_perf(
         decode_compile_time = time.time() - t
         tt_out.deallocate(True)
 
-        # Capture decode trace bound to (decode_tok_dev, decode_pos_dev)
+        # Capture decode trace bound to (decode_tok_dev, decode_pos_dev).
+        t = time.time()
         if decode_2cq is not None:
             stage_decode_inputs(decode_2cq, mesh_device, decode_tok_dev, decode_pos_dev, decode_token, decode_pos)
         decode_trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -198,6 +200,7 @@ def _run_devstral2_perf(
         ttnn.end_trace_capture(mesh_device, decode_trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
         signal_decode_step_done(decode_2cq)
+        decode_capture_time = time.time() - t
 
         # Time decode replays. With 2CQ, include per-step input H2D (matches text_demo / agent).
         t = time.time()
@@ -211,12 +214,20 @@ def _run_devstral2_perf(
                 signal_decode_step_done(decode_2cq)
         decode_total_time = time.time() - t
         decode_replay_time = decode_total_time / decode_iters
-        decode_tok_per_s = decode_iters / decode_total_time
+        steady_state_decode_tok_per_s = decode_iters / decode_total_time
+
+        # End-to-end generation: TTFT + decode warmup (compile + capture) + all decode steps.
+        end_to_end_generation_time_s = ttft_s + decode_compile_time + decode_capture_time + decode_total_time
+        end_to_end_throughput_tok_per_s = decode_iters / end_to_end_generation_time_s
+
         decode_trace_logits.deallocate(True)
         cq_note = " 2CQ" if decode_2cq is not None else ""
         logger.info(
             f"Decode{cq_note}: compile={decode_compile_time*1000:.0f}ms, "
-            f"replay={decode_replay_time*1000:.2f}ms ({decode_tok_per_s:.2f} tok/s/user)"
+            f"capture={decode_capture_time*1000:.0f}ms, "
+            f"replay={decode_replay_time*1000:.2f}ms "
+            f"(steady-state {steady_state_decode_tok_per_s:.2f} tok/s/user, "
+            f"end-to-end {end_to_end_throughput_tok_per_s:.2f} tok/s/user)"
         )
 
         return {
@@ -227,8 +238,13 @@ def _run_devstral2_perf(
             "prefill_replay_time_s": prefill_replay_time,
             "prefill_throughput_tok_per_s": padded_prompt_len / prefill_replay_time,
             "decode_compile_time_s": decode_compile_time,
+            "decode_capture_time_s": decode_capture_time,
             "decode_replay_time_s": decode_replay_time,
-            "decode_throughput_tok_per_s_per_user": decode_tok_per_s,
+            "decode_total_time_s": decode_total_time,
+            "steady_state_decode_throughput_tok_per_s": steady_state_decode_tok_per_s,
+            "decode_throughput_tok_per_s_per_user": steady_state_decode_tok_per_s,
+            "end_to_end_generation_time_s": end_to_end_generation_time_s,
+            "end_to_end_throughput_tok_per_s": end_to_end_throughput_tok_per_s,
             "padded_prompt_len": padded_prompt_len,
             "decode_iters": decode_iters,
             "decode_trace_2cq": float(decode_2cq is not None),
@@ -322,6 +338,7 @@ def test_devstral2_123B_instruct_e2e_performant(
 
     logger.info(
         f"{model_name}: TTFT={results['ttft_ms']:.1f}ms, "
-        f"decode {results['decode_throughput_tok_per_s_per_user']:.2f} tok/s/user "
+        f"steady-state decode={results['steady_state_decode_throughput_tok_per_s']:.2f} tok/s/user, "
+        f"end-to-end decode={results['end_to_end_throughput_tok_per_s']:.2f} tok/s/user "
         f"(prefill {results['prefill_throughput_tok_per_s']:.1f} tok/s on {results['padded_prompt_len']}-tok prompt)"
     )
