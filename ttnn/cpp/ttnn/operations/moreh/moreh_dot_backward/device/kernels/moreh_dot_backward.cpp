@@ -25,6 +25,7 @@ void kernel_main() {
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         if (has_input_grad) {
             cb_c2.wait_front(onetile);
+            cb_c16.reserve_back(onetile);
             ACQ();
             mul_tiles_bcast<BroadcastType::SCALAR>(tt::CBIndex::c_2, tt::CBIndex::c_0, 0, 0, 0);
             pack_tile(0, tt::CBIndex::c_16);
@@ -35,6 +36,7 @@ void kernel_main() {
 
         if (has_other_grad) {
             cb_c1.wait_front(onetile);
+            cb_c17.reserve_back(onetile);
             ACQ();
             mul_tiles_bcast<BroadcastType::SCALAR>(tt::CBIndex::c_1, tt::CBIndex::c_0, 0, 0, 0);
             pack_tile(0, tt::CBIndex::c_17);
