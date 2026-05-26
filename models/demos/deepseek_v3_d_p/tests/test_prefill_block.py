@@ -257,7 +257,6 @@ def test_prefill_block(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         weight_cache_path=cache_dir,
-        capacity_factor=32,
         is_balanced=is_balanced,
     )
     if gate_fallback_mode is not None:
