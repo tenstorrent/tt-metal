@@ -877,6 +877,7 @@ def create_text_to_unit_parameters(encoder, *, device: ttnn.Device) -> dict:
         ffn_weight_dtype=ttnn.bfloat8_b,
         attn_weight_dtype=ttnn.bfloat8_b,
         fuse_qkv=True,
+        dram_width_sharded_weights=True,
     )
     out = {
         "layers": layers,
@@ -925,14 +926,14 @@ def _t2u_decoder_layer_parameters(layer: torch.nn.Module, *, device: ttnn.Device
     """[`SeamlessM4Tv2TextToUnitDecoderLayer`] weights."""
     layer_dict = {
         "self_attn": {
-            "qkv": _fused_qkv_pair(
+            "qkv": _fused_qkv_pair_dram_sharded(
                 layer.self_attn.q_proj,
                 layer.self_attn.k_proj,
                 layer.self_attn.v_proj,
                 device=device,
                 weight_dtype=ttnn.bfloat8_b,
             ),
-            "out_proj": _linear_pair(layer.self_attn.out_proj, device=device),
+            "out_proj": _linear_pair_dram_sharded(layer.self_attn.out_proj, device=device),
         },
         "self_attn_layer_norm": {
             "weight": _ln_to_device(layer.self_attn_layer_norm.weight, device=device),

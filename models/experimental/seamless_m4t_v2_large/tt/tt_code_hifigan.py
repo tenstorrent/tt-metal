@@ -28,6 +28,8 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
 _VOCODER_EXPAND_MATMUL_CHUNK = TILE
 # HiFi-GAN conv_pre input length per chunk (upsample L1 grows quickly on BH).
 _HIFIGAN_MEL_CHUNK = 384
+# Chunk long ``ttnn.conv1d`` along time (resblock after upsample can exceed mel chunk length).
+_VOCODER_CONV1D_CHUNK_ROWS = MATMUL_1D_SEQ_THRESHOLD
 
 
 def _vocoder_dram_slice_count(input_length: int) -> int:
@@ -101,6 +103,9 @@ def _vocoder_conv1d_config(
         conv_kwargs["activation"] = fused_post_activation
     if int(input_length) > 64 or int(in_channels) >= 512:
         conv_kwargs["act_block_h_override"] = 32
+    if int(input_length) > 256:
+        conv_kwargs["enable_act_double_buffer"] = False
+        conv_kwargs["enable_weights_double_buffer"] = False
     return ttnn.Conv1dConfig(**conv_kwargs)
 
 
@@ -509,6 +514,70 @@ class TTSeamlessM4Tv2CodeHifiGan:
             padding=int(cpost.padding),
         )
 
+    def _conv1d_run(
+        self,
+        x_rm: ttnn.Tensor,
+        *,
+        weight: ttnn.Tensor,
+        bias: Optional[ttnn.Tensor],
+        batch: int,
+        input_length: int,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int,
+        padding: int,
+        groups: int,
+        dilation: int,
+        fused_post_activation: Optional[ttnn.UnaryWithParam],
+        deallocate_input: bool = False,
+        use_prepared_weights: bool = True,
+    ) -> Tuple[ttnn.Tensor, int]:
+        """Single-shot ``ttnn.conv1d`` on row-major NLC activations."""
+        conv_config = _vocoder_conv1d_config(fused_post_activation, input_length=input_length, in_channels=in_channels)
+        cache_key = self._conv1d_prep_cache_key(
+            weight=weight,
+            bias=bias,
+            batch=batch,
+            input_length=input_length,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            padding=padding,
+            groups=groups,
+            dilation=dilation,
+            fused_post_activation=fused_post_activation,
+        )
+        cached = self._conv1d_prepared_cache.get(cache_key) if use_prepared_weights else None
+        weight_tensor = cached[0] if cached is not None else weight
+        bias_tensor = cached[1] if cached is not None else bias
+        out, out_len = ttnn.conv1d(
+            input_tensor=x_rm,
+            weight_tensor=weight_tensor,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            device=self.device,
+            bias_tensor=bias_tensor,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            batch_size=batch,
+            input_length=input_length,
+            conv_config=conv_config,
+            compute_config=self._compute,
+            groups=groups,
+            dilation=dilation,
+            dtype=ttnn.bfloat16,
+            return_output_dim=True,
+        )
+        if deallocate_input:
+            ttnn.deallocate(x_rm)
+        out_len = int(out_len)
+        if ttnn.is_sharded(out):
+            out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.reshape(out, (batch, out_len, out_channels))
+        return out, out_len
+
     def _conv1d(
         self,
         x_nlc: ttnn.Tensor,
@@ -528,54 +597,88 @@ class TTSeamlessM4Tv2CodeHifiGan:
     ) -> Tuple[ttnn.Tensor, int]:
         # ``ttnn.conv1d`` reshapes activations for the conv2d path; TILE NLC (e.g. from ``embedding``)
         # can hit "reshape between two shapes with different volumes". Host ROW_MAJOR weights are fine.
+        seq = int(input_length)
         x_in = x_nlc
         rm_buf: Optional[ttnn.Tensor] = None
         if x_nlc.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             rm_buf = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x_in = rm_buf
-        conv_config = _vocoder_conv1d_config(fused_post_activation, input_length=input_length, in_channels=in_channels)
-        cache_key = self._conv1d_prep_cache_key(
-            weight=weight,
-            bias=bias,
-            batch=batch,
-            input_length=input_length,
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=kernel_size,
-            padding=padding,
-            groups=groups,
-            dilation=dilation,
-            fused_post_activation=fused_post_activation,
-        )
-        cached = self._conv1d_prepared_cache.get(cache_key)
-        weight_tensor = cached[0] if cached is not None else weight
-        bias_tensor = cached[1] if cached is not None else bias
-        out, out_len = ttnn.conv1d(
-            input_tensor=x_in,
-            weight_tensor=weight_tensor,
-            in_channels=in_channels,
-            out_channels=out_channels,
-            device=self.device,
-            bias_tensor=bias_tensor,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            batch_size=batch,
-            input_length=input_length,
-            conv_config=conv_config,
-            compute_config=self._compute,
-            groups=groups,
-            dilation=dilation,
-            dtype=ttnn.bfloat16,
-            return_output_dim=True,
-        )
+
+        if seq <= _VOCODER_CONV1D_CHUNK_ROWS:
+            return self._conv1d_run(
+                x_in,
+                weight=weight,
+                bias=bias,
+                batch=batch,
+                input_length=seq,
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                groups=groups,
+                dilation=dilation,
+                fused_post_activation=fused_post_activation,
+                deallocate_input=rm_buf is not None,
+            )
+
+        chunk_size = 256 if in_channels >= 512 else _VOCODER_CONV1D_CHUNK_ROWS
+        halo = int(padding)
+        chunks: list[ttnn.Tensor] = []
+        for start in range(0, seq, chunk_size):
+            end = min(start + chunk_size, seq)
+            chunk_rows = end - start
+            in_start = max(0, start - halo)
+            in_end = min(seq, end + halo)
+            win_len = in_end - in_start
+            x_win = ttnn.slice(
+                x_in,
+                [0, in_start, 0],
+                [batch, in_end, in_channels],
+                (1, 1, 1),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            out_win, _ = self._conv1d_run(
+                x_win,
+                weight=weight,
+                bias=bias,
+                batch=batch,
+                input_length=win_len,
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                groups=groups,
+                dilation=dilation,
+                fused_post_activation=fused_post_activation,
+                deallocate_input=True,
+            )
+            out_start = start - in_start
+            if out_start > 0 or chunk_rows < int(out_win.shape[1]):
+                out_chunk = ttnn.slice(
+                    out_win,
+                    [0, out_start, 0],
+                    [batch, out_start + chunk_rows, out_channels],
+                    (1, 1, 1),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(out_win)
+            else:
+                out_chunk = out_win
+            chunks.append(out_chunk)
+
         if rm_buf is not None:
             ttnn.deallocate(rm_buf)
-        out_len = int(out_len)
-        if ttnn.is_sharded(out):
-            out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
-        out = ttnn.reshape(out, (batch, out_len, out_channels))
-        return out, out_len
+        elif x_in is not x_nlc:
+            ttnn.deallocate(x_in)
+
+        if len(chunks) == 1:
+            return chunks[0], seq
+        out = ttnn.concat(chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for c in chunks:
+            ttnn.deallocate(c)
+        return out, seq
 
     def _pad_nlc_time(
         self,

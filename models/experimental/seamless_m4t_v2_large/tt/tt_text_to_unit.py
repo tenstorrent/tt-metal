@@ -32,11 +32,14 @@ import ttnn
 from models.common.utility_functions import nearest_32
 from models.experimental.seamless_m4t_v2_large.tt.common import (
     core_grid,
+    dram_matmul_program_config,
+    ensure_l1_width_sharded_activation,
     matmul_program_config,
     MATMUL_1D_SEQ_THRESHOLD,
     sdpa_program_config,
     TILE,
     to_torch_replicated_first_shard,
+    width_sharded_to_l1_interleaved,
 )
 
 # Chunk ``H @ enc`` along upsampled rows (same row count as speech-encoder long mel matmuls).
@@ -52,6 +55,272 @@ def _linear_token_rows(x: ttnn.Tensor) -> int:
     if len(x.shape) == 2:
         return int(x.shape[0])
     return int(x.shape[-2])
+
+
+def _weight_is_dram_width_sharded(weight: ttnn.Tensor) -> bool:
+    mc = weight.memory_config()
+    return mc.buffer_type == ttnn.BufferType.DRAM and mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
+
+def _bias_token_rows(bias: ttnn.Tensor) -> int:
+    if len(bias.shape) == 4:
+        return int(bias.shape[2])
+    return TILE
+
+
+def _t2u_sdpa_program_config(
+    device: ttnn.Device,
+    seq_q: int,
+    seq_k: int,
+    cache: dict,
+) -> ttnn.SDPAProgramConfig:
+    """Capped SDPA chunks for long T2U encoder/decoder sequences (avoids L1 overflow at seq 4096)."""
+    key = (seq_q, seq_k)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+
+    m = max(seq_q, seq_k)
+    if m > 96:
+        cap = 32
+    elif m > 64:
+        cap = 64
+    elif m > 32:
+        cap = 128
+    else:
+        cap = 256
+    q_chunk = max(32, min(cap, nearest_32(seq_q)))
+    k_chunk = max(32, min(cap, nearest_32(seq_k)))
+    out = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk,
+        k_chunk_size=k_chunk,
+        exp_approx_mode=False,
+    )
+    cache[key] = out
+    return out
+
+
+def _t2u_layer_norm(
+    x: ttnn.Tensor,
+    *,
+    weight: ttnn.Tensor,
+    bias: ttnn.Tensor,
+    epsilon: float,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+    long_seq: bool,
+) -> ttnn.Tensor:
+    """Layer norm with DRAM activations on long sequences (speech-encoder long-audio policy)."""
+    if ttnn.is_sharded(x):
+        mc = ttnn.DRAM_MEMORY_CONFIG if long_seq else ttnn.L1_MEMORY_CONFIG
+        x = ttnn.sharded_to_interleaved(x, mc, output_dtype=ttnn.bfloat16)
+    elif long_seq and x.memory_config().buffer_type != ttnn.BufferType.DRAM:
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+    out_mc = ttnn.DRAM_MEMORY_CONFIG if long_seq else ttnn.L1_MEMORY_CONFIG
+    return ttnn.layer_norm(
+        x,
+        weight=weight,
+        bias=bias,
+        epsilon=epsilon,
+        memory_config=out_mc,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+
+def _pad_token_rows(x: ttnn.Tensor, m_actual: int, m_padded: int) -> ttnn.Tensor:
+    if m_actual >= m_padded:
+        return x
+    k = int(x.shape[-1])
+    pad_rows = m_padded - m_actual
+    pad = ttnn.full(
+        [pad_rows, k],
+        0.0,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=x.device(),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    padded = ttnn.concat([x, pad], dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn.deallocate(pad)
+    return padded
+
+
+def _linear_dram_chunked(
+    device: ttnn.Device,
+    *,
+    dram_matmul_pc_cache: dict,
+    chunked_linear_compute_cfg: Optional[ttnn.DeviceComputeKernelConfig],
+    long_seq_mc: Optional[ttnn.MemoryConfig],
+    x: ttnn.Tensor,
+    weight: ttnn.Tensor,
+    bias: ttnn.Tensor,
+    activation: Optional[str],
+    logical_out_dim: int,
+    batch: int,
+    seq: int,
+    m_actual: int,
+    m: int,
+    k: int,
+    n: int,
+) -> tuple[ttnn.Tensor, Optional[ttnn.DeviceComputeKernelConfig]]:
+    """DRAM-sharded matmul in TILE-row chunks (text-encoder long-seq path)."""
+    fused_activation = ttnn.UnaryOpType.RELU if activation == "relu" else None
+    pc_key = (m, k, n, fused_activation)
+    pc = dram_matmul_pc_cache.get(pc_key)
+    if pc is None:
+        pc = dram_matmul_program_config(device, m, k, n, fused_activation=fused_activation)
+        dram_matmul_pc_cache[pc_key] = pc
+
+    if chunked_linear_compute_cfg is None:
+        chunked_linear_compute_cfg = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+    if ttnn.is_sharded(x):
+        x_inter = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+    else:
+        x_inter = x
+    if len(x_inter.shape) == 3:
+        x_inter = ttnn.reshape(x_inter, (m_actual, k))
+    elif len(x_inter.shape) != 2:
+        x_inter = ttnn.reshape(x_inter, (m_actual, k))
+
+    chunks: list[ttnn.Tensor] = []
+    num_chunks = (m_actual + m - 1) // m
+    for i in range(num_chunks):
+        start = i * m
+        end = min(start + m, m_actual)
+        chunk_rows = end - start
+
+        chunk = ttnn.slice(x_inter, [start, 0], [end, k], [1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+        if chunk_rows < m:
+            chunk = _pad_token_rows(chunk, chunk_rows, m)
+        chunk_sharded = ensure_l1_width_sharded_activation(device, chunk, m, k, n)
+        out_sharded = ttnn.linear(
+            chunk_sharded,
+            weight,
+            bias=bias,
+            program_config=pc,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            compute_kernel_config=chunked_linear_compute_cfg,
+        )
+        if chunk_sharded is not chunk:
+            ttnn.deallocate(chunk_sharded)
+        if chunk is not x_inter:
+            ttnn.deallocate(chunk)
+        out_inter = width_sharded_to_l1_interleaved(out_sharded)
+        if long_seq_mc is ttnn.DRAM_MEMORY_CONFIG:
+            out_dram = ttnn.to_memory_config(out_inter, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(out_inter)
+            out_inter = out_dram
+        ttnn.deallocate(out_sharded)
+        if len(out_inter.shape) == 4 and int(out_inter.shape[1]) == 1:
+            out_inter = ttnn.reshape(out_inter, (int(out_inter.shape[2]), int(out_inter.shape[-1])))
+        if chunk_rows < m:
+            trim_mc = long_seq_mc or ttnn.L1_MEMORY_CONFIG
+            out_inter = ttnn.slice(
+                out_inter,
+                [0, 0],
+                [chunk_rows, int(out_inter.shape[-1])],
+                [1, 1],
+                memory_config=trim_mc,
+            )
+        chunks.append(out_inter)
+
+    concat_mc = long_seq_mc or ttnn.L1_MEMORY_CONFIG
+    if len(chunks) == 1:
+        out_concat = chunks[0]
+        if concat_mc is ttnn.DRAM_MEMORY_CONFIG and out_concat.memory_config().buffer_type != ttnn.BufferType.DRAM:
+            out_dram = ttnn.to_memory_config(out_concat, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(out_concat)
+            out_concat = out_dram
+    else:
+        out_concat = ttnn.concat(chunks, dim=0, memory_config=concat_mc)
+        for c in chunks:
+            ttnn.deallocate(c)
+
+    padded_n = int(out_concat.shape[-1])
+    if padded_n > logical_out_dim:
+        out_concat = ttnn.slice(out_concat, [0, 0], [m_actual, logical_out_dim], [1, 1], memory_config=concat_mc)
+    out = ttnn.reshape(out_concat, (batch, seq, logical_out_dim))
+    return out, chunked_linear_compute_cfg
+
+
+def _linear_matmul_1d_chunked(
+    device: ttnn.Device,
+    x: ttnn.Tensor,
+    weight: ttnn.Tensor,
+    bias: Optional[ttnn.Tensor],
+    *,
+    activation: Optional[str],
+    batch: int,
+    seq: int,
+    m_actual: int,
+    k: int,
+    n: int,
+    logical_out_dim: int,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+) -> ttnn.Tensor:
+    """Chunked ``ttnn.linear`` with 1D multicast (interleaved weights, DRAM activations)."""
+    if len(x.shape) == 4:
+        x = ttnn.reshape(x, (batch, seq, k))
+    elif len(x.shape) == 2:
+        x = ttnn.reshape(x, (batch, seq, k))
+
+    chunk_m = TILE
+    chunks: list[ttnn.Tensor] = []
+    for start in range(0, m_actual, chunk_m):
+        end = min(start + chunk_m, m_actual)
+        chunk_rows = end - start
+        x_chunk = ttnn.slice(
+            x,
+            [0, start, 0],
+            [batch, end, k],
+            [1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        pc = matmul_program_config(device, token_rows=chunk_rows, in_dim=k, out_dim=n)
+        out_chunk = ttnn.linear(
+            x_chunk,
+            weight,
+            bias=bias,
+            activation=activation,
+            program_config=pc,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=compute_kernel_config,
+        )
+        ttnn.deallocate(x_chunk)
+        if chunk_rows < chunk_m:
+            out_chunk = ttnn.slice(
+                out_chunk,
+                [0, 0, 0],
+                [batch, chunk_rows, int(out_chunk.shape[-1])],
+                [1, 1, 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        chunks.append(out_chunk)
+
+    if len(chunks) == 1:
+        out = chunks[0]
+    else:
+        out = ttnn.concat(chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for c in chunks:
+            ttnn.deallocate(c)
+
+    padded_n = int(out.shape[-1])
+    if padded_n > logical_out_dim:
+        rank = len(out.shape)
+        begins = [0] * rank
+        ends = list(out.shape)
+        ends[-2] = m_actual
+        ends[-1] = logical_out_dim
+        strides = [1] * rank
+        out = ttnn.slice(out, begins, ends, strides, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return out
 
 
 def _upload_repeat_cumsum_tiles(device: ttnn.Device, repeats: Sequence[int]) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -351,6 +620,9 @@ def _conv1d_config_for(
         conv_kwargs["activation"] = ttnn.UnaryWithParam(op_type)
     if sequence_length > 64 or in_channels >= 512:
         conv_kwargs["act_block_h_override"] = 32
+    if sequence_length > 256:
+        conv_kwargs["enable_act_double_buffer"] = False
+        conv_kwargs["enable_weights_double_buffer"] = False
     return ttnn.Conv1dConfig(**conv_kwargs)
 
 
@@ -675,9 +947,25 @@ def _discrete_duration_counts(log_dur: ttnn.Tensor, *, batch: int, seq: int) -> 
     return [max(1, int(round(v))) for v in x_h]
 
 
-def _conv1d_same(
+# Chunk wide decoder conv along sequence when single-shot L1 still overflows (hidden=1024, seq=4096).
+_CONV1D_CHUNK_ROWS = MATMUL_1D_SEQ_THRESHOLD
+
+
+def _conv1d_out_to_nlc(out: ttnn.Tensor, *, batch: int, out_channels: int) -> ttnn.Tensor:
+    """Normalize ``ttnn.conv1d`` output to NLC ``[batch, seq, C]``."""
+    rank = len(out.shape)
+    if rank == 3:
+        return out
+    if rank == 4 and int(out.shape[1]) == 1:
+        return ttnn.reshape(out, (batch, int(out.shape[2]), out_channels))
+    if rank == 4:
+        return ttnn.reshape(out, (batch, int(out.shape[1]), out_channels))
+    raise RuntimeError(f"Unexpected conv1d output rank {rank}, shape {tuple(out.shape)}")
+
+
+def _conv1d_same_impl(
     device: ttnn.Device,
-    x_tile: ttnn.Tensor,
+    x_rm: ttnn.Tensor,
     *,
     sequence_length: int,
     weight_rm: ttnn.Tensor,
@@ -689,21 +977,11 @@ def _conv1d_same(
     compute_kernel_config: ttnn.DeviceComputeKernelConfig,
     activation: Optional[str] = None,
     prep_cache: Optional[Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]] = None,
+    deallocate_input: bool = False,
 ) -> ttnn.Tensor:
-    """Same-padding Conv1d stride 1 via ``ttnn.conv1d`` (activations ``[B,S,C]`` NLC).
-
-    When ``activation`` is provided (e.g. ``"relu"``) it is fused into the
-    conv kernel via ``Conv1dConfig.activation``; the SFPU applies it at the
-    writeback stage of each output tile so no separate UnaryDeviceOperation
-    is dispatched.  Numerically equivalent to a post-conv ``ttnn.relu``.
-    """
-    batch = int(x_tile.shape[0])
+    """Single-shot same-padding Conv1d (``x_rm`` is NLC row-major)."""
+    batch = int(x_rm.shape[0])
     seq = int(sequence_length)
-    if x_tile.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-        x_rm = ttnn.to_layout(x_tile, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(x_tile)
-    else:
-        x_rm = x_tile
     conv_config = _conv1d_config_for(
         sequence_length=seq,
         in_channels=in_channels,
@@ -777,11 +1055,118 @@ def _conv1d_same(
             dtype=ttnn.bfloat16,
             return_output_dim=True,
         )
-    if out_tt.get_layout() != ttnn.TILE_LAYOUT:
-        out_tile = ttnn.to_layout(out_tt, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if deallocate_input:
+        ttnn.deallocate(x_rm)
+    out_nlc = _conv1d_out_to_nlc(out_tt, batch=batch, out_channels=out_channels)
+    if out_nlc is not out_tt:
         ttnn.deallocate(out_tt)
+    if out_nlc.get_layout() != ttnn.TILE_LAYOUT:
+        out_tile = ttnn.to_layout(out_nlc, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(out_nlc)
         return out_tile
-    return out_tt
+    return out_nlc
+
+
+def _conv1d_same(
+    device: ttnn.Device,
+    x_tile: ttnn.Tensor,
+    *,
+    sequence_length: int,
+    weight_rm: ttnn.Tensor,
+    bias_rm: Optional[ttnn.Tensor],
+    in_channels: int,
+    out_channels: int,
+    kernel_size: int,
+    padding: int,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+    activation: Optional[str] = None,
+    prep_cache: Optional[Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]] = None,
+) -> ttnn.Tensor:
+    """Same-padding Conv1d stride 1 via ``ttnn.conv1d`` (activations ``[B,S,C]`` NLC).
+
+    When ``activation`` is provided (e.g. ``"relu"``) it is fused into the
+    conv kernel via ``Conv1dConfig.activation``; the SFPU applies it at the
+    writeback stage of each output tile so no separate UnaryDeviceOperation
+    is dispatched.  Numerically equivalent to a post-conv ``ttnn.relu``.
+
+    For ``sequence_length > 256``, ``_conv1d_config_for`` disables conv double-buffering.
+    Wide decoder conv (``in_channels >= 512``) at longer seq is additionally tiled along S.
+    """
+    batch = int(x_tile.shape[0])
+    seq = int(sequence_length)
+    if x_tile.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        x_rm = ttnn.to_layout(x_tile, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x_tile)
+    else:
+        x_rm = x_tile
+
+    if seq <= _CONV1D_CHUNK_ROWS or in_channels < 512:
+        return _conv1d_same_impl(
+            device,
+            x_rm,
+            sequence_length=seq,
+            weight_rm=weight_rm,
+            bias_rm=bias_rm,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            padding=padding,
+            compute_kernel_config=compute_kernel_config,
+            activation=activation,
+            prep_cache=prep_cache,
+        )
+
+    chunk_size = 256 if in_channels >= 512 else _CONV1D_CHUNK_ROWS
+    chunks: list[ttnn.Tensor] = []
+    for start in range(0, seq, chunk_size):
+        end = min(start + chunk_size, seq)
+        chunk_rows = end - start
+        in_start = max(0, start - padding)
+        in_end = min(seq, end + padding)
+        win_len = in_end - in_start
+        x_win = ttnn.slice(
+            x_rm,
+            [0, in_start, 0],
+            [batch, in_end, in_channels],
+            [1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        out_win = _conv1d_same_impl(
+            device,
+            x_win,
+            sequence_length=win_len,
+            weight_rm=weight_rm,
+            bias_rm=bias_rm,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            padding=padding,
+            compute_kernel_config=compute_kernel_config,
+            activation=activation,
+            prep_cache=prep_cache,
+            deallocate_input=True,
+        )
+        out_start = start - in_start
+        if out_start > 0 or chunk_rows < win_len:
+            out_chunk = ttnn.slice(
+                out_win,
+                [0, out_start, 0],
+                [batch, out_start + chunk_rows, out_channels],
+                [1, 1, 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(out_win)
+        else:
+            out_chunk = out_win
+        chunks.append(out_chunk)
+
+    ttnn.deallocate(x_rm)
+    if len(chunks) == 1:
+        return chunks[0]
+    out = ttnn.concat(chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for c in chunks:
+        ttnn.deallocate(c)
+    return out
 
 
 class TTSeamlessM4Tv2TextToUnitEncoder:
@@ -822,6 +1207,9 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
         )
         self._sdpa_pc_cache: dict = {}
         self._matmul_pc_cache: dict = {}
+        self._dram_matmul_pc_cache: dict = {}
+        self._chunked_linear_compute_cfg: Optional[ttnn.DeviceComputeKernelConfig] = None
+        self._long_seq_mc: Optional[ttnn.MemoryConfig] = None
 
     def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
         return sdpa_program_config(self.device, seq_q, seq_k, self._sdpa_pc_cache)
@@ -850,13 +1238,49 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
         *,
         activation: str | None = None,
         program_config: Optional[ttnn.ProgramConfig] = None,
+        batch: Optional[int] = None,
+        seq: Optional[int] = None,
     ) -> ttnn.Tensor:
-        if program_config is None:
-            program_config = self._matmul_pc(
-                _linear_token_rows(x),
-                int(weight.shape[-2]),
-                int(weight.shape[-1]),
+        k = int(weight.shape[-2])
+        n = int(weight.shape[-1])
+        logical_out_dim = n
+
+        if len(x.shape) == 3:
+            batch = batch if batch is not None else int(x.shape[0])
+            seq = seq if seq is not None else int(x.shape[1])
+            m_actual = batch * seq
+        elif len(x.shape) == 2:
+            m_actual = int(x.shape[0])
+            batch = batch if batch is not None else 1
+            seq = seq if seq is not None else m_actual
+        else:
+            m_actual = _linear_token_rows(x)
+            batch = batch if batch is not None else 1
+            seq = seq if seq is not None else m_actual
+
+        m = _bias_token_rows(bias) if bias is not None else TILE
+        if m_actual > m or _weight_is_dram_width_sharded(weight):
+            out, self._chunked_linear_compute_cfg = _linear_dram_chunked(
+                self.device,
+                dram_matmul_pc_cache=self._dram_matmul_pc_cache,
+                chunked_linear_compute_cfg=self._chunked_linear_compute_cfg,
+                long_seq_mc=self._long_seq_mc,
+                x=x,
+                weight=weight,
+                bias=bias,
+                activation=activation,
+                logical_out_dim=logical_out_dim,
+                batch=batch,
+                seq=seq,
+                m_actual=m_actual,
+                m=m,
+                k=k,
+                n=n,
             )
+            return out
+
+        if program_config is None:
+            program_config = self._matmul_pc(m_actual, k, n)
         kwargs: dict = dict(
             bias=bias,
             activation=activation,
@@ -870,15 +1294,14 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
         return ttnn.linear(x, weight, **kwargs)
 
     def _layer_norm(self, x: ttnn.Tensor, *, weight: ttnn.Tensor, bias: ttnn.Tensor) -> ttnn.Tensor:
-        if ttnn.is_sharded(x):
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
-        return ttnn.layer_norm(
+        long_seq = self._long_seq_mc is ttnn.DRAM_MEMORY_CONFIG
+        return _t2u_layer_norm(
             x,
             weight=weight,
             bias=bias,
             epsilon=self.layer_norm_eps,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self._linear_ln_compute_cfg,
+            long_seq=long_seq,
         )
 
     def _self_attention(
@@ -901,6 +1324,8 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
             attn_module.qkv.weight,
             attn_module.qkv.bias,
             program_config=pc_qkv,
+            batch=batch,
+            seq=seq,
         )
         qkv_4d = ttnn.reshape(qkv, (batch, 1, seq, 3 * hidden_size))
 
@@ -938,6 +1363,8 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
             attn_module.out_proj.weight,
             attn_module.out_proj.bias,
             program_config=pc_out,
+            batch=batch,
+            seq=seq,
         )
         ttnn.deallocate(merged)
         return proj
@@ -951,6 +1378,8 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
 
         batch = int(inputs_embeds.shape[0])
         seq = int(inputs_embeds.shape[1])
+
+        self._long_seq_mc = ttnn.DRAM_MEMORY_CONFIG if seq > TILE else None
 
         hidden = inputs_embeds
         sdpa_cfg = self._sdpa_program_config(seq, seq)
@@ -993,6 +1422,8 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
                 layer.ffn.fc1.bias,
                 activation="relu",
                 program_config=pc_ffn_fc1,
+                batch=batch,
+                seq=seq,
             )
             ttnn.deallocate(normed)
             ff = self._linear(
@@ -1000,6 +1431,8 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
                 layer.ffn.fc2.weight,
                 layer.ffn.fc2.bias,
                 program_config=pc_ffn_fc2,
+                batch=batch,
+                seq=seq,
             )
             hidden = ttnn.add(hidden, ff, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(ff)
@@ -1081,6 +1514,9 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         self._conv1d_prepared_cache: Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]] = {}
         self._sdpa_pc_cache: dict = {}
         self._matmul_pc_cache: dict = {}
+        self._dram_matmul_pc_cache: dict = {}
+        self._chunked_linear_compute_cfg: Optional[ttnn.DeviceComputeKernelConfig] = None
+        self._long_seq_mc: Optional[ttnn.MemoryConfig] = None
         self._unit_pad_tail_cache: Dict[Tuple[int, int, int], ttnn.Tensor] = {}
         self._decoder_mask_cache: Dict[Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]] = {}
         self._repeat_cum_cache: Dict[Tuple[int, ...], Tuple[ttnn.Tensor, ttnn.Tensor]] = {}
@@ -1209,30 +1645,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         return cached
 
     def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
-        key = (seq_q, seq_k)
-        cached = self._sdpa_pc_cache.get(key)
-        if cached is not None:
-            return cached
-
-        m = max(seq_q, seq_k)
-        if m > 96:
-            cap = 32
-        elif m > 64:
-            cap = 64
-        elif m > 32:
-            cap = 128
-        else:
-            cap = 256
-        q_chunk = max(32, min(cap, nearest_32(seq_q)))
-        k_chunk = max(32, min(cap, nearest_32(seq_k)))
-        out = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
-            q_chunk_size=q_chunk,
-            k_chunk_size=k_chunk,
-            exp_approx_mode=False,
-        )
-        self._sdpa_pc_cache[key] = out
-        return out
+        return _t2u_sdpa_program_config(self.device, seq_q, seq_k, self._sdpa_pc_cache)
 
     def _matmul_pc(self, token_rows: int, in_dim: int, out_dim: int) -> Optional[ttnn.ProgramConfig]:
         if token_rows > MATMUL_1D_SEQ_THRESHOLD:
@@ -1260,13 +1673,49 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         program_config: Optional[ttnn.ProgramConfig] = None,
         memory_config: Optional[ttnn.MemoryConfig] = None,
         dtype: Optional[ttnn.DataType] = None,
+        batch: Optional[int] = None,
+        seq: Optional[int] = None,
     ) -> ttnn.Tensor:
-        if program_config is None:
-            program_config = self._matmul_pc(
-                _linear_token_rows(x),
-                int(weight.shape[-2]),
-                int(weight.shape[-1]),
+        k = int(weight.shape[-2])
+        n = int(weight.shape[-1])
+        logical_out_dim = n
+
+        if len(x.shape) == 3:
+            batch = batch if batch is not None else int(x.shape[0])
+            seq = seq if seq is not None else int(x.shape[1])
+            m_actual = batch * seq
+        elif len(x.shape) == 2:
+            m_actual = int(x.shape[0])
+            batch = batch if batch is not None else 1
+            seq = seq if seq is not None else m_actual
+        else:
+            m_actual = _linear_token_rows(x)
+            batch = batch if batch is not None else 1
+            seq = seq if seq is not None else m_actual
+
+        m = _bias_token_rows(bias) if bias is not None else TILE
+        if dtype is None and (m_actual > m or _weight_is_dram_width_sharded(weight)):
+            out, self._chunked_linear_compute_cfg = _linear_dram_chunked(
+                self.device,
+                dram_matmul_pc_cache=self._dram_matmul_pc_cache,
+                chunked_linear_compute_cfg=self._chunked_linear_compute_cfg,
+                long_seq_mc=self._long_seq_mc,
+                x=x,
+                weight=weight,
+                bias=bias,
+                activation=activation,
+                logical_out_dim=logical_out_dim,
+                batch=batch,
+                seq=seq,
+                m_actual=m_actual,
+                m=m,
+                k=k,
+                n=n,
             )
+            return out
+
+        if program_config is None:
+            program_config = self._matmul_pc(m_actual, k, n)
         mem = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
         kwargs: dict = dict(
             bias=bias,
@@ -1283,15 +1732,14 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         return ttnn.linear(x, weight, **kwargs)
 
     def _layer_norm(self, x: ttnn.Tensor, *, weight: ttnn.Tensor, bias: ttnn.Tensor) -> ttnn.Tensor:
-        if ttnn.is_sharded(x):
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
-        return ttnn.layer_norm(
+        long_seq = self._long_seq_mc is ttnn.DRAM_MEMORY_CONFIG
+        return _t2u_layer_norm(
             x,
             weight=weight,
             bias=bias,
             epsilon=self.layer_norm_eps,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self._linear_ln_compute_cfg,
+            long_seq=long_seq,
         )
 
     def _decoder_masks(self, *, padded_unit_seq: int, dur_sum: int) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
@@ -1327,6 +1775,8 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             attn_module.qkv.weight,
             attn_module.qkv.bias,
             program_config=pc_qkv,
+            batch=batch,
+            seq=seq,
         )
         qkv_4d = ttnn.reshape(qkv, (batch, 1, seq, 3 * hidden_size))
 
@@ -1364,6 +1814,8 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             attn_module.out_proj.weight,
             attn_module.out_proj.bias,
             program_config=pc_out,
+            batch=batch,
+            seq=seq,
         )
         ttnn.deallocate(merged)
         return proj
@@ -1694,6 +2146,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         # the additive mask drives padded keys to -inf and the post-SDPA gating zeros padded queries.
         dur_sum = int(sum(dur_list))
         assert dur_sum == unit_seq
+        self._long_seq_mc = ttnn.DRAM_MEMORY_CONFIG if max(char_len, unit_seq) > TILE else None
         padded_unit_seq = ((unit_seq + 31) // 32) * 32
         if padded_unit_seq > unit_seq:
             if full_trace_prebuf:
@@ -1742,21 +2195,33 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             bias=dec.layer_norm.bias,
         )
         vocab = int(self.parameters.lm_head.weight.shape[-1])
-        pc_lm = self._matmul_pc(batch * padded_unit_seq, self.hidden_size, vocab)
-        lm_kwargs: dict = dict(
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self._lm_head_compute_cfg,
-        )
-        if pc_lm is not None:
-            lm_kwargs["program_config"] = pc_lm
+        lm_weight = self.parameters.lm_head.weight
+        if batch * padded_unit_seq > TILE:
+            logits = _linear_matmul_1d_chunked(
+                self.device,
+                hidden,
+                lm_weight,
+                None,
+                activation=None,
+                batch=batch,
+                seq=padded_unit_seq,
+                m_actual=batch * padded_unit_seq,
+                k=self.hidden_size,
+                n=vocab,
+                logical_out_dim=vocab,
+                compute_kernel_config=self._lm_head_compute_cfg,
+            )
         else:
-            lm_kwargs["core_grid"] = core_grid(self.device)
-        logits = ttnn.linear(
-            hidden,
-            self.parameters.lm_head.weight,
-            bias=None,
-            **lm_kwargs,
-        )
+            pc_lm = self._matmul_pc(batch * padded_unit_seq, self.hidden_size, vocab)
+            lm_kwargs: dict = dict(
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self._lm_head_compute_cfg,
+            )
+            if pc_lm is not None:
+                lm_kwargs["program_config"] = pc_lm
+            else:
+                lm_kwargs["core_grid"] = core_grid(self.device)
+            logits = ttnn.linear(hidden, lm_weight, bias=None, **lm_kwargs)
         ttnn.deallocate(hidden)
         # Slice back to the logical unit-seq so callers see ``[..., unit_seq, vocab]``. ``ttnn.slice``
         # requires the begins/ends/strides to match the input rank, which can be 3D or 4D depending
