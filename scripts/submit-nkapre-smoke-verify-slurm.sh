@@ -40,8 +40,8 @@ submit() {
         "${dep_arg[@]}" \
         --export=ALL,TT_METAL_HOME,CRAQ_SIM,RESULTS_STAMP${extra_export} \
         "$script" | awk '{print $4}')
-    echo "  ${name}: job ${job_id}"
-    echo "$job_id"
+    echo "  ${name}: job ${job_id}" >&2
+    printf '%s\n' "$job_id"
 }
 
 echo "=== Post-rebase smoke verify (stamp=${STAMP}) ==="
