@@ -4,30 +4,16 @@
 
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "scatter_device_operation_types.hpp"
-
-#include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim {
 
-using namespace tt;
-using namespace tt::tt_metal;
-
 struct ScatterProgramFactory {
-    struct shared_variables_t {
-        KernelHandle reader_kernel_id{};
-        KernelHandle writer_kernel_id{};
-        std::vector<CoreCoord> cores;
-    };
-
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(const ScatterParams&, const ScatterInputs&, Tensor&);
-
-    static void override_runtime_arguments(cached_program_t&, const ScatterParams&, const ScatterInputs&, Tensor&);
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const ScatterParams& args, const ScatterInputs& tensor_args, Tensor& output_tensor);
 };
 
 }  // namespace ttnn::prim
