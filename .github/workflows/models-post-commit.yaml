@@ -89,9 +89,21 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          source tests/scripts/run_python_model_tests.sh
-          run_python_model_tests_${{ inputs.arch }}
-          run_python_model_tests_slow_runtime_mode_${{ inputs.arch }}
+          python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+            --out /work/power_report.json \
+            -- bash -c '
+              source tests/scripts/run_python_model_tests.sh
+              run_python_model_tests_${{ inputs.arch }}
+              run_python_model_tests_slow_runtime_mode_${{ inputs.arch }}
+            '
+      - name: Upload power report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: power-report-models-${{ inputs.arch }}
+          path: ${{ github.workspace }}/docker-job/power_report.json
+          if-no-files-found: warn
+          retention-days: 30
       - name: 📊 CCache Report
         if: ${{ !cancelled() }}
         run: |
