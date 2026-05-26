@@ -24,6 +24,8 @@ qwen3_embedding_0_6b/
 │   ├── demo_bs8_isl512.py         # Perf demo — batch=8, ISL=512
 │   ├── demo_bs32_isl512.py        # Perf demo — batch=32, ISL=512
 │   └── mteb_evaluation.py         # MTEB accuracy eval (TT vs HF reference)
+├── tt/
+│   └── attention.py               # Qwen3EmbeddingAttention — bs=1/ISL=512 graph opts
 └── tests/
     └── perf/
         ├── new_perf_bs1_isl512.py   # Tracy profiling — batch=1, ISL=512
@@ -52,6 +54,9 @@ pytest models/demos/wormhole/qwen3_embedding_0_6b/demo/demo_bs1_isl512.py -sv
 # Standalone
 MESH_DEVICE=P150 python models/demos/wormhole/qwen3_embedding_0_6b/demo/demo_bs1_isl512.py
 ```
+
+The BS1 entrypoint also enables `QWEN_FF2_BFP4=1` by default (via `setdefault`)
+because it consistently improves BS1/ISL512 prefill throughput on P150.
 
 ### Batch size 8
 
@@ -145,3 +150,24 @@ All demos and tests automatically apply these optimizations via `_common.apply_r
 | `TT_BATCHED_L1_PREFILL=1` | L1-resident activations for batched prefill (bs > 1) |
 
 All vars use `os.environ.setdefault` so you can override any single knob from the shell for A/B comparisons.
+
+### Batch-size 1-only knob
+
+Set as default only inside `demo/demo_bs1_isl512.py` and
+`tests/perf/new_perf_bs1_isl512.py`. No-op for bs=8 / bs=32.
+
+| Env var | Effect | Measured delta (P150, ISL=512) |
+|---|---|---|
+| `QWEN_FF2_BFP4=1` | FF2 weights in BFP4 (set by default for bs=1 only) | 7.9 -> 7.8 ms best prefill |
+
+### bs=1 / ISL=512 prefill graph optimizations (model-local)
+
+These live in `tt/attention.py` as the `Qwen3EmbeddingAttention` subclass and
+are plugged into the model build in `demo/_common.py` via
+`Transformer(..., attention_class=Qwen3EmbeddingAttention)`. The subclass
+shape-gates each optimization on `(max_batch_size, max_seq_len)`; any other
+configuration falls through to the unmodified base class.
+
+| Optimization | Gate | Measured delta (P150) |
+|---|---|---|
+| Skip pre-SDPA `Q -> BFP8` typecast (K/V are already native bf16 because `TT_SKIP_KV_CACHE_FILL=1`) | `max_batch_size == 1` and `max_seq_len == 512` and `args.skip_kv_cache_fill` | 7.8 -> 7.7 ms best prefill |

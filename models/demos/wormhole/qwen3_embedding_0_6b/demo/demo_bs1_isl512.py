@@ -5,17 +5,20 @@
 """
 Qwen3-Embedding-0.6B perf demo, fixed at batch=1 / ISL=512 / DP=1 / single device.
 
-All recommended optimizations are turned on by default (FF1/FF3 BFP4 baseline +
-QKV/WO BFP4 + FF1/FF3 output BFP8 + FFNORM input BFP8 + RoPE tables in L1 + LN
-block-sharding + head-split NlpCreateHeads/NLPConcatHeads). The head-split TM
-paths are bs=1-critical: each changes the per-layer sequence-only split from 16
-work units to 128 head-grouped work units. Each env var is `setdefault`'d so you
-can still override one from the shell for A/B knob comparisons.
+All recommended optimizations are turned on by default (FF1/FF2/FF3 BFP4
+weights + QKV/WO BFP4 + FF1/FF3 output BFP8 + FFNORM input BFP8 + RoPE tables
+in L1 + LN block-sharding + head-split NlpCreateHeads/NLPConcatHeads). The
+head-split TM paths are bs=1-critical: each changes the per-layer sequence-only
+split from 16 work units to 128 head-grouped work units. Each env var is
+`setdefault`'d so you can still override one from the shell for A/B knob
+comparisons.
 
 Usage:
     pytest models/demos/wormhole/qwen3_embedding_0_6b/demo/demo_bs1_isl512.py -sv
     python models/demos/wormhole/qwen3_embedding_0_6b/demo/demo_bs1_isl512.py
 """
+
+import os
 
 import pytest
 
@@ -26,6 +29,13 @@ SEQ_LEN = 512
 NUM_ITERATIONS = 10
 
 apply_recommended_env(batched_l1=BATCH_SIZE > 1)
+# bs=1-specific speed knob: FF2(BFP4) consistently trims ~1-2% off prefill time
+# on P150 for ISL=512 while keeping the rest of the optimization set identical.
+os.environ.setdefault("QWEN_FF2_BFP4", "1")
+# Pre-SDPA Q -> BFP8 typecast is skipped at bs=1 / ISL=512 inside
+# `qwen3_embedding_0_6b/tt/attention.py::Qwen3EmbeddingAttention`. The model
+# builder in `_common.py` plugs that subclass into the Transformer; no env
+# var is required.
 
 
 @pytest.mark.parametrize(

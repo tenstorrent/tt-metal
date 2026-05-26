@@ -11,9 +11,10 @@ The signposted zone is what you filter on in Tracy/the CSV post-processor to
 get a clean device-time number — uncluttered by the compile pass.
 
 Uses the same all-optimizations-on environment as `demo_bs1_isl512.py`,
-including `QWEN_NLP_CREATE_HEADS_HEAD_SPLIT=1` and
-`QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT=1`, so Tracy should show both TM ops at ~128
-cores rather than the generic 16-core sequence-only split.
+including `QWEN_FF2_BFP4=1` and head-split
+(`QWEN_NLP_CREATE_HEADS_HEAD_SPLIT=1` / `QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT=1`),
+so Tracy should show both TM ops at ~128 cores rather than the generic 16-core
+sequence-only split.
 
 Usage (Tracy device profile):
     HF_MODEL=Qwen/Qwen3-Embedding-0.6B MESH_DEVICE=P150 \\
@@ -27,6 +28,8 @@ and `stop` signposts (Tracy GUI: zone view; CLI: process_ops_perf with
 inside that window should match the demo's reported best/avg prefill time.
 """
 
+import os
+
 import pytest
 
 from models.demos.wormhole.qwen3_embedding_0_6b.demo._common import apply_recommended_env, run_perf
@@ -35,6 +38,7 @@ BATCH_SIZE = 1
 SEQ_LEN = 512
 
 apply_recommended_env(batched_l1=BATCH_SIZE > 1)
+os.environ.setdefault("QWEN_FF2_BFP4", "1")
 
 
 @pytest.mark.parametrize(

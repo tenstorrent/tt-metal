@@ -883,6 +883,17 @@ class Attention(LightweightModule):
 
             return dense_out_reduced
 
+    def _prepare_q_for_sdpa(self, q_heads_1QSD: ttnn.Tensor) -> ttnn.Tensor:
+        """Hook: produce the Q tensor that gets passed into SDPA.
+
+        Default implementation casts Q to BFP8 to match the K/V dtype feeding
+        SDPA. Subclasses (e.g. for embedding-only workloads where K/V are kept
+        native bf16) can override this to return Q unchanged.
+        """
+        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b)
+        ttnn.deallocate(q_heads_1QSD)
+        return q_heads_1QSD_8b
+
     def forward_prefill(
         self,
         x_11SH,
@@ -1108,8 +1119,7 @@ class Attention(LightweightModule):
         # per layer saved) but regressed bs32/isl512 by 6 ms: bf16 Q is 2x the
         # memory footprint and SDPA reads Q multiple times per K chunk, so the
         # bandwidth cost far exceeds the typecast saved for large batched work.
-        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b)
-        ttnn.deallocate(q_heads_1QSD)
+        q_heads_1QSD_8b = self._prepare_q_for_sdpa(q_heads_1QSD)
 
         if chunk_start_idx is not None:
             if self.sliding_window is not None:

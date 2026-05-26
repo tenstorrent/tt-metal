@@ -40,12 +40,15 @@ from loguru import logger
 
 import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.demos.wormhole.qwen3_embedding_0_6b.tt.attention import Qwen3EmbeddingAttention
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_model
+from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len
 from models.tt_transformers.tt.generator import Generator
+from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,
     MathFidelitySetting,
+    ModelArgs,
     OpGroup,
     PrecisionSetting,
     TensorGroup,
@@ -158,15 +161,27 @@ def build_single_device_model(mesh_device, batch_size: int, seq_len: int):
         max_num_blocks=page_params["page_max_num_blocks"],
     )
 
-    model_args, model, kv_cache, _state_dict = create_tt_model(
+    padded_seq_len = get_padded_prefill_len(seq_len)
+    # Build the model directly (rather than via `create_tt_model`) so we can
+    # plug in the qwen3-embedding-local Attention subclass that owns the
+    # bs=1/ISL=512 prefill graph optimizations.
+    model_args = ModelArgs(
         mesh_device,
         instruct=False,
         max_batch_size=batch_size,
         optimizations=qwen_embedding_optimizations,
-        max_seq_len=seq_len,
-        paged_attention_config=paged_attention_config,
+        max_seq_len=padded_seq_len,
+        prefetcher=None,
+    )
+    state_dict = model_args.load_state_dict()
+    model = Transformer(
+        args=model_args,
+        mesh_device=mesh_device,
         dtype=ttnn.bfloat8_b,
-        state_dict=None,
+        state_dict=state_dict,
+        weight_cache_path=model_args.weight_cache_path(ttnn.bfloat8_b),
+        paged_attention_config=paged_attention_config,
+        attention_class=Qwen3EmbeddingAttention,
     )
     # Generator expects kv_cache indexed first by DP instance, then by layer.
     # Single-device path -> exactly one DP instance.
