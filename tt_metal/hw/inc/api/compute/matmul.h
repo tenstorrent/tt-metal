@@ -6,6 +6,7 @@
 
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "sanitizer/api.h"
 #ifdef TRISC_MATH
 #include "llk_math_matmul_api.h"
 #endif
@@ -49,6 +50,7 @@ static uint32_t throttled_mop_status = 0;
 // clang-format on
 ALWI void matmul_block_math_dynamic_throttle(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t idst, const uint32_t transpose, uint32_t ct_dim, uint32_t rt_dim) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     // Dynamic throttling is only available on Blackhole architecture
     // Check firmware-controlled throttle enable flag (even = no throttle, odd = throttle)
@@ -91,7 +93,7 @@ ALWI void mm_init(
     uint32_t out_cb_id,
     const uint32_t transpose = 0,
     uint32_t call_line = __builtin_LINE()) {
-        LLK_SAN_FUNCTION(ttttt);
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, out_cb_id, call_line);
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
@@ -138,6 +140,7 @@ ALWI void mm_init(
 // clang-format on
 ALWI void matmul_tiles(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t idst) {
+    LLK_SAN_FUNCTION();
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
 #ifndef ARCH_QUASAR
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst)));
@@ -162,6 +165,7 @@ ALWI void matmul_tiles(
 // clang-format on
 template <uint32_t num_faces = 4>
 ALWI void matmul_tiles_math(uint32_t idst) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, num_faces>(idst)));
 #endif  // TODO: AM; add Quasar implementation
@@ -183,6 +187,7 @@ ALWI void matmul_tiles_math(uint32_t idst) {
 // clang-format on
 ALWI void mm_init_short(
     uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t transpose = 0, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
@@ -207,6 +212,7 @@ ALWI void mm_init_short(
 // clang-format on
 ALWI void mm_init_short_with_dt(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t c_in_old_srca, const uint32_t transpose = 0) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     UNPACK(
         (llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(c_in_old_srca, in1_cb_id)));
@@ -240,7 +246,7 @@ ALWI void mm_block_init(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1,
     uint32_t call_line = __builtin_LINE()) {
-        LLK_SAN_FUNCTION(ttttt);
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, out_cb_id, call_line);
 
@@ -305,6 +311,7 @@ ALWI void matmul_block(
     uint32_t rt_dim,
     uint32_t kt_dim,
     uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
@@ -345,6 +352,7 @@ ALWI void mm_block_init_short(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1,
     uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
@@ -386,6 +394,7 @@ ALWI void mm_block_init_short_with_dt(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1,
     uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
     UNPACK(
@@ -422,6 +431,7 @@ ALWI void mm_block_init_short_with_both_dt(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(
         old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));

@@ -65,6 +65,7 @@ template <
     bool dense = false>
 ALWI void pack_untilize_dest_init(
     uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure<Operand::PACK>(ocb, call_line);
 #ifdef ARCH_BLACKHOLE
@@ -113,6 +114,7 @@ ALWI void pack_untilize_dest_init(
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -152,6 +154,7 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
+    LLK_SAN_FUNCTION();
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
         MATH((llk_math_wait_for_dest_available()));
         for (uint32_t c = 0; c < block_ct_dim; ++c) {
@@ -226,6 +229,7 @@ ALWI void pack_untilize_dest(
     uint32_t face_r_dim = 16,
     uint32_t num_faces = 4,
     uint32_t tile_dst_rt_offset = 0) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
         block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_rt_offset)));
@@ -251,6 +255,7 @@ ALWI void pack_untilize_dest(
  */
 // clang-format on
 ALWI void pack_untilize_uninit(uint32_t ocb) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     // Reconfigure data format to match the initial configuration, before calling init.
     // Init is called to ensure special untilize init overrides are cleaned up.

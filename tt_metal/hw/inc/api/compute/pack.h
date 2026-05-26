@@ -5,6 +5,7 @@
 #pragma once
 
 #include "common_globals.h"
+#include "sanitizer/api.h"
 #ifdef TRISC_PACK
 #include "llk_pack_tile_api.h"
 #include "llk_pack_rows_api.h"
@@ -63,6 +64,7 @@ namespace ckernel {
 // clang-format on
 template <bool out_of_order_output = false>
 ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
 #else
@@ -103,6 +105,7 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
  */
 // clang-format on
 ALWI void pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
 #else
@@ -130,6 +133,7 @@ ALWI void pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
 // clang-format on
 template <bool is_tile_dim_reconfig_en = false>
 ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_cb_id)));
     if constexpr (is_tile_dim_reconfig_en) {
@@ -161,6 +165,7 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
 // clang-format on
 template <bool is_tile_dim_reconfig_en = false>
 ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new_cb_id) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_cb_id, new_cb_id)));
     if constexpr (is_tile_dim_reconfig_en) {

@@ -6,6 +6,7 @@
 
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "sanitizer/api.h"
 #ifdef TRISC_MATH
 #include "llk_math_common_api.h"
 #include "llk_math_unary_datacopy_api.h"
@@ -30,6 +31,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
@@ -86,6 +88,7 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
  * correctly.
  */
 ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
     state_configure(icb, call_line);
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t dst_format = get_operand_dst_format(icb);
@@ -133,6 +136,7 @@ ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_L
  */
 // clang-format on
 ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
+    LLK_SAN_FUNCTION();
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t dst_format = get_operand_dst_format(icb);
 
