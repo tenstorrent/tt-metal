@@ -2025,11 +2025,6 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         }
         return any_dm && !disabled;
     };
-    const bool producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers);
-    const bool consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers);
-    const std::optional<bool> override_consumer_implicit_sync =
-        (consumer_implicit_sync != producer_implicit_sync) ? std::make_optional(consumer_implicit_sync) : std::nullopt;
-
     return experimental::dfb::DataflowBufferConfig{
         .entry_size = dfb_spec->entry_size,
         .num_entries = dfb_spec->num_entries,
@@ -2039,8 +2034,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .consumer_risc_mask = consumer_risc_mask,
         .num_consumers = consumer->num_threads,
         .cap = consumer_access_pattern,
-        .enable_implicit_sync = producer_implicit_sync,
-        .override_consumer_implicit_sync = override_consumer_implicit_sync,
+        .enable_producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers),
+        .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
         .tensix_scope = tensix_scope,

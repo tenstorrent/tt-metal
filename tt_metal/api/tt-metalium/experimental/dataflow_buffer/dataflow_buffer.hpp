@@ -41,18 +41,12 @@ struct DataflowBufferConfig {
     uint8_t num_consumers = 1;
     AccessPattern cap = AccessPattern::STRIDED;
 
-    // Implicit sync:
-    // When true, both producer and consumer kernels use the streamlined implicit sync syntax
-    // (This ONLY applies to DM riscs; Tensix riscs always require explicit sync.)
-    bool enable_implicit_sync = false;
-
-    // By default, the producer and consumer sides share the same implicit sync setting
-    // However, you can "flip" the behavior of the consumer side to create
-    //  - explicit producer + implicit consumer
-    //  - implicit producer + explicit consumer
-    // This is rarely (if ever) useful, hence why it's a std::optional rather than plain bool.
-    // The option exists primarily to simplify legality check coupling in Metal 2.0.
-    std::optional<bool> override_consumer_implicit_sync = std::nullopt;
+    // Implicit sync — per-side opt-in to the streamlined ISR-driven credit posting.
+    // (Only applies to DM riscs; Tensix riscs always require explicit sync.)
+    // Setting the two sides asymmetrically is a niche debug knob for isolating sync bugs;
+    // typical usage sets both to the same value.
+    bool enable_producer_implicit_sync = false;
+    bool enable_consumer_implicit_sync = false;
 
     // Data format and tile formats for LLKs
     DataFormat data_format = tt::DataFormat::Float16_b;
@@ -64,12 +58,6 @@ struct DataflowBufferConfig {
     // supplied before launch via DataflowBufferImpl::set_borrowed_memory_base_addr.
     bool borrows_memory = false;
 };
-
-inline bool producer_implicit_sync_active(const DataflowBufferConfig& config) { return config.enable_implicit_sync; }
-
-inline bool consumer_implicit_sync_active(const DataflowBufferConfig& config) {
-    return config.override_consumer_implicit_sync.value_or(config.enable_implicit_sync);
-}
 
 // Note: This API and the DataflowBufferConfig are placeholder only, the final DataflowBuffer APIs will conform with
 // host API redesign. Returns logical DFB id

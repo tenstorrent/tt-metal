@@ -68,15 +68,16 @@ inline TensorSpec make_alias_l1_tensor_spec(uint32_t entry_size, uint32_t num_en
 // producer = DM RISC 0, consumer = DM RISC 1 (valid on WH/BH and Quasar).
 inline dfb::DataflowBufferConfig make_1sx1s_config(uint32_t entry_size, uint32_t num_entries) {
     return dfb::DataflowBufferConfig{
-        .entry_size         = entry_size,
-        .num_entries        = num_entries,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
         .producer_risc_mask = 0x1,
-        .num_producers      = 1,
-        .pap                = dfb::AccessPattern::STRIDED,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x2,
-        .num_consumers      = 1,
-        .cap                = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false,
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false,
     };
 }
 

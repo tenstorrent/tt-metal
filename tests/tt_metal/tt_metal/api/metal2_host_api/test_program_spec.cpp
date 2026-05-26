@@ -582,7 +582,7 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingSelfLoopWithMatchingSidesSucceeds) 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
     // INTRA-tensix self-loop DFBs have no DM endpoint; the spec-to-impl translation produces
-    // enable_implicit_sync=false automatically (no DM kernel to vote for it).
+    // enable_{producer,consumer}_implicit_sync=false automatically (no DM kernel to vote for it).
 
     BindDFBToKernel(self_loop_1, "dfb", "p", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(self_loop_1, "dfb", "c", KernelSpec::DFBEndpointType::CONSUMER);
@@ -1686,7 +1686,7 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelImplicitIntraSucceeds) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
     // INTRA-tensix self-loop: no DM endpoint, so the spec-to-impl translation produces
-    // enable_implicit_sync=false at the lower DFB layer automatically.
+    // enable_{producer,consumer}_implicit_sync=false at the lower DFB layer automatically.
 
     BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
