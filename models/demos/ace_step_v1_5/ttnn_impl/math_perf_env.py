@@ -47,7 +47,9 @@ DiT linears are often DRAM-bound at HiFi4 without tuning (reference path only):
 
 VAE decode exposes large-M matmuls inside ``conv1d`` / ``conv_transpose2d`` im2col (e.g.
 ``1920×512×512``, ``30720×128×128``, ``61440×128×128``). Production VAE uses **LoFi** conv compute + **BF16** activations; **``bfloat8_b``** weights on
-``k>1`` conv / conv-transpose im2col (DRAM BW). ``k=1`` projections stay ``ttnn.conv1d`` (L1-safe CBs).
+``k>1`` conv / conv-transpose im2col (DRAM BW). ``k=1`` projections use ``ttnn.conv1d`` with tuned
+1D mcast matmul configs on large im2col ``M`` (``61440`` / ``30720`` / ``7680`` buckets via
+:func:`ace_step_vae_conv1d_im2col_matmul_program_config`).
 Opt-in **``bfloat8_b`` activation compute** (conv output dtype + Snake TILE chain) via
 ``ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=1``; inter-op buffers stay BF16 ``ROW_MAJOR`` (TTNN layout limit).
 
@@ -325,6 +327,169 @@ def ace_step_vae_eltwise_kwargs(ttnn: Any, *, device: Any = None, l1_mc: Any | N
     return ace_step_binary_kwargs(ttnn, l1_mc)
 
 
+def ace_step_device_profiler_enabled() -> bool:
+    return (
+        os.environ.get("TTNN_OP_PROFILER", "").strip() == "1"
+        or os.environ.get("TT_METAL_DEVICE_PROFILER", "").strip() == "1"
+    )
+
+
+def ace_step_profiler_flush_every_layer() -> int:
+    """Drain device profiler every N VAE/DiT layers (0=off). Default ``1`` when profiling."""
+    if not ace_step_device_profiler_enabled():
+        return 0
+    try:
+        return max(0, int(os.environ.get("ACE_STEP_PROFILER_FLUSH_EVERY_LAYER", "1")))
+    except ValueError:
+        return 1
+
+
+def ace_step_enable_tracy_profiler_env() -> None:
+    """Match TTNN + metal profilers so Tracy host/device op IDs align in ``cpp_device_perf_report.csv``."""
+    if os.environ.get("TT_METAL_DEVICE_PROFILER", "").strip() == "1":
+        os.environ.setdefault("TTNN_OP_PROFILER", "1")
+
+
+def ace_step_flush_device_profiler(device) -> None:
+    """Sync and drain per-RISC device profiler rings (avoids Tracy 'Device data missing' on merge)."""
+    if not ace_step_device_profiler_enabled():
+        return
+    if os.environ.get("ACE_STEP_USE_TRACE", "").lower() in ("1", "true", "yes"):
+        return
+    try:
+        import ttnn
+
+        ttnn.synchronize_device(device)
+        ttnn.ReadDeviceProfiler(device)
+    except Exception:
+        pass
+
+
+def ace_step_vae_conv1d_im2col_matmul_enabled() -> bool:
+    """Whether ``1×1`` conv may bypass ``ttnn.conv1d`` with tuned ``ttnn.linear`` matmul configs.
+
+    - ``ACE_STEP_VAE_LARGE_M_MATMUL=0`` — always off.
+    - ``ACE_STEP_VAE_LARGE_M_MATMUL=1`` — always on.
+    - Default — on. **Stays on under profilers** so large im2col ``M`` uses a clamped full-grid
+      program config instead of ``ttnn.conv1d`` matmul probing 640 M-tiles as 640 cores.
+    """
+    flag = os.environ.get("ACE_STEP_VAE_LARGE_M_MATMUL")
+    if flag is not None:
+        return flag.lower() not in ("0", "false", "no", "off")
+    return True
+
+
+def ace_step_vae_max_per_core_m_tiles() -> int:
+    """Max ``per_core_M`` (M tiles) for VAE im2col ``MultiCast1D`` before falling back to ``ttnn.conv1d``.
+
+    Default ``8`` for normal perf. While profiling, default ``20`` so ``61440×128`` im2col
+    (``per_core_M≈18`` on 110 cores) still uses tuned matmul. Override via env.
+    """
+    default = "20" if ace_step_device_profiler_enabled() else "8"
+    return max(1, int(os.environ.get("ACE_STEP_VAE_MAX_PER_CORE_M_TILES", default)))
+
+
+def ace_step_vae_conv1d_im2col_matmul_program_config(
+    device: Any,
+    *,
+    m_dim: int,
+    k_dim: int,
+    n_dim: int,
+):
+    """Tuned 1D reuse config for VAE ``1×1`` ``ttnn.conv1d`` im2col matmuls.
+
+    Applies to large-M buckets from Tracy (``61440×128``, ``30720×128``, ``7680×256``, ``1920×512``) using
+    **tall-M** ``MultiCast1D`` (``mcast_in0=False``, ``M`` split across cores). Skips ``M < 7680`` only.
+    """
+    m = int(m_dim)
+    k = int(k_dim)
+    n = int(n_dim)
+    if m < 7680:
+        return None
+    if not ace_step_vae_conv1d_im2col_matmul_enabled():
+        # Large im2col still needs a clamped program config — ``ttnn.conv1d`` probes M-tiles as cores.
+        pass
+    return ace_step_vae_large_m_matmul_program_config(
+        device,
+        m_dim=m,
+        k_dim=k,
+        n_dim=n,
+    )
+
+
+def _mcast_1d_vae_im2col_tall_m_program_config(
+    device: Any,
+    *,
+    m_dim: int,
+    k_dim: int,
+    n_dim: int,
+    in0_block_w_cap: int = 2,
+    out_subblock_h_cap: int = 4,
+    out_subblock_w: int = 1,
+):
+    """1D reuse matmul for **tall** VAE ``1×1`` conv im2col (``M >> N``).
+
+    Uses ``mcast_in0=False`` and splits ``M`` across the compute grid. ``mcast_in0=True`` would
+    require every core to buffer the **full** ``M`` strip in L1 (see TT_FATAL in
+    ``matmul_multicore_reuse_mcast_1d``) and overflows Blackhole for production audio lengths
+    (``61440×128`` im2col).
+    """
+    import ttnn
+
+    cfg_cls = getattr(ttnn, "MatmulMultiCoreReuseMultiCast1DProgramConfig", None)
+    if cfg_cls is None or not hasattr(device, "compute_with_storage_grid_size"):
+        return None
+
+    grid = device.compute_with_storage_grid_size()
+    gx = max(1, int(grid.x))
+    gy = max(1, int(grid.y))
+    num_cores = gx * gy
+    tile = int(getattr(ttnn, "TILE_SIZE", 32))
+    m_tiles = max(1, (int(m_dim) + tile - 1) // tile)
+    n_tiles = max(1, (int(n_dim) + tile - 1) // tile)
+    k = max(tile, int(k_dim))
+    k_tiles = max(1, k // tile)
+
+    per_core_m = max(1, (m_tiles + num_cores - 1) // num_cores)
+    if per_core_m > ace_step_vae_max_per_core_m_tiles() and not ace_step_device_profiler_enabled():
+        return None
+    num_blocks_m = (m_tiles + per_core_m - 1) // per_core_m
+    if num_blocks_m > num_cores:
+        return None
+
+    in0_block_w = min(int(in0_block_w_cap), k_tiles)
+    while k_tiles % in0_block_w != 0 and in0_block_w > 1:
+        in0_block_w -= 1
+
+    # Use the full device grid — a 1-row subgrid (e.g. 11×1) makes matmul output-spec probing
+    # request hundreds of cores against only 11 available (TT_FATAL spam / Tracy 32K limit).
+    per_core_n = max(1, (n_tiles + num_cores - 1) // num_cores)
+
+    out_subblock_h = min(int(out_subblock_h_cap), per_core_m)
+    while per_core_m % out_subblock_h != 0 and out_subblock_h > 1:
+        out_subblock_h -= 1
+
+    out_subblock_w_target = min(int(out_subblock_w), max(1, int(per_core_n)))
+    if out_subblock_w_target > 1 and per_core_n % out_subblock_w_target != 0:
+        per_core_n = ((per_core_n + out_subblock_w_target - 1) // out_subblock_w_target) * out_subblock_w_target
+
+    out_subblock_w_eff = min(int(out_subblock_w), max(1, int(per_core_n)))
+    while per_core_n % out_subblock_w_eff != 0 and out_subblock_w_eff > 1:
+        out_subblock_w_eff -= 1
+
+    return cfg_cls(
+        compute_with_storage_grid_size=(gx, gy),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w_eff,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+
+
 def ace_step_vae_large_m_matmul_program_config(
     device: Any,
     *,
@@ -332,40 +497,36 @@ def ace_step_vae_large_m_matmul_program_config(
     k_dim: int,
     n_dim: int,
 ):
-    """Matmul program config for VAE conv im2col shapes (e.g. 1920×512, 30720×128, 61440×128).
-
-    TTNN conv does not accept ``program_config`` directly; this documents the target geometry when
-    conv is re-packed with L1 activations (``prepare_conv_*`` + ``memory_config``).
-    """
+    """Matmul program config for VAE conv im2col shapes (e.g. 1920×512, 30720×128, 61440×128)."""
     tile = 32
     m = max(1, int(m_dim))
     k = max(tile, int(k_dim))
     n = max(tile, int(n_dim))
     if m >= 61440:
-        return _mcast_1d_linear_program_config(
+        return _mcast_1d_vae_im2col_tall_m_program_config(
             device,
-            seq_len=m,
-            in_dim=k,
-            out_dim=n,
+            m_dim=m,
+            k_dim=k,
+            n_dim=n,
             in0_block_w_cap=2,
             out_subblock_h_cap=2,
             out_subblock_w=2,
         )
     if m >= 7680:
-        return _mcast_1d_linear_program_config(
+        return _mcast_1d_vae_im2col_tall_m_program_config(
             device,
-            seq_len=m,
-            in_dim=k,
-            out_dim=n,
+            m_dim=m,
+            k_dim=k,
+            n_dim=n,
             in0_block_w_cap=2,
             out_subblock_h_cap=1,
             out_subblock_w=4,
         )
-    return _mcast_1d_linear_program_config(
+    return _mcast_1d_vae_im2col_tall_m_program_config(
         device,
-        seq_len=m,
-        in_dim=k,
-        out_dim=n,
+        m_dim=m,
+        k_dim=k,
+        n_dim=n,
         in0_block_w_cap=2,
         out_subblock_h_cap=4,
         out_subblock_w=1,

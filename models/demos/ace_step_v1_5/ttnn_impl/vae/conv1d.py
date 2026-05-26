@@ -19,20 +19,48 @@ implement the same formula, so the time-axis output length matches.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from .._ttnn import get_ttnn
 from ..math_perf_env import (
+    ace_step_concat_kwargs,
+    ace_step_dense_linear_program_config,
     ace_step_init_vae_conv_compute_kernel_config,
     ace_step_reshape_kwargs,
     ace_step_vae_activation_compute_dtype,
     ace_step_vae_activation_memory_config,
     ace_step_vae_activation_storage_dtype,
+    ace_step_vae_conv1d_im2col_matmul_enabled,
+    ace_step_vae_conv1d_im2col_matmul_program_config,
     ace_step_vae_conv1d_memory_config,
     ace_step_vae_conv_weight_dtype,
     ace_step_vae_host_weight_staging_dtype,
     ace_step_vae_normalize_activation_output,
 )
+
+
+def _vae_act_block_h_override(*, in_channels: int) -> int:
+    """``act_block_h_override`` in ntiles = value / 32; must divide per-core output height in tiles.
+
+    Use 32 (1 ntile) so short conv-transpose windows (1 ntile/core) do not log conv2d_utils warnings.
+    """
+    _ = in_channels
+    return 32
+
+
+# ``ttnn.conv1d`` im2col probes 640 cores when ``M`` has 640 TILE rows (``T=20480`` at ``B=1``).
+_K1_AVOID_CONV1D_M_DIM = 20480
+# Chunk long k=1 convs so each ``ttnn.conv1d`` sees ``M <= 7680`` (240 M-tiles, Tracy-safe).
+_K1_CONV1D_CHUNK_T_DEFAULT = 7680
+
+
+def _k1_conv1d_chunk_t() -> int:
+    try:
+        return max(32, int(os.environ.get("ACE_STEP_VAE_K1_CONV1D_CHUNK_T", str(_K1_CONV1D_CHUNK_T_DEFAULT))))
+    except ValueError:
+        return _K1_CONV1D_CHUNK_T_DEFAULT
 
 
 def _require_ttnn():
@@ -107,19 +135,18 @@ class TtConv1d:
 
         # Host staging: BF16 ROW_MAJOR (``prepare_conv_weights``); ``conv_config.weights_dtype`` packs BFP8.
         self._weight_host_tt = ttnn.as_tensor(w, dtype=self.weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self._bias_np = None
         if bias_host is None:
             self._bias_host_tt = None
             self._has_bias = False
         else:
             b = _to_float32_numpy(bias_host).reshape(1, 1, 1, -1)
+            self._bias_np = b
             self._bias_host_tt = ttnn.as_tensor(b, dtype=self.weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
             self._has_bias = True
 
-        # Low-channel layers tolerate act_block_h=64 (fewer weight passes); wide layers stay at 32 for L1 CB budget.
-        _act_block_h = 64 if self.in_channels <= 512 else 32
-        # TTNN only frees the conv input when deallocate_activation=True *and* input is L1
-        # (see conv2d.cpp: should_deallocate_act = deallocate_activation && !is_dram). k>1 convs
-        # use DRAM activations so this is a no-op there; 1×1 L1 projections get input freed.
+        # 32 = 1 tile height; valid for both long audio and 1-ntile/core conv-transpose tiles.
+        _act_block_h = _vae_act_block_h_override(in_channels=self.in_channels)
         self.conv_config = ttnn.Conv1dConfig(
             weights_dtype=self._conv_weight_dtype,
             shard_layout=None,
@@ -133,6 +160,45 @@ class TtConv1d:
         self._packed_for: tuple[int, int] | None = None
         self._weight_dev = None
         self._bias_dev = None
+        self._linear_weight_tt = None
+        self._linear_bias_tt = None
+        if self.kernel_size == 1:
+            self._init_k1_linear_weights(w, self._bias_np)
+
+    def _init_k1_linear_weights(self, weight_np: np.ndarray, bias_np: np.ndarray | None) -> None:
+        """Device TILE weights for ``ttnn.linear`` (no ``prepare_conv_weights`` / im2col probe)."""
+        ttnn = self.ttnn
+        w2 = np.ascontiguousarray(weight_np.reshape(self.out_channels, self.in_channels).astype(np.float32))
+        w_mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        self._linear_weight_tt = ttnn.as_tensor(
+            w2,
+            device=self.device,
+            dtype=self._conv_weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=w_mem,
+        )
+        self._linear_bias_tt = None
+        if bias_np is not None:
+            b = np.ascontiguousarray(bias_np.reshape(1, 1, 1, -1).astype(np.float32))
+            self._linear_bias_tt = ttnn.as_tensor(
+                b,
+                device=self.device,
+                dtype=self._conv_weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=w_mem,
+            )
+
+    def _k1_m_dim(self, batch_size: int, input_length: int) -> int:
+        return int(batch_size) * int(input_length)
+
+    def _k1_must_avoid_conv1d(self, m_dim: int) -> bool:
+        return self.kernel_size == 1 and int(m_dim) >= _K1_AVOID_CONV1D_M_DIM
+
+    def _k1_activation_memory_config(self, *, force_dram: bool = False):
+        ttnn = self.ttnn
+        if force_dram or max(self.in_channels, self.out_channels) >= 512:
+            return getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        return self._input_memory_config()
 
     def _input_memory_config(self):
         ttnn = self.ttnn
@@ -152,6 +218,146 @@ class TtConv1d:
         if x.memory_config() == target:
             return x
         return self.ttnn.to_memory_config(x, target)
+
+    def _output_length(self, input_length: int) -> int:
+        num = int(input_length) + 2 * self.padding - self.dilation * (self.kernel_size - 1) - 1
+        return num // self.stride + 1
+
+    def _k1_im2col_matmul_program_config(self, *, batch_size: int, input_length: int):
+        if self.kernel_size != 1:
+            return None
+        m_dim = int(batch_size) * int(input_length)
+        return ace_step_vae_conv1d_im2col_matmul_program_config(
+            self.device,
+            m_dim=m_dim,
+            k_dim=self.in_channels,
+            n_dim=self.out_channels,
+        )
+
+    def _forward_k1_linear(
+        self,
+        x,
+        *,
+        batch_size: int,
+        input_length: int,
+        program_config,
+        force_dram: bool = False,
+    ):
+        """``1×1`` conv as ``ttnn.linear`` — avoids ``prepare_conv_weights`` / conv1d im2col probes."""
+        if self._linear_weight_tt is None:
+            return None
+        ttnn = self.ttnn
+        _sr = ace_step_reshape_kwargs(ttnn)
+        act_mc = self._k1_activation_memory_config(force_dram=force_dram)
+        _til_kw = {"memory_config": act_mc} if act_mc is not None else {}
+        if x.layout != ttnn.TILE_LAYOUT:
+            x_tile = ttnn.to_layout(x, ttnn.TILE_LAYOUT, **_til_kw)
+        elif act_mc is not None and x.memory_config() != act_mc:
+            x_tile = ttnn.to_memory_config(x, act_mc)
+        else:
+            x_tile = x
+
+        linear_kw: dict = {
+            "compute_kernel_config": self.compute_config,
+            "transpose_b": True,
+        }
+        if program_config is not None:
+            linear_kw["program_config"] = program_config
+        if act_mc is not None:
+            linear_kw["memory_config"] = act_mc
+
+        try:
+            out = ttnn.linear(
+                x_tile,
+                self._linear_weight_tt,
+                bias=self._linear_bias_tt,
+                dtype=self._compute_dtype,
+                **linear_kw,
+            )
+        except RuntimeError:
+            return None
+        finally:
+            if self._vae_conv_perf and act_mc is not None and act_mc == self._l1_mem and x_tile is not x:
+                try:
+                    ttnn.deallocate(x_tile)
+                except Exception:
+                    pass
+
+        if len(out.shape) == 4:
+            out = ttnn.squeeze(out, 1)
+        if len(out.shape) == 3 and int(out.shape[1]) != int(input_length):
+            out = ttnn.reshape(out, (batch_size, self._output_length(input_length), self.out_channels), **_sr)
+        return ace_step_vae_normalize_activation_output(
+            ttnn, out, storage_dtype=self._storage_dtype, compute_dtype=self._compute_dtype
+        )
+
+    def _forward_k1_tuned_matmul(
+        self,
+        x,
+        *,
+        batch_size: int,
+        input_length: int,
+        force_dram: bool = False,
+    ):
+        """``1×1`` conv via tuned tall-M ``ttnn.linear`` (Tracy 61440/30720/7680 buckets)."""
+        program_config = self._k1_im2col_matmul_program_config(
+            batch_size=batch_size,
+            input_length=input_length,
+        )
+        if program_config is None:
+            return None
+        return self._forward_k1_linear(
+            x,
+            batch_size=batch_size,
+            input_length=input_length,
+            program_config=program_config,
+            force_dram=force_dram,
+        )
+
+    def _forward_k1_dense_matmul(
+        self,
+        x,
+        *,
+        batch_size: int,
+        input_length: int,
+        force_dram: bool = False,
+    ):
+        program_config = ace_step_dense_linear_program_config(
+            self.device,
+            seq_len=int(input_length),
+            in_dim=self.in_channels,
+            out_dim=self.out_channels,
+            batch_size=int(batch_size),
+        )
+        if program_config is None:
+            return None
+        return self._forward_k1_linear(
+            x,
+            batch_size=batch_size,
+            input_length=input_length,
+            program_config=program_config,
+            force_dram=force_dram,
+        )
+
+    def _forward_k1_via_linear(self, x, *, batch_size: int, input_length: int) -> object | None:
+        """Try ``ttnn.linear`` for k=1 (never ``prepare_conv_weights`` on the hot path)."""
+        if self.kernel_size != 1 or self._linear_weight_tt is None:
+            return None
+        m_dim = self._k1_m_dim(batch_size, input_length)
+        must_avoid = self._k1_must_avoid_conv1d(m_dim)
+        if not ace_step_vae_conv1d_im2col_matmul_enabled() and not must_avoid:
+            return None
+        for force_dram in (False, True):
+            for forward_fn in (self._forward_k1_tuned_matmul, self._forward_k1_dense_matmul):
+                out = forward_fn(
+                    x,
+                    batch_size=batch_size,
+                    input_length=input_length,
+                    force_dram=force_dram,
+                )
+                if out is not None:
+                    return out
+        return None
 
     def _ensure_packed(self, batch_size: int, input_length: int) -> None:
         ttnn = self.ttnn
@@ -201,24 +407,12 @@ class TtConv1d:
             )
         self._packed_for = (batch_size, input_length)
 
-    def __call__(self, x):
-        """Run conv1d on a ``[B, T, C]`` row-major tensor.
-
-        Returns a ``[B, T_out, out_channels]`` row-major tensor.
-        """
+    def _run_conv1d(self, x, *, batch_size: int, input_length: int):
+        """Eager ``ttnn.conv1d`` on ``[B,T,C]`` row-major (prepares weights per shape)."""
         ttnn = self.ttnn
         _sr = ace_step_reshape_kwargs(ttnn)
-        if len(x.shape) != 3:
-            raise ValueError(f"TtConv1d expects rank-3 [B,T,C], got {x.shape}")
-        b = int(x.shape[0])
-        t = int(x.shape[1])
-        c = int(x.shape[-1])
-        if c != self.in_channels:
-            raise ValueError(f"Conv1d input channels mismatch: got {c}, expected {self.in_channels}")
-
-        x = self._maybe_l1(x)
-        if x.dtype != self._storage_dtype:
-            x = ttnn.typecast(x, self._storage_dtype, memory_config=self._input_memory_config())
+        b = int(batch_size)
+        t = int(input_length)
         self._ensure_packed(b, t)
         ret = ttnn.conv1d(
             input_tensor=x,
@@ -247,6 +441,61 @@ class TtConv1d:
         return ace_step_vae_normalize_activation_output(
             ttnn, out, storage_dtype=self._storage_dtype, compute_dtype=self._compute_dtype
         )
+
+    def _forward_k1_chunked_conv1d(self, x, *, batch_size: int, input_length: int):
+        """Slice long k=1 conv along time — each slab stays below 640 M-tile im2col probes."""
+        if self.kernel_size != 1:
+            return None
+        chunk_t = _k1_conv1d_chunk_t()
+        total_t = int(input_length)
+        if total_t <= chunk_t:
+            return None
+        ttnn = self.ttnn
+        b = int(batch_size)
+        parts = []
+        start = 0
+        while start < total_t:
+            end = min(start + chunk_t, total_t)
+            slab = ttnn.slice(x, (0, start, 0), (b, end, self.in_channels))
+            parts.append(self._run_conv1d(slab, batch_size=b, input_length=end - start))
+            start = end
+        if len(parts) == 1:
+            return parts[0]
+        return (
+            ttnn.concat(parts, dim=1, **ace_step_concat_kwargs(ttnn))
+            if hasattr(ttnn, "concat")
+            else ttnn.concatenate(parts, dim=1, **ace_step_concat_kwargs(ttnn))
+        )
+
+    def __call__(self, x):
+        """Run conv1d on a ``[B, T, C]`` row-major tensor.
+
+        Returns a ``[B, T_out, out_channels]`` row-major tensor.
+        """
+        ttnn = self.ttnn
+        if len(x.shape) != 3:
+            raise ValueError(f"TtConv1d expects rank-3 [B,T,C], got {x.shape}")
+        b = int(x.shape[0])
+        t = int(x.shape[1])
+        c = int(x.shape[-1])
+        if c != self.in_channels:
+            raise ValueError(f"Conv1d input channels mismatch: got {c}, expected {self.in_channels}")
+
+        x = self._maybe_l1(x)
+        if x.dtype != self._storage_dtype:
+            x = ttnn.typecast(x, self._storage_dtype, memory_config=self._input_memory_config())
+        m_dim = self._k1_m_dim(b, t)
+        linear_out = None
+        # Wide/long k=1: ``ttnn.linear`` L1 CBs overflow on Blackhole (see ``residual.py``); use conv1d.
+        if self.kernel_size == 1 and m_dim < 7680:
+            linear_out = self._forward_k1_via_linear(x, batch_size=b, input_length=t)
+        if linear_out is not None:
+            return linear_out
+        if self._k1_must_avoid_conv1d(m_dim):
+            chunked = self._forward_k1_chunked_conv1d(x, batch_size=b, input_length=t)
+            if chunked is not None:
+                return chunked
+        return self._run_conv1d(x, batch_size=b, input_length=t)
 
 
 class TtConvTranspose1d:
@@ -312,8 +561,7 @@ class TtConvTranspose1d:
             self._bias_host_tt = ttnn.as_tensor(b, dtype=self.weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
             self._has_bias = True
 
-        _act_block_h = 64 if self.in_channels <= 512 else 32
-        # Same L1-only input free as Conv1d (conv_transpose2d.cpp mirrors conv2d dealloc path).
+        _act_block_h = _vae_act_block_h_override(in_channels=self.in_channels)
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=self._conv_weight_dtype,
             shard_layout=None,
