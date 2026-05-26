@@ -445,23 +445,6 @@ void validate_matmul_fused_operations(
     TT_FATAL(
         !fused_activation.has_value() || config_supports_activation,
         "Fused activation is not supported for this matmul program config");
-
-    if (!fused_activation.has_value()) {
-        return;
-    }
-
-    using ttnn::operations::unary::UnaryOpType;
-    const UnaryOpType op_type = fused_activation->op_type;
-    const bool is_supported_op = op_type == UnaryOpType::RELU || op_type == UnaryOpType::GELU ||
-                                 op_type == UnaryOpType::TANH || op_type == UnaryOpType::SILU ||
-                                 op_type == UnaryOpType::RELU6 || op_type == UnaryOpType::SIGMOID ||
-                                 op_type == UnaryOpType::HARDSIGMOID || op_type == UnaryOpType::HARDTANH ||
-                                 op_type == UnaryOpType::SELU || op_type == UnaryOpType::SOFTPLUS;
-    TT_FATAL(
-        is_supported_op,
-        "Unsupported fused activation op type for matmul: {}. Supported types are "
-        "RELU, GELU, TANH, SILU, RELU6, SIGMOID, HARDSIGMOID, HARDTANH, SELU, SOFTPLUS",
-        op_type);
 }
 
 bool get_broadcast_batch(
