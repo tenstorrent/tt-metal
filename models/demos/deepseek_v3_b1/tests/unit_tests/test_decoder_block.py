@@ -1057,24 +1057,21 @@ def test_decoder_mlp(
 
     # ========================================================================
     # DEBUG #43563: compare iter-0 vs iter-1 SDPA per-core output byte-for-byte.
-    # The flash_mla.hpp debug patch re-packs the final SDPA output into cb_out_in
-    # at the end of each flash_mla call (see flash_mla.hpp:789-805). cb_out_in is
-    # *rebound* (via the mla_iter_dump_buffer plumbing in
-    # attention_block/op.py and decoder_block/op.py) to the dedicated
-    # `mla_iter_dump_buffer` ttnn tensor instead of `sdpa_out_interm_buffer`,
-    # so its L1 region is NOT aliased by post-SDPA CBs and survives until host
-    # readback. On consecutive iter-0/iter-1 calls the CB's internal write
-    # pointer advances by out_chunk_tiles (16) each time, so:
-    #   tiles  0..15  -> iter-0 SDPA output
-    #   tiles 16..31  -> iter-1 SDPA output
-    # We to_torch the buffer (host gets un-tilized row-major view), decode tile-by-
-    # tile, and diff iter-0 vs iter-1 per SDPA worker core.
-    # Layout: shard is (40 rows, 544 cols) per core in TILE_LAYOUT, tile = (8, 32),
-    # so tile_cols_per_shard = 17. A tile at L1 tile-index `i` occupies torch view
-    # rows [tile_row*8, tile_row*8+8), cols [tile_col*32, tile_col*32+32) where
-    # tile_row = i // 17, tile_col = i % 17. Note iter-1 straddles tile-row 0/1.
-    # NOTE: only valid at position_id=127 (num_cores_to_wait == 0, cb_out_in unused
-    # by sdpa_tail). At multi-chunk this section will see iter-1 data clobbered.
+    # flash_mla.hpp's static call counter picks per-iter dump CBs:
+    #   iter-0 -> cb_out_in      (bound to mla_iter_dump_buffer @ offset 0)
+    #   iter-1 -> cb_iter1_dump  (bound to mla_iter_dump_buffer @ offset
+    #                             mla_out_in_total_size = 48*512 = 24576 bytes
+    #                             = tile index 48 in the buffer)
+    # Both CBs live in the dedicated `mla_iter_dump_buffer` (uncontested L1).
+    # Within the host's to_torch() view:
+    #   iter-0 = tiles  0..15  (L1 bytes 0..8192)
+    #   iter-1 = tiles 48..63  (L1 bytes 24576..32768)
+    # Shard is (40 rows, 544 cols) per core in TILE_LAYOUT, tile = (8, 32),
+    # tile_cols_per_shard = 17. Tile at L1 tile-index `i` occupies torch view
+    # rows [tile_row*8, tile_row*8+8), cols [tile_col*32, tile_col*32+32),
+    # where tile_row = i // 17, tile_col = i % 17.
+    # NOTE: only valid at position_id=127 (num_cores_to_wait == 0, cb_out_in
+    # unused by sdpa_tail). At multi-chunk this section's CBs race sdpa_tail.
     try:
         sdpa_interm_torch = ttnn.to_torch(
             d["mla_iter_dump_buffer"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
@@ -1083,6 +1080,9 @@ def test_decoder_mlp(
         shard_h, shard_w, tile_h, tile_w = 40, 544, 8, 32
         tile_cols_per_shard = shard_w // tile_w  # 17
         num_tiles_per_iter = 16
+        # cb_iter1_dump is bound at L1 offset = mla_out_in_total_size = 48 tiles
+        # of the dedicated buffer (matches attention_block/op.py).
+        iter1_dump_tile_offset = 48
         num_devices_total = mesh_rows * mesh_cols
         num_cores_per_dev = device_grid_size.x * device_grid_size.y
         rows_per_dev = num_cores_per_dev * shard_h
@@ -1116,7 +1116,9 @@ def test_decoder_mlp(
                 iter0 = torch.stack([get_tile(shard, i) for i in range(num_tiles_per_iter)], dim=0)  # (16, 8, 32)
                 if torch.all(iter0 == 0):
                     continue
-                iter1 = torch.stack([get_tile(shard, num_tiles_per_iter + i) for i in range(num_tiles_per_iter)], dim=0)
+                iter1 = torch.stack(
+                    [get_tile(shard, iter1_dump_tile_offset + i) for i in range(num_tiles_per_iter)], dim=0
+                )
                 eq_mask = iter0 == iter1
                 if eq_mask.all():
                     continue  # iter-0 and iter-1 bit-identical on this core
@@ -1150,7 +1152,7 @@ def test_decoder_mlp(
             core_lin = cy * device_grid_size.x + cx
             shard = dev_block[core_lin * shard_h : (core_lin + 1) * shard_h, :]
             iter0 = torch.stack([get_tile(shard, i) for i in range(num_tiles_per_iter)], dim=0)
-            iter1 = torch.stack([get_tile(shard, num_tiles_per_iter + i) for i in range(num_tiles_per_iter)], dim=0)
+            iter1 = torch.stack([get_tile(shard, iter1_dump_tile_offset + i) for i in range(num_tiles_per_iter)], dim=0)
             # Byte-diff map: one 'X' per differing tile, '.' per matching tile.
             map_chars = []
             for t in range(num_tiles_per_iter):

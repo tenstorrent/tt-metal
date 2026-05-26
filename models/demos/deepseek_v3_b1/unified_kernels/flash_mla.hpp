@@ -111,7 +111,8 @@ struct FlashMLADecode {
         uint32_t cb_ms_in_,
         uint32_t cb_out_o_,
         uint32_t cb_out_ms_,
-        uint32_t cb_out_final_>
+        uint32_t cb_out_final_,
+        uint32_t cb_iter1_dump_>  // DEBUG #43563
     struct ComputeCTArgs {
         static constexpr uint32_t cb_q_in = cb_q_in_;
         static constexpr uint32_t cb_k_in = cb_k_in_;
@@ -123,6 +124,7 @@ struct FlashMLADecode {
         static constexpr uint32_t cb_out_o = cb_out_o_;
         static constexpr uint32_t cb_out_ms = cb_out_ms_;
         static constexpr uint32_t cb_out_final = cb_out_final_;
+        static constexpr uint32_t cb_iter1_dump = cb_iter1_dump_;  // DEBUG #43563
     };
 
     struct ReaderArgs {
@@ -665,6 +667,7 @@ struct FlashMLADecode {
             constexpr uint32_t cb_out_o = CTArgs::cb_out_o;
             constexpr uint32_t cb_out_ms = CTArgs::cb_out_ms;
             constexpr uint32_t cb_out_final = CTArgs::cb_out_final;
+            constexpr uint32_t cb_iter1_dump = CTArgs::cb_iter1_dump;  // DEBUG #43563
 
             constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
             constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -772,6 +775,32 @@ struct FlashMLADecode {
                     !sdpa_output_is_final && last_chunk,
                     mask_last_chunk && last_chunk);
             }
+            // DEBUG #43563: dump *pre-recip* mm2 (raw P*V accumulator) to a
+            // per-iter dedicated CB BEFORE the tail's compute_sdpa_recip
+            // cancellation. Two debug CBs, both bound to `mla_iter_dump_buffer`
+            // at disjoint L1 offsets:
+            //   cb_out_in     -> offset 0     (iter-0)
+            //   cb_iter1_dump -> offset 24576 (iter-1)
+            // Per-TRISC2 static counter selects: first flash_mla call (iter-0)
+            // packs to cb_out_in; second call (iter-1) packs to cb_iter1_dump.
+            // Both packed bytes survive until host readback. Packs the raw mm2
+            // because flash-attention scale-invariance (compute_sdpa_recip)
+            // cancels iter-0/iter-1 bank-asymmetry in the *post*-recip output
+            // (verified: post-recip dump shows bit-identical iter-0/iter-1).
+            // The bank-asymmetric signal lives in the PRE-recip mm2.
+            // SAFE ONLY at pos=127 (sdpa_tail does not consume cb_out_in).
+            {
+                static uint32_t flash_mla_iter_dump_call_count = 0;
+                const uint32_t debug_dump_cb = (flash_mla_iter_dump_call_count == 0) ? cb_out_in : cb_iter1_dump;
+                cb_reserve_back(debug_dump_cb, out_chunk_tiles);
+                pack_block_contiguous_init(debug_dump_cb);
+                for (uint32_t i = 0; i < out_chunk_tiles; i += output_granularity) {
+                    pack_block_contiguous(mm2_dst_tile_offset + i, debug_dump_cb, output_granularity);
+                }
+                cb_push_back(debug_dump_cb, out_chunk_tiles);
+                pack_block_contiguous_init(sdpa_output_cb);
+                flash_mla_iter_dump_call_count++;
+            }
             if (!sdpa_output_is_final) {
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
                 pack_block_contiguous(max_dst_tile_offset, sdpa_ms_cb, 1);
@@ -786,27 +815,6 @@ struct FlashMLADecode {
                 PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));
             }
             cb_push_back(sdpa_output_cb, out_chunk_tiles);
-            // DEBUG #43563: dump final SDPA output to cb_out_in for cross-iter
-            // L1 byte diff. cb_out_in is rebound (via op.py) to the dedicated
-            // mla_iter_dump_buffer (sized 48 tiles per core) so its L1 region
-            // is NOT aliased by post-SDPA CBs. The CB's persistent write
-            // pointer separates consecutive flash_mla calls into disjoint
-            // regions when the wr_ptr is preserved across iters:
-            //   iter-0 -> tiles [0, out_chunk_tiles)
-            //   iter-1 -> tiles [out_chunk_tiles, 2*out_chunk_tiles)
-            // We cb_reserve_back BEFORE the pack to ensure the CB has enough
-            // headroom for one iter's worth of tiles. This prevents the LLK
-            // pack from silently dropping or wrapping. Host owns consumption
-            // (no pop_front anywhere on the kernel side).
-            // SAFE ONLY at pos=127 (num_cores_to_wait==0 -> sdpa_tail does
-            // not consume cb_out_in); at multi-chunk this races sdpa_tail.
-            cb_reserve_back(cb_out_in, out_chunk_tiles);
-            pack_block_contiguous_init(cb_out_in);
-            for (uint32_t i = 0; i < out_chunk_tiles; i += output_granularity) {
-                pack_block_contiguous(mm2_dst_tile_offset + i, cb_out_in, output_granularity);
-            }
-            cb_push_back(cb_out_in, out_chunk_tiles);
-            pack_block_contiguous_init(sdpa_output_cb);
             tile_regs_commit();
             tile_regs_wait();
             tile_regs_release();

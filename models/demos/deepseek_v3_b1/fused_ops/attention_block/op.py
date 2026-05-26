@@ -971,6 +971,11 @@ class AttentionBlock:
         mla_out_ms_cb = cb_id_context.get_cb_id(stats_df, TD_8x32)  # Output MS CB for MLA
         mla_mask_cb = cb_id_context.get_cb_id(q_df, TD_8x32)  # Mask CB for MLA
         mla_out_final_cb = mla_out_o_cb  # Output final CB for MLA, unused for full fused attention block
+        # DEBUG #43563: second debug CB for iter-1's flash_mla dump. Bound to the
+        # SAME mla_iter_dump_buffer as mla_out_in_cb but at a higher L1 offset,
+        # so iter-0 (cb_out_in) and iter-1 (cb_iter1_dump) write to disjoint
+        # regions and both survive until host readback.
+        mla_iter1_dump_cb = cb_id_context.get_cb_id(stats_df, TD_8x32)
 
         # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
         bcast_pkt_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # Packet buffer for CCL broadcast
@@ -1776,6 +1781,7 @@ class AttentionBlock:
             ("mla_out_o_cb", mla_out_o_cb),
             ("mla_out_ms_cb", mla_out_ms_cb),
             ("mla_out_final_cb", mla_out_final_cb),
+            ("mla_iter1_dump_cb", mla_iter1_dump_cb),  # DEBUG #43563
         ]
 
         # Get NOC coordinates for this device
@@ -2635,6 +2641,29 @@ class AttentionBlock:
                 )
             ]
             mla_cb_descriptors.append(mla_out_in_cb_descriptor)
+            # DEBUG #43563: cb_iter1_dump binding. Lives in the dedicated
+            # mla_iter_dump_buffer at offset = mla_out_in_total_size (just past
+            # cb_out_in's region). Sized for one iter's worth of out_chunk_tiles
+            # = 16 tiles (8192 bytes). Static counter in flash_mla.hpp picks
+            # cb_out_in for iter-0 and cb_iter1_dump for iter-1 so both dumps
+            # survive in disjoint L1 regions.
+            mla_iter1_dump_total_size = out0_t * stats_tile_size  # out_chunk_tiles tiles
+            mla_iter1_dump_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                mla_iter1_dump_cb,
+                ref_mla_iter_dump_buffer,
+                address_offset=mla_out_in_total_size,
+                total_size=mla_iter1_dump_total_size,
+                core_ranges=full_device_grid,
+            )
+            mla_iter1_dump_cb_descriptor.format_descriptors = [
+                ttnn.CBFormatDescriptor(
+                    buffer_index=mla_iter1_dump_cb,
+                    data_format=stats_df,
+                    page_size=stats_tile_size,
+                    tile=stats_tile_descriptor,
+                )
+            ]
+            mla_cb_descriptors.append(mla_iter1_dump_cb_descriptor)
             # cb_ms_in: m/s stats input (m and s are packed into single tile)
             mla_ms_in_total_size = mla_intermed_ms_tiles * stats_tile_size
             mla_ms_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(

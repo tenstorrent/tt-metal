@@ -1282,7 +1282,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("mla_ms_in_cb"),
         get_named_compile_time_arg_val("mla_out_o_cb"),
         get_named_compile_time_arg_val("mla_out_ms_cb"),
-        get_named_compile_time_arg_val("mla_out_final_cb")>;
+        get_named_compile_time_arg_val("mla_out_final_cb"),
+        get_named_compile_time_arg_val("mla_iter1_dump_cb")>;  // DEBUG #43563
 
     // Matmul4 CTArgs
     using Matmul4CTArgs =
