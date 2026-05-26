@@ -14,7 +14,6 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWRowSharded,
     _decode_down_proj_dram_sharded_program_config,
     _decode_down_proj_input_memory_config,
-    _decode_down_proj_mcast1d_program_config,
     _decode_gate_up_dram_sharded_program_config,
     _dp_matmul_program_config,
     _dram_sharded_mem_config_2d,
@@ -243,39 +242,16 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
         needs_ccl = _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device)
         fused_bias = None if needs_ccl else self.tt_bias
 
-        # Decode fast path: mcast1d 8x3 with DRAM_INTERLEAVED weight + L1
-        # interleaved I/O (52us standalone). Lets the MLP keep gate/up
-        # L1_INTERLEAVED end-to-end and skips the pair of pre-silu_mul I2S
-        # reshards that the DRAM-sharded 8c path needed. We pick this path
-        # whenever the input is L1 interleaved (the layout the MLP produces
-        # when ``_down_proj_dram_input_shard_cfg`` is left unused).
-        is_input_l1_interleaved = (
-            input_tensor.memory_config().buffer_type == ttnn.BufferType.L1
-            and not input_tensor.memory_config().is_sharded()
-        )
-        mcast1d_pc = (
-            _decode_down_proj_mcast1d_program_config(input_shape, self.tt_weight.shape)
-            if (not needs_ccl and is_input_l1_interleaved)
-            else None
-        )
-        if mcast1d_pc is not None:
-            tt_output = ttnn.linear(
-                input_tensor,
-                self.tt_weight,
-                bias=fused_bias,
-                dtype=ttnn.bfloat8_b,
-                memory_config=output_memory_config or ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config,
-                program_config=mcast1d_pc,
-            )
-            return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
-
-        # DRAM-sharded fallback (only triggers if a caller still hands us
-        # L1_WIDTH_SHARDED input; kept for compatibility).
+        # Decode fast path: DRAM-sharded 8c (8x1 grid) matmul with
+        # ``DRAM_WIDTH_SHARDED`` weight + L1 width-sharded I/O (44us
+        # standalone). Caller is expected to hand us an 8c L1 width-sharded
+        # input (MLP does one I2S on the silu_mul output before calling
+        # ``down_proj``); if it didn't, ``to_memory_config`` does the I2S
+        # here as a defensive fallback.
         dram_shard_cfg = getattr(self, "_down_proj_dram_input_shard_cfg", None)
         dram_pc = (
             _decode_down_proj_dram_sharded_program_config(input_shape, self.tt_weight.shape)
-            if (not needs_ccl and dram_shard_cfg is not None and input_tensor.memory_config().is_sharded())
+            if (not needs_ccl and dram_shard_cfg is not None)
             else None
         )
         if dram_pc is not None and dram_shard_cfg is not None:
@@ -389,14 +365,14 @@ class TTNNDotsOCRMLP(TTNNModule):
         gate, up = ttnn.chunk(gate_up, 2, dim=-1)
         ttnn.deallocate(gate_up)
 
-        # Down-proj now runs on the mcast1d 8x3 decode path (DRAM_INTERLEAVED
-        # weight, L1 interleaved I/O). silu_mul therefore stays interleaved
-        # and we skip the pair of I2S reshards that the older DRAM-sharded
-        # 8c down-proj required. The ``_down_proj_dram_input_shard_cfg``
-        # attribute is left intact on the down_proj for compatibility but is
-        # no longer engaged from MLP forward.
-        down_dram_shard_cfg = None
-        silu_mul_mc = activation_mc
+        # silu_mul stays on L1 interleaved (cheap multiply, no presharding of
+        # gate/up). We then I2S the silu_mul OUTPUT once, into the 8c L1
+        # width-sharded layout that the DRAM-sharded down_proj expects. That
+        # is a single I2S per layer (vs the two pre-silu_mul I2S reshards
+        # the "preshard gate+up" variant needed) and lets down_proj engage
+        # its faster DRAM-sharded 8c kernel (~44us, vs the mcast1d 8x3
+        # interleaved-I/O variant's ~52us).
+        down_dram_shard_cfg = getattr(self.down_proj, "_down_proj_dram_input_shard_cfg", None) if is_decode else None
 
         # ``fast_and_approximate_mode=True`` routes the fused SILU through
         # the polynomial exp/sigmoid path. SILU dominates this op (the
@@ -409,10 +385,13 @@ class TTNNDotsOCRMLP(TTNNModule):
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             fast_and_approximate_mode=True,
             dtype=ttnn.bfloat8_b,
-            memory_config=silu_mul_mc,
+            memory_config=activation_mc,
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
+
+        if down_dram_shard_cfg is not None:
+            gate_up_mul = ttnn.to_memory_config(gate_up_mul, down_dram_shard_cfg)
 
         down_output_mc = activation_mc if (is_decode and down_dram_shard_cfg is None) else None
         output = self.down_proj(gate_up_mul, output_memory_config=down_output_mc)
