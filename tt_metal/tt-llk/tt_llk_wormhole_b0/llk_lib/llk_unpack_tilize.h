@@ -412,19 +412,19 @@ inline void _llk_unpack_tilizeA_B_(
     }
 }
 
-inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim)
+inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces, const std::uint32_t face_r_dim)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // Stalling SETDMAREG done by THCON until UNPACK finishes
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
     TT_SETADCXX(p_setadc::UNP_B, face_r_dim * FACE_C_DIM - 1, 0x0);
 
-    // Revert Z and Y dim value back to default:
+    // Restore Z and Y dim to the default operand state set by _llk_unpack_init_:
     // THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1 - word 1 of the same-named register
-    // y-dim sits in lower 16 bits and is set to 1 by default
-    // z-dim sits in upper 16 bits and is set to unpA_num_faces which is 4 by default
-    // TODO NC: Make this configurable and restored to a default operand state under tt-llk#1161
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(4);
+    // y-dim sits in lower 16 bits and is 1 by default (never touched by tilize init)
+    // z-dim sits in upper 16 bits and is set to unpA_num_faces by _llk_unpack_init_
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(num_faces);
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0x0000ffff>(1);
 
     unpack_config_u config   = {0};
