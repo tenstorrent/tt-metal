@@ -2,7 +2,7 @@
 
 ## Overview
 
-The [TensorAccessor](../../tt_metal/hw/inc/accessor/tensor_accessor.h) is a utility for efficiently accessing all tensors distributed across multiple memory banks. It provides an abstraction that handles the mapping from logical tensor indices to physical memory locations.
+The [TensorAccessor](../../tt_metal/hw/inc/api/tensor/tensor_accessor.h) is a utility for efficiently accessing all tensors distributed across multiple memory banks. It provides an abstraction that handles the mapping from logical tensor indices to physical memory locations.
 
 The main thing to keep in mind when working with it is that developer can choose which arguments of accessor are passed through compile time arguments, which through common-runtime arguments.
 Parameters may consist of rank, number of banks, tensor shape, shard shape, banks coordinates, etc.
@@ -68,7 +68,7 @@ uint32_t new_base_idx_crta = args.next_common_runtime_args_offset();
 
 // Option 1 (preferred, less error-prone): Using default tensor buffer's aligned_page_size to create a TensorAccessor
 auto tensor_accessor = TensorAccessor(args, bank_base_address);
-// Option 2: Create a TensorAccessor with custom runtime page size passed in as the 3rd argument
+// Option 2: Create a TensorAccessor with custom runtime page size passed in as the 3rd argument. Used when we need to override the compile-time aligned_page_size if we have a program cache hit on a buffer with a different aligned_page_size.
 auto tensor_accessor = TensorAccessor(args, bank_base_address, page_size);
 ```
 

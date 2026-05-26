@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,6 +41,7 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation::tensor_return_v
     const std::optional<ttnn::Tensor>& attn_mask,
     const ttnn::Tensor& intermediates,
     const float dropout_probability = 0.0F,
-    const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
+    const std::optional<ttnn::Tensor>& preallocated_u_scaler = std::nullopt);
 
 }  // namespace ttnn::prim

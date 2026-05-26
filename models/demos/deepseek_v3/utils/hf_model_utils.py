@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import concurrent.futures
@@ -358,10 +358,32 @@ def _quad_ring_expert_weight_name(layer_idx: int, projection: str) -> str:
     return f"model.layers.{layer_idx}.mlp.experts_quad_ring.{projection}.weight"
 
 
-def _default_quad_ring_ring2cores() -> dict[int, tuple[int, int, int]]:
-    # Mirrors `determine_compute_matmul_cores()` pad/full-ring positions for 12 DRAM banks.
-    matmul_pad_cores = {1, 2, 4, 5, 7, 8, 10, 11}
-    return {ring_pos: (ring_pos, ring_pos, 1 if ring_pos in matmul_pad_cores else 0) for ring_pos in range(12)}
+def _default_quad_ring_shard_maps(
+    hidden_size: int,
+    intermediate_size: int,
+    *,
+    num_cores: int = 12,
+) -> tuple[list[int], list[tuple[int, int]]]:
+    from ttnn.experimental.moe_compute_utils import BLOCK_TILES_W, _shard_tiles, _w2_shard_tiles
+
+    import ttnn
+
+    hidden_tiles = hidden_size // ttnn.TILE_SIZE
+    intermediate_tiles = intermediate_size // ttnn.TILE_SIZE
+    max_w2_tiles = (hidden_tiles + num_cores - 1) // num_cores
+    groups_per_core = (max_w2_tiles + BLOCK_TILES_W - 1) // BLOCK_TILES_W
+
+    w0_w1_shard_map = []
+    w2_shard_map = []
+    for ring_pos in range(num_cores):
+        w0_w1_shard_map.append(_shard_tiles(intermediate_tiles, ring_pos, num_cores))
+
+        w2_tiles = _w2_shard_tiles(hidden_tiles, ring_pos, intermediate_tiles, num_cores)
+        last_group_tiles = w2_tiles - (groups_per_core - 1) * BLOCK_TILES_W
+        last_group_pad_tiles = groups_per_core * BLOCK_TILES_W - w2_tiles
+        w2_shard_map.append((last_group_tiles, last_group_pad_tiles))
+
+    return w0_w1_shard_map, w2_shard_map
 
 
 def _validate_quad_ring_stacked_projection_shape(
@@ -398,7 +420,6 @@ def _prepare_quad_ring_expert_tensors(
             "for quad-ring expert preparation."
         )
     num_experts_per_device = num_routed_experts // num_devices
-    ring2cores = _default_quad_ring_ring2cores()
 
     w0 = stacked_gate.unsqueeze(0).transpose(-1, -2)
     w1 = stacked_up.unsqueeze(0).transpose(-1, -2)
@@ -410,6 +431,7 @@ def _prepare_quad_ring_expert_tensors(
             f"(tensor shape: {tuple(w0.shape)})"
         )
     matmul_n = w0.shape[-1]
+    w0_w1_shard_map, w2_shard_map = _default_quad_ring_shard_maps(hidden_size, matmul_n)
 
     prepared_w0_w1_per_device: list[torch.Tensor] = []
     prepared_w2_per_device: list[torch.Tensor] = []
@@ -422,7 +444,7 @@ def _prepare_quad_ring_expert_tensors(
                 num_experts_per_device,
                 hidden_size,
                 matmul_n,
-                ring2cores,
+                w0_w1_shard_map,
             )
         )
         prepared_w2_per_device.append(
@@ -432,7 +454,8 @@ def _prepare_quad_ring_expert_tensors(
                 num_experts_per_device,
                 matmul_n,
                 hidden_size,
-                ring2cores,
+                w2_shard_map,
+                w0_w1_shard_map,
             )
         )
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -74,7 +74,10 @@ class ModelArgs:
         self.model_path = dir
         self.weights_path = dir
 
-        logger.info(f"Using GPT-OSS model from: {self.model_path}")
+        logger.info(
+            f"Using GPT-OSS model from: {self.model_path}"
+            f"{' (dummy weights — no checkpoint load)' if self.dummy_weights else ''}"
+        )
 
         if self.dummy_weights:
             # Skip loading HF config for testing - use default values
@@ -234,7 +237,7 @@ class ModelArgs:
                 weights_path,
                 torch_dtype="auto"
                 # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                # may come in any dtype. If the model weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                 # unnecessary cast.
             )
             state_dict = model.state_dict()

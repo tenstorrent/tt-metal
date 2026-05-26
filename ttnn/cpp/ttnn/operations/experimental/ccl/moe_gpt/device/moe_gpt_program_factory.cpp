@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -324,7 +324,7 @@ MoEGPTMeshWorkloadFactory::create_at(
         "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/compute.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::LoFi,
+            .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
             .fp32_dest_acc_en = false,
             .dst_full_sync_en = false,
             .bfp8_pack_precise = false,
@@ -625,8 +625,8 @@ MoEGPTMeshWorkloadFactory::create_at(
         const auto tilize_mapping_data_format = tt::tt_metal::datatype_to_dataformat_converter(expert_mapping.dtype());
         const auto tilize_output_data_format = tt::tt_metal::datatype_to_dataformat_converter(sparse_buffer.dtype());
 
-        // tiles_per_local_chunk for the drain core (used for CB sizing)
-        uint32_t shared_cb_num_pages = max_tiles_per_local_chunk;
+        // tiles_per_global_chunk: drain core gathers from all tilize cores before multicast
+        uint32_t shared_cb_num_pages = hidden_size / TILE_WIDTH;
 
         tt::tt_metal::create_cb(
             per_expert_total_tokens_cb_id,
@@ -688,7 +688,7 @@ MoEGPTMeshWorkloadFactory::create_at(
             program,
             tilize_core_range_set,
             tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment),
-            tokens,
+            tokens + 1,
             tt::DataFormat::UInt32);
 
         tt::tt_metal::create_cb(

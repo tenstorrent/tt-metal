@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
-#include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
@@ -26,24 +25,28 @@ using namespace tt::tt_fabric::linear::experimental;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr uint32_t ring_size = get_compile_time_arg_val(1);
-constexpr uint32_t cb_compute_output_id = get_compile_time_arg_val(2);
-constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(3);
-constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
-constexpr uint32_t page_size = get_compile_time_arg_val(5);
-constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(6);
-constexpr uint32_t output_num_pages = get_compile_time_arg_val(7);
-constexpr uint32_t batch_num_pages = get_compile_time_arg_val(8);
-constexpr uint32_t slice_B = get_compile_time_arg_val(9);
+constexpr uint32_t my_chip_id = get_named_compile_time_arg_val("my_chip_id");
+constexpr uint32_t ring_size = get_named_compile_time_arg_val("ring_size");
+constexpr uint32_t cb_compute_output_id = get_named_compile_time_arg_val("cb_compute_output_id");
+constexpr uint32_t cb_reader_output_id = get_named_compile_time_arg_val("cb_reader_output_id");
+constexpr uint32_t tile_granularity = get_named_compile_time_arg_val("tile_granularity");
+constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
+constexpr uint32_t num_tiles_to_write_per_packet = get_named_compile_time_arg_val("num_tiles_to_write_per_packet");
+constexpr uint32_t output_num_pages = get_named_compile_time_arg_val("output_num_pages");
+constexpr uint32_t batch_num_pages = get_named_compile_time_arg_val("batch_num_pages");
+constexpr uint32_t slice_B = get_named_compile_time_arg_val("slice_B");
 
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(10);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(11);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(12);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(13);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(14);
+#ifdef USE_WORKER_MUX
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(0);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(1);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(2);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(3);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(4);
 
-constexpr uint32_t num_ct_args = 15;
+constexpr uint32_t num_ct_args = 5;
+#else
+constexpr uint32_t num_ct_args = 0;
+#endif
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
@@ -74,10 +77,10 @@ void kernel_main() {
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
     const uint32_t chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
-    arg_idx++;  // start_pages_read_in_row unused by dim0 kernel
-    arg_idx++;  // start_row_offset unused by dim 0 kernel
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+
+#ifdef USE_WORKER_MUX
     const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
@@ -95,6 +98,7 @@ void kernel_main() {
     uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
+#endif
 
     const auto& unicast_route_info = (direction == 1) ? forward_unicast_route_info : backward_unicast_route_info;
     const auto& multicast_route_info = (direction == 1) ? forward_multicast_route_info : backward_multicast_route_info;
@@ -102,54 +106,13 @@ void kernel_main() {
     constexpr uint32_t ct_idx =
         num_ct_args + 2 * (ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args);
 
-#ifdef INTERMEDIATE_IS_SHARDED
-    constexpr uint32_t ct_offset = 7;
-
-    using intermediate_tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(ct_idx),       // Memory layout
-        get_compile_time_arg_val(ct_idx + 1),   // The number of sharding cores
-        get_compile_time_arg_val(ct_idx + 2),   // The page size we offset each write to
-        get_compile_time_arg_val(ct_idx + 3),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(ct_idx + 4),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(ct_idx + 5),   // pages_per_shard_x
-        get_compile_time_arg_val(ct_idx + 6)>;  // pages_per_shard_y
-
-    const auto [intermediate_mapping_table, intermediate_rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<intermediate_tensor_shard_info>(get_arg_addr(arg_idx));
-    experimental::ShardedAddrGen<intermediate_tensor_shard_info> intermediate_addrgen = {
-        .bank_base_address = intermediate_address, .shard_array = intermediate_mapping_table};
-
-    arg_idx += intermediate_rt_increment;
-
-#else
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx>();
-    constexpr uint32_t ct_offset = intermediate_tensor_args.num_compile_time_args();
-    auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address, page_size);
-#endif
+    auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address);
 
-#ifdef OUTPUT_IS_SHARDED
-    using output_tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(ct_idx + ct_offset),       // Memory layout
-        get_compile_time_arg_val(ct_idx + ct_offset + 1),   // The number of sharding cores
-        get_compile_time_arg_val(ct_idx + ct_offset + 2),   // The page size we offset each write to
-        get_compile_time_arg_val(ct_idx + ct_offset + 3),   // The number of pages in each sharding row not including
-                                                            // padding pages
-        get_compile_time_arg_val(ct_idx + ct_offset + 4),   // This defines times when contiguous pages can't be
-                                                            // calculated
-        get_compile_time_arg_val(ct_idx + ct_offset + 5),   // pages_per_shard_x
-        get_compile_time_arg_val(ct_idx + ct_offset + 6)>;  // pages_per_shard_y
+    constexpr auto output_tensor_args = TensorAccessorArgs<intermediate_tensor_args.next_compile_time_args_offset()>();
+    auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
 
-    const auto [output_mapping_table, output_rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<output_tensor_shard_info>(get_arg_addr(arg_idx));
-    experimental::ShardedAddrGen<output_tensor_shard_info> output_addrgen = {
-        .bank_base_address = output_address, .shard_array = output_mapping_table};
-
-    arg_idx += output_rt_increment;
-#else
-    constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
-    auto output_addrgen = TensorAccessor(output_tensor_args, output_address, page_size);
-#endif
-
+#ifdef USE_WORKER_MUX
     auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
         fabric_mux_x,
         fabric_mux_y,
@@ -168,6 +131,10 @@ void kernel_main() {
     // need to wait for fabric mux to be ready to accept connections
     tt::tt_fabric::wait_for_fabric_endpoint_ready(
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
+#else
+    size_t arg_for_fab = arg_idx;
+    auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
+#endif
 
     // pre-populate packet headers
     auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
@@ -178,7 +145,16 @@ void kernel_main() {
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
 
+#ifdef USE_WORKER_MUX
     tt::tt_fabric::fabric_client_connect(mux_connection_handle);
+    auto* fabric_connection_ptr = &mux_connection_handle;
+#else
+    if (fabric_connection.is_logically_connected()) {
+        fabric_connection.open();
+    }
+    auto* fabric_connection_ptr =
+        direction ? &fabric_connection.get_forward_connection() : &fabric_connection.get_backward_connection();
+#endif
 
     fabric_multicast_noc_unicast_atomic_inc_set_state<
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
@@ -194,7 +170,7 @@ void kernel_main() {
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
         ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_mcastseminc, multicast_route_info);
         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            &mux_connection_handle,
+            fabric_connection_ptr,
             pkt_hdr_mcastseminc,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
 
@@ -281,7 +257,7 @@ void kernel_main() {
                                 auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                                     intermediate_addrgen, intermediate_tile_two_id, 0);
                                 fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                                    &mux_connection_handle,
+                                    fabric_connection_ptr,
                                     pkt_scatter_hdr,
                                     l1_read_addr,
                                     NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
@@ -291,7 +267,7 @@ void kernel_main() {
                             case 1:
                             default: {
                                 fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                    &mux_connection_handle,
+                                    fabric_connection_ptr,
                                     pkt_unicast_hdr,
                                     l1_read_addr,
                                     NocUnicastCommandHeader{noc_address0});
@@ -321,7 +297,7 @@ void kernel_main() {
                         uint64_t out_ready_sem_noc_addr_in_pkt =
                             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
                         fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                            &mux_connection_handle,
+                            fabric_connection_ptr,
                             pkt_hdr_seminc,
                             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
                     }
@@ -334,7 +310,7 @@ void kernel_main() {
                 uint64_t out_ready_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    &mux_connection_handle,
+                    fabric_connection_ptr,
                     pkt_hdr_seminc,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
             }
@@ -363,7 +339,7 @@ void kernel_main() {
                     size_t l1_read_addr = get_read_ptr(cb_output_id);
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                         uint32_t output_tile_id = output_tile_id_start + tiles_read;
-                        uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
+                        uint64_t local_noc_addr = output_addrgen.get_noc_addr(output_tile_id);
                         noc_async_write(l1_read_addr, local_noc_addr, page_size);
                         l1_read_addr += page_size;
                         tiles_read++;
@@ -399,7 +375,7 @@ void kernel_main() {
     uint64_t batch_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
     fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-        &mux_connection_handle,
+        fabric_connection_ptr,
         pkt_hdr_mcastseminc,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
     noc_async_writes_flushed();
@@ -411,6 +387,7 @@ void kernel_main() {
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
+#ifdef USE_WORKER_MUX
     tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
@@ -422,6 +399,11 @@ void kernel_main() {
         noc_semaphore_inc(dest_addr, 1);
         noc_async_atomic_barrier();
     }
+#else
+    if (fabric_connection.is_logically_connected()) {
+        fabric_connection.close();
+    }
+#endif
 
     noc_async_write_barrier();
 }

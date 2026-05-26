@@ -13,6 +13,7 @@ The current version is verified to work with the following models:
 | [Llama 3.2 11B Vision](https://huggingface.co/meta-llama/Llama-3.2-11B-Vision)                   | n300                        | ```meta-llama/Llama-3.2-11B-Vision```           |
 | [Llama 3.2 90B Vision](https://huggingface.co/meta-llama/Llama-3.2-90B-Vision)                   | LoudBox / QuietBox          | ```meta-llama/Llama-3.2-90B-Vision```           |
 | [Mistral 7B Instruct v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)            | n150                        | ```mistralai/Mistral-7B-Instruct-v0.3```        |
+| [Mistral Small 3.1 24B Instruct](https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503) | T3K                   | ```mistralai/Mistral-Small-3.1-24B-Instruct-2503``` |
 | [Mixtral 8x7B Instruct v0.1](https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1)        | LoudBox / QuietBox          | ```mistralai/Mixtral-8x7B-Instruct-v0.1```        |
 | [Qwen 2.5 7B](https://huggingface.co/Qwen/Qwen2.5-7B)                                            | n300                        | ```Qwen/Qwen2.5-7B```                           |
 | [Qwen 2.5 Coder 32B](https://huggingface.co/Qwen/Qwen2.5-Coder-32B)                              | LoudBox / QuietBox          | ```Qwen/Qwen2.5-Coder-32B```                    |
@@ -65,6 +66,7 @@ The current version is verified to work with the following models:
 | [Mistral-7B-v0.1](https://huggingface.co/mistralai/Mistral-7B-v0.1)                                                       | N150     | `mistralai/Mistral-7B-v0.1`                                 |
 | [Mistral-Small-24B-Base-2501](https://huggingface.co/mistralai/Mistral-Small-24B-Base-2501)                               | T3K      | `mistralai/Mistral-Small-24B-Base-2501`                     |
 | [Mistral-Small-24B-Instruct-2501](https://huggingface.co/mistralai/Mistral-Small-24B-Instruct-2501)                       | T3K      | `mistralai/Mistral-Small-24B-Instruct-2501`                 |
+| [Mistral-Small-3.1-24B-Instruct-2503](https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503)             | T3K      | `mistralai/Mistral-Small-3.1-24B-Instruct-2503`             |
 | [NuminaMath-7B-TIR](https://huggingface.co/AI-MO/NuminaMath-7B-TIR)                                                       | N300     | `AI-MO/NuminaMath-7B-TIR`                                   |
 | [OpenThinker-7B](https://huggingface.co/open-thoughts/OpenThinker-7B)                                                     | N300     | `open-thoughts/OpenThinker-7B`                              |
 | [Primal-Mini-3B-Exp](https://huggingface.co/prithivMLmods/Primal-Mini-3B-Exp)                                             | N150     | `prithivMLmods/Primal-Mini-3B-Exp`                          |
@@ -206,6 +208,7 @@ Huggingface models specify their architecture in the `config.json` file. The fol
 - Qwen2ForCausalLM
 - Qwen3ForCausalLM
 - MistralForCausalLM
+- Mistral3ForConditionalGeneration
 - Phi3ForCausalLM
 
 At the time of writing this covers the majority of popular HuggingFace text-generation models. If you find another architecture that works or extend TT-Transformers to support one we would love to accept a PR!
@@ -327,6 +330,7 @@ Max Prefill Chunk Sizes (text-only):
 | Qwen2.5-7B | 4k tokens | 32k tokens | 128k tokens | 128k tokens |
 | Llama3.1-8B  | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
 | Llama3.2-11B | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
+| Mistral-Small-3.1-24B | 8k tokens | 128k tokens | 128k tokens | 128k tokens |
 | Llama3.1-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
 | Llama3.2-90B | Not supported | Not supported | 32k tokens     | Not supported |
 | DeepSeek-R1-Distill-Llama3.3-70B | Not supported | Not supported | 32k tokens | 128k tokens |
@@ -335,6 +339,8 @@ Max Prefill Chunk Sizes (text-only):
 - These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
 
 **Chunked prefill (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and T3000. On N300, a max prefill context length of 8k is supported, while T3000 supports a max context length of 128k.
+
+**Chunked prefill (Mistral-Small-3.1-24B multimodal)**: Mistral-Small-3.1-24B-Instruct-2503 (Pixtral vision) is currently supported on T3000. On T3000, a max prefill context length of 128k is supported.
 
 ---
 

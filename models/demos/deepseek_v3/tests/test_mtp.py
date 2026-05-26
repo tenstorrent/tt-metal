@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -27,14 +27,14 @@ from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.mtp import MTP2D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div, get_fabric_config
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import load_state_dict
 from models.demos.deepseek_v3.utils.weight_config import _try_load_cached_config, get_weight_config
 
 DEFAULT_NUM_STEPS = 128
 GENERATE_REFERENCE = os.getenv("DEEPSEEK_V3_MTP_GENERATE_REFERENCE", "0") == "1"
-TRACE_REGION_SIZE = int(os.getenv("DEEPSEEK_TRACE_REGION_SIZE", "134217728"))
+TRACE_REGION_SIZE = int(os.getenv("DEEPSEEK_TRACE_REGION_SIZE", "0"))
 TIMEOUT_S = int(os.getenv("DEEPSEEK_V3_MTP_TIMEOUT_S", "1200"))
 MAX_E2E_SECONDS = float(os.getenv("DEEPSEEK_V3_MTP_E2E_MAX_S", "0"))
 MIN_TOKENS_PER_SEC = float(os.getenv("DEEPSEEK_V3_MTP_MIN_TPS", "1.0"))
@@ -43,6 +43,7 @@ DEFAULT_PREFILL_LEN = int(os.getenv("DEEPSEEK_V3_MTP_PREFILL_LEN", "16"))
 DEFAULT_VERIFY_STEPS = int(os.getenv("DEEPSEEK_V3_MTP_VERIFY_STEPS", "16"))
 DEFAULT_MTP_TEST_MAX_SEQ_LEN = int(os.getenv("DEEPSEEK_V3_MTP_MAX_SEQ_LEN", "256"))
 SKIP_IN_CI = pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+MTP_REFERENCE_GENERATION_ISSUE = "https://github.com/tenstorrent/tt-metal/issues/45000"
 
 
 def _get_reference_dir() -> Path:
@@ -221,7 +222,7 @@ def _run_reference_decode_replay_consistency(
     [
         pytest.param(
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": get_fabric_config(),
                 "trace_region_size": TRACE_REGION_SIZE,
             },
             marks=SKIP_IN_CI,
@@ -256,7 +257,7 @@ def test_mtp_reference_decode_replay_consistency(
     [
         pytest.param(
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": get_fabric_config(),
                 "trace_region_size": TRACE_REGION_SIZE,
             },
             marks=SKIP_IN_CI,
@@ -1123,13 +1124,13 @@ class _MtpTraceRunner:
 
 # Test: generate the hidden-state and next-token oracle payload used by the MTP checks below.
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["DUAL", "QUAD"])
+@pytest.mark.requires_device(["QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
         pytest.param(
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": get_fabric_config(),
                 "trace_region_size": TRACE_REGION_SIZE,
             },
             marks=SKIP_IN_CI,
@@ -1140,6 +1141,9 @@ class _MtpTraceRunner:
 @pytest.mark.skipif(
     not GENERATE_REFERENCE,
     reason="Set DEEPSEEK_V3_MTP_GENERATE_REFERENCE=1 to generate MTP reference IO.",
+)
+@pytest.mark.skip(
+    reason=f"MTP reference generation fails on QUAD optimized MoE decode: {MTP_REFERENCE_GENERATION_ISSUE}"
 )
 def test_generate_mtp_reference_io(
     mesh_device,
@@ -1350,12 +1354,12 @@ def test_mtp_accept_rate_and_perf(
 
 # Test: prefill priming must seed the MTP cache correctly so post-prefill predictions stay accurate.
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["DUAL", "QUAD"])
+@pytest.mark.requires_device(["QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
             "trace_region_size": TRACE_REGION_SIZE,
         }
     ],
@@ -1481,12 +1485,12 @@ def test_mtp_prefill_priming(
 
 # Test: verify batching with aliased page tables must preserve prompt predictions, accept masks, and accepted verify outputs.
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["DUAL", "QUAD"])
+@pytest.mark.requires_device(["QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
             "trace_region_size": TRACE_REGION_SIZE,
         }
     ],

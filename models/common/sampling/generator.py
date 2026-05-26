@@ -1,7 +1,8 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import random
 import secrets
 from dataclasses import dataclass, fields, replace
@@ -138,6 +139,7 @@ class SamplingGenerator:
         sampling_params,
         prompt_tokens: torch.Tensor | None,
         empty_slots: list[int],
+        replicate_seeds: bool = True,
     ):
         """Prepare sampling state for a prefill request.
 
@@ -148,7 +150,7 @@ class SamplingGenerator:
         # assert on condition that seed is not None
         assert seed is not None, "sampling_params must be formatted (seed should be a list, not None)"
         self.seed_manager.reset_seed(seed, empty_slots)
-        self.seed_manager.get_new_values(empty_slots, replicate_seeds=True)
+        self.seed_manager.get_new_values(empty_slots, replicate_seeds=replicate_seeds)
         if prompt_tokens is not None:
             self.reset_prompt_tokens(prompt_tokens)
         self.reset_output_state()
@@ -581,6 +583,32 @@ class SeedManager:
             )
         else:
             self._seed_mapper = None
+
+    def apply_slot_remap(self, remap):
+        """Reindex RNG state after batch condense.
+
+        ``remap`` is a 1-D int tensor of length ``max_batch_size`` where
+        ``remap[i] = j`` means slot *i* now holds the request that was
+        previously at slot *j*.  Identity entries (``remap[i] == i``) are
+        no-ops.  Only non-identity entries trigger a move.
+        """
+        if not self._seed_active:
+            return
+        moves = [(int(remap[i]), i) for i in range(len(remap)) if int(remap[i]) != i]
+        if not moves:
+            return
+        # Snapshot the state we're about to overwrite.
+        old_seeds = list(self.seeds)
+        old_rngs = list(self.rngs)
+        for old_slot, new_slot in moves:
+            self.seeds[new_slot] = old_seeds[old_slot]
+            # copy.copy preserves internal RNG state but creates an
+            # independent object so the old slot's reference (still in
+            # self.rngs[old_slot]) does not alias the new one. Without
+            # this, get_new_values() would advance the shared object
+            # twice per decode step (once for each slot).
+            self.rngs[new_slot] = copy.copy(old_rngs[old_slot])
+        self._seed_active = any(s is not None for s in self.seeds)
 
     def reset_seed(self, seeds, user_ids):
         """Update RNG state for the given user slots after a prefill.

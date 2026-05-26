@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -89,6 +89,14 @@ private:
     uint32_t get_active_erisc_launch_flag_addr();
     bool erisc_app_still_running(tt::ChipId device_id, CoreCoord virtual_core);
     void erisc_send_exit_signal(tt::ChipId device_id, CoreCoord virtual_core, bool is_idle_eth);
+
+    // Wait for base FW to reach a terminal postcode (PASS/FAIL/SKIP). Idle eth only —
+    // any terminal state, as long as we don't assert/deassert during that process
+    bool wait_for_eth_fw_ready(tt::ChipId device_id, const CoreCoord& virtual_core, int timeout_ms = 20000);
+
+    // Zero all ETH RISC interrupt-mode registers on core. No-op on archs that don't
+    // expose this (num_interrupt_vecs == 0)
+    void disable_eth_interrupts(tt::ChipId device_id, const CoreCoord& virtual_core);
 
     void assert_cores(tt::ChipId device_id);
     void teardown_simulator_ethernet_cores();

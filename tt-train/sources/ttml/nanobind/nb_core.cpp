@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,6 +34,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "core/clip_grad_norm.hpp"
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/socket_manager.hpp"
+#include "core/tt_profiler.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "utils/memory_utils.hpp"
 
@@ -50,6 +51,9 @@ void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<ttnn::distributed::SocketType>(py_distributed);
     // Expose multihost DistributedContext under core.distributed as a non-owning type (not exposed by ttnn)
     nb::class_<tt::tt_metal::distributed::multihost::DistributedContext>(py_distributed, "DistributedContext");
+
+    // TTProfiler binding
+    nb::class_<ttml::core::TTProfiler>(m, "TTProfiler");
 
     // Utils submodule for memory tracking
     m.def_submodule("utils");
@@ -164,10 +168,21 @@ void py_module(nb::module_& m) {
             nb::arg("mesh_shape_override"));
         // Synchronize gradients across devices for DDP
         py_distributed.def(
-            "synchronize_gradients", &ttml::core::distributed::synchronize_gradients, nb::arg("parameters"));
+            "synchronize_gradients",
+            static_cast<void (*)(const ttml::serialization::NamedParameters&)>(
+                &ttml::core::distributed::synchronize_gradients),
+            nb::arg("parameters"));
+        py_distributed.def(
+            "synchronize_gradients",
+            static_cast<void (*)(const ttml::serialization::NamedParameters&, const std::vector<uint32_t>&)>(
+                &ttml::core::distributed::synchronize_gradients),
+            nb::arg("parameters"),
+            nb::arg("cluster_axes"));
 
         // Bind DistributedContext methods
         using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
+        using DistRank = tt::tt_metal::distributed::multihost::Rank;
+        using DistTag = tt::tt_metal::distributed::multihost::Tag;
         auto py_dist_ctx = static_cast<nb::class_<DistributedContext>>(py_distributed.attr("DistributedContext"));
         py_dist_ctx.def("size", [](DistributedContext& self) { return *self.size(); });
         py_dist_ctx.def("rank", [](DistributedContext& self) { return *self.rank(); });
@@ -178,6 +193,34 @@ void py_module(nb::module_& m) {
                 return self.create_sub_context(ttsl::Span<int>(const_cast<int*>(ranks.data()), ranks.size()));
             },
             nb::arg("ranks"));
+        // Byte-level point-to-point primitives — pure host-MPI, no device or
+        // mesh-socket dependency. These are the operations the C++ training
+        // stack uses underneath SocketManager (e.g. for the multi-host socket
+        // descriptor handshake in mesh_socket_utils.cpp). Exposed here so
+        // tests can validate them directly without going through MeshSocket,
+        // which requires sender_mesh_id != receiver_mesh_id (not satisfied
+        // on Galaxy single-mesh layouts).
+        py_dist_ctx.def(
+            "send",
+            [](DistributedContext& self, nb::bytes data, int dest, int tag) {
+                // DistributedContext::send takes Span<std::byte> (non-const),
+                // but underlying MPI_Send treats it as readonly.
+                auto* ptr = reinterpret_cast<std::byte*>(const_cast<char*>(data.c_str()));
+                self.send(ttsl::Span<std::byte>(ptr, data.size()), DistRank{dest}, DistTag{tag});
+            },
+            nb::arg("data"),
+            nb::arg("dest"),
+            nb::arg("tag") = 0);
+        py_dist_ctx.def(
+            "recv",
+            [](DistributedContext& self, std::size_t nbytes, int source, int tag) -> nb::bytes {
+                std::vector<std::byte> buffer(nbytes);
+                self.recv(ttsl::Span<std::byte>(buffer.data(), buffer.size()), DistRank{source}, DistTag{tag});
+                return nb::bytes(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+            },
+            nb::arg("nbytes"),
+            nb::arg("source"),
+            nb::arg("tag") = 0);
 
         // Bind SocketManager methods
         auto py_socket_manager =
@@ -231,6 +274,32 @@ void py_module(nb::module_& m) {
             nb::arg("rank"),
             nb::arg("use_grad") = false,
             nb::rv_policy::reference);
+    }
+
+    // TTProfiler method bindings
+    {
+        auto py_profiler = static_cast<nb::class_<ttml::core::TTProfiler>>(m.attr("TTProfiler"));
+        py_profiler.def("is_enabled", &ttml::core::TTProfiler::is_enabled, "Check if profiler is enabled");
+        py_profiler.def("enable", &ttml::core::TTProfiler::enable, "Enable profiler");
+        py_profiler.def("disable", &ttml::core::TTProfiler::disable, "Disable profiler");
+        py_profiler.def(
+            "get_naive_profiling",
+            &ttml::core::TTProfiler::get_naive_profiling,
+            "Check if TTML_NAIVE_PROFILER env var is set");
+        py_profiler.def(
+            "read_results",
+            [](const ttml::core::TTProfiler& self,
+               ttnn::distributed::MeshDevice& device,
+               const std::string& noop_identifier,
+               bool dump_results) {
+                self.read_results(&device, noop_identifier, dump_results, 5U, tt::tt_metal::ProfilerReadState::NORMAL);
+            },
+            nb::arg("device"),
+            nb::arg("noop_identifier") = "noop_identifier",
+            nb::arg("dump_results") = false,
+            "Insert a profiler marker. Synchronizes device and emits a timestamp (naive mode) "
+            "or inserts noop markers for Tracy profiling. "
+            "When dump_results is True, also flushes device profiling data to disk.");
     }
 
     // MemoryUsageTracker bindings under core.utils

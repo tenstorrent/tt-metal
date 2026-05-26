@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: 2024 Tenstorrent USA, Inc.
 #
 # Purpose: Setup and deploy Llama 3.1 70B Instruct model with dependencies.
 
@@ -219,11 +219,11 @@ install_vllm() {
     print_step "Installing vLLM"
     if [[ ! -d "vllm" ]]; then
         source python_env/bin/activate
-        export VLLM_TARGET_DEVICE="tt"
         git clone https://github.com/tenstorrent/vllm.git
         pushd vllm >/dev/null
         git checkout "${TT_VLLM_COMMIT_SHA_OR_TAG}"
-        pip install -e .
+        VLLM_TARGET_DEVICE=empty pip install -e .
+        pip install -e plugins/vllm-tt-plugin
         popd >/dev/null
     else
         echo "🔔 vLLM already installed. Skipping install."
@@ -233,7 +233,7 @@ install_vllm() {
 deploy_server() {
     print_step "Deploying Llama server"
     source python_env/bin/activate
-    python vllm/examples/server_example_tt.py
+    python vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py
     echo "✅ Deployment complete! Interact via http://localhost:8000."
 }
 

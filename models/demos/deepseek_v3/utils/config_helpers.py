@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
@@ -25,11 +25,14 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
 
 
+def _env_flag_enabled(name: str) -> bool:
+    value = os.getenv(name)
+    return value is not None and value.strip().lower() not in ("", "0", "false")
+
+
 def get_fabric_config() -> ttnn.FabricConfig:
     """Get the fabric config for the model."""
-    return (
-        ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
-    )
+    return ttnn.FabricConfig.FABRIC_1D_RING if _env_flag_enabled("USE_TORUS_MODE") else ttnn.FabricConfig.FABRIC_1D
 
 
 def is_ring_fabric(fabric_config: ttnn.FabricConfig) -> bool:
@@ -92,14 +95,17 @@ PREFILL_CHUNK_SIZES = {
         (32 * 1024, PrefillChunkSizes(model_chunk=1024, mla_chunk=512, wkv_b2_chunk=512)),
     ),
     # TG
-    4: ((0, PrefillChunkSizes(model_chunk=DEFAULT_MAX_SEQ_LEN, mla_chunk=DEFAULT_MAX_SEQ_LEN, wkv_b2_chunk=2 * 1024)),),
+    4: (
+        (0, PrefillChunkSizes(model_chunk=DEFAULT_MAX_SEQ_LEN, mla_chunk=DEFAULT_MAX_SEQ_LEN, wkv_b2_chunk=2 * 1024)),
+        (32 * 1024, PrefillChunkSizes(model_chunk=32 * 1024, mla_chunk=32 * 1024, wkv_b2_chunk=2 * 1024)),
+    ),
 }
 
 
 def get_prefill_chunk_sizes(max_seq_len: int, num_rows: int) -> PrefillChunkSizes:
     """Return PrefillChunkSizes for the given (num_rows, max_seq_len).
 
-    Return the configuration of the first seq_len which is >= input seq_len
+    Return the configuration for the largest threshold not exceeding max_seq_len.
     """
     if num_rows not in PREFILL_CHUNK_SIZES:
         raise ValueError(f"num_rows should be in (4, 8, 16), got {num_rows}")
@@ -107,9 +113,9 @@ def get_prefill_chunk_sizes(max_seq_len: int, num_rows: int) -> PrefillChunkSize
 
     chunks_to_return = chunk_sizes[0][1]
     for config_seq_len, chunks in chunk_sizes:
-        chunks_to_return = chunks
-        if config_seq_len >= max_seq_len:
+        if config_seq_len > max_seq_len:
             break
+        chunks_to_return = chunks
     logger.info(f"Prefill chunks: {chunks_to_return}")
     return chunks_to_return
 

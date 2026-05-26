@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
+
+"""Compare DeepSeek determinism JSONL logs from repeated runs.
+
+This utility is intended for debugging non-deterministic DeepSeek behavior by
+loading two per-step JSONL logs, optionally stripping volatile context fields,
+and reporting the first mismatched records with compact summaries.
+"""
 
 from __future__ import annotations
 

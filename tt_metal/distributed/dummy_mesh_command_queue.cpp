@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,7 +31,8 @@ bool DummyMeshCommandQueue::write_shard_to_device(
     const void* /*src*/,
     const std::optional<BufferRegion>& /*region*/,
     tt::stl::Span<const SubDeviceId> /*sub_device_ids*/,
-    std::shared_ptr<experimental::PinnedMemory> /*pinned_memory*/) {
+    std::shared_ptr<experimental::PinnedMemory> /*pinned_memory*/,
+    const tt::tt_metal::CoreRangeSet* /*logical_core_filter*/) {
     // No-op for inactive rank; no pinned memory used
     return false;
 }

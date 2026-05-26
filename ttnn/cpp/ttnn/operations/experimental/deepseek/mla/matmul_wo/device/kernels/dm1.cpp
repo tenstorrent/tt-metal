@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -109,4 +109,5 @@ void kernel_main() {
 
     // Ensure write and semaphore have left the core before continuing
     noc_async_write_flushed_with_trid(semaphore_trid, /*noc=*/1);
+    noc_async_write_set_trid(0, /*noc=*/1);
 }

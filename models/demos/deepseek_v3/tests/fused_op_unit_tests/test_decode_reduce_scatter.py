@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -233,7 +233,7 @@ def run_decode_reduce_scatter_deepseek_impl(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-                "trace_region_size": 1531456,
+                "trace_region_size": 0,
             },
             ttnn.Topology.Ring,
         ),

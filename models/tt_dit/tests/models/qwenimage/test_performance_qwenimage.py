@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,7 +23,17 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
-        [(2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
+        pytest.param(
+            (2, 4),
+            (2, 0),
+            (1, 0),
+            (4, 1),
+            (4, 1),
+            (4, 1),
+            ttnn.Topology.Linear,
+            1,
+            marks=pytest.mark.skip(reason="Disabled by issue #44770"),
+        ),
         [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[

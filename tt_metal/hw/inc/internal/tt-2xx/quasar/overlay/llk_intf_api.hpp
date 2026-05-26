@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,6 +18,8 @@
 
 #define LLK_REG_SIZE TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_REG_MAP_SIZE
 #define COUNTER_REG_SIZE TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__REG_FILE_SIZE
+
+namespace overlay {
 
 /**
  * @enum llk_interface_e
@@ -219,3 +221,5 @@ inline __attribute__((always_inline)) uint16_t fast_llk_intf_read_error(uint64_t
         llk_if * LLK_REG_SIZE + counter * COUNTER_REG_SIZE +
         TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__ERROR_STATUS_REG_ADDR);
 }
+
+}  // namespace overlay

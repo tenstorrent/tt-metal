@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -2238,6 +2238,15 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     static ActualSpeedySenderState<true> persistent_speedy_sender_state_vc2;
     static ActualSpeedyReceiverState<true, 2> persistent_speedy_receiver_state_vc2;
 #endif
+
+    uint16_t fabric_heartbeat_counter = 0;
+#if defined(ARCH_BLACKHOLE)
+    constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x7CC70;
+#else
+    constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x1F80;
+#endif
+    volatile uint32_t* fabric_heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(FABRIC_KERNEL_HEARTBEAT_ADDR);
+
     auto execute_main_loop = [&]() {
         ActualSpeedySenderState<super_speedy_mode> local_speedy_sender_state;
         ActualSpeedyReceiverState<super_speedy_mode, 0> local_speedy_receiver_state;
@@ -2271,17 +2280,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 loop_start_cycles = get_timestamp();
             }
-            if constexpr (super_speedy_mode && is_sender_channel_serviced[0]) {
-                auto check_connection_status =
-                    !channel_connection_established[0] ||
-                    local_sender_channel_worker_interfaces.template get<0>().has_worker_teardown_request();
-                if (check_connection_status) {
-                    check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
-                        local_sender_channel_worker_interfaces.template get<0>(),
-                        channel_connection_established[0],
-                        local_sender_channel_free_slots_stream_ids[0]);
-                }
-            }
 #if defined(FABRIC_2D_VC2_SERVICED)
             if constexpr (is_sender_channel_serviced[VC2_SENDER_CHANNEL_START]) {
                 auto check_connection_status =
@@ -2304,7 +2302,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         tx_progress |= run_sender_channel_step_speedy<
                             0,
                             to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
-                            SENDER_CREDIT_AMORTIZATION_FREQUENCY>(
+                            SENDER_CREDIT_AMORTIZATION_FREQUENCY,
+                            true /*MANAGE_CONNECTION_LIVENESS_IN_SPEEDY_HELPER*/>(
                             local_sender_channels.template get<0>(),
                             local_sender_channel_worker_interfaces.template get<0>(),
                             outbound_to_receiver_channel_pointer_ch0,
@@ -2528,7 +2527,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         tx_progress |= run_sender_channel_step_speedy<
                             VC2_SENDER_CHANNEL_START,
                             to_receiver_packets_sent_streams[VC2_RECEIVER_CHANNEL],
-                            SENDER_CREDIT_AMORTIZATION_FREQUENCY_LOCAL_VC2>(
+                            SENDER_CREDIT_AMORTIZATION_FREQUENCY_LOCAL_VC2,
+                            false /*MANAGE_CONNECTION_LIVENESS_IN_SPEEDY_HELPER*/>(
                             local_sender_channels.template get<VC2_SENDER_CHANNEL_START>(),
                             local_sender_channel_worker_interfaces.template get<VC2_SENDER_CHANNEL_START>(),
                             outbound_to_receiver_channel_pointer_ch2,
@@ -2583,6 +2583,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     rx_progress,
                     local_fabric_telemetry,
                     fabric_telemetry);
+            }
+
+            if ((++fabric_heartbeat_counter & 0x3F) == 0) {
+                *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
             }
 
             if constexpr (enable_context_switch) {

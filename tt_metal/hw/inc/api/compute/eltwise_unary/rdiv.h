@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,7 +32,7 @@ ALWI void rdiv_tile_init() { MATH((llk_math_eltwise_unary_sfpu_rdiv_init<APPROX>
  */
 // clang-format on
 template <RoundingMode rounding_mode = RoundingMode::None>
-ALWI void rdiv_tile(uint32_t dst_index, uint32_t value, int vector_mode = (int)VectorMode::RC) {
+ALWI void rdiv_tile(uint32_t dst_index, uint32_t value, VectorMode vector_mode = VectorMode::RC) {
     MATH((llk_math_eltwise_unary_sfpu_rdiv<APPROX, DST_ACCUM_MODE, rounding_mode>(dst_index, value, vector_mode)));
 }
 

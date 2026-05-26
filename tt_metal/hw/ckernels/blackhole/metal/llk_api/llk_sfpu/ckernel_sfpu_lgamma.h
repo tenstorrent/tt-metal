@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,8 @@
 #include "ckernel_sfpu_log.h"
 
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_log.h"
+#include "sfpu/ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 
@@ -43,7 +45,7 @@ inline void calculate_lgamma_stirling() {
         // reflection adjustment for inputs < 0.5 are done in calculate_lgamma_adjusted.
 
         if constexpr (!is_fp32_dest_acc_en) {
-            res = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(res, 0));
+            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::NearestEven);
         }
 
         sfpi::dst_reg[0] = res;
@@ -76,10 +78,10 @@ inline void calculate_lgamma_adjusted(
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         } else {
             sfpi::vInt exp = sfpi::exexp(in);
-            sfpi::vInt man = sfpi::exman9(in);
+            sfpi::vInt man = sfpi::exman(in);
             v_if(exp == 128 && man == 0) { result = std::numeric_limits<float>::infinity(); }
             v_endif;
         }
@@ -162,7 +164,8 @@ inline void calculate_lgamma_stirling_fp32(
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void lgamma_stirling_init() {
-    _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
+    // init for _sfpu_reciprocal_<2> for Blackhole
+    sfpi::vConstFloatPrgm0 = 2.0f;
 }
 
 }  // namespace ckernel::sfpu

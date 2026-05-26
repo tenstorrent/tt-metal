@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
@@ -141,20 +141,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         }
 
         # TODO: #42722 - preallocated tensors for all_to_all_dispatch_metadata
-        if False:
-            rows_per_block = USERS_PER_ROW
-            batch = rows_per_block * mesh_device.shape[0]
-            preallocated_all_to_all_dispatch_metadata_tensors = (
-                AllToAllDispatchMetadataConfig.create_preallocated_dispatch_output_tensors(
-                    mesh_device,
-                    batch,
-                    hf_config.hidden_size,
-                    hf_config.num_experts_per_tok,
-                )
-            )
-            config[
-                "quad_ring_preallocated_all_to_all_dispatch_metadata_tensors"
-            ] = preallocated_all_to_all_dispatch_metadata_tensors
 
         return config
 
@@ -258,9 +244,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
                 output_memory_config=io_memory_config,
             )
 
-        batch = batch_size_per_row * mesh_device.shape[0]
-        seq_len = 1
-
         # TODO: #41009
         config["quad_ring_all_to_all_dispatch_metadata"] = AllToAllDispatchMetadataConfig(
             worker_mode=ttnn.WorkerMode.DIRECT,
@@ -285,7 +268,8 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         )
         config["quad_ring_moe_compute"] = MoEComputeConfig(
             output_height_shard_dim=4,
-            output_width_shard_dim=4,
+            intermediate_size=hf_config.moe_intermediate_size,
+            has_bias=False,
             cluster_axis=0,
             mux_core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(4, 7))}),
         )
@@ -572,8 +556,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         topk_experts_indices_rm: ttnn.Tensor,
         topk_experts_weights_rm: ttnn.Tensor,
     ):
-        ccl = cfg["ccl"]
-
         topk_experts_indices_rm_sharded = ttnn.to_memory_config(
             topk_experts_indices_rm,
             memory_config=cfg["quad_ring_all_to_all_dispatch_metadata_sharded_memory_config"],

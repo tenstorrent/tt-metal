@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,12 +26,12 @@ namespace ckernel {
  * cb_wait_front(8) followed by a cb_pop_front(32) would produce incorrect behavior. Instead 4 calls of cb_wait_front()
  * waiting on 8, 16, 24, 32 tiles should be issued.
  *
- * Important note: number of tiles used in all cb_* calls must evenly divide the cb size and must be the same number in
- * all cb_wait_front calls in the same kernel. Example 1: cb_wait_front(32), cb_wait_front(40), cb_pop_front(32+8) tiles
- * on a CB of size 64 would produce incorrect behavior. Example 2: cb_wait_front(3) on a cb of size 32 would also
- * produce incorrect behavior. These limitations are due to performance optimizations in the CB implementation.
- *
- * Important note: CB total size must be an even multiple of the argument passed to this call.
+ * Important note: the total number of tiles passed to cb_pop_front/cb_push_back calls within one complete cycle of
+ * the CB must sum to exactly the CB size (fifo_num_pages) so that the internal pointer wraps correctly. Individual
+ * pop or push amounts do not need to evenly divide the CB size. Example: on a CB of size 12, cb_pop_front(5)
+ * followed by cb_pop_front(7) is correct (total 12 = CB size). However, cb_pop_front(7) followed by
+ * cb_pop_front(7) on the same CB is incorrect (total 14 != 12). Out-of-bounds pointer advancement is detected
+ * at runtime when watcher or lightweight kernel asserts are enabled.
  *
  * Return value: None
  *
@@ -78,9 +78,8 @@ ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_pop_tiles(c
 // clang-format off
 /**
  * A blocking call that waits for the specified number of tiles to be free in the specified circular buffer. This call
- * is used by the producer to wait for the consumer to consume (ie. free up) the specified number of tiles.
- *
- * CB total size must be an even multiple of the argument passed to this call.
+ * is used by the producer to wait for the consumer to consume (ie. free up) the specified number of tiles. This is a
+ * polling operation that does not advance any CB pointer.
  *
  * Return value: None
  *
@@ -173,7 +172,7 @@ ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
 #else
     ASSERT(false && "get_tile_address is not implemented for ARCH_QUASAR");
     return 0;
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 // clang-format off
@@ -213,7 +212,7 @@ ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t elem
 #else
     ASSERT(false && "read_tile_value is not implemented for ARCH_QUASAR");
     return 0;
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 }  // namespace ckernel

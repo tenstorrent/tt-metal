@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,13 +6,14 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
+#include <cmath>
+
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operation.hpp"
 
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation_types.hpp"
-#include "ttnn/operations/transformer/sdpa/device/joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 
 using namespace tt::tt_metal;
@@ -199,7 +200,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> JointSDPADeviceOpera
 
     CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                      : output_tensor.device()->compute_with_storage_grid_size();
-    MathFidelity fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+    tt::tt_metal::MathFidelity fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
 
     const uint32_t B = q_shape[0];
     const uint32_t NQH = q_shape[1];
@@ -239,7 +240,7 @@ JointSDPAResult joint_scaled_dot_product_attention(
     using OperationType = ttnn::prim::JointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
     auto scale_val = scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1])));
 

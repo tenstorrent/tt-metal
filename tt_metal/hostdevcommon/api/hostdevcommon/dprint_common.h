@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@
 // DataFormat comes from tt_backend_api_types.hpp for SW, and tensix_types.h for HW...
 // But wait there's more, SW also includes tensix_types.h so there's both tt::DataFormat and DataFormat there. Use a
 // different name here so that this header can be included in both.
-#if !defined(KERNEL_BUILD) && !defined(FW_BUILD)  // SW
+#if !defined(KERNEL_BUILD) && !defined(FW_BUILD) && !defined(ENV_LLK_INFRA)  // SW
 #include <tt-metalium/tt_backend_api_types.hpp>
 using CommonDataFormat = tt::DataFormat;
 #else
@@ -24,7 +24,9 @@ using CommonDataFormat = DataFormat;
 
 #include <cstddef>
 
+#if !defined(ENV_LLK_INFRA)
 constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204;  // per thread
+#endif
 
 #define DPRINT_TYPES            \
     DPRINT_PREFIX(CSTR)         \
@@ -72,6 +74,8 @@ static_assert(DPrintTypeID_Count < 64, "Exceeded number of dprint types");
 // These magic values must not be equal to any real wpos/rpos values.
 constexpr uint32_t DEBUG_PRINT_SERVER_STARTING_MAGIC = 0x98989898;
 constexpr uint32_t DEBUG_PRINT_SERVER_DISABLED_MAGIC = 0xf8f8f8f8;
+constexpr uint32_t DEVICE_PRINT_RESET_BUFFER_MAGIC = 0xF0E1D2C3;
+constexpr uint32_t DEVICE_PRINT_WRITE_STALL_FLAG = 1u << 31;
 
 #define ATTR_PACK __attribute__((packed))
 

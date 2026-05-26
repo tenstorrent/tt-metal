@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """AIME-24 regression tests for the DeepSeek-V3 demo."""
@@ -76,6 +76,7 @@ def _clear_score_artifact(case_id: str) -> None:
     try:
         _score_artifact_path(case_id).unlink()
     except FileNotFoundError:
+        # It's fine if no prior score artifact exists; cleanup is best-effort.
         pass
 
 

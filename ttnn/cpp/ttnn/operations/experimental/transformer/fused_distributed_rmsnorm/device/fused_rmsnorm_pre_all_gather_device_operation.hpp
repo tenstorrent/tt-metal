@@ -1,17 +1,25 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <optional>
+#include <variant>
 
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 #include "fused_rmsnorm_pre_all_gather_device_operation_types.hpp"
-#include "fused_rmsnorm_pre_all_gather_program_factory.hpp"
 
 namespace ttnn::experimental::prim {
+
+struct FusedRMSNormPreAllGatherProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const FusedRmsnormPreAllGatherParams& operation_attributes,
+        const FusedRmsnormPreAllGatherInputs& tensor_args,
+        Tensor& output_tensor);
+};
 
 struct FusedRMSNormPreAllGatherDeviceOperation {
     using operation_attributes_t = FusedRmsnormPreAllGatherParams;

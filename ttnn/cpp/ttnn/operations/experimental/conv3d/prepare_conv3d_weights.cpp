@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,7 +23,9 @@ namespace ttnn::operations::experimental::conv3d {
 template <typename T, typename Fn>
 Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const TensorSpec& output_spec) {
     TT_FATAL(is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
-    return Tensor(input_tensor.host_storage().transform(compute), output_spec, input_tensor.tensor_topology());
+    auto transformed_buffer = input_tensor.host_storage().buffer().transform(
+        compute, tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+    return Tensor(tt::tt_metal::HostTensor(std::move(transformed_buffer), output_spec, input_tensor.tensor_topology()));
 }
 
 template <typename Func, typename... Args>
@@ -153,7 +155,7 @@ Tensor prepare_conv3d_weights(
     uint32_t ALIGN_PAD = alignment - (C % alignment);
     if (C % alignment != 0) {
         ttnn::SmallVector<std::array<uint32_t, 2>> padding_shape({{0, 0}, {0, 0}, {0, 0}, {0, ALIGN_PAD}, {0, 0}});
-        prepare_weights = ttnn::pad(prepare_weights, padding_shape, 0.0f);
+        prepare_weights = ttnn::pad(prepare_weights, padding_shape, 0.0f, /*use_multicore=*/true);
     }
     // Reshape and permute weights
     auto weights_shape = prepare_weights.logical_shape();

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -57,14 +57,16 @@ def _write_weight_config_json_atomically(config_path: Path, weight_config: Any) 
                     os.fsync(dfd)
                 finally:
                     os.close(dfd)
-            except OSError:
-                pass
+            except OSError as e:
+                # Best-effort durability step: if directory fsync is unavailable/fails, keep publication successful.
+                logger.debug(f"Failed to fsync weight config directory {config_path.parent}: {e}")
         finally:
             if tmp_path.exists():
                 try:
                     tmp_path.unlink()
-                except OSError:
-                    pass
+                except OSError as e:
+                    # Best-effort cleanup: failure to remove a stale temp file should not fail publication.
+                    logger.debug(f"Failed to remove temporary weight config file {tmp_path}: {e}")
 
 
 @contextmanager

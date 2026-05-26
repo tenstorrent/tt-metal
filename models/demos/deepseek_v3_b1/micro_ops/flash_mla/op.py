@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -643,6 +643,7 @@ class FlashMLADecode:
             ("kv_cache_cur_pos_ready_semaphore_id", kv_cache_cur_pos_ready_semaphore_id),
             ("kv_cache_cur_pos_ready_value", kv_cache_cur_pos_ready_value),
             ("cb_k_in", cb_k_in),
+            ("num_mcast_dests", num_mcast_dests),
         ]
         # TensorAccessorArgs for K (indexed, starting at index 0)
         brisc_compile_time_args = list(get_tensor_accessor_args(kv_cache_tensor))
@@ -853,6 +854,8 @@ class FlashMLADecode:
                         is_mcast_sender,
                         mcast_start_x,
                         mcast_start_y,
+                        mcast_end_x,
+                        mcast_end_y,
                         vc,
                     ],
                 )

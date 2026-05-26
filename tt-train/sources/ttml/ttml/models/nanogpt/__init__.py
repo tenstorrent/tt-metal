@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -79,7 +79,7 @@ class NanoGPT(AbstractModuleBase):
         )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
-            self.tok_emb.weight = self.fc.weight.tensor
+            self.tok_emb.weight = self.fc.weight
 
         if config.positional_embedding_type == "trainable":
             self.pos_emb = TrainablePositionalEmbedding(
@@ -162,6 +162,8 @@ def create_nanogpt(config: NanoGPTConfig) -> NanoGPT:
     return NanoGPT(config)
 
 
+from .flops import calculate_flops_per_token
+
 __all__ = [
     "PositionalEmbedding",
     "TrainablePositionalEmbedding",
@@ -169,5 +171,6 @@ __all__ = [
     "NanoGPT",
     "NanoGPTExperimentalConfig",
     "NanoGPTConfig",
+    "calculate_flops_per_token",
     "create_nanogpt",
 ]

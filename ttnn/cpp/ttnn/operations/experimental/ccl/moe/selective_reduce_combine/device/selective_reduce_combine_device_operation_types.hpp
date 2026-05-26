@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,7 +23,7 @@ struct SelectiveReduceCombineParams {
     uint32_t experts;
     uint32_t num_links;
 
-    std::optional<uint32_t> axis;
+    uint32_t axis;
     tt::tt_fabric::Topology topology;
 
     uint32_t num_token_parallel_cores;

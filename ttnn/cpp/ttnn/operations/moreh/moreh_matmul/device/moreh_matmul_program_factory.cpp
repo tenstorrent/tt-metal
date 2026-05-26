@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -107,10 +107,13 @@ void get_not_bcast(
     }
 }
 
-MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOperation::MultiCoreProgramFactory::create(
+tt::tt_metal::ProgramDescriptor MorehMatmulOperation::MultiCoreProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+
     const Tensor& input = tensor_args.input;
     const Tensor& other = tensor_args.other;
     const Tensor& output = tensor_return_value;
@@ -121,14 +124,12 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     bool transpose_other = operation_attributes.transpose_other;
 
     const DeviceComputeKernelConfig& compute_kernel_config = init_device_compute_kernel_config(
-        input.device()->arch(), operation_attributes.compute_kernel_config, MathFidelity::HiFi4);
-    ;
+        input.device()->arch(), operation_attributes.compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::Program program{};
-    tt::tt_metal::IDevice* device{input.device()};
+    IDevice* device{input.device()};
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -280,28 +281,39 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     const uint32_t im3_t{1};   // temp for bias add
     const uint32_t out0_t{2};  // output
 
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        cb_data_format,
-        {
-            {tt::CBIndex::c_0, in0_t},
-            {tt::CBIndex::c_1, in1_t},
-            {tt::CBIndex::c_2, in2_t},
-            {tt::CBIndex::c_3, in3_t},
-            {tt::CBIndex::c_4, in4_t},
-            {tt::CBIndex::c_24, im0_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format},
-            {tt::CBIndex::c_25, im1_t},
-            {tt::CBIndex::c_26, im2_t},
-            {tt::CBIndex::c_27, im3_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format},
-            {tt::CBIndex::c_16, out0_t},
+    auto im0_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format;
+    auto im3_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format;
+
+    ProgramDescriptor desc;
+
+    auto add_cb = [&](CBIndex idx, uint32_t num_tiles, tt::DataFormat fmt) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = num_tiles * tile_size(fmt),
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(idx),
+                .data_format = fmt,
+                .page_size = tile_size(fmt),
+            }}},
         });
+    };
+
+    add_cb(tt::CBIndex::c_0, in0_t, cb_data_format);
+    add_cb(tt::CBIndex::c_1, in1_t, cb_data_format);
+    add_cb(tt::CBIndex::c_2, in2_t, cb_data_format);
+    add_cb(tt::CBIndex::c_3, in3_t, cb_data_format);
+    add_cb(tt::CBIndex::c_4, in4_t, cb_data_format);
+    add_cb(tt::CBIndex::c_24, im0_t, im0_data_format);
+    add_cb(tt::CBIndex::c_25, im1_t, cb_data_format);
+    add_cb(tt::CBIndex::c_26, im2_t, cb_data_format);
+    add_cb(tt::CBIndex::c_27, im3_t, im3_data_format);
+    add_cb(tt::CBIndex::c_16, out0_t, cb_data_format);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::map<std::string, std::string> reader_defines;
-    std::vector<uint32_t> reader_compile_time_args = {
+    std::map<std::string, std::string> reader_defines_map;
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
         Kt,
         static_cast<uint32_t>(transpose_input),
         static_cast<uint32_t>(transpose_other),
@@ -314,23 +326,32 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     TensorAccessorArgs(other.buffer()).append_to(reader_compile_time_args);
 
     if (bias.has_value()) {
-        reader_defines["FUSE_BIAS"] = "1";
+        reader_defines_map["FUSE_BIAS"] = "1";
         reader_compile_time_args.push_back(static_cast<uint32_t>(is_scalar_bias));
         TensorAccessorArgs(bias->buffer()).append_to(reader_compile_time_args);
         log_debug(tt::LogOp, "{}:{} bias tensor. is bias dram {}", __func__, __LINE__, is_dram(bias));
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {};
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args;
     TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
-    const auto* const reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/reader_moreh_matmul.cpp";
-    const auto* const writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/writer_moreh_matmul.cpp";
+    KernelDescriptor::Defines reader_defines(reader_defines_map.begin(), reader_defines_map.end());
 
-    const auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/reader_moreh_matmul.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.defines = std::move(reader_defines);
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/writer_moreh_matmul.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
+
     log_debug(
         tt::LogOp,
         "{}:{} DMVK is_dram(input): {}, is_dram(other): {}, is_dram(output): {}",
@@ -343,11 +364,11 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::map<std::string, std::string> compute_defines;
+    std::map<std::string, std::string> compute_defines_map;
 
     const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/moreh_matmul.cpp";
-    std::vector<uint32_t> compute_args_group_1 = {
+    KernelDescriptor::CompileTimeArgs compute_args_group_1 = {
         num_output_tiles_per_core_group_1,  // num_output_tiles
         Mt,
         Nt,
@@ -360,29 +381,35 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         other_mask_w};
 
     if (bias.has_value()) {
-        compute_defines["FUSE_BIAS"] = "1";
+        compute_defines_map["FUSE_BIAS"] = "1";
         compute_args_group_1.push_back(static_cast<uint32_t>(is_scalar_bias));
     }
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
-        compute_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines_map["FP32_DEST_ACC_EN"] = "1";
         unpack_to_dest_mode[tt::CBIndex::c_24] = UnpackToDestMode::UnpackToDestFp32;
     }
+    KernelDescriptor::Defines compute_defines(compute_defines_map.begin(), compute_defines_map.end());
 
-    const auto compute_kernel_1_id = CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core_group_1, num_output_tiles_per_core_group_1, compute_args_group_1},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode,
-        unpack_to_dest_mode);
+    KernelDescriptor compute_desc_1;
+    compute_desc_1.kernel_source = compute_kernel_file;
+    compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc_1.core_ranges = core_group_1;
+    compute_desc_1.compile_time_args = std::move(compute_args_group_1);
+    compute_desc_1.defines = compute_defines;
+    compute_desc_1.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
+        .math_approx_mode = math_approx_mode,
+    };
 
-    std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
-    if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_args_group_2 = {
+    KernelDescriptor compute_desc_2;
+    bool has_core_group_2 = !core_group_2.ranges().empty();
+    if (has_core_group_2) {
+        KernelDescriptor::CompileTimeArgs compute_args_group_2 = {
             num_output_tiles_per_core_group_2,  // num_output_tiles
             Mt,
             Nt,
@@ -398,15 +425,18 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
             compute_args_group_2.push_back(static_cast<uint32_t>(is_scalar_bias));
         }
 
-        compute_kernel_2_id = CreateComputeKernel(
-            program,
-            compute_kernel_file,
-            {core_group_2, num_output_tiles_per_core_group_2, compute_args_group_2},
-            compute_defines,
-            math_fidelity,
-            fp32_dest_acc_en,
-            math_approx_mode,
-            unpack_to_dest_mode);
+        compute_desc_2.kernel_source = compute_kernel_file;
+        compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc_2.core_ranges = core_group_2;
+        compute_desc_2.compile_time_args = std::move(compute_args_group_2);
+        compute_desc_2.defines = compute_defines;
+        compute_desc_2.config = ComputeConfigDescriptor{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .math_approx_mode = math_approx_mode,
+        };
     }
     log_debug(
         tt::LogOp,
@@ -419,29 +449,34 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
+    const uint32_t input_addr = input.buffer()->address();
+    const uint32_t other_addr = other.buffer()->address();
+    auto* const output_buf = output.buffer();
+    const uint32_t bias_addr = bias.has_value() ? bias.value().buffer()->address() : 0u;
+
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_output_tiles_per_core;
+        std::vector<uint32_t> compute_rt_args;
+        compute_rt_args.push_back(num_tiles_written);
+        compute_rt_args.insert(compute_rt_args.end(), output_stride.begin(), output_stride.end());
+
         if (core_group_1.contains(core)) {
             num_output_tiles_per_core = num_output_tiles_per_core_group_1;
-            std::vector<uint32_t> compute_rt_args;
-            compute_rt_args.push_back(num_tiles_written);
-            compute_rt_args.insert(compute_rt_args.end(), output_stride.begin(), output_stride.end());
-            tt::tt_metal::SetRuntimeArgs(program, compute_kernel_1_id, core, compute_rt_args);
+            compute_desc_1.runtime_args.emplace_back(
+                core, KernelDescriptor::CoreRuntimeArgs(compute_rt_args.begin(), compute_rt_args.end()));
         } else if (core_group_2.contains(core)) {
-            TT_FATAL(compute_kernel_2_id.has_value(), "Core not in specified core ranges");
+            TT_FATAL(has_core_group_2, "Core not in specified core ranges");
             num_output_tiles_per_core = num_output_tiles_per_core_group_2;
-            std::vector<uint32_t> compute_rt_args;
-            compute_rt_args.push_back(num_tiles_written);
-            compute_rt_args.insert(compute_rt_args.end(), output_stride.begin(), output_stride.end());
-            tt::tt_metal::SetRuntimeArgs(program, compute_kernel_2_id.value(), core, compute_rt_args);
+            compute_desc_2.runtime_args.emplace_back(
+                core, KernelDescriptor::CoreRuntimeArgs(compute_rt_args.begin(), compute_rt_args.end()));
         } else {
             TT_THROW("Core not in specified core ranges");
         }
 
         std::vector<uint32_t> reader_rt_args;
-        reader_rt_args.push_back(input.buffer()->address());
-        reader_rt_args.push_back(other.buffer()->address());
+        reader_rt_args.push_back(input_addr);
+        reader_rt_args.push_back(other_addr);
         reader_rt_args.push_back(num_tiles_written);
         reader_rt_args.push_back(num_output_tiles_per_core);
 
@@ -453,57 +488,24 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         reader_rt_args.insert(reader_rt_args.end(), other_not_bcast.begin(), other_not_bcast.end());
 
         if (bias.has_value()) {
-            reader_rt_args.push_back(bias.value().buffer()->address());
+            reader_rt_args.push_back(bias_addr);
         }
 
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
+        reader_desc.runtime_args.emplace_back(
+            core, KernelDescriptor::CoreRuntimeArgs(reader_rt_args.begin(), reader_rt_args.end()));
 
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            core,
-            {output.buffer()->address(), num_tiles_written, num_output_tiles_per_core});
+        writer_desc.emplace_runtime_args(core, {output_buf, num_tiles_written, num_output_tiles_per_core});
         num_tiles_written += num_output_tiles_per_core;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
-}
-
-void MorehMatmulOperation::MultiCoreProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto num_cores = cached_program.shared_variables.num_cores;
-    auto num_cores_y = cached_program.shared_variables.num_cores_y;
-
-    auto bias = tensor_args.bias;
-
-    log_debug(tt::LogOp, "{}:{} args_callback ", __func__, __LINE__);
-    const auto input_address = tensor_args.input.buffer()->address();
-    const auto other_address = tensor_args.other.buffer()->address();
-    const auto output_address = tensor_return_value.buffer()->address();
-
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = input_address;
-            runtime_args[1] = other_address;
-
-            if (bias.has_value()) {
-                const auto bias_address = bias.value().buffer()->address();
-                runtime_args[runtime_args.size() - 1] = bias_address;
-            }
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = output_address;
-        }
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc_1));
+    if (has_core_group_2) {
+        desc.kernels.push_back(std::move(compute_desc_2));
     }
+
+    return desc;
 }
+
 }  // namespace ttnn::operations::moreh::moreh_matmul

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,13 +6,10 @@ import math
 import pytest
 from loguru import logger
 from models.common.utility_functions import is_wormhole_b0
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 import torch
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_equal,
-    comp_pcc,
-)
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 @pytest.mark.parametrize("batch", [16, 96])
@@ -35,6 +32,7 @@ def test_matmul_1d_in0_batched(
     function_level_defaults,
     num_loops,
 ):
+    torch.manual_seed(0)
     grid_size = (12, 8)
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -62,7 +60,14 @@ def test_matmul_1d_in0_batched(
 
         in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-        bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
+
+        bias_t = ttnn.from_torch(
+            bias,
+            dtype=weights_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=interleaved_mem_config,
+        )
 
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
@@ -106,9 +111,7 @@ def test_matmul_1d_in0_batched(
 
         tt_out = tt2torch_tensor(output_t)
         output_t.deallocate()
-        passing, output = comp_pcc(pt_out, tt_out)
-        logger.info(output)
-        assert passing
+        assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)
 
 
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
@@ -135,6 +138,7 @@ def test_linear_fp32_acc_l1(
     function_level_defaults,
     num_loops,
 ):
+    torch.manual_seed(0)
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -162,8 +166,13 @@ def test_linear_fp32_acc_l1(
 
         in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-        bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
-
+        bias_t = ttnn.from_torch(
+            bias.reshape(bias_shape),
+            dtype=weights_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=interleaved_mem_config,
+        )
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
         if in0_sharded:
@@ -212,9 +221,7 @@ def test_linear_fp32_acc_l1(
 
         tt_out = tt2torch_tensor(output_t)
 
-        passing, output = comp_pcc(pt_out, tt_out)
-        logger.info(output)
-        assert passing
+        assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)
 
 
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
@@ -243,6 +250,7 @@ def test_matmul_no_mcast_fp32_acc_l1(
     function_level_defaults,
     num_loops,
 ):
+    torch.manual_seed(213919)
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -317,9 +325,9 @@ def test_matmul_no_mcast_fp32_acc_l1(
 
         tt_out = tt2torch_tensor(output_t)
 
-        passing, output = comp_pcc(pt_out, tt_out)
-        logger.info(output)
-        assert passing
+        assert_numeric_metrics(
+            pt_out, tt_out, atol=0.011 * K, rtol=0.001 * K, frobenius_threshold=0.001 * K, check_ulp=False
+        )
 
 
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
@@ -352,6 +360,7 @@ def test_matmul_1d_fp32_input_output(
     function_level_defaults,
     num_loops,
 ):
+    torch.manual_seed(0)
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -379,7 +388,13 @@ def test_matmul_1d_fp32_input_output(
 
         in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-        bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
+        bias_t = ttnn.from_torch(
+            bias.reshape(bias_shape),
+            dtype=weights_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=interleaved_mem_config,
+        )
 
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
@@ -429,9 +444,9 @@ def test_matmul_1d_fp32_input_output(
 
         tt_out = tt2torch_tensor(output_t)
 
-        passing, output = comp_pcc(pt_out, tt_out)
-        logger.info(output)
-        assert passing
+        assert_numeric_metrics(
+            pt_out, tt_out, atol=0.011 * K, rtol=0.001 * K, frobenius_threshold=0.001 * K, check_ulp=False
+        )
 
 
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
@@ -466,6 +481,7 @@ def test_matmul_no_mcast_fp32_input_output(
     function_level_defaults,
     num_loops,
 ):
+    torch.manual_seed(0)
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -540,9 +556,9 @@ def test_matmul_no_mcast_fp32_input_output(
 
         tt_out = tt2torch_tensor(output_t)
 
-        passing, output = comp_pcc(pt_out, tt_out)
-        logger.info(output)
-        assert passing
+        assert_numeric_metrics(
+            pt_out, tt_out, atol=10992.66 * K, rtol=0.001 * K, frobenius_threshold=0.001 * K, check_ulp=False
+        )
 
 
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
@@ -580,6 +596,7 @@ def test_matmul_no_untilize_output_param(
     function_level_defaults,
     num_loops,
 ):
+    torch.manual_seed(0)
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -654,9 +671,7 @@ def test_matmul_no_untilize_output_param(
 
         tt_out = tt2torch_tensor(output_t)
 
-        passing, output = comp_pcc(pt_out, tt_out)
-        logger.info(output)
-        assert passing
+        assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)
 
 
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
@@ -677,6 +692,7 @@ def test_sharded_matmul_2d(
     weights_dtype,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, 1, N]
@@ -703,8 +719,13 @@ def test_sharded_matmul_2d(
 
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
-
+    bias_t = ttnn.from_torch(
+        bias.reshape(bias_shape),
+        dtype=weights_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=interleaved_mem_config,
+    )
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
     if in0_sharded:
@@ -740,9 +761,7 @@ def test_sharded_matmul_2d(
 
     tt_out = tt2torch_tensor(output_t)
 
-    passing, output = comp_pcc(pt_out, tt_out)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)
 
 
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_interleaved"])
@@ -761,6 +780,7 @@ def test_sharded_matmul_2d_in0_height_sharded_in1_width_sharded(
     output_dtype,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     M = 6 * 32
     N = 12 * 32
     K = 2 * 32
@@ -791,7 +811,13 @@ def test_sharded_matmul_2d_in0_height_sharded_in1_width_sharded(
     # Generate the tensor
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
+    bias_t = ttnn.from_torch(
+        bias.reshape(bias_shape),
+        dtype=weights_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=interleaved_mem_config,
+    )
 
     if in0_sharded:
         in0_t = ttnn.interleaved_to_sharded(
@@ -838,9 +864,7 @@ def test_sharded_matmul_2d_in0_height_sharded_in1_width_sharded(
 
     tt_out = tt2torch_tensor(output_t)
 
-    passing, output = comp_pcc(pt_out, tt_out)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)
 
 
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
@@ -859,6 +883,7 @@ def test_sharded_matmul_2d_transposed(
     weights_dtype,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     K = 256
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
@@ -884,7 +909,14 @@ def test_sharded_matmul_2d_transposed(
 
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
+
+    bias_t = ttnn.from_torch(
+        bias,
+        dtype=weights_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=interleaved_mem_config,
+    )
 
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
@@ -921,12 +953,11 @@ def test_sharded_matmul_2d_transposed(
 
     tt_out = tt2torch_tensor(output_t)
 
-    passing, output = comp_pcc(pt_out, tt_out)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(pt_out, tt_out, atol=999, rtol=999, frobenius_threshold=999, check_ulp=False)
 
 
 def test_resharded_binary_to_matmul(device, function_level_defaults):
+    torch.manual_seed(0)
     grid_size_binary = device.compute_with_storage_grid_size()
     num_cores_binary = 98
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -963,7 +994,14 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config)
     weight_t = torch2tt_tensor(weight, device, tt_memory_config=interleaved_mem_config)
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config)[0]
+
+    bias_t = ttnn.from_torch(
+        bias,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=interleaved_mem_config,
+    )
 
     in0_t = ttnn.interleaved_to_sharded(
         in0_t,
@@ -1010,11 +1048,9 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
 
     tt_out = tt2torch_tensor(output_matmul_t)
 
-    pt_out = (in0 + in1) @ weight
+    pt_out = (in0 + in1) @ weight + bias
 
-    passing, output = comp_pcc(pt_out, tt_out)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)
 
 
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
@@ -1035,6 +1071,7 @@ def test_sharded_matmul_1d_in0(
     weights_dtype,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -1061,8 +1098,13 @@ def test_sharded_matmul_1d_in0(
 
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
-
+    bias_t = ttnn.from_torch(
+        bias.reshape(bias_shape),
+        dtype=weights_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=interleaved_mem_config,
+    )
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
     if in0_sharded:
@@ -1099,13 +1141,12 @@ def test_sharded_matmul_1d_in0(
 
     tt_out = tt2torch_tensor(output_t)
 
-    passing, output = comp_pcc(pt_out, tt_out, 0.98)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)
 
 
 # Have at least one example of 1d matmul with in1 mcasted that runs on WH
 def test_sharded_matmul_1d_in1_wormhole(device, function_level_defaults):
+    torch.manual_seed(0)
     M = 4096
     K = 64
     N = 256
@@ -1136,7 +1177,13 @@ def test_sharded_matmul_1d_in1_wormhole(device, function_level_defaults):
 
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype)
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype)[0]
+    bias_t = ttnn.from_torch(
+        bias.reshape(bias_shape),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=interleaved_mem_config,
+    )
 
     output_mem_config = sharded_mem_config
 
@@ -1172,9 +1219,7 @@ def test_sharded_matmul_1d_in1_wormhole(device, function_level_defaults):
 
     tt_out = tt2torch_tensor(output_t)
 
-    passing, output = comp_pcc(pt_out, tt_out)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)
 
 
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
@@ -1200,6 +1245,7 @@ def test_sharded_matmul_no_mcast(
     activations_dtype,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     grid_size = (12, 8)
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -1265,6 +1311,4 @@ def test_sharded_matmul_no_mcast(
 
     tt_out = tt2torch_tensor(output_t)
 
-    passing, output = comp_pcc(pt_out, tt_out)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)

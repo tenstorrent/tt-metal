@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include <variant>
 #include <tt-metalium/core_coord.hpp>
@@ -57,6 +58,9 @@ struct QuasarDataMovementConfig {
 
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
+
+    // Provide include paths for the kernel compiler (-I)
+    std::vector<std::filesystem::path> compiler_include_paths;
 };
 
 struct QuasarComputeConfig {
@@ -82,8 +86,11 @@ struct QuasarComputeConfig {
     //     CreateKernel(program, "kernel.cpp", core, QuasarComputeConfig{.compile_args = compile_args,
     //     .named_compile_args = named_compile_args})
     std::unordered_map<std::string, uint32_t> named_compile_args;
+
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
+    // Provide include paths for the kernel compiler (-I)
+    std::vector<std::filesystem::path> compiler_include_paths;
 };
 
 /**

@@ -1,108 +1,91 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
-#include "experimental/noc.h"
-#endif
-
-#include "api/debug/dprint.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+#include "api/kernel_thread_globals.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    // same arg indices as in reader_binary_diff_lengths for compat
-    uintptr_t src0_addr = get_arg_val<uint32_t>(0);
-    uintptr_t src1_addr = get_arg_val<uint32_t>(1);
-    uint32_t Mt = get_arg_val<uint32_t>(2);
-    uint32_t Kt = get_arg_val<uint32_t>(3);
-    uint32_t Nt = get_arg_val<uint32_t>(4);
-    uint32_t MtKt = get_arg_val<uint32_t>(5);  // if 0
-    uint32_t KtNt = get_arg_val<uint32_t>(6);
-    uint32_t batch = get_arg_val<uint32_t>(7);
-    uint32_t bcast_B = get_arg_val<uint32_t>(8);  // if 1 we broadcast B to batch
+    uint32_t Mt = get_arg(args::Mt);
+    uint32_t Kt = get_arg(args::Kt);
+    uint32_t Nt = get_arg(args::Nt);
+    uint32_t MtKt = get_arg(args::MtKt);
+    uint32_t KtNt = get_arg(args::KtNt);
+    uint32_t batch = get_arg(args::batch);
+    uint32_t bcast_B = get_arg(args::do_bcast);
+    uint32_t batch_start = get_arg(args::batch_start);
 
-    // DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << "KtNt=" << KtNt << ENDL();
-    // DPRINT << "src0=" << src0_addr << " src1=" << src1_addr << ENDL();
-    // DPRINT << "batch=" << batch << ENDL();
-
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
+    uint32_t reader_id = get_my_thread_id();
+    uint32_t num_readers = get_num_threads();
 
     constexpr uint32_t onetile = 1;
-#ifdef ARCH_QUASAR
-    experimental::Noc noc;
-    experimental::DataflowBuffer dfb0(0);
-    experimental::DataflowBuffer dfb1(1);
-    const uint32_t src0_tile_bytes = dfb0.get_entry_size();
-    const uint32_t src1_tile_bytes = dfb1.get_entry_size();
-#else
-    const uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
-    const uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
+
+    Noc noc;
+    DataflowBuffer dfb0(dfb::src0);
+    DataflowBuffer dfb1(dfb::src1);
+#ifndef ARCH_QUASAR
+    const uint32_t entry_size0 = dfb0.get_entry_size();
+    const uint32_t entry_size1 = dfb1.get_entry_size();
 #endif
-    constexpr auto src0_args = TensorAccessorArgs<0>();
-    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
-    uint32_t itileA_batch = 0;
-    uint32_t itileB_batch = 0;
+    const auto s0 = TensorAccessor(ta::src0);
+    const auto s1 = TensorAccessor(ta::src1);
 
-    const auto s0 = TensorAccessor(src0_args, src0_addr, src0_tile_bytes);
-
-    const auto s1 = TensorAccessor(src1_args, src1_addr, src1_tile_bytes);
+    uint32_t itileA_batch = batch_start * MtKt;
+    uint32_t itileB_batch = batch_start * KtNt;
 
     for (uint32_t nb = 0; nb < batch; nb++) {
         uint32_t itileA = itileA_batch;
-        for (uint32_t mt = 0; mt < Mt; mt++) {
+        for (uint32_t mt = 0; mt < Mt; mt++) { // row of in0
             uint32_t itileB = itileB_batch;
-            for (uint32_t nt = 0; nt < Nt; nt++) {
-                for (uint32_t kt = 0; kt < Kt; kt++) {
+            for (uint32_t nt = 0; nt < Nt; nt++) { // col of in1
+                for (uint32_t kt = 0; kt < Kt; kt++) { // col of in0, row of in1
                     // Read A's tile at (mt, kt)
-                    {
+                    if (mt % num_readers == reader_id) {
 #ifdef ARCH_QUASAR
+                        // Quasar: implicit-sync read. The DFB credit advances via the per-trid
+                        // completion ISR; no reserve_back / barrier / push_back required.
+                        noc.async_read<Noc::TxnIdMode::ENABLED>(s0, dfb0, {.page_id = itileA}, {});
+#else
                         dfb0.reserve_back(onetile);
-                        uint32_t l1_write_addr_in0 = dfb0.get_write_ptr();
-                        noc_async_read_tile(itileA, s0, l1_write_addr_in0);
+                        noc.async_read(s0, dfb0, entry_size0, {.page_id = itileA}, {});
                         noc.async_read_barrier();
                         dfb0.push_back(onetile);
-#else
-                        cb_reserve_back(cb_id_in0, onetile);
-                        uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                        noc_async_read_tile(itileA, s0, l1_write_addr_in0);
-                        noc_async_read_barrier();
-                        cb_push_back(cb_id_in0, onetile);
 #endif
                     }
 
-                    {  // Read B's tile at (kt, nt)
+                    // Read B's tile at (kt, nt)
+                    if (mt % num_readers == reader_id && kt % num_readers == reader_id) {
 #ifdef ARCH_QUASAR
+                        noc.async_read<Noc::TxnIdMode::ENABLED>(s1, dfb1, {.page_id = itileB}, {});
+#else
                         dfb1.reserve_back(onetile);
-                        uint32_t l1_write_addr_in1 = dfb1.get_write_ptr();
-                        noc_async_read_tile(itileB, s1, l1_write_addr_in1);
+                        noc.async_read(s1, dfb1, entry_size1, {.page_id = itileB}, {});
                         noc.async_read_barrier();
                         dfb1.push_back(onetile);
-#else
-                        cb_reserve_back(cb_id_in1, onetile);
-                        uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                        noc_async_read_tile(itileB, s1, l1_write_addr_in1);
-                        noc_async_read_barrier();
-                        cb_push_back(cb_id_in1, onetile);
 #endif
                     }
-                    // DPRINT << "Pushed itileA=" << itileA << " itileB=" << itileB << ENDL();
 
                     itileA += 1;   // A is MK
                     itileB += Nt;  // B is KN, so to get k++ we stride by Nt
                 }  // Kt loop
-                itileB -= KtNt;  // revert B to previous state before the K loop (to avoid multiplies)
-                itileB += 1;     // B is KN, so here in the end of Nt loop we increment N by 1
-                itileA -= Kt;    // resets tileA to kt=0, keep the same mt
+                itileB -= KtNt;
+                itileB += 1;
+                itileA -= Kt;
             }  // Nt loop
-            itileA += Kt;  // A is MK, advance to next M
+            itileA += Kt;  // A is MK, advance by num_readers rows
         }  // Mt loop
-        itileA_batch += MtKt;  // update batch strides
-        if (bcast_B == 0) {    // don't increment batch if we broadcast matrix B
+        itileA_batch += MtKt;
+        if (bcast_B == 0) {
             itileB_batch += KtNt;
         }
     }  // batch loop
+
+    dfb0.finish();
+    dfb1.finish();
 }

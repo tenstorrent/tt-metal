@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -153,7 +153,6 @@ strided_all_gather_minimal_matmul_async_program(
             semaphore,
             all_gather_fused_op_signaler,
             read_local_slice_from_input,
-            std::nullopt,
             num_workers_per_direction_opt,
             num_buffers_per_channel,
             matmul_fused_op_signaler->num_fused_op_cores_to_signal,

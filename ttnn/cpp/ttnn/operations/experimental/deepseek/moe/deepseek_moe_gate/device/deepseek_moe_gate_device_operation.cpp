@@ -44,7 +44,9 @@ void DeepseekMoeGateDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "input_tensor must be BFLOAT16");
     TT_FATAL(bias_tensor.dtype() == DataType::BFLOAT16, "bias_tensor must be BFLOAT16");
+    TT_FATAL(input_indices_tensor.dtype() == DataType::UINT16, "input_indices_tensor must be UINT16");
     TT_FATAL(output_tensor.dtype() == DataType::BFLOAT16, "output_tensor must be BFLOAT16");
+    TT_FATAL(output_indices_tensor.dtype() == DataType::UINT16, "output_indices_tensor must be UINT16");
 
     TT_FATAL(input_tensor.is_sharded(), "input_tensor must be sharded");
     TT_FATAL(bias_tensor.is_sharded(), "bias_tensor must be sharded");

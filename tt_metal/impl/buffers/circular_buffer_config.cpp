@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,8 @@
 #include "buffer.hpp"
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
 namespace tt {
 enum class DataFormat : uint8_t;
@@ -21,6 +23,15 @@ namespace tt::tt_metal {
 CircularBufferConfig::CircularBufferConfig(
     uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec) :
     total_size_(total_size), globally_allocated_address_(std::nullopt) {
+    this->set_config(data_format_spec);
+}
+
+CircularBufferConfig::CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, DataType>& data_type_spec) :
+    total_size_(total_size), globally_allocated_address_(std::nullopt) {
+    std::map<uint8_t, tt::DataFormat> data_format_spec;
+    for (const auto& [idx, dtype] : data_type_spec) {
+        data_format_spec[idx] = datatype_to_dataformat_converter(dtype);
+    }
     this->set_config(data_format_spec);
 }
 
@@ -37,8 +48,16 @@ CircularBufferConfig::CircularBufferConfig(
 }
 
 CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : total_size_(descriptor.total_size) {
-    if (descriptor.buffer) {
-        this->set_globally_allocated_address(*descriptor.buffer);
+    TT_FATAL(
+        !(descriptor.buffer && descriptor.tensor),
+        "CBDescriptor cannot specify both buffer and tensor as the globally-allocated backing storage");
+
+    const Buffer* backing_buffer = descriptor.buffer;
+    if (!backing_buffer && descriptor.tensor) {
+        backing_buffer = descriptor.tensor->mesh_buffer().get_reference_buffer();
+    }
+    if (backing_buffer) {
+        this->set_globally_allocated_address(*backing_buffer);
         if (descriptor.address_offset != 0) {
             uint32_t l1_alignment = hal::get_l1_alignment();
             TT_FATAL(
@@ -160,6 +179,15 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const
     return this->set_globally_allocated_address_and_total_size(buffer, this->total_size_);
 }
 
+CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const MeshTensor& tensor) {
+    return set_globally_allocated_address(*tensor.mesh_buffer().get_reference_buffer());
+}
+
+CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
+    const MeshTensor& tensor, uint32_t total_size) {
+    return set_globally_allocated_address_and_total_size(*tensor.mesh_buffer().get_reference_buffer(), total_size);
+}
+
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
     const Buffer& buffer, uint32_t total_size) {
     if (not buffer.is_l1()) {
@@ -212,6 +240,8 @@ uint32_t CircularBufferConfig::max_size() const { return this->max_size_; }
 uint32_t CircularBufferConfig::buffer_size() const { return this->buffer_size_; }
 
 uint32_t CircularBufferConfig::address_offset() const { return this->address_offset_; }
+
+void CircularBufferConfig::set_address_offset(uint32_t offset) { this->address_offset_ = offset; }
 
 CircularBufferConfig::Builder CircularBufferConfig::Builder::LocalBuilder(
     CircularBufferConfig& parent, uint8_t buffer_index) {

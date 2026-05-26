@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -49,6 +49,7 @@ void kernel_main() {
     uint64_t addr_other_noc = get_noc_addr(noc_x, noc_y, l1_read_addr, 1 - noc_index);
 
     DPRINT << "Start" <<ENDL();
+    DEVICE_PRINT("Start\n");
 
     // Test stateful read API
     noc_async_read_set_state(addr_self_noc, noc_index);
@@ -77,7 +78,7 @@ void kernel_main() {
 
     // Test gen_fast
     constexpr auto s_args = TensorAccessorArgs<2>();
-    const auto s0 = TensorAccessor(s_args, l1_read_addr, page_size);
+    const auto s0 = TensorAccessor(s_args, l1_read_addr);
 
     for (uint32_t i = 0; i < iteration; i ++) {
         uint32_t noc = (i % 2) == 0 ? noc_index : 1-noc_index;
@@ -188,6 +189,7 @@ void kernel_main() {
 
     DPRINT << "END" <<ENDL();
     DPRINT << "noc_mode " << (uint)noc_mode << ENDL();
+    DEVICE_PRINT("END\nnoc_mode {}\n", (uint)noc_mode);
 
     // Barrier test - test barrier itself working properly
     for (int noc = 0; noc < NUM_NOCS; noc++) {

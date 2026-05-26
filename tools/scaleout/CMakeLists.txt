@@ -75,7 +75,7 @@ target_link_libraries(
     scaleout_tools
     PUBLIC
         TT::STL
-        umd::device
+        umd::tt-umd
     PRIVATE
         enchantum::enchantum
         tt-logger::tt-logger

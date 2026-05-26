@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,6 @@ def test_tensor_ranks(shape, device):
     tt_tensor = tt_tensor.to(device)
     tt_tensor = tt_tensor.cpu()
     tt_tensor = tt_tensor.to(ttnn.ROW_MAJOR_LAYOUT)
-    tt_tensor = tt_tensor.unpad_from_tile(shape)
 
     assert tt_tensor.shape.rank == len(shape)
 

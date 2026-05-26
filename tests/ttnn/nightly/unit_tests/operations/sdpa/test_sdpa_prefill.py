@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -849,9 +849,11 @@ def test_sdpa_chunked_iterate_batch(
             grid_size=(1, 1),
         )
 
-    # Print number of program cache entries
-    assert device.num_program_cache_entries() == 1, "Program cache should only have 1 entry but has {}".format(
-        device.num_program_cache_entries()
+    expected_entries = s // prefill_chunk_size
+    assert (
+        device.num_program_cache_entries() == expected_entries
+    ), "Program cache should have {} entry/entries but has {}".format(
+        expected_entries, device.num_program_cache_entries()
     )
 
 

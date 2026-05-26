@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,9 +16,10 @@ enum class DevicePrintRiscCoreState : uint8_t {
     PrintingDisabled = 2,
 };
 
-#if defined(KERNEL_BUILD) || defined(FW_BUILD) || defined(HAL_BUILD)
+#if defined(KERNEL_BUILD) || defined(FW_BUILD) || defined(HAL_BUILD) || defined(ENV_LLK_INFRA)
 
 #include "core_config.h"
+#include <atomic>
 
 struct DevicePrintMemoryLayout {
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)

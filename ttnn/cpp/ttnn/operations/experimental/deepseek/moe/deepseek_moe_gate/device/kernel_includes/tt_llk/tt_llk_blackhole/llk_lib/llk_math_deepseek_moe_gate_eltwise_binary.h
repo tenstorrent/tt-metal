@@ -96,8 +96,7 @@ inline void deepseek_moe_gate_eltwise_binary_configure_mop(
 
     std::uint32_t math_op;
 
-    // TODO: Probably not worth it to use a replay buffer/mop for this
-    // Just hardcode the math ops in _llk_math_deepseek_moe_gate_eltwise_binary_ since we only have 1 face
+    // Hardcode the math ops in _llk_math_deepseek_moe_gate_eltwise_binary_ since we only have 1 face
     if constexpr (eltwise_binary_type == ELWADD) {
         math_op = TT_OP_ELWADD(0, acc_to_dest, broadcast_type, addr_mod, dst_math_offset);
 

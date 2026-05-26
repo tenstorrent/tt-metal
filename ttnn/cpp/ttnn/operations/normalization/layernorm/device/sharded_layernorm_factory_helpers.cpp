@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -547,6 +547,13 @@ CBSizeParams::Sizes CBSizeParams::compute() const {
     sizes.in6_CB_size = in0_block_tiles * beta_single_tile_size / block_ht;
 
     sizes.x_CB_size = in0_block_tiles * single_tile_size;
+    if (is_post_all_gather && !rms_norm) {
+        // Non-RMSNORM post-allgather reuses cb_x (c_24) as both cb_ex_sqr and cb_im.
+        // The allgather worker writes 1 tile to cb_ex_sqr first, advancing the write
+        // pointer. The CB needs an extra tile so the subsequent cb_im write has enough
+        // contiguous space.
+        sizes.x_CB_size += single_tile_size;
+    }
     sizes.xmm_CB_size = in0_block_tiles * single_tile_size;
 
     sizes.ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
@@ -915,6 +922,7 @@ void add_kernel_descriptors(
     compute_all_to_all_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = kernel_config.math_fidelity,
         .fp32_dest_acc_en = kernel_config.fp32_dest_acc_en,
+        .dst_full_sync_en = kernel_config.dst_full_sync_en,
         .math_approx_mode = kernel_config.math_approx_mode};
     program_descriptor.kernels.push_back(std::move(compute_all_to_all_kernel_desc));
 
@@ -931,6 +939,7 @@ void add_kernel_descriptors(
         compute_not_all_to_all_kernel_desc.config = ComputeConfigDescriptor{
             .math_fidelity = kernel_config.math_fidelity,
             .fp32_dest_acc_en = kernel_config.fp32_dest_acc_en,
+            .dst_full_sync_en = kernel_config.dst_full_sync_en,
             .math_approx_mode = kernel_config.math_approx_mode};
         program_descriptor.kernels.push_back(std::move(compute_not_all_to_all_kernel_desc));
     }
@@ -1058,13 +1067,16 @@ void add_cb_descriptors(
             tt::CBIndex::c_3,
             tt::DataFormat::Float16_b,
             cb_config.bfloat16_tile_size));
-        // CB 4: in4 scaler-c
+        // CB 4: in4 scaler-c (global reduce scaler — F32 when intermediates are F32, otherwise BF16)
+        tt::DataFormat scaler_global_format =
+            cb_config.cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        uint32_t scaler_global_tile_size = tt::tile_size(scaler_global_format);
         program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.in2_CB_size,
+            scaler_global_tile_size,
             core_ranges.all_cores,
             tt::CBIndex::c_4,
-            tt::DataFormat::Float16_b,
-            cb_config.bfloat16_tile_size));
+            scaler_global_format,
+            scaler_global_tile_size));
         // CB 11: ex_partial2
         program_descriptor.cbs.push_back(make_cb_descriptor(
             cb_config.ex_partial_CB_size,

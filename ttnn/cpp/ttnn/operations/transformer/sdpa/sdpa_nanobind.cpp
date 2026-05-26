@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -78,6 +78,54 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     return outputs;
 }
 
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& joint_tensor_q,
+    const ttnn::Tensor& joint_tensor_k,
+    const ttnn::Tensor& joint_tensor_v,
+    ttnn::Tensor& persistent_output_buffer_k,
+    ttnn::Tensor& persistent_output_buffer_v,
+    const std::string& joint_strategy,
+    std::size_t logical_n,
+    const SDPAProgramConfig& program_config,
+    std::optional<float> scale,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t num_links,
+    uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    uint32_t num_workers_per_link,
+    uint32_t num_buffers_per_channel) {
+    return ttnn::transformer::ExecuteExpRingJointAttention::invoke(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        joint_tensor_q,
+        joint_tensor_k,
+        joint_tensor_v,
+        persistent_output_buffer_k,
+        persistent_output_buffer_v,
+        joint_strategy,
+        logical_n,
+        program_config,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        cluster_axis,
+        mesh_device,
+        topology,
+        subdevice_id,
+        scale,
+        compute_kernel_config,
+        num_workers_per_link,
+        num_buffers_per_channel);
+}
+
 }  // namespace
 
 namespace {
@@ -128,12 +176,15 @@ ttnn::Tensor flash_mla_prefill_wrapper_input_tensor(
 }
 
 // Dispatch: chunk_start_idx_tensor present → flexible (runtime offset); else legacy (chunk_start_idx int).
+// nanobind optional caster converts Python None|int at the wrapper boundary
+// (GIL held); the body runs with the GIL released (call_guard applied by
+// bind_function) and uses only C++ values.
 ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
     const ttnn::Tensor& page_table_tensor,
-    const nb::object& chunk_start_idx_arg,
+    std::optional<int64_t> chunk_start_idx_arg,
     std::optional<ttnn::Tensor> chunk_start_idx_tensor_opt,
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
@@ -151,18 +202,17 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
             program_config,
             compute_kernel_config);
     }
-    if (chunk_start_idx_arg.is_none()) {
+    if (!chunk_start_idx_arg.has_value()) {
         throw std::runtime_error(
             "chunk_start_idx (int) is required for legacy chunked SDPA. For flexible path use "
             "chunk_start_idx_tensor=...");
     }
-    int64_t chunk_start_idx = nb::cast<int64_t>(chunk_start_idx_arg);
     return ttnn::transformer::chunked_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
         page_table_tensor,
-        chunk_start_idx,
+        *chunk_start_idx_arg,
         scale,
         memory_config,
         program_config,
@@ -372,6 +422,12 @@ void bind_sdpa(nb::module_& mod) {
             is_causal (bool): Whether to use causal attention masking. Defaults to False.
             is_balanced (bool): Whether to use balanced attention computation. Defaults to False.
 
+        Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
+        length is less than input_tensor_k's (Q is the latest slab; K is the populated
+        prefix from chunk 0 through the current chunk). The op derives chunk_size and
+        the absolute Q-row offset from the shapes plus sp_size — no extra args needed.
+        Chunked prefill is mathematically causal; callers must pass is_causal=True.
+
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
               - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dh].
@@ -408,6 +464,78 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("use_column_major_ccl") = false,
         nb::arg("is_causal").noconvert() = false,
         nb::arg("is_balanced").noconvert() = false);
+
+    const auto* exp_ring_joint_doc = R"doc(
+        ExpRingJointAttention operation that efficiently performs non-causal attention over two
+        sets of query, key, and value tensors, where the first set is sharded across devices in the sequence dimension.
+        Internally, these are concatenated in the sequence dimension (joint_strategy = "rear"),
+        then attention is computed once. The output is split ("sliced") into two parts: one for the original Q/K/V chunk,
+        and one for the joint Q/K/V chunk.
+
+        This op handles optional padding via an attention mask to omit padded tokens from
+        both the "original" and "joint" sequences.
+
+        Since N must be divisible by the number of devices, the logical N must be passed in.
+
+        Args:
+            input_tensor_q (ttnn.Tensor): Original queries  [b x nh x N/num_devices x dh].
+            input_tensor_k (ttnn.Tensor): Original keys     [b x nh x N/num_devices x dh].
+            input_tensor_v (ttnn.Tensor): Original values   [b x nh x N/num_devices x dh].
+
+            joint_tensor_q (ttnn.Tensor): Joint queries     [b x nh x L x dh].
+            joint_tensor_k (ttnn.Tensor): Joint keys        [b x nh x L x dh].
+            joint_tensor_v (ttnn.Tensor): Joint values      [b x nh x L x dh].
+
+        Keyword args:
+            persistent_output_buffer_k (ttnn.Tensor): Persistent buffer for gathered K tensor.
+            persistent_output_buffer_v (ttnn.Tensor): Persistent buffer for gathered V tensor.
+            joint_strategy (str): Strategy for joint attention. Must be "rear".
+            logical_n (int): The logical sequence length N before sharding across devices.
+            program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
+            scale (float, optional): Scale factor for QK^T. Defaults to None.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to None.
+            dim (int): Dimension along which to perform the ring all-gather operation.
+            multi_device_global_semaphore (List[ttnn.GlobalSemaphore]): Global semaphores for multi-device synchronization.
+            num_links (int): Number of communication links to use for ring all-gather.
+            cluster_axis (int): Axis of the mesh device along which to perform the all-gather.
+            mesh_device (ttnn.MeshDevice): Multi-device mesh for distributed computation.
+            topology (ttnn.ccl.Topology): Communication topology (Ring or Linear).
+            subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
+
+        Returns:
+            (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
+              - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dh].
+              - The attention output for the joint Q/K/V shape    [b x nh x L x dh].
+              - The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L) x 1]
+        )doc";
+
+    ttnn::bind_function<"exp_ring_joint_scaled_dot_product_attention", "ttnn.transformer.">(
+        mod,
+        exp_ring_joint_doc,
+        &exp_ring_joint_scaled_dot_product_attention_wrapper,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("input_tensor_v").noconvert(),
+        nb::arg("joint_tensor_q").noconvert(),
+        nb::arg("joint_tensor_k").noconvert(),
+        nb::arg("joint_tensor_v").noconvert(),
+        nb::kw_only(),
+        nb::arg("persistent_output_buffer_k").noconvert(),
+        nb::arg("persistent_output_buffer_v").noconvert(),
+        nb::arg("joint_strategy"),
+        nb::arg("logical_n"),
+        nb::arg("program_config").noconvert(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("dim"),
+        nb::arg("multi_device_global_semaphore"),
+        nb::arg("num_links"),
+        nb::arg("cluster_axis"),
+        nb::arg("mesh_device"),
+        nb::arg("topology"),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("num_workers_per_link") = 1,
+        nb::arg("num_buffers_per_channel") = 8);
 
     const auto* const mla_doc =
         R"doc(

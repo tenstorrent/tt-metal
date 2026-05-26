@@ -86,7 +86,7 @@ The demo can also run on a single Galaxy in data parallel mode with a reduced nu
 
 ```bash
 MESH_DEVICE=TG python models/demos/deepseek_v3/demo/demo.py \
-             --prompts-file models/demos/deepseek_v3/demo/test_prompts.json \
+             --prompts-file models/demos/deepseek_v3/demo/demo_aime24_gpqa_short.json \
              --output-path deepseek_tt_out_batch_4.json \
              --max-new-tokens 128 \
              --model-path $DEEPSEEK_V3_HF_MODEL
@@ -141,7 +141,6 @@ The `launch_multihost_galaxy` script automatically sets `DEEPSEEK_V3_HF_MODEL` a
 - `--single-layer {mlp,moe}`: When combined with `--random-weights`, request a single-layer run (`mlp` only).
 - `--token-accuracy`: Enable teacher-forcing decode and report accuracy (requires full-model mode plus tokenizer and reference file).
 - `--reference-file PATH`: Path to `.pt/.refpt` reference file (see below).
-- `--tf-prompt-len N`: Override the teacher-forcing prompt length pulled from the reference file.
 
 You should also provide one or more prompts (each in quotes as in the above example) as positional arguments, unless using `--random-weights`. In `--random-weights` mode, prompts are optional.
 
@@ -165,12 +164,12 @@ The CLI accepts JSON files in either of the following layouts:
 }
 ```
 
-Use `--num-prompts` to truncate large prompt sets. For example, there are 256 total prompts in `models/demos/deepseek_v3/demo/test_prompts.json`, but you can limit it to a subset.
+Use `--num-prompts` to truncate large prompt sets. For example, `models/demos/deepseek_v3/demo/demo_aime24_gpqa_short.json` contains 512 prompts, but you can limit it to a 256-prompt subset when you only want a single pass through the attached AIME24/GPQA mix.
 
 ### Sample usage with JSON file:
 
 ```bash
-python models/demos/deepseek_v3/demo/demo.py --prompts-file models/demos/deepseek_v3/demo/test_prompts.json --num-prompts 256 --output-path deepseek_tt_out.json --max-new-tokens 128
+python models/demos/deepseek_v3/demo/demo.py --prompts-file models/demos/deepseek_v3/demo/demo_aime24_gpqa_short.json --num-prompts 256 --output-path deepseek_tt_out.json --max-new-tokens 128
 ```
 
 Use `--no-stop-at-eos` with the command above if you need fixed-length outputs for stress or benchmarking workflows.
@@ -205,28 +204,25 @@ The demo logs wall-clock statistics (prefill/decode times, tokens per second, an
 
 ### Teacher Forcing Accuracy Verification
 
-You can verify accuracy under teacher forcing using a reference file with tokenized ground-truth. The expected format matches the tt_transformers demos/tests:
+You can verify accuracy under teacher forcing using a multi-prompt reference file with tokenized ground-truth.
 
-- Keys: `reference_tokens` (LongTensor [1, T]) and optional `top5_tokens` (LongTensor [T, 5]).
-- The demo splits `reference_tokens` at `T//2 + 1` into input prompt and ground-truth continuation.
+- The expected payload is `multi_prompt_v1` (or `multi_prompt_v1_lzma_v1`), with an `entries` list.
+- Each entry contains `prompt_tokens`, `generated_tokens`, `top5_tokens`, and `tf_prompt_len`.
+- In teacher-forcing mode, prompt count must match reference entry count.
 
-Generate a compatible reference file with the tt_transformers helper (use the same tokenizer/model family as your DeepSeek model to ensure token IDs match):
+Generate a compatible multi-prompt reference file with:
 
-- Hugging Face path:
-  - `python models/tt_transformers/tests/generate_reference_outputs.py --total_length 2048 --output_file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --model deepseek-ai/DeepSeek-V3`
-- Or use the HF-only variant:
-  - `python models/tt_transformers/tests/generate_reference_hf.py --total_length 2048 --output_file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --model deepseek-ai/DeepSeek-V3`
+- `python models/demos/deepseek_v3/demo/convert_api_json_to_refpt.py --input <api-results.json> --output models/demos/deepseek_v3/demo/deepseek_r1_teacher_forcing_256.refpt --model-path <local-hf-model-path> --num-entries 256 --max-new-tokens 128`
 
 Run the DeepSeek-V3 demo with teacher forcing:
 
-- `python models/demos/deepseek_v3/demo/demo.py --model-path /path/to/deepseek-v3 --token-accuracy --reference-file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --max-new-tokens 256`
-  - Optionally control prompt length independently with `--tf-prompt-len`, e.g.:
-  - `... --tf-prompt-len 1024 --max-new-tokens 256`
+- `python models/demos/deepseek_v3/demo/demo.py --model-path /path/to/deepseek-v3 --token-accuracy --reference-file models/demos/deepseek_v3/demo/deepseek_r1_teacher_forcing_256.refpt --prompts-file <prompts.json> --num-prompts 256 --max-new-tokens 128`
 
 Notes:
 
 - `--token-accuracy` is not compatible with `--random-weights` and requires tokenizer files in `--model-path`.
-- The demo decodes a single sequence in teacher-forcing mode. `--max-new-tokens` is capped to the number of available ground-truth tokens in the reference file.
+- Use the same prompts JSON and prompt count that were used to generate the API results converted into the reference file.
+- The demo decodes one sequence per reference entry in teacher-forcing mode. `--max-new-tokens` is capped to the number of available ground-truth tokens per entry.
 - If `top5_tokens` is present in the reference, the demo reports both top-1 and top-5 accuracies; otherwise, only top-1.
 
 ## How to develop
@@ -314,7 +310,6 @@ export PYTHON_ENV_DIR=$TT_METAL_HOME/build/python_env_vllm
 source $VLLM_DIR/tt_metal/setup-metal.sh
 source $PYTHON_ENV_DIR/bin/activate
 
-export VLLM_TARGET_DEVICE="tt"
 export ARCH_NAME=wormhole_b0
 export HF_HOME=<hugging face home directory>
 export HF_MODEL="deepseek-ai/DeepSeek-R1-0528"
@@ -328,11 +323,11 @@ Launch the server with long-lived RPC settings and TT mesh sizing:
 ```bash
 VLLM_RPC_TIMEOUT=1000000 \
 MESH_DEVICE="(4,8)" \
-python examples/server_example_tt.py \
+python plugins/vllm-tt-plugin/examples/server_example_tt.py \
   --model "deepseek-ai/DeepSeek-R1-0528" \
   --max_model_len 1024 \
   --block_size 32 \
-  --override_tt_config '{"trace_mode": false}'
+  --plugin-config '{"tt": {"trace_mode": false}}'
 ```
 
 In another terminal, send a client request:
@@ -342,3 +337,5 @@ curl http://localhost:8000/v1/completions \
   -H "Content-Type: application/json" \
   -d '{ "model": "deepseek-ai/DeepSeek-R1-0528", "prompt": "San Francisco is a", "max_tokens": 32, "temperature": 0, "top_p": 0.9, "top_k": 10 }'
 ```
+
+For batched/manual vLLM request generation, the repo now includes `models/demos/deepseek_v3/demo/vllm_aime24_gpqa_short.json`. It contains the same 512 doubled AIME24/GPQA prompts as `models/demos/deepseek_v3/demo/demo_aime24_gpqa_short.json`, but serialized as a plain JSON string array instead of `{"prompt": ...}` objects so it matches the format vLLM clients typically expect.

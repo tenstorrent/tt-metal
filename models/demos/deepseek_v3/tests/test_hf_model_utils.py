@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,7 @@ import safetensors.torch
 import torch
 
 from models.demos.deepseek_v3.utils.hf_model_utils import (
+    _default_quad_ring_shard_maps,
     default_quad_ring_model_path,
     default_stacked_dequantized_model_path,
     index_model_weights,
@@ -201,6 +202,13 @@ def test_default_quad_ring_model_path_appends_suffix() -> None:
     assert default_quad_ring_model_path(Path("/tmp/deepseek-stacked-quad-ring")) == Path(
         "/tmp/deepseek-stacked-quad-ring"
     )
+
+
+def test_default_quad_ring_shard_maps_match_legacy_deepseek_layout() -> None:
+    w0_w1_shard_map, w2_shard_map = _default_quad_ring_shard_maps(hidden_size=7168, intermediate_size=2048)
+
+    assert w0_w1_shard_map == [6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5]
+    assert w2_shard_map == [(2, 2), (3, 1), (3, 1), (2, 2), (3, 1), (3, 1)] * 2
 
 
 def test_save_quad_ring_hf_checkpoint_adds_prepared_expert_tensors(
@@ -626,6 +634,7 @@ def test_unload_weight_from_lazy_state_dict_evicts_stacked_alias_cache(tmp_path:
     target_tensor = torch.empty_like(stacked_weight[1])
 
     load_weight(expert_key, target_tensor)
+    assert torch.equal(target_tensor, stacked_weight[1])
     assert expert_key in state_dict._cache
     assert stacked_key not in state_dict._cache
 

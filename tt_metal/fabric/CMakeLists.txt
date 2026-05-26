@@ -68,7 +68,7 @@ target_link_libraries(
     PRIVATE
         TT::ScaleoutTools
         Metalium::Metal::LLRT
-        umd::device
+        umd::tt-umd
         metal_common_libs
         enchantum::enchantum
         fmt::fmt-header-only
@@ -77,6 +77,7 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
         protobuf::libprotobuf
+        cadical::cadical
 )
 
 tt_reuse_precompile_headers(fabric TT::CommonPCH)

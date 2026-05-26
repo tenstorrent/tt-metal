@@ -1,6 +1,7 @@
 set(HAL_STRUCT_SOURCES
     ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/hostdev/dev_msgs.h
     ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h
 )
 
 set(DEV_MSGS_CODEGEN_PY ${CMAKE_CURRENT_SOURCE_DIR}/codegen/codegen.py)
@@ -10,6 +11,8 @@ set(HAL_GENERATED_STRUCT_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/generated/dev_msgs_impl.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/generated/fabric_telemetry.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/generated/fabric_telemetry_impl.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/generated/realtime_profiler_msgs.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/generated/realtime_profiler_msgs_impl.hpp
 )
 
 add_custom_command(

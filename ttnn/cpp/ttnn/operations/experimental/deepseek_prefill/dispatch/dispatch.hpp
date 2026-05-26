@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,12 +24,14 @@ std::array<ttnn::Tensor, 2> dispatch(
     uint32_t num_routed_experts,
     uint32_t num_experts_per_tok,
     uint32_t metadata_len,
-    uint32_t max_dispatched_tokens_per_expert,
+    uint32_t max_dispatch_buffer_token_size,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
     std::optional<uint32_t> cluster_axis = 0,
     std::optional<uint32_t> num_links = 1,
-    std::optional<tt::tt_fabric::Topology> topology = tt::tt_fabric::Topology::Linear);
+    std::optional<tt::tt_fabric::Topology> topology = tt::tt_fabric::Topology::Linear,
+    bool use_l1_small_for_semaphores = false,
+    bool use_fp8_dispatch = false);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch
 

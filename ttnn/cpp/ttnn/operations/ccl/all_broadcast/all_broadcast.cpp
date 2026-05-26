@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,8 @@ std::vector<ttnn::Tensor> all_broadcast(
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<uint32_t> num_links,
-    std::optional<ttnn::ccl::Topology> topology) {
+    std::optional<ttnn::ccl::Topology> topology,
+    bool use_l1_small_for_semaphores) {
     // Default values for num_links and topology
     if (cluster_axis == std::nullopt) {
         auto mesh_shape = input_tensor.device()->get_view().shape();
@@ -37,8 +38,8 @@ std::vector<ttnn::Tensor> all_broadcast(
                 for (uint32_t i = 0; i < num_tensors; ++i) {
                     auto tensor = std::move(tensors.front());
                     tensors.pop_front();
-                    auto curr_tensors =
-                        ttnn::all_broadcast(tensor, axis, subdevice_id, memory_config, num_links, topology);
+                    auto curr_tensors = ttnn::all_broadcast(
+                        tensor, axis, subdevice_id, memory_config, num_links, topology, use_l1_small_for_semaphores);
                     tensors.insert(tensors.end(), curr_tensors.begin(), curr_tensors.end());
                 }
             }
@@ -53,7 +54,8 @@ std::vector<ttnn::Tensor> all_broadcast(
     uint32_t num_links_ = num_links.value_or(ttnn::common::get_num_links(*mesh_device, cluster_axis));
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
 
-    return ttnn::prim::all_broadcast(input_tensor, cluster_axis, subdevice_id, memory_config_, num_links_, topology_);
+    return ttnn::prim::all_broadcast(
+        input_tensor, cluster_axis, subdevice_id, memory_config_, num_links_, topology_, use_l1_small_for_semaphores);
 }
 
 }  // namespace ttnn

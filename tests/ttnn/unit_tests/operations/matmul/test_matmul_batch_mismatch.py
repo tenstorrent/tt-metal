@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -29,6 +29,7 @@ def test_matmul_batch_mismatch(batch, M, K, N, device):
 
     Previously, batch=6 would hang in the matmul kernel due to incorrect argument passed to the in1 reader receiver kernel.
     """
+    torch.manual_seed(0)
     # Create input tensor [batch, M, K]
     input_torch = torch.randn(batch, M, K)
     input_ttnn = ttnn.from_torch(input_torch, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)

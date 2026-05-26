@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -51,31 +51,31 @@ void kernel_main() {
     constexpr auto src2_args =
         TensorAccessorArgs<src1_args.next_compile_time_args_offset(), src1_args.next_common_runtime_args_offset()>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb0(cb_id_src0);
-    experimental::CircularBuffer cb1(cb_id_src1);
-    experimental::CircularBuffer cb2(cb_id_src2);
+    Noc noc;
+    CircularBuffer cb0(cb_id_src0);
+    CircularBuffer cb1(cb_id_src1);
+    CircularBuffer cb2(cb_id_src2);
 
 #if SRC_SHARDED_A
     cb0.reserve_back(src0_num_tiles);
     cb0.push_back(src0_num_tiles);
 #else
     const uint32_t src0_tile_bytes = get_tile_size(cb_id_src0);
-    const auto src0 = TensorAccessor(src0_args, src0_addr, src0_tile_bytes);
+    const auto src0 = TensorAccessor(src0_args, src0_addr);
 #endif
 #if SRC_SHARDED_B
     cb1.reserve_back(src1_num_tiles);
     cb1.push_back(src1_num_tiles);
 #else
     const uint32_t src1_tile_bytes = get_tile_size(cb_id_src1);
-    const auto src1 = TensorAccessor(src1_args, src1_addr, src1_tile_bytes);
+    const auto src1 = TensorAccessor(src1_args, src1_addr);
 #endif
 #if SRC_SHARDED_C
     cb2.reserve_back(src2_num_tiles);
     cb2.push_back(src2_num_tiles);
 #else
     const uint32_t src2_tile_bytes = get_tile_size(cb_id_src2);
-    const auto src2 = TensorAccessor(src2_args, src2_addr, src2_tile_bytes);
+    const auto src2 = TensorAccessor(src2_args, src2_addr);
 #endif
 #if !SRC_SHARDED_A || !SRC_SHARDED_B || !SRC_SHARDED_C
     constexpr uint32_t onetile = 1;

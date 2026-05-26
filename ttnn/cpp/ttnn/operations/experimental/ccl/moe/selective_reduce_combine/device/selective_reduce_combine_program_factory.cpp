@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -77,8 +77,23 @@ auto launch_mux_workers(
             *occupied_l1_tensor_addr);
     }
 
-    const auto needed_mux_core_range_set =
-        select_from_corerangeset(mux_core_range_set, 0, num_links * neighbors.size() - 1);
+    // Calculate required vs available mux cores for fabric communication (one core per link per neighbor)
+    const uint32_t needed_cores = num_links * neighbors.size();
+    const uint32_t available_cores = mux_core_range_set.num_cores();
+
+    // Validate sufficient cores exist before selection to prevent segfault in select_from_corerangeset
+    TT_FATAL(
+        needed_cores <= available_cores,
+        "Not enough mux cores! Needed: {} (num_links={} * neighbors.size()={}), Available: {}. "
+        "mux_core_range_set={}",
+        needed_cores,
+        num_links,
+        neighbors.size(),
+        available_cores,
+        mux_core_range_set.str());
+
+    const auto needed_mux_core_range_set = select_from_corerangeset(mux_core_range_set, 0, needed_cores - 1);
+
     auto mux_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
@@ -168,7 +183,8 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     const GlobalSemaphore& cross_device_semaphore) {
     tt::tt_metal::Program program{};
     const ttnn::CoreRangeSet worker_core_range_set(operation_attributes.worker_cores);
-    const uint32_t metadata_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range_set, 1);
+    const uint32_t metadata_sync_semaphore_id =
+        tt::tt_metal::CreateSemaphore(program, CoreRangeSet(worker_core_range_set.bounding_box()), 1);
     const uint32_t compute_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range_set, 0);
     auto artifacts = build_selective_reduce_combine_program_artifacts(
         program,
@@ -250,13 +266,13 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
-    //  assert (axis.has_value()) in validate
-    const auto& axis = operation_attributes.axis;
+    const auto axis = operation_attributes.axis;
 
     const auto fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
     const uint32_t num_devices_total = mesh_view.num_devices();
+    const bool double_buffer_source = compute_cores_by_ring_id.has_value();
 
     // NOTE: shared experts are slightly delicate since they show up as an additional entry in the mapping tensor the
     // result is fractional experts per device so div_up is required to get the right value here.
@@ -295,21 +311,32 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto token_segment_buffer_size_bytes =
         *std::max_element(data_parallel_sizes_bytes.begin(), data_parallel_sizes_bytes.end());
 
-    // slightly awkward. we want the token dimension but the underlying shape might not represent the data layout.
-    //  This is in line with the assumption that tokens are split across the entirety of the shard, regardless of
-    //  number of tokens
     constexpr auto double_buffer = 2;
-    const auto input_shards = input_tensor.memory_config().shard_spec()->grid.num_cores();
-    const auto token_expert_row_offset = input_tensor.logical_shape().volume() / input_shards /
-                                         (hidden_size / num_data_parallel_cores / double_buffer) /
-                                         num_token_parallel_cores;
-    const auto expert_token_segment_buffer_block_size_bytes = token_segment_buffer_size_bytes * token_expert_row_offset;
+    const auto num_buffers = (double_buffer_source) ? double_buffer : experts_per_device;
 
-    const auto buffer_size_bytes = expert_token_segment_buffer_block_size_bytes * double_buffer;
+    // TODO (AFM) this is an ugly kludge until we can get GPT-OSS on the mainline op #43645
+    uint32_t expert_token_segment_buffer_block_size_bytes;
+    if (double_buffer_source) {
+        // slightly awkward. we want the token dimension but the underlying shape might not represent the data layout.
+        //  This is in line with the assumption that tokens are split across the entirety of the shard, regardless of
+        //  number of tokens
+        const auto input_shards = input_tensor.memory_config().shard_spec()->grid.num_cores();
+        const auto token_expert_row_offset = input_tensor.logical_shape().volume() / input_shards /
+                                             (hidden_size / num_data_parallel_cores / double_buffer) /
+                                             num_token_parallel_cores;
+
+        expert_token_segment_buffer_block_size_bytes = token_segment_buffer_size_bytes * token_expert_row_offset;
+    } else {
+        expert_token_segment_buffer_block_size_bytes =
+            token_segment_buffer_size_bytes * total_tokens / num_token_parallel_cores;
+    }
+
+    const auto buffer_size_bytes = expert_token_segment_buffer_block_size_bytes * num_buffers;
 
     const auto input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     // input sharded buffer
-    constexpr auto data_cb_id = tt::CBIndex::c_15;
+    // start at this cb index so we don't clash with compute when fused
+    constexpr auto data_cb_id = tt::CBIndex::c_3;
     CircularBufferConfig cb_data_config = CircularBufferConfig(buffer_size_bytes, {{data_cb_id, input_data_format}})
                                               .set_page_size(data_cb_id, buffer_size_bytes)
                                               .set_globally_allocated_address(*input_tensor.buffer());
@@ -317,7 +344,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     // dense_token_maps_tensor page buffer
     // tensor pages are padded for alignment
     const uint32_t dense_token_maps_stride_elm = dense_token_maps_tensor.logical_shape()[-1] / total_tokens;
-    constexpr auto dense_token_maps_cb_id = tt::CBIndex::c_1;
+    constexpr auto dense_token_maps_cb_id = tt::CBIndex::c_4;
     const uint32_t aligned_dense_token_maps_buffer_size_bytes =
         tt::align(experts_per_device * aligned_dense_token_maps_page_size_bytes, l1_alignment);
     const auto dense_token_maps_data_format = datatype_to_dataformat_converter(dense_token_maps_tensor.dtype());
@@ -330,11 +357,10 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto token_counts_data_format = datatype_to_dataformat_converter(dense_token_counts_tensor.dtype());
     // offset into token maps, number of tokens, offset into activations
     const auto token_offset_count_bytes_per_expert = 3 * tt::datum_size(token_counts_data_format);
-    const auto dram_alignment = hal::get_dram_alignment();
-    constexpr auto token_counts_cb_id = tt::CBIndex::c_2;
-    const auto token_counts_element_size = dense_token_counts_tensor.element_size();
+    constexpr auto token_counts_cb_id = tt::CBIndex::c_5;
+    const auto token_counts_tensor_page_size_bytes = dense_token_counts_tensor.tensor_spec().compute_page_size_bytes();
     const uint32_t aligned_token_counts_buffer_size = tt::align(
-        (token_counts_element_size + token_offset_count_bytes_per_expert) * experts_per_device, dram_alignment);
+        token_counts_tensor_page_size_bytes + token_offset_count_bytes_per_expert * experts_per_device, l1_alignment);
     CircularBufferConfig cb_token_counts_config =
         CircularBufferConfig(aligned_token_counts_buffer_size, {{token_counts_cb_id, token_counts_data_format}})
             .set_page_size(token_counts_cb_id, aligned_token_counts_buffer_size);
@@ -345,7 +371,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
     const auto token_activations_page_size_bytes = token_activations_tensor.tensor_spec().compute_page_size_bytes();
     const auto aligned_token_activations_page_size_bytes = tt::align(token_activations_page_size_bytes, l1_alignment);
-    constexpr auto token_activations_cb_id = tt::CBIndex::c_3;
+    constexpr auto token_activations_cb_id = tt::CBIndex::c_6;
     CircularBufferConfig cb_token_activations_config =
         CircularBufferConfig(
             aligned_token_activations_page_size_bytes, {{token_activations_cb_id, tt::DataFormat::UInt32}})
@@ -353,7 +379,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
     // client interface
     constexpr auto num_headers = 3;  // data unicast headers and atomic inc multicast headers
-    constexpr auto client_interface_cb_id = tt::CBIndex::c_4;
+    constexpr auto client_interface_cb_id = tt::CBIndex::c_7;
     CircularBufferConfig client_interface_cb_config =
         CircularBufferConfig(num_headers * CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(client_interface_cb_id, CLIENT_INTERFACE_SIZE);
@@ -379,10 +405,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto [mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps] = detail::launch_mux_workers(
         *mesh_device, mux_core_range_set, fabric_node_id, neighbors, num_links, num_worker_cores, program);
 
-    const auto start_coord =
-        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().start_coord);
-    const auto end_coord =
-        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().end_coord);
+    const auto needed_worker_core_bounding_box = needed_worker_core_range_set.bounding_box();
+    const auto start_coord = mesh_device->worker_core_from_logical_core(needed_worker_core_bounding_box.start_coord);
+    const auto end_coord = mesh_device->worker_core_from_logical_core(needed_worker_core_bounding_box.end_coord);
 
     // launch reader kernel
     std::unordered_map<std::string, uint32_t> reader_named_ct_args = {
@@ -393,7 +418,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"aligned_token_activations_page_size_bytes", aligned_token_activations_page_size_bytes},
         {"activations_stride_elm", activations_stride_elm},
         {"dense_token_maps_page_size_bytes", aligned_dense_token_maps_page_size_bytes},
-        {"token_counts_page_size_bytes", aligned_token_counts_buffer_size},
+        {"token_counts_page_size_bytes", token_counts_tensor_page_size_bytes},
         {"dense_token_maps_stride_elm", dense_token_maps_stride_elm},
         {"num_local_experts", experts_per_device},
         {"num_token_parallel_cores", num_token_parallel_cores},
@@ -405,6 +430,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"noc_y_start", start_coord.y},
         {"noc_x_end", end_coord.x},
         {"noc_y_end", end_coord.y},
+        {"worker_bounding_box_size", needed_worker_core_bounding_box.size()},
     };
 
     std::vector<uint32_t> reader_compile_time_args;
@@ -427,6 +453,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
     // launch writer kernel
     const uint32_t flat_mesh_idx = operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
+    const bool use_init_semaphore = !tensor_args.optional_output_tensor.has_value() ||
+                                    !operation_attributes.optional_cross_device_semaphore.has_value();
+
     // Writer compute sync: when used from MoE, use matmul's data-ready semaphore; else create local (standalone).
     const uint32_t writer_compute_sync_semaphore_id = compute_sync_semaphore_id;
 
@@ -477,9 +506,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"DEST_MESH_ID", stringify(dest_mesh_id)},
         {"DIRECTIONS", stringify(directions)}};
 
-    if (axis.has_value()) {
-        writer_defines["REPLICATE_GROUP_AXIS"] = std::to_string(axis.value());
-    }
+    writer_defines["REPLICATE_GROUP_AXIS"] = std::to_string(axis);
 
     const DataMovementConfig writer_config{
         .processor = DataMovementProcessor::RISCV_0,

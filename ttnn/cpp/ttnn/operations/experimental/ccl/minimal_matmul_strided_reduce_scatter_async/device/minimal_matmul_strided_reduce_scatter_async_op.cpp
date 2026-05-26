@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -101,8 +101,11 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
             ta_shape[-2],
             ta_shape[-1]);
         TT_FATAL(
-            tb_shape[-2] == 1 && tb_shape[-1] == N_rs,
-            "addcmul_input_tensor2 shape must be broadcast [1, N/ring_size={}], got [{}, {}]",
+            (tb_shape[-2] == 1 || tb_shape[-2] == M) && tb_shape[-1] == N_rs,
+            "addcmul_input_tensor2 shape must be broadcast [1, N/ring_size={}] or full [M={}, N/ring_size={}], got "
+            "[{}, {}]",
+            N_rs,
+            M,
             N_rs,
             tb_shape[-2],
             tb_shape[-1]);
@@ -261,10 +264,10 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<Tensor>& optional_rs_output_tensor,
     const std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
-    const std::optional<const Tensor>& addcmul_input_tensor2) {
+    const std::optional<const Tensor>& addcmul_input_tensor2,
+    std::optional<tt::tt_metal::DataType> dtype) {
     using OperationType = ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsync;
 
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
     const auto resolved_sub_device_id =
@@ -278,6 +281,7 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
             .config = config,
             .fused_activation = std::move(fused_activation),
             .output_mem_config = memory_config_mm,
+            .output_dtype = dtype,
             .compute_kernel_config = compute_kernel_config};
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -297,8 +301,7 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
         /* num_workers_per_link */ num_workers_per_link,
         /* num_buffers_per_channel */ num_buffers_per_channel,
         /* chunk_width_in_mm_blocks */ chunk_width_in_mm_blocks,
-        /* reduce_scatter_core_grid_offset */ reduce_scatter_core_grid_offset,
-        /* devices */ devices};
+        /* reduce_scatter_core_grid_offset */ reduce_scatter_core_grid_offset};
 
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor,

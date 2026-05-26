@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -72,19 +72,18 @@ void kernel_main() {
     constexpr uint32_t gather_sem_idx = get_compile_time_arg_val(10);
     constexpr uint32_t cb_gather_tmp = get_compile_time_arg_val(11);
     constexpr uint32_t cb_mask = get_compile_time_arg_val(15);
-    constexpr uint32_t mask_page_size = get_compile_time_arg_val(16);
 
     constexpr uint32_t src_accessor_offset = 17;
     constexpr auto src_args = TensorAccessorArgs<src_accessor_offset>();
-    const auto src_accessor = TensorAccessor(src_args, src_addr, input_page_size);
+    const auto src_accessor = TensorAccessor(src_args, src_addr);
 
     constexpr uint32_t dst_accessor_offset = src_args.next_compile_time_args_offset();
     constexpr auto dst_args_ct = TensorAccessorArgs<dst_accessor_offset>();
-    const auto dst_accessor = TensorAccessor(dst_args_ct, dst_addr, output_page_size);
+    const auto dst_accessor = TensorAccessor(dst_args_ct, dst_addr);
 
     constexpr uint32_t mask_accessor_offset = dst_args_ct.next_compile_time_args_offset();
     constexpr auto mask_args_ct = TensorAccessorArgs<mask_accessor_offset>();
-    const auto mask_accessor = TensorAccessor(mask_args_ct, mask_addr, mask_page_size);
+    const auto mask_accessor = TensorAccessor(mask_args_ct, mask_addr);
 
     uint32_t in_base_addr = get_write_ptr(cb_id_in);
     uint32_t out_addr = get_write_ptr(cb_id_out);
@@ -147,9 +146,12 @@ void kernel_main() {
         uint32_t tmp_addr = get_write_ptr(cb_gather_tmp);
         volatile tt_l1_ptr uint32_t* local_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
 
+        // Wait for ALL children to signal before reading any.
+        // A single gather_sem counter does not identify WHICH child signaled,
+        // so we must wait for all num_receive increments to guarantee every
+        // child's histogram is finalized before reading.
+        noc_semaphore_wait_min(gather_sem_ptr, num_receive);
         for (uint32_t level = 0; level < num_receive; level++) {
-            noc_semaphore_wait_min(gather_sem_ptr, level + 1);
-
             uint32_t child_noc_x = get_arg_val<uint32_t>(7 + level * 2);
             uint32_t child_noc_y = get_arg_val<uint32_t>(7 + level * 2 + 1);
 

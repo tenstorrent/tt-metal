@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,5 +50,9 @@ inline __attribute__((always_inline)) uint32_t get_hw_thread_idx() {
     return PROCESSOR_INDEX;
 #endif
 }
+
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC)
+inline __attribute__((always_inline)) uint32_t get_trisc_id() { return ckernel::csr_read<ckernel::CSR::TRISC_ID>(); }
+#endif
 
 }  // namespace internal_

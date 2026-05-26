@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,8 @@ std::vector<ttnn::Tensor> all_broadcast(
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     std::optional<uint32_t> num_links = 1,  // change to std::nullopt when we add support/test for links > 1 #30798
     std::optional<ttnn::ccl::Topology> topology =
-        ttnn::ccl::Topology::Linear);  // change to std::nullopt when we add support/test for non-linear topologies
-                                       // #30798
+        ttnn::ccl::Topology::Linear,  // change to std::nullopt when we add support/test for non-linear topologies
+                                      // #30798
+    bool use_l1_small_for_semaphores = false);
 
 }  // namespace ttnn

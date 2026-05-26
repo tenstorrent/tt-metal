@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,12 +27,11 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t onetile = 1;
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_id_qv);
-    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, single_tile_size_bytes);
+    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
 
 #ifdef READ_FROM_INPUT_TENSOR_KV
     constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, single_tile_size_bytes);
+    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
 #endif
 
     for (uint32_t block = 0; block < num_blocks; block++) {

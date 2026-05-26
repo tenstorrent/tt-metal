@@ -23,9 +23,9 @@ void bind_deepseek_moe_gate(nb::module_& mod) {
             input_indices_tensor: Transposed routing indices shard.
             output_tensor: Preallocated BF16 buffer for normalized top-8 scores (shard 32x32).
             output_indices_tensor: Preallocated UInt16 indices buffer (shard 32x32).
-            eps: Denominator stabilization for normalization.
-            scaling_factor: Routed scaling factor applied after normalization.
-            enable_sigmoid: Apply sigmoid to logits before bias add when True.
+            eps: Denominator stabilization for normalization (default: 1e-20).
+            scaling_factor: Routed scaling factor applied after normalization (default: 2.5).
+            enable_sigmoid: Apply sigmoid to logits before bias add when True (default: False).
 
         Returns:
             Tuple ``(output_tensor, output_indices_tensor)``.

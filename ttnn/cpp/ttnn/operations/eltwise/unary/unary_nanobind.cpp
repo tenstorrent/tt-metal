@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -561,61 +561,6 @@ void bind_unary_operation_with_float_parameter_default(
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()});
-}
-
-template <ttnn::unique_string OpName, auto Func>
-void bind_unary_composite_with_default_float(
-    nb::module_& mod,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    float parameter_a_value,
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string& info_doc = "") {
-    auto doc = fmt::format(
-        R"doc(
-        Performs {0} function on :attr:`input_tensor`, :attr:`{2}`.
-
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            {2} (float, optional): {3}. Defaults to `{4}`.
-
-        Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - {5}
-                 - TILE, ROW_MAJOR
-
-            {6}
-        )doc",
-        std::string(OpName),
-        std::string("ttnn.") + std::string(OpName),
-        parameter_name_a,
-        parameter_a_doc,
-        parameter_a_value,
-        supported_dtype,
-        info_doc);
-
-    ttnn::bind_function<OpName>(
-        mod,
-        doc.c_str(),
-        ttnn::overload_t{
-            Func,
-            nb::arg("input_tensor"),
-            nb::arg(parameter_name_a.c_str()) = parameter_a_value,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
 }
 
 template <ttnn::unique_string OpName, auto Func>
@@ -1309,71 +1254,6 @@ void bind_unary_composite_int_with_default(
             nb::arg("memory_config") = nb::none()});
 }
 
-// OpHandler_two_float_with_default
-template <ttnn::unique_string OpName, auto Func>
-void bind_unary_composite_floats_with_default(
-    nb::module_& mod,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    float parameter_a_value,
-    const std::string& parameter_name_b,
-    const std::string& parameter_b_doc,
-    float parameter_b_value,
-    const std::string& supported_dtype = "BFLOAT16, BFLOAT8_B",
-    const std::string& info_doc = "") {
-    auto doc = fmt::format(
-        R"doc(
-        Performs {0} function on :attr:`input_tensor`, :attr:`{2}`, :attr:`{5}`.
-
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-
-        Keyword args:
-            {2} (float, optional): {3}. Defaults to `{4}`.
-            {5} (float, optional): {6}. Defaults to `{7}`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - {8}
-                 - TILE, ROW_MAJOR
-
-            {9}
-        )doc",
-        std::string(OpName),
-        std::string("ttnn.") + std::string(OpName),
-        parameter_name_a,
-        parameter_a_doc,
-        parameter_a_value,
-        parameter_name_b,
-        parameter_b_doc,
-        parameter_b_value,
-        supported_dtype,
-        info_doc);
-
-    ttnn::bind_function<OpName>(
-        mod,
-        doc.c_str(),
-        ttnn::overload_t{
-            Func,
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg(parameter_name_a.c_str()) = parameter_a_value,
-            nb::arg(parameter_name_b.c_str()) = parameter_b_value,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
-}
-
 // OpHandler_one_int
 template <ttnn::unique_string OpName, auto Func>
 void bind_unary_composite_int(
@@ -1479,66 +1359,6 @@ void bind_unary_threshold(
             nb::arg(parameter_name_a.c_str()),
             nb::arg(parameter_name_b.c_str()),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
-}
-
-// OpHandler_float_with_default
-template <ttnn::unique_string OpName, auto Func>
-void bind_unary_composite_float_with_default(
-    nb::module_& mod,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    float parameter_a_value,
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string& info_doc = "") {
-    auto doc = fmt::format(
-        R"doc(
-        Performs {0} function on :attr:`input_tensor`, :attr:`{2}`.
-
-        .. math::
-            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \verb|{2}|)
-
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-
-        Keyword args:
-            {2} (float, optional): {3}. Defaults to `{4}`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - {5}
-                 - TILE, ROW_MAJOR
-
-            {6}
-        )doc",
-        std::string(OpName),
-        std::string("ttnn.") + std::string(OpName),
-        parameter_name_a,
-        parameter_a_doc,
-        parameter_a_value,
-        supported_dtype,
-        info_doc);
-
-    ttnn::bind_function<OpName>(
-        mod,
-        doc.c_str(),
-        ttnn::overload_t{
-            Func,
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg(parameter_name_a.c_str()) = parameter_a_value,
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none()});
 }
@@ -1775,10 +1595,10 @@ void py_module(nb::module_& mod) {
     bind_unary_operation_subcoregrids<"hardmish">(
         mod,
         &ttnn::hardmish,
-        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor}}_i \times \frac{{\min(\max(\mathrm{{input\_tensor}}_i + 2.8, 0), 5)}}{{5}})doc",
-        "[Supported range -20 to inf]",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(Computes the Hard Mish activation function. Hard Mish is a piecewise-linear approximation of the Mish activation function, offering improved computational efficiency while maintaining similar performance characteristics.)doc");
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor}}_i \times \frac{{\min(\max(\mathrm{{input\_tensor}}_i + 2, 0), 2)}}{{2}})doc",
+        "[Supports finite inputs; for non-finite values, -inf yields NaN due to the formula's -inf * 0 term.]",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc",
+        R"doc(Computes the Hard Mish activation function. Hard Mish is a computationally efficient approximation of the Mish activation function.)doc");
     bind_unary_operation_subcoregrids<"gez">(
         mod,
         &ttnn::gez,
@@ -1994,7 +1814,7 @@ void py_module(nb::module_& mod) {
     bind_unary_operation_with_fast_and_approximate_mode<"exp", &ttnn::exp>(
         mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_with_fast_and_approximate_mode<"erf", &ttnn::erf>(mod, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_fast_and_approximate_mode<"erfc", &ttnn::erfc>(mod, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation_subcoregrids<"erfc">(mod, &ttnn::erfc, "", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode<"gelu", &ttnn::gelu>(mod, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode<"log", &ttnn::log>(
         mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
@@ -2126,12 +1946,12 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|cosh|(\mathrm{{input\_tensor}}_i))doc",
         "[supported range -9 to 9]",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_composite_2param<"digamma", &ttnn::digamma>(
+    bind_unary_operation_subcoregrids<"digamma">(
         mod,
+        &ttnn::digamma,
         R"doc(Performs digamma function on :attr:`input_tensor`.)doc",
         "[supported for values greater than 0].",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(TILE)doc");
+        R"doc(BFLOAT16, FLOAT32)doc");
     bind_unary_composite_2param<"multigammaln", &ttnn::multigammaln>(
         mod,
         R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc",

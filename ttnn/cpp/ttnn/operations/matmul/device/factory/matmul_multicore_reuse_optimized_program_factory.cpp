@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
@@ -9,7 +9,10 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
+#include <map>
+#include <string>
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt;
@@ -23,164 +26,6 @@ using tt::tt_metal::Tensor;
 using tt::tt_metal::WriterConfigDescriptor;
 
 namespace ttnn::prim {
-
-// Program is constructed from the ProgramDescriptor, then shared_variables_t
-// is populated with kernel/CB handles for override_runtime_arguments().
-MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReuseOptimizedProgramFactory::create(
-    const ttnn::prim::MatmulParams& operation_attributes,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    // create_descriptor falls back to program_config.compute_with_storage_grid_size when
-    // core_range_set is not provided, so no need to pass one explicitly here.
-    ProgramDescriptor descriptor = create_descriptor(operation_attributes, tensor_args, tensor_return_value);
-
-    tt_metal::Program program{descriptor};
-
-    // Kernel handles are assigned sequentially in descriptor order:
-    // reader=0, writer=1, compute kernels follow
-    constexpr tt_metal::KernelHandle reader_id = 0;
-    constexpr tt_metal::KernelHandle writer_id = 1;
-
-    // Look up CB handles by buffer index
-    tt_metal::CBHandle cb_src0 = 0, cb_src1 = 0, cb_output = 0;
-    for (const auto& cb : program.circular_buffers()) {
-        if (cb->buffer_indices().contains(tt::CBIndex::c_0)) {
-            cb_src0 = cb->id();
-        }
-        if (cb->buffer_indices().contains(tt::CBIndex::c_1)) {
-            cb_src1 = cb->id();
-        }
-        if (cb->buffer_indices().contains(tt::CBIndex::c_4)) {
-            cb_output = cb->id();
-        }
-    }
-
-    // Compute num_cores and cores vector for shared_variables_t, used by
-    // override_runtime_arguments for program cache reuse.
-    const auto& program_config =
-        std::get<operations::matmul::MatmulMultiCoreReuseProgramConfig>(operation_attributes.program_config.value());
-    CoreCoord compute_with_storage_grid_size = program_config.compute_with_storage_grid_size;
-
-    const auto& a = tensor_args.input_tensors.at(0);
-    const auto& b = tensor_args.input_tensors.at(1);
-    auto& output = tensor_return_value.at(0);
-
-    bool in0_is_sharded = a.is_sharded();
-    bool in1_is_sharded = b.is_sharded();
-    bool output_is_sharded = output.is_sharded();
-
-    std::optional<tt::tt_metal::ShardSpec> shard_spec = std::nullopt;
-    if (in0_is_sharded) {
-        shard_spec = a.shard_spec().value();
-    } else if (in1_is_sharded) {
-        shard_spec = b.shard_spec().value();
-    } else if (output_is_sharded) {
-        shard_spec = output.shard_spec().value();
-    }
-
-    bool transpose_a = operation_attributes.transpose_a;
-    const auto& ashape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
-    auto in0_tile = operations::matmul::utilities::get_matmul_tile(a, transpose_a);
-    uint32_t B = get_batch_size(ashape);
-    uint32_t M = operations::matmul::utilities::get_M_dim(ashape, in0_tile, false);
-
-    bool transpose_b = operation_attributes.transpose_b;
-    const auto& bshape = operations::matmul::utilities::get_matmul_tensor_padded_shape(b, transpose_b);
-    auto in1_tile = operations::matmul::utilities::get_matmul_tile(b, transpose_b);
-    uint32_t N = operations::matmul::utilities::get_N_dim(bshape, in1_tile);
-
-    uint32_t per_core_M = program_config.per_core_M;
-    uint32_t per_core_N = program_config.per_core_N;
-    uint32_t num_output_blocks_total = (B * M / per_core_M) * (N / per_core_N);
-
-    uint32_t num_cores = 0;
-    CoreRangeSet all_cores, core_group_1, core_group_2;
-    uint32_t num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
-
-    if (shard_spec.has_value()) {
-        all_cores = shard_spec.value().grid;
-        num_cores = all_cores.num_cores();
-    } else {
-        std::tie(
-            num_cores,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            num_blocks_per_core_group_1,
-            num_blocks_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total);
-    }
-
-    bool row_major = false;
-    if (shard_spec.has_value()) {
-        row_major = shard_spec.value().orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
-    }
-    const auto cores =
-        grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, row_major);
-
-    return {std::move(program), {reader_id, writer_id, cb_src0, cb_src1, cb_output, num_cores, cores}};
-}
-
-void MatmulMultiCoreReuseOptimizedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ttnn::prim::MatmulParams& /*operation_attributes*/,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
-    auto mm_kernel_in0_reader_id = shared_variables.mm_kernel_in0_reader_id;
-    auto mm_kernel_in1_reader_writer_id = shared_variables.mm_kernel_in1_reader_writer_id;
-    auto cb_src0 = shared_variables.cb_src0;
-    auto cb_src1 = shared_variables.cb_src1;
-    auto cb_output = shared_variables.cb_output;
-    auto cores = shared_variables.cores;
-
-    const auto& input_tensors = tensor_args.input_tensors;
-    const auto& output_tensors = tensor_return_value;
-
-    auto* src_buffer_a = input_tensors.at(0).buffer();
-    auto* src_buffer_b = input_tensors.at(1).buffer();
-
-    auto* dst_buffer = output_tensors.at(0).buffer();
-
-    const bool src0_sharded = input_tensors[0].memory_config().is_sharded();
-    const bool src1_sharded = input_tensors[1].memory_config().is_sharded();
-    const bool out_sharded = output_tensors[0].memory_config().is_sharded();
-
-    const bool update_reader_args = !src0_sharded;
-
-    const bool update_writer_args = !(src1_sharded and out_sharded);
-
-    if (update_reader_args || update_writer_args) {
-        auto& reader_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in0_reader_id);
-
-        auto& writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_reader_writer_id);
-
-        for (const auto& core : cores) {
-            if (update_reader_args) {
-                auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                runtime_args[0] = src_buffer_a->address();  // in0_tensor_addr
-            }
-
-            if (update_writer_args) {
-                auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                runtime_args[0] = src_buffer_b->address();  // in1_tensor_addr
-                runtime_args[3] = dst_buffer->address();    // out_tensor_addr
-            }
-        }
-    }
-    if (src0_sharded) {
-        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
-    }
-
-    if (src1_sharded) {
-        UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer_b);
-    }
-
-    if (out_sharded) {
-        UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
-    }
-}
 
 CoreRangeSet MatmulMultiCoreReuseOptimizedProgramFactory::default_core_range(IDevice* device) {
     auto grid_size = device->compute_with_storage_grid_size();
@@ -346,7 +191,17 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         num_blocks_per_core_group_1 *= batch_scale_factor;
         num_blocks_per_core_group_2 *= batch_scale_factor;
     } else {
-        CoreCoord grid = program_config.compute_with_storage_grid_size;
+        if (!program_config.allowed_worker_cores.has_value()) {
+            log_warning(
+                tt::LogOp,
+                "MatmulMultiCoreReuseOptimizedProgramFactory: program_config.allowed_worker_cores not populated; "
+                "falling back to compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() should "
+                "invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This "
+                "will become a hard error in a future release.");
+        }
+        CoreCoord grid = program_config.allowed_worker_cores.has_value()
+                             ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
+                             : program_config.compute_with_storage_grid_size;
         std::tie(
             num_cores,
             all_cores,
@@ -471,16 +326,22 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     };
 
     // Compute defines
-    KernelDescriptor::Defines compute_defines;
+    std::map<std::string, std::string> mm_kernel_defines;
     if (packer_l1_acc_en) {
-        compute_defines.emplace_back("PACKER_L1_ACC", "1");
+        mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }
     if (fp32_dest_acc_en) {
-        compute_defines.emplace_back("FP32_DEST_ACC_EN", "1");
+        mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
     if (in1_transpose_tile) {
-        compute_defines.emplace_back("IN1_TRANSPOSE_TILE", "1");
+        mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
+    const auto throttle_level = ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+    KernelDescriptor::Defines compute_defines{mm_kernel_defines.begin(), mm_kernel_defines.end()};
 
     // Build per-core runtime args
     bool row_major = false;
@@ -497,12 +358,35 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
     uint32_t in1_n_block_stride = per_core_N * (transpose_b ? K : 1);
 
-    KernelDescriptor::RuntimeArgs reader_runtime_args;
-    KernelDescriptor::RuntimeArgs reader_writer_runtime_args;
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Build ProgramDescriptor
+    ////////////////////////////////////////////////////////////////////////////
+    ProgramDescriptor program_descriptor;
+
+    // Reader kernel descriptor (created before loop so emplace_runtime_args can be called in loop)
+    KernelDescriptor reader_kernel_desc;
+    reader_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0.cpp";
+    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.core_ranges = all_cores;
+    reader_kernel_desc.compile_time_args = reader_compile_time_args;
+    reader_kernel_desc.named_compile_time_args = cb_named_args;
+    reader_kernel_desc.defines = reader_defines;
+    reader_kernel_desc.config = ReaderConfigDescriptor{};
+
+    // Reader/Writer kernel descriptor (reads in1, writes output)
+    KernelDescriptor reader_writer_kernel_desc;
+    reader_writer_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp";
+    reader_writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_writer_kernel_desc.core_ranges = all_cores;
+    reader_writer_kernel_desc.compile_time_args = reader_writer_compile_time_args;
+    reader_writer_kernel_desc.named_compile_time_args = cb_named_args;
+    reader_writer_kernel_desc.defines = reader_writer_defines;
+    reader_writer_kernel_desc.config = WriterConfigDescriptor{};
+
     KernelDescriptor::RuntimeArgs compute_runtime_args_g1;
     KernelDescriptor::RuntimeArgs compute_runtime_args_g2;
-    reader_runtime_args.reserve(num_cores);
-    reader_writer_runtime_args.reserve(num_cores);
     compute_runtime_args_g1.reserve(g1_numcores);
 
     for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); ++i) {
@@ -519,23 +403,15 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         uint32_t in1_start_tile_id =
             (bcast_batch ? 0 : (start_batch * in1_batch_stride)) + (start_n_block * in1_n_block_stride);
 
-        reader_runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{
-                (uint32_t)in0_buffer->address(),
-                in0_start_tile_id,
-                num_output_blocks_per_core,
-            });
+        reader_kernel_desc.emplace_runtime_args(core, {in0_buffer, in0_start_tile_id, num_output_blocks_per_core});
 
-        reader_writer_runtime_args.emplace_back(
+        reader_writer_kernel_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                (uint32_t)in1_buffer->address(),
-                in1_start_tile_id,
-                num_output_blocks_per_core,
-                (uint32_t)out_buffer->address(),
-                num_blocks_written * num_tiles_per_block_out,
-            });
+            {in1_buffer,
+             in1_start_tile_id,
+             num_output_blocks_per_core,
+             out_buffer,
+             num_blocks_written * num_tiles_per_block_out});
 
         // Compute kernels have no per-core runtime args
         if (i < g1_numcores) {
@@ -547,35 +423,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         num_blocks_written += num_output_blocks_per_core;
     }
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Build ProgramDescriptor
-    ////////////////////////////////////////////////////////////////////////////
-    ProgramDescriptor program_descriptor;
-
-    // Reader kernel descriptor
-    KernelDescriptor reader_kernel_desc;
-    reader_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0.cpp";
-    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = all_cores;
-    reader_kernel_desc.compile_time_args = reader_compile_time_args;
-    reader_kernel_desc.named_compile_time_args = cb_named_args;
-    reader_kernel_desc.defines = reader_defines;
-    reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
-    reader_kernel_desc.config = ReaderConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
-
-    // Reader/Writer kernel descriptor (reads in1, writes output)
-    KernelDescriptor reader_writer_kernel_desc;
-    reader_writer_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp";
-    reader_writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_writer_kernel_desc.core_ranges = all_cores;
-    reader_writer_kernel_desc.compile_time_args = reader_writer_compile_time_args;
-    reader_writer_kernel_desc.named_compile_time_args = cb_named_args;
-    reader_writer_kernel_desc.defines = reader_writer_defines;
-    reader_writer_kernel_desc.runtime_args = std::move(reader_writer_runtime_args);
-    reader_writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_writer_kernel_desc));
 
     // Compute kernel descriptor (core group 1)
@@ -589,7 +437,10 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     compute_kernel_desc.defines = compute_defines;
     compute_kernel_desc.runtime_args = std::move(compute_runtime_args_g1);
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
     program_descriptor.kernels.push_back(std::move(compute_kernel_desc));
 
     // Core group 2 compute kernel (if needed)
@@ -626,7 +477,10 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         compute_kernel_desc_g2.defines = compute_defines;
         compute_kernel_desc_g2.runtime_args = std::move(compute_runtime_args_g2);
         compute_kernel_desc_g2.config = ComputeConfigDescriptor{
-            .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .math_approx_mode = math_approx_mode};
         program_descriptor.kernels.push_back(std::move(compute_kernel_desc_g2));
     }
 
@@ -718,39 +572,6 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     }
 
     return program_descriptor;
-}
-
-MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory::cached_mesh_workload_t
-MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory::create_mesh_workload(
-    const ttnn::prim::MatmulParams& attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
-        for (const auto& mesh_coord : mesh_coord_range) {
-            const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
-            auto single_device_program =
-                MatmulMultiCoreReuseOptimizedProgramFactory::create(attributes, tensor_args, tensor_return_value);
-            shared_variables[mesh_coord_range] = single_device_program.shared_variables;
-            workload.add_program(mesh_coord_range, std::move(single_device_program.program));
-        }
-    }
-    return {std::move(workload), std::move(shared_variables)};
-}
-
-void MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const ttnn::prim::MatmulParams& attributes,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
-        auto cached_program_proxy = MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t::proxy(
-            program, cached_workload.shared_variables.at(mesh_coord_range));
-        MatmulMultiCoreReuseOptimizedProgramFactory::override_runtime_arguments(
-            cached_program_proxy, attributes, tensor_args, tensor_return_value);
-    }
 }
 
 }  // namespace ttnn::prim

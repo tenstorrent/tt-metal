@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -9,9 +9,8 @@ import torch
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 from ttnn.experimental.moe_compute_utils import (
-    determine_compute_matmul_cores,
-    get_w0_w1_memory_config,
-    get_w2_memory_config,
+    get_weight_core_shard_maps,
+    get_weight_mem_configs,
     prepare_w0_w1_tensor_for_moe_compute,
     prepare_w2_tensor_for_moe_compute,
 )
@@ -43,9 +42,6 @@ class Experts(AbstractModule):
 
     WEIGHT_TORCH_DTYPE = torch.bfloat16
     _warned_legacy_expert_checkpoint = False
-    _warned_missing_quad_ring_prepared_checkpoint = False
-    _QUAD_RING_PREPARED_W0_W1_KEY = "experts_quad_ring.w0_w1.weight"
-    _QUAD_RING_PREPARED_W2_KEY = "experts_quad_ring.w2.weight"
 
     @classmethod
     def _get_num_experts_per_device(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> int:
@@ -169,32 +165,62 @@ class Experts(AbstractModule):
         num_layers = 1
         num_experts_per_device = cls._get_num_experts_per_device(hf_config, mesh_device)
         num_routed_experts = hf_config.n_routed_experts
-        hidden_size = hf_config.hidden_size
-        loaded_prepared_weights = cls._load_quad_ring_prepared_weights(state_dict)
-        ring2cores, compute_matmul_dram_core_range_set = determine_compute_matmul_cores(mesh_device)
 
-        if loaded_prepared_weights is not None:
-            prepared_w0_w1, prepared_w2 = loaded_prepared_weights
-            cls._validate_quad_ring_prepared_weights_shapes(prepared_w0_w1, prepared_w2, num_routed_experts)
-            logger.info("Using prepacked quad-ring MoE expert tensors from checkpoint.")
-            matmul_N = hf_config.moe_intermediate_size
-        else:
-            if not cls._warned_missing_quad_ring_prepared_checkpoint:
-                logger.warning(
-                    "Quad-ring prepared expert tensors were not found in the checkpoint. "
-                    "Falling back to on-the-fly expert repacking, which is significantly slower. "
-                    "Generate a prepared checkpoint with "
-                    "`python models/demos/deepseek_v3/scripts/prepare_quad_ring_hf_checkpoint.py "
-                    "<stacked-model-path>` and point `DEEPSEEK_V3_HF_MODEL` or `--model-path` at the resulting "
-                    "`*-quad-ring` directory."
+        hidden_size = hf_config.hidden_size
+        matmul_N = hf_config.moe_intermediate_size
+        w0_w1_shard_map, w2_shard_map, compute_matmul_dram_core_range_set = get_weight_core_shard_maps(
+            mesh_device, hidden_size, matmul_N
+        )
+
+        prepared_state_dict = state_dict
+        prepared_key_pairs = (
+            ("experts_quad_ring.w0_w1.weight", "experts_quad_ring.w2.weight"),
+            ("w0_w1.weight", "w2.weight"),
+        )
+        prepared_w0_w1_key = prepared_key_pairs[0][0]
+        prepared_w2_key = prepared_key_pairs[0][1]
+        has_prepared_w0_w1 = False
+        has_prepared_w2 = False
+        for candidate_w0_w1_key, candidate_w2_key in prepared_key_pairs:
+            candidate_has_w0_w1 = candidate_w0_w1_key in prepared_state_dict
+            candidate_has_w2 = candidate_w2_key in prepared_state_dict
+            if candidate_has_w0_w1 or candidate_has_w2:
+                prepared_w0_w1_key = candidate_w0_w1_key
+                prepared_w2_key = candidate_w2_key
+                has_prepared_w0_w1 = candidate_has_w0_w1
+                has_prepared_w2 = candidate_has_w2
+                break
+
+        if has_prepared_w0_w1 or has_prepared_w2:
+            if not (has_prepared_w0_w1 and has_prepared_w2):
+                raise ValueError(
+                    "Checkpoint contains partial quad-ring prepared expert tensors. "
+                    f"Expected both '{prepared_w0_w1_key}' and '{prepared_w2_key}'."
                 )
-                cls._warned_missing_quad_ring_prepared_checkpoint = True
+            prepared_w0_w1 = get_dequantized_tensor(
+                prepared_state_dict, prepared_w0_w1_key, dtype=cls.WEIGHT_TORCH_DTYPE
+            )
+            prepared_w2 = get_dequantized_tensor(prepared_state_dict, prepared_w2_key, dtype=cls.WEIGHT_TORCH_DTYPE)
+        else:
+            allow_repack = os.getenv("DEEPSEEK_V3_ALLOW_QUAD_RING_WEIGHT_REPACK", "0").lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            if not allow_repack:
+                raise ValueError(
+                    "Quad-ring MoE weight loading requires prepacked HF expert tensors "
+                    f"'{prepared_w0_w1_key}' and '{prepared_w2_key}' so cold TTNN weight-cache loads stay fast. "
+                    "Run `python models/demos/deepseek_v3/scripts/prepare_quad_ring_hf_checkpoint.py "
+                    "<stacked-dequantized-model>` and point DEEPSEEK_V3_HF_MODEL at the generated "
+                    "`*-quad-ring` checkpoint, or set DEEPSEEK_V3_ALLOW_QUAD_RING_WEIGHT_REPACK=1 "
+                    "to allow slow in-process repacking."
+                )
 
             w0 = cls._load_expert_weight(state_dict, "gate_proj", num_routed_experts).unsqueeze(0).transpose(-1, -2)
             w1 = cls._load_expert_weight(state_dict, "up_proj", num_routed_experts).unsqueeze(0).transpose(-1, -2)
             w2 = cls._load_expert_weight(state_dict, "down_proj", num_routed_experts).unsqueeze(0).transpose(-1, -2)
-
-            matmul_N = w0.shape[-1]
 
             prepared_w0_w1 = []
             prepared_w2 = []
@@ -206,7 +232,7 @@ class Experts(AbstractModule):
                     num_experts_per_device,
                     hidden_size,
                     matmul_N,
-                    ring2cores,
+                    w0_w1_shard_map,
                 )
                 prepared_w2_tensor = prepare_w2_tensor_for_moe_compute(
                     w2[:, i : i + num_experts_per_device, :, :],
@@ -214,7 +240,8 @@ class Experts(AbstractModule):
                     num_experts_per_device,
                     matmul_N,
                     hidden_size,
-                    ring2cores,
+                    w2_shard_map,
+                    w0_w1_shard_map,
                 )
 
                 prepared_w0_w1.append(prepared_w0_w1_tensor)
@@ -223,11 +250,14 @@ class Experts(AbstractModule):
             prepared_w0_w1 = torch.cat(prepared_w0_w1, dim=2)
             prepared_w2 = torch.cat(prepared_w2, dim=2)
 
-        w0_w1_memory_config = get_w0_w1_memory_config(
-            num_layers, num_experts_per_device, hidden_size, compute_matmul_dram_core_range_set
-        )
-        w2_memory_config = get_w2_memory_config(
-            num_layers, num_experts_per_device, matmul_N, compute_matmul_dram_core_range_set
+        w0_w1_memory_config, w2_memory_config, _, _ = get_weight_mem_configs(
+            num_layers,
+            num_experts_per_device,
+            hidden_size,
+            matmul_N,
+            w0_w1_shard_map,
+            w2_shard_map,
+            compute_matmul_dram_core_range_set,
         )
 
         return {
@@ -252,58 +282,6 @@ class Experts(AbstractModule):
                 )
             },
         }
-
-    @classmethod
-    def _load_quad_ring_prepared_weights(
-        cls, state_dict: dict[str, torch.Tensor]
-    ) -> tuple[torch.Tensor, torch.Tensor] | None:
-        w0_w1_key = cls._QUAD_RING_PREPARED_W0_W1_KEY
-        w2_key = cls._QUAD_RING_PREPARED_W2_KEY
-
-        has_w0_w1 = w0_w1_key in state_dict
-        has_w2 = w2_key in state_dict
-        if has_w0_w1 != has_w2:
-            missing_keys = [key for key, exists in ((w0_w1_key, has_w0_w1), (w2_key, has_w2)) if not exists]
-            raise ValueError(
-                "Checkpoint contains partial quad-ring prepared expert tensors. "
-                f"Missing {missing_keys}; regenerate the quad-ring prepared checkpoint."
-            )
-        if not has_w0_w1:
-            return None
-
-        prepared_w0_w1 = get_dequantized_tensor(state_dict, w0_w1_key, dtype=cls.WEIGHT_TORCH_DTYPE).contiguous()
-        prepared_w2 = get_dequantized_tensor(state_dict, w2_key, dtype=cls.WEIGHT_TORCH_DTYPE).contiguous()
-        return prepared_w0_w1, prepared_w2
-
-    @classmethod
-    def _validate_quad_ring_prepared_weights_shapes(
-        cls,
-        prepared_w0_w1: torch.Tensor,
-        prepared_w2: torch.Tensor,
-        num_routed_experts: int,
-    ) -> None:
-        expected_tile_width = 4 * ttnn.TILE_SIZE
-        if prepared_w0_w1.ndim != 6:
-            raise ValueError(
-                f"Expected '{cls._QUAD_RING_PREPARED_W0_W1_KEY}' to have rank 6, got {prepared_w0_w1.ndim}"
-            )
-        if prepared_w2.ndim != 6:
-            raise ValueError(f"Expected '{cls._QUAD_RING_PREPARED_W2_KEY}' to have rank 6, got {prepared_w2.ndim}")
-        if prepared_w0_w1.shape[0] != 12 or prepared_w2.shape[0] != 12:
-            raise ValueError(
-                "Quad-ring prepared expert tensors must have 12 DRAM-bank groups in dim 0, got "
-                f"{prepared_w0_w1.shape[0]} and {prepared_w2.shape[0]}"
-            )
-        if prepared_w0_w1.shape[2] != num_routed_experts or prepared_w2.shape[2] != num_routed_experts:
-            raise ValueError(
-                "Quad-ring prepared expert tensors have mismatched expert dimension: expected "
-                f"{num_routed_experts}, got {prepared_w0_w1.shape[2]} and {prepared_w2.shape[2]}"
-            )
-        if prepared_w0_w1.shape[-1] != expected_tile_width or prepared_w2.shape[-1] != expected_tile_width:
-            raise ValueError(
-                "Quad-ring prepared expert tensors must have tile width "
-                f"{expected_tile_width} in the last dim, got {prepared_w0_w1.shape[-1]} and {prepared_w2.shape[-1]}"
-            )
 
     @classmethod
     def is_device_supported(cls, mesh_device: ttnn.Device) -> bool:

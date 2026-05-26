@@ -16,9 +16,6 @@
 namespace ckernel {
 namespace sfpu {
 
-// TODO: Initial evaluation of using replay buffers here did not show any performance improvement
-// Try re-evaluating with latest op sequence and record larger sequences
-
 constexpr uint32_t dst_tile_offset = 64;  // 1 tile x 64 rows per tile
 constexpr uint32_t scores_offset = 0;
 constexpr uint32_t indices_offset = scores_offset + dst_tile_offset;

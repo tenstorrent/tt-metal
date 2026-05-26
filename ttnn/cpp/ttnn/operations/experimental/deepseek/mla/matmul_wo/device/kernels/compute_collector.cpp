@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,7 +36,7 @@ void kernel_main() {
 
     binary_op_init_common(cb_s2c_in2, cb_s2c_in2, cb_s2c_out);
 
-    binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_s2c_in2);
+    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_s2c_in2);
 
     cb_reserve_back(cb_s2c_out, num_iters);
 
@@ -45,7 +45,8 @@ void kernel_main() {
 
         tile_regs_acquire();
         for (uint32_t k = 0; k < num_cores; ++k) {
-            binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_s2c_in2, k, 0);
+            binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                cb_s2c_in2, k, 0 /*dst_tile_index*/);
         }
         tile_regs_commit();
 

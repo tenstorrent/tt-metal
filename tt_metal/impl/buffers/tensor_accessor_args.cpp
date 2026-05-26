@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -116,6 +116,15 @@ TensorAccessorArgs::TensorAccessorArgs(const distributed::MeshBuffer* buffer, te
 TensorAccessorArgs::TensorAccessorArgs(
     const std::shared_ptr<distributed::MeshBuffer>& buffer, tensor_accessor::ArgsConfig args_config) :
     TensorAccessorArgs(buffer.get(), args_config) {}
+
+TensorAccessorArgs::TensorAccessorArgs(const MeshTensor& tensor, tensor_accessor::ArgsConfig args_config) :
+    TensorAccessorArgs(tensor.mesh_buffer(), args_config) {}
+
+TensorAccessorArgs::TensorAccessorArgs(
+    ttsl::optional_reference<const MeshTensor> tensor, tensor_accessor::ArgsConfig args_config) :
+    buffer_(tensor ? tensor->mesh_buffer().get_reference_buffer() : nullptr), args_config_(args_config) {
+    update_args_config();
+}
 
 TensorAccessorArgs TensorAccessorArgs::create_dram_interleaved() {
     TensorAccessorArgs args;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "api/debug/dprint_pages.h"
@@ -31,10 +31,8 @@ void kernel_main() {
     const auto output_reduced_base_addr = get_arg_val<uint32_t>(3);
     const auto reduce_start_idx = get_arg_val<uint32_t>(4);
 
-    const auto output_mapping_addrgen = TensorAccessor(
-        output_mapping_args, output_mapping_base_addr, output_mapping_page_size_bytes);
-    const auto output_reduced_addrgen = TensorAccessor(
-        output_reduced_args, output_reduced_base_addr,output_reduced_page_size_bytes);
+    const auto output_mapping_addrgen = TensorAccessor(output_mapping_args, output_mapping_base_addr);
+    const auto output_reduced_addrgen = TensorAccessor(output_reduced_args, output_reduced_base_addr);
 
     // scratch space for mapping
     cb_reserve_back(output_mapping_cb_id, 1);
@@ -77,7 +75,7 @@ void kernel_main() {
                 reduced_l1_ptr[e] = 1;
             }
         }
-        const uint64_t output_noc_addr = get_noc_addr(bs, output_mapping_addrgen);
+        const uint64_t output_noc_addr = output_mapping_addrgen.get_noc_addr(bs);
         noc_async_write(output_l1_addr, output_noc_addr, output_mapping_page_size_bytes);
 
         if (found) {
@@ -86,7 +84,7 @@ void kernel_main() {
         }
 
         if (reduction_count == reduction_size - 1) {
-            const uint64_t output_reduced_noc_addr = get_noc_addr(reduce_idx++, output_reduced_addrgen);
+            const uint64_t output_reduced_noc_addr = output_reduced_addrgen.get_noc_addr(reduce_idx++);
             noc_async_write(reduced_l1_addr, output_reduced_noc_addr, output_reduced_page_size_bytes);
             noc_async_write_barrier();
             tt::data_movement::common::fill_with_val<uint16_t>(reduced_l1_addr, num_local_experts, 0u);

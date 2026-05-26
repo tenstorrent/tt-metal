@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,8 @@
 #pragma once
 
 #include <cstdint>
+
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 
 /**
  * Direction-alternating ring_id sequencer.
@@ -94,13 +96,31 @@ struct RingIdSequencer {
  * Find the last ring iteration that performs actual KV computation.
  * Creates a copy of the sequencer and iterates it with no synchronization.
  *
- * @param seq               Sequencer state (copied — original is not modified)
- * @param local_padded_Nt   Per-device padded sequence length in tiles
- * @param global_n_tile_id  Logical (unpadded) sequence length in tiles (logical_n / TILE_HEIGHT)
- * @param L                 Joint sequence length in elements (0 if no joint attention)
+ * @param seq                 Sequencer state (copied — original is not modified)
+ * @param local_padded_Nt     Per-device padded sequence length in tiles
+ * @param last_n_tile_id      Last valid global K tile index (i.e., logical_nt - 1). The
+ *                            "does_work" predicate compares ring start to this with `<=`,
+ *                            so it represents an inclusive upper bound, not a count.
+ *                            Caller must ensure logical_nt > 0.
+ * @param L                   Joint sequence length in elements (0 if no joint attention)
+ * @param is_causal           Whether causal masking is enabled
+ * @param is_balanced         Whether balanced (zigzag) causal distribution is enabled
+ * @param chunked_enabled     Whether balanced chunked-prefill layout is active. When
+ *                            true, every iter holds one slab of real data per chunk
+ *                            → every iter does work.
  */
 inline uint32_t find_last_active_ring_iter(
-    RingIdSequencer seq, uint32_t local_padded_Nt, uint32_t global_n_tile_id, uint32_t L) {
+    RingIdSequencer seq,
+    uint32_t local_padded_Nt,
+    uint32_t last_n_tile_id,
+    uint32_t L,
+    bool is_causal = false,
+    bool is_balanced = false,
+    bool chunked_enabled = false) {
+    if (chunked_enabled) {
+        return seq.ring_size - 1;
+    }
+
     uint32_t last_active = 0;
     auto no_sync = [](uint32_t, uint32_t) {};
 
@@ -108,7 +128,8 @@ inline uint32_t find_last_active_ring_iter(
         uint32_t ring_id = seq.get_next_ring_id(no_sync);
         bool does_joint = (ring_id == seq.ring_size - 1);
         uint32_t kv_start = ring_id * local_padded_Nt;
-        bool does_work = (kv_start <= global_n_tile_id) || (does_joint && L != 0);
+        bool does_work = ((kv_start <= last_n_tile_id) || (does_joint && L != 0)) &&
+                         !(is_causal && seq.ring_index < ring_id && !is_balanced);
         if (does_work) {
             last_active = t;
         }
@@ -116,3 +137,57 @@ inline uint32_t find_last_active_ring_iter(
 
     return last_active;
 }
+
+/**
+ * Count valid (non-skipped) K chunks for a ring iteration. Local K chunks whose global
+ * start tile >= logical_nt are skipped (matches compute).
+ */
+template <
+    bool chunked_enabled,
+    uint32_t kv_local_padded_Nt,
+    uint32_t Sk_chunk_t,
+    uint32_t chunk_size_t = 0,
+    uint32_t q_local_padded_Nt = 0>
+inline uint32_t count_valid_kv_chunks(
+    uint32_t num_kv_chunks, uint32_t num_local_k_chunks, uint32_t ring_id, uint32_t logical_nt) {
+    uint32_t count = 0;
+    for (uint32_t k = 0; k < num_kv_chunks; ++k) {
+        const bool is_joint = k >= num_local_k_chunks;
+        if (!is_joint) {
+            const uint32_t kv_global_start_tile =
+                kv_global_tile_for_local<chunked_enabled, kv_local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
+                    ring_id, k * Sk_chunk_t);
+            if (kv_global_start_tile >= logical_nt) {
+                continue;
+            }
+        }
+        count++;
+    }
+    return count;
+}
+
+/**
+ * Compile-time geometry for the K-chunk that straddles the causal coarse-half boundary
+ * in balanced-zigzag ring SDPA.
+ *
+ * Each device holds `local_padded_Nt` K tiles split as two equal coarse halves
+ * (early sequence / late sequence).  When `Sk_chunk_t` does not divide the
+ * coarse half size (`local_padded_Nt / 2`), exactly one K chunk straddles the
+ * boundary: its first part belongs to the early half (valid on rix > rid halved
+ * iterations) and its remainder belongs to the late half (must be -inf-masked).
+ * The K-loop must be extended by one chunk to include it, and compute must
+ * stamp -inf on the trailing `straddle_num_padded_tiles` columns.
+ *
+ * Used by both the compute kernel (ring_joint_sdpa.cpp) and the reader
+ * dataflow kernel (ring_joint_reader.cpp) to keep the K-loop bounds in sync.
+ */
+template <uint32_t local_padded_Nt, uint32_t Sk_chunk_t>
+struct KCausalStraddleInfo {
+    static constexpr uint32_t coarse_chunk_size_t = local_padded_Nt / 2;
+    static constexpr bool has_straddle = (coarse_chunk_size_t % Sk_chunk_t) != 0;
+    // Index of the straddling K chunk (floor(coarse_chunk_size_t / Sk_chunk_t)).
+    static constexpr uint32_t straddle_chunk_id = coarse_chunk_size_t / Sk_chunk_t;
+    // Trailing tiles in the straddle chunk that belong to the late half (0 if no straddle).
+    static constexpr uint32_t straddle_num_padded_tiles =
+        has_straddle ? (Sk_chunk_t - (coarse_chunk_size_t % Sk_chunk_t)) : 0;
+};
