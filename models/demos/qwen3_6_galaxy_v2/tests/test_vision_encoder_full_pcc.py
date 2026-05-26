@@ -11,8 +11,8 @@ PatchMerger — those are small CPU ops for V2 first pass).
 Input: random hidden states `[seq_len, hidden=1152]` as if the patch_embed
 + pos_embed had already produced them. Output: same shape after 27 blocks.
 
-PCC > 0.95 required (bf16 quantization compounds through 27 layers — the
-single block hit 0.9981, attention alone 0.987; expect some degradation).
+PCC > 0.99 after Meta-RoPE fix (qwen3_vl convert_rope_style_hf_to_meta +
+reverse_permute Q/K weights makes on-device bf16 RoPE math-equivalent to HF).
 """
 
 import os
@@ -141,7 +141,7 @@ def test_vision_encoder_full_qwen36(grid_h, grid_w, mesh_device, reset_seeds, en
     logger.info(f"tt output stats: mean={tt_output_torch.mean().item():.4f}, std={tt_output_torch.std().item():.4f}")
 
     # Lower threshold for the full 27-layer chain (bf16 compounds)
-    pcc_required = 0.95
+    pcc_required = 0.99
     passing, pcc_message = comp_pcc(x_ref, tt_output_torch, pcc_required)
     logger.info(comp_allclose(x_ref, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")

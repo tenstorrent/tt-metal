@@ -122,7 +122,7 @@ def test_vision_block_tp_qwen36(grid_h, grid_w, layer_num, mesh_device, reset_se
     else:
         tt_output_torch = tt_output_torch[0, :seq_len, :H]
 
-    pcc_required = 0.98  # match the attention block's relaxed threshold (bf16 floor)
+    pcc_required = 0.99  # tightened: Meta-RoPE on-device path matches HF (qwen3_vl precedent)
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")

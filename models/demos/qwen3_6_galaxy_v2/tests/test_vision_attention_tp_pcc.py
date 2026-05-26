@@ -122,11 +122,10 @@ def test_vision_attention_tp_qwen36(grid_h, grid_w, layer_num, mesh_device, rese
     logger.info(f"tt_output_torch shape: {tuple(tt_output_torch.shape)}")
     tt_output_torch = tt_output_torch[0, :seq_len, :H]  # [seq_len, H]
 
-    # First-pass V2 threshold relaxed to 0.98 — bf16 precision floor in vision
-    # attention with head_dim=72 padded to 96 + scale fix + rotary_embedding_llama
-    # currently yields ~0.987. Further improvement (fp32 SDPA, alt RoPE padding,
-    # etc.) is a separate optimization phase.
-    pcc_required = 0.98
+    # PCC > 0.99: HF→Meta head_dim permutation on Q/K weights + cos/sin perm to
+    # Meta interleaved layout (mirrors qwen3_vl) makes the on-device
+    # `rotary_embedding_llama` produce HF-equivalent rotation in bf16.
+    pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")

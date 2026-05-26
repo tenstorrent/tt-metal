@@ -168,6 +168,33 @@ def _apply_interleaved_rope_perm(
     return t.index_select(head_dim_axis, idx)
 
 
+def _hf_to_meta_qk_head_perm(W: torch.Tensor, *, head_dim_axis: int, head_dim: int) -> torch.Tensor:
+    """Permute Q/K weight (or bias) head_dim axis from HF rotate-half to Meta interleaved.
+
+    HF layout per head: [r_0, r_1, ..., r_{H/2-1}, i_0, i_1, ..., i_{H/2-1}]
+    Meta layout per head: [r_0, i_0, r_1, i_1, ..., r_{H/2-1}, i_{H/2-1}]
+
+    Identical to `reverse_permute` in tt_transformers/load_checkpoints.py used by
+    qwen3_vl, but parameterised on which axis of an arbitrary-rank tensor.
+    """
+    assert head_dim % 2 == 0, f"head_dim {head_dim} must be even"
+    half = head_dim // 2
+    if head_dim_axis < 0:
+        head_dim_axis = t_dim_normalize(W, head_dim_axis)
+    assert W.shape[head_dim_axis] == head_dim, f"axis size {W.shape[head_dim_axis]} != head_dim {head_dim}"
+    # Split head_dim axis into (real|imag, k) then transpose to (k, real|imag).
+    pre = W.shape[:head_dim_axis]
+    post = W.shape[head_dim_axis + 1 :]
+    W = W.reshape(*pre, 2, half, *post)
+    W = W.transpose(head_dim_axis, head_dim_axis + 1)
+    W = W.reshape(*pre, head_dim, *post)
+    return W
+
+
+def t_dim_normalize(t: torch.Tensor, dim: int) -> int:
+    return dim if dim >= 0 else t.dim() + dim
+
+
 def reorg_fused_qkv_weight(
     qkv_w: torch.Tensor,
     *,
@@ -191,17 +218,24 @@ def reorg_fused_qkv_weight(
     K = qkv_w[hidden : 2 * hidden, :]
     V = qkv_w[2 * hidden : 3 * hidden, :]
 
-    def reshape_for_tp(W: torch.Tensor) -> torch.Tensor:
-        # [hidden, hidden_in] → [num_heads, head_dim, hidden_in] → pad head_dim → [num_heads, padded_head_dim, hidden_in]
+    def reshape_for_tp(W: torch.Tensor, *, qk_permute: bool) -> torch.Tensor:
+        # [hidden, hidden_in] → [num_heads, head_dim, hidden_in]
         W = W.view(num_heads, head_dim, hidden_in)
+        # Q and K: permute head_dim from HF [r_0..r_{H/2-1}, i_0..i_{H/2-1}] to
+        # Meta interleaved [r_0, i_0, r_1, i_1, ...] so the on-device
+        # `rotary_embedding_llama` (interleaved-pair convention) rotates
+        # mathematically equivalent positions vs HF rotate_half. V is unchanged.
+        if qk_permute:
+            W = _hf_to_meta_qk_head_perm(W, head_dim_axis=1, head_dim=head_dim)
+        # pad head_dim with zeros: [num_heads, padded_head_dim, hidden_in]
         W = _pad_head_dim(W, head_dim_axis=1, head_dim=head_dim, padded_head_dim=padded_head_dim)
         # [num_heads, padded_head_dim, hidden_in] → [tp_factor, num_local_heads, padded_head_dim, hidden_in]
         W = W.view(tp_factor, num_local_heads, padded_head_dim, hidden_in)
         return W
 
-    Q = reshape_for_tp(Q)
-    K = reshape_for_tp(K)
-    V = reshape_for_tp(V)
+    Q = reshape_for_tp(Q, qk_permute=True)
+    K = reshape_for_tp(K, qk_permute=True)
+    V = reshape_for_tp(V, qk_permute=False)
 
     # Concat along dim=1 (the local-heads axis) so per-chip slice = (Q-heads, K-heads, V-heads).
     qkv = torch.cat([Q, K, V], dim=1)  # [tp_factor, 3 * num_local_heads, padded_head_dim, hidden_in]
@@ -227,15 +261,19 @@ def reorg_fused_qkv_bias(
     K = qkv_b[hidden : 2 * hidden]
     V = qkv_b[2 * hidden : 3 * hidden]
 
-    def reshape_for_tp(b: torch.Tensor) -> torch.Tensor:
+    def reshape_for_tp(b: torch.Tensor, *, qk_permute: bool) -> torch.Tensor:
         b = b.view(num_heads, head_dim)
+        # Q/K bias: same HF→Meta head_dim permutation as the weight (so the
+        # bias contribution lands on the same Meta channel as the weight matmul).
+        if qk_permute:
+            b = _hf_to_meta_qk_head_perm(b, head_dim_axis=1, head_dim=head_dim)
         b = _pad_head_dim(b, head_dim_axis=1, head_dim=head_dim, padded_head_dim=padded_head_dim)
         b = b.view(tp_factor, num_local_heads, padded_head_dim)
         return b
 
-    Q = reshape_for_tp(Q)
-    K = reshape_for_tp(K)
-    V = reshape_for_tp(V)
+    Q = reshape_for_tp(Q, qk_permute=True)
+    K = reshape_for_tp(K, qk_permute=True)
+    V = reshape_for_tp(V, qk_permute=False)
 
     qkv = torch.cat([Q, K, V], dim=1)  # [tp_factor, 3 * num_local_heads, padded_head_dim]
     qkv = qkv.reshape(tp_factor * 3 * num_local_heads * padded_head_dim)
@@ -289,38 +327,21 @@ def build_vision_rope_tensors(
     )
     assert cos.shape == (seq_len, head_dim), f"unexpected cos shape {cos.shape}"
 
+    # Convert cos/sin from HF rotate-half layout [c0..c_{H/2-1}, c0..c_{H/2-1}]
+    # to Meta interleaved layout [c0, c0, c1, c1, ..., c_{H/2-1}, c_{H/2-1}] so
+    # they pair with the Meta-permuted Q/K weights (see reorg_fused_qkv_weight).
+    # Identical to qwen3_vl's `convert_rope_style_hf_to_meta`.
+    cos = _apply_interleaved_rope_perm(cos, head_dim_axis=-1, head_dim=head_dim, padded_head_dim=head_dim)
+    sin = _apply_interleaved_rope_perm(sin, head_dim_axis=-1, head_dim=head_dim, padded_head_dim=head_dim)
     if padded_head_dim != head_dim:
+        # Pad to padded_head_dim with cos=1, sin=0 → identity rotation on padded
+        # positions, leaves the zero-padded weight columns unaffected.
         cos_pad = torch.ones(seq_len, padded_head_dim - head_dim, dtype=cos.dtype)
         sin_pad = torch.zeros(seq_len, padded_head_dim - head_dim, dtype=sin.dtype)
         cos = torch.cat([cos, cos_pad], dim=-1)
         sin = torch.cat([sin, sin_pad], dim=-1)
-        # Permute HF rotate-half cos/sin layout to interleaved layout matching
-        # the qkv weight permutation in `reorg_fused_qkv_weight`. AND negate sin
-        # because the TT `rotary_embedding_llama` op has the opposite cross-term
-        # sign convention vs HF rotate_half:
-        #   TT:  y[2k]   = x[2k]*cos[2k]   + x[2k+1]*sin[2k]
-        #        y[2k+1] = x[2k+1]*cos[2k+1] - x[2k]*sin[2k+1]
-        #   HF rotate-half: y[k]     = x[k]    *cos - x[k+H/2]*sin   (k in [0, H/2))
-        #                   y[k+H/2] = x[k+H/2]*cos + x[k]    *sin
-        # Negating sin flips the cross-term signs, making the two equivalent
-        # after the position permutation.
-        cos = _apply_interleaved_rope_perm(cos, head_dim_axis=-1, head_dim=head_dim, padded_head_dim=padded_head_dim)
-        sin = _apply_interleaved_rope_perm(-sin, head_dim_axis=-1, head_dim=head_dim, padded_head_dim=padded_head_dim)
 
     # Upload as [1, 1, S, padded_head_dim] replicated across the full mesh.
-    # Note on PCC: individual q_rot / k_rot vectors show PCC ~0.79 vs HF
-    # because TT rotary_embedding_llama uses a different rotation basis than
-    # HF rotate_half. BUT the dot-product q·k that drives attention scores is
-    # invariant under any consistent unitary rotation applied to both q and k.
-    # The end-to-end attention output PCC settles at ~0.987 — that's bf16
-    # precision compounding through qkv_proj + rope + sdpa + o_proj, not a
-    # rotation convention mismatch. Higher precision (fp32 throughout) would
-    # close the 0.013 gap; deferred as a follow-up optimization.
-    # `ttnn.experimental.rotary_embedding_llama` hard-requires bf16 inputs
-    # (asserts all input dtypes == bfloat16). Confirmed empirically: fp32
-    # cos/sin upload fails with TT_FATAL. Higher precision would need a
-    # manual fp32 RoPE with proper rotate_half_72 (requires non-tile-
-    # aligned slicing in ttnn; deferred).
     def upload(t: torch.Tensor) -> ttnn.Tensor:
         return ttnn.from_torch(
             t.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),

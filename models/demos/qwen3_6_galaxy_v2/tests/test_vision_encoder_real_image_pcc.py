@@ -80,10 +80,11 @@ def test_vision_encoder_e2e_qwen36(grid_h, grid_w, mesh_device, reset_seeds, ens
     tt_features = tt_encoder.forward(pixel_values, grid_thw)
     logger.info(f"TT output shape: {tuple(tt_features.shape)}")
 
-    # PCC threshold = 0.99 — achievable with QWEN36_VISION_CPU_ROPE=1 (fp32 CPU
-    # RoPE recovers from bf16 device-RoPE op's precision floor of 0.844).
-    # Without the env var, falls back to on-device bf16 rope and PCC is ~0.84.
-    pcc_required = 0.99 if os.environ.get("QWEN36_VISION_CPU_ROPE", "0") == "1" else 0.84
+    # PCC > 0.99: HF→Meta Q/K weight permutation + cos/sin Meta-interleave makes
+    # the on-device bf16 `rotary_embedding_llama` mathematically equivalent to
+    # HF rotate_half (qwen3_vl precedent). CPU-RoPE env path remains as a
+    # diagnostic / precision-floor probe.
+    pcc_required = 0.99
     passing, pcc_message = comp_pcc(ref_features, tt_features, pcc_required)
     logger.info(comp_allclose(ref_features, tt_features))
     logger.info(f"PCC: {pcc_message}")
