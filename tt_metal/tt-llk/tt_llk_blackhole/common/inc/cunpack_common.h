@@ -251,6 +251,24 @@ inline constexpr bool should_unpack_to_dest(const bool unpack_to_dest, const std
 {
     return unpack_to_dest && is_32bit_input(unpack_src_format, unpack_dst_format);
 }
+
+// Canonical srcA tile-descriptor baseline programmed by configure_unpack_AB.
+// Per-op uninits restore the tile descriptor to this state.
+//
+// Y-dim (lower 16 bits of TileDescriptor word 1): always 1.
+// X-dim (upper 16 bits of TileDescriptor word 0): 0 for srcA because Tile_x_dim_cntx0 overrides it.
+// Z-dim (upper 16 bits of TileDescriptor word 1): equals the operand's num_faces (used directly at call sites).
+constexpr std::uint32_t CANONICAL_UNPA_TILE_Y_DIM = 1;
+constexpr std::uint32_t CANONICAL_UNPA_TILE_X_DIM = 0;
+
+// Canonical Tile_x_dim_cntx0 word: face_dim packed into both cntx0 (low 16) and cntx1 (high 16),
+// where face_dim = face_r_dim * FACE_C_DIM. configure_unpack_AB programs this value.
+inline constexpr std::uint32_t canonical_unpA_tile_x_dim_cntx(const std::uint32_t face_r_dim)
+{
+    const std::uint32_t face_dim = face_r_dim * FACE_C_DIM;
+    return face_dim | (face_dim << 16);
+}
+
 /**
  * \brief Checks if the unpacker conversion is supported w.r.t. the FP32 dest accumulation mode.
  *

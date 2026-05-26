@@ -301,10 +301,17 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    // Revert Z dim value back to default.
-    const std::uint32_t Tile_z_dim = num_faces;
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(Tile_z_dim);
+    // Restore tile-descriptor Z and X dim to the canonical baseline programmed by
+    // configure_unpack_AB. Z-dim equals the operand's num_faces; X-dim is 0 because the
+    // per-context override in Tile_x_dim_cntx0 (set below) is what the unpacker actually
+    // consumes for srcA. The non-8-bit init path mutates X-dim (to face_r_dim*num_faces*FACE_C_DIM)
+    // so it must be reverted here too to keep the operand operation-restorable.
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(num_faces);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 16, 0xffff0000>(CANONICAL_UNPA_TILE_X_DIM);
 
+    // The unpack-config[0] write below also clears tileize_mode, haloize_mode, and the
+    // other word-0 fields back to 0, mirroring what the zero-initialised config struct
+    // produces in configure_unpack_AB.
     unpack_config_u config = {0};
 
     config.f.out_data_format = unpack_dst_format;
@@ -314,8 +321,10 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     // Load unpack config[0]
     TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG2_Out_data_format_ADDR32);
-    // GPR preloaded with  16 | (16 << 16)}
-    TTI_WRCFG(p_gpr_unpack::FACE_DIM_16x16, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
+    // Restore Tile_x_dim_cntx0 to the canonical face_dim-derived value. The previous
+    // FACE_DIM_16x16 GPR was correct only for face_r_dim=16; tiny tiles need a
+    // face_r_dim-aware value to match the baseline programmed by configure_unpack_AB.
+    cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(canonical_unpA_tile_x_dim_cntx(face_r_dim));
     TTI_NOP;
 }
 
