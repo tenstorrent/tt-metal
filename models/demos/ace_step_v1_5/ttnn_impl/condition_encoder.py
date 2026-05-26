@@ -221,7 +221,6 @@ class _TtAceStepTinyEncoder:
             sin_np, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=mem, mesh_mapper=mapper
         )
         self._rope_cache: dict[int, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
-        # Keyed by (full|sliding, seq_len): dummy S=1 precompute must not reuse for real lyric/timbre S.
         self._attn_bias_cache: dict[tuple[str, int], ttnn.Tensor] = {}
 
     def _rope_tables_for_seq(self, seq_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -379,6 +378,7 @@ class _TtAceStepTinyEncoder:
             sliding_window=self.sliding_window if use_sliding else None,
         )
         mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+        s = int(mask_np.shape[1])
         cache_key = ("sliding" if use_sliding else "full", s)
         if cache_key not in self._attn_bias_cache:
             self._attn_bias_cache[cache_key] = ace_step_upload_f32_np_as_bf16_tile(

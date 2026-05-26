@@ -44,8 +44,10 @@ from .math_perf_env import (
     ace_step_nlp_concat_heads,
     ace_step_permute_kwargs,
     ace_step_reshape_kwargs,
+    ace_step_safe_deallocate,
     ace_step_sdpa_activation_kwargs,
     ace_step_sdpa_mask_memory_config,
+    ace_step_try_nlp_qkv_heads_split,
     ace_step_upload_f32_np_as_bf16_tile,
 )
 
@@ -274,12 +276,29 @@ class TtQwen3EncoderMLP:
                 mesh_mapper=mapper,
             )
 
-        self.w_gate = as_w("gate_proj")
-        self.w_up = as_w("up_proj")
         self.w_down = as_w("down_proj")
         # Wide cond MLPs (e.g. timbre 6144×2048 gate/up): L1 linear outputs clash with matmul
         # static CBs (L1 buffer @ 1096832 vs CB end @ 1167872 on Blackhole). Keep DRAM activations.
         self._mlp_keep_dram_activations = int(intermediate_size) >= 4608
+        self._fused_gate_up = not self._mlp_keep_dram_activations
+        if self._fused_gate_up:
+            gate_host = weights_np[f"{base}.gate_proj.weight"]
+            up_host = weights_np[f"{base}.up_proj.weight"]
+            gate_up_host = np.concatenate([gate_host, up_host], axis=0)
+            self.w_gate_up = ttnn.as_tensor(
+                gate_up_host,
+                device=device,
+                dtype=w_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=mem,
+                mesh_mapper=mapper,
+            )
+            self.w_gate = None
+            self.w_up = None
+        else:
+            self.w_gate = as_w("gate_proj")
+            self.w_up = as_w("up_proj")
+            self.w_gate_up = None
 
     def _l1_activation(self, t: ttnn.Tensor) -> ttnn.Tensor:
         if self._act_l1 is None:
@@ -292,7 +311,8 @@ class TtQwen3EncoderMLP:
             kw["compute_kernel_config"] = self._linear_ck
         pc = None
         if self._use_cond_linear_pc:
-            key = (int(batch_size), int(seq_len))
+            fused = self._fused_gate_up
+            key = (int(batch_size), int(seq_len), fused)
             pc = self._gate_up_pc_cache.get(key)
             if pc is None:
                 pc = ace_step_cond_mlp_gate_up_linear_program_config(
@@ -301,6 +321,7 @@ class TtQwen3EncoderMLP:
                     hidden_size=self.hidden_size,
                     intermediate_size=self.intermediate_size,
                     batch_size=int(batch_size),
+                    out_dim=(2 * self.intermediate_size if fused else None),
                 )
                 if pc is not None:
                     self._gate_up_pc_cache[key] = pc
@@ -343,8 +364,15 @@ class TtQwen3EncoderMLP:
         else:
             x = self._l1_activation(x)
         lin_gu = self._gate_up_linear_kwargs(batch_size=b_x, seq_len=s)
-        gate = ttnn.linear(x, self.w_gate, bias=None, transpose_b=True, **lin_gu)
-        up = ttnn.linear(x, self.w_up, bias=None, transpose_b=True, **lin_gu)
+        if self._fused_gate_up:
+            gu = ttnn.linear(x, self.w_gate_up, bias=None, transpose_b=True, **lin_gu)
+            inter = self.intermediate_size
+            gate = ttnn.slice(gu, (0, 0, 0, 0), (b_x, 1, s, inter))
+            up = ttnn.slice(gu, (0, 0, 0, inter), (b_x, 1, s, 2 * inter))
+            ace_step_safe_deallocate(ttnn, gu)
+        else:
+            gate = ttnn.linear(x, self.w_gate, bias=None, transpose_b=True, **lin_gu)
+            up = ttnn.linear(x, self.w_up, bias=None, transpose_b=True, **lin_gu)
         _silu_mc = (self._linear_out_l1 if not self._mlp_keep_dram_activations else None) or getattr(
             ttnn, "DRAM_MEMORY_CONFIG", None
         )
@@ -426,8 +454,17 @@ class _TtQwen3EncoderLayer:
         self.input_ln_w = as_t("input_layernorm.weight")
         self.post_ln_w = as_t("post_attention_layernorm.weight")
         self.wq = as_t("self_attn.q_proj.weight", proj=True)
-        self.wk = as_t("self_attn.k_proj.weight", proj=True)
-        self.wv = as_t("self_attn.v_proj.weight", proj=True)
+        wk_host = weights_np[f"{prefix}.self_attn.k_proj.weight"]
+        wv_host = weights_np[f"{prefix}.self_attn.v_proj.weight"]
+        wkv_host = np.concatenate([wk_host, wv_host], axis=0)
+        self.wkv = ttnn.as_tensor(
+            wkv_host,
+            device=device,
+            dtype=self._proj_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem,
+            mesh_mapper=mapper,
+        )
         self.wo = as_t("self_attn.o_proj.weight", proj=True)
         self.q_norm_w = as_t("self_attn.q_norm.weight")
         self.k_norm_w = as_t("self_attn.k_norm.weight")
@@ -495,32 +532,43 @@ class _TtQwen3EncoderLayer:
         q_dim_o = int(H * Dh)
         kv_dim_o = int(kv_h * Dh)
         lin_q = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=hsz, out_dim=q_dim_o)
-        lin_kv = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=hsz, out_dim=kv_dim_o)
-        _sr = ace_step_reshape_kwargs(ttnn)
-        _pk = ace_step_permute_kwargs(ttnn)
+        lin_kv = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=hsz, out_dim=2 * kv_dim_o)
         q = ttnn.linear(x, self.wq, bias=None, transpose_b=True, **lin_q)
-        k = ttnn.linear(x, self.wk, bias=None, transpose_b=True, **lin_kv)
-        v = ttnn.linear(x, self.wv, bias=None, transpose_b=True, **lin_kv)
+        kv = ttnn.linear(x, self.wkv, bias=None, transpose_b=True, **lin_kv)
 
-        # BFP8 1D-mcast matmul can spill Q/K/V to DRAM despite memory_config=L1; reshape/permute
-        # views inherit that placement. Force L1 before SDPA (no-op when already L1).
+        # BFP8 1D-mcast matmul can spill Q/KV to DRAM despite memory_config=L1; head-split
+        # inherits that placement. Force L1 before SDPA (no-op when already L1).
         if _l1_mc is not None:
             q = ace_step_ensure_l1_activation(ttnn, q, _l1_mc)
-            k = ace_step_ensure_l1_activation(ttnn, k, _l1_mc)
-            v = ace_step_ensure_l1_activation(ttnn, v, _l1_mc)
+            kv = ace_step_ensure_l1_activation(ttnn, kv, _l1_mc)
 
-        # [B,1,S,H*Dh] -> [B,S,H,Dh] -> [B,H,S,Dh] (4-D path; avoids rank-5 intermediate)
-        q = ttnn.reshape(q, (b, s, H, Dh), **_sr)
-        k = ttnn.reshape(k, (b, s, kv_h, Dh), **_sr)
-        v = ttnn.reshape(v, (b, s, kv_h, Dh), **_sr)
-        q = ttnn.permute(q, (0, 2, 1, 3), **_pk)
-        k = ttnn.permute(k, (0, 2, 1, 3), **_pk)
-        v = ttnn.permute(v, (0, 2, 1, 3), **_pk)
-
-        if _l1_mc is not None:
-            q = ace_step_ensure_l1_activation(ttnn, q, _l1_mc)
-            k = ace_step_ensure_l1_activation(ttnn, k, _l1_mc)
-            v = ace_step_ensure_l1_activation(ttnn, v, _l1_mc)
+        heads = ace_step_try_nlp_qkv_heads_split(
+            ttnn,
+            q_b1sd=q,
+            kv_b1sd=kv,
+            num_heads=H,
+            num_kv_heads=kv_h,
+            memory_config=_l1_mc,
+        )
+        if heads is not None:
+            q, k, v = heads
+            ace_step_safe_deallocate(ttnn, kv)
+        else:
+            _sr = ace_step_reshape_kwargs(ttnn)
+            _pk = ace_step_permute_kwargs(ttnn)
+            k = ttnn.slice(kv, (0, 0, 0, 0), (b, 1, s, kv_dim_o))
+            v = ttnn.slice(kv, (0, 0, 0, kv_dim_o), (b, 1, s, 2 * kv_dim_o))
+            ace_step_safe_deallocate(ttnn, kv)
+            q = ttnn.reshape(q, (b, s, H, Dh), **_sr)
+            k = ttnn.reshape(k, (b, s, kv_h, Dh), **_sr)
+            v = ttnn.reshape(v, (b, s, kv_h, Dh), **_sr)
+            q = ttnn.permute(q, (0, 2, 1, 3), **_pk)
+            k = ttnn.permute(k, (0, 2, 1, 3), **_pk)
+            v = ttnn.permute(v, (0, 2, 1, 3), **_pk)
+            if _l1_mc is not None:
+                q = ace_step_ensure_l1_activation(ttnn, q, _l1_mc)
+                k = ace_step_ensure_l1_activation(ttnn, k, _l1_mc)
+                v = ace_step_ensure_l1_activation(ttnn, v, _l1_mc)
 
         q = ttnn.rms_norm(q, weight=self.q_norm_w, epsilon=self.eps, **_rms_kw)
         k = ttnn.rms_norm(k, weight=self.k_norm_w, epsilon=self.eps, **_rms_kw)
@@ -661,6 +709,22 @@ class TtQwen3EmbeddingEncoder:
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self.mem,
+            mesh_mapper=mapper,
+        )
+
+        # Pre-warm default all-valid attention bias (avoids ~2 ms host Tilize gap on first forward).
+        _warm_mask = np.ones((1, self.cfg.max_seq_len), dtype=np.float32)
+        _warm_bias = causal_padding_attn_bias_np(_warm_mask, self.cfg.max_seq_len)
+        _warm_nh = int(self.cfg.num_attention_heads)
+        if _warm_nh > 1:
+            _warm_bias = np.repeat(_warm_bias, _warm_nh, axis=1)
+        _warm_key = (int(self.cfg.max_seq_len), _warm_nh, _warm_mask.tobytes())
+        self._attn_bias_cache[_warm_key] = ace_step_upload_f32_np_as_bf16_tile(
+            ttnn,
+            _warm_bias,
+            device=device,
+            dtype=self.dtype,
+            memory_config=ace_step_sdpa_mask_memory_config(ttnn) or self.mem,
             mesh_mapper=mapper,
         )
 
