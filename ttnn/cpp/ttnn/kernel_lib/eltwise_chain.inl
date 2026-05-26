@@ -404,12 +404,12 @@ struct PackTile : PackTileTag {
     static constexpr OperandKind index_mode          = IndexMode;
 
     // Prev-CB fold (D2): PackTile writes pack-side; mark Cb under reconfig only when
-    // the user opted into pack reconfig (Output / OutputConditional). Otherwise no
-    // pack reconfig is emitted — fold keeps prior pack target.
+    // the user opted into pack reconfig (Output). Otherwise no pack reconfig is
+    // emitted — fold keeps prior pack target.
     static constexpr uint32_t          reconfig_srca_cb    = NO_PREV_CB;
     static constexpr uint32_t          reconfig_srcb_cb    = NO_PREV_CB;
     static constexpr uint32_t          reconfig_pack_cb    =
-        (Reconfig == PackTileReconfig::Output || Reconfig == PackTileReconfig::OutputConditional) ? Cb : NO_PREV_CB;
+        (Reconfig == PackTileReconfig::Output) ? Cb : NO_PREV_CB;
 
     [[no_unique_address]] TileBaseT tile_base{};
 
@@ -525,7 +525,7 @@ struct PackTileBlock : PackTileTag {
     static constexpr uint32_t reconfig_srca_cb = NO_PREV_CB;
     static constexpr uint32_t reconfig_srcb_cb = NO_PREV_CB;
     static constexpr uint32_t reconfig_pack_cb =
-        (Reconfig == PackTileReconfig::Output || Reconfig == PackTileReconfig::OutputConditional) ? Cb : NO_PREV_CB;
+        (Reconfig == PackTileReconfig::Output) ? Cb : NO_PREV_CB;
 
     static ALWI void init() {
         // Pack reconfig is fold-driven; init() is a no-op.
@@ -1705,33 +1705,77 @@ ALWI void elem_init() { E::init(); }
 // 0, where prev == NO_PREV_CB) and never again on that side. Run-time cost: zero —
 // `if constexpr` resolves at compile time.
 //
+// Emission shapes:
+//   - srca AND srcb both reconfig, both have prev    → reconfig_data_format(prev_a, curr_a, prev_b, curr_b)  (4-arg _with_dt)
+//   - srca AND srcb both reconfig, both first-emit   → reconfig_data_format(curr_a, curr_b)                  (2-arg combined)
+//   - srca AND srcb both reconfig, mixed prev-state  → independent per-side calls
+//   - one side only                                  → reconfig_data_format_src{a,b}(prev, curr) or (curr)
+//   - pack                                           → always independent; pack_reconfig_data_format(prev_p, curr_p) or (curr_p)
+// The LLK's _with_dt overloads run a format-equality fast-path skip against the CB
+// metadata tables, so an emitted reconfig on CBs with matching dtypes is a no-op
+// at the hardware level — strictly bounded by a handful of compare instructions.
+//
 // DEST accumulation mode is build-flag-driven (DST_ACCUM_MODE / FP32_DEST_ACC_EN) —
 // no per-element fp32 fold here.
 // =============================================================================
 
 template <class E, std::size_t I, class... Es>
 ALWI void emit_pre_element_transitions() {
-    // ---- D2 prev-CB elision ----
     constexpr uint32_t curr_a = cb_for_side<Side::SrcA, E>();
-    if constexpr (curr_a != NO_PREV_CB) {
-        constexpr uint32_t prev_a = prev_cb_for_idx<Side::SrcA, I, Es...>();
-        if constexpr (curr_a != prev_a) {
+    constexpr uint32_t curr_b = cb_for_side<Side::SrcB, E>();
+    constexpr uint32_t curr_p = cb_for_side<Side::Pack, E>();
+
+    constexpr uint32_t prev_a =
+        (curr_a != NO_PREV_CB) ? prev_cb_for_idx<Side::SrcA, I, Es...>() : NO_PREV_CB;
+    constexpr uint32_t prev_b =
+        (curr_b != NO_PREV_CB) ? prev_cb_for_idx<Side::SrcB, I, Es...>() : NO_PREV_CB;
+    constexpr uint32_t prev_p =
+        (curr_p != NO_PREV_CB) ? prev_cb_for_idx<Side::Pack, I, Es...>() : NO_PREV_CB;
+
+    constexpr bool reconf_a = (curr_a != NO_PREV_CB) && (curr_a != prev_a);
+    constexpr bool reconf_b = (curr_b != NO_PREV_CB) && (curr_b != prev_b);
+    constexpr bool reconf_p = (curr_p != NO_PREV_CB) && (curr_p != prev_p);
+
+    // ---- srca + srcb: coalesce when both sides share prev-state ----
+    if constexpr (reconf_a && reconf_b) {
+        if constexpr (prev_a != NO_PREV_CB && prev_b != NO_PREV_CB) {
+            // both sides have prev → 4-arg _with_dt
+            reconfig_data_format(prev_a, curr_a, prev_b, curr_b);
+        } else if constexpr (prev_a == NO_PREV_CB && prev_b == NO_PREV_CB) {
+            // first-emit on both sides → 2-arg combined (unconditional reprogram)
+            reconfig_data_format(curr_a, curr_b);
+        } else {
+            // mixed prev-state → independent per-side
+            if constexpr (prev_a != NO_PREV_CB) {
+                reconfig_data_format_srca(prev_a, curr_a);
+            } else {
+                reconfig_data_format_srca(curr_a);
+            }
+            if constexpr (prev_b != NO_PREV_CB) {
+                reconfig_data_format_srcb(prev_b, curr_b);
+            } else {
+                reconfig_data_format_srcb(curr_b);
+            }
+        }
+    } else if constexpr (reconf_a) {
+        if constexpr (prev_a != NO_PREV_CB) {
+            reconfig_data_format_srca(prev_a, curr_a);
+        } else {
             reconfig_data_format_srca(curr_a);
         }
-    }
-
-    constexpr uint32_t curr_b = cb_for_side<Side::SrcB, E>();
-    if constexpr (curr_b != NO_PREV_CB) {
-        constexpr uint32_t prev_b = prev_cb_for_idx<Side::SrcB, I, Es...>();
-        if constexpr (curr_b != prev_b) {
+    } else if constexpr (reconf_b) {
+        if constexpr (prev_b != NO_PREV_CB) {
+            reconfig_data_format_srcb(prev_b, curr_b);
+        } else {
             reconfig_data_format_srcb(curr_b);
         }
     }
 
-    constexpr uint32_t curr_p = cb_for_side<Side::Pack, E>();
-    if constexpr (curr_p != NO_PREV_CB) {
-        constexpr uint32_t prev_p = prev_cb_for_idx<Side::Pack, I, Es...>();
-        if constexpr (curr_p != prev_p) {
+    // ---- pack: always independent ----
+    if constexpr (reconf_p) {
+        if constexpr (prev_p != NO_PREV_CB) {
+            pack_reconfig_data_format(prev_p, curr_p);
+        } else {
             pack_reconfig_data_format(curr_p);
         }
     }

@@ -181,26 +181,31 @@
  *
  * Reconfig (`with_dt_tree`-style) — fold-driven post commits 2-3
  * ----------------------------------------------------------------
- *  - CopyTileReconfig::Input         → fold emits `reconfig_data_format_srca(curr)` (compile-time-elided when prev ==
- * curr).
- *  - BinaryDataFormatReconfig::Input → fold emits `reconfig_data_format_srca / _srcb` per side (compile-time-elided per
- * side). Pack-side reconfig is owned by the downstream `PackTile` (`PackTileReconfig::Output`); BinaryFpu writes to
- * DEST, never to a CB.
- *  - BinaryDataFormatReconfig::SrcA  → fold emits `reconfig_data_format_srca` only (caller asserts srcb is already
- * programmed). Single-side variant for chains where the other side is already bound by a prior element.
- *  - BinaryDataFormatReconfig::SrcB  → fold emits `reconfig_data_format_srcb` only (caller asserts srca is already
- * programmed). Mirror of SrcA.
+ *  - CopyTileReconfig::Input         → fold emits single-side reconfig on srca (compile-time-elided when prev == curr).
+ *  - BinaryDataFormatReconfig::Input → fold emits per-side reconfig on srca + srcb (compile-time-elided per side).
+ *    Pack-side reconfig is owned by the downstream `PackTile` (`PackTileReconfig::Output`); BinaryFpu writes to DEST,
+ *    never to a CB.
+ *  - BinaryDataFormatReconfig::SrcA  → fold emits srca reconfig only (caller asserts srcb is already programmed).
+ *  - BinaryDataFormatReconfig::SrcB  → fold emits srcb reconfig only (caller asserts srca is already programmed).
  *  - DestReuseReconfig::Input        → fold emits per-side reconfig (srca OR srcb depending on ReuseType).
- *  - DestReuseReconfig::SrcA         → fold emits `reconfig_data_format_srca` only, decoupled from ReuseType.
- *  - DestReuseReconfig::SrcB         → fold emits `reconfig_data_format_srcb` only, decoupled from ReuseType.
- *  - PackTileReconfig::Output        → fold emits `pack_reconfig_data_format(new_cb)`.
- *  - PackTileReconfig::OutputConditional → currently emits same as ::Output; future extension may
- *    select two-arg `pack_reconfig_data_format(prev, curr)` form when prev_pack is known (D7 note).
+ *  - DestReuseReconfig::SrcA         → fold emits srca reconfig only, decoupled from ReuseType.
+ *  - DestReuseReconfig::SrcB         → fold emits srcb reconfig only, decoupled from ReuseType.
+ *  - PackTileReconfig::Output        → fold emits pack reconfig — two-arg `_with_dt` form when prev_pack_cb is known,
+ *    single-arg on first emit.
  *  - UnaryBcastReconfig::Input       → currently bundled into `unary_bcast_init`.
  *
- * The combined `reconfig_data_format(srca, srcb)` overloads expand to the same two MOPs that
- * `reconfig_data_format_srca` + `reconfig_data_format_srcb` issue independently, so the per-side
- * elision in the fold yields the same MOP count as the combined form when both sides change.
+ * Emission shapes the fold chooses between (see `emit_pre_element_transitions`):
+ *
+ *   srca + srcb both reconfig, both have prev   → reconfig_data_format(prev_a, curr_a, prev_b, curr_b)  (4-arg
+ * _with_dt) srca + srcb both reconfig, both first-emit  → reconfig_data_format(curr_a, curr_b)                  (2-arg
+ * combined) srca + srcb both reconfig, mixed prev-state → reconfig_data_format_src{a,b}(prev, curr) or (curr) per side
+ *   one side only                               → reconfig_data_format_src{a,b}(prev, curr) or (curr)
+ *   pack-side                                   → pack_reconfig_data_format(prev_p, curr_p) or (curr_p)
+ *
+ * The LLK's `_with_dt` overloads include a runtime format-equality check against the CB metadata tables
+ * (`unpack_src_format[]` / `unpack_dst_format[]`) and short-circuit the unpack-side and math-side reprograms
+ * independently when formats match — so emitted reconfigs are no-ops at the hardware level when the involved CBs
+ * happen to carry the same dtype.
  */
 
 #include <cstdint>
@@ -775,10 +780,14 @@ enum class UnaryBcastReconfig : uint8_t {
 };
 
 /// Pack-side dtype-reconfig.
+///
+/// The fold emits `pack_reconfig_data_format(prev_p, curr_p)` (two-arg `_with_dt`)
+/// when a prior chain element established the pack target, and falls back to the
+/// single-arg form on first emit. The LLK's runtime format-equality check makes
+/// the legacy `OutputConditional` distinction redundant; only `Output` remains.
 enum class PackTileReconfig : uint8_t {
     None,
-    Output,             // pack_reconfig_data_format(new_cb)
-    OutputConditional,  // pack_reconfig_data_format(old_cb, new_cb)  (FP32_DEST_ACC-gated)
+    Output,  // fold emits pack_reconfig_data_format(prev_p, curr_p) when prev_p known, else (curr_p)
 };
 
 // =============================================================================

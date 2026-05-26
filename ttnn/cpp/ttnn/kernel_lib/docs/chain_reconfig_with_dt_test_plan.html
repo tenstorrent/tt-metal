@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Chain reconfig <code>_with_dt</code> — Gate 2 test plan</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 24px; color: #1c1c1c; line-height: 1.55; }
+  h1 { border-bottom: 2px solid #2557a6; padding-bottom: 8px; }
+  h2 { border-bottom: 1px solid #ddd; padding-bottom: 4px; margin-top: 32px; }
+  h3 { margin-top: 22px; }
+  code, pre { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  pre { background: #f6f6f6; padding: 12px 16px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.45; }
+  code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-size: 92%; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }
+  th, td { border: 1px solid #ccc; padding: 6px 9px; text-align: left; vertical-align: top; }
+  th { background: #eef; }
+  .case { background: #fff5d0; font-weight: 700; }
+  .skip { background: #fde0e0; }
+  .new { background: #e3f7e0; }
+  .pill { padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+  .pill.gate { background: #2557a6; color: #fff; }
+  .pill.draft { background: #6c757d; color: #fff; }
+  .pill.skip { background: #b22222; color: #fff; }
+  .pill.must { background: #c8930a; color: #fff; }
+  .pill.cov { background: #2a8a2a; color: #fff; }
+  .callout { background: #fff8e1; border-left: 4px solid #f0b400; padding: 8px 14px; margin: 14px 0; border-radius: 4px; }
+  .callout.good { background: #e3f7e0; border-left-color: #2a8a2a; }
+  .callout.bad  { background: #fde0e0; border-left-color: #b22222; }
+  .cite { color: #555; font-size: 12px; font-family: monospace; }
+  .signoff { background: #2557a6; color: #fff; padding: 12px 16px; border-radius: 6px; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13px; margin: 24px 0; }
+</style>
+</head>
+<body>
+
+<h1>Chain reconfig <code>_with_dt</code> — Gate 2 test plan</h1>
+
+<p>
+  <span class="pill draft">DRAFT</span>
+  <strong>Gate 1 ref:</strong> <code>chain_reconfig_with_dt_proposal.html</code> (approved 2026-05-26).
+  <strong>Status:</strong> awaiting explicit Gate 2 sign-off per <code>llk_helpers_hq.md</code>.
+  <strong>Scope:</strong> validation strategy for the fold change in <code>emit_pre_element_transitions</code> + removal of <code>PackTileReconfig::OutputConditional</code>.
+</p>
+
+<h2>1. What is being validated</h2>
+
+<p>The proposal's parity claim is:</p>
+
+<blockquote>The LLK's <code>should_reconfigure_cbs</code> runtime check (<code class="cite">llk_unpack_common_api.h:104-153</code>) is a pure fast-path skip — if formats already match, the underlying THCON / DEST programming is bypassed but no functional state is changed. Switching from the single-arg LLK to the two-arg <code>_with_dt</code> form must therefore be <strong>bit-exact</strong> against today.</blockquote>
+
+<p>The combined 2-arg / 4-arg <code>reconfig_data_format</code> overload (Gate 1 Decision 3) issues the same underlying unpack+math reprogram (or fast-path skip) as two separate per-side calls — verified by reading <code class="cite">tt_metal/hw/inc/api/compute/reconfig_data_format.h:14-44</code>. So the parity claim extends to it.</p>
+
+<p>The <code>PackTileReconfig::OutputConditional</code> enum value (Gate 1 Decision 2) has zero callsites outside <code>eltwise_chain.hpp</code>/<code>.inl</code> itself (verified by repo-wide grep). Removal is a pure dead-code cleanup; functional risk is zero.</p>
+
+<h2>2. Test strategy — parity, and format heterogeneity is mandatory</h2>
+
+<div class="callout bad">
+<strong>Why same-format testing alone catches nothing.</strong> The LLK's <code>should_reconfigure_cbs</code> runtime check (<code class="cite">llk_unpack_common_api.h:104-153</code>) compares <code>unpack_src_format[old_op]</code> against <code>unpack_src_format[new_op]</code> and <strong>skips the entire reprogram when they match</strong>. If every CB in the chain is the same dtype, every transition hits the fast-path skip — the new emission overloads (4-arg <code>with_dt</code>, 2-arg combined, per-side fallback) all execute their first few instructions and then jump out. A regression in argument order, side selection, or prev-tracking would <em>never fire</em>, and the same-dtype test would vacuously pass.<br><br>
+<strong>The 4-arg <code>reconfig_data_format(srca_old, srca_new, srcb_old, srcb_new)</code> is the highest regression risk</strong>: swap srca/srcb argument pairs and a same-dtype test catches nothing; force a format mismatch and the test fails immediately because the reprogram fires on the wrong side. Same-format tests therefore <em>cannot</em> be the primary parity signal — they exist to confirm the fast-path skip itself works.
+</div>
+
+<p>The test strategy splits into two halves, both required:</p>
+
+<ol>
+  <li>
+    <strong>Format-homogeneous parity</strong> (the fast-path skip path) — confirms the new emission overloads compile, link, and don't perturb behavior when the LLK's runtime check skips the reprogram. This is what the existing op pytests give us with their default bf16 matrix. Necessary, but insufficient on its own.
+  </li>
+  <li>
+    <strong>Format-heterogeneous parity</strong> (the actual reprogram path) — <span class="pill must">REQUIRED</span> forces <code>should_reconfigure_cbs</code> to return <code>true</code> at each new emission site so the reprogram actually fires through the new overloads. Without this, the new code paths are dead during testing.
+  </li>
+</ol>
+
+<p>The four concrete levers we have to force <code>should_reconfigure_cbs → true</code> in a chain transition:</p>
+
+<ul>
+  <li><strong>Mixed IEEE input dtypes</strong> (e.g. bf16 + fp32 binary inputs) — forces srca format ≠ srcb format on a single binary element, so the 2-arg combined / 4-arg <code>with_dt</code> overloads must route both formats correctly.</li>
+  <li><strong>Block-float vs IEEE input (bfloat8_b)</strong> <span class="pill must">distinct signal</span> — bfp8 has a fundamentally different <code>unpack_src_format[]</code> code than bf16/fp32 (block float with per-face shared exponent vs IEEE bit-encoding). A bfp8 × bf16 binary input or a bfp8↔bf16 CB rotation forces a reprogram path that <em>no</em> bf16↔fp32 combo touches: the unpack engine programs a different tile-decode pipeline, and the pack engine programs shared-exponent computation. This is the highest-coverage single dtype combo for the new overloads, and it is the path most likely to silently corrupt under an argument-order regression.</li>
+  <li><strong><code>fp32_dest_acc_en = True</code> with bf16 inputs</strong> — forces the math-side <code>unpack_dst_format[]</code> table to differ from the unpack-side <code>unpack_src_format[]</code>, so the math-side reconfig fires independently of the unpack-side. Isolates the math-side fast-path skip from the unpack-side.</li>
+  <li><strong>Output dtype ≠ input dtype</strong> (typecast, bfloat8_b output, etc.) — forces <code>pack_reconfig_data_format(prev_p, curr_p)</code> to actually reprogram pack-side formatting, exercising the pack-side <code>with_dt</code> overload. Pack-to-bfp8 specifically exercises shared-exponent programming, which no IEEE-to-IEEE pack reconfig hits.</li>
+</ul>
+
+<p><strong>bfp8 coverage is non-negotiable</strong> for at least one row per emission case A / D / E — see §3 and §5.</p>
+
+<div class="callout good">
+<strong>We own the validation kernels.</strong> This is a helper-library change. The primary validation surface is <strong>dedicated test kernels we write</strong>, where we control the CB dtype assignment cell-by-cell to construct exactly the chain transition each emission case requires. There is no "the op's program factory refuses heterogeneous dtypes" constraint — that constraint only exists when borrowing an op pytest. For each emission case in §3, the plan in §5 names a dedicated kernel under <code>ttnn/cpp/ttnn/kernel_lib/tests/chain_reconfig/</code> with the exact CB layout and dtype assignment. Existing op pytests that happen to host useful combos (the bfp8 typecast suite) are kept as <em>secondary integration smoke</em> — they catch real-op regressions for free, but they are not the primary signal.
+</div>
+
+<p>Each new emission case from the proposal's §3 must have at least one heterogeneous-format covering pytest run. The §3 coverage matrix below is structured around this requirement.</p>
+
+<p><strong>Additional check:</strong></p>
+
+<ol>
+  <li><strong>FP32 accumulation mode</strong> — every covering pytest runs with <code>fp32_dest_acc_en ∈ {False, True}</code>. The math-side reconfig path is what changes, so toggling DEST mode is non-negotiable.</li>
+</ol>
+
+<p>This plan ships <strong>new test kernels and a new pytest</strong>. The HQ doc's reference to <code>tests/ttnn/unit_tests/kernel_lib/test_helpers_chain_and_binary.py</code> describes scaffolding that does not currently exist on disk — Gate 3 implementation creates both the kernel directory (<code>ttnn/cpp/ttnn/kernel_lib/tests/chain_reconfig/</code>) and the pytest (<code>tests/ttnn/unit_tests/kernel_lib/test_chain_reconfig.py</code>) as part of the validation surface, per §5.1.</p>
+
+<h2>3. Emission cases — trigger conditions and what each one validates</h2>
+
+<p>Reference for what each emission case is, what dtype delta forces its reprogram, and which §5.1 dedicated kernel covers it. Pass criterion at the bottom of the section.</p>
+
+<table>
+  <tr>
+    <th>Case</th><th>Emission</th><th>Trigger (when the fold emits it)</th><th>Dtype delta that fires the reprogram</th><th>§5.1 kernel</th>
+  </tr>
+  <tr>
+    <td><strong>A</strong> <span class="pill must">highest risk</span></td>
+    <td><code>reconfig_data_format(prev_a, curr_a, prev_b, curr_b)</code> — 4-arg <code>with_dt</code></td>
+    <td>Both srca and srcb reconfig in the same transition, both with prev set</td>
+    <td>Both srca and srcb change dtype across the transition (e.g. srca bfp8→bf16 + srcb bf16→fp32). Argument-order regression is invisible without two-sided format change.</td>
+    <td><code>chain_4arg_with_dt.cpp</code></td>
+  </tr>
+  <tr>
+    <td><strong>B</strong></td>
+    <td><code>reconfig_data_format(curr_a, curr_b)</code> — 2-arg combined, unconditional reprogram (no <code>with_dt</code>)</td>
+    <td>Both srca and srcb reconfig in the same transition, neither with prev (first-emit on both sides)</td>
+    <td>Any dtype assignment exercises the unconditional reprogram; argument routing is what matters. The kernel uses bfp8 × fp32 for maximum delta.</td>
+    <td><code>chain_2arg_combined.cpp</code></td>
+  </tr>
+  <tr>
+    <td><strong>C</strong></td>
+    <td><code>reconfig_data_format_srca(prev_a, curr_a)</code> + <code>reconfig_data_format_srcb(curr_b)</code> — per-side fallback, mixed forms</td>
+    <td>Both reconfig, but only one side has prev (the other is first-emit on its side)</td>
+    <td>The held-prev side changes dtype across its CB rotation, AND the first-emit side enters with a different dtype than the held side.</td>
+    <td><code>chain_mixed_prev.cpp</code></td>
+  </tr>
+  <tr>
+    <td><strong>D</strong></td>
+    <td><code>reconfig_data_format_srca(prev_a, curr_a)</code> (or srcb) — single-side <code>with_dt</code></td>
+    <td>One side reconfigs (the other is unused / untouched), the reconfiguring side has prev</td>
+    <td>The reconfiguring side rotates across CBs with different dtypes (e.g. srca: bfp8 → bf16). Verifies the per-side <code>_with_dt</code> overload reprograms only its side.</td>
+    <td><code>chain_singleside.cpp</code></td>
+  </tr>
+  <tr>
+    <td><strong>E</strong></td>
+    <td><code>pack_reconfig_data_format(prev_p, curr_p)</code> — pack-side <code>with_dt</code></td>
+    <td>Pack-side reconfig with prev_p set (downstream PackTile rotates output CB)</td>
+    <td>Output CB rotates across different pack-target dtypes — most aggressively bf16 → bfp8, which exercises shared-exponent programming on the pack engine.</td>
+    <td><code>chain_pack_to_bfp8.cpp</code></td>
+  </tr>
+  <tr>
+    <td><strong>F</strong></td>
+    <td>(none — compile-time elision)</td>
+    <td>Same CB on the same side across consecutive chain elements; <code>if constexpr</code> guard elides the emission</td>
+    <td>N/A — verifies the post-refactor fold still emits zero LLK calls for the no-op transition.</td>
+    <td><code>chain_elide.cpp</code></td>
+  </tr>
+</table>
+
+<div class="callout">
+<strong>Per-case pass criterion.</strong> Each §5.1 kernel's pytest row must:
+<ol style="margin: 6px 0 0 18px;">
+  <li>Compile and run on device without hang.</li>
+  <li>Produce output with PCC ≥ the §4 threshold against the torch golden.</li>
+  <li>Verifiably exercise the named emission overload — confirmed by reading <code>emit_pre_element_transitions</code>'s <code>if constexpr</code> decision for the kernel's chain layout, not by trusting that the kernel filename matches.</li>
+</ol>
+Case F's criterion is narrower: the same-CB chain emits no LLK reconfig calls at all. A compile-time elision regression would change the chain's instruction count, so the kernel's PCC pass on bf16 plus a build-time sanity (e.g. inspecting the generated assembly for the expected number of <code>reconfig_data_format</code> sites) is sufficient.
+</div>
+
+<h2>4. Parameter matrix for the primary pytest</h2>
+
+<p>The dedicated helper pytest (<code>tests/ttnn/unit_tests/kernel_lib/test_chain_reconfig.py</code>, defined in §5.1) takes the kernel as the outer parametrize axis and varies the following per kernel:</p>
+
+<table>
+  <tr><th>Axis</th><th>Required values</th><th>Why required (signal it produces)</th></tr>
+  <tr>
+    <td><code>num_tiles</code></td>
+    <td>{1, 8, 64}</td>
+    <td>HQ doc §"Validation Tests" requirement. 1 = single tile; 8 = fits in DEST half-sync fp16; 64 = spans multiple DEST windows. Confirms the new emission path doesn't perturb per-tile loop iteration accounting.</td>
+  </tr>
+  <tr>
+    <td><code>fp32_dest_acc_en</code></td>
+    <td>{False, True}</td>
+    <td>Math-side reconfig path differs between half-sync (DEST = bf16/fp16) and fp32-DEST (DEST = fp32). Both branches of <code>llk_math_reconfig_data_format</code> must reach the same fast-path skip / reprogram decision. Non-negotiable.</td>
+  </tr>
+  <tr>
+    <td>CB dtype assignment</td>
+    <td>Hard-coded per kernel — see §5.1 table</td>
+    <td>The whole point of dedicated kernels: each CB's dtype is set at host setup to force <code>should_reconfigure_cbs → true</code> at the exact emission site we are validating. No matrix toggle here — the assignment is the kernel's identity.</td>
+  </tr>
+  <tr>
+    <td>Shape</td>
+    <td>The shape implied by <code>num_tiles</code> — e.g. <code>(1, 1, 32, 32 * num_tiles)</code> tile-aligned. One non-tile-aligned shape per kernel is optional sanity, not required.</td>
+    <td>Fold is shape-invariant; the emission decision is purely compile-time.</td>
+  </tr>
+</table>
+
+<p><strong>PCC thresholds for the primary suite:</strong> ≥ 0.9999 for bf16-only paths, ≥ 0.999 for paths with fp32 or bfp8 in the chain, ≥ 0.99 for bfp8 pack-output paths. These match HQ doc thresholds. <strong>Do not relax thresholds to make a test pass.</strong> A measurable PCC drop on a kernel that previously passed (or on its same-CB-no-reconfig baseline) indicates a real argument-routing regression.</p>
+
+<p><strong>Secondary integration smoke (§5.2):</strong> runs unchanged on each op's existing parametrize. We don't impose a matrix on the op pytests — if the integration breaks at any of the dtypes the op already covers, we'll see it.</p>
+
+<h2>5. Test surface — dedicated helper kernels (primary) + op-pytest integration smoke (secondary)</h2>
+
+<h3>5.1 Primary surface — dedicated helper test kernels</h3>
+
+<p>One kernel per emission case (A–F), each with an explicit per-CB dtype assignment chosen to force the new overload to fire its reprogram through the highest-signal format delta. All live under a new directory <code>ttnn/cpp/ttnn/kernel_lib/tests/chain_reconfig/</code>, driven by a new pytest <code>tests/ttnn/unit_tests/kernel_lib/test_chain_reconfig.py</code>. <em>Both directories need to be created</em> — the HQ doc references the parent kernel_lib test scaffolding but it does not exist on disk yet.</p>
+
+<table>
+  <tr>
+    <th>Kernel</th><th>Case</th><th>Chain shape (compute kernel)</th><th>CB dtype assignment</th><th>What fires</th>
+  </tr>
+  <tr>
+    <td><code>chain_4arg_with_dt.cpp</code></td>
+    <td>A</td>
+    <td>BinaryFpu(CbA, CbB) → BinaryFpu(CbC, CbD) → PackTile(CbOut)</td>
+    <td>CbA=bfp8, CbB=bf16, CbC=bf16, CbD=fp32, CbOut=bf16</td>
+    <td>At element 1: srca rotates bfp8 → bf16 AND srcb rotates bf16 → fp32, both with prev set → 4-arg <code>reconfig_data_format(prev_a, curr_a, prev_b, curr_b)</code>. Both sides have format mismatch — argument-order regression catches immediately.</td>
+  </tr>
+  <tr>
+    <td><code>chain_2arg_combined.cpp</code></td>
+    <td>B</td>
+    <td>BinaryFpu(CbA, CbB) → PackTile(CbOut)  [first element]</td>
+    <td>CbA=bfp8, CbB=fp32, CbOut=bf16</td>
+    <td>First-emit on both srca and srcb simultaneously, neither with prev → 2-arg <code>reconfig_data_format(curr_a, curr_b)</code>. Verifies the combined unconditional-reprogram routing.</td>
+  </tr>
+  <tr>
+    <td><code>chain_mixed_prev.cpp</code></td>
+    <td>C</td>
+    <td>CopyTile(CbA) → BinaryFpu(CbB, CbC) → PackTile(CbOut)</td>
+    <td>CbA=bfp8, CbB=bf16, CbC=fp32, CbOut=bf16</td>
+    <td>At BinaryFpu: srca has prev (bfp8 → bf16, format change), srcb is first emit (fp32) → mixed-prev fallback emits <code>reconfig_data_format_srca(prev_a, curr_a)</code> AND <code>reconfig_data_format_srcb(curr_b)</code>. Two distinct overloads on the same transition.</td>
+  </tr>
+  <tr>
+    <td><code>chain_singleside.cpp</code></td>
+    <td>D</td>
+    <td>CopyTile(CbA) → SFPU op (in place) → CopyTile(CbB) → PackTile(CbOut)</td>
+    <td>CbA=bfp8, CbB=bf16, CbOut=bf16</td>
+    <td>At second CopyTile: srca rotates bfp8 → bf16, srcb untouched → single-side per-side <code>reconfig_data_format_srca(prev_a, curr_a)</code>. The 2-arg per-side <code>_with_dt</code> overload must reprogram only srca.</td>
+  </tr>
+  <tr>
+    <td><code>chain_pack_to_bfp8.cpp</code></td>
+    <td>E</td>
+    <td>CopyTile(CbA) → PackTile(CbOut1) → CopyTile(CbB) → PackTile(CbOut2)</td>
+    <td>CbA=bf16, CbOut1=bf16, CbB=bf16, CbOut2=bfp8</td>
+    <td>At second PackTile: pack-side rotates bf16 → bfp8 with prev set → <code>pack_reconfig_data_format(prev_p, curr_p)</code> fires shared-exponent programming. Exercises the pack <code>_with_dt</code> overload with the strongest pack-side delta.</td>
+  </tr>
+  <tr>
+    <td><code>chain_elide.cpp</code></td>
+    <td>F</td>
+    <td>CopyTile(CbA) → CopyTile(CbA) → CopyTile(CbA) → PackTile(CbOut)</td>
+    <td>CbA=bf16, CbOut=bf16</td>
+    <td>Same CB on srca across three consecutive CopyTiles → compile-time elision emits zero reconfig calls. Verifies the fold's <code>if constexpr</code> elision path still works after the refactor.</td>
+  </tr>
+</table>
+
+<p>Each kernel is JIT-compiled by the pytest and parameterized over:</p>
+
+<ul>
+  <li><code>num_tiles ∈ {1, 8, 64}</code></li>
+  <li><code>fp32_dest_acc_en ∈ {False, True}</code></li>
+</ul>
+
+<p>Golden is computed in torch by replicating the chain semantically. PCC threshold per row: ≥ 0.9999 for bf16-only paths, ≥ 0.999 for mixed-dtype paths involving fp32 / bfp8 (HQ doc thresholds).</p>
+
+<p>Pytest entry:</p>
+
+<pre># Single command for the primary surface
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/kernel_lib/test_chain_reconfig.py</pre>
+
+<h3>5.2 Secondary surface — op-pytest integration smoke</h3>
+
+<p>Existing op pytests that already host bfp8 / fp32-mixed chain shapes through real consumer kernels. These are <em>not</em> the primary signal — they're free integration smoke that catches "the helper change broke a real op." Run them after the primary suite passes:</p>
+
+<table>
+  <tr><th>Pytest</th><th>Real-op chain shape it exercises</th></tr>
+  <tr>
+    <td><code>tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast_tcast.py</code></td>
+    <td>Binary bcast + output typecast with bfp8 × bf16 inputs — cases A, B, E in a real op</td>
+  </tr>
+  <tr>
+    <td><code>tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py</code></td>
+    <td>Binary + output typecast, bfp8 rows present</td>
+  </tr>
+  <tr>
+    <td><code>tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py</code></td>
+    <td>Unary dtype conversion, bfp8 ↔ bf16 + fp32 ↔ bf16 — cases D, E in a real op</td>
+  </tr>
+  <tr>
+    <td><code>tests/ttnn/unit_tests/operations/eltwise/test_where.py</code></td>
+    <td>Ternary select with bfp8 — covers an unusual chain shape</td>
+  </tr>
+  <tr>
+    <td><code>tests/ttnn/unit_tests/operations/eltwise/test_silu.py</code></td>
+    <td>Unary bfp8 chain — single-side typecast pipeline</td>
+  </tr>
+  <tr>
+    <td><code>tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_bcast_fp32_dest_acc.py</code></td>
+    <td>IEEE-mixed binary bcast with fp32_dest_acc — case A IEEE path</td>
+  </tr>
+  <tr>
+    <td><code>tests/ttnn/unit_tests/operations/fused/test_batch_norm.py</code></td>
+    <td>Multi-element binary chain (normalization) — real-world case A consumer</td>
+  </tr>
+  <tr>
+    <td><code>tests/ttnn/nightly/unit_tests/operations/fused/test_rmsnorm.py</code></td>
+    <td>Multi-element fused normalization — real-world case A</td>
+  </tr>
+  <tr>
+    <td><code>tests/ttnn/nightly/unit_tests/operations/experimental/test_rotary_embedding_llama.py</code></td>
+    <td>Rotary embedding (mul + add chain) — real-world case A/B</td>
+  </tr>
+  <tr>
+    <td><code>tests/ttnn/nightly/unit_tests/operations/reduction/test_prod_all.py</code></td>
+    <td>Reduction chain with same-CB reuse — case F elision in a real op</td>
+  </tr>
+</table>
+
+<p>No matrix extensions are required on any secondary pytest. Each runs unchanged on its existing parametrize; if it passes before the change and after the change, the integration is fine. If it fails, the primary suite should have caught the underlying bug first — investigate that first.</p>
+
+<pre># Primary suite first (gating)
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/kernel_lib/test_chain_reconfig.py
+
+# Then integration smoke (free signal)
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast_tcast.py
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/eltwise/test_where.py
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/eltwise/test_silu.py
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_bcast_fp32_dest_acc.py
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/fused/test_batch_norm.py
+scripts/run_safe_pytest.sh --run-all tests/ttnn/nightly/unit_tests/operations/fused/test_rmsnorm.py
+scripts/run_safe_pytest.sh --run-all tests/ttnn/nightly/unit_tests/operations/experimental/test_rotary_embedding_llama.py
+scripts/run_safe_pytest.sh --run-all tests/ttnn/nightly/unit_tests/operations/reduction/test_prod_all.py</pre>
+
+<div class="callout">
+<strong>Hang-detection note.</strong> Per <code>llk_helpers_hq.md</code> §"Validation Tests" and the global memory <code>feedback_safe_pytest_no_timeout.md</code>, do NOT wrap any of these with the shell <code>timeout</code> command — <code>run_safe_pytest.sh</code> has built-in dispatch-timeout detection that emits <code>generated/tt-triage/triage.json</code> on hang. An outer <code>timeout</code> kills the wrapper before triage runs.
+</div>
+
+<h2>6. Skips / not-covered</h2>
+
+<p>Honest accounting of what this plan does NOT cover and why:</p>
+
+<table>
+  <tr><th>Area</th><th>Status</th><th>Rationale</th></tr>
+  <tr class="skip">
+    <td>Blackhole arch coverage</td>
+    <td><span class="pill skip">deferred</span></td>
+    <td>Per HQ doc §"Validation Tests": "Skip Blackhole unless the feature is explicitly Blackhole-tested." The reconfig fold is Wormhole-validated; Blackhole exercises the same LLK headers through arch-gated compilation and will be covered by post-merge CI on Blackhole pipelines.</td>
+  </tr>
+  <tr class="skip">
+    <td>Quasar arch</td>
+    <td><span class="pill skip">N/A</span></td>
+    <td><code>reconfig_data_format.h</code> guards all four overloads with <code>#ifndef ARCH_QUASAR</code> — the new emission paths are no-ops on Quasar and require no separate validation.</td>
+  </tr>
+  <tr class="skip">
+    <td>Any perf measurement</td>
+    <td><span class="pill skip">not added</span></td>
+    <td>This plan is correctness-parity only. The LLK's runtime fast-path skip is expected to be neutral-to-positive on wall-clock time, but no perf harness ships with this validation — the change's justification is correctness symmetry, not measured perf. Perf characterization is a separate workstream if and when needed.</td>
+  </tr>
+  <tr class="skip">
+    <td>Bit-exact diff harness (pre-vs-post output dump)</td>
+    <td><span class="pill must">optional</span></td>
+    <td>Existing PCC-based pytest assertions are sufficient for the parity claim. A bit-exact diff is stricter than PCC but would require a custom harness; if Gate 1 reviewers want it, it goes here.</td>
+  </tr>
+</table>
+
+<h2>7. What "approved" means for this gate</h2>
+
+<p>Per <code>llk_helpers_hq.md</code> §"Gate 2", the explicit user approval needed before Gate 3 (implementation) begins:</p>
+
+<ul>
+  <li>The six dedicated helper kernels listed in §5.1 (chain shapes + CB dtype assignments).</li>
+  <li>The parameter matrix in §4.</li>
+  <li>The op-pytest integration smoke list in §5.2.</li>
+  <li>The skips in §6 (or removal of any skip).</li>
+</ul>
+
+<p>If any of the above changes after sign-off, the plan re-enters Gate 2 and is re-committed verbatim before Gate 3 resumes.</p>
+
+<div class="signoff">
+TEST PLAN: Gate 1 parity validation through <strong>dedicated helper test kernels</strong> we write (primary) plus existing op pytests as integration smoke (secondary). Each dedicated kernel hard-codes a per-CB dtype assignment chosen to force <code>should_reconfigure_cbs → true</code> at the exact emission site for its case — no reliance on op-pytest matrices.<br>
+PRIMARY: 6 new kernels under <code>ttnn/cpp/ttnn/kernel_lib/tests/chain_reconfig/</code> + 1 new pytest under <code>tests/ttnn/unit_tests/kernel_lib/test_chain_reconfig.py</code>. Both directories created as part of this validation.<br>
+SECONDARY: 10 existing op pytests (bfp8 typecast suite, IEEE-mixed binary, batch_norm, rmsnorm, rotary_embedding_llama, prod) run unchanged on their existing matrices.<br>
+MATRIX (primary): <code>num_tiles ∈ {1, 8, 64}</code>, <code>fp32_dest_acc_en ∈ {False, True}</code>, CB dtype assignment hard-coded per kernel.<br>
+GATE 2: awaiting approval.
+</div>
+
+</body>
+</html>

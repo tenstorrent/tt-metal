@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Eltwise chain — emit two-arg <code>_with_dt</code> reconfig form (proposal)</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 24px; color: #1c1c1c; line-height: 1.55; }
+  h1 { border-bottom: 2px solid #0a4; padding-bottom: 8px; }
+  h2 { border-bottom: 1px solid #ddd; padding-bottom: 4px; margin-top: 32px; }
+  h3 { margin-top: 22px; }
+  code, pre { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  pre { background: #f6f6f6; padding: 12px 16px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.45; }
+  code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-size: 92%; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+  th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #eef; }
+  .yes { background: #e3f7e0; }
+  .no  { background: #fde0e0; }
+  .new { background: #fff5d0; }
+  .cite { color: #555; font-size: 12px; font-family: monospace; }
+  .pill { padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+  .pill.new { background: #c8930a; color: #fff; }
+  .pill.unchanged { background: #888; color: #fff; }
+  .pill.yes { background: #2a8a2a; color: #fff; }
+  .pill.no  { background: #b22222; color: #fff; }
+  .pill.gate { background: #2557a6; color: #fff; }
+  .pill.draft { background: #6c757d; color: #fff; }
+  .callout { background: #fff8e1; border-left: 4px solid #f0b400; padding: 8px 14px; margin: 14px 0; border-radius: 4px; }
+  .callout.good { background: #e3f7e0; border-left-color: #2a8a2a; }
+  .callout.bad  { background: #fde0e0; border-left-color: #b22222; }
+  .key { font-weight: 700; color: #2557a6; }
+  .signoff { background: #2557a6; color: #fff; padding: 12px 16px; border-radius: 6px; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13px; margin: 24px 0; }
+</style>
+</head>
+<body>
+
+<h1>Eltwise chain — emit two-arg <code>_with_dt</code> reconfig form</h1>
+
+<p>
+  <span class="pill gate">GATE 1 — APPROVED</span>
+  <strong>Status:</strong> Approved 2026-05-26 (astancov@). Decisions on §8 open questions baked into §3 / §5 below.
+  <strong>Scope:</strong> modify the existing <code>eltwise_chain</code> reconfig fold (<code>emit_pre_element_transitions</code>) to emit the two-arg LLK <code>_with_dt</code> form whenever a prior chain element on the same side is known,
+  and to coalesce both-side srca+srcb transitions into the combined 2-arg / 4-arg <code>reconfig_data_format</code> overload when both sides share prev-state.
+  No new helper, no new policy enum (default-on). One public API simplification: <code>PackTileReconfig::OutputConditional</code> is removed (collapses with <code>::Output</code>).
+</p>
+
+<div class="callout good">
+<strong>Gate 1 decisions (see §8 for context).</strong>
+<ol style="margin: 6px 0 0 18px;">
+  <li><strong>Default-on.</strong> No policy enum; the fold always emits the new form.</li>
+  <li><strong>Remove <code>PackTileReconfig::OutputConditional</code>.</strong> Collapse into <code>::Output</code> at the same time as the fold change — the LLK's runtime format-equality check makes the distinction redundant. Update every callsite.</li>
+  <li><strong>Use the combined srca+srcb overload when both sides share prev-state in the same transition.</strong> Both have prev → 4-arg <code>reconfig_data_format(prev_a, curr_a, prev_b, curr_b)</code>. Both lack prev → 2-arg <code>reconfig_data_format(curr_a, curr_b)</code>. Mixed (one has prev, the other doesn't) falls back to independent per-side calls. Pack-side stays per-side (no combined cross-side overload exists).</li>
+</ol>
+</div>
+
+<h2>1. Background — what the chain emits today</h2>
+
+<p>The chain's reconfig fold lives at <code class="cite">eltwise_chain.inl:1712-1738</code>:</p>
+
+<pre>template &lt;class E, std::size_t I, class... Es&gt;
+ALWI void emit_pre_element_transitions() {
+    constexpr uint32_t curr_a = cb_for_side&lt;Side::SrcA, E&gt;();
+    if constexpr (curr_a != NO_PREV_CB) {
+        constexpr uint32_t prev_a = prev_cb_for_idx&lt;Side::SrcA, I, Es...&gt;();
+        if constexpr (curr_a != prev_a) {
+            reconfig_data_format_srca(curr_a);              // &lt;-- single-arg
+        }
+    }
+    // ...same for srcb and pack...
+}</pre>
+
+<p>
+The fold already computes <code>prev_a</code> at compile time
+(<code class="cite">eltwise_chain.inl:200-212</code>, <code>prev_cb_for_idx&lt;Side, I, Es...&gt;</code>
+walks <code>Es[0..I-1]</code> backwards and returns the most recent non-sentinel CB on that side).
+It uses this knowledge <em>only to elide</em> the reconfig when <code>prev_a == curr_a</code> at compile time.
+When prev and curr differ, the chain unconditionally emits the single-arg LLK overload.
+</p>
+
+<p>The two-arg overloads exist in the public compute API and are documented as "only if it differs from existing format":</p>
+
+<ul>
+  <li><code>reconfig_data_format_srca(old_cb, new_cb)</code> — <code class="cite">tt_metal/hw/inc/api/compute/reconfig_data_format.h:65</code></li>
+  <li><code>reconfig_data_format_srcb(old_cb, new_cb)</code> — <code class="cite">…:95</code></li>
+  <li><code>pack_reconfig_data_format(old_cb, new_cb)</code> — <code class="cite">tt_metal/hw/inc/api/compute/pack.h:163</code></li>
+</ul>
+
+<h2>2. What the two-arg LLK form actually does</h2>
+
+<p>Tracing one step deeper, the two-arg <code>_with_dt</code> LLK is not just "syntactic sugar plus one extra MOP". It performs a runtime <em>data-format</em> compare against the CB metadata tables and skips the underlying register programming when the formats already match. From <code class="cite">tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_unpack_common_api.h:104-153</code>:</p>
+
+<pre>inline bool should_reconfigure_cbs(uint32_t old_op, uint32_t new_op) {
+    return (unpack_src_format[old_op] != unpack_src_format[new_op]) ||
+           (unpack_dst_format[old_op] != unpack_dst_format[new_op]);
+}
+
+template &lt;…&gt;
+inline void llk_unpack_reconfig_data_format_srca(uint32_t old_op, uint32_t new_op) {
+    …
+    if (should_reconfigure_cbs(old_op, new_op)) {
+        llk_unpack_reconfig_data_format_srca&lt;…&gt;(new_op);   // do the real work
+    } else if constexpr (dim_stride_target != IGNORE) { … }
+    else if (face_r_dim or num_faces differ)            { … }
+}</pre>
+
+<p>The math-side <code>_with_dt</code> applies the same idea against <code>unpack_dst_format[]</code> (<code class="cite">llk_math_common_api.h:90-99</code>). So the gain isn't "one MOP at the LLK call site", it's:</p>
+
+<ul>
+  <li>the entire <strong>unpack-side reprogram</strong> (THCON register writes for src/dst formats) is skipped when both CBs carry the same dtype, and</li>
+  <li>the <strong>math-side reprogram</strong> (DEST-accumulation format programming) is independently skipped on the same condition.</li>
+</ul>
+
+<p>Compile-time elision (what we have today) catches only literal CB-index identity (<code>prev == curr</code>). The two-arg LLK form additionally catches the very common case of <span class="key">different CB indices with the same dtype</span>, at runtime, for free from our side.</p>
+
+<h2>3. Proposal — fold emits <code>_with_dt</code> when prev is known, and combines srca+srcb when both sides share prev-state</h2>
+
+<p>Restructure <code>emit_pre_element_transitions</code> into a two-stage emit:</p>
+
+<ol>
+  <li><strong>Compute side-by-side compile-time reconfig decisions.</strong> For each side (srca / srcb / pack) determine <code>reconf_X = (curr_X != NO_PREV_CB) &amp;&amp; (curr_X != prev_X)</code>.</li>
+  <li><strong>Coalesce srca+srcb when shape matches.</strong> If both srca and srcb are reconfiguring in this transition <em>and</em> both have prev (or both lack prev), emit the combined cross-side <code>reconfig_data_format</code> overload. Otherwise emit independent per-side calls.</li>
+  <li><strong>Always emit pack independently.</strong> No combined cross-side overload exists for pack.</li>
+</ol>
+
+<p>Approved emission table:</p>
+
+<table>
+  <tr><th>Case</th><th><code>reconf_a</code></th><th><code>reconf_b</code></th><th><code>prev_a</code></th><th><code>prev_b</code></th><th>Emit</th></tr>
+  <tr class="yes">
+    <td>Both sides, both have prev</td>
+    <td>true</td><td>true</td><td>known</td><td>known</td>
+    <td><code>reconfig_data_format(prev_a, curr_a, prev_b, curr_b)</code> <span class="pill new">4-arg with_dt</span></td>
+  </tr>
+  <tr class="yes">
+    <td>Both sides, both first emit</td>
+    <td>true</td><td>true</td><td>NO_PREV_CB</td><td>NO_PREV_CB</td>
+    <td><code>reconfig_data_format(curr_a, curr_b)</code> <span class="pill new">2-arg combined</span></td>
+  </tr>
+  <tr>
+    <td>Both sides, mixed prev-state</td>
+    <td>true</td><td>true</td><td>known</td><td>NO_PREV_CB</td>
+    <td><code>reconfig_data_format_srca(prev_a, curr_a)</code> + <code>reconfig_data_format_srcb(curr_b)</code></td>
+  </tr>
+  <tr>
+    <td>Srca only, has prev</td>
+    <td>true</td><td>false</td><td>known</td><td>—</td>
+    <td><code>reconfig_data_format_srca(prev_a, curr_a)</code> <span class="pill new">2-arg with_dt</span></td>
+  </tr>
+  <tr>
+    <td>Srca only, first emit</td>
+    <td>true</td><td>false</td><td>NO_PREV_CB</td><td>—</td>
+    <td><code>reconfig_data_format_srca(curr_a)</code> <span class="pill unchanged">unchanged</span></td>
+  </tr>
+  <tr>
+    <td>Srcb only (mirror of srca)</td>
+    <td>false</td><td>true</td><td>—</td><td>any</td>
+    <td><code>reconfig_data_format_srcb(prev_b, curr_b)</code> or <code>reconfig_data_format_srcb(curr_b)</code></td>
+  </tr>
+  <tr>
+    <td>Pack, has prev</td>
+    <td colspan="4">independent of srca/srcb; <code>reconf_p</code> active, <code>prev_p</code> known</td>
+    <td><code>pack_reconfig_data_format(prev_p, curr_p)</code> <span class="pill new">2-arg with_dt</span></td>
+  </tr>
+  <tr>
+    <td>Pack, first emit</td>
+    <td colspan="4">independent; <code>reconf_p</code> active, <code>prev_p == NO_PREV_CB</code></td>
+    <td><code>pack_reconfig_data_format(curr_p)</code> <span class="pill unchanged">unchanged</span></td>
+  </tr>
+</table>
+
+<p>Sketch of the new fold body:</p>
+
+<pre>template &lt;class E, std::size_t I, class... Es&gt;
+ALWI void emit_pre_element_transitions() {
+    constexpr uint32_t curr_a = cb_for_side&lt;Side::SrcA, E&gt;();
+    constexpr uint32_t curr_b = cb_for_side&lt;Side::SrcB, E&gt;();
+    constexpr uint32_t curr_p = cb_for_side&lt;Side::Pack, E&gt;();
+
+    constexpr uint32_t prev_a = (curr_a != NO_PREV_CB) ? prev_cb_for_idx&lt;Side::SrcA, I, Es...&gt;() : NO_PREV_CB;
+    constexpr uint32_t prev_b = (curr_b != NO_PREV_CB) ? prev_cb_for_idx&lt;Side::SrcB, I, Es...&gt;() : NO_PREV_CB;
+    constexpr uint32_t prev_p = (curr_p != NO_PREV_CB) ? prev_cb_for_idx&lt;Side::Pack, I, Es...&gt;() : NO_PREV_CB;
+
+    constexpr bool reconf_a = (curr_a != NO_PREV_CB) &amp;&amp; (curr_a != prev_a);
+    constexpr bool reconf_b = (curr_b != NO_PREV_CB) &amp;&amp; (curr_b != prev_b);
+    constexpr bool reconf_p = (curr_p != NO_PREV_CB) &amp;&amp; (curr_p != prev_p);
+
+    // ---- srca + srcb: combine when both sides share prev-state ----
+    if constexpr (reconf_a &amp;&amp; reconf_b) {
+        if constexpr (prev_a != NO_PREV_CB &amp;&amp; prev_b != NO_PREV_CB) {
+            reconfig_data_format(prev_a, curr_a, prev_b, curr_b);    // 4-arg with_dt
+        } else if constexpr (prev_a == NO_PREV_CB &amp;&amp; prev_b == NO_PREV_CB) {
+            reconfig_data_format(curr_a, curr_b);                    // 2-arg combined
+        } else {
+            // mixed: emit per-side
+            if constexpr (prev_a != NO_PREV_CB) reconfig_data_format_srca(prev_a, curr_a);
+            else                                reconfig_data_format_srca(curr_a);
+            if constexpr (prev_b != NO_PREV_CB) reconfig_data_format_srcb(prev_b, curr_b);
+            else                                reconfig_data_format_srcb(curr_b);
+        }
+    } else if constexpr (reconf_a) {
+        if constexpr (prev_a != NO_PREV_CB) reconfig_data_format_srca(prev_a, curr_a);
+        else                                reconfig_data_format_srca(curr_a);
+    } else if constexpr (reconf_b) {
+        if constexpr (prev_b != NO_PREV_CB) reconfig_data_format_srcb(prev_b, curr_b);
+        else                                reconfig_data_format_srcb(curr_b);
+    }
+
+    // ---- pack: always independent ----
+    if constexpr (reconf_p) {
+        if constexpr (prev_p != NO_PREV_CB) pack_reconfig_data_format(prev_p, curr_p);
+        else                                pack_reconfig_data_format(curr_p);
+    }
+}</pre>
+
+<p>One function, one mechanical rewrite. The compile-time elision (skip when <code>curr == prev</code>) is preserved as the <code>reconf_X</code> guard.</p>
+
+<h2>4. Why this is straightforward (and where the value comes from)</h2>
+
+<table>
+  <tr><th>Concern</th><th>Resolution</th></tr>
+  <tr>
+    <td>Do we have <code>prev_cb</code>?</td>
+    <td class="yes">Yes. <code>prev_cb_for_idx&lt;Side, I, Es...&gt;()</code> already computes it at compile time — it is the value we are currently comparing against for elision.</td>
+  </tr>
+  <tr>
+    <td>Do the two-arg LLK overloads exist for all three sides?</td>
+    <td class="yes">Yes — srca, srcb, pack all have two-arg overloads documented as "only if it differs from existing format".</td>
+  </tr>
+  <tr>
+    <td>What's the runtime delta?</td>
+    <td class="new">Two operand-id lookups + one format comparison on each side, vs. an unconditional unpack/math reprogram. The reprogram is the multi-MOP path; the comparison is a handful of cycles.</td>
+  </tr>
+  <tr>
+    <td>Where is the actual win?</td>
+    <td class="new"><strong>Pack-side</strong> first (full pack reprogram skipped when dtype matches across CBs). <strong>Srca/srcb</strong> next — chains that thread bfloat16 CBs through different operand IDs (very common: <code>CbA → CbInterim → CbOut</code> all bf16) become free of unpack-side reprogramming.</td>
+  </tr>
+</table>
+
+<h2>5. Worked examples</h2>
+
+<h3>5.1 FpuBinary[CbA,CbB] → CopyTile[CbC] → DestReuse&lt;DEST_TO_SRCB&gt;[CbD]</h3>
+
+<p>Assume all four CBs carry the same dtype (e.g. bfloat16). Compile-time fold today:</p>
+
+<table>
+  <tr><th>Element</th><th>Side</th><th>prev_cb</th><th>curr_cb</th><th>Today (single-arg)</th><th>Proposed (two-arg)</th></tr>
+  <tr>
+    <td rowspan="3">FpuBinary[CbA,CbB]<br><span class="cite">I=0</span></td>
+    <td>srca</td><td>NO_PREV_CB</td><td>CbA</td>
+    <td><code>reconfig_srca(CbA)</code></td>
+    <td><code>reconfig_srca(CbA)</code> <span class="pill unchanged">unchanged (first emit)</span></td>
+  </tr>
+  <tr>
+    <td>srcb</td><td>NO_PREV_CB</td><td>CbB</td>
+    <td><code>reconfig_srcb(CbB)</code></td>
+    <td><code>reconfig_srcb(CbB)</code> <span class="pill unchanged">unchanged</span></td>
+  </tr>
+  <tr>
+    <td>pack</td><td>—</td><td>—</td><td>—</td><td>—</td>
+  </tr>
+  <tr>
+    <td rowspan="3">CopyTile[CbC]<br><span class="cite">I=1</span></td>
+    <td>srca</td><td>CbA</td><td>CbC</td>
+    <td><code>reconfig_srca(CbC)</code></td>
+    <td class="yes"><code>reconfig_srca(CbA, CbC)</code> <span class="pill yes">runtime skip if dtypes match</span></td>
+  </tr>
+  <tr>
+    <td>srcb</td><td>CbB</td><td>—</td><td>—</td><td>—</td>
+  </tr>
+  <tr>
+    <td>pack</td><td>—</td><td>—</td><td>—</td><td>—</td>
+  </tr>
+  <tr>
+    <td rowspan="3">DestReuse[CbD]<br><span class="cite">I=2, DEST_TO_SRCB</span></td>
+    <td>srca</td><td>CbC</td><td>—</td><td>—</td><td>—</td>
+  </tr>
+  <tr>
+    <td>srcb</td><td>CbB</td><td>CbD</td>
+    <td><code>reconfig_srcb(CbD)</code></td>
+    <td class="yes"><code>reconfig_srcb(CbB, CbD)</code> <span class="pill yes">runtime skip if dtypes match</span></td>
+  </tr>
+  <tr>
+    <td>pack</td><td>—</td><td>—</td><td>—</td><td>—</td>
+  </tr>
+</table>
+
+<p>In the homogeneous-dtype case (overwhelmingly common in eltwise pipelines), today's chain pays two unpack reprograms per loop iteration that the proposed form skips at the LLK level. In a mixed-dtype chain, both forms reprogram — but the two-arg form costs only one extra comparison, while the single-arg form already had to reprogram anyway.</p>
+
+<h3>5.2 PackTile rotation (the original D7 motivation)</h3>
+
+<p>Per <code class="cite">eltwise_chain.hpp:197-198</code>, <code>PackTileReconfig::OutputConditional</code> was reserved precisely for this two-arg pack form. <strong>Approved (Decision 2):</strong> the enum value is removed entirely — under the new fold every pack reconfig that has a known prev goes through <code>pack_reconfig_data_format(prev_p, curr_p)</code> automatically, and the LLK does the format-equality skip itself. Callsites that previously used <code>::OutputConditional</code> are mechanically rewritten to <code>::Output</code>.</p>
+
+<h2>6. Caveats and correctness</h2>
+
+<h3>6.1 What "prev_cb" actually means</h3>
+
+<p><code>prev_cb_for_idx</code> returns "the most recent CB bound on this side by an earlier element <em>of this chain</em>". That equals "what the hardware thinks is programmed" only if the chain owns all reconfigs on that side from boot. For the chain-as-kernel-body case (the common one) this holds. For a chain spliced into a kernel where something else (raw LLK init, another helper) programmed the side before the chain started, the first chain emission on that side still hits the <code>NO_PREV_CB</code> branch and emits single-arg — which is the same as today. So no regression.</p>
+
+<div class="callout good">
+<strong>Invariant we are claiming.</strong> If the fold returned <code>prev_a</code> as a concrete CB, then a prior element of this same chain has issued (single-arg or two-arg) <code>reconfig_data_format_srca</code> on that CB during the chain's emission, so the LLK's <code>unpack_src_format[prev_a]</code> tracks the engine state. The two-arg call is therefore answering a well-formed question.
+</div>
+
+<h3>6.2 No interaction with hoisting decisions</h3>
+
+<p>The reconfig fold runs from <code>emit_pre_element_transitions</code> on every iteration where the chain calls into it — boot-time during hoisted init walks, and per-tile inside loops for non-hoisted elements. The two-arg form is correct in both contexts (the LLK's runtime format check is unconditional). Math-MOP partial hoisting (<code class="cite">eltwise_chain_partial_hoist_proposal.html</code>) is orthogonal — it changes <em>where</em> the fold fires, not <em>what</em> it emits.</p>
+
+<h3>6.3 First-emit semantics are unchanged</h3>
+
+<p>When <code>prev == NO_PREV_CB</code>, we still emit single-arg. This is necessary: the chain has no claim about prior engine state, so it cannot fabricate an <code>old_cb</code>. Today's behavior is preserved exactly at chain start.</p>
+
+<h3>6.4 No-op when curr == prev</h3>
+
+<p>Already handled by the existing <code>if constexpr (curr_a != prev_a)</code> guard. The two-arg path is only entered when the fold has already proven the CB indices differ.</p>
+
+<h2>7. Cost / risk summary</h2>
+
+<table>
+  <tr><th>Axis</th><th>Today</th><th>Proposed</th></tr>
+  <tr>
+    <td>Compile-time work</td>
+    <td><code>prev_cb_for_idx</code> + equality check</td>
+    <td>Same, plus one extra <code>if constexpr</code> branch per side</td>
+  </tr>
+  <tr>
+    <td>Code size (per emit site)</td>
+    <td>1 LLK call</td>
+    <td>1 LLK call (different overload), no extra runtime branch on the kernel side</td>
+  </tr>
+  <tr>
+    <td>Runtime per inter-element transition (homogeneous dtype)</td>
+    <td>Full unpack + math reprogram on the changed side</td>
+    <td class="yes">~3 loads + 1 compare, then no-op</td>
+  </tr>
+  <tr>
+    <td>Runtime per inter-element transition (mixed dtype)</td>
+    <td>Full reprogram</td>
+    <td>Same reprogram + ~3 loads + 1 compare</td>
+  </tr>
+  <tr>
+    <td>Surface area changed</td>
+    <td>—</td>
+    <td>One function (<code>emit_pre_element_transitions</code>), three sites</td>
+  </tr>
+  <tr>
+    <td>Public API</td>
+    <td>—</td>
+    <td class="yes"><code>PackTileReconfig::OutputConditional</code> removed (Decision 2). Mechanical rewrite of every callsite to <code>::Output</code>. No other API surface change.</td>
+  </tr>
+</table>
+
+<h2>8. Gate 1 decisions (was: open questions)</h2>
+
+<ol>
+  <li>
+    <strong>Default-on or behind a policy enum?</strong>
+    <span class="pill yes">DECIDED: default-on</span>
+    No new enum value, no per-callsite opt-in. The fold is the only place we'd flip it and the LLK already has the runtime safeguard. A future regression is diagnosed by reading the chain emission, not by toggling a policy.
+  </li>
+  <li>
+    <strong>What to do with <code>PackTileReconfig::OutputConditional</code>?</strong>
+    <span class="pill yes">DECIDED: remove</span>
+    Under the new fold it is indistinguishable from <code>::Output</code> (both reach the two-arg pack form when <code>prev_p</code> is known, and the LLK does the format-equality skip itself). Remove the enum value and rewrite every callsite to <code>::Output</code> in the same implementation commit.
+  </li>
+  <li>
+    <strong>Combined cross-side <code>reconfig_data_format</code> overload?</strong>
+    <span class="pill yes">DECIDED: use it when both sides share prev-state</span>
+    Both srca and srcb reconfiguring in this transition with both having prev → emit the 4-arg <code>reconfig_data_format(prev_a, curr_a, prev_b, curr_b)</code>. Both reconfiguring with neither having prev (first-emit on both sides) → emit the 2-arg <code>reconfig_data_format(curr_a, curr_b)</code>. Mixed prev-state (one side has prev, the other doesn't) falls back to independent per-side calls. Pack-side stays per-side — no combined cross-side overload exists for pack. See §3 table for the full emission matrix.
+  </li>
+  <li>
+    <strong>What does the test plan need to add?</strong>
+    <span class="pill gate">DEFERRED to Gate 2</span>
+    Per-side dtype-mixed chain (e.g. bf16 × fp32 inputs producing a bf16 output) plus a same-dtype chain across distinct CBs, run against the existing eltwise corpus. The expectation is bit-exact parity with today (the LLK's runtime check is purely a fast-path skip), so the plan is "no numerical regression on existing tests" + one perf datapoint. Gate 2 will own the concrete test list.
+  </li>
+</ol>
+
+<h2>9. Path forward</h2>
+
+<ol>
+  <li><span class="pill yes">DONE</span> Gate 1 approved (Decisions 1–3 above).</li>
+  <li><strong>Commit this artifact verbatim</strong> per <code>llk_helpers_hq.md</code> §"Commit the artifact on acceptance".</li>
+  <li><strong>Gate 2 test plan</strong> — enumerate the chain shapes already covered, parameterize over <code>num_tiles ∈ {1, 8, 64}</code> and <code>fp32_dest_acc_en ∈ {False, True}</code>, capture one perf datapoint. Post as a separate artifact, await sign-off, commit.</li>
+  <li><strong>Gate 3 implementation</strong> — one commit, ~30 lines in <code>emit_pre_element_transitions</code> (per §3 sketch), plus removal of <code>PackTileReconfig::OutputConditional</code> across the policy enum and every callsite, plus an updated header comment block at <code>eltwise_chain.hpp:184-198</code> to reflect the new emission contract.</li>
+</ol>
+
+<div class="signoff">
+APPROVED Gate 1 (2026-05-26): switch <code>emit_pre_element_transitions</code> to emit two-arg <code>_with_dt</code> reconfig when prev_cb is known, coalesce srca+srcb into the combined 2-arg / 4-arg <code>reconfig_data_format</code> overload when both sides share prev-state, and remove <code>PackTileReconfig::OutputConditional</code>.<br>
+SCOPE: <code>ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl</code> + <code>eltwise_chain.hpp</code> (policy enum + callsites).<br>
+NEXT: commit artifact → Gate 2 test plan.
+</div>
+
+</body>
+</html>
