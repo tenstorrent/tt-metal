@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,10 +6,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/operations/data_movement/flip/device/flip_device_operation.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement {
-
 namespace detail {
 
 static uint32_t get_tile_num_tiles(const ttnn::Tensor& input_tensor) {
@@ -67,7 +65,6 @@ FlipDeviceOperation::MultiCoreTiled::cached_program_t FlipDeviceOperation::Multi
 
     const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     const auto& face_shape = input_tensor.tensor_spec().tile().get_face_shape();
-    const auto& logical_shape = input_tensor.logical_shape();
 
     auto tiled_shape = detail::get_tiled_shape(input_tensor);
     auto tile_strides = detail::get_tile_strides(tiled_shape);
@@ -81,23 +78,16 @@ FlipDeviceOperation::MultiCoreTiled::cached_program_t FlipDeviceOperation::Multi
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(core_grid, num_tiles);
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t tile_size_bytes = input_tensor.tensor_spec().tile().get_tile_size(cb_data_format);
-    uint32_t num_tiles_in_cb = 2;
+    DataFormat data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    uint32_t tile_size_bytes = input_tensor.tensor_spec().tile().get_tile_size(data_format);
 
-    tt::tt_metal::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
-        tt::tt_metal::CircularBufferConfig(
-            num_tiles_in_cb * tile_size_bytes, {{tt::CBIndex::c_0, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_0, tile_size_bytes));
+        CircularBufferConfig(2 * tile_size_bytes, {{CBIndex::c_0, data_format}})
+            .set_page_size(CBIndex::c_0, tile_size_bytes));
 
-    tt::tt_metal::CreateCircularBuffer(
-        program,
-        all_cores,
-        tt::tt_metal::CircularBufferConfig(
-            num_tiles_in_cb * tile_size_bytes, {{tt::CBIndex::c_16, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_16, tile_size_bytes));
+    const auto& logical_shape = input_tensor.logical_shape();
 
     std::vector<uint32_t> reader_compile_time_args = {};
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
@@ -119,25 +109,7 @@ FlipDeviceOperation::MultiCoreTiled::cached_program_t FlipDeviceOperation::Multi
         all_cores,
         ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
 
-    bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 || cb_data_format == tt::DataFormat::UInt32;
-
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (cb_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode[tt::CBIndex::c_0] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-    }
-
-    std::vector<uint32_t> compute_kernel_args = {};
-    KernelHandle compute_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/flip/device/kernels/compute/compute_flip_tiled.cpp",
-        all_cores,
-        tt::tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .compile_args = compute_kernel_args,
-        });
-
-    std::vector<uint32_t> writer_compile_time_args = {tt::CBIndex::c_16};
+    std::vector<uint32_t> writer_compile_time_args = {};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     KernelHandle writer_id = CreateKernel(
@@ -147,46 +119,39 @@ FlipDeviceOperation::MultiCoreTiled::cached_program_t FlipDeviceOperation::Multi
         WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
+    std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), 0, 0};
+
     reader_runtime_args.insert(reader_runtime_args.end(), tiled_shape.begin(), tiled_shape.end());
     reader_runtime_args.insert(reader_runtime_args.end(), tile_strides.begin(), tile_strides.end());
     reader_runtime_args.insert(reader_runtime_args.end(), dims_to_flip.begin(), dims_to_flip.end());
 
-    std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), 0, 0};
-    std::vector<uint32_t> compute_runtime_args = {0};
-
-    auto cores = corerange_to_cores(all_cores, std::nullopt);
     uint32_t start_tile = 0;
-    for (const auto& core : cores) {
-        uint32_t tiles_per_core = 0;
-        if (core_group_1.contains(core)) {
-            tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            tiles_per_core = num_tiles_per_core_group_2;
+    uint32_t end_tile = 0;
+    auto work_groups = {
+        std::make_pair(core_group_1, num_tiles_per_core_group_1),
+        std::make_pair(core_group_2, num_tiles_per_core_group_2)};
+
+    for (const auto& [ranges, tiles_per_core] : work_groups) {
+        for (const auto& range : ranges.ranges()) {
+            for (const auto& core : range) {
+                end_tile += tiles_per_core;
+
+                reader_runtime_args[1] = start_tile;
+                reader_runtime_args[2] = end_tile;
+                SetRuntimeArgs(program, reader_id, core, reader_runtime_args);
+
+                writer_runtime_args[1] = start_tile;
+                writer_runtime_args[2] = end_tile;
+                SetRuntimeArgs(program, writer_id, core, writer_runtime_args);
+
+                start_tile += tiles_per_core;
+            }
         }
-
-        uint32_t end_tile = start_tile + tiles_per_core;
-
-        reader_runtime_args[1] = start_tile;
-        reader_runtime_args[2] = end_tile;
-        SetRuntimeArgs(program, reader_id, core, reader_runtime_args);
-
-        // writer_unary_interleaved_start_id expects: addr, num_tiles, start_tile
-        writer_runtime_args[1] = tiles_per_core;
-        writer_runtime_args[2] = start_tile;
-        SetRuntimeArgs(program, writer_id, core, writer_runtime_args);
-
-        compute_runtime_args[0] = tiles_per_core;
-        SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
-
-        start_tile = end_tile;
     }
 
     return {
         std::move(program),
-        {.unary_reader_kernel_id = reader_id,
-         .compute_kernel_id = compute_kernel_id,
-         .unary_writer_kernel_id = writer_id,
-         .core_range = all_cores},
+        {.unary_reader_kernel_id = reader_id, .unary_writer_kernel_id = writer_id, .core_range = all_cores},
     };
 }
 
