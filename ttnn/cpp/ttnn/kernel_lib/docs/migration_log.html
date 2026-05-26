@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Eltwise-chain migration log</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; color: #222; }
+  .layout { display: grid; grid-template-columns: 280px 1fr; min-height: 100vh; }
+  .sidebar { background: #1c2128; color: #d4d4d4; overflow-y: auto; }
+  .sidebar h2 { color: #fff; padding: 16px 16px 8px; margin: 0; font-size: 14px; letter-spacing: 0.5px; }
+  .sidebar h3 { color: #8b949e; padding: 14px 16px 4px; margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+  .sidebar .tab-btn { display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; cursor: pointer; border-left: 3px solid transparent; font-size: 13px; transition: background 0.1s; }
+  .sidebar .tab-btn:hover { background: #2d333b; }
+  .sidebar .tab-btn.active { background: #2d333b; border-left-color: #2f81f7; color: #fff; }
+  .badge { font-size: 10px; padding: 2px 6px; border-radius: 10px; font-weight: 600; }
+  .badge-full { background: #1f6c3e; color: #fff; }
+  .badge-partial { background: #9e6a03; color: #fff; }
+  .badge-blocked { background: #a22; color: #fff; }
+  .badge-skip { background: #555; color: #fff; }
+  .main { padding: 24px 32px; overflow-x: auto; max-width: 100%; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .panel h1 { margin: 0 0 4px; font-size: 22px; }
+  .panel .path { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; color: #57606a; margin-bottom: 4px; }
+  .panel .meta { margin-bottom: 20px; font-size: 13px; color: #57606a; }
+  .panel .meta b { color: #222; }
+  .subtabs { display: flex; gap: 0; border-bottom: 2px solid #d0d7de; margin-bottom: 16px; }
+  .subtabs button { padding: 8px 16px; cursor: pointer; background: transparent; border: none; border-bottom: 2px solid transparent; margin-bottom: -2px; font: inherit; font-size: 13px; font-weight: 500; color: #57606a; }
+  .subtabs button.active { color: #2f81f7; border-bottom-color: #2f81f7; }
+  .subpanel { display: none; }
+  .subpanel.active { display: block; }
+  pre { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 12px 16px; overflow-x: auto; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; line-height: 1.45; margin: 0 0 12px; }
+  pre code { font: inherit; color: #24292f; }
+  .diff-add { background: #ddf4dd; }
+  .diff-del { background: #ffd7d5; }
+  ul.decisions { padding-left: 20px; margin: 0 0 16px; }
+  ul.decisions li { margin: 6px 0; }
+  ul.decisions li b { color: #0969da; }
+  .empty-state { color: #8b949e; padding: 40px; text-align: center; font-style: italic; }
+  .commit-link { font-family: "SF Mono", Menlo, Consolas, monospace; background: #ddf4dd; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<div class="layout">
+
+<nav class="sidebar">
+  <h2>Eltwise-chain migrations</h2>
+
+  <h3>SFPU-binary cluster</h3>
+  <div class="tab-btn" data-tab="batch_norm_sfpu"><span>batch_norm_sfpu_kernel</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="running_stats_sfpu"><span>running_statistics_sfpu</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="running_stats_fpu"><span>running_statistics_kernel</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="eltwise_binary_sfpu_kernel"><span>eltwise_binary_sfpu_kernel</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="moreh_int_sum_h"><span>moreh_int_sum_h</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="moreh_int_sum_w"><span>moreh_int_sum_w</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="moreh_int_sum_nc"><span>moreh_int_sum_nc</span><span class="badge badge-skip">queued</span></div>
+
+  <h3>Moreh recip + mul cluster</h3>
+  <div class="tab-btn" data-tab="moreh_nll_step2"><span>moreh_nll_loss_step2</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="moreh_nll_bw"><span>moreh_nll_loss_backward</span><span class="badge badge-partial">attempted</span></div>
+  <div class="tab-btn" data-tab="moreh_bias_single"><span>moreh_bias_bw_single_core</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="moreh_bias_multi"><span>moreh_bias_bw_multi_core</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="moreh_clip_step3"><span>moreh_clip_grad_norm_step3</span><span class="badge badge-full">FULL</span></div>
+  <div class="tab-btn" data-tab="moreh_abs_pow"><span>moreh_abs_pow</span><span class="badge badge-skip">queued</span></div>
+
+  <h3>CCL / reduction accumulator</h3>
+  <div class="tab-btn" data-tab="ccl_line_red"><span>line_reduction</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="ccl_ring_red"><span>ring_reduction</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="ccl_dim0_line"><span>dim_zero_line_reduction</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="ccl_dim0_ring"><span>dim_zero_ring_reduction</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="ccl_all_red_async"><span>all_reduce_async/reduction</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="ccl_deepseek_moe_rs"><span>deepseek_moe_reduce_scatter</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="ccl_llama_rs"><span>llama_reduce_scatter</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="ccl_llama_rs_heads"><span>llama_rs_create_heads</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="exp_fast_red_nc"><span>fast_reduce_nc</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="exp_deepseek_fast_red_nc"><span>deepseek_moe_fast_reduce_nc</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="exp_all_red_qkv"><span>all_reduce_create_qkv_heads</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="norm_pre_add"><span>norm/pre_add.h</span><span class="badge badge-skip">queued</span></div>
+
+  <h3>Rotary HF family</h3>
+  <div class="tab-btn" data-tab="rotary_hf"><span>rotary_embedding_hf</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="rotary_hf_sharded"><span>rotary_embedding_hf_sharded</span><span class="badge badge-skip">queued</span></div>
+
+  <h3>Ternary FPU family</h3>
+  <div class="tab-btn" data-tab="ternary_addc_fpu"><span>ternary_addc_ops_fpu</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="ternary_addc_fpu_bcast"><span>ternary_addc_ops_fpu_bcast</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="ternary_addc_fpu_rowbcast"><span>ternary_addc_ops_fpu_rowbcast</span><span class="badge badge-skip">queued</span></div>
+
+  <h3>Other</h3>
+  <div class="tab-btn" data-tab="ssm_prefix_scan"><span>ssm_prefix_scan</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="intimg_compute"><span>intimg_compute</span><span class="badge badge-skip">queued</span></div>
+
+  <h3>Reclassified during work</h3>
+  <div class="tab-btn" data-tab="moreh_sum_nc"><span>moreh_sum_nc</span><span class="badge badge-blocked">blocked</span></div>
+  <div class="tab-btn" data-tab="moe_compute_skip"><span>moe_compute/compute</span><span class="badge badge-blocked">blocked</span></div>
+  <div class="tab-btn" data-tab="moe_gpt_skip"><span>moe_gpt/compute</span><span class="badge badge-blocked">blocked</span></div>
+</nav>
+
+<main class="main">
+
+  <!-- moreh_sum_nc — reclassified to BLOCKED -->
+  <section class="panel" id="panel-moreh_sum_nc">
+    <h1>moreh_sum_nc.cpp — <span class="badge badge-blocked">BLOCKED</span></h1>
+    <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/moreh_sum_nc.cpp</div>
+    <div class="meta"><b>Reason:</b> uses <code>add_tiles_init(cb_in0, cb_in1, acc_to_dest=true)</code> with <code>add_tiles(cb_in0, cb_in1, 0, 0, dst0)</code> in a per-iter loop that accumulates into <code>dst0</code>. Chain's <code>BinaryFpu</code> does not currently expose <code>acc_to_dest=true</code>. This was listed as MIGRATE NOW in the candidates doc; on closer inspection it matches the documented <b>DEST-accumulating BinaryFpu</b> helper gap.</div>
+    <div class="meta"><b>Unblocks:</b> add an <code>acc_to_dest=true</code> mode to <code>BinaryFpu</code> in <code>binary_op_helpers.hpp</code>. Would also unblock <code>layernorm_pre_allgather_2d.cpp</code> and <code>rmsnorm_pre_allgather_2d.cpp</code>.</div>
+  </section>
+
+  <!-- moe_compute/compute.cpp — reclassified to BLOCKED -->
+  <section class="panel" id="panel-moe_compute_skip">
+    <h1>moe_compute/compute.cpp — <span class="badge badge-blocked">SKIP</span></h1>
+    <div class="path">ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute.cpp</div>
+    <div class="meta"><b>Reason:</b> the only raw <code>pack_tile</code> is in the bias-init sequence: <code>fill_tile(dst0, 1.f) + pack_tile(dst0, cb_c2c_ones_tile)</code> — a tiny init that runs ONCE at the top of the kernel. The remaining 400 lines are <code>matmul_kloop_pack</code>-driven matmul + ring sync (OOS #8). Migrating the 1-tile init alone gives essentially zero coverage and adds a chain include to an otherwise non-chain kernel. Defer.</div>
+  </section>
+
+  <section class="panel" id="panel-moe_gpt_skip">
+    <h1>moe_gpt/compute.cpp — <span class="badge badge-blocked">SKIP</span></h1>
+    <div class="path">ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/compute.cpp</div>
+    <div class="meta"><b>Reason:</b> same shape as <code>moe_compute/compute.cpp</code> — a 1-tile <code>fill+pack</code> bias-init inside a matmul-dominated kernel. Defer.</div>
+  </section>
+
+  <!-- moreh_clip_grad_norm_step3 — FULL -->
+  <section class="panel" id="panel-moreh_clip_step3">
+    <h1>moreh_clip_grad_norm_step3 — <span class="badge badge-full">FULL</span></h1>
+    <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/kernels/moreh_clip_grad_norm_step3_kernel.cpp</div>
+    <div class="meta"><b>Commit:</b> <span class="commit-link">98c5ebb783b</span> &nbsp; <b>Test:</b> <code>test_moreh_clip_grad_norm.py</code> — 20 PASS</div>
+    <div class="subtabs">
+      <button class="active" data-sub="step3-before">Before</button>
+      <button data-sub="step3-after">After</button>
+      <button data-sub="step3-decisions">Decisions</button>
+    </div>
+    <div class="subpanel active" id="sub-step3-before"><pre><code>void kernel_main() {
+    int i{0};
+    const auto num_tiles = get_arg_val&lt;uint32_t&gt;(i++);
+
+    std::uint8_t input_id{0};
+    const auto cb_x = input_id++;
+    CircularBuffer cb_x_obj(cb_x);
+    const auto cb_clip_coef_clamped = input_id++;
+    CircularBuffer cb_clip_coef_clamped_obj(cb_clip_coef_clamped);
+
+    std::uint8_t output_id{16};
+    const auto cb_y = output_id++;
+    CircularBuffer cb_y_obj(cb_y);
+
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dst0 = 0;
+
+    binary_op_init_common(cb_x, cb_clip_coef_clamped, cb_y);
+    cb_clip_coef_clamped_obj.wait_front(onetile);
+
+    for (uint32_t tile_idx = 0; tile_idx &lt; num_tiles; tile_idx++) {
+        tile_regs_acquire();
+        cb_x_obj.wait_front(onetile);
+        cb_y_obj.reserve_back(onetile);
+
+        mul_tiles_bcast_scalar_init_short(cb_x, cb_clip_coef_clamped);
+        mul_tiles_bcast_scalar(cb_x, cb_clip_coef_clamped, 0, 0, dst0);
+        cb_x_obj.pop_front(onetile);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile(dst0, cb_y);
+        cb_y_obj.push_back(onetile);
+        tile_regs_release();
+    }
+    cb_clip_coef_clamped_obj.pop_front(onetile);
+}</code></pre></div>
+    <div class="subpanel" id="sub-step3-after"><pre><code>void kernel_main() {
+    int i{0};
+    const auto num_tiles = get_arg_val&lt;uint32_t&gt;(i++);
+
+    constexpr uint32_t cb_x = 0;                  // input
+    constexpr uint32_t cb_clip_coef_clamped = 1;  // clip_coef_clamped (held scalar)
+    constexpr uint32_t cb_y = 16;                 // output
+    CircularBuffer cb_clip_coef_clamped_obj(cb_clip_coef_clamped);
+
+    constexpr uint32_t onetile = 1;
+
+    compute_kernel_hw_startup(cb_x, cb_clip_coef_clamped, cb_y);
+    cb_clip_coef_clamped_obj.wait_front(onetile);
+
+    // cb_y = cb_x × cb_clip_coef_clamped[scalar bcast]
+    compute_kernel_lib::eltwise_chain(
+        num_tiles,
+        compute_kernel_lib::BinaryFpu&lt;
+            cb_x, cb_clip_coef_clamped,
+            compute_kernel_lib::BinaryFpuOp::Mul,
+            compute_kernel_lib::BroadcastDim::Scalar,
+            compute_kernel_lib::BinaryDataFormatReconfig::None,
+            compute_kernel_lib::Streaming,
+            compute_kernel_lib::CallerManaged,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::OperandKind::Scalar&gt;{},
+        compute_kernel_lib::PackTile&lt;
+            cb_y, compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::OutStreaming,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::PackTileReconfig::None&gt;{});
+
+    cb_clip_coef_clamped_obj.pop_front(onetile);
+}</code></pre></div>
+    <div class="subpanel" id="sub-step3-decisions"><ul class="decisions">
+      <li><b>CB ids → constexpr.</b> Original used <code>std::uint8_t input_id{0}; const auto cb_x = input_id++;</code> — runtime values. Chain template parameters require constexpr CB ids, so the four CB declarations became <code>constexpr uint32_t cb_x = 0; cb_clip_coef_clamped = 1; cb_y = 16;</code>. Values are identical.</li>
+      <li><b>cb_clip_coef_clamped lifecycle: CallerManaged + Scalar.</b> Original waits once outside the loop (held scalar) and pops once at the very end. Chain with <code>CallerManaged</code> emits no wait/pop, so the explicit <code>wait_front(1)</code> and <code>pop_front(1)</code> stay outside the chain. Per the documented rule (<code>feedback_callermanaged_needs_external_wait.md</code>), CallerManaged needs an external wait — which is exactly the original's behavior.</li>
+      <li><b>cb_x lifecycle: Streaming.</b> Original waits, uses, and pops once per iteration — straight Streaming.</li>
+      <li><b>Reconfig flags: both None.</b> Original used <code>mul_tiles_bcast_scalar_init_short</code> (<b>no</b> <code>_with_dt</code> suffix) and plain <code>pack_tile</code> — neither does a per-iter format reconfig. Initial state set by <code>compute_kernel_hw_startup(cb_x, cb_clip_coef_clamped, cb_y)</code> matches the original's <code>binary_op_init_common</code>. Chain emits <code>BinaryDataFormatReconfig::None</code> + <code>PackTileReconfig::None</code> to match.</li>
+      <li><b>Init choice: <code>compute_kernel_hw_startup</code> vs <code>binary_op_init_common</code>.</b> Original used <code>binary_op_init_common(cb_x, cb_clip_coef_clamped, cb_y)</code>. The chain's first call still does its own per-element init internally, so either kernel-level init works — but <code>compute_kernel_hw_startup</code> is the convention in already-migrated kernels (moreh_dot_backward etc.) and is the minimal correct init.</li>
+    </ul></div>
+  </section>
+
+  <!-- moreh_nll_loss_backward — ATTEMPTED -->
+  <section class="panel" id="panel-moreh_nll_bw">
+    <h1>moreh_nll_loss_backward — <span class="badge badge-partial">ATTEMPTED, reverted</span></h1>
+    <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/moreh_nll_loss_backward_kernel.cpp</div>
+    <div class="meta"><b>Status:</b> migration attempted, test failed with PCC mismatch, reverted. <b>Failed test:</b> <code>test_moreh_nll_loss_backward[shape=[400,300], reduction_mean=True, none_weight=True]</code></div>
+    <div class="subtabs">
+      <button class="active" data-sub="nllbw-shape">Proposed shape</button>
+      <button data-sub="nllbw-decisions">Decisions / next steps</button>
+    </div>
+    <div class="subpanel active" id="sub-nllbw-shape"><ul class="decisions">
+      <li><b>Pre-loop (DIVISOR):</b> <code>CopyTile&lt;cb_divisor, D0, HeldStream, Scalar, CopyTileReconfig::Input&gt; + Recip&lt;D0&gt; + PackTile&lt;cb_tmp1, D0, OutStreaming, Scalar, PackTileReconfig::Output&gt;</code>. HeldStream chosen because kernel pops cb_divisor at the very end.</li>
+      <li><b>Per-iter Block A (DIVISOR):</b> <code>BinaryFpu&lt;cb_tmp_weight, cb_output_grad, Mul, Scalar, Input reconfig, Streaming, CallerManaged, ...&gt; + Negative&lt;D0&gt; + PackTile&lt;cb_tmp2, Output reconfig&gt;</code>.</li>
+      <li><b>Per-iter Block B (DIVISOR):</b> <code>BinaryFpu&lt;cb_tmp2, cb_tmp1, Mul, Scalar, Input reconfig, Streaming, HeldStream, ...&gt; + PackTile&lt;cb_input_grad, Output reconfig&gt;</code>.</li>
+      <li><b>Per-iter Block C (no DIVISOR):</b> <code>BinaryFpu&lt;cb_tmp_weight, cb_output_grad, Mul, Scalar, Input reconfig, Streaming, CallerManaged, ...&gt; + Negative&lt;D0&gt; + PackTile&lt;cb_input_grad&gt;</code>.</li>
+    </ul></div>
+    <div class="subpanel" id="sub-nllbw-decisions"><ul class="decisions">
+      <li><b>Init swap risk.</b> Original uses <code>init_sfpu(cb_output_grad, cb_input_grad)</code> = <code>unary_op_init_common</code>. The migration used <code>binary_op_init_common(cb_tmp_weight, cb_output_grad, cb_input_grad)</code>. The first chain (recip) is unary-shaped but later chains are binary; switching to binary init affects initial unpacker state that the chain may rely on.</li>
+      <li><b>Reconfig flag mismatch suspicion.</b> Original <code>_with_dt</code> helpers only reconfig under <code>FP32_DEST_ACC_EN</code>; the failing test was BFLOAT16 (no FP32 mode). Chain's <code>BinaryDataFormatReconfig::Input</code> emits unconditional reconfigs — potentially perturbing format state in a way that affects the SFPU recip / negative chain.</li>
+      <li><b>Next steps:</b> (a) try <code>BinaryDataFormatReconfig::None</code> + <code>PackTileReconfig::None</code> (matching the no-reconfig original under BF16); (b) check whether <code>unary_op_init_common</code> is the right kernel-level startup before a first-chain that is unary-shaped (CopyTile + Recip + Pack); (c) bisect by replacing one block at a time.</li>
+      <li><b>Deferred</b> to focused follow-up; not a blocker, just slower than the simple muls.</li>
+    </ul></div>
+  </section>
+
+  <!-- Placeholder -->
+  <section class="panel active" id="panel-empty">
+    <div class="empty-state">Select a kernel from the sidebar to view its migration record.<br>Click queued kernels to see their proposed shape; completed kernels show before/after diffs and decisions taken.</div>
+  </section>
+
+</main>
+
+</div>
+
+<script>
+  document.querySelectorAll('.sidebar .tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.sidebar .tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      const tab = btn.dataset.tab;
+      const target = document.getElementById('panel-' + tab);
+      if (target) target.classList.add('active');
+      else document.getElementById('panel-empty').classList.add('active');
+    });
+  });
+  document.querySelectorAll('.subtabs').forEach(group => {
+    group.querySelectorAll('button').forEach(b => {
+      b.addEventListener('click', () => {
+        group.querySelectorAll('button').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        const parent = group.closest('.panel');
+        parent.querySelectorAll('.subpanel').forEach(sp => sp.classList.remove('active'));
+        parent.querySelector('#sub-' + b.dataset.sub).classList.add('active');
+      });
+    });
+  });
+</script>
+
+</body>
+</html>

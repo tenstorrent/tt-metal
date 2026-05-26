@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Eltwise-chain migration candidates</title>
+<style>
+  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 1280px; margin: 24px auto; padding: 0 24px; color: #222; }
+  h1 { border-bottom: 2px solid #333; padding-bottom: 6px; }
+  h2 { margin-top: 36px; border-bottom: 1px solid #999; padding-bottom: 4px; }
+  h3 { margin-top: 24px; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }
+  th, td { border: 1px solid #bbb; padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: #f0f0f0; font-weight: 600; }
+  tr:nth-child(even) { background: #fafafa; }
+  code, .mono { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; background: #f4f4f4; padding: 1px 3px; border-radius: 2px; }
+  .verdict-now { color: #086; font-weight: 600; }
+  .verdict-partial { color: #c80; font-weight: 600; }
+  .verdict-blocked { color: #a22; font-weight: 600; }
+  .verdict-oos { color: #666; font-style: italic; }
+  .priority-hi { background: #e6f7ec; }
+  .priority-md { background: #fff8e0; }
+  .priority-lo { background: #f4f4f4; }
+  .nb { background: #fff7d4; padding: 8px 12px; border-left: 4px solid #c80; margin: 12px 0; }
+  ul.tight { margin: 4px 0; padding-left: 20px; }
+  ul.tight li { margin: 1px 0; }
+  .pathcol { min-width: 320px; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 11px; }
+</style>
+</head>
+<body>
+
+<h1>Eltwise-chain migration candidates</h1>
+
+<p>Triage of every TTNN core kernel (<code>ttnn/cpp/ttnn/**</code>) still emitting raw <code>pack_tile</code> calls, classifying each by whether it can be migrated onto <code>compute_kernel_lib::eltwise_chain</code>, the chain shape that would express it, and the blockers that prevent migration.</p>
+
+<p><b>Source data:</b> <code>generated/pack_tile_survey.tsv</code> (730 callsites). Already-migrated kernels are taken from <code>ttnn/cpp/ttnn/kernel_lib/migration_status.md</code>. <b>Branch:</b> <code>astancov/eltwise_vx_migration</code>.</p>
+
+<p><b>Scope filter:</b> excluded from this report — <code>models/</code>, <code>tt_metal/programming_examples/</code>, <code>tt-train/</code>, and pure dispatch/firmware files. Only <code>ttnn/cpp/ttnn/</code> production kernels in scope.</p>
+
+<h2>1. Known out-of-scope (OOS) patterns</h2>
+
+<p>The migration ledger (<code>migration_status.md</code> &sect;"Patterns left raw") already names the patterns chain cannot express today. Every "blocked" verdict in this document maps to one of these:</p>
+
+<table>
+<thead><tr><th>#</th><th>OOS pattern</th><th>Why chain can't express it</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Welford accumulator (in-DEST persistent across blocks + <code>transpose_wh_tile</code> interleaved with <code>welford_update</code> / <code>welford_finalize_to_row</code> dual-pack)</td><td>Chain assumes per-call DEST acquire/release; no welford wrappers.</td></tr>
+<tr><td>2</td><td><code>transpose_wh_tile</code></td><td>No chain primitive. Used in welford finalize, ema, rotary single-tile, permute kernels.</td></tr>
+<tr><td>3</td><td>Fused FPU + SFPU + reduce in one DEST acquire window</td><td>Chain stages cannot interleave with <code>reduce_tile</code> inside the same DEST acquire.</td></tr>
+<tr><td>4</td><td>Macro-injected SFPU activation (<code>SFPU_OP_INIT_ACTIVATION</code> / <code>SFPU_OP_CHAIN_0</code> / <code>BINARY_OP</code> / <code>PROCESS_POST_ACTIVATIONS</code>)</td><td>No element wraps a user-defined preprocessor macro that expands to arbitrary SFPU calls.</td></tr>
+<tr><td>5</td><td><code>chain_llk</code> DSL (separate normed_output / gamma / beta nodes)</td><td>Migrating means rewriting the <code>chain_llk</code> graph layer.</td></tr>
+<tr><td>6</td><td>L1 packer accumulator (<code>pack_reconfig_l1_acc(1)</code>)</td><td>Chain doesn't expose L1 acc mode for <code>PackTile</code>.</td></tr>
+<tr><td>7</td><td>Runtime CB ids in template args (q/k branch via runtime <code>is_q</code>)</td><td>Chain elements require constexpr CB ids; runtime branch may exceed TRISC2 size.</td></tr>
+<tr><td>8</td><td><code>matmul_tiles</code> / <code>matmul_block</code></td><td>Eltwise-chain scope excludes matmul.</td></tr>
+<tr><td>9</td><td>Cumulative wait + tile-indexed access with conditional last-tile branch</td><td>Expressible with <code>Bulk + Block + TileBaseRuntime</code> but conditional mask-on-last-tile requires chain split with careful TileBase math.</td></tr>
+<tr><td>10</td><td><code>reshuffle_rows_tile</code></td><td>No chain primitive.</td></tr>
+<tr><td>11</td><td><code>rand_tile</code> with runtime seed</td><td><code>RandTile&lt;Seed&gt;</code> Seed is NTTP; need init-out-of-band pattern (replicate Dropout).</td></tr>
+</tbody>
+</table>
+
+<h2>2. Known helper gaps (would unlock kernels if added)</h2>
+
+<table>
+<thead><tr><th>Helper gap</th><th>Unlocks</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>DestReuseBinarySfpu</code> (load CB to D1, run SFPU binary against <i>running</i> D0 from a prior chain stage &mdash; no re-copy)</td><td><b>None known.</b> The kernels originally listed under this gap in <code>migration_status.md</code> (batch_norm_sfpu, running_statistics_sfpu, eltwise_binary_sfpu) actually use the simpler pattern <code>CopyTile + CopyTile + BinarySfpu</code> with both D0 and D1 freshly copied each stage &mdash; expressible today via <code>AddBinary&lt;D0,D1,D0&gt;</code> / <code>SubBinary</code> / <code>MulBinary</code> / <code>DivBinary</code> in <code>eltwise_binary_sfpu.hpp</code>.</td><td>This gap matters only when an op wants to fuse the running D0 across consecutive SFPU binaries without re-copying. None of the currently-unmigrated kernels need it; leave as a future helper analogue to FPU's <code>DestReuseBinary</code>.</td></tr>
+<tr><td>DEST-accumulating BinaryFpu (<code>add_tiles_init(acc_to_dest=true)</code>)</td><td><code>layernorm_pre_allgather_2d.cpp</code>, <code>rmsnorm_pre_allgather_2d.cpp</code> merge-core stage.</td><td>Documented gap.</td></tr>
+<tr><td>BlockIterOffset with runtime offset (<code>block.to_global(i)</code>)</td><td>Layernorm gamma/beta path.</td><td>Chain has BlockIterOffset; runtime-offset variant TBD.</td></tr>
+<tr><td>CallerManaged + OperandKind::Block window cycling without popping</td><td>Groupnorm mul-by-input_mask blocks.</td><td>Documented gap (numerically wrong for <code>test_group_norm_large_ex_external_cb</code>).</td></tr>
+<tr><td>L1 acc PackTile mode</td><td>groupnorm_sharded_v2 <code>(x-E[x])^2</code> block, minimal_matmul, deepseek_prefill.</td><td>Would resolve OOS #6.</td></tr>
+<tr><td>Runtime-templated CB id chain element</td><td>rotary_embedding_llama_fused_qk (q/k branch).</td><td>OOS #7. May still exceed TRISC2 size.</td></tr>
+</tbody>
+</table>
+
+<h2>3. Top-level summary</h2>
+
+<p>Of the 140 unmigrated kernel <i>callsites</i> across 65 unmigrated files in <code>ttnn/cpp/ttnn/</code>, the breakdown by verdict is:</p>
+
+<table>
+<thead><tr><th>Verdict</th><th>Kernel count</th><th>Description</th></tr></thead>
+<tbody>
+<tr class="priority-hi"><td><span class="verdict-now">MIGRATE NOW</span></td><td>~20</td><td>Clear chain shape with no documented blocker. Helpers exist (including <code>AddBinary</code>/<code>SubBinary</code>/<code>MulBinary</code> SFPU on two DEST slots). Lift directly.</td></tr>
+<tr class="priority-md"><td><span class="verdict-partial">PARTIAL</span></td><td>~13</td><td>Some stages migrate cleanly; one or more stages hit a known OOS or specific helper gap. Worth the partial.</td></tr>
+<tr class="priority-lo"><td><span class="verdict-blocked">BLOCKED (helper gap)</span></td><td>~3</td><td>Migration unblocks once a small helper struct is added (DEST-acc BinaryFpu for <code>*_pre_allgather_2d</code>, <code>chain_llk</code> DSL replacement).</td></tr>
+<tr class="priority-lo"><td><span class="verdict-blocked">BLOCKED (macro)</span></td><td>~22</td><td>Macro-injected SFPU activation (OOS #4). Fundamentally requires a kernel-local <code>ActivationMacro</code> CRTP struct or preprocessor refactor.</td></tr>
+<tr class="priority-lo"><td><span class="verdict-oos">OOS</span></td><td>~8</td><td>Transpose-only, raw matmul, <code>reshuffle_rows_tile</code>, <code>chain_llk</code> DSL — out of scope for eltwise-chain.</td></tr>
+</tbody>
+</table>
+
+<h2>4. MIGRATE NOW &mdash; high-priority queue</h2>
+
+<p>Each row below has a known chain shape (referenced kernels in commits column have the same shape already migrated). No documented blocker. The "Skipped" column lists any stages that legitimately remain raw (with the OOS root-cause #).</p>
+
+<table>
+<thead>
+<tr>
+  <th>#</th>
+  <th class="pathcol">Kernel</th>
+  <th>pack_tile count</th>
+  <th>Chain shape proposal</th>
+  <th>Skipped (with OOS #)</th>
+  <th>Reference migration</th>
+</tr>
+</thead>
+<tbody>
+<tr class="priority-hi">
+  <td>1</td>
+  <td class="pathcol">moreh/moreh_nll_loss/moreh_nll_loss_step2/.../moreh_nll_loss_step2_kernel.cpp</td>
+  <td>8</td>
+  <td>(a) Single-tile <code>CopyTile + Recip + PackTile</code> over <code>cb_divisor</code>. (b) Per-iter <code>CopyTile</code> + (conditional <code>Mul</code> by weight) + <code>MulScalar</code> by <code>cb_divisor_recip</code> + <code>PackTile</code>. cb_divisor_recip held = HeldStream.</td>
+  <td>None</td>
+  <td><code>moreh_clip_grad_norm_step1</code> (<code>d47573e2270</code>) — same recip+mul shape.</td>
+</tr>
+<tr class="priority-hi">
+  <td>2</td>
+  <td class="pathcol">moreh/moreh_nll_loss_backward/.../moreh_nll_loss_backward_kernel.cpp</td>
+  <td>4</td>
+  <td>(a) <code>CopyTile + Recip + PackTile</code> over <code>cb_divisor</code> &rarr; <code>cb_tmp1</code>. (b) <code>BinaryFpu&lt;Mul, BroadcastDim::Scalar&gt;</code> twice (weight*output_grad, tmp2*tmp1). HeldStream on shared cb_tmp1.</td>
+  <td>None</td>
+  <td><code>moreh_clip_grad_norm_step1</code>, <code>moreh_norm_backward_kernel</code> (<code>01156fad878</code>).</td>
+</tr>
+<tr class="priority-hi">
+  <td>3</td>
+  <td class="pathcol">moreh/moreh_abs_pow/.../moreh_abs_pow_kernel.cpp</td>
+  <td>1</td>
+  <td>Per-tile <code>CopyTile + (optional Mask) + Abs + PackTile</code> for cb_x &rarr; cb_xabs. <code>Mask</code> op struct exists in <code>eltwise_misc.hpp</code>.</td>
+  <td>The <code>power_tile_to_cb</code> composite is a multi-stage helper (abs+power-iterative+log+exp+mul); it has been migrated FULL in <code>moreh_norm_h_kernel.cpp</code> (<code>7743f35794f</code>) &mdash; use that as reference. PowerIterative struct already in <code>eltwise_misc.hpp</code>.</td>
+  <td><code>moreh_norm_h_kernel.cpp</code> &mdash; full reference.</td>
+</tr>
+<tr class="priority-hi">
+  <td>4</td>
+  <td class="pathcol">moreh/moreh_linear_backward/.../moreh_bias_backward_single_core_hw.cpp</td>
+  <td>1</td>
+  <td>Likely <code>CopyTile + PackTile</code> with bias accumulator. Read the file before migration.</td>
+  <td>None expected (small kernel).</td>
+  <td><code>moreh_dot_backward.cpp</code> (<code>5cb08a20f15</code>).</td>
+</tr>
+<tr class="priority-hi">
+  <td>5</td>
+  <td class="pathcol">moreh/moreh_linear_backward/.../moreh_bias_backward_multi_core_h.cpp</td>
+  <td>1</td>
+  <td>Same shape as the single-core sibling.</td>
+  <td>None expected.</td>
+  <td><code>moreh_dot_backward.cpp</code>.</td>
+</tr>
+<tr class="priority-hi">
+  <td>6</td>
+  <td class="pathcol">moreh/moreh_clip_grad_norm/.../moreh_clip_grad_norm_step3_kernel.cpp</td>
+  <td>1</td>
+  <td>Step3 final stage. Read the file; likely <code>CopyTile + PackTile</code> or <code>Mul + PackTile</code> tail.</td>
+  <td>If <code>power_tile_to_cb</code> is reused, see step1/step2 PARTIAL note. Otherwise none.</td>
+  <td><code>moreh_clip_grad_norm_step1/step2</code> rows.</td>
+</tr>
+<tr class="priority-hi">
+  <td>7</td>
+  <td class="pathcol">moreh/moreh_sum/.../moreh_sum_nc_impl_kernels/moreh_sum_nc.cpp</td>
+  <td>1</td>
+  <td>Seed + accumulator (<code>DestReuseBinary&lt;Add, DEST_TO_SRCA&gt;</code> against <code>cb_in</code>) + final pack.</td>
+  <td>None.</td>
+  <td><code>prod_nc.cpp</code> (<code>96c844c6817</code>).</td>
+</tr>
+<tr class="priority-hi">
+  <td>8</td>
+  <td class="pathcol">eltwise/ternary/.../ternary_addc_ops_fpu.cpp</td>
+  <td>1</td>
+  <td><code>BinaryFpu&lt;Mul&gt;(cb_in1, cb_in2)</code> &rarr; D0; <code>MulScalar</code> if scalar != 1; <code>DestReuseBinary&lt;Add, DEST_TO_SRCA&gt;(cb_in0)</code>; <code>PackTile&lt;cb_out, D0&gt;</code>. cb_in0 wait happens LATE in original &mdash; use <code>CallerManaged + Streaming</code> on cb_in0 with the wait/pop kept outside the chain.</td>
+  <td>None.</td>
+  <td><code>batch_norm_kernel.cpp</code> (<code>17056fe08cb</code>) for DestReuseBinary chain shape.</td>
+</tr>
+<tr class="priority-hi">
+  <td>9</td>
+  <td class="pathcol">eltwise/ternary/.../ternary_addc_ops_fpu_bcast.cpp</td>
+  <td>1</td>
+  <td>Same shape as ternary_addc_ops_fpu but with <code>BroadcastDim::Scalar</code> on the bcast operand.</td>
+  <td>None.</td>
+  <td>Sibling above + <code>moreh_dot_backward</code> (Scalar bcast).</td>
+</tr>
+<tr class="priority-hi">
+  <td>10</td>
+  <td class="pathcol">eltwise/ternary/.../ternary_addc_ops_fpu_rowbcast.cpp</td>
+  <td>4</td>
+  <td>Same shape as ternary_addc_ops_fpu but with <code>BroadcastDim::Row</code>.</td>
+  <td>None.</td>
+  <td>Sibling + <code>bcast_h.cpp</code> (<code>65b34f7740f</code>).</td>
+</tr>
+<tr class="priority-hi">
+  <td>11</td>
+  <td class="pathcol">experimental/transformer/rotary_embedding_hf/.../rotary_embedding_hf.cpp</td>
+  <td>3</td>
+  <td>Rotated &times; sin + in &times; cos + final add &mdash; 3 chains, same shape as the migrated <code>rotary_embedding.cpp</code> (<code>54d28d9b172</code>).</td>
+  <td>If <code>matmul_tiles</code>-based rotate_half is present &rarr; OOS #8.</td>
+  <td><code>rotary_embedding.cpp</code> PARTIAL row.</td>
+</tr>
+<tr class="priority-hi">
+  <td>12</td>
+  <td class="pathcol">experimental/transformer/rotary_embedding_hf/.../rotary_embedding_hf_sharded.cpp</td>
+  <td>5</td>
+  <td>Sharded variant of #11; 3 chains + reload variant.</td>
+  <td>If matmul rotate_half present &rarr; OOS #8.</td>
+  <td><code>rotary_embedding_llama_sharded.cpp</code> (<code>e1134ae5e31</code>).</td>
+</tr>
+<tr class="priority-hi">
+  <td>13</td>
+  <td class="pathcol">experimental/transformer/all_reduce_create_qkv_heads/.../reduction.cpp</td>
+  <td>1</td>
+  <td>Single eltwise_binary block (likely Add accumulator). Trivial chain.</td>
+  <td>None.</td>
+  <td><code>prod_nc.cpp</code>.</td>
+</tr>
+<tr class="priority-hi">
+  <td>14</td>
+  <td class="pathcol">experimental/ccl/{moe_gpt, moe_compute}/.../compute.cpp</td>
+  <td>1 each</td>
+  <td>Single SFPU block. <code>CopyTile + &lt;sfpu&gt; + PackTile</code>.</td>
+  <td>None expected; verify SFPU op is in <code>sfpu_helpers.hpp</code>.</td>
+  <td><code>logsigmoid_kernel.cpp</code> (<code>ef60346171a</code>).</td>
+</tr>
+<tr class="priority-hi">
+  <td>15</td>
+  <td class="pathcol">experimental/ssm/prefix_scan/.../ssm_prefix_scan.cpp</td>
+  <td>3</td>
+  <td>2 eltwise_binary stages + 1 copy &mdash; likely state-update chain. Migrate per-stage.</td>
+  <td>If state update is in-DEST persistent &rarr; OOS #1-class welford-like. Spot-check first.</td>
+  <td><code>moreh_norm_h_kernel.cpp</code> for in-DEST accumulator.</td>
+</tr>
+<tr class="priority-hi">
+  <td>16</td>
+  <td class="pathcol">experimental/reduction/integral_image/.../intimg_compute.cpp</td>
+  <td>7</td>
+  <td>Cumsum-based stages. <code>Cumsum&lt;Slot&gt;{first}</code> chain element is available (added <code>ef60346171a</code>) in <code>eltwise_math.hpp</code>.</td>
+  <td><code>transpose_wh_tile</code> if used &rarr; OOS #2 (intimg already noted blocked on transpose).</td>
+  <td><code>intimg_compute</code> Cumsum row in <code>migration_status.md</code>.</td>
+</tr>
+<tr class="priority-hi">
+  <td>17</td>
+  <td class="pathcol">experimental/ccl/reduce_scatter_minimal_async/.../{dim_zero_line_reduction, dim_zero_ring_reduction, line_reduction, ring_reduction}.cpp</td>
+  <td>1 each</td>
+  <td>Per-tile add reduction. Single BinaryFpu&lt;Add&gt; + PackTile chain.</td>
+  <td>None.</td>
+  <td><code>prod_nc.cpp</code>.</td>
+</tr>
+<tr class="priority-hi">
+  <td>18</td>
+  <td class="pathcol">experimental/ccl/{all_reduce_async, deepseek_moe_reduce_scatter, llama_reduce_scatter, llama_reduce_scatter_create_heads}/.../*.cpp</td>
+  <td>1 each</td>
+  <td>Single eltwise_binary add reduction (4 kernels). Same chain shape as above family.</td>
+  <td>None.</td>
+  <td><code>prod_nc.cpp</code>.</td>
+</tr>
+<tr class="priority-hi">
+  <td>19</td>
+  <td class="pathcol">experimental/reduction/{fast_reduce_nc, deepseek_moe_fast_reduce_nc}/.../*.cpp</td>
+  <td>1 each</td>
+  <td>Same single-add-accumulator shape as the CCL family above.</td>
+  <td>None.</td>
+  <td><code>prod_nc.cpp</code>.</td>
+</tr>
+<tr class="priority-hi">
+  <td>20</td>
+  <td class="pathcol">normalization/kernel_util/compute/pre_add.h</td>
+  <td>1</td>
+  <td>Single Add stage. Header used by other normalization kernels.</td>
+  <td>None.</td>
+  <td><code>moreh_dot.cpp</code>.</td>
+</tr>
+<tr class="priority-hi">
+  <td>21</td>
+  <td class="pathcol">normalization/batch_norm/.../batch_norm_sfpu_kernel.cpp</td>
+  <td>5</td>
+  <td>5 chains, all SFPU-binary on two fresh DEST slots:<br>
+    (a) <code>CopyTile&lt;cb_batch_var, D0&gt; + CopyTile&lt;cb_eps, D1&gt; + AddBinary&lt;D0,D1,D0&gt; + Rsqrt&lt;D0&gt; + PackTile&lt;cb_den&gt;</code><br>
+    (b) <code>CopyTile&lt;cb_other,D0&gt; + CopyTile&lt;cb_bcast,D1&gt; + SubBinary + CopyTile&lt;cb_den,D1&gt; + MulBinary + PackTile</code><br>
+    (c) optional weight: <code>CopyTile + CopyTile + MulBinary + PackTile</code><br>
+    (d) optional bias: <code>CopyTile + CopyTile + AddBinary + PackTile</code><br>
+    (e) optional typecast: already migrated as <code>eltwise_typecast.cpp</code> shape (<code>Typecast&lt;InDF,OutDF&gt;</code>).</td>
+  <td>None.</td>
+  <td><code>eltwise_typecast.cpp</code> (<code>6589d8167d8</code>) for the Typecast stage; <code>logsigmoid_kernel.cpp</code> for multi-DEST-slot copies.</td>
+</tr>
+<tr class="priority-hi">
+  <td>22</td>
+  <td class="pathcol">normalization/batch_norm/.../running_statistics_sfpu_kernel.cpp</td>
+  <td>11</td>
+  <td>Same shape as #21: per-stat (mean / var) chains of <code>CopyTile + CopyTile + (AddBinary|SubBinary|MulBinary) + PackTile</code>, plus the optional typecast tail. The <code>(1-momentum)</code> and <code>momentum*batch_stat + (1-momentum)*old_stat</code> combo decomposes into 2-3 chained stages but all SFPU-binary on fresh DEST slots.</td>
+  <td>None.</td>
+  <td>Same as #21.</td>
+</tr>
+<tr class="priority-hi">
+  <td>23</td>
+  <td class="pathcol">normalization/batch_norm/.../running_statistics_kernel.cpp</td>
+  <td>2</td>
+  <td>FPU variant of #22 &mdash; uses <code>DestReuseBinary</code> (FPU) which is already in chain.</td>
+  <td>None.</td>
+  <td><code>batch_norm_kernel.cpp</code> (<code>17056fe08cb</code>).</td>
+</tr>
+<tr class="priority-hi">
+  <td>24</td>
+  <td class="pathcol">eltwise/binary/.../eltwise_binary_sfpu_kernel.cpp</td>
+  <td>3</td>
+  <td>SFPU binary variant: <code>CopyTile&lt;cb_in0, D0&gt; + CopyTile&lt;cb_in1, D1&gt; + &lt;BinarySfpu&gt;&lt;D0,D1,D0&gt; + PackTile</code>.</td>
+  <td>If the binary op is selected via a preprocessor macro (e.g. <code>BINARY_SFPU_OP</code>) &rarr; OOS #4 instead &mdash; spot-check first. The kernel is small (3 callsites) so the lift is fast.</td>
+  <td><code>moreh_dot.cpp</code> for the BinaryFpu shape; substitute the SFPU element.</td>
+</tr>
+<tr class="priority-hi">
+  <td>25</td>
+  <td class="pathcol">moreh/moreh_sum/.../moreh_int_sum_h.cpp</td>
+  <td>4</td>
+  <td>SFPU integer accumulator. <code>CopyTile&lt;cb_acc,D0&gt; + CopyTile&lt;cb_in,D1&gt; + AddIntBinary&lt;DF,D0,D1,D0&gt; + PackTile</code>. <code>AddIntBinary</code> with explicit <code>DataFormat</code> template is in <code>eltwise_binary_sfpu.hpp</code>.</td>
+  <td>None.</td>
+  <td><code>prod_nc.cpp</code> shape + integer SFPU struct.</td>
+</tr>
+<tr class="priority-hi">
+  <td>26</td>
+  <td class="pathcol">moreh/moreh_sum/.../moreh_int_sum_w.cpp</td>
+  <td>4</td>
+  <td>Same as #25.</td>
+  <td>None.</td>
+  <td>Sibling above.</td>
+</tr>
+<tr class="priority-hi">
+  <td>27</td>
+  <td class="pathcol">moreh/moreh_sum/.../moreh_int_sum_nc.cpp</td>
+  <td>1</td>
+  <td>Same as #25 but single accumulator.</td>
+  <td>None.</td>
+  <td>Sibling above.</td>
+</tr>
+</tbody>
+</table>
+
+<h2>5. PARTIAL &mdash; migrate the stages we can, document the blocker</h2>
+
+<p>Each of these has at least one cleanly-migratable stage AND at least one stage hitting a real OOS root-cause. PARTIAL migrations here are NOT lazy &mdash; they cite a specific root-cause #.</p>
+
+<table>
+<thead>
+<tr>
+  <th>#</th>
+  <th class="pathcol">Kernel</th>
+  <th>pack_tile count</th>
+  <th>Migratable stages</th>
+  <th>Skipped (root-cause #)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="priority-md">
+  <td>21</td>
+  <td class="pathcol">experimental/ssm/repeat_and_interleave_eltwise_mul/.../ssm_eltwise_mul.cpp</td>
+  <td>7</td>
+  <td>The <code>mul_tiles(cb_id_in0, cb_id_in1)</code> block (Block B) and the bcast_rows mul (Block E) &mdash; both BinaryFpu+PackTile. Cite reconfig audit carefully: original only reconfigs srca, so use <code>BinaryDataFormatReconfig::SrcA</code>.</td>
+  <td>4 transpose_wh blocks (A, C, D, F) &rarr; OOS #2.</td>
+</tr>
+<tr class="priority-md">
+  <td>22</td>
+  <td class="pathcol">reduction/accumulation/.../accumulation_compute.cpp</td>
+  <td>3</td>
+  <td>Seed pack-only (CopyTile + PackTile from a zeroed DST is the seed) and the per-iter <code>CopyTile(CB_IN) + DestReuseBinary&lt;Add, DEST_TO_SRCA&gt;(CB_ACC) + PackTile&lt;CB_OUT&gt;</code> accumulator.</td>
+  <td>If <code>pack_reconfig_l1_acc</code> is used &rarr; OOS #6. The kernel uses <code>fp32_acc_to_dest=True</code> per the comments; verify whether L1 acc mode is engaged.</td>
+</tr>
+<tr class="priority-md">
+  <td>23</td>
+  <td class="pathcol">reduction/generic/.../reduce_h_neg.cpp</td>
+  <td>3</td>
+  <td>(a) Pre-reduce <code>CopyTile + Negative + PackTile</code> chain over <code>ntiles</code>. (b) Post-reduce <code>CopyTile + Negative + (optional MulScalar) + PackTile</code> chain.</td>
+  <td>The middle <code>reduce_tile</code> stage &rarr; OOS #3 (interleaved reduce_init+reduce_tile in DEST window). Use <code>reduce_helpers</code>, not eltwise_chain.</td>
+</tr>
+<tr class="priority-md">
+  <td>24</td>
+  <td class="pathcol">reduction/generic/.../reduce_w_neg.cpp</td>
+  <td>3</td>
+  <td>Same shape as <code>reduce_h_neg.cpp</code>.</td>
+  <td>Same.</td>
+</tr>
+<tr class="priority-md">
+  <td>25</td>
+  <td class="pathcol">reduction/generic/.../reduce_hw_neg.cpp</td>
+  <td>3</td>
+  <td>Same shape as the H/W siblings.</td>
+  <td>Same.</td>
+</tr>
+<tr class="priority-md">
+  <td>26</td>
+  <td class="pathcol">moreh/moreh_layer_norm/.../moreh_layer_norm_small_kernel.cpp</td>
+  <td>13</td>
+  <td>Var(X)+eps &rarr; rsqrt (1 chain); x-E[x] (sub_bcast_cols); (x-E[x])*recip; gamma mul_bcast_rows; beta add_bcast_rows. 5+ chains.</td>
+  <td>The interleaved reduce stages &rarr; OOS #3. Same blockers as layernorm.cpp PARTIAL row.</td>
+</tr>
+<tr class="priority-md">
+  <td>27</td>
+  <td class="pathcol">moreh/moreh_layer_norm/.../moreh_layer_norm_large_kernel.cpp</td>
+  <td>15</td>
+  <td>Same chains as small variant + block-strided variant of x-E[x] and (x-E[x])^2.</td>
+  <td>OOS #3 reduce-interleave + possibly OOS #9 cumulative-wait.</td>
+</tr>
+<tr class="priority-md">
+  <td>28</td>
+  <td class="pathcol">moreh/moreh_layer_norm_backward/.../moreh_layer_norm_backward_input_grad_large_kernel.cpp</td>
+  <td>19</td>
+  <td>Most blocks: rsqrt seed, (dy*gamma) bcast mul, sub_bcast, (x-E[x])*rsqrt, accumulator additions. 6+ chains.</td>
+  <td>Welford accumulator (if present) &rarr; OOS #1; reduce-interleaved &rarr; OOS #3. Audit carefully.</td>
+</tr>
+<tr class="priority-md">
+  <td>29</td>
+  <td class="pathcol">moreh/moreh_layer_norm_backward/.../moreh_layer_norm_backward_input_grad_small_kernel.cpp</td>
+  <td>15</td>
+  <td>Subset of the large variant.</td>
+  <td>Same.</td>
+</tr>
+<tr class="priority-md">
+  <td>30</td>
+  <td class="pathcol">moreh/moreh_layer_norm_backward/.../moreh_layer_norm_backward_gamma_beta_grad_kernel.cpp</td>
+  <td>10</td>
+  <td>Per-tile <code>CopyTile + Mul + PackTile</code> gradient accumulator stages.</td>
+  <td>Reduction tail &rarr; OOS #3.</td>
+</tr>
+<tr class="priority-md">
+  <td>31</td>
+  <td class="pathcol">moreh/moreh_softmax/.../moreh_softmax_w.cpp</td>
+  <td>2</td>
+  <td>The post-reduce per-tile <code>sub_bcast_cols + Exp + PackTile</code> and <code>(optional) Log/Recip + PackTile</code> stages. Similar to moreh_softmax_h_large PARTIAL (commit <code>b83db8b05c0</code>).</td>
+  <td>Mask + reduce-init + reduce_tile in DEST window &rarr; OOS #3. Cumulative-wait conditional last-tile mask &rarr; OOS #9.</td>
+</tr>
+<tr class="priority-md">
+  <td>32</td>
+  <td class="pathcol">moreh/moreh_softmax/.../moreh_softmax_w_large.cpp</td>
+  <td>2</td>
+  <td>Same as moreh_softmax_w; existing partial row in migration_status (commit <code>f0f7da92ea1</code>).</td>
+  <td>Already PARTIAL &mdash; nothing new to migrate without a helper update.</td>
+</tr>
+<tr class="priority-md">
+  <td>36</td>
+  <td class="pathcol">moreh/moreh_sum/.../moreh_sum_w_impl_kernels/moreh_sum_w.cpp</td>
+  <td>2</td>
+  <td><code>CopyTile + PackTile</code> tail.</td>
+  <td>Main <code>matmul_tiles</code>-based reduction &rarr; OOS #8 (this is the tile-matmul REDUCE_ROW path; per memory, only block matmul helpers should be used).</td>
+</tr>
+<tr class="priority-md">
+  <td>37</td>
+  <td class="pathcol">normalization/layernorm/.../layernorm_sharded.cpp</td>
+  <td>9</td>
+  <td>Var(X)+eps &rarr; rsqrt; FUSE_PRE_ADD if present; per-block x-E[x] and (x-E[x])*recip; gamma/beta. Same shape as the migrated <code>layernorm.cpp</code> PARTIAL (<code>5d0e13a7f96</code>).</td>
+  <td>Macro-injected SFPU activation (<code>SFPU_OP_INIT_ACTIVATION</code>) &rarr; OOS #4. Reduce-interleaved stages &rarr; OOS #3.</td>
+</tr>
+<tr class="priority-md">
+  <td>38</td>
+  <td class="pathcol">normalization/layernorm/.../layernorm_sharded_post_allgather.cpp</td>
+  <td>10</td>
+  <td>Var+eps rsqrt; x-E[x]; (x-E[x])*rsqrt; gamma/beta. Mirrors <code>layernorm_distributed/layernorm_post_allgather.cpp</code> PARTIAL (<code>6277004b227</code>).</td>
+  <td><code>chain_llk</code> gamma/beta wiring &rarr; OOS #5. Reduce stages OOS #3.</td>
+</tr>
+<tr class="priority-md">
+  <td>39</td>
+  <td class="pathcol">normalization/layernorm/.../layernorm_sharded_pre_allgather.cpp</td>
+  <td>4</td>
+  <td>Squaring chain (same-CB Mul + TileBaseCompileTime). Same shape as <code>layernorm_distributed/layernorm_pre_allgather.cpp</code> (<code>189ef03f223</code>).</td>
+  <td>Reduce tail &rarr; OOS #3.</td>
+</tr>
+<tr class="priority-md">
+  <td>40</td>
+  <td class="pathcol">normalization/layernorm/.../layernorm_sharded_welford.cpp</td>
+  <td>8</td>
+  <td>Per-block sub_bcast / mul_bcast as in <code>layernorm_welford.cpp</code> PARTIAL (<code>547aa2f1ec3</code>).</td>
+  <td>Welford accumulator &rarr; OOS #1; <code>transpose_wh_tile</code> &rarr; OOS #2.</td>
+</tr>
+<tr class="priority-md">
+  <td>41</td>
+  <td class="pathcol">normalization/layernorm_distributed/.../layernorm_pre_allgather_welford.cpp</td>
+  <td>11</td>
+  <td>Squaring + accumulator stages.</td>
+  <td>Welford + transpose &rarr; OOS #1, #2.</td>
+</tr>
+<tr class="priority-md">
+  <td>42</td>
+  <td class="pathcol">experimental/transformer/dit_layernorm_pre_all_gather/.../layernorm_pre_allgather_welford.cpp</td>
+  <td>4</td>
+  <td>Squaring stage.</td>
+  <td>Welford accumulator OOS #1.</td>
+</tr>
+<tr class="priority-md">
+  <td>43</td>
+  <td class="pathcol">normalization/kernel_util/compute/combine_welford.h</td>
+  <td>2</td>
+  <td>Helper used by welford kernels.</td>
+  <td>Welford finalize semantics &rarr; OOS #1.</td>
+</tr>
+<tr class="priority-md">
+  <td>44</td>
+  <td class="pathcol">normalization/softmax/.../attention/compute/softmax_large_tensor.cpp</td>
+  <td>6</td>
+  <td>Plain <code>else</code> branch (no FUSED_SCALE_MASK + no NUMERIC_STABLE) &rarr; <code>CopyTile + Exp + PackTile</code> chain. Mirrors the migrated <code>softmax.cpp</code> (<code>d0b0d9a5f78</code>).</td>
+  <td>NUMERIC_STABLE / FUSED_SCALE_MASK &rarr; cumulative wait OOS (HQ &sect;"Non-goals"). Runtime CB ids OOS #7.</td>
+</tr>
+<tr class="priority-md">
+  <td>45</td>
+  <td class="pathcol">eltwise/ternary/.../ternary_sfpu_no_bcast_ttt.cpp</td>
+  <td>1</td>
+  <td>3-input SFPU. Per memory, helper supports ternary/quaternary SFPU. If <code>TERNARY_SFPU_OP</code> resolves to a constexpr SFPU call, expressible via a <code>TernarySfpu</code> chain element.</td>
+  <td>If it's a macro-expanded preprocessor op &rarr; OOS #4.</td>
+</tr>
+<tr class="priority-md">
+  <td>46</td>
+  <td class="pathcol">eltwise/ternary/.../ternary_sfpu_no_bcast_tts_tst.cpp, ternary_sfpu_col_scalar_bcast_*.cpp, ternary_sfpu_row_bcast_ttt.cpp</td>
+  <td>1-4 each</td>
+  <td>Variants of #45 with bcast (Col/Row/Scalar). Same chain pattern.</td>
+  <td>Same macro classification check needed.</td>
+</tr>
+<tr class="priority-md">
+  <td>47</td>
+  <td class="pathcol">eltwise/ternary/.../ternary_addcmul_int_sfpu.cpp, ternary_addcmul_int_sfpu_bcast.cpp</td>
+  <td>1 each</td>
+  <td>int dtype addcmul. CopyTile + ternary SFPU + PackTile.</td>
+  <td>OOS #4 if macro-injected.</td>
+</tr>
+<tr class="priority-md">
+  <td>48</td>
+  <td class="pathcol">eltwise/ternary/.../ternary_addc_ops_sfpu.cpp, ternary_addc_ops_sfpu_bcast.cpp</td>
+  <td>1 each</td>
+  <td>SFPU variant of the FPU addc_ops kernels.</td>
+  <td>OOS #4 likely (SFPU macro injection).</td>
+</tr>
+</tbody>
+</table>
+
+<h2>6. BLOCKED on a small helper addition</h2>
+
+<p>These would migrate if a small helper struct is added &mdash; per migration_status HQ doc, adding op structs is NOT a blocker if the user / pipeline approves.</p>
+
+<table>
+<thead>
+<tr><th>#</th><th class="pathcol">Kernel</th><th>Blocker</th><th>Unlock cost</th></tr>
+</thead>
+<tbody>
+<tr class="priority-lo">
+  <td>49</td>
+  <td class="pathcol">eltwise/binary/.../eltwise_binary_kernel.cpp</td>
+  <td>FPU variant &mdash; should be migratable. Re-check; if macro-injected activation present, would shift to OOS #4 instead.</td>
+  <td>Audit before committing.</td>
+</tr>
+<tr class="priority-lo">
+  <td>50</td>
+  <td class="pathcol">normalization/layernorm_distributed/.../layernorm_pre_allgather_2d.cpp</td>
+  <td>Per migration_status: needs <b>DEST-accumulating BinaryFpu</b> (<code>add_tiles_init(acc_to_dest=true)</code>) for the merge-core stage.</td>
+  <td>Helper extension in <code>binary_op_helpers.hpp</code>.</td>
+</tr>
+<tr class="priority-lo">
+  <td>51</td>
+  <td class="pathcol">normalization/rmsnorm_distributed/.../rmsnorm_pre_allgather_2d.cpp</td>
+  <td>Same as #50.</td>
+  <td>Same.</td>
+</tr>
+<tr class="priority-lo">
+  <td>52</td>
+  <td class="pathcol">normalization/layernorm_distributed/.../chain_llk.hpp</td>
+  <td><code>chain_llk</code> DSL graph layer &rarr; OOS #5.</td>
+  <td>Substantial: would mean re-implementing chain_llk on top of eltwise_chain.</td>
+</tr>
+</tbody>
+</table>
+
+<h2>7. BLOCKED on macro-injected SFPU/activation (OOS #4)</h2>
+
+<p>These kernels use preprocessor macros like <code>BINARY_OP</code>, <code>PROCESS_POST_ACTIVATIONS</code>, <code>SFPU_OP_INIT_ACTIVATION</code>, or <code>BINARY_SFPU_OP</code> that expand to arbitrary SFPU calls at compile time. The chain has no element that wraps a user-defined preprocessor macro. The unlock requires <b>either</b> a per-kernel <code>ActivationMacro : UnaryOp</code> CRTP shim guarded by <code>#ifdef</code>, <b>or</b> a preprocessor refactor of the host's <code>get_defines</code> to emit chain-element template args instead of macros (as done for <code>bcast_h.cpp</code> &mdash; commit <code>65b34f7740f</code>).</p>
+
+<ul class="tight">
+<li><code>eltwise/binary_ng/device/kernels/compute/eltwise_binary.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels/compute/eltwise_binary_no_bcast.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels/compute/eltwise_binary_scalar.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_no_bcast.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_scalar.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels/compute/eltwise_where_no_bcast.cpp</code> (TERNARY_SFPU_OP)</li>
+<li><code>eltwise/binary_ng/device/kernels/compute/eltwise_where_sfpu.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels/compute/eltwise_where_sfpu_scalar.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp</code> (header used by above)</li>
+<li><code>eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp</code> (header used by above)</li>
+<li><code>eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_col_bcast.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_row_bcast.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_row_col_bcast.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_scalar_bcast.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_col_bcast.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_row_bcast.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_row_col_bcast.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_scalar_bcast.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels_ng/compute/eltwise_where_sfpu_row_bcast.cpp</code></li>
+<li><code>eltwise/binary_ng/device/kernels_ng/compute/eltwise_where_sfpu_row_col_bcast.cpp</code></li>
+<li><code>eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp</code> (SFPU_OP_CHAIN_0)</li>
+<li><code>eltwise/unary/device/kernels/compute/lgamma_kernel.cpp</code> (macro-injected approximation)</li>
+<li><code>eltwise/unary/device/kernels/compute/lgamma_fast_kernel.cpp</code></li>
+<li><code>eltwise/unary/device/kernels/compute/where_tss_kernel.cpp</code></li>
+<li><code>examples/example/device/kernels/compute/eltwise_sfpu.cpp</code> (mirrors the macro pattern)</li>
+<li><code>experimental/unary_backward/gelu_backward/.../eltwise_bw_gelu_approx_tanh.cpp</code> (per-tile sfpu via macros)</li>
+</ul>
+
+<p class="nb"><b>Refactor path (high leverage):</b> the <code>bcast_h.cpp</code> / <code>bcast_w.cpp</code> / <code>bcast_hw.cpp</code> migration (commit <code>65b34f7740f</code>) shows how to lift this whole family in one go &mdash; the program factory's <code>get_defines</code> was changed to emit <code>CHAIN_BCAST_OP</code> / <code>CHAIN_BCAST_DIM</code> identifiers that resolve to chain enum values. The same shape applied to <code>binary_op_utils::get_defines</code> would emit <code>CHAIN_BINARY_OP</code> + an activation enum, and unblock the entire <code>binary_ng</code> + <code>where</code> + <code>lgamma</code> family above.</p>
+
+<h2>8. OOS &mdash; out of scope for eltwise-chain</h2>
+
+<table>
+<thead>
+<tr><th class="pathcol">Kernel</th><th>Why OOS</th></tr>
+</thead>
+<tbody>
+<tr><td class="pathcol">data_movement/transpose/.../transpose_wh.cpp, transpose_wh_sharded.cpp</td><td>transpose_wh_tile only &rarr; OOS #2.</td></tr>
+<tr><td class="pathcol">data_movement/sort/.../sort_single_row_multi_core.cpp, sort_common.hpp</td><td>transpose + sort primitive &rarr; OOS #2.</td></tr>
+<tr><td class="pathcol">data_movement/concat/.../height_sharded_width_concat_two_tensors.cpp</td><td>transpose-only &rarr; OOS #2.</td></tr>
+<tr><td class="pathcol">experimental/transformer/split_query_key_value_and_split_heads/.../transpose_wh_sharded.cpp</td><td>OOS #2.</td></tr>
+<tr><td class="pathcol">experimental/ssm/hc_sum_reduce/.../ssm_1d_sum_reduce.cpp</td><td>1D transpose &rarr; OOS #2.</td></tr>
+<tr><td class="pathcol">ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp</td><td>OOS #2.</td></tr>
+<tr><td class="pathcol">reduction/topk/.../topk.cpp, topk_common_funcs.hpp, topk_local.cpp, topk_final.cpp</td><td>topk uses transpose + custom topk primitive &rarr; OOS #2 + topk OOS.</td></tr>
+<tr><td class="pathcol">reduction/sampling/.../sampling.cpp, reduction/moe/.../moe.cpp</td><td>transpose-heavy + custom selection &rarr; OOS #2.</td></tr>
+<tr><td class="pathcol">experimental/deepseek_prefill/.../moe_grouped_topk.cpp, experimental/reduction/deepseek_grouped_gate/.../deepseek_grouped_gate.cpp, experimental/topk_router_gpt/.../compute.cpp</td><td>Same family; transpose + topk primitives &rarr; OOS #2.</td></tr>
+<tr><td class="pathcol">reduction/accumulation/ema/.../ema_compute.cpp</td><td>transpose-based EMA &rarr; OOS #2.</td></tr>
+<tr><td class="pathcol">reduction/generic/.../welford_reduce_h.cpp, welford_reduce_w.cpp, welford_reduce_hw.cpp</td><td>Welford finalize + transpose &rarr; OOS #1, #2.</td></tr>
+<tr><td class="pathcol">matmul/.../bmm.cpp, bmm_large_block_zm_fused_bias_activation.cpp, bmm_tilize_untilize.cpp</td><td>matmul kernels &rarr; OOS #8.</td></tr>
+<tr><td class="pathcol">moreh/moreh_matmul/.../moreh_matmul.cpp, moreh_mean/.../moreh_mean_w.cpp</td><td>matmul-based reduction &rarr; OOS #8 (tile matmul is anti-pattern per branch memory).</td></tr>
+<tr><td class="pathcol">experimental/matmul/attn_matmul/.../transformer_attn_matmul.cpp</td><td>OOS #8.</td></tr>
+<tr><td class="pathcol">experimental/deepseek/{moe/moe_gate_mm, mla/matmul_wo}/.../compute*.cpp</td><td>matmul-heavy &rarr; OOS #8.</td></tr>
+<tr><td class="pathcol">experimental/conv3d/.../compute.cpp, conv/conv2d/.../compute_depthwise_conv1d.cpp</td><td>conv kernels with embedded matmul + bias add. The bias-add stages could migrate but the surrounding matmul is OOS #8 &mdash; partial yields little.</td></tr>
+<tr><td class="pathcol">experimental/minimal_matmul/.../compute.cpp, experimental/ccl/all_gather_minimal_matmul_async/.../compute.cpp</td><td>matmul-heavy + L1 acc &rarr; OOS #6, #8.</td></tr>
+<tr><td class="pathcol">embedding_backward/.../embedding_backward.cpp</td><td><code>reshuffle_rows_tile</code> &rarr; OOS #10.</td></tr>
+<tr><td class="pathcol">{uniform, rand, bernoulli, randn}/.../compute*.cpp</td><td><code>rand_tile</code> with runtime seed &rarr; OOS #11 (replicable to Dropout's init-out-of-band pattern but low ROI).</td></tr>
+<tr><td class="pathcol">transformer/sdpa/.../compute_common.hpp, compute_streaming.hpp</td><td>SDPA fused softmax + matmul + scaling in DEST window. Specific stages might be liftable but the surrounding flash-attention loop is fused-FPU-SFPU-reduce &rarr; OOS #3.</td></tr>
+<tr><td class="pathcol">normalization/kernel_util/compute/numeric.h</td><td>Header used by chain_llk &rarr; OOS #5.</td></tr>
+<tr><td class="pathcol">ttnn/cpp/ttnn/kernel/compute/moreh_common.hpp</td><td>Composite header (<code>*_to_cb</code> functions). Migrated <i>indirectly</i> as each calling moreh kernel switches to chain. Not migrated on its own.</td></tr>
+<tr><td class="pathcol">ttnn/cpp/ttnn/kernel_lib/{copy_tile_helpers.hpp, matmul_kloop_helpers.hpp}</td><td>Helper library internals.</td></tr>
+</tbody>
+</table>
+
+<h2>9. Suggested order of attack</h2>
+
+<ol>
+<li><b>Quick wins (1-day):</b> rows 1, 2, 4, 5, 6, 7, 13, 17, 18, 19, 20 from &sect;4 &mdash; each is a clean small-chain migration with an existing reference.</li>
+<li><b>SFPU-binary batch (rows 21-27):</b> batch_norm_sfpu, running_statistics_sfpu, running_statistics, eltwise_binary_sfpu, moreh_int_sum_{h,w,nc}. All are <code>CopyTile + CopyTile + AddBinary|SubBinary|MulBinary + (optional SFPU unary) + PackTile</code> &mdash; helpers already exist in <code>eltwise_binary_sfpu.hpp</code> (<code>AddBinary&lt;D0,D1,D0&gt;</code>, etc.). One reference example pulls the whole family.</li>
+<li><b>Family lift (the binary_ng + lgamma + where_tss cluster, 22 kernels in &sect;7):</b> refactor <code>binary_op_utils::get_defines</code> to emit chain-element identifiers (mirroring <code>bcast_op_utils</code> &mdash; commit <code>65b34f7740f</code>). Unlocks ~22 kernels in one shot.</li>
+<li><b>Rotary family (#11, #12):</b> sibling of already-migrated rotary kernels; same shape applies.</li>
+<li><b>Ternary FPU family (#8, #9, #10):</b> verify <code>ternary_addc_ops_fpu*.cpp</code> are not macro-injected (the FPU variants in &sect;4 are clean); migrate to BinaryFpu+ScalarMul+DestReuseBinary chains.</li>
+<li><b>Reduce_*_neg PARTIAL (rows 23-25):</b> migrate pre-reduce and post-reduce CopyTile+Negative stages; leave the central reduce_tile in <code>reduce_helpers</code>.</li>
+<li><b>moreh layer_norm family (rows 26-30):</b> mirror the layernorm.cpp PARTIAL pattern; non-trivial but high coverage gain.</li>
+<li><b>Defer welford / matmul / transpose-heavy families</b> until the corresponding helper gap or scope expansion is approved.</li>
+</ol>
+
+<p class="nb"><b>Erratum from a prior version of this doc:</b> the "DestReuseBinarySfpu" gap listed in <code>migration_status.md</code> blocked ~5 SFPU kernels &mdash; it actually doesn't. Those kernels load <i>both</i> D0 and D1 with fresh <code>copy_tile</code> calls each stage, so the existing <code>AddBinary&lt;Dst,Dst,Dst&gt;</code> family in <code>eltwise_binary_sfpu.hpp</code> already expresses them. The gap is real but applies only to a different (currently-non-existent) pattern: reusing a running D0 across consecutive SFPU binaries without re-copying.</p>
+
+<h2>10. Methodology notes</h2>
+
+<ul>
+<li>Per-kernel audit grep before any migration: <code>grep -nE '(add|sub|mul)_tiles|copy_tile|pack_tile|reconfig_data_format|pack_reconfig|tile_regs_(acquire|release|wait|commit)|ACQ|REL|rsqrt_tile|exp_tile|recip_tile|sqrt_tile|log_tile|tanh_tile|mask_tile|abs_tile|fill_tile|reduce_tile|transpose_wh|matmul_tiles|rand_tile|reshuffle_rows' &lt;kernel&gt;</code>. Every remaining block after migration must map to (a) a chain element, (b) a documented helper gap, or (c) an OOS root-cause # from &sect;1.</li>
+<li>Reconfig audit: <code>BinaryDataFormatReconfig</code> / <code>PackTileReconfig</code> / <code>CopyTileReconfig</code> flags must match the <i>original</i> LLK init calls IN THIS kernel, not a sibling branch.</li>
+<li>One representative test per kernel during migration (via <code>scripts/run_safe_pytest.sh</code>); full suite at the end of the batch. NEVER wrap <code>run_safe_pytest.sh</code> or <code>tt-probe.sh</code> with <code>timeout</code> &mdash; kills the built-in hang triage. NEVER <code>tt-smi -r</code> manually.</li>
+<li>Lifecycle pitfall: <code>CallerManaged</code> emits no <code>cb_wait_front</code> &mdash; for held CBs without an external wait, use <code>HeldStream</code>. (Caused the moreh_softmax/*_large hang fixed in <code>b83db8b05c0</code>.)</li>
+<li>Lifecycle pitfall: <code>Bulk + Scalar</code> over-waits for held 1-tile broadcast operands &mdash; use <code>CallerManaged + Scalar</code> w/ explicit external wait or <code>HeldStream + Scalar</code>.</li>
+</ul>
+
+</body>
+</html>
