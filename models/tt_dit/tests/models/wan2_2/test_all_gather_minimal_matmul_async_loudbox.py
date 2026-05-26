@@ -12,7 +12,7 @@ from models.tt_dit.tests.models.wan2_2.test_all_gather_minimal_matmul_async impo
 )
 
 LOUDBOX_MESH_CONFIG = {
-    "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
     "fabric_router_config": create_fabric_router_config(4096),
     "trace_region_size": 90112,
 }
@@ -27,15 +27,27 @@ LOUDBOX_MESH_CONFIG = {
             LOUDBOX_MESH_CONFIG,
             ttnn.Topology.Ring,
             1,
-            4,
+            6,
             0,
             1,
             11,
             10,
             1,
         ],
+        [
+            (1, 8),
+            LOUDBOX_MESH_CONFIG,
+            ttnn.Topology.Ring,
+            2,
+            4,
+            0,
+            1,
+            8,
+            8,
+            1,
+        ],
     ],
-    ids=["bh1x8links2"],
+    ids=["bh1x8fullgrid", "bh1x8partialgrid"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
