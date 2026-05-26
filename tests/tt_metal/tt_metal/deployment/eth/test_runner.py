@@ -481,6 +481,15 @@ def link_name(l: TestedLink) -> str:
     return "->".join(sorted(names))
 
 
+def format_rate(r: float) -> str:
+    s = f"{r * 100:.3f}%"
+
+    if s == "0.000%":
+        return "<0.001%"
+
+    return s
+
+
 def print_test_summary(t: TestCase, runs: list[TestRun]):
     for r in runs:
         if not r.name.endswith(t):
@@ -522,7 +531,7 @@ def print_test_summary(t: TestCase, runs: list[TestRun]):
 
                 rate = max(rate, e["data"]["rate"])
 
-            row += [len(links[k]["errors"]), f"{rate * 100:.2f}%", "FAIL" if len(links[k]["errors"]) else "OK"]
+            row += [len(links[k]["errors"]), format_rate(rate), "FAIL" if len(links[k]["errors"]) else "OK"]
             rows.append(row)
 
         print(table(f"{t} test summary", headers, rows))
