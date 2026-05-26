@@ -227,7 +227,12 @@ class PytestInvocation:
 
     def argv(self) -> List[str]:
         return (
-            ["pytest", self.test_path]
+            [
+                "pytest",
+                "-p",
+                "scripts.tt_hw_planner.instrumentation",
+                self.test_path,
+            ]
             + self.args
             + [
                 f"--timeout={self.per_test_timeout_s()}",

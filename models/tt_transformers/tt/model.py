@@ -249,6 +249,11 @@ class Transformer(LightweightModule):
             x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
         logits = self.lm_head(x)
         logits = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if getattr(self.args, "final_logit_softcapping", 0.0) > 0:
+            cap = self.args.final_logit_softcapping
+            logits = ttnn.mul(logits, 1.0 / cap)
+            logits = ttnn.tanh(logits)
+            logits = ttnn.mul(logits, cap)
         return logits
 
     def process_hidden_states_after_prefill_trace(self, hidden_states, last_token_idx):
@@ -874,5 +879,9 @@ class Transformer(LightweightModule):
         x = self.lm_head(x)
         if mode == Mode.PREFILL:
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
+        if getattr(self.args, "final_logit_softcapping", 0.0) > 0:
+            cap = self.args.final_logit_softcapping
+            x = ttnn.mul(x, 1.0 / cap)
+            x = ttnn.tanh(x)
+            x = ttnn.mul(x, cap)
         return x

@@ -1011,7 +1011,26 @@ def test_demo_text(
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    if len(input_prompts) == 1:  # Manual input
+    _emit_embeddings = bool(os.environ.get("TT_HW_PLANNER_EMIT_EMBEDDINGS"))
+    if _emit_embeddings:
+        try:
+            from scripts.tt_hw_planner.correctness.embedding import DEFAULT_PROBE_SENTENCES as _embed_probes
+        except Exception:
+            _embed_probes = (
+                "The quick brown fox jumps over the lazy dog.",
+                "Tenstorrent makes AI hardware in Toronto, Canada.",
+                "Embeddings represent text as vectors in a high-dimensional space.",
+            )
+        _probes = list(_embed_probes)
+        _probes = (
+            (_probes * global_batch_size)[:global_batch_size]
+            if global_batch_size > len(_probes)
+            else _probes[:global_batch_size]
+        )
+        input_prompts = _probes
+        all_prompts = _probes
+        logger.info(f"[embed-mode] overriding input_prompts with {len(_probes)} probe sentence(s)")
+    elif len(input_prompts) == 1:  # Manual input
         input_prompts = input_prompts * global_batch_size
         all_prompts = input_prompts
     else:  # Inputs from file
@@ -1182,10 +1201,58 @@ def test_demo_text(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
-                sampling_params=prefill_sampling_params,
+                sampling_params=prefill_sampling_params if not _emit_embeddings else None,
                 warmup_prefill=not is_device_perf_test,
                 enable_trace=enable_trace,
+                return_hidden_states=_emit_embeddings,
             )
+            if _emit_embeddings:
+                try:
+                    import base64 as _b64
+                    import io as _io
+
+                    import numpy as _np
+
+                    _hidden_results = prefill_out if isinstance(prefill_out, list) else [prefill_out]
+                    for _user_idx, _res in enumerate(_hidden_results):
+                        if isinstance(_res, dict) and "hidden_states" in _res:
+                            _h = _res["hidden_states"]
+                            _last_idx = int(_res.get("last_token_idx", 0)) % 32
+                        else:
+                            _h = _res
+                            _last_idx = 0
+                        if hasattr(_h, "detach"):
+                            _h = _h.detach()
+                        if hasattr(_h, "to"):
+                            _h = _h.to(dtype=torch.float32)
+                        if hasattr(_h, "cpu"):
+                            _h = _h.cpu()
+                        _arr = _h.numpy() if hasattr(_h, "numpy") else _np.asarray(_h)
+                        while _arr.ndim > 1 and _arr.shape[0] == 1:
+                            _arr = _arr[0]
+                        if _arr.ndim == 2 and _arr.shape[0] >= 32:
+                            _vec = _arr[_last_idx, :]
+                        elif _arr.ndim == 2:
+                            _vec = _arr[-1, :]
+                        else:
+                            _vec = _arr.reshape(-1)
+                        _vec = _np.ascontiguousarray(_vec, dtype=_np.float32)
+                        _buf = _io.BytesIO()
+                        _np.save(_buf, _vec, allow_pickle=False)
+                        _b = _b64.b64encode(_buf.getvalue()).decode("ascii")
+                        print(f"==EMBED {_user_idx} - OUTPUT", flush=True)
+                        for _i in range(0, len(_b), 76):
+                            print(_b[_i : _i + 76], flush=True)
+                        print(f"==EMBED {_user_idx} - END", flush=True)
+                    logger.info(
+                        f"[embed-mode] emitted {len(_hidden_results)} embedding marker block(s); stopping before decode"
+                    )
+                    return
+                except Exception as _exc:
+                    logger.warning(
+                        f"TT_HW_PLANNER_EMIT_EMBEDDINGS set but emission failed: " f"{type(_exc).__name__}: {_exc}"
+                    )
+                    return
             if prefill_sampling_params is not None and isinstance(prefill_out, tuple):
                 prefilled_token, prefill_log_probs = prefill_out
             else:

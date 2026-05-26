@@ -1,0 +1,162 @@
+from __future__ import annotations
+
+import os
+import sys
+
+
+def _log(msg: str) -> None:
+    print(f"[tt_hw_planner.instrumentation] {msg}", file=sys.stderr, flush=True)
+
+
+_INSTALLED = False
+
+
+def install_all() -> None:
+    global _INSTALLED
+    if _INSTALLED:
+        return
+    _INSTALLED = True
+    _install_lightweight_module_probe()
+    _install_trace_disable()
+    _install_logit_dump()
+
+
+def _install_lightweight_module_probe() -> None:
+    if not os.environ.get("TT_PLANNER_PROBE_OUTPUT"):
+        return
+    try:
+        from models.common.lightweightmodule import LightweightModule
+    except Exception as exc:
+        _log(f"LightweightModule import failed; probe disabled: {type(exc).__name__}: {exc}")
+        return
+
+    if getattr(LightweightModule, "_tt_hw_planner_probe_patched", False):
+        return
+
+    orig_call = LightweightModule.__call__
+
+    def patched_call(self, *args, **kwargs):
+        if not getattr(LightweightModule, "_tt_hw_planner_probe_done", False):
+            LightweightModule._tt_hw_planner_probe_done = True
+            try:
+                _auto_attach_probe(self)
+            except Exception as exc:
+                _log(f"probe auto-attach failed: {type(exc).__name__}: {exc}")
+        return orig_call(self, *args, **kwargs)
+
+    LightweightModule.__call__ = patched_call
+    LightweightModule._tt_hw_planner_probe_patched = True
+    _log("LightweightModule.__call__ patched for probe auto-attach")
+
+
+def _auto_attach_probe(first_call_self) -> None:
+    import gc
+
+    from models.common.lightweightmodule import LightweightModule
+    from scripts.tt_hw_planner.agentic.tt_probe import maybe_install_global
+
+    all_lwm = [o for o in gc.get_objects() if isinstance(o, LightweightModule)]
+    child_ids = set()
+    for o in all_lwm:
+        try:
+            refs = gc.get_referents(o)
+        except Exception:
+            continue
+        for r in refs:
+            if isinstance(r, LightweightModule) and r is not o:
+                child_ids.add(id(r))
+            elif isinstance(r, (list, tuple, dict)):
+                try:
+                    members = r.values() if isinstance(r, dict) else r
+                    for m in members:
+                        if isinstance(m, LightweightModule) and m is not o:
+                            child_ids.add(id(m))
+                except Exception:
+                    pass
+    roots = [o for o in all_lwm if id(o) not in child_ids] or [first_call_self]
+    for root in roots:
+        try:
+            n = maybe_install_global(root)
+            _log(f"probe attached: root={type(root).__name__} wrapped={n}")
+        except Exception as exc:
+            _log(f"probe attach failed for {type(root).__name__}: {type(exc).__name__}: {exc}")
+
+
+def _install_trace_disable() -> None:
+    if not (os.environ.get("TT_PLANNER_NO_TRACE") == "1" or os.environ.get("TT_PLANNER_PROBE_OUTPUT")):
+        return
+    try:
+        from models.tt_transformers.demo import simple_text_demo as _demo
+    except Exception as exc:
+        _log(f"simple_text_demo import failed; trace-disable skipped: {type(exc).__name__}: {exc}")
+        return
+
+    orig = getattr(_demo, "test_demo_text", None)
+    if orig is None or getattr(orig, "_tt_hw_planner_trace_patched", False):
+        return
+
+    def wrapped(*args, **kwargs):
+        if "enable_trace" in kwargs and kwargs["enable_trace"]:
+            _log("disabling trace mode for this run (NO_TRACE or PROBE_OUTPUT set)")
+            kwargs["enable_trace"] = False
+        return orig(*args, **kwargs)
+
+    wrapped._tt_hw_planner_trace_patched = True
+    _demo.test_demo_text = wrapped
+    _log("test_demo_text wrapped to force enable_trace=False")
+
+
+def _install_logit_dump() -> None:
+    if not os.environ.get("TT_HW_PLANNER_DUMP_LOGITS"):
+        return
+    try:
+        from models.tt_transformers.tt.generator import Generator
+    except Exception as exc:
+        _log(f"Generator import failed; logit-dump skipped: {type(exc).__name__}: {exc}")
+        return
+
+    if getattr(Generator, "_tt_hw_planner_logit_dump_patched", False):
+        return
+
+    orig = Generator.prefill_forward_text
+
+    def wrapped(self, *args, **kwargs):
+        result = orig(self, *args, **kwargs)
+        try:
+            _dump_first_step_logits(result)
+        except Exception as exc:
+            _log(f"logit-dump emit failed: {type(exc).__name__}: {exc}")
+        return result
+
+    Generator.prefill_forward_text = wrapped
+    Generator._tt_hw_planner_logit_dump_patched = True
+    _log("Generator.prefill_forward_text wrapped for step-0 logit dump")
+
+
+def _dump_first_step_logits(result) -> None:
+    from pathlib import Path
+
+    import numpy as _np
+    import torch
+
+    if getattr(_dump_first_step_logits, "_done", False):
+        return
+
+    if isinstance(result, tuple) and len(result) >= 1:
+        logits = result[0]
+    else:
+        logits = result
+    if not isinstance(logits, torch.Tensor):
+        return
+
+    dump_dir = Path(os.environ.get("TT_HW_PLANNER_DUMP_DIR", "/tmp/tt_hw_planner_runs"))
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    dump_path = dump_dir / f"tt_logits_step0_user0_{os.getpid()}.npy"
+    arr = logits[0].detach().to(dtype=torch.float32).cpu().numpy().reshape(-1)
+    _np.save(str(dump_path), arr)
+    print(f"==LOGITS PATH: {dump_path}", flush=True)
+    _dump_first_step_logits._done = True
+
+
+def pytest_configure(config) -> None:
+    install_all()
