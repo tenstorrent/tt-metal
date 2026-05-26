@@ -1,102 +1,119 @@
-# CI Disable Work: Single-Run Targeted Verification Policy
+# CI Disable Work: Targeted Verification Strategy
 
 This note applies to the "disable deterministic failing tests" workflow.
 
-## Policy Shift
+## Goal
 
-The goal is no longer to make pipelines perfectly green.
-For each PR/pipeline session, perform exactly one verification run total after applying disables.
+Avoid running every job in a large workflow after each disable change.
+Only re-run jobs that were failing before the change.
 
-## In-Scope Failures Only
+## Default Rule
 
-This effort is only for deterministic runtime/code failures.
+For each pipeline branch, do not run full workflow verification by default.
+Run only the previously failing jobs unless there is a reason to re-expand scope.
 
-- In scope:
-  - reproducible test failures with concrete failing test IDs (`FAILED ...`)
-  - failures that occur in 3 consecutive runs on `main`
-- Out of scope:
-  - failures that are at least partially due to job timeouts (including plain job timeouts; not the same as a proven hung test)
-  - flaky/non-consecutive failures
-  - infra/runner/network/download/environment faults
+## PR Verification Budget (Exactly One Run)
 
-Do not disable tests for out-of-scope failures.
+Each PR gets exactly one targeted verification run total.
 
-## Timeout-Tracking Issue Workflow (Mandatory)
+- Never dispatch a second verification run for the same PR.
+- Plan and scope that one run carefully before dispatch.
+- Keep existing artifact-reuse/no-rebuild requirements for that one run.
 
-For each out-of-scope failure that is at least partially due to job timeouts:
+## PR Disable Batch Policy (Exactly One Initial Batch)
 
-- Track it in a separate timeout-tracking issue (distinct from the pipeline disable-tracking issue).
-- Explicitly designate that timeout-tracking issue for pipeline re-org follow-up.
-- Whenever the timeout-tracking issue is created or updated, record its link and current status in `disabling-work-so-far.md`.
+Each PR gets exactly one initial disable batch.
 
-## Session Start Requirements (Mandatory)
+- After the first disable batch is committed to that PR, do not add new disables to that PR.
+- Exception: removal is allowed. If revalidation on `main` shows a previously disabled test is fixed, remove that disable (add the test back).
+
+## Session Start Rebase + Revalidation (Mandatory)
 
 At the beginning of each active session for a pipeline branch:
 
 1. Rebase the working branch onto the latest `main`.
-2. Re-check latest completed run(s) on `main` for that pipeline.
-3. Identify all tests with 3 consecutive deterministic failures on `main` within the workflow scope.
-4. Ensure the branch disables all such tests found in scope.
+2. Re-check the latest completed run(s) on `main` for that pipeline.
+3. Confirm each test currently disabled by the branch still fails deterministically on `main`.
 
-If a previously disabled test no longer fails deterministically on latest `main`, remove its disable from the branch and issue list.
+If any test no longer fails on latest `main`:
 
-## Single Verification Run Workflow
+- Remove its skip/disable from the branch.
+- Keep only disables for tests that are still deterministically failing.
+- Continue the targeted verification loop with the reduced disable set.
 
-After the disable set is updated for the current session:
-
-1. Build the changed-job verification scope (do not run full workflow matrices by default).
-2. Create a temporary verification branch from the feature branch.
-3. Prune workflow/job selection in the temporary branch so only changed jobs are dispatched.
-4. Dispatch exactly one verification run for the session.
-5. Inspect results, then remove temporary workflow-pruning edits from the real feature branch.
-
-Do not run iterative or repeated verification loops in the same session.
+Rationale: PRs may remain open for days, and we must avoid disabling tests that have already been fixed and are now passing.
 
 ## Build Reuse Requirement (No Rebuilds)
 
-Verification must reuse existing build artifacts.
-Do not run fresh builds for targeted verification.
+For this project, verification runs must reuse existing build artifacts.
+Do not run fresh build steps for targeted verification.
 
-Before dispatching the single verification run:
+Before dispatching a verification run:
 
-1. Ensure `workflow_dispatch` accepts an artifact-source run ID (for example, `use-artifacts-from-run`).
+1. Modify the pipeline workflow file being dispatched so `workflow_dispatch` can accept an artifact-source run ID (for example, `use-artifacts-from-run`).
 2. Thread that input into the workflow's `build-artifact` call so it is passed to `.github/workflows/build-artifact.yaml`.
 3. Confirm the called workflow supports artifact reuse and skips build when the run ID is set.
-4. Dispatch with that run ID so builds are downloaded instead of rebuilt.
+4. Dispatch the verification run with that run ID so build artifacts are downloaded instead of rebuilt.
 
 Run ID selection rules:
 
 - Prefer a successful recent `Merge Gate` run.
-- Match build intent (platform/build-type/LTO/tracy expectations).
-- Source run must contain required build outputs.
-- Prefer same commit or nearest compatible commit prior to disable-only changes.
+- The source run should match the same build intent (platform/build-type/LTO/tracy expectations).
+- The source run must contain the required build outputs (build tarball and wheel when needed by the pipeline).
+- Prefer a source run on the same commit, or the nearest compatible commit prior to the disable-only changes.
 
 If no compatible artifact-source run is available, do not dispatch a rebuild run.
+First find another compatible source run or update the plan/branch flow to obtain one.
 
-## Automation Follow-Up Policy
+## In-Scope vs Out-of-Scope Failures
 
-On subsequent automation runs for the same PR/pipeline session:
+This effort is only for deterministic runtime/code failures.
 
-- If the single verification run has completed, and
-- jobs that were previously passing did not regress,
+- In scope:
+  - reproducible test failures with concrete failing test IDs (`FAILED ...`) that recur with the same deterministic failure pattern across 3 consecutive runs on `main`
+- Out of scope:
+  - plain job timeouts (not the same as a proven hung test)
+  - flaky/non-consecutive failures
+  - infra/runner/network/download/environment faults
 
-then mark the PR ready to merge even if new failures appear.
+Timeout handling rule:
 
-New failures discovered after the single run should be recorded and triaged, but do not trigger repeated verification for the same session.
+- Timeouts remain out of scope for disable actions and must stay in the timeout-tracking issue workflow.
+
+Do not spend disable/fix cycles on out-of-scope failures in this project.
+
+## Operating Procedure
+
+1. Identify failing jobs from the latest relevant run:
+  - Initial pass: latest completed run on `main`
+  - Iteration pass: latest completed run on the feature branch
+2. Build the target job set from those failures.
+3. Create a temporary verification branch from the current feature branch.
+4. In the temporary branch, modify workflow/job selection so only target jobs run.
+5. Dispatch workflow on the temporary branch.
+6. Inspect results and apply test-disable fixes on the real feature branch.
+7. Repeat until targeted failures are either fixed, disabled, or classified as infra/flaky.
 
 ## Safety Constraints
 
-- Keep one active workflow run at a time.
-- Do not dispatch unrelated workflows.
-- Keep PRs in Draft while disable changes are still being applied.
-- Use skip reason format: `Disabled by issue #XXXXX`.
-- Do not include temporary workflow-pruning edits in the final PR diff.
-- After every workflow dispatch, immediately report the run URL.
+- Never dispatch more than one workflow run at a time.
+- Never dispatch unrelated workflows.
+- Keep PRs as draft until final validation.
+- Do not include temporary workflow-pruning edits in the final PR branch.
+- After every workflow dispatch, immediately share the run URL in the status update.
 
 ## Issue Tracking Sync (Mandatory)
 
 Keep the linked disable-tracking issue in sync with the draft PR at all times.
 
-- Every time a test/parameterization is disabled, update the issue immediately.
-- The issue must reflect the full current disable set in the PR.
+- Every time a new test/parameterization is disabled, immediately update the issue with that test ID.
+- The issue must always reflect the full current set of disables in the PR (not just the latest addition).
 - If a disable is removed from the PR, remove it from the issue list in the same session.
+- After the initial disable batch is committed, issue updates should only reflect removals/revalidation outcomes (no new disables).
+
+## Exit Criteria for Full Workflow Run
+
+Run full workflow only when:
+
+- targeted failing jobs are stable/green, and
+- a final confidence pass is needed before undrafting/hand-off.
