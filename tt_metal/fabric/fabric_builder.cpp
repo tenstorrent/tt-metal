@@ -20,8 +20,9 @@ FabricBuilder::FabricBuilder(
     program_(program),
     fabric_context_(fabric_context),
     builder_context_(fabric_context.get_builder_context()),
-    local_node_(tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
-        device->id())),
+    local_node_(
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
+            device->id())),
     wrap_around_mesh_(fabric_context_.is_wrap_around_mesh(local_node_.mesh_id)) {
     // Determine if this device has tunneling dispatch
     auto mmio_device_id =
@@ -143,12 +144,13 @@ std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_conne
         uint32_t num_links = std::min(chans_dir1.size(), chans_dir2.size());
 
         for (uint32_t link = 0; link < num_links; link++) {
-            pairs.push_back(RouterConnectionPair{
-                .chan1 = chans_dir1[link],
-                .chan2 = chans_dir2[link],
-                .link_idx = link,
-                .num_links = num_links,
-            });
+            pairs.push_back(
+                RouterConnectionPair{
+                    .chan1 = chans_dir1[link],
+                    .chan2 = chans_dir2[link],
+                    .link_idx = link,
+                    .num_links = num_links,
+                });
         }
     };
 
