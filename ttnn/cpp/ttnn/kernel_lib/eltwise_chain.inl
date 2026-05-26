@@ -211,6 +211,48 @@ constexpr uint32_t prev_cb_for_idx() {
     }
 }
 
+// =============================================================================
+// Pack-side chain-shape predicates (pack_reconfig hoisting refinement)
+//
+// `last_pack_cb<Es...>()` — last opt-in pack CB in chain order; used as the
+// wraparound `prev` for site 0's per-stage emission (the iter-to-iter cycle).
+//
+// `chain_has_heterogeneous_pack_cbs<Es...>()` — true iff ≥2 opt-in pack sites
+// declare different CBs. Boot-only hoisting silently miscompiles this shape
+// (last reconfig wins, earlier sites pack with wrong descriptors). When true,
+// the chain defers pack reconfig from boot to per-stage with the 2-arg cache-
+// checked LLK form. See `docs/pack_reconfig_hoisting_proposal.html` §4.2.
+// =============================================================================
+
+template <class... Es>
+constexpr uint32_t last_pack_cb() {
+    constexpr uint32_t cbs[] = { cb_for_side<Side::Pack, Es>()... };
+    uint32_t last = NO_PREV_CB;
+    for (std::size_t k = 0; k < sizeof...(Es); ++k) {
+        if (cbs[k] != NO_PREV_CB) last = cbs[k];
+    }
+    return last;
+}
+
+template <class... Es>
+constexpr bool chain_has_heterogeneous_pack_cbs() {
+    if constexpr (sizeof...(Es) == 0) {
+        return false;
+    } else {
+        constexpr uint32_t cbs[] = { cb_for_side<Side::Pack, Es>()... };
+        uint32_t first_seen = NO_PREV_CB;
+        for (std::size_t k = 0; k < sizeof...(Es); ++k) {
+            if (cbs[k] == NO_PREV_CB) continue;
+            if (first_seen == NO_PREV_CB) {
+                first_seen = cbs[k];
+            } else if (first_seen != cbs[k]) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
 }  // namespace detail
 
 // =============================================================================
@@ -1715,6 +1757,15 @@ ALWI void elem_init() { E::init(); }
 // metadata tables, so an emitted reconfig on CBs with matching dtypes is a no-op
 // at the hardware level — strictly bounded by a handful of compare instructions.
 //
+// Pack-side hoist policy (per `docs/pack_reconfig_hoisting_proposal.html` §4.2):
+//   - Homogeneous chains (≤1 opt-in pack site, or all sites share a CB): boot
+//     emission via `pack_init_for_each`. Subsequent sites fold-elide.
+//   - Heterogeneous chains (≥2 opt-in pack sites with different CBs): boot emits
+//     only the FIRST opt-in site's reconfig (initializes packer state); later
+//     sites' reconfigs are deferred to per-stage emission inside the per-iter
+//     pack phase (`emit_per_stage_pack_reconfig`). The 2-arg cache-checked LLK
+//     form makes the no-change case ~one compare + branch.
+//
 // DEST accumulation mode is build-flag-driven (DST_ACCUM_MODE / FP32_DEST_ACC_EN) —
 // no per-element fp32 fold here.
 // =============================================================================
@@ -1735,6 +1786,14 @@ ALWI void emit_pre_element_transitions() {
     constexpr bool reconf_a = (curr_a != NO_PREV_CB) && (curr_a != prev_a);
     constexpr bool reconf_b = (curr_b != NO_PREV_CB) && (curr_b != prev_b);
     constexpr bool reconf_p = (curr_p != NO_PREV_CB) && (curr_p != prev_p);
+
+    // Pack-side deferral: in heterogeneous chains, only the first opt-in pack
+    // site (prev_p == NO_PREV_CB) emits at boot. Later sites defer to per-stage
+    // via `emit_per_stage_pack_reconfig`, where the 2-arg LLK form's cache check
+    // handles intra-stage transitions cheaply and the per-iter wraparound from
+    // last-pack-cb to first-pack-cb is correctly programmed.
+    constexpr bool defer_pack_to_per_stage =
+        chain_has_heterogeneous_pack_cbs<Es...>() && (prev_p != NO_PREV_CB);
 
     // ---- srca + srcb: coalesce when both sides share prev-state ----
     if constexpr (reconf_a && reconf_b) {
@@ -1771,8 +1830,8 @@ ALWI void emit_pre_element_transitions() {
         }
     }
 
-    // ---- pack: always independent ----
-    if constexpr (reconf_p) {
+    // ---- pack: always independent; deferred to per-stage in heterogeneous chains ----
+    if constexpr (reconf_p && !defer_pack_to_per_stage) {
         if constexpr (prev_p != NO_PREV_CB) {
             pack_reconfig_data_format(prev_p, curr_p);
         } else {
@@ -1781,16 +1840,44 @@ ALWI void emit_pre_element_transitions() {
     }
 }
 
-// Pack-phase init (Pack* only — F-PERF-4: hoisted to boot, not per-tile).
-// Note: post-commit-2 the pack reconfig is fold-driven via `emit_pre_element_transitions`,
-// so the init body is effectively a no-op for PackTile / PackTileBlock. Retained for symmetry
-// in case a pack element gains per-op LLK programming in a future commit.
+// emit_per_stage_pack_reconfig<E, I, Es...>()
 //
-// `hoist_compute_init` excludes PackTile from its filtered walk (PACK is its own
-// always-hoisted cohort, disjoint from math-MOP and SFPU). `pack_init_for_each`
-// is the sole boot-time emission path for pack-side reconfig — it fires once
-// per chain regardless of the math/sfpu hoist decisions, so `PackTileReconfig::Output`
-// programs the pack engine before the first iteration in all cases.
+// Per-stage pack reconfig used only when the chain has heterogeneous opt-in
+// pack CBs (boot can't program all of them). For every opt-in pack site,
+// emit the 2-arg `pack_reconfig_data_format(prev, curr)` form before that
+// site's per-iter pack work, using wraparound `prev` for the first pack site
+// (so iter k+1's site 0 sees iter k's site N-1 as the previous descriptor
+// state). The LLK's compare-and-skip on matching formats keeps the cost to
+// a few cycles when adjacent stages happen to share a dtype.
+template <class E, std::size_t I, class... Es>
+ALWI void emit_per_stage_pack_reconfig() {
+    if constexpr (!chain_has_heterogeneous_pack_cbs<Es...>()) return;
+    constexpr uint32_t curr_p = cb_for_side<Side::Pack, E>();
+    if constexpr (curr_p == NO_PREV_CB) return;
+    constexpr uint32_t prev_chain = prev_cb_for_idx<Side::Pack, I, Es...>();
+    // Wraparound: first opt-in pack site has no in-chain prev; on iter ≥ 1 the
+    // packer ended the previous iter on `last_pack_cb`. The LLK 2-arg form does
+    // the right thing on iter 0 too (cache check vs. boot-initialized state).
+    constexpr uint32_t prev_p =
+        (prev_chain != NO_PREV_CB) ? prev_chain : last_pack_cb<Es...>();
+    if constexpr (prev_p != NO_PREV_CB) {
+        pack_reconfig_data_format(prev_p, curr_p);
+    }
+}
+
+// Pack-phase init (Pack* only — F-PERF-4: hoisted to boot when sound).
+// Pack reconfig is fold-driven via `emit_pre_element_transitions`. For
+// homogeneous pack chains (≤1 opt-in pack site, or all sites share a CB),
+// boot programs the pack engine once and per-stage emission is suppressed.
+// For heterogeneous chains (multi-output ops with different pack CBs), boot
+// programs only the FIRST opt-in pack site; later sites emit per-stage in
+// `apply_pack_phase` via `emit_per_stage_pack_reconfig` using the 2-arg
+// cache-checked LLK form. See `docs/pack_reconfig_hoisting_proposal.html` §4.2.
+//
+// `hoist_compute_init` excludes PackTile from its filtered walk (PACK is its
+// own cohort, disjoint from math-MOP and SFPU). `pack_init_for_each` runs the
+// boot fold for pack sites; per-stage emission is intentionally separate so
+// the heterogeneous case stays correct across per-iter wraparound.
 template <std::size_t I, class E, class... Es>
 ALWI void elem_pack_init() {
     if constexpr (is_pack_tile_op_v<E>) {
@@ -1903,6 +1990,7 @@ ALWI void elem_apply_pack(
     uint32_t n_tiles) {
     constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_pack_tile_op_v<ElemT>) {
+        emit_per_stage_pack_reconfig<ElemT, I, Es...>();
         elem.reserve_per_tile(i_outer);
         elem_reserve_per_block(elem, inner_count);
         elem.reserve_upfront(n_tiles);
@@ -2143,6 +2231,7 @@ ALWI void elem_apply_pack_2d(
     uint32_t Wt) {
     constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_pack_tile_op_v<ElemT>) {
+        emit_per_stage_pack_reconfig<ElemT, I, Es...>();
         elem.reserve_per_tile(i_flat);
         elem_reserve_per_block(elem, inner_count);
         elem.reserve_upfront_2d(Ht, Wt);

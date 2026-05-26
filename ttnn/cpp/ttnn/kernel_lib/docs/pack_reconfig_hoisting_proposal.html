@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>pack_reconfig hoisting — LLK analysis &amp; eltwise helper refinement proposal</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 1200px; margin: 24px auto; padding: 0 24px; color: #1c1c1c; line-height: 1.55; }
+  h1 { border-bottom: 2px solid #0a4; padding-bottom: 8px; }
+  h2 { border-bottom: 1px solid #ddd; padding-bottom: 4px; margin-top: 36px; }
+  h3 { margin-top: 24px; }
+  h4 { margin-top: 18px; }
+  code, pre { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  pre { background: #f6f6f6; padding: 12px 16px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.45; }
+  code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-size: 92%; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+  th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #eef; }
+  .safe   { background: #e3f7e0; }
+  .unsafe { background: #fde0e0; }
+  .cond   { background: #fff5d0; }
+  .none   { background: #f4f4f4; color: #666; }
+  .cite   { color: #555; font-size: 12px; font-family: monospace; }
+  .diagram { font-family: "SF Mono", Menlo, Consolas, monospace; background: #fafafa; border: 1px solid #ddd; padding: 14px; white-space: pre; overflow-x: auto; font-size: 13px; line-height: 1.35; border-radius: 6px; }
+  .pill { padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+  .pill.safe   { background: #2a8a2a; color: #fff; }
+  .pill.unsafe { background: #b22222; color: #fff; }
+  .pill.cond   { background: #c8930a; color: #fff; }
+  .pill.boot   { background: #2557a6; color: #fff; }
+  .pill.stage  { background: #6a3aa1; color: #fff; }
+  .pill.iter   { background: #0a8a8a; color: #fff; }
+  .pill.none   { background: #888; color: #fff; }
+  .callout { background: #fff8e1; border-left: 4px solid #f0b400; padding: 8px 14px; margin: 14px 0; border-radius: 4px; }
+  .callout.good { background: #e3f7e0; border-left-color: #2a8a2a; }
+  .callout.bad  { background: #fde0e0; border-left-color: #b22222; }
+  .callout.info { background: #eef6ff; border-left-color: #2557a6; }
+  .tldr { background: #eef6ff; border: 1px solid #b6cce8; padding: 12px 16px; border-radius: 6px; margin: 12px 0; }
+  .key { font-weight: 700; color: #2557a6; }
+  .footnote { font-size: 12px; color: #555; }
+  tr.strikeout td { text-decoration: line-through; color: #888; background: #f0f0f0 !important; }
+  tr.strikeout td .pill { opacity: 0.5; }
+  .struck-section { text-decoration: line-through; color: #888; opacity: 0.55; }
+  .struck-section h3, .struck-section h4 { color: #888; }
+  .struck-section .pill { opacity: 0.5; }
+  .struck-section pre, .struck-section table { filter: grayscale(60%); }
+  .chosen-section { background: #e8f4fc; border-left: 6px solid #2a8a2a; padding: 8px 18px 14px 18px; border-radius: 6px; margin: 18px 0; }
+  .chosen-badge { display: inline-block; background: #2a8a2a; color: #fff; font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 10px; margin-left: 8px; vertical-align: middle; }
+</style>
+</head>
+<body>
+
+<h1>pack_reconfig hoisting — LLK analysis &amp; eltwise helper refinement proposal</h1>
+
+<p class="footnote">Status: design proposal. The chain helper is the <em>target</em> of the refinement; analysis below is grounded in LLK source, not in chain internals.</p>
+
+<div class="tldr">
+<strong>TL;DR.</strong>
+The current eltwise helper rule &ldquo;hoist <code>pack_reconfig</code> to boot whenever it is enabled&rdquo; conflates two independent questions:
+<ol>
+  <li><em>Should we emit a reconfig at all?</em> (driven by whether the packer state in force is the one the next pack needs)</li>
+  <li><em>Where in the kernel does the emission have to live?</em> (driven by whether the answer to #1 stays constant across iterations and stages)</li>
+</ol>
+At the LLK level, hoisting <code>pack_reconfig_data_format</code> all the way to boot is sound only under three conjoined preconditions — same target output across all packs, no intervening primitive that clobbers packer descriptors, and constant tile geometry. The helper should make the boot/stage/iter decision <em>per pack site</em> using those preconditions, not on a single &ldquo;enabled&rdquo; toggle.
+</div>
+
+<h2>1. LLK reference — what <code>pack_reconfig_data_format</code> actually does</h2>
+
+<p>Two entry points live on the LLK boundary; both reduce to <code>_llk_pack_reconfig_data_format_</code> in <code>cpack_common.h</code>:</p>
+
+<table>
+  <thead>
+    <tr><th>Wrapper</th><th>Signature</th><th>Cache check?</th><th>Cost when no change</th><th>Cost when change</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>llk_pack_reconfig_data_format(new_output)</code></td>
+      <td>1-arg</td>
+      <td>None</td>
+      <td>Full MMIO write path</td>
+      <td>Full MMIO write path</td>
+    </tr>
+    <tr>
+      <td><code>llk_pack_reconfig_data_format(old_output, new_output)</code></td>
+      <td>2-arg</td>
+      <td><code>pack_dst_format[old] != pack_dst_format[new]</code> (plus exp-section comparison for BFP)</td>
+      <td>Single compare + branch</td>
+      <td>Full MMIO write path</td>
+    </tr>
+    <tr>
+      <td><code>llk_pack_reconfig_l1_acc(enable)</code></td>
+      <td>1-arg</td>
+      <td>None at this level</td>
+      <td>~4 RMW writes to <code>THCON_SEC*_REG*_Pack_L1_Acc</code></td>
+      <td>~4 RMW writes</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="cite">References: <code>tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_pack_api.h:~395-404</code> (2-arg dispatcher), <code>tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/cpack_common.h:~562-675</code> (reconfig body), and the Blackhole equivalents.</p>
+
+<h3>1.1 Hardware state programmed by a full reconfig</h3>
+<ul>
+  <li><strong>Packer descriptors</strong> (4 packers share these): <code>THCON_SEC0_REG1</code> / <code>REG8</code> and <code>THCON_SEC1_REG1</code> / <code>REG8</code> — row/tile header sizes and the <code>in_data_format</code> / <code>out_data_format</code> bytes.</li>
+  <li><strong>DEST&rarr;packer routing format</strong>: <code>ALU_FORMAT_SPEC_REG2_Dstacc</code> (the format the packer believes is sitting in DEST).</li>
+  <li><strong>Packer L1 stride table</strong>: re-derived from the new output format (different output dtypes produce different strides into L1).</li>
+  <li><strong>Packer counters</strong>: <code>PACK_COUNTERS_SEC*.pack_reads_per_xy_plane = face_r_dim</code> — reset on format change.</li>
+  <li><strong>DEST read-control</strong>: <code>PCK_DEST_RD_CTRL.Read_32b_data</code> — driven by the <code>is_fp32_dest_acc_en</code> template parameter, not by the per-call output id.</li>
+  <li><strong>BFP exponent section sizes</strong> (BFP output only): a sequence of <code>TTI_REG2FLOP</code> writes computing <code>EXP*_SEC_SIZE_BFP*</code>.</li>
+</ul>
+
+<p>All of these are <em>global packer state</em>. None are per-tile. The <code>pack_tile()</code> call itself supplies the DEST tile index separately; tile address is orthogonal to format state.</p>
+
+<h3>1.2 Built-in synchronization</h3>
+<p><code>_llk_pack_reconfig_data_format_</code> begins with <code>TTI_STALLWAIT(STALL_THCON, PACK)</code> — the packer is drained before any descriptor is mutated. Callers do not need to add their own drain, but they must not call reconfig before the matching <code>pack_tile()</code> MOP has been issued (otherwise the prior packs that should have used the old format will see the new one).</p>
+
+<h2>2. When is a pack_reconfig &ldquo;hoistable&rdquo;?</h2>
+
+<p>Define <em>hoistable</em> as: <em>moving the call from inside a per-tile loop to outside it (boot, or before a stage) does not change the observed pack output of any tile.</em></p>
+
+<p>Hoist-safety is the conjunction of three preconditions. Each is independent — failing any one disqualifies a higher level of hoisting.</p>
+
+<table>
+  <thead>
+    <tr><th>Precondition</th><th>What must be true</th><th>What violates it</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>P1. Format invariance</strong></td>
+      <td><code>pack_dst_format[out]</code> identical for every pack site covered by the hoist.</td>
+      <td>Different output CBs with different dtypes; same CB but exponent precision change for BFP; same CB but face geometry change.</td>
+    </tr>
+    <tr>
+      <td><strong>P2. No intervening clobber</strong></td>
+      <td>Between the hoisted call and the last covered pack, no LLK call writes <code>THCON_SEC*_REG*</code>, <code>PACK_COUNTERS_SEC*</code>, or <code>ALU_FORMAT_SPEC_REG2_Dstacc</code>.</td>
+      <td><code>llk_pack_hw_configure_disaggregated</code>, <code>mm_init</code>, <code>reduce_init</code>, <code>llk_pack_reconfig_l1_acc</code> in some paths, any custom kernel insert.</td>
+    </tr>
+    <tr>
+      <td><strong>P3. Geometry invariance</strong></td>
+      <td><code>face_r_dim</code>, <code>num_faces</code>, <code>partial_face</code> equal for every covered pack.</td>
+      <td>Mixed tile shapes within the loop (rare in eltwise, common in tilize/untilize bridges).</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>2.1 Three hoist levels — each strictly stronger than the next</h3>
+
+<div class="diagram">
+  L0 (none)     L1 (per-tile)         L2 (per-stage)          L3 (boot)
+  ─────────     ─────────────         ──────────────          ─────────
+  no emit       inside inner loop     before inner loop       once at chain entry
+  caller owns   call every tile       call once per stage     call once for whole chain
+
+  Safe if:      Always safe (the      P1 holds across all     P1 ∧ P2 ∧ P3 hold across
+  prior code    2-arg form's cache    iters of that stage     every stage and every iter
+  set the       check costs ~1
+  packer        branch when no
+  correctly     change is needed)
+</div>
+
+<p>L0 and L3 are the two corner cases the current helper toggles between (&ldquo;Reconfig::None&rdquo; vs &ldquo;Reconfig::Output&rdquo;). L1 and L2 are missing.</p>
+
+<h3>2.2 Concrete hoist-safe vs hoist-unsafe shapes</h3>
+
+<table>
+  <thead>
+    <tr><th>Shape</th><th>P1</th><th>P2</th><th>P3</th><th>Safest hoist</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Single pack site, single output CB, eltwise chain</td><td class="safe">✓</td><td class="safe">✓</td><td class="safe">✓</td><td><span class="pill boot">L3 boot</span></td></tr>
+    <tr><td>Two pack sites, same output CB, same dtype</td><td class="safe">✓</td><td class="safe">✓</td><td class="safe">✓</td><td><span class="pill boot">L3 boot</span></td></tr>
+    <tr><td>Two pack sites, <em>different</em> output CBs (e.g. multi-output op)</td><td class="unsafe">✗</td><td class="safe">✓</td><td class="safe">✓</td><td><span class="pill stage">L2 per-stage</span></td></tr>
+    <tr class="strikeout"><td>One pack site, but chain interleaved with a primitive that calls <code>pack_hw_configure</code> (reduce/matmul stage in a fused kernel)</td><td>✓</td><td>✗</td><td>✓</td><td><span class="pill stage">L2 per-stage</span> (re-emit after clobber)</td></tr>
+    <tr class="strikeout"><td>Pack with mixed face geometry across iterations</td><td>✓</td><td>✓</td><td>✗</td><td><span class="pill iter">L1 per-tile</span></td></tr>
+    <tr><td>Caller already programmed the packer to the right output before invoking the chain</td><td class="cond">✓</td><td class="safe">✓</td><td class="safe">✓</td><td><span class="pill none">L0 none</span> (let caller own it)</td></tr>
+  </tbody>
+</table>
+
+<h2>3. What the eltwise helper does today</h2>
+
+<p>Today the helper exposes a per-element enum:</p>
+
+<pre>enum class PackTileReconfig : uint8_t {
+    None,
+    Output,             // pack_reconfig_data_format(new_cb)
+    OutputConditional,  // pack_reconfig_data_format(old_cb, new_cb), FP32_DEST_ACC-gated
+};</pre>
+
+<p>Each <code>PackTile&lt;…, Reconfig=Output&gt;</code> declaration produces exactly one <code>pack_reconfig_data_format</code> call, emitted before the per-tile work begins. The emission point is <em>fixed</em> at chain boot; the per-tile loop body never re-issues a reconfig.</p>
+
+<p>That is L3 in our taxonomy, applied unconditionally whenever <code>Reconfig != None</code>.</p>
+
+<div class="callout">
+<strong>Why this default falls short.</strong>
+<ul>
+  <li>It is over-eager for chains where the caller has already programmed the packer (no emission needed at all → L0 would be cheaper).</li>
+  <li>It is structurally wrong for chains with multiple pack sites targeting different output CBs — at boot the last reconfig wins, so the first stage runs against the wrong packer state. The bug is latent today only because production chains tend to have a single pack site; nothing in the helper prevents a future caller from tripping it.</li>
+  <li>It cannot recover from a mid-chain clobber (P2 violation) — the boot emission is &ldquo;use-it-or-lose-it&rdquo;.</li>
+  <li>It uses the 1-arg LLK form unconditionally for <code>Output</code>, paying the full MMIO write even when the packer happens to already be on the right format. The <code>OutputConditional</code> variant exists but is hidden behind <code>FP32_DEST_ACC_EN</code>; the early-exit benefit is general, not FP32-specific.</li>
+</ul>
+</div>
+
+<h2>4. Proposed refinement</h2>
+
+<div class="struck-section">
+<h3>4.1 Replace the binary toggle with a hoist-level policy</h3>
+
+<p>Promote <code>PackTileReconfig</code> from a 3-way enum to an explicit hoist policy with the four LLK-meaningful levels:</p>
+
+<pre>enum class PackHoist : uint8_t {
+    None,        // L0 — caller owns packer state; helper emits nothing
+    PerTile,     // L1 — emit the 2-arg form inside the per-tile loop
+    PerStage,    // L2 — emit once before each PackTile element's loop
+    Boot,        // L3 — emit once at chain entry (current behavior)
+};</pre>
+
+<p>The single-arg vs two-arg LLK form choice becomes orthogonal:</p>
+
+<pre>enum class PackReconfigForm : uint8_t {
+    Unconditional,   // pack_reconfig_data_format(new)            — 1-arg
+    CacheChecked,    // pack_reconfig_data_format(old, new)       — 2-arg
+};</pre>
+
+<p>The two are composed at the pack site. <code>(PerTile, CacheChecked)</code> gives the safest cheapest default; <code>(Boot, Unconditional)</code> reproduces today's behavior.</p>
+</div>
+
+<div class="chosen-section">
+<h3>4.2 Default by chain shape, not by global flag <span class="chosen-badge">CHOSEN REFINEMENT</span></h3>
+
+<p>The refinement is to pick the emission point per pack site from the chain shape at compile time, rather than always emitting at boot whenever reconfig is opted in. With the fused-kernel-clobber and mixed-geometry shapes from §2.2 excluded (they don't arise in eltwise chains), the decision collapses to three cases:</p>
+
+<table>
+  <thead>
+    <tr><th>Detected shape</th><th>Emission point</th><th>LLK form</th><th>Rationale</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1 pack site in the chain</td><td><span class="pill boot">Boot</span> (chain entry)</td><td>1-arg <code>pack_reconfig(new)</code></td><td>P1 holds trivially; a single one-shot call has nothing to compare against, so the cache-checked form would have an undefined &ldquo;old&rdquo; argument.</td></tr>
+    <tr><td>N pack sites, all targeting the same output CB</td><td><span class="pill boot">Boot</span> (chain entry)</td><td>1-arg <code>pack_reconfig(new)</code></td><td>Equivalent to the single-site case after CB-fold elision — same emission, same form.</td></tr>
+    <tr><td>N pack sites, <em>heterogeneous</em> output CBs (multi-output op)</td><td><span class="pill stage">PerStage</span> (before each pack site's per-tile loop)</td><td>2-arg <code>pack_reconfig(prev, new)</code></td><td>Boot emission would silently miscompile (last reconfig in fold order wins, earlier stages run with wrong descriptors). Per-stage emission with the 2-arg form is the correctness fix; the cache check makes it free when adjacent stages happen to share an output.</td></tr>
+  </tbody>
+</table>
+
+<h4>PerStage requires tracking the previous pack CB</h4>
+
+<p>The 2-arg LLK form <code>pack_reconfig_data_format(old_output, new_output)</code> early-exits when <code>pack_dst_format[old] == pack_dst_format[new]</code>. To use it, the helper must know which output the packer was last programmed for. Tracking that is local to the helper — the user never supplies it:</p>
+
+<ul>
+  <li>The chain's existing fold-driven analysis already computes &ldquo;previous pack CB for stage <em>i</em>&rdquo; (it is what gates whether the boot-time emission elides for repeated targets). Reuse that same lookup as the <code>old_output</code> argument when emitting per stage.</li>
+  <li>For the very first PackTile site in a heterogeneous chain, there is no previous CB inside the chain. Two equally good options:
+    <ol>
+      <li>Treat the first site as still hoisted to Boot (1-arg form), and start tracking from the second site onward.</li>
+      <li>Emit the first site with the 1-arg form at PerStage too, for uniformity in the generated code.</li>
+    </ol>
+    Either is sound; option 1 saves one emission and matches the &ldquo;Boot iff sound&rdquo; spirit.
+  </li>
+  <li>The tracker is a compile-time constant per stage — no runtime state, no extra registers, no per-tile cost. It exists only in the template fold.</li>
+</ul>
+
+<h4>What this changes in practice</h4>
+
+<ul>
+  <li>Single-pack-site chains (the dominant case in production today): unchanged. Still <span class="pill boot">Boot</span> + 1-arg.</li>
+  <li>Multi-pack-site chains with a shared output: unchanged. CB-fold elision already collapses them to a single boot emission.</li>
+  <li>Multi-pack-site chains with different outputs: today they're either rejected by the <code>writer_pair_collide</code> trait (when CB <em>and</em> slot match) or silently miscompiled (when CB differs). After the refinement they become a first-class supported shape with per-stage emission and the cache-checked LLK form.</li>
+</ul>
+</div>
+
+<div class="struck-section">
+<h3>4.3 Hoist-safety preconditions as compile-time assertions</h3>
+
+<p>For each declared hoist level, the helper should be able to fail the build if the chain shape violates the corresponding precondition:</p>
+
+<table>
+  <thead>
+    <tr><th>Declared level</th><th>Assertion the helper enforces</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Boot</td><td>All pack sites in the chain agree on output CB <em>and dtype</em> (P1); no element in the chain advertises a &ldquo;clobbers packer descriptors&rdquo; trait (P2); all elements declare uniform tile geometry (P3).</td></tr>
+    <tr><td>PerStage</td><td>Within each stage's per-tile loop, P1-P3 hold (almost always trivially true — one pack site per stage, fixed format, fixed geometry).</td></tr>
+    <tr><td>PerTile</td><td>No assertion — always sound.</td></tr>
+    <tr><td>None</td><td>No assertion — caller's responsibility.</td></tr>
+  </tbody>
+</table>
+
+<p>The P1 check for Boot is the most important one in practice: it converts what is today a latent multi-pack-site bug into a build error or an automatic downgrade to PerStage.</p>
+</div>
+
+<div class="struck-section">
+<h3>4.4 Form selection: prefer cache-checked everywhere it is cheap</h3>
+
+<p>The 2-arg form's overhead in the &ldquo;no change&rdquo; case is one comparison plus one branch in LLK; it is on the order of a handful of cycles. The 1-arg form, when no reconfig is actually needed, costs the full MMIO write sequence (<code>TTI_REG2FLOP</code> &times; many).</p>
+
+<p>Recommendation: <code>CacheChecked</code> becomes the default form for every level except Boot-single-site. The Boot-single-site case can stay <code>Unconditional</code> because it is a single one-shot call where the early-exit cannot save anything (the &ldquo;old&rdquo; CB id is undefined at boot).</p>
+</div>
+
+<div class="struck-section">
+<h3>4.5 Interaction with <code>pack_reconfig_l1_acc</code></h3>
+
+<p><code>pack_reconfig_l1_acc</code> is independent of format reconfig — it RMWs <code>THCON_SEC*_REG*_Pack_L1_Acc</code>. Its hoist analysis is the same as for format reconfig (P1-P3 with the &ldquo;format&rdquo; replaced by the L1-acc enable bit), and it deserves its own policy slot rather than being implicit in the format reconfig path. Out of scope for the present proposal but worth tracking as a follow-up.</p>
+</div>
+
+<h2>5. Migration plan</h2>
+
+<p>The chosen refinement (§4.2) reuses the existing <code>PackTileReconfig</code> enum — no new pack policy types are introduced. The helper picks the emission point per pack site from chain shape; the user-facing API does not change.</p>
+
+<ol>
+  <li><strong>Implement the per-stage emission path.</strong> Add a call site inside the helper's pack-apply phase that emits <code>pack_reconfig_data_format</code> before each PackTile element's per-tile loop. Activate it only for chains where the fold-driven analysis detects heterogeneous output CBs across pack sites. Single-pack-site and homogeneous-output chains keep the existing boot-time emission path unchanged.</li>
+  <li><strong>Wire the 2-arg LLK form for per-stage emission.</strong> The chain already computes &ldquo;previous pack CB for stage <em>i</em>&rdquo; as part of its boot-time fold-elision logic. Reuse that same compile-time constant as the <code>old_output</code> argument to <code>pack_reconfig_data_format(old, new)</code>. The first PackTile site in a heterogeneous chain stays on the boot-time 1-arg path (no defined &ldquo;previous&rdquo;); subsequent sites use the 2-arg form.</li>
+  <li><strong>Audit existing pack sites.</strong> Single-pack-site chains are the dominant shape and are unaffected. The handful of multi-pack-site chains (e.g. <code>prod_nc.cpp</code>, where each chain invocation is still a single pack site) do not trip the new path either — they use separate chain instantiations, each with its own boot emission. The new path is reachable only when a future caller writes a chain with multiple <code>PackTile&lt;…&gt;</code> elements pointing at different output CBs in the same instantiation.</li>
+</ol>
+
+<h2>6. Risks and edge cases</h2>
+
+<table>
+  <thead>
+    <tr><th>Risk</th><th>Mitigation</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Per-stage emission inside the apply loop adds an MMIO write to chains that today have it at boot, when the new policy auto-downgrades a P1-violating chain.</td>
+      <td>Cost is one reconfig per stage transition, not per tile. Net cost on heterogeneous-output chains is bounded by the number of stages, not the number of tiles. For homogeneous chains the default stays Boot.</td>
+    </tr>
+    <tr>
+      <td>2-arg cache-checked form needs a valid &ldquo;old&rdquo; CB id; getting that wrong silently skips a needed reconfig.</td>
+      <td>The helper already knows the previous pack CB via its fold-driven analysis (the &ldquo;prev pack CB&rdquo; lookup that gates today's boot emission). Reuse it as the &ldquo;old&rdquo; argument; never let the user supply it.</td>
+    </tr>
+    <tr>
+      <td>Boot emission today happens once at chain entry; if the chain is invoked multiple times in a kernel, each invocation re-emits. Moving to PerStage inside <code>apply_pack</code> changes the call site but not the count (still once per chain invocation per stage transition).</td>
+      <td>This is the existing behavior and is unaffected by the proposal. Cross-invocation deduplication is a separate optimization (would require a kernel-level packer-state cache).</td>
+    </tr>
+    <tr>
+      <td>The P2 trait (&ldquo;clobbers packer descriptors&rdquo;) needs to be declared per element kind. Reduce / matmul aren't chain elements today, so the trait is vacuous in eltwise chains.</td>
+      <td>Wire the trait now with a default of <code>false</code>; populate it only when a chain element actually clobbers. Until then the auto-downgrade only fires on the multi-pack-site case.</td>
+    </tr>
+    <tr>
+      <td>Per-tile cache-checked form in a tight loop could measurably eat cycles even when no change is needed (one compare per tile).</td>
+      <td>PerTile is opt-in, not the default. Use it for chains where geometry actually varies tile-to-tile.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>7. Summary</h2>
+
+<p>The LLK provides four meaningful emission points (none / per-tile / per-stage / boot) governed by three independent preconditions (format invariance, no clobber, geometry invariance). The eltwise helper today collapses this to two — &ldquo;emit at boot&rdquo; or &ldquo;don't emit&rdquo; — and picks boot whenever the user opts in. The refinement is to:</p>
+
+<ol>
+  <li>Expose the full four-level hoist policy and the 1-arg/2-arg form choice as orthogonal axes.</li>
+  <li>Default the hoist level from chain shape, so that boot is chosen only when P1-P3 actually hold.</li>
+  <li>Encode P1 (and eventually P2, P3) as compile-time assertions so that a chain shape which the boot-time hoist would silently miscompile becomes a build error or an automatic downgrade.</li>
+  <li>Prefer the 2-arg cache-checked form for every level above Boot-single-site; the no-change case costs one branch.</li>
+</ol>
+
+<p>The change is additive at the source level (existing <code>PackTileReconfig</code> stays as an alias) and replaces an unconditional always-hoist policy with a per-site decision grounded in LLK semantics.</p>
+
+</body>
+</html>
