@@ -27,8 +27,8 @@ def assert_vbench_quality(
 ) -> dict[str, float]:
     try:
         from vbench import VBench
-    except ImportError:
-        logger.warning("VBench is not installed, skipping quality evaluation")
+    except ImportError as e:
+        logger.warning(f"VBench import failed ({e}), skipping quality evaluation")
         return {}
 
     thresholds = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
