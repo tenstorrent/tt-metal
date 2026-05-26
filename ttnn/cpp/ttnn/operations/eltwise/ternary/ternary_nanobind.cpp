@@ -334,6 +334,32 @@ void bind_ternary_mac(nb::module_& mod, const std::string& description) {
             nb::arg("memory_config") = nb::none()));
 }
 
+void bind_ternary_snake_beta(nb::module_& mod, const std::string& description) {
+    auto doc = std::string(R"doc(
+SnakeBeta activation (canonical, BigVGAN-style):
+
+    y = x + sin^2(alpha * x) / beta
+
+Constraints (v1):
+  - input/alpha/beta must be tile layout
+  - dtype in {bfloat16, float32}; alpha.dtype == beta.dtype == input.dtype
+  - alpha.shape == beta.shape
+  - alpha and beta have non-1 size only on the last dim, which must equal input.shape[-1]
+  - caller is responsible for beta != 0 (no internal epsilon)
+)doc") + description;
+
+    ttnn::bind_function<"snake_beta">(
+        mod,
+        doc.c_str(),
+        &ttnn::snake_beta,
+        nb::arg("input_tensor"),
+        nb::arg("alpha"),
+        nb::arg("beta"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
+}
+
 }  // namespace
 
 void py_module(nb::module_& mod) {
@@ -366,6 +392,10 @@ void py_module(nb::module_& mod) {
     bind_ternary_mac(
         mod,
         R"doc(Computes Mac on :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+
+    bind_ternary_snake_beta(
+        mod,
+        R"doc(Computes the SnakeBeta activation `y = x + sin^2(alpha * x) / beta` element-wise on :attr:`input_tensor` with broadcastable per-channel :attr:`alpha` and :attr:`beta`, and returns a tensor with the same layout as :attr:`input_tensor`.)doc");
 }
 
 }  // namespace ttnn::operations::ternary
