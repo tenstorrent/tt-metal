@@ -787,19 +787,20 @@ struct FlashMLADecode {
             }
             cb_push_back(sdpa_output_cb, out_chunk_tiles);
             // DEBUG #43563: dump final SDPA output to cb_out_in for cross-iter
-            // L1 byte diff. cb_out_in's persistent write pointer naturally
-            // separates consecutive calls into disjoint regions:
+            // L1 byte diff. cb_out_in is rebound (via op.py) to the dedicated
+            // mla_iter_dump_buffer (sized 48 tiles per core) so its L1 region
+            // is NOT aliased by post-SDPA CBs. The CB's persistent write
+            // pointer separates consecutive flash_mla calls into disjoint
+            // regions when the wr_ptr is preserved across iters:
             //   iter-0 -> tiles [0, out_chunk_tiles)
             //   iter-1 -> tiles [out_chunk_tiles, 2*out_chunk_tiles)
-            // Host reads cb_out_in's L1 base from a target core after the run
-            // and diffs the two halves byte-for-byte. No pop_front anywhere
-            // (host owns consumption). Re-init the packer MOP for cb_out_in
-            // (different output CB id; format happens to match sdpa_output_cb
-            // but we re-init defensively per the LLK guidance), then restore
-            // for sdpa_output_cb (no further packs in this function, but be
-            // hygienic). SAFE ONLY at pos=127 (num_cores_to_wait==0 ->
-            // sdpa_tail does not consume cb_out_in); at multi-chunk this
-            // races with sdpa_tail's consumer and will hang or corrupt.
+            // We cb_reserve_back BEFORE the pack to ensure the CB has enough
+            // headroom for one iter's worth of tiles. This prevents the LLK
+            // pack from silently dropping or wrapping. Host owns consumption
+            // (no pop_front anywhere on the kernel side).
+            // SAFE ONLY at pos=127 (num_cores_to_wait==0 -> sdpa_tail does
+            // not consume cb_out_in); at multi-chunk this races sdpa_tail.
+            cb_reserve_back(cb_out_in, out_chunk_tiles);
             pack_block_contiguous_init(cb_out_in);
             for (uint32_t i = 0; i < out_chunk_tiles; i += output_granularity) {
                 pack_block_contiguous(mm2_dst_tile_offset + i, cb_out_in, output_granularity);

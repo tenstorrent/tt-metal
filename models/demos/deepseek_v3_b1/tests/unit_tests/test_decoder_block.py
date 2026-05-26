@@ -1174,6 +1174,21 @@ def test_decoder_mlp(
                             f"iter1={v1:+.6e} (0x{h1:04x}) delta={v1 - v0:+.6e}"
                         )
                     break
+
+            # DEBUG #43563 probe: inspect cb_out_in beyond the expected iter-0/1
+            # regions to localize WHERE iter-1's pack actually landed. cb_out_in
+            # is sized 48 tiles per core; we expect tiles [0,16) iter-0, [16,32)
+            # iter-1, [32,48) untouched (= 0). If [32,48) is nonzero, iter-1 may
+            # have written there (wrap-around). If [0,16) matches what we'd see
+            # with num_internal_iterations=1, iter-1's pack never ran.
+            tail_tiles = torch.stack(
+                [get_tile(shard, 32 + i) for i in range(16)], dim=0
+            )  # tiles [32,48) on the same core
+            tail_nonzero = int((tail_tiles != 0).sum().item())
+            logger.info(
+                f"  trailing tiles [32,48) on dev={dev_idx} core=({cx},{cy}): "
+                f"nonzero_elems={tail_nonzero}/4096, max_abs={float(tail_tiles.abs().max().item()):.6g}"
+            )
     except Exception as e:
         logger.warning(f"DEBUG #43563: cross-iter L1 diff failed: {e!r}")
 
