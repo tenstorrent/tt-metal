@@ -236,7 +236,7 @@ init_packages() {
                 "numactl-devel"
                 "libatomic"
                 "libstdc++"
-                "tbb-devel"
+                "intel-oneapi-tbb-devel"
                 "capstone-devel"
                 "wget"
                 "curl"
@@ -304,7 +304,19 @@ prep_ubuntu_system() {
 
 prep_redhat_system() {
     echo "[INFO] Preparing Red Hat family system..."
-    # TODO: Implement Red Hat family system preparation
+
+    # Add Intel oneAPI repository for TBB 2021+
+    # Legacy tbb-devel (2020.3) has an enum-out-of-range bug (oneapi-src/oneTBB#843)
+    # that is rejected by clang when gcc-toolset-15's <execution> header pulls tbb/task.h
+    cat > /etc/yum.repos.d/oneAPI.repo << 'REPO_EOF'
+[oneAPI]
+name=Intel oneAPI repository
+baseurl=https://yum.repos.intel.com/oneapi
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+REPO_EOF
 }
 
 # We currently have an affinity to clang as it is more thoroughly tested in CI
