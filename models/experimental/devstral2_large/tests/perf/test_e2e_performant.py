@@ -18,9 +18,8 @@ Run::
     pytest models/experimental/devstral2_large/tests/perf/test_e2e_performant.py -k L10
     pytest models/experimental/devstral2_large/tests/perf/test_e2e_performant.py -k L88
 
-With decode trace + 2CQ (CQ1 input H2D, CQ0 trace replay)::
-
-    DEVSTRAL2_DECODE_TRACE_2CQ=1 pytest models/experimental/devstral2_large/tests/perf/test_e2e_performant.py -k L10
+Decode trace + 2CQ (CQ1 input H2D, CQ0 trace replay) is on by default
+(``DEVSTRAL2_DECODE_TRACE_2CQ=1``; set ``0`` for single-CQ baseline).
 """
 
 from __future__ import annotations
@@ -42,6 +41,7 @@ from models.experimental.devstral2_large.demo.decode_trace_2cq import (
 )
 from models.experimental.devstral2_large.demo.text_demo import _mesh_device_param
 from models.experimental.devstral2_large.tests._devstral_weights import (
+    DEVSTRAL2_TEST_MAX_SEQ_LEN,
     model_prefill_weight_keys,
     require_hf_weights,
     require_text_config,
@@ -122,7 +122,7 @@ def _run_devstral2_perf(
     prefill_iters: int,
 ):
     padded_prompt_len = max(_round_up(prompt_len, 32), 32)
-    max_seq_len = max(_round_up(padded_prompt_len + decode_iters + 1, 32), 512)
+    max_seq_len = max(_round_up(padded_prompt_len + decode_iters + 1, 32), DEVSTRAL2_TEST_MAX_SEQ_LEN)
 
     t_build = time.time()
     model, args = _build_model(mesh_device, num_layers, max_seq_len)

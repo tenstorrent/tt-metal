@@ -14,23 +14,20 @@ instead of HuggingFace's FP8 path.
 Tracing
 -------
 Prefill uses chunked paged attention (``kv_block_size`` tokens per dispatch, same
-as ``tt_demo_agent.py``). With ``DEVSTRAL2_TRACE_PREFILL=1`` (default), one
-full-model prefill trace is captured and replayed for every chunk:
+as ``tt_demo_agent.py``). **Prefill trace is on by default**: one full-model
+prefill trace is captured and replayed for every chunk:
 
 - ``chunk_start_idx_tensor`` (device int32) drives flexible chunked SDPA inside the trace.
 - RoPE cos/sin and the per-chunk page-table slice are copied into persistent device
   buffers before each ``execute_trace`` (same pattern as llama3 galaxy prefix-caching traces).
 
-Without prefill tracing, each chunk is dispatched with legacy scalar ``start_pos``.
+If ``max_seq_len`` is too small for flexible chunked SDPA, prefill trace is disabled
+automatically and each chunk uses legacy scalar ``start_pos``.
 
-Decode follows the standard pattern: iteration 0 is an untraced compile pass,
-iteration 1 captures the trace bound to persistent ``(token, current_pos)``
-device buffers, and later iterations only do host→device copy + ``execute_trace``.
+Decode uses traced replay; **2CQ** (CQ1=input H2D, CQ0=forward/trace) is on by default
+(``DEVSTRAL2_DECODE_TRACE_2CQ=1``). Set ``DEVSTRAL2_DECODE_TRACE_2CQ=0`` for single-CQ.
 
-Set ``DEVSTRAL2_TRACE_PREFILL=0`` to run chunked prefill untraced.
-
-Set ``DEVSTRAL2_DECODE_TRACE_2CQ=1`` to use two command queues for decode (CQ1=input
-H2D, CQ0=forward/trace). Requires ``num_command_queues=2`` on the mesh device.
+Set ``DEVSTRAL2_TRACE_PREFILL=0`` to run chunked prefill without trace capture.
 
 Usage (pytest, single Loudbox / 1x8 mesh by default)::
 
@@ -42,9 +39,9 @@ pytest CLI option churn)::
     DEVSTRAL2_PROMPT="Write a Python function to reverse a linked list."
     DEVSTRAL2_MAX_NEW_TOKENS=100
     DEVSTRAL2_NUM_LAYERS=         # unset/empty = full num_hidden_layers
-    DEVSTRAL2_TRACE_PREFILL=1     # 0 = never capture prefill trace
-    DEVSTRAL2_DECODE_TRACE_2CQ=0  # 1 = CQ1 input H2D + CQ0 decode trace
-    DEVSTRAL2_MIN_MAX_SEQ_LEN=1024  # KV floor (1024 => 8 blocks, enables flexible prefill trace)
+    DEVSTRAL2_TRACE_PREFILL=1     # 0 = never capture prefill trace (default: on)
+    DEVSTRAL2_DECODE_TRACE_2CQ=1  # 0 = single CQ decode (default: on)
+    DEVSTRAL2_MIN_MAX_SEQ_LEN=32768  # KV floor (must be >= prompt + max_new; 32K default)
     MESH_DEVICE=N150|N300|N150x4|P150x4|T3K|TG    # default 1x4 (Quietbox)
 
 The Devstral-2-123B Hub checkpoint is gated, so the first run must have
@@ -109,7 +106,7 @@ def _min_max_seq_len() -> int:
     SDPA + multi-chunk prefill trace are safe. Use 512 only if you accept int ``start_pos``
     prefill (trace disabled when cols != logical blocks).
     """
-    raw = os.environ.get("DEVSTRAL2_MIN_MAX_SEQ_LEN", "4096").strip()
+    raw = os.environ.get("DEVSTRAL2_MIN_MAX_SEQ_LEN", "32768").strip()
     floor = int(raw)
     block = Devstral2Args.kv_block_size
     if floor % block != 0:
@@ -379,7 +376,7 @@ def _generate(
             "Disabling prefill trace: flexible chunked SDPA needs page_table blocks "
             f"({args.kv_page_table_blocks_per_user}) == logical KV blocks "
             f"({args.kv_num_blocks_per_user}); using int start_pos prefill instead. "
-            "Set DEVSTRAL2_TRACE_PREFILL=0 to silence."
+            "Set DEVSTRAL2_TRACE_PREFILL=0 to silence, or raise DEVSTRAL2_MIN_MAX_SEQ_LEN."
         )
         trace_prefill = False
     state_dict = _build_state_dict(num_layers, want_lm_head=not args.tie_word_embeddings)
@@ -637,7 +634,7 @@ def _text_demo_device_params():
 @pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
 @pytest.mark.parametrize("device_params", [_text_demo_device_params()], indirect=True)
 def test_devstral2_large_text_demo(mesh_device):
-    prompt = os.environ.get("DEVSTRAL2_PROMPT") or "Write a Python function to reverse a linked list."
+    prompt = "You are a senior distributed systems and AI infrastructure engineer responsible for designing and optimizing a production-grade large language model inference platform for Tenstorrent Blackhole hardware using TTNN and TT-Metal. Your task is to redesign the runtime architecture for the Devstral-2-123B-Instruct-2512 model while supporting distributed tensor-parallel execution, asynchronous scheduling, paged KV-cache allocation, continuous batching, trace replay, speculative decoding, and long-context inference. The current runtime experiences severe bottlenecks during decode due to DRAM bandwidth saturation, NoC congestion, KV-cache fragmentation, and synchronization stalls introduced by ReduceScatter and AllGather operations. Analyze how tensor sharding should be implemented across multiple chips and explain how tile layout tensors are distributed across Tensix cores using 32x32 tiles internally decomposed into 16x16 matrix-engine faces. Describe how GEMM execution streams weights from DRAM into L1 SRAM while keeping activations resident in circular buffers to maximize compute overlap. Explain how async DMA engines should prefetch weight tiles, KV-cache blocks, and activation tensors while compute kernels continue execution on separate command queues. Compare static trace replay against bucketed trace replay for variable sequence lengths and explain how TTNN traces interact with dynamic prefill and decode execution. Discuss how grouped-query attention reduces KV-cache size, how YaRN rotary embeddings enable 262K-token context windows, and how distributed attention should synchronize remote KV shards across chips using ethernet and NoC communication. Include detailed analysis of DRAM residency, L1 SRAM utilization, partial-sum accumulation, decode bottlenecks, inter-chip synchronization overhead, and tile-level matrix multiplication scheduling. Explain how tensor layouts differ between row-major and tile layout formats and how layout conversions impact DRAM traffic and runtime latency. The runtime currently supports mixed prefill and decode workloads, multi-user serving, variable prompt lengths, asynchronous execution, distributed KV-cache paging, and speculative decoding with rollback support. Analyze how scheduler pipelines should overlap attention kernels, FFN kernels, ReduceScatter operations, AllGather communication, and async memory transfers to maximize utilization across all Tensix cores. Explain how paged KV-cache systems avoid memory fragmentation and how long-context decode affects bandwidth pressure as sequence lengths increase toward 262K tokens. Provide recommendations for optimizing continuous batching, decode throughput, trace replay reuse, circular-buffer allocation, tensor streaming, NoC traffic shaping, and DRAM access scheduling. Also explain how distributed profiling should identify bottlenecks in asynchronous execution pipelines and how runtime traces should capture synchronization stalls, idle compute cycles, and memory starvation conditions. Include pseudocode and architectural reasoning for implementing a production-grade Devstral-2-123B inference runtime optimized for Tenstorrent Blackhole LoudBox systems while supporting long-context coding-agent workloads, distributed transformer execution, and high-throughput low-latency inference under mixed multi-user serving conditions. Additionally explain how compiler graph lowering interacts with TTNN runtime scheduling, how kernel fusion should combine RMSNorm, rotary embeddings, and QKV projections, how speculative decoding can reduce latency, how KV-cache quantization affects memory bandwidth, how decode execution differs fundamentally from prefill execution, and how asynchronous command queues improve throughput through compute and DMA overlap. Finally analyze how a coding-agent style workload with repository-scale prompts, multi-file reasoning, terminal interaction, tool-calling, and large code-context windows stresses the distributed runtime differently compared to standard chat inference workloads, and explain how the inference engine should adapt scheduling, sharding, trace replay, and memory allocation strategies to efficiently support large-scale coding-assistant deployments for enterprise software engineering environments.Write a fibonacci python program"
     max_new_tokens = int(os.environ.get("DEVSTRAL2_MAX_NEW_TOKENS") or "100")
     raw_layers = os.environ.get("DEVSTRAL2_NUM_LAYERS", "")
     num_layers_override = int(raw_layers) if raw_layers else None

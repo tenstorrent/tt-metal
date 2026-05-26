@@ -23,13 +23,14 @@ import torch
 import ttnn
 
 
+def _env_flag_enabled(name: str, *, default: str = "1") -> bool:
+    """True unless the env var is explicitly 0 / false / no."""
+    return os.environ.get(name, default).strip().lower() not in ("0", "false", "no")
+
+
 def decode_trace_2cq_enabled() -> bool:
-    """True when ``DEVSTRAL2_DECODE_TRACE_2CQ`` is set (1/true/yes)."""
-    return os.environ.get("DEVSTRAL2_DECODE_TRACE_2CQ", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    )
+    """True when ``DEVSTRAL2_DECODE_TRACE_2CQ`` is unset or truthy (default on)."""
+    return _env_flag_enabled("DEVSTRAL2_DECODE_TRACE_2CQ")
 
 
 def num_command_queues_for_decode() -> int:

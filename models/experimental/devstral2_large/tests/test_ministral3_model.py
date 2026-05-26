@@ -30,6 +30,7 @@ from transformers.models.ministral3.modeling_ministral3 import Ministral3Model
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstral2_large.tests._devstral_weights import (
+    DEVSTRAL2_TEST_MAX_SEQ_LEN,
     load_ministral3_model_weights,
     require_model_weights,
     require_text_config,
@@ -166,7 +167,9 @@ def test_ministral3_model_pcc_devstral2_large_partial_weights_one_layer_prefill(
     seq_len,
     batch_size,
 ):
-    fixtures = _setup_devstral_ministral3_partial_one_layer(mesh_device, max_seq_len=max(512, seq_len))
+    fixtures = _setup_devstral_ministral3_partial_one_layer(
+        mesh_device, max_seq_len=max(DEVSTRAL2_TEST_MAX_SEQ_LEN, seq_len)
+    )
     text_cfg = fixtures.text_cfg
     ref = fixtures.ref
     tt_model = fixtures.tt_model
@@ -224,7 +227,9 @@ def test_ministral3_model_pcc_devstral2_large_partial_weights_one_layer_decode(
     prefill_seq_len = 128
     decode_pos = prefill_seq_len
 
-    fixtures = _setup_devstral_ministral3_partial_one_layer(mesh_device, max_seq_len=max(512, decode_pos + 1))
+    fixtures = _setup_devstral_ministral3_partial_one_layer(
+        mesh_device, max_seq_len=max(DEVSTRAL2_TEST_MAX_SEQ_LEN, decode_pos + 1)
+    )
     text_cfg = fixtures.text_cfg
     ref = fixtures.ref
     tt_model = fixtures.tt_model

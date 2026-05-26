@@ -23,7 +23,10 @@ from transformers.models.ministral3.modeling_ministral3 import (
     apply_rotary_pos_emb,
 )
 
-from models.experimental.devstral2_large.tests._devstral_weights import require_text_config
+from models.experimental.devstral2_large.tests._devstral_weights import (
+    DEVSTRAL2_TEST_MAX_SEQ_LEN,
+    require_text_config,
+)
 from models.experimental.devstral2_large.tt.model_args import Devstral2Args
 from models.experimental.devstral2_large.tt.tt_ministral_rotary_emb import (
     compute_llama4_scale,
@@ -38,7 +41,7 @@ def text_cfg():
 
 @pytest.fixture(scope="module")
 def args(text_cfg):
-    return Devstral2Args.from_hf_config(text_cfg, max_seq_len=4096)
+    return Devstral2Args.from_hf_config(text_cfg, max_seq_len=DEVSTRAL2_TEST_MAX_SEQ_LEN)
 
 
 @pytest.mark.parametrize("max_pos", [4096])
