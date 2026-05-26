@@ -379,6 +379,39 @@ def _store_extracted(
     )
 
 
+def store_patch(
+    model_id: str,
+    rel_path: str,
+    patch_text: str,
+    *,
+    source: str = "captured",
+) -> Optional[OverlayRecord]:
+    if not patch_text.strip():
+        return None
+    md = _model_dir(model_id)
+    md.mkdir(parents=True, exist_ok=True)
+    patch_file = md / _patch_filename(rel_path)
+    patch_file.write_text(patch_text)
+    sha = hashlib.sha256(patch_text.encode("utf-8")).hexdigest()
+    idx = _load_index(model_id)
+    idx[rel_path] = {
+        "patch_file": patch_file.name,
+        "captured_ts": time.time(),
+        "sha256": sha,
+        "line_count": patch_text.count("\n"),
+        "classification": classify_path(rel_path),
+        "source": source,
+    }
+    _save_index(model_id, idx)
+    return OverlayRecord(
+        model_id=model_id,
+        rel_path=rel_path,
+        patch_path=patch_file,
+        captured_ts=time.time(),
+        sha256=sha,
+    )
+
+
 def _filter_hunks(diff: str, *, pattern: str) -> str:
     rx = re.compile(pattern, re.IGNORECASE)
     lines = diff.splitlines(keepends=True)

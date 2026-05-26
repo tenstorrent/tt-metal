@@ -6189,7 +6189,7 @@ def cmd_up(args) -> int:
 
 
 def _cmd_up_isolated(args) -> int:
-    from .overlay_manager import apply_for, capture, using_repo
+    from .overlay_manager import apply_for, store_patch, using_repo
     from .worktree import create as _wt_create, destroy as _wt_destroy
 
     session = _wt_create(args.model_id)
@@ -6198,9 +6198,21 @@ def _cmd_up_isolated(args) -> int:
     with using_repo(session.path):
         n_shared, shared_files = apply_for("_shared")
         n_model, model_files = apply_for(args.model_id)
-    pre_applied_files = set(shared_files) | set(model_files)
     if n_shared or n_model:
         print(f"  [isolation] applied {n_shared} _shared + {n_model} model overlay(s)")
+        _stage_proc = subprocess.run(
+            ["git", "add", "-u"],
+            cwd=session.path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if _stage_proc.returncode != 0:
+            print(
+                f"  [isolation] WARN git add -u failed: {_stage_proc.stderr.strip()}; "
+                f"capture may double-count overlay state",
+                file=sys.stderr,
+            )
 
     prev_env = {
         "TT_HW_PLANNER_BRINGUP_CWD": os.environ.get("TT_HW_PLANNER_BRINGUP_CWD"),
@@ -6221,31 +6233,33 @@ def _cmd_up_isolated(args) -> int:
                 os.environ[k] = v
 
         if rc == 0:
-            print(f"  [isolation] success — capturing edits as overlay for {args.model_id}")
+            print(f"  [isolation] success — capturing LLM deltas as overlay for {args.model_id}")
             captured = 0
             try:
                 proc = subprocess.run(
-                    ["git", "diff", "--name-only", "HEAD"],
+                    ["git", "diff", "--name-only"],
                     cwd=session.path,
                     capture_output=True,
                     text=True,
                     check=False,
                 )
                 changed = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
-                new_edits = [f for f in changed if f not in pre_applied_files]
-                skipped = sorted(set(changed) & pre_applied_files)
-                if skipped:
-                    print(
-                        f"  [isolation] skipping {len(skipped)} file(s) already covered by applied overlays (not LLM discoveries)"
+                for f in changed:
+                    diff_proc = subprocess.run(
+                        ["git", "diff", "--", f],
+                        cwd=session.path,
+                        capture_output=True,
+                        text=True,
+                        check=False,
                     )
-                with using_repo(session.path):
-                    for f in new_edits:
-                        rec = capture(args.model_id, f)
-                        if rec:
-                            captured += 1
+                    if diff_proc.returncode != 0 or not diff_proc.stdout.strip():
+                        continue
+                    rec = store_patch(args.model_id, f, diff_proc.stdout, source="captured_from_bringup")
+                    if rec:
+                        captured += 1
             except Exception as exc:
                 print(f"  [isolation] capture failed: {type(exc).__name__}: {exc}", file=sys.stderr)
-            print(f"  [isolation] captured {captured} edit(s); destroying worktree")
+            print(f"  [isolation] captured {captured} LLM delta(s); destroying worktree")
             _wt_destroy(session)
         else:
             print(f"  [isolation] bring-up rc={rc}; worktree preserved at:")
