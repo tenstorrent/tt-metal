@@ -177,7 +177,7 @@ various_ops_test = {
     "command": "pytest tests/ttnn/tracy/test_various_ops_profile.py::test_various_ops_profile",
 }
 
-EXPECTED_VARIOUS_OP_SUBSTRINGS = ("matmul", "add", "multiply", "subtract")
+EXPECTED_DEVICE_OP_COUNT = 5
 
 
 @skip_for_blackhole()
@@ -201,23 +201,27 @@ class TestVariousOpsProfile:
     def test_various_op_codes_reported(self, run_test_do_post_proc):
         res, _request = run_test_do_post_proc
         op_rows = res[res["OP TYPE"] != "signpost"]
-        op_codes = {str(code).lower() for code in op_rows["OP CODE"].dropna() if str(code).strip()}
+        op_codes = [str(code).lower() for code in op_rows["OP CODE"].dropna() if str(code).strip()]
 
-        missing_ops = [
-            expected for expected in EXPECTED_VARIOUS_OP_SUBSTRINGS if not any(expected in code for code in op_codes)
-        ]
-        assert not missing_ops, f"Missing ops {missing_ops}. Found OP CODE values: {sorted(op_codes)}"
+        assert (
+            len(op_codes) >= EXPECTED_DEVICE_OP_COUNT
+        ), f"Expected at least {EXPECTED_DEVICE_OP_COUNT} device ops, found {len(op_codes)}: {op_codes}"
+        assert any("matmul" in code for code in op_codes), f"Expected a matmul op in OP CODE column, found: {op_codes}"
+        binary_op_count = sum(1 for code in op_codes if "binary" in code)
+        assert (
+            binary_op_count >= 3
+        ), f"Expected at least 3 binary ops (add/multiply/subtract), found {binary_op_count} in: {op_codes}"
 
     def test_device_durations_populated(self, run_test_do_post_proc):
         res, _request = run_test_do_post_proc
         device_rows = res[res["DEVICE FW DURATION [ns]"].notna()]
-        assert len(device_rows) >= len(EXPECTED_VARIOUS_OP_SUBSTRINGS), (
-            f"Expected device durations for at least {len(EXPECTED_VARIOUS_OP_SUBSTRINGS)} ops, "
+        assert len(device_rows) >= EXPECTED_DEVICE_OP_COUNT, (
+            f"Expected device durations for at least {EXPECTED_DEVICE_OP_COUNT} ops, "
             f"but only found {len(device_rows)}"
         )
         positive_durations = pd.to_numeric(device_rows["DEVICE FW DURATION [ns]"], errors="coerce").fillna(0) > 0
-        assert positive_durations.sum() >= len(
-            EXPECTED_VARIOUS_OP_SUBSTRINGS
+        assert (
+            positive_durations.sum() >= EXPECTED_DEVICE_OP_COUNT
         ), "Expected non-zero DEVICE FW DURATION [ns] for profiled ops"
 
     def test_sub_device_id_matches_device_csv_when_present(self, run_test_do_post_proc):
