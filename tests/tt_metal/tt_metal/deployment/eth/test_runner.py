@@ -482,10 +482,10 @@ def link_name(l: TestedLink) -> str:
 
 
 def format_rate(r: float) -> str:
-    s = f"{r * 100:.3f}%"
+    s = f"{r * 1e6:.1f}ppm"
 
-    if s == "0.000%" and r > 0.0:
-        return "<0.001%"
+    if s == "0.0ppm" and r > 0.0:
+        return "<0.1ppm"
 
     return s
 
