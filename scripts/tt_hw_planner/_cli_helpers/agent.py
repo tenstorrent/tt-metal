@@ -518,16 +518,23 @@ def _resolve_tiered_model_aliases(
     legacy single-model path with `auto_model`.
 
     When `--auto-model-tiered` is set, applies provider defaults
-    (claude: sonnet -> opus; cursor: sonnet-4 -> opus). Explicit
-    `--auto-model-light` / `--auto-model-heavy` always override the
-    defaults. If only ONE of light/heavy is given (no tiered shortcut),
-    the unset side falls back to `auto_model` inside the picker.
+    (claude: haiku -> sonnet for the bulk of iters; opus is reserved
+    for explicit `--auto-model-heavy=opus`. cursor: sonnet-4 -> opus
+    preserved for now since cursor's tier ladder differs). Explicit
+    `--auto-model-light` / `--auto-model-heavy` always override.
+    If only ONE of light/heavy is given (no tiered shortcut), the
+    unset side falls back to `auto_model` inside the picker.
+
+    2026-05-26: Haiku-first default switched from Sonnet to halve
+    per-iter wall time on simpler components (FFN, RMSNorm, etc.).
+    Sonnet becomes the escalation tier; Opus opt-in only via explicit
+    --auto-model-heavy=opus for users who need maximal reasoning.
     """
     if not auto_model_light and not auto_model_heavy and not auto_model_tiered:
         return (None, None)
     if auto_model_tiered:
         if provider == "claude":
-            default_light, default_heavy = "sonnet", "opus"
+            default_light, default_heavy = "haiku", "sonnet"
         else:
             default_light, default_heavy = "sonnet-4", "opus"
     else:

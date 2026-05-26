@@ -136,6 +136,10 @@ def _run_auto_iterate_loop(
     permanently_skipped: List[str] = []
     graduated_this_run: List[str] = []
 
+    from .sweep_cache import ValidationSweepCache
+
+    _SWEEP_CACHE = ValidationSweepCache()
+
     unverified_native_this_run: set = set()
     verified_fail: set = set()
 
@@ -2752,9 +2756,29 @@ def _run_auto_iterate_loop(
                     converge_msg = f"model runs natively on {BOX} (no CPU fallback)"
 
             sweep_candidates = [c for c in unvalidated_new if c not in permanently_skipped and c not in verified_fail]
+            from .sweep_cache import should_skip_validation_sweep
+
+            if sweep_candidates and should_skip_validation_sweep(focused_rc):
+                print(
+                    f"  validation sweep: SKIPPED (focused pytest "
+                    f"crashed/timed-out rc={focused_rc}; sweep on other "
+                    f"components yields no new info this iter)"
+                )
+                sweep_candidates = []
             if sweep_candidates:
-                sweep_targets = sweep_candidates
-                sweep_tests = _list_component_pcc_tests(demo_dir, only=sweep_targets)
+                must_run, cached_pass = _SWEEP_CACHE.split_sweep_candidates(
+                    sweep_candidates,
+                    {c: demo_dir / "_stubs" / f"{_safe_id(c)}.py" for c in sweep_candidates},
+                )
+                if cached_pass:
+                    print(
+                        f"  validation sweep cache: skipping {len(cached_pass)} "
+                        f"component(s) whose stub is unchanged since last PASS "
+                        f"({', '.join(sorted(cached_pass))})"
+                    )
+                    validated_this_run |= set(cached_pass)
+                sweep_targets = must_run
+                sweep_tests = _list_component_pcc_tests(demo_dir, only=sweep_targets) if sweep_targets else []
                 if sweep_tests:
                     banner(
                         f"AUTO-ITERATE {it}/{max_iters}: validation sweep on "
@@ -2772,6 +2796,10 @@ def _run_auto_iterate_loop(
                     sw_passed = set(sweep_report.get("passed_components", []) or [])
                     sw_failed = set(sweep_report.get("failed_components", []) or [])
                     sw_skipped = set(sweep_report.get("skipped_components", []) or [])
+                    for _c in sw_passed:
+                        _SWEEP_CACHE.record(_c, demo_dir / "_stubs" / f"{_safe_id(_c)}.py", "PASS")
+                    for _c in sw_failed:
+                        _SWEEP_CACHE.record(_c, demo_dir / "_stubs" / f"{_safe_id(_c)}.py", "FAIL")
                     validated_this_run |= sw_passed
                     validated_this_run -= sw_failed
                     validated_this_run -= sw_skipped
