@@ -47,8 +47,9 @@ Use this reference while bringing up a TTNN decoder layer. It folds in relevant 
 ## Prefill And Decode Shapes
 
 - Prefill commonly uses `(1, batch=1, seq_len, hidden)` style tensor shapes; decode commonly uses `(1, seq_len=1, batch, hidden)`.
-- Decode tests should include full supported context length unless KV-cache DRAM capacity forces a reduction.
-- Prefill tests should include full supported sequence length unless L1/DRAM capacity forces a reduction.
+- Decode tests must include the full supported context length unless measured KV-cache DRAM capacity forces a reduction. If reduced, record the attempted full-length or capacity-probe command, log, failure signature or byte calculation, and largest feasible tested context.
+- Prefill tests must include the full supported sequence length unless measured L1/DRAM capacity forces a reduction. If reduced, record the attempted full-length or capacity-probe command, log, failure signature or byte calculation, and largest feasible tested sequence.
+- Do not accept "tractability", profiling/watcher cost, runtime, or small synthetic proof scope as sequence-capacity evidence.
 - Sliding-window models should include lengths around window boundaries, not only tiny smoke shapes.
 - If a model has both full and sliding attention but identical decoder computation except mask/window configuration, use one parameterized implementation and tests for both modes.
 

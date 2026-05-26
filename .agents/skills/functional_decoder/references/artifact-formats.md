@@ -33,6 +33,8 @@ Use these exact mode strings:
 
 Use lowercase hyphen-case for `layer_kind_id`.
 
+Final `pass` artifacts must satisfy the sequence-length contract. If any representative layer kind uses reduced prefill or decode length, `sequence_limits.json` must prove a measured capacity blocker or cite an explicit user-approved reduced scope. Reduced length for convenience, "tractability", profiler/watcher cost, runtime, or small-proof speed is not valid for `manifest.status == "pass"`.
+
 ## manifest.json
 
 ```json
@@ -96,6 +98,8 @@ Plain executable shell transcript. Each command block must start with a command 
 # purpose: prefill PCC
 pytest models/demos/example/tests/test_layer.py -k "dense and prefill" -vv 2>&1 | tee pytest/dense_prefill.log
 ```
+
+If full prefill/decode length is reduced, include the capacity probe command(s) here. These are final evidence commands, not debug attempts, and their ids must appear in `sequence_limits.json`.
 
 ## model_facts.json
 
@@ -188,6 +192,8 @@ pytest models/demos/example/tests/test_layer.py -k "dense and prefill" -vv 2>&1 
 
 ## sequence_limits.json
 
+Every layer kind must either test the reference maximums or prove why the reserved hardware cannot. If `reduced` is `true`, `reduction_kind` must be `"capacity"` or `"explicit-user-scope"`. For `"capacity"`, include nonempty `capacity_evidence` with command ids, logs, attempted lengths, failure signatures or byte calculations, available device memory, and the largest feasible tested lengths. For `"explicit-user-scope"`, include the user instruction that approved the reduced scope. Do not use "tractability" or runtime cost as a capacity reason.
+
 ```json
 {
   "schema_version": 1,
@@ -200,8 +206,25 @@ pytest models/demos/example/tests/test_layer.py -k "dense and prefill" -vv 2>&1 
       "reference_max_decode_context_len": 32768,
       "tested_max_decode_context_len": 32768,
       "reduced": false,
+      "reduction_kind": null,
       "reduction_reason": null,
-      "evidence": []
+      "capacity_evidence": {
+        "available_device_dram_bytes": null,
+        "estimated_required_kv_cache_bytes": null,
+        "attempted_prefill_command_id": null,
+        "attempted_prefill_log": null,
+        "attempted_decode_command_id": null,
+        "attempted_decode_log": null,
+        "failure_signature": null,
+        "largest_feasible_prefill_seq_len": 32768,
+        "largest_feasible_decode_context_len": 32768,
+        "notes": []
+      },
+      "explicit_user_scope": null,
+      "evidence": [
+        "pytest/dense_prefill.log",
+        "pytest/dense_decode.log"
+      ]
     }
   ]
 }
