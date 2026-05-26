@@ -10,16 +10,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
-// Math thread acquires DST exclusively.
-ALWI void ACQ() { tile_regs_acquire(); }
-// Boundary between math ops and pack ops: math signals done, pack waits for math.
-ALWI void COMMIT_WAIT() {
-    tile_regs_commit();
-    tile_regs_wait();
-}
-// Pack thread releases DST.
-ALWI void REL() { tile_regs_release(); }
-
 // Compute one block (one kernel-tap slice) of a 1D depthwise conv.
 //
 // Per output tile:
@@ -47,8 +37,7 @@ inline void mul_and_accumulate_block(
         in1_cb.wait_front(1);
         in0_cb.wait_front(1);
 
-        ACQ();
-
+        tile_regs_acquire();
         // mul: srcA = in0 (bf16), srcB = in1 (bf8/bf16) -> dst[0]
         reconfig_data_format_srcb(in1_cb_id);
         mul_tiles_init(in0_cb_id, in1_cb_id);
@@ -68,14 +57,13 @@ inline void mul_and_accumulate_block(
             // Restore srcA to in0's format for the next iteration's mul unpack.
             reconfig_data_format_srca(in0_cb_id);
         }
-
-        COMMIT_WAIT();
+        tile_regs_commit();
 
         out_cb.reserve_back(1);
+        tile_regs_wait();
         pack_tile(0, out_cb_id);
         out_cb.push_back(1);
-
-        REL();
+        tile_regs_release();
 
         in0_cb.pop_front(1);
         in1_cb.pop_front(1);
@@ -101,8 +89,7 @@ inline void mul_and_accumulate_coalesced_block(
 
     for (uint32_t h = 0; h < act_block_h_ntiles; ++h) {
         for (uint32_t c = 0; c < in_channels_ntiles; ++c) {
-            ACQ();
-
+            tile_regs_acquire();
             reconfig_data_format_srca(in0_cb_id);
             reconfig_data_format_srcb(in1_cb_id);
 
@@ -113,14 +100,13 @@ inline void mul_and_accumulate_coalesced_block(
                 mul_tiles_init(in0_cb_id, in1_cb_id, tap != 0 ? 1U : 0U, __builtin_LINE());
                 mul_tiles(in0_cb_id, in1_cb_id, act_tile_idx, weight_tile_idx, 0);
             }
-
-            COMMIT_WAIT();
+            tile_regs_commit();
 
             out_cb.reserve_back(1);
+            tile_regs_wait();
             pack_tile(0, out_cb_id);
             out_cb.push_back(1);
-
-            REL();
+            tile_regs_release();
         }
     }
 
