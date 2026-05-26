@@ -1,16 +1,22 @@
 # Optimized Decoder Artifact Formats
 
-All paths in JSON are relative to `models/demos/<model>/doc/optimized_decoder/` unless stated otherwise. Use strict JSON, UTF-8, two-space indentation, and `"schema_version": 1`. Use `null` for unavailable values and empty arrays for no entries.
+All paths in JSON are relative to `models/autoports/<model>/doc/optimized_decoder/` unless stated otherwise. Use strict JSON, UTF-8, two-space indentation, and `"schema_version": 1`. Use `null` for unavailable values and empty arrays for no entries.
 
 ## Directory Contract
 
 The final golden optimized-decoder evidence lives directly under:
 
 ```text
-models/demos/<model>/doc/optimized_decoder/
+models/autoports/<model>/doc/optimized_decoder/
 ```
 
-Do not create per-debug-run or per-attempt directories in this doc tree. Keep functional baseline evidence in `doc/functional_decoder/` and future phase evidence in sibling directories such as `doc/multidevice/`.
+Do not create per-debug-run or per-attempt directories in this doc tree. Keep functional baseline evidence in `doc/functional_decoder/` and future phase evidence in sibling directories such as `doc/multichip_decoder/`.
+
+The optimized implementation itself must live at:
+
+```text
+models/autoports/<model>/tt/optimized_decoder.py
+```
 
 ## Status Values
 
@@ -65,6 +71,7 @@ Use lowercase hyphen-case for `layer_kind_id` and optimization ids.
   "paths": {
     "report": "optimized_decoder.md",
     "commands": "commands.sh",
+    "implementation_contract": "implementation_contract.json",
     "baseline_summary": "baseline_summary.json",
     "functional_regression_results": "functional_regression_results.json",
     "optimization_plan": "optimization_plan.json",
@@ -113,6 +120,70 @@ Use lowercase hyphen-case for `layer_kind_id` and optimization ids.
   ]
 }
 ```
+
+## implementation_contract.json
+
+Record the concrete optimized decoder interface. The method contract should match the functional decoder unless a changed optional keyword is documented and all tests use it explicitly. `from_state_dict` remains the real-or-synthetic weight-loading API used by later full-model ports.
+
+```json
+{
+  "schema_version": 1,
+  "artifact_type": "optimized_decoder_implementation_contract",
+  "implementation": {
+    "path": "models/autoports/example/tt/optimized_decoder.py",
+    "class_name": "OptimizedDecoder",
+    "base_class": "models.common.lightweightmodule.LightweightModule",
+    "subclasses_lightweight_module": true,
+    "functional_implementation_path": "models/autoports/example/tt/functional_decoder.py"
+  },
+  "methods": {
+    "from_state_dict": {
+      "kind": "classmethod",
+      "signature": "from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, **kwargs)",
+      "loads_real_weights": true,
+      "loads_synthetic_weights": true,
+      "real_weights_are_canonical": true,
+      "notes": []
+    },
+    "prefill_forward": {
+      "signature": "prefill_forward(self, hidden_states, *, page_table, position_ids, **kwargs)",
+      "matches_functional_signature": true,
+      "runtime_torch_allowed": false,
+      "runtime_from_torch_allowed": false,
+      "runtime_to_torch_allowed": false,
+      "input_layout": "model-specific",
+      "output_layout": "model-specific"
+    },
+    "decode_forward": {
+      "signature": "decode_forward(self, hidden_states, *, page_table, position_ids, **kwargs)",
+      "matches_functional_signature": true,
+      "runtime_torch_allowed": false,
+      "runtime_from_torch_allowed": false,
+      "runtime_to_torch_allowed": false,
+      "trace_replay_supported": true,
+      "input_layout": "model-specific",
+      "output_layout": "model-specific"
+    }
+  },
+  "state_dict_contract": {
+    "real_weight_supported": true,
+    "synthetic_weight_supported": true,
+    "real_weight_evidence": {
+      "status": "pass",
+      "command_id": "pytest_dense_real_weight_load",
+      "reason_not_run": null
+    },
+    "synthetic_weight_evidence": {
+      "status": "pass",
+      "command_id": "pytest_dense_decode"
+    },
+    "precision_changes_vs_functional": [],
+    "key_transforms_vs_functional": []
+  }
+}
+```
+
+Set `real_weight_evidence.status` to `pass` when a real state dict was available and the optimized load path was exercised. Use `skipped` with a concrete `reason_not_run` only when no real weights were available for the final artifact. The synthetic path must pass for CI-oriented final artifacts.
 
 ## functional_regression_results.json
 

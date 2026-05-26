@@ -1,6 +1,6 @@
 ---
 name: multichip-decoder
-description: Parallelize a functional or optimized TTNN transformer decoder layer across the current multi-chip hardware in tt-metal. Use when adding tensor parallel or 2D mesh execution to a single-chip decoder, choosing 1D TP up to 8 chips or Galaxy 4x8 strategies, preserving functional/optimized tests, comparing multi-chip output to the single-chip TTNN baseline, validating RMSNorm and paged KV-cache correctness, tracing the target decode path, profiling with tt-perf-report, and producing final golden multichip_decoder artifacts.
+description: Parallelize a functional or optimized TTNN transformer decoder layer under models/autoports/{model} across the current multi-chip hardware in tt-metal. Use when producing models/autoports/{model}/tt/multichip_decoder.py with a MultichipDecoder LightweightModule class matching the decoder interface, adding tensor parallel or 2D mesh execution, choosing 1D TP up to 8 chips or Galaxy 4x8 strategies, comparing multi-chip output to the single-chip TTNN baseline, validating RMSNorm and paged KV-cache correctness, tracing decode, profiling with tt-perf-report, and producing golden multichip_decoder artifacts.
 ---
 
 # Multichip Decoder
@@ -25,8 +25,8 @@ Do not skip these reads. The skill body defines the workflow; the references def
 
 Prefer the strongest passing single-chip baseline:
 
-1. If `models/demos/<model>/doc/optimized_decoder/manifest.json` exists with `"status": "pass"`, use optimized decoder as the baseline.
-2. Otherwise use `models/demos/<model>/doc/functional_decoder/manifest.json` with `"status": "pass"`.
+1. If `models/autoports/<model>/doc/optimized_decoder/manifest.json` exists with `"status": "pass"`, use optimized decoder as the baseline.
+2. Otherwise use `models/autoports/<model>/doc/functional_decoder/manifest.json` with `"status": "pass"`.
 3. If neither exists or neither passes, stop and repair or rerun the earlier phase unless the user explicitly asked only for diagnostic planning.
 
 Preserve the baseline's public correctness contract. Multi-chip tests may be separate tests or parameterized variants, but they must not weaken the earlier prefill, decode, paged KV-cache, determinism, stress, trace, watcher, or fallback assertions.
@@ -34,6 +34,7 @@ Preserve the baseline's public correctness contract. Multi-chip tests may be sep
 ## Definition Of Done
 
 - Implement multi-chip execution for the target hardware's supported mesh size. On a 1x8 mesh, target TP=8; do not spend final proof time also proving TP=2 or TP=4 unless the user asks.
+- Produce `models/autoports/<model>/tt/multichip_decoder.py` exporting `MultichipDecoder(LightweightModule)` with the same `from_state_dict`, `prefill_forward`, and `decode_forward` interface contract as the chosen single-chip baseline.
 - Use the current hardware's natural parallelism. For 1D hardware up to 8 chips, default to 1D tensor parallelism. On Galaxy 4x8, make an explicit plan for 2D parallelism and justify whether dense 2D TP, expert replication, or another strategy is fastest.
 - Compare multi-chip TTNN outputs to the single-chip TTNN baseline, not directly to HF, with `PCC >= 0.995` for prefill and decode. Expect much higher PCC when the only intended delta is parallelization; investigate large deltas even if they pass the minimum threshold.
 - Keep paged KV-cache behavior correct and preserve the baseline's supported sequence limits unless device DRAM or L1 capacity forces a documented reduction.
@@ -44,7 +45,31 @@ Preserve the baseline's public correctness contract. Multi-chip tests may be sep
 - Include an optional stress mode, and run it for final success if the selected baseline requires stress.
 - Report warmed prefill and decode latency for single-chip baseline and target multi-chip implementation, plus speedup and efficiency.
 - Run Tracy and `tt-perf-report` for final target prefill and decode windows.
-- Produce only the final golden proof artifacts under `models/demos/<model>/doc/multichip_decoder/`.
+- Produce only the final golden proof artifacts under `models/autoports/<model>/doc/multichip_decoder/`.
+
+## Autoport Output Contract
+
+Create the multi-chip implementation under:
+
+```text
+models/autoports/<model>/tt/multichip_decoder.py
+```
+
+This file must export:
+
+```python
+class MultichipDecoder(LightweightModule):
+    @classmethod
+    def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, **kwargs): ...
+
+    def prefill_forward(self, ...): ...
+
+    def decode_forward(self, ...): ...
+```
+
+`MultichipDecoder` must subclass `models.common.lightweightmodule.LightweightModule`. `from_state_dict` is the multi-chip decoder's general weight-loading boundary: it must load real checkpoint tensors when provided and must also accept synthetic state dicts for CI/baseline comparison. Real HF state-dict keys and shapes remain canonical unless the multi-chip implementation records an explicit sharding/key transform. Weight sharding, real/synthetic weight conversion, mesh placement, CCL setup, cache construction, and `ttnn.as_tensor` calls belong in `from_state_dict` or setup helpers, not in runtime `prefill_forward` or `decode_forward`.
+
+The output layout of `prefill_forward` and `decode_forward` must match the corresponding input layout unless `mesh_contract.json` proves a different chainable contract. Record actual method signatures, state-dict keys, mesh input/output layouts, and real/synthetic weight support in `implementation_contract.json`.
 
 ## Parallelization Workflow
 
@@ -83,7 +108,7 @@ Write or extend pytest coverage near the model implementation.
 Required behavior:
 
 - Open the current target mesh and run at the hardware-supported target size.
-- Produce a single-chip TTNN baseline output with identical synthetic inputs, weights, page tables, and positions.
+- Produce a single-chip TTNN baseline output with identical inputs, real-or-synthetic weights, page tables, and positions. Final CI-friendly proof should use synthetic weights unless the user explicitly provides real weights for the run.
 - Compare target multi-chip TTNN output to that single-chip TTNN output for full decoder prefill and decode with `PCC >= 0.995`.
 - Preserve the baseline's paged KV-cache tests and prove multi-chip page-table, current-position, user-slot, and local KV-head behavior.
 - Preserve sequence limits or document reductions with memory evidence.
@@ -105,7 +130,7 @@ Audit the runtime path for host fallback. No runtime torch, `ttnn.from_torch`, `
 Final golden multi-chip evidence lives directly under:
 
 ```text
-models/demos/<model>/doc/multichip_decoder/
+models/autoports/<model>/doc/multichip_decoder/
 ```
 
 Do not save every debug attempt in this doc tree. Intermediate failing or exploratory runs belong under scratch locations such as `generated/multichip_decoder/debug/`, `/tmp`, or uncommitted local artifact directories.
@@ -116,6 +141,7 @@ Required final files:
 manifest.json
 multichip_decoder.md
 commands.sh
+implementation_contract.json
 baseline_summary.json
 mesh_contract.json
 parallelization_plan.json

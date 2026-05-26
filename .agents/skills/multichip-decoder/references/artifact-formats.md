@@ -1,21 +1,27 @@
 # Multichip Decoder Artifact Formats
 
-All paths in JSON are relative to `models/demos/<model>/doc/multichip_decoder/` unless stated otherwise. Use strict JSON, UTF-8, two-space indentation, and `"schema_version": 1`. Use `null` for unavailable values and empty arrays for no entries.
+All paths in JSON are relative to `models/autoports/<model>/doc/multichip_decoder/` unless stated otherwise. Use strict JSON, UTF-8, two-space indentation, and `"schema_version": 1`. Use `null` for unavailable values and empty arrays for no entries.
 
 ## Directory Contract
 
 Final golden multi-chip evidence lives directly under:
 
 ```text
-models/demos/<model>/doc/multichip_decoder/
+models/autoports/<model>/doc/multichip_decoder/
+```
+
+The multi-chip implementation itself must live at:
+
+```text
+models/autoports/<model>/tt/multichip_decoder.py
 ```
 
 Do not create per-debug-run or per-attempt directories in this doc tree. Keep earlier phase evidence in sibling directories:
 
 ```text
-models/demos/<model>/doc/functional_decoder/
-models/demos/<model>/doc/optimized_decoder/
-models/demos/<model>/doc/multichip_decoder/
+models/autoports/<model>/doc/functional_decoder/
+models/autoports/<model>/doc/optimized_decoder/
+models/autoports/<model>/doc/multichip_decoder/
 ```
 
 ## Status Values
@@ -81,6 +87,7 @@ Use lowercase hyphen-case for `layer_kind_id` and strategy ids.
   "paths": {
     "report": "multichip_decoder.md",
     "commands": "commands.sh",
+    "implementation_contract": "implementation_contract.json",
     "baseline_summary": "baseline_summary.json",
     "mesh_contract": "mesh_contract.json",
     "parallelization_plan": "parallelization_plan.json",
@@ -116,7 +123,7 @@ Plain executable shell transcript. Each command block must start with a command 
 ```bash
 # command_id: pytest_dense_decode
 # purpose: target mesh decode PCC
-pytest models/demos/example/tests/test_layer.py -k "dense and decode and multichip" -vv 2>&1 | tee pytest/dense_decode.log
+pytest models/autoports/example/tests/test_layer.py -k "dense and decode and multichip" -vv 2>&1 | tee pytest/dense_decode.log
 ```
 
 ## baseline_summary.json
@@ -143,6 +150,73 @@ The baseline may be `functional_decoder` or `optimized_decoder`. `baseline_statu
   ]
 }
 ```
+
+## implementation_contract.json
+
+Record the concrete multi-chip decoder interface. It should match the selected single-chip baseline interface unless a changed optional keyword is documented and all tests use it explicitly. `from_state_dict` remains the real-or-synthetic weight-loading API used by later full-model ports.
+
+```json
+{
+  "schema_version": 1,
+  "artifact_type": "multichip_decoder_implementation_contract",
+  "implementation": {
+    "path": "models/autoports/example/tt/multichip_decoder.py",
+    "class_name": "MultichipDecoder",
+    "base_class": "models.common.lightweightmodule.LightweightModule",
+    "subclasses_lightweight_module": true,
+    "single_chip_baseline_path": "models/autoports/example/tt/optimized_decoder.py"
+  },
+  "methods": {
+    "from_state_dict": {
+      "kind": "classmethod",
+      "signature": "from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, **kwargs)",
+      "loads_real_weights": true,
+      "loads_synthetic_weights": true,
+      "real_weights_are_canonical": true,
+      "mesh_placement_done_in_setup": true,
+      "notes": []
+    },
+    "prefill_forward": {
+      "signature": "prefill_forward(self, hidden_states, *, page_table, position_ids, **kwargs)",
+      "matches_single_chip_signature": true,
+      "runtime_torch_allowed": false,
+      "runtime_from_torch_allowed": false,
+      "runtime_to_torch_allowed": false,
+      "input_layout": "model-specific",
+      "output_layout": "model-specific",
+      "chainable_without_extra_ops": true
+    },
+    "decode_forward": {
+      "signature": "decode_forward(self, hidden_states, *, page_table, position_ids, **kwargs)",
+      "matches_single_chip_signature": true,
+      "runtime_torch_allowed": false,
+      "runtime_from_torch_allowed": false,
+      "runtime_to_torch_allowed": false,
+      "trace_replay_supported": true,
+      "input_layout": "model-specific",
+      "output_layout": "model-specific",
+      "chainable_without_extra_ops": true
+    }
+  },
+  "state_dict_contract": {
+    "real_weight_supported": true,
+    "synthetic_weight_supported": true,
+    "real_weight_evidence": {
+      "status": "pass",
+      "command_id": "pytest_dense_real_weight_load",
+      "reason_not_run": null
+    },
+    "synthetic_weight_evidence": {
+      "status": "pass",
+      "command_id": "pytest_dense_decode"
+    },
+    "weight_sharding_described_in_mesh_contract": true,
+    "key_transforms_vs_single_chip": []
+  }
+}
+```
+
+Set `real_weight_evidence.status` to `pass` when a real state dict was available and the multi-chip load path was exercised. Use `skipped` with a concrete `reason_not_run` only when no real weights were available for the final artifact. The synthetic path must pass for CI-oriented final artifacts.
 
 ## mesh_contract.json
 
