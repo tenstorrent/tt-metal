@@ -211,7 +211,13 @@ static void run_step_and_compare(const AdamWCase& pc) {
         fused_state["exp_avg"] = serialization::NamedParameters{{"theta", m0_tensor}};
         fused_state["exp_avg_sq"] = serialization::NamedParameters{{"theta", v0_tensor}};
         fused_state["steps"] = initial_steps;
+        fused_state["lr"] = pc.lr;
+        fused_state["beta1"] = pc.beta1;
+        fused_state["beta2"] = pc.beta2;
+        fused_state["epsilon"] = pc.epsilon;
+        fused_state["weight_decay"] = pc.weight_decay;
         fused_state["amsgrad"] = pc.amsgrad;
+        fused_state["stochastic_rounding"] = false;
         if (pc.amsgrad) {
             auto max_v0_tensor = autograd::create_tensor(to_tt_bf16(max_v0), false);
             fused_state["max_exp_avg_sq"] = serialization::NamedParameters{{"theta", max_v0_tensor}};

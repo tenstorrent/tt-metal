@@ -45,6 +45,7 @@ set(SOURCES
     serialization/flatbuffer_serializer_test.cpp
     serialization/tensor_serializer_test.cpp
     serialization/safetensors_test.cpp
+    serialization/get_value_type_test.cpp
     ops/cross_entropy_fw_op_test.cpp
     ops/select_target_logit_op_test.cpp
     ops/subtract_at_target_op_test.cpp

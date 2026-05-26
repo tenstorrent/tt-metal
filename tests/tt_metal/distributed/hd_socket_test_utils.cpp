@@ -14,9 +14,8 @@ bool is_device_coord_mmio_mapped(const std::shared_ptr<MeshDevice>& mesh_device,
 }
 
 PhysicalSystemDescriptor make_physical_system_descriptor() {
-    auto& driver = const_cast<tt::umd::Cluster&>(*MetalContext::instance().get_cluster().get_driver());
     return run_physical_system_discovery(
-        driver,
+        *MetalContext::instance().get_cluster().get_cluster_desc(),
         MetalContext::instance().get_distributed_context_ptr(),
         MetalContext::instance().rtoptions().get_target_device());
 }

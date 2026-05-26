@@ -1,9 +1,14 @@
 name: "ttnn - model trace sweep validation"
 
 run-name: >-
-  ttnn - model trace sweep validation
+  ${{
+    github.event_name == 'schedule' && 'ttnn - model trace sweep validation (scheduled)' ||
+    'ttnn - model trace sweep validation'
+  }}
 
 on:
+  schedule:
+    - cron: "0 5 * * *"  # Daily at 5:00 AM UTC (after sweep runs complete)
   workflow_dispatch:
     inputs:
       scope-targets:
@@ -47,7 +52,7 @@ jobs:
       caller-id: ${{ format('{0}/run-{1}/attempt-{2}', github.workflow, github.run_id, github.run_attempt) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install registry parser dependency
         run: pip3 install PyYAML
@@ -55,8 +60,8 @@ jobs:
       - name: Parse trace selection registry
         id: parse-trace-selection-registry
         env:
-          MODELS_FILTER: ${{ inputs.models-filter }}
-          SCOPE_OVERRIDE: ${{ inputs.scope-targets }}
+          MODELS_FILTER: ${{ inputs.models-filter || '' }}
+          SCOPE_OVERRIDE: ${{ inputs.scope-targets || 'auto' }}
         run: |
           python3 - <<'PY'
           import os
@@ -166,6 +171,6 @@ jobs:
       models: ${{ needs.inspect-trace-selection-registry.outputs.selected-models }}
       trace-ids: ${{ needs.inspect-trace-selection-registry.outputs.selected-trace-ids }}
       caller-id: ${{ needs.inspect-trace-selection-registry.outputs.caller-id }}
-      allow-partial-hash-changes: ${{ inputs.allow-partial-hash-changes }}
-      models-filter: ${{ inputs.models-filter }}
-      upload-results: ${{ inputs.upload-results }}
+      allow-partial-hash-changes: ${{ github.event_name == 'schedule' && true || inputs.allow-partial-hash-changes }}
+      models-filter: ${{ inputs.models-filter || '' }}
+      upload-results: ${{ github.event_name == 'schedule' && false || inputs.upload-results }}

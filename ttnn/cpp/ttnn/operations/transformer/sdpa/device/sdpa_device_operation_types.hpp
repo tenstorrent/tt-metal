@@ -30,6 +30,8 @@ struct SDPAInputs {
     std::optional<Tensor> v;
     std::optional<Tensor> attn_mask;
     std::optional<Tensor> page_table;
+    // Mirrors SDPAParams::chunk_start_idx_tensor so ProgramDescriptor buffer bindings can patch cache hits.
+    std::optional<Tensor> chunk_start_idx_tensor;
     std::optional<Tensor> attention_sink;
 };
 
