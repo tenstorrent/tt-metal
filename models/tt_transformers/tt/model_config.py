@@ -3673,7 +3673,9 @@ class ModelArgs:
                         )
                         model.apply(model._init_weights)
                     except Exception as e:
-                        logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                        logger.info(
+                            f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}"
+                        )
                         model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
                 # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             else:
