@@ -134,6 +134,8 @@ KIMI = KimiVariant(
     supported_meshes=frozenset({(8, 4)}),
     required_gate_fallback_mode=GateComputeMode.HOST_ALL,
     supports_pretrained=False,
+    mla_pcc_threshold=0.995,
+    moe_pcc_threshold=0.995,
 )
 
 MODEL_VARIANTS = {v.name: v for v in [DSV3, KIMI]}
