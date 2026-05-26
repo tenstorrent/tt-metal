@@ -17,6 +17,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_tp_mesh_composer
+from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -67,10 +68,11 @@ def test_embedding_8x4_galaxy(mesh_device):
         tp_axis=tp_axis,
     )
 
-    # Push tokens through a persistent H2DStreamService — same pattern as
-    # prefill_runner._build_h2d_service: global spec describes the SP-sharded,
-    # TP-replicated tensor on device; the service core drains pushed bytes into
-    # the backing tensor, which the embedding op then consumes.
+    # Push tokens through a persistent H2DStreamService. Worker_cores is set so
+    # the service-core kernel multicasts a data-ready inc after each transfer;
+    # the h2d_socket_sync op below waits on that, copies the backing tensor
+    # into a fresh output, and acks the service core — replacing the host-side
+    # `service.barrier()` round-trip.
     per_chip_bytes = isl_per_chip * 4  # uint32
     global_spec = ttnn.TensorSpec(
         shape=ttnn.Shape([sp_factor, 1, isl_per_chip]),
@@ -84,25 +86,28 @@ def test_embedding_8x4_galaxy(mesh_device):
             placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()],
         ),
     )
+    worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
     h2d_service = ttnn.H2DStreamService(
         mesh_device=mesh_device,
         global_spec=global_spec,
         fifo_size_bytes=8 * per_chip_bytes,
         scratch_cb_size_bytes=per_chip_bytes,
         mapper=mapper,
+        worker_cores=worker_cores,
     )
     logger.info(
         f"[h2d] H2DStreamService built: global_shape=({sp_factor},1,{isl_per_chip}) "
-        f"uint32 ROW_MAJOR DRAM, per_chip_bytes={per_chip_bytes}"
+        f"uint32 ROW_MAJOR DRAM, per_chip_bytes={per_chip_bytes}, worker_cores={worker_cores}"
     )
 
     logger.info(f"torch_tokens shape: {torch_tokens.shape}")
     # uint32 bit pattern == int32 bit pattern for non-negative ids (vocab fits in 18 bits).
     flat_tokens = torch_tokens.to(torch.int32).contiguous().numpy()
     h2d_service.forward_to_tensor_bytes(flat_tokens)
-    h2d_service.barrier()
-    tt_tokens = h2d_service.get_backing_tensor()
-    logger.info(f"tt_tokens shape (from H2D backing tensor): {tt_tokens.shape}")
+    # Device-side sync: workers wait on data_ready_sem, copy backing -> fresh
+    # output, ack consumed_counter. No host barrier needed.
+    tt_tokens = h2d_socket_sync(h2d_service, worker_cores)
+    logger.info(f"tt_tokens shape (synced from H2D service): {tt_tokens.shape}")
 
     tt_output = tt_emb(tt_tokens)
 
