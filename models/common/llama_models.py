@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Union
 import torch
 from PIL import Image
 from pydantic import BaseModel, validator
-from transformers import AutoModelForVision2Seq, AutoProcessor, pipeline
+from transformers import AutoModelForImageTextToText, AutoProcessor, pipeline
 
 
 class Role(Enum):
@@ -185,7 +185,7 @@ class GeneratorChat:
 class GeneratorText:
     def __init__(self, model_name):
         self.processor = AutoProcessor.from_pretrained(model_name)
-        self.model = AutoModelForVision2Seq.from_pretrained(model_name)
+        self.model = AutoModelForImageTextToText.from_pretrained(model_name)
 
     def text_completion(
         self,
