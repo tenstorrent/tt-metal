@@ -87,7 +87,7 @@ Measured with ``pytest models/experimental/devstral2_123B_instruct/tests/perf/te
 |:-----|:-------|:-----|-------------:|-------------:|----------:|--------------:|------------------------:|----------------------:|
 | E2E L88 (2CQ traced) | BH Loudbox | 1×8 | 128 | 32 | 102.2 | 1262 | 14.02 | 8.81 |
 
-**Metric definitions** (aligned with [Devstral Small 2 PR #44834](https://github.com/tenstorrent/tt-metal/pull/44834)):
+**Metric definitions** :
 
 - **TTFT** — one prefill trace replay after capture (time to first decode logits).
 - **Prefill tok/s** — ``prompt_len / prefill_trace_replay_time`` (compile pass excluded).
