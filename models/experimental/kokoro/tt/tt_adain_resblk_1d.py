@@ -20,7 +20,14 @@ from torch.nn.utils import parametrize
 import ttnn
 
 from .tt_adain_1d import TTAdaIN1d, preprocess_tt_adain_1d
-from .tt_conv import TTConv1dParams, TTConvTranspose1dParams, tt_conv1d_nlc, tt_conv_transpose1d_nlc
+from .tt_conv import (
+    TTConv1dParams,
+    TTConvTranspose1dParams,
+    tt_conv1d_nlc,
+    tt_conv_transpose1d_nlc,
+    upload_conv1d_params_from_module,
+    upload_conv_transpose_pool_params_from_module,
+)
 from .tt_upsample_1d import TTUpSample1d
 
 
@@ -50,62 +57,12 @@ def _strip_weight_norm_from_conv(m: nn.Module) -> None:
 
 
 def _conv1d_to_tt_params(conv: nn.Conv1d, device, *, weights_dtype) -> TTConv1dParams:
-    w = conv.weight.detach().cpu().unsqueeze(-1)
-    b = conv.bias.detach().cpu() if conv.bias is not None else None
-    w_tt = ttnn.from_torch(
-        w,
-        dtype=weights_dtype,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
-    b_tt = (
-        ttnn.from_torch(
-            b.reshape(1, 1, 1, -1),
-            dtype=weights_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        if b is not None
-        else None
-    )
-    return TTConv1dParams(
-        weight=w_tt,
-        bias=b_tt,
-        in_channels=int(conv.in_channels),
-        out_channels=int(conv.out_channels),
-        kernel_size=int(conv.kernel_size[0]),
-        stride=int(conv.stride[0]),
-        padding=int(conv.padding[0]),
-        groups=int(conv.groups),
-    )
+    return upload_conv1d_params_from_module(conv, device, weights_dtype=weights_dtype)
 
 
-def _conv_transpose_pool_to_tt_params(m: nn.ConvTranspose1d, _device, *, weights_dtype) -> TTConvTranspose1dParams:
-    """Depthwise upsample pool (``unsqueeze(-1)`` weight layout, **host** ROW_MAJOR like ``ttnn_adain_resblk_encode``).
-
-    Keeping pool weights on **host** avoids the conv2d device path that requires pre-tilized weights
-    (``Layout::TILE`` / folded matrix) before preparation.
-    """
-    w = m.weight.detach().cpu().unsqueeze(-1)
-    w_tt = ttnn.from_torch(w, dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
-    b_tt = None
-    if m.bias is not None:
-        b_tt = ttnn.from_torch(
-            m.bias.detach().cpu().reshape(1, 1, 1, -1),
-            dtype=weights_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-    return TTConvTranspose1dParams(
-        weight=w_tt,
-        bias=b_tt,
-        in_channels=int(m.in_channels),
-        out_channels=int(m.out_channels),
-        kernel_size=int(m.kernel_size[0]),
-        stride=int(m.stride[0]),
-        padding=int(m.padding[0]),
-        output_padding=int(m.output_padding[0]),
-        groups=int(m.groups),
-        mirror_kernel=True,
-        spatial_style="height",
-    )
+def _conv_transpose_pool_to_tt_params(m: nn.ConvTranspose1d, device, *, weights_dtype) -> TTConvTranspose1dParams:
+    """Depthwise upsample pool on device TILE (activations stay TILE in :func:`tt_conv_transpose1d_nlc`)."""
+    return upload_conv_transpose_pool_params_from_module(m, device, weights_dtype=weights_dtype)
 
 
 def preprocess_tt_adain_resblk_1d(

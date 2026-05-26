@@ -25,7 +25,7 @@ Tensor layout notes
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Sequence
 
 import torch
 import torch.nn as nn
@@ -33,7 +33,7 @@ import torch.nn as nn
 import ttnn
 
 from .tt_adain_resblk_1d import TTAdainResBlk1d, TTAdainResBlk1dParams, preprocess_tt_adain_resblk_1d
-from .tt_conv import TTConv1dParams, tt_conv1d_nlc
+from .tt_conv import TTConv1dParams, tt_conv1d_nlc, upload_conv1d_params_from_module
 from .tt_duration_encoder import (
     TTDurationEncoder,
     TTDurationEncoderParams,
@@ -68,31 +68,9 @@ class TTProsodyPredictorParams:
     style_dim: int
 
 
-def _conv1d_no_weightnorm_to_tt_params(conv: nn.Conv1d, *, weights_dtype) -> TTConv1dParams:
-    """Upload a plain ``nn.Conv1d`` (no weight_norm) to TT in the layout :func:`tt_conv1d_nlc` expects."""
-    w = conv.weight.detach().cpu().unsqueeze(-1)
-    w_tt = ttnn.from_torch(
-        w,
-        dtype=weights_dtype,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
-    b_tt: Optional[ttnn.Tensor] = None
-    if conv.bias is not None:
-        b_tt = ttnn.from_torch(
-            conv.bias.detach().cpu().reshape(1, 1, 1, -1),
-            dtype=weights_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-    return TTConv1dParams(
-        weight=w_tt,
-        bias=b_tt,
-        in_channels=int(conv.in_channels),
-        out_channels=int(conv.out_channels),
-        kernel_size=int(conv.kernel_size[0]),
-        stride=int(conv.stride[0]),
-        padding=int(conv.padding[0]),
-        groups=int(conv.groups),
-    )
+def _conv1d_no_weightnorm_to_tt_params(conv: nn.Conv1d, device, *, weights_dtype) -> TTConv1dParams:
+    """Upload a plain ``nn.Conv1d`` (no weight_norm) to device TILE for :func:`tt_conv1d_nlc`."""
+    return upload_conv1d_params_from_module(conv, device, weights_dtype=weights_dtype)
 
 
 def preprocess_tt_prosody_predictor(
@@ -128,8 +106,8 @@ def preprocess_tt_prosody_predictor(
         for b in module.N
     )
 
-    f0_proj = _conv1d_no_weightnorm_to_tt_params(module.F0_proj, weights_dtype=conv_weights_dtype)
-    n_proj = _conv1d_no_weightnorm_to_tt_params(module.N_proj, weights_dtype=conv_weights_dtype)
+    f0_proj = _conv1d_no_weightnorm_to_tt_params(module.F0_proj, device, weights_dtype=conv_weights_dtype)
+    n_proj = _conv1d_no_weightnorm_to_tt_params(module.N_proj, device, weights_dtype=conv_weights_dtype)
 
     d_hid = int(module.text_encoder.d_model)
     style_dim = int(module.text_encoder.sty_dim)

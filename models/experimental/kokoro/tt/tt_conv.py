@@ -16,9 +16,70 @@ from dataclasses import dataclass
 from typing import Optional
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 import ttnn
+
+
+def upload_conv1d_params_from_module(
+    conv: nn.Conv1d,
+    _device,
+    *,
+    weights_dtype=ttnn.bfloat16,
+) -> "TTConv1dParams":
+    """Upload Conv1d weights on host ROW_MAJOR (``ttnn.conv1d`` prepares once per call)."""
+    w = conv.weight.detach().cpu().unsqueeze(-1)
+    w_tt = ttnn.from_torch(w, dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+    b_tt = None
+    if conv.bias is not None:
+        b_tt = ttnn.from_torch(
+            conv.bias.detach().cpu().reshape(1, 1, 1, -1),
+            dtype=weights_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+    return TTConv1dParams(
+        weight=w_tt,
+        bias=b_tt,
+        in_channels=int(conv.in_channels),
+        out_channels=int(conv.out_channels),
+        kernel_size=int(conv.kernel_size[0]),
+        stride=int(conv.stride[0]),
+        padding=int(conv.padding[0]),
+        groups=int(conv.groups),
+        dilation=int(conv.dilation[0]),
+    )
+
+
+def upload_conv_transpose_pool_params_from_module(
+    module: nn.ConvTranspose1d,
+    _device,
+    *,
+    weights_dtype=ttnn.bfloat16,
+) -> "TTConvTranspose1dParams":
+    """Upload pool weights on host ROW_MAJOR (same as legacy Kokoro bring-up)."""
+    w = module.weight.detach().cpu().unsqueeze(-1)
+    w_tt = ttnn.from_torch(w, dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+    b_tt = None
+    if module.bias is not None:
+        b_tt = ttnn.from_torch(
+            module.bias.detach().cpu().reshape(1, 1, 1, -1),
+            dtype=weights_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+    return TTConvTranspose1dParams(
+        weight=w_tt,
+        bias=b_tt,
+        in_channels=int(module.in_channels),
+        out_channels=int(module.out_channels),
+        kernel_size=int(module.kernel_size[0]),
+        stride=int(module.stride[0]),
+        padding=int(module.padding[0]),
+        output_padding=int(module.output_padding[0]),
+        groups=int(module.groups),
+        mirror_kernel=True,
+        spatial_style="height",
+    )
 
 
 def tt_weight_norm_materialize(weight_v: torch.Tensor, weight_g: torch.Tensor, *, eps: float = 1e-12) -> torch.Tensor:
@@ -499,8 +560,10 @@ def tt_conv_transpose1d_nlc(
             ttnn.deallocate(y_full)
             return y
 
-    if x_nlc.layout != ttnn.ROW_MAJOR_LAYOUT:
-        x_nlc = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT)
+    # Keep NLC activations in TILE; request TILE output so downstream AdaIN/concat stays TILE
+    # (avoids explicit untilize→ROW_MAJOR→conv→tilize on the hot prosody upsample path).
+    if x_nlc.layout != ttnn.TILE_LAYOUT:
+        x_nlc = ttnn.to_layout(x_nlc, ttnn.TILE_LAYOUT, memory_config=memory_config)
     x = ttnn.reshape(x_nlc, (x_nlc.shape[0], 1, x_nlc.shape[1], x_nlc.shape[2]), memory_config=memory_config)
     if conv_config is None:
         conv_config = ttnn.Conv2dConfig(weights_dtype=params.weight.dtype)
@@ -508,6 +571,7 @@ def tt_conv_transpose1d_nlc(
         # to reduce pressure on L1_SMALL (the generator path can otherwise OOM on BH).
         conv_config.config_tensors_in_dram = True
         conv_config.deallocate_activation = True
+        conv_config.output_layout = ttnn.TILE_LAYOUT
         try:
             conv_config.enable_act_double_buffer = False
         except Exception:
