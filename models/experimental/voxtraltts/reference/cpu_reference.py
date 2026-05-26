@@ -14,6 +14,9 @@ import math
 from models.experimental.voxtraltts.reference.audio_tokenizer_ops import (
     audio_tokenizer_decode_reference,
     audio_tokenizer_encode_tokens_reference,
+    audio_tokenizer_latent_from_codes,
+    decoder_blocks_stack_reference,
+    output_proj_mel_ncl_reference_bf16,
 )
 from models.experimental.voxtraltts.reference.cpu_flow_matching_acoustic import (
     AudioSpecialTokens,
@@ -30,6 +33,7 @@ from models.experimental.voxtraltts.reference.voxtral_request import (
     get_instruct_tokenizer,
     load_mistral_tokenizer,
 )
+from models.experimental.voxtraltts.utils.debug_trace import VoxtralTTSDebugTrace
 from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
 
 _ACOUSTIC_CFG_ALPHA = 1.2
@@ -281,6 +285,22 @@ class VoxtralCPUReference:
         )  # [1, mm_dim]
         return audio_embeddings.unsqueeze(0).to(device=self.device, dtype=self.dtype)
 
+    def _collect_tokenizer_debug(self, codes_b37t: torch.Tensor, trace: VoxtralTTSDebugTrace) -> None:
+        ref_latent_ncl = audio_tokenizer_latent_from_codes(
+            codes_b37t.cpu(),
+            self._audio_tokenizer_state_dict,
+            n_acoustic_levels=self.config.audio_tokenizer_args.acoustic_codebook_size,
+        ).to(torch.bfloat16)
+        trace.set("tokenizer.latent", ref_latent_ncl.permute(0, 2, 1).contiguous())
+        ref_hidden_btd = decoder_blocks_stack_reference(
+            ref_latent_ncl, self._audio_tokenizer_state_dict, self.config.audio_tokenizer_args
+        )
+        trace.set("tokenizer.decoder", ref_hidden_btd)
+        ref_mel_ncl = output_proj_mel_ncl_reference_bf16(
+            ref_hidden_btd.to(torch.bfloat16), self._audio_tokenizer_state_dict
+        )
+        trace.set("tokenizer.mel", ref_mel_ncl.permute(0, 2, 1).contiguous())
+
     @torch.inference_mode()
     def generate(
         self,
@@ -292,17 +312,23 @@ class VoxtralCPUReference:
         *,
         tt_acoustic: Any | None = None,
         return_tokenizer_codes: bool = False,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        return_debug: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, VoxtralTTSDebugTrace]:
         if ref_audio is not None:
             raise NotImplementedError(
                 "CPU reference currently supports preset voice embeddings, not ref-audio cloning."
             )
         if voice is None:
             raise ValueError("voice must be provided for CPU reference generation.")
+        if return_debug and not return_tokenizer_codes:
+            raise ValueError("return_debug=True requires return_tokenizer_codes=True")
 
         torch.manual_seed(seed)
+        debug = VoxtralTTSDebugTrace() if return_debug else None
         request = compose_speech_request(text, self.model_name_or_path, voice=voice, ref_audio=None)
         _, inputs_embeds = self._prompt_embeddings(request["prompt_token_ids"], voice)
+        if debug is not None:
+            debug.set("embeds.prompt", inputs_embeds)
 
         outputs = self.text_model(
             inputs_embeds=inputs_embeds.unsqueeze(0),
@@ -312,17 +338,33 @@ class VoxtralCPUReference:
         )
         hidden = outputs.hidden_states[-1][:, -1, :]
         past_key_values = outputs.past_key_values
-        generated_codes = []
+        if debug is not None:
+            debug.set("text.prefill.hidden", hidden.squeeze(0))
+            for layer_idx, layer_hidden in enumerate(outputs.hidden_states):
+                debug.set(f"text.prefill.layer.{layer_idx}", layer_hidden[:, -1, :].squeeze(0))
 
         cfg_alpha = torch.tensor(self._acoustic_cfg_alpha, device=hidden.device, dtype=hidden.dtype)
+        generated_codes = []
+
         for step_idx in range(max_tokens):
+            if debug is not None:
+                debug.set(f"step.{step_idx}.text.hidden_in", hidden.squeeze(0))
             torch.manual_seed(acoustic_fm_noise_seed(seed, step_idx))
             if tt_acoustic is not None:
                 hc = hidden.detach().to(dtype=torch.bfloat16)
                 ca = cfg_alpha.to(device=hc.device, dtype=hc.dtype)
                 audio_codes = tt_acoustic.acoustic_codes_forward(hc, ca).to(torch.long)
+            elif debug is not None:
+                ac_out = self.acoustic_transformer(hidden, cfg_alpha, collect_semantic_logits=True)
+                assert isinstance(ac_out, tuple)
+                audio_codes, ac_debug = ac_out
+                audio_codes = audio_codes.to(torch.long)
+                for k, v in ac_debug.items():
+                    debug.set(f"step.{step_idx}.acoustic.{k}", v.squeeze() if v.dim() > 1 and v.shape[0] == 1 else v)
             else:
                 audio_codes = self.acoustic_transformer(hidden, cfg_alpha).to(torch.long)
+            if debug is not None:
+                debug.set(f"step.{step_idx}.acoustic.codes", audio_codes.squeeze(0))
             generated_codes.append(audio_codes[0].detach().cpu())
             if int(audio_codes[0, 0].item()) == self.end_audio_id:
                 break
@@ -337,14 +379,28 @@ class VoxtralCPUReference:
             )
             hidden = outputs.hidden_states[-1][:, -1, :]
             past_key_values = outputs.past_key_values
+            if debug is not None:
+                debug.set(f"step.{step_idx}.text.hidden_out", hidden.squeeze(0))
+                for layer_idx, layer_hidden in enumerate(outputs.hidden_states):
+                    debug.set(f"step.{step_idx}.text.layer.{layer_idx}", layer_hidden[:, -1, :].squeeze(0))
 
         if not generated_codes:
             empty = torch.tensor([], dtype=torch.float32)
             empty_codes = torch.zeros(1, 37, 0, dtype=torch.long)
-            return (empty, empty_codes) if return_tokenizer_codes else empty
+            if return_tokenizer_codes and return_debug:
+                return empty, empty_codes, debug
+            if return_tokenizer_codes:
+                return empty, empty_codes
+            return empty
         stacked = torch.stack(generated_codes, dim=0).to(self.device)
         wav = self._decode_audio_codes(stacked)
         if return_tokenizer_codes:
             _, codes_b37t = self._split_stacked_codes(stacked)
+            if debug is not None:
+                debug.set("output.codes", codes_b37t.float())
+                debug.set("output.waveform", wav.reshape(1, 1, -1))
+                self._collect_tokenizer_debug(codes_b37t, debug)
+            if return_debug:
+                return wav, codes_b37t.cpu(), debug
             return wav, codes_b37t.cpu()
         return wav
