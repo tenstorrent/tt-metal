@@ -8,23 +8,26 @@
     2. tt-transformers -- Meta naming used by ``models/tt_transformers``
                           (run through ``convert_hf_to_meta``)
     3. ttml            -- ``Llama/blocks/{i}/...`` naming used by tt-train,
-                          derived from the loader in
-                          ``tt-train/sources/ttml/ttml/models/llama/safetensors_loader.py``
+                          read directly from ``LlamaCompositeKV.parameters()``
 
-CPU-only: no mesh device, no on-device weight load. Just lists the keys and
-their shapes side-by-side. Edit ``MODEL_ID`` / ``WEIGHT_TYING`` to switch
-checkpoints.
+The ``hf`` and ``tt-transformers`` formats are derived on CPU. The ``ttml``
+format requires building the actual model, which opens the mesh device
+(closed before the script exits). Edit ``MODEL_ID`` to switch checkpoints.
 """
 
 from __future__ import annotations
 
 import os
+
+os.environ.setdefault("TT_LOGGER_LEVEL", "Error")
+
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[3]
+sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO_ROOT))
 
 
@@ -33,12 +36,8 @@ sys.path.insert(0, str(REPO_ROOT))
 # ---------------------------------------------------------------------------
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
-
-# ttml routes the embedding to a different param when the LM head is tied to
-# the embedding (see safetensors_loader.py). Llama-3.2-1B/3B have weight tying
-# enabled in the in-repo configs (configs/model_configs/llama3_2_1B.yaml).
-# Set this False for 8B/70B which ship a separate ``lm_head.weight``.
-WEIGHT_TYING = True
+TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml"
+TTML_MODEL_CONFIG_REL = "tt-train/configs/model_configs/llama3_2_1B.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -94,40 +93,77 @@ def tt_transformers_keys(hf_state_shapes: Dict[str, Tuple[int, ...]], model_id: 
 # ---------------------------------------------------------------------------
 
 
-def ttml_keys(model_id: str, weight_tying: bool) -> List[str]:
-    """Enumerate the ttml parameter names statically from the loader's mapping.
+def ttml_keys(model_id: str) -> Dict[str, Tuple[int, ...]]:
+    """Build the actual ttml ``LlamaCompositeKV`` model and return its parameters.
 
-    Mirrors ``tt-train/sources/ttml/ttml/models/llama/safetensors_loader.py``,
-    which is the source of truth for ttml param naming.
+    Opens the AutoContext mesh device, instantiates the model (no weight
+    load), enumerates ``model.parameters()`` to get the live names and
+    shapes, then closes the device. The values are 4D shapes
+    (``(1, 1, rows, cols)`` for matrices, ``(1, 1, 1, n)`` for vectors)
+    matching ttml's on-device tensor layout.
     """
-    from transformers import AutoConfig
+    import ttnn
 
-    cfg = AutoConfig.from_pretrained(model_id)
-    n_layers = cfg.num_hidden_layers
+    import ttml
+    from ttml.common.config import DeviceConfig, get_model_config, load_config
+    from ttml.models import RunnerType, WeightTyingType
+    from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig
+    from transformers import AutoTokenizer
 
-    keys: List[str] = []
-    if weight_tying:
-        keys.append("Llama/fc/weight")  # tied: embedding lives here
-    else:
-        keys.append("Llama/tok_emb/weight")
-        keys.append("Llama/fc/weight")  # separate LM head
+    from utils.llama_overrides import LlamaCompositeKV
 
-    for i in range(n_layers):
-        keys.extend(
-            [
-                f"Llama/blocks/{i}/attention_norm/gamma",
-                f"Llama/blocks/{i}/attention/q_linear/weight",
-                f"Llama/blocks/{i}/attention/kv_linear/weight",  # k_proj + v_proj fused
-                f"Llama/blocks/{i}/attention/out_linear/weight",
-                f"Llama/blocks/{i}/mlp_norm/gamma",
-                f"Llama/blocks/{i}/mlp/w1/weight",  # gate_proj
-                f"Llama/blocks/{i}/mlp/w3/weight",  # up_proj
-                f"Llama/blocks/{i}/mlp/w2/weight",  # down_proj
-            ]
-        )
+    raw = load_config(os.path.join(REPO_ROOT, TTML_DEVICE_CONFIG_REL))
+    device_config = DeviceConfig(raw)
+    tf_config = get_model_config(os.path.join(REPO_ROOT, TTML_MODEL_CONFIG_REL))
 
-    keys.append("Llama/ln_fc/gamma")
-    return keys
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    tf_config.vocab_size = len(tokenizer)
+
+    rope_scaling = LlamaRopeScalingConfig(
+        scaling_factor=getattr(tf_config, "scaling_factor", 0.0) or 0.0,
+        high_freq_factor=getattr(tf_config, "high_freq_factor", 4.0) or 4.0,
+        low_freq_factor=getattr(tf_config, "low_freq_factor", 1.0) or 1.0,
+        original_context_length=getattr(tf_config, "original_context_length", 0) or 0,
+    )
+    runner_type = RunnerType.from_string(str(tf_config.runner_type))
+    weight_tying = WeightTyingType.Disabled
+    if tf_config.weight_tying:
+        weight_tying = WeightTyingType.from_string(str(tf_config.weight_tying))
+
+    llama_cfg = LlamaConfig(
+        hidden_size=tf_config.embedding_dim,
+        intermediate_size=tf_config.intermediate_dim,
+        num_hidden_layers=tf_config.num_blocks,
+        num_attention_heads=tf_config.num_heads,
+        num_key_value_heads=tf_config.num_groups,
+        vocab_size=len(tokenizer),
+        max_position_embeddings=tf_config.max_sequence_length,
+        rope_theta=tf_config.theta or 10000.0,
+        attention_dropout=tf_config.dropout_prob,
+        mlp_dropout=tf_config.dropout_prob,
+        runner_type=runner_type,
+        weight_tying=weight_tying,
+        rope_scaling=rope_scaling,
+    )
+
+    # set_fabric_config must run before any device is opened.
+    print("[ttml] set_fabric_config(FABRIC_2D)")
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
+
+    print(f"[ttml] opening mesh device {tuple(device_config.mesh_shape)} and building LlamaCompositeKV")
+    if device_config.total_devices() > 1:
+        ttml.core.distributed.enable_fabric(device_config.total_devices())
+    autograd_ctx = ttml.autograd.AutoContext.get_instance()
+    autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)
+
+    try:
+        model = LlamaCompositeKV(llama_cfg)
+        params = {name: tuple(param.shape()) for name, param in model.parameters().items()}
+        del model
+    finally:
+        autograd_ctx.close_device()
+
+    return {name: params[name] for name in sorted(params)}
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +187,6 @@ def print_keys(title: str, items) -> None:
 
 def main() -> None:
     print(f"Model: {MODEL_ID}")
-    print(f"weight_tying (ttml): {WEIGHT_TYING}")
 
     hf = hf_keys(MODEL_ID)
     print_keys("HF (transformers / safetensors)", hf)
@@ -159,8 +194,8 @@ def main() -> None:
     tt = tt_transformers_keys(hf, MODEL_ID)
     print_keys("tt-transformers (Meta naming, after convert_hf_to_meta)", tt)
 
-    ttml = ttml_keys(MODEL_ID, WEIGHT_TYING)
-    print_keys("ttml (Llama/blocks/{i}/... — from safetensors_loader.py)", ttml)
+    ttml = ttml_keys(MODEL_ID)
+    print_keys("ttml (Llama/blocks/{i}/... — live LlamaCompositeKV.parameters())", ttml)
 
 
 if __name__ == "__main__":
