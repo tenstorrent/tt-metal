@@ -43,11 +43,17 @@ def cmd_emit_e2e(args) -> int:
         repo_root=Path.cwd(),
     )
 
+    def _resolve_demo_dir(raw: Optional[str]) -> Path:
+        if not raw:
+            return Path(f"models/demos/_emitted/{args.model_id.split('/')[-1].replace('-', '_').lower()}")
+        p = Path(raw)
+        return p.parent if p.suffix == ".py" else p
+
     if args.output:
         output_path = Path(args.output)
     else:
         slug = args.model_id.split("/")[-1].replace("-", "_").lower()
-        demo_dir = Path(backend.demo_path) if backend.demo_path else Path(f"models/demos/_emitted/{slug}")
+        demo_dir = _resolve_demo_dir(backend.demo_path)
 
         canonical_dir = Path(f"models/demos/{demo_dir.parent.name}/{slug}/tests")
         if canonical_dir.parent.exists():
@@ -55,7 +61,7 @@ def cmd_emit_e2e(args) -> int:
         else:
             output_path = demo_dir / "tests" / f"test_e2e_{slug}.py"
 
-    captured_dir = (Path(backend.demo_path) / "_captured") if backend.demo_path else None
+    captured_dir = (_resolve_demo_dir(backend.demo_path) / "_captured") if backend.demo_path else None
     written: Optional[Path] = None
     used_wired = False
     if captured_dir and captured_dir.exists():
