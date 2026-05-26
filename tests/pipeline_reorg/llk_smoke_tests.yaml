@@ -1,7 +1,7 @@
 # LLK smoke — PR-gate python_tests (no coverage, 4-way split, markers not perf and not nightly and not quasar and not debug).
 # PYTEST_MARKERS is set by llk-smoke-impl.yaml / workflow_call inputs. ci-quiet log mode is hard-coded.
-# Debug-marked tests (e.g. test_device_print) run in dedicated groups with LOGURU_LEVEL=DEBUG so the
-# device-print kernel build path is enabled in both compile-producer and compile-consumer phases.
+# Tests marked with debug (e.g. test_device_print) run in dedicated groups with LOGURU_LEVEL=DEBUG so the
+# device print kernel build path is enabled in both compile-producer and compile-consumer phases.
 
 - name: llk_smoke_wormhole group 1/4
   split_group: 1
