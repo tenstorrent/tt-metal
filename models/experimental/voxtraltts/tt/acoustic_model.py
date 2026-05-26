@@ -458,8 +458,8 @@ class VoxtralTTAcousticModel:
         ttnn.deallocate(v_scaled)
         return new_sampled
 
-    def _fm_round_acoustic_codes_from_sampled_tt(self, sampled_tt: ttnn.Tensor, bsz: int) -> torch.Tensor:
-        """Clamp → scale → ``round`` in fp32; host ``[bsz, n_acoustic]`` long (pre special-token offset)."""
+    def _fm_pre_round_scaled_from_sampled_tt(self, sampled_tt: ttnn.Tensor, bsz: int) -> torch.Tensor:
+        """Return pre-``round()`` scaled FSQ values ``[bsz, n_acoustic]`` on host (fp32 path on device)."""
         mem = ttnn.DRAM_MEMORY_CONFIG
         if sampled_tt.dtype == ttnn.float32:
             sampled_f32 = sampled_tt
@@ -481,6 +481,11 @@ class VoxtralTTAcousticModel:
         ttnn.deallocate(halved)
         scaled_host = ttnn.to_torch(scaled).float().reshape(bsz, -1)
         ttnn.deallocate(scaled)
+        return scaled_host
+
+    def _fm_round_acoustic_codes_from_sampled_tt(self, sampled_tt: ttnn.Tensor, bsz: int) -> torch.Tensor:
+        """Clamp → scale → ``round`` in fp32; host ``[bsz, n_acoustic]`` long (pre special-token offset)."""
+        scaled_host = self._fm_pre_round_scaled_from_sampled_tt(sampled_tt, bsz)
         return scaled_host.round().long()
 
     def _decode_one_frame(
