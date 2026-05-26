@@ -59,6 +59,7 @@ class TtSnake1d:
         device,
         dtype=None,
         memory_config=None,
+        output_memory_config=None,
     ) -> None:
         ttnn = _require_ttnn()
         self.ttnn = ttnn
@@ -72,15 +73,17 @@ class TtSnake1d:
 
         # L1 eltwise chain: all intermediate tensors (ax, sin, square, term, y4) live in L1
         # rather than DRAM, eliminating ~5 DRAM round-trips per snake call.
-        # The final to_layout (Untilize) stages the result back to DRAM *inside* this class
-        # before returning, so callers always receive a DRAM ROW_MAJOR tensor.
-        # This preserves CB safety: k>7 conv1d static CB region extends to ~180 KiB on
-        # Blackhole; any live L1 activation in that band fails program validation at compile
-        # time.  Since snake returns DRAM, no L1 tensor is alive when conv1d is called.
+        # By default the result is staged back to DRAM before returning so callers that
+        # immediately invoke a k>7 conv1d (static CB region ~180 KiB on Blackhole) are safe.
+        # Pass output_memory_config=L1_MEMORY_CONFIG when the caller's next op is k=1 conv
+        # or another L1-safe op — this eliminates the snake DRAM write and the downstream
+        # conv _maybe_l1 copy in one shot.
         l1_mc = ace_step_vae_activation_memory_config(ttnn)
         dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         self._l1_mc = l1_mc
         self._dram_mc = dram_mc
+        # output_memory_config=None → DRAM (safe default); L1_MEMORY_CONFIG when CB-safe.
+        self._output_mc = output_memory_config if output_memory_config is not None else dram_mc
         # Params are tiny (≤256 B each per snake instance); keeping them in L1 makes
         # both multiply operands fully L1-local (no DRAM broadcast read for alpha/beta).
         self.memory_config = memory_config if memory_config is not None else l1_mc
@@ -163,14 +166,15 @@ class TtSnake1d:
         if y4.dtype != self._storage_dtype:
             y4 = ttnn.typecast(y4, self._storage_dtype, **self._typecast_kw)
 
-        # Untilize + stage back to DRAM in one fused to_layout call.
-        # DRAM output is required: k>7 conv1d program compilation (warmup) raises
-        # TT_FATAL if any L1 buffer is alive in the static CB region (~0–180 KiB).
-        # After this call y4's L1 buffer is released (Python refcount → 0 on rebind).
-        _rm_dram_kw = {"memory_config": dram_mc} if dram_mc is not None else {}
+        # Untilize into the requested output memory (DRAM by default).
+        # DRAM is required when the caller's next op is k>7 conv1d: program compilation
+        # raises TT_FATAL if any L1 buffer is alive in the static CB region (~0–180 KiB).
+        # When output_memory_config=L1_MEMORY_CONFIG the result stays in L1, saving the
+        # DRAM write here and the downstream _maybe_l1 copy in k=1 conv.
+        _rm_out_kw = {"memory_config": self._output_mc} if self._output_mc is not None else {}
         if squeeze_back:
             y = ttnn.squeeze(y4, 1)
-            y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, **_rm_dram_kw)
+            y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, **_rm_out_kw)
         else:
-            y = ttnn.to_layout(y4, ttnn.ROW_MAJOR_LAYOUT, **_rm_dram_kw)
+            y = ttnn.to_layout(y4, ttnn.ROW_MAJOR_LAYOUT, **_rm_out_kw)
         return y
