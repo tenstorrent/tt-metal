@@ -298,7 +298,9 @@ class FlowMatchingAudioTransformerRef(nn.Module):
         semantic_code: torch.Tensor,
         llm_hidden: torch.Tensor,
         cfg_alpha: torch.Tensor,
-    ) -> torch.Tensor:
+        *,
+        collect_fm_debug: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         B = semantic_code.shape[0]
         should_decode = semantic_code != self._end_audio_token_id
 
@@ -316,6 +318,7 @@ class FlowMatchingAudioTransformerRef(nn.Module):
             cfg_alpha = ca
 
         sampled = x_0
+        fm_debug: dict[str, torch.Tensor] | None = {} if collect_fm_debug else None
         for i in range(len(timesteps) - 1):
             t = timesteps[i]
             dt = timesteps[i + 1] - timesteps[i]
@@ -325,7 +328,13 @@ class FlowMatchingAudioTransformerRef(nn.Module):
             llm_batched = torch.cat([llm_hidden, llm_hidden_zero], dim=0)
             t_emb_batched = torch.cat([t_emb, t_emb], dim=0)
 
-            v_all = self._predict_velocity(x_t=x_batched, llm_output=llm_batched, t_emb=t_emb_batched)
+            if collect_fm_debug and i == 0:
+                v_all, step_debug = self._predict_velocity_debug(
+                    x_t=x_batched, llm_output=llm_batched, t_emb=t_emb_batched
+                )
+                fm_debug = step_debug
+            else:
+                v_all = self._predict_velocity(x_t=x_batched, llm_output=llm_batched, t_emb=t_emb_batched)
             v_t, uncond_v_t = v_all[:B], v_all[B:]
             v_t = cfg_alpha * v_t + (1 - cfg_alpha) * uncond_v_t
 
@@ -335,7 +344,54 @@ class FlowMatchingAudioTransformerRef(nn.Module):
         scaled_x = ((sampled + 1) / 2) * (self.acoustic_embeddings_levels - 1)
         output_codes = scaled_x.round().long()
         output_codes[~should_decode] = self._empty_audio_token_id
-        return output_codes + len(AudioSpecialTokens.all_special_tokens())
+        codes = output_codes + len(AudioSpecialTokens.all_special_tokens())
+        if collect_fm_debug:
+            assert fm_debug is not None
+            return codes, fm_debug
+        return codes
+
+    def _predict_velocity_debug(
+        self,
+        x_t: torch.Tensor,
+        llm_output: torch.Tensor,
+        t_emb: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        debug: dict[str, torch.Tensor] = {}
+        time_dtype = self.time_projection.weight.dtype
+        llm_dtype = self.llm_projection.weight.dtype
+        input_dtype = self.input_projection.weight.dtype
+
+        t_emb_p = self.time_projection(t_emb.to(dtype=time_dtype)).to(dtype=input_dtype)
+        llm_p = self.llm_projection(llm_output.to(dtype=llm_dtype)).to(dtype=input_dtype)
+        x_t_p = x_t.to(dtype=input_dtype)
+        p0 = self.input_projection(x_t_p.unsqueeze(1))
+        debug["proj_input"] = p0.float()
+        debug["proj_time"] = t_emb_p.unsqueeze(1).float()
+        debug["proj_llm"] = llm_p.unsqueeze(1).float()
+
+        h = torch.cat([p0, t_emb_p.unsqueeze(1), llm_p.unsqueeze(1)], dim=1)
+        debug["concat_input"] = h.unsqueeze(1).float()
+
+        for i in self.layers_ids:
+            layer = self.layers[str(i)]
+            n1 = layer.attention_norm(h)
+            debug[f"layer{i}.attn_norm"] = n1.unsqueeze(1).float()
+            a = layer.attention(n1)
+            debug[f"layer{i}.attn_out"] = a.unsqueeze(1).float()
+            h = h + a
+            debug[f"layer{i}.post_attn"] = h.unsqueeze(1).float()
+            n2 = layer.ffn_norm(h)
+            debug[f"layer{i}.ffn_norm"] = n2.unsqueeze(1).float()
+            f = layer.feed_forward(n2)
+            debug[f"layer{i}.ffn_out"] = f.unsqueeze(1).float()
+            h = h + f
+            debug[f"layer{i}.post_ffn"] = h.unsqueeze(1).float()
+
+        h = self.norm(h)
+        debug["final_norm"] = h.unsqueeze(1).float()
+        v = self.acoustic_codebook_output(h[:, 0, :])
+        debug["velocity"] = v.unsqueeze(1).unsqueeze(1).float()
+        return v.float(), debug
 
     def _predict_velocity(
         self,
@@ -364,7 +420,14 @@ class FlowMatchingAudioTransformerRef(nn.Module):
         final_hidden = final_hidden.view(-1, acoustic_transformer_inputs.shape[1], final_hidden.shape[-1])
         return self.acoustic_codebook_output(final_hidden[:, 0, :])
 
-    def forward(self, llm_hidden: torch.Tensor, cfg_alpha: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        llm_hidden: torch.Tensor,
+        cfg_alpha: torch.Tensor,
+        *,
+        return_debug: bool = False,
+        collect_semantic_logits: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         w_dtype = self.semantic_codebook_output.weight.dtype
         semantic_logit = self.semantic_codebook_output(llm_hidden.to(dtype=w_dtype)).float()
         semantic_logit[:, self._empty_audio_token_id] = float("-inf")
@@ -373,14 +436,32 @@ class FlowMatchingAudioTransformerRef(nn.Module):
         ] = float("-inf")
 
         semantic_code = semantic_logit.argmax(dim=-1, keepdim=True)
+        need_debug = return_debug or collect_semantic_logits
+        debug: dict[str, torch.Tensor] | None = {} if need_debug else None
+        if debug is not None:
+            debug["semantic_logits"] = semantic_logit
 
-        acoustic_codes = self.decode_one_frame(
-            semantic_code.squeeze(1),
-            llm_hidden.to(dtype=self.llm_projection.weight.dtype),
-            cfg_alpha=cfg_alpha,
-        )
+        if return_debug:
+            frame_out = self.decode_one_frame(
+                semantic_code.squeeze(1),
+                llm_hidden.to(dtype=self.llm_projection.weight.dtype),
+                cfg_alpha=cfg_alpha,
+                collect_fm_debug=True,
+            )
+            assert isinstance(frame_out, tuple)
+            acoustic_codes, fm_debug = frame_out
+            debug.update({f"fm.{k}": v for k, v in fm_debug.items()})
+        else:
+            acoustic_codes = self.decode_one_frame(
+                semantic_code.squeeze(1),
+                llm_hidden.to(dtype=self.llm_projection.weight.dtype),
+                cfg_alpha=cfg_alpha,
+            )
 
-        return torch.cat([semantic_code, acoustic_codes], dim=1)
+        codes = torch.cat([semantic_code, acoustic_codes], dim=1)
+        if need_debug:
+            return codes, debug
+        return codes
 
 
 def build_audio_model_args_from_voxtral_config(cfg) -> dict[str, Any]:
