@@ -368,6 +368,18 @@ class ttMLA:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+        # Latent-V placeholder for chunked-prefill: V passed as seq=0 with the
+        # correct V head dim (kv_lora_rank). The op detects this and reuses K's
+        # buffer for V reads, eliminating the per-chunk V slice copy.
+        self.tt_v_latent_null = ttnn.from_torch(
+            torch.zeros(1, 1, 0, self.kv_lora_rank),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
         # Load weights to TT device
         weights = self._convert_and_cache_weights(
             state_dict,
@@ -753,50 +765,48 @@ class ttMLA:
 
             local_offset = chunk_start_global // self.sp_factor
             populated_local = chunk_end_global // self.sp_factor
-            seq_max_local = kvpe_cache.shape[2]
-            seq_max_global = seq_max_local * self.sp_factor
             kvpe_dim = self.kv_lora_rank + self.qk_rope_head_dim
             ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_batch_idx, update_idx=local_offset)
 
-            # V = kv_lora (1 head, kv_lora_rank) — head-dim slice of kvpe_cache.
-            # Full seq retained so K.seq == V.seq (op validation requires it).
-            # wkv_b2 is applied to the compact attn_out after attention.
-            tt_v_lora = ttnn.slice(
+            # K populated prefix: slice both batch (cache_batch_idx) and seq
+            # (populated_local). The seq trim is load-bearing — the op derives
+            # q_start_idx from K's physical seq dim, so it must equal the
+            # populated prefix, not the cache max. See Test 5 in
+            # test_ring_joint_sdpa_handoff.py for the indexed-cache bug demo.
+            tt_k_populated = ttnn.slice(
                 kvpe_cache,
-                [0, 0, 0, 0],
-                [kvpe_cache.shape[0], 1, seq_max_local, self.kv_lora_rank],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                [cache_batch_idx, 0, 0, 0],
+                [cache_batch_idx + 1, 1, populated_local, kvpe_dim],
             )
 
-            # Persistent AG buffers sized to full per-device K/V seq (the AG
-            # gathers seq_max_local * sp_factor since K = full cache).
-            persistent_k_shard_dims = [None, None]
-            persistent_v_shard_dims = [None, None]
+            # V is the first kv_lora_rank head-dim columns of K (MLA absorption);
+            # pass self.tt_v_latent_null (seq=0, head=kv_lora_rank) and an empty
+            # persistent V buffer. The op reads V tiles from K's gathered buffer
+            # with K's row stride and truncates each row to vDHt = kv_lora_rank/32
+            # tiles. wkv_b2 is applied to the compact attn_out after attention.
             persistent_k_buf = ttnn.from_torch(
-                torch.zeros(1, 1, seq_max_global, kvpe_dim),
+                torch.zeros(1, 1, chunk_end_global, kvpe_dim),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=persistent_k_shard_dims
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[None, None]
                 ),
             )
             persistent_v_buf = ttnn.from_torch(
-                torch.zeros(1, 1, seq_max_global, self.kv_lora_rank),
+                torch.zeros(1, 1, 0, self.kv_lora_rank),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=persistent_v_shard_dims
-                ),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
             attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 tt_q,
-                kvpe_cache,
-                tt_v_lora,
+                tt_k_populated,
+                self.tt_v_latent_null,
                 self.joint_q,
                 self.joint_kv,
                 self.joint_v_lora,
@@ -804,6 +814,11 @@ class ttMLA:
                 persistent_output_buffer_v=persistent_v_buf,
                 joint_strategy="rear",
                 logical_n=chunk_end_global,
+                # SDPA chunk sizes capped at 32/32: the L1 budget is driven by
+                # Sk_chunk_t * DHt and Sk_chunk_t * vDHt CB allocations, and larger
+                # configs (e.g. 256/128 from MLA_SDPA_CONFIG[4096]) overflow L1 with
+                # MLA's head dims (DHt=18, vDHt=16). Latent V removes V's DRAM copy
+                # but the V CB is still allocated, so L1 pressure is unchanged.
                 program_config=ttnn.SDPAProgramConfig(
                     compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
                     q_chunk_size=32,
@@ -823,7 +838,6 @@ class ttMLA:
                 is_causal=True,
                 scale=self.scale,
                 is_balanced=self.is_balanced,
-                cache_batch_idx=cache_batch_idx,
             )
 
             attn_out = ttnn.linear(

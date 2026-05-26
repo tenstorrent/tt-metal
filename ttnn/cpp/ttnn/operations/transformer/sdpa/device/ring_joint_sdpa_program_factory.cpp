@@ -169,6 +169,10 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     // q_local_padded_N (Q rows per device) can be shorter than kv_local_padded_N for chunked prefill.
     const bool indexed_kv_cache = args.has_indexed_kv_cache();
+    // Latent-V mode: V passed as seq=0 placeholder; reader reuses K's buffer and
+    // reads only the first vDHt head-dim tiles. V's head dim and NHV still come
+    // from gathered V's shape (the caller sizes that placeholder accordingly).
+    const bool v_shares_k_buffer = tensor_args.has_latent_v();
     const uint32_t B = q_shape[0];
     const uint32_t NH = q_shape[1];
     const uint32_t NHK = k_shape[1];
@@ -507,6 +511,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         chunk_size_t,
         static_cast<uint32_t>(indexed_kv_cache),
         NHV,
+        static_cast<uint32_t>(v_shares_k_buffer),
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);

@@ -105,6 +105,10 @@ struct RingJointSDPAInputs {
     uint32_t local_kv_seq_len() const { return static_cast<uint32_t>(input_k.logical_shape()[2]); }
 
     bool is_chunked() const { return input_q.logical_shape()[2] < local_kv_seq_len(); }
+
+    // Latent-V optimization: V is signalled as seq=0; reader reuses K's buffer
+    // and reads the first vDHt head-dim tiles (V's logical head dim).
+    bool has_latent_v() const { return input_v.logical_shape()[2] == 0; }
 };
 
 // Index constants for RingJointSDPAResult vector

@@ -321,9 +321,12 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         N_global,
         N_local_kv,
         args.ring_size);
+    // Latent-V mode (V.seq == 0) signals "reuse K's buffer for V reads" — gathered V
+    // is empty and the reader fetches V tiles from the gathered K buffer with K's row
+    // stride, reading only the first vDHt head-dim tiles per row.
     TT_FATAL(
-        k_shape[2] == v_shape[2],
-        "K sequence length must be equal to V sequence length. Got K: {}, V: {}",
+        v_shape[2] == 0 || k_shape[2] == v_shape[2],
+        "Gathered V seq length must equal K seq length, or 0 for latent-V mode. Got K: {}, V: {}",
         k_shape[2],
         v_shape[2]);
 
@@ -354,8 +357,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         N_local_kv,
         tt::constants::TILE_HEIGHT);
     TT_FATAL(
-        tensor_args.input_v.logical_shape()[2] == N_local_kv,
-        "V local seq length must match K local seq length. Got V: {}, K: {}",
+        tensor_args.has_latent_v() || tensor_args.input_v.logical_shape()[2] == N_local_kv,
+        "V local seq length must match K local seq length, or be 0 for latent-V mode. Got V: {}, K: {}",
         tensor_args.input_v.logical_shape()[2],
         N_local_kv);
 
