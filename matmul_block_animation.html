@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>matmul_block — animated walkthrough</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c2330;
+    --panel-3: #232b39;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #f0883e;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --yellow: #d29922;
+    --teal: #39c5cf;
+    --pink: #f778ba;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.5; }
+  .wrap { max-width: 1300px; margin: 0 auto; padding: 24px 24px 60px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 14px; font-size: 14px; }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; background: var(--panel-2); padding: 1px 5px; border-radius: 3px; }
+
+  /* Status bar */
+  .status-bar {
+    display: grid;
+    grid-template-columns: 110px 130px 110px 1fr;
+    gap: 8px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+    margin: 12px 0;
+  }
+  .status-cell { background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; }
+  .status-cell .lbl { display: block; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .status-cell .val { display: block; font-family: "SF Mono", Menlo, monospace; font-size: 14px; color: var(--text); margin-top: 2px; }
+  .status-cell.phase .val { color: var(--accent); }
+
+  .desc-bar {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--yellow);
+    border-radius: 4px;
+    padding: 10px 14px;
+    font-size: 13px;
+    margin: 8px 0 16px;
+    min-height: 42px;
+  }
+  .desc-bar code { background: var(--panel-3); }
+
+  /* Matrix layout */
+  .main-view {
+    display: grid;
+    grid-template-columns: auto auto;
+    grid-template-rows: auto auto;
+    gap: 18px 28px;
+    margin: 16px 0;
+  }
+  .corner { background: transparent; }
+  .b-area, .a-area, .c-area { display: flex; flex-direction: column; }
+  .mat-label { font-size: 11px; color: var(--muted); font-family: "SF Mono", Menlo, monospace; margin-bottom: 6px; }
+
+  .tile-grid { display: inline-grid; gap: 2px; padding: 6px; background: #0a0d12; border-radius: 4px; }
+  .tile {
+    width: 28px; height: 28px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "SF Mono", Menlo, monospace; font-size: 10px;
+    color: var(--muted);
+    transition: background 0.18s, border-color 0.18s, box-shadow 0.18s, transform 0.12s;
+    position: relative;
+  }
+  .tile.empty { background: var(--panel-2); border-color: var(--border); color: var(--muted); }
+  .tile.a-fill { background: rgba(188,140,255,0.18); border-color: var(--purple); color: var(--text); }
+  .tile.b-fill { background: rgba(57,197,207,0.18); border-color: var(--teal); color: var(--text); }
+  .tile.lvl-1 { background: rgba(63,185,80,0.18); border-color: rgba(63,185,80,0.55); color: var(--text); }
+  .tile.lvl-2 { background: rgba(63,185,80,0.34); border-color: rgba(63,185,80,0.75); color: var(--text); }
+  .tile.lvl-3 { background: rgba(63,185,80,0.55); border-color: var(--green); color: var(--text); font-weight: 600; }
+  .tile.dst-lvl-1 { background: rgba(240,136,62,0.22); border-color: rgba(240,136,62,0.55); color: var(--text); }
+  .tile.dst-lvl-2 { background: rgba(240,136,62,0.38); border-color: rgba(240,136,62,0.75); color: var(--text); }
+  .tile.dst-lvl-3 { background: rgba(240,136,62,0.55); border-color: var(--orange); color: var(--text); font-weight: 600; }
+  .tile.reserved { background: var(--panel-2); border-style: dashed; border-color: var(--muted); }
+  .tile.kslice { box-shadow: inset 0 0 0 1px var(--yellow); }
+
+  /* Active highlights */
+  .tile.read { box-shadow: 0 0 0 2px var(--red); z-index: 1; transform: scale(1.06); }
+  .tile.write { box-shadow: 0 0 0 2px var(--accent); z-index: 1; transform: scale(1.06); }
+  .tile.flash { animation: flash 0.5s ease-out; }
+  @keyframes flash {
+    0% { box-shadow: 0 0 0 4px rgba(248,81,73,0.7); }
+    100% { box-shadow: 0 0 0 2px var(--red); }
+  }
+  .tile.active-sb { outline: 2px solid var(--yellow); outline-offset: 1px; z-index: 1; }
+
+  /* Buffers row */
+  .bufs-view {
+    display: grid;
+    grid-template-columns: auto auto auto;
+    gap: 16px;
+    margin: 18px 0;
+    align-items: flex-start;
+  }
+  .buf-card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+  .buf-card .buf-label { font-size: 11px; color: var(--muted); font-family: "SF Mono", Menlo, monospace; margin-bottom: 6px; }
+  .buf-card .buf-sub { font-size: 10px; color: var(--muted); margin-top: 4px; }
+
+  /* Controls */
+  .controls {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 14px;
+    margin: 18px 0 8px;
+    flex-wrap: wrap;
+  }
+  .controls button {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 7px 14px;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .controls button:hover { background: var(--panel-3); border-color: var(--accent); }
+  .controls button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .controls button.primary { background: var(--accent); color: #0a0d12; border-color: var(--accent); font-weight: 600; }
+  .controls button.primary:hover { background: #79b8ff; }
+  .controls .spacer { flex: 1; }
+  .controls label { font-size: 12px; color: var(--muted); }
+  .controls input[type=range] { width: 130px; accent-color: var(--accent); }
+  .controls .frame-info { font-family: "SF Mono", Menlo, monospace; font-size: 12px; color: var(--muted); padding: 4px 8px; background: var(--panel-2); border-radius: 3px; }
+
+  /* Legend */
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 16px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 14px;
+    margin: 8px 0 16px;
+    font-size: 12px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .swatch { width: 16px; height: 16px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.15); }
+
+  .progress-bar {
+    height: 4px;
+    background: var(--panel-2);
+    border-radius: 2px;
+    margin: 4px 0 10px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--purple));
+    width: 0%;
+    transition: width 0.2s;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>matmul_block — animated walkthrough</h1>
+<p class="sub">
+  C = A × B with sub-blocking + K-blocking. Same example as the zoom doc:
+  <code>num_k_blocks = 3</code>, 2×2 M-subblocks × 2×2 N-subblocks of 2×2 tiles,
+  <code>block_w = 2</code>, software spill/reload (no L1_ACC). Press <b>Play</b>.
+</p>
+
+<div class="legend">
+  <div class="legend-item"><span class="swatch" style="background:rgba(188,140,255,0.18);border-color:var(--purple)"></span>A (in0)</div>
+  <div class="legend-item"><span class="swatch" style="background:rgba(57,197,207,0.18);border-color:var(--teal)"></span>B (in1)</div>
+  <div class="legend-item"><span class="swatch" style="background:rgba(63,185,80,0.18);border-color:rgba(63,185,80,0.55)"></span>1 K-block accumulated</div>
+  <div class="legend-item"><span class="swatch" style="background:rgba(63,185,80,0.34);border-color:rgba(63,185,80,0.75)"></span>2 K-blocks accumulated</div>
+  <div class="legend-item"><span class="swatch" style="background:rgba(63,185,80,0.55);border-color:var(--green)"></span>3 K-blocks = final</div>
+  <div class="legend-item"><span class="swatch" style="background:rgba(240,136,62,0.38);border-color:var(--orange)"></span>DST (math/pack regs)</div>
+  <div class="legend-item"><span class="swatch" style="box-shadow:0 0 0 2px var(--red); background:var(--panel-2)"></span>currently read</div>
+  <div class="legend-item"><span class="swatch" style="box-shadow:0 0 0 2px var(--accent); background:var(--panel-2)"></span>currently written</div>
+  <div class="legend-item"><span class="swatch" style="background:var(--panel-2);box-shadow:inset 0 0 0 1px var(--yellow)"></span>K-block slice</div>
+</div>
+
+<div class="status-bar">
+  <div class="status-cell"><span class="lbl">K-block</span><span class="val" id="status-kb">—</span></div>
+  <div class="status-cell"><span class="lbl">Subblock</span><span class="val" id="status-sb">—</span></div>
+  <div class="status-cell"><span class="lbl">Inner FMA</span><span class="val" id="status-inner">—</span></div>
+  <div class="status-cell phase"><span class="lbl">Phase</span><span class="val" id="status-phase">—</span></div>
+</div>
+
+<div class="progress-bar"><div class="progress-fill" id="progress"></div></div>
+
+<div class="desc-bar" id="desc">Press <b>Play</b> to begin the walkthrough.</div>
+
+<div class="main-view">
+  <!-- top-left: empty -->
+  <div class="corner"></div>
+  <!-- top-right: B -->
+  <div class="b-area">
+    <div class="mat-label">B (in1) — K=6 × N=4 tiles</div>
+    <div class="tile-grid" id="b-grid" style="grid-template-columns: repeat(4, 28px);"></div>
+  </div>
+  <!-- bottom-left: A -->
+  <div class="a-area">
+    <div class="mat-label">A (in0) — M=4 × K=6 tiles</div>
+    <div class="tile-grid" id="a-grid" style="grid-template-columns: repeat(6, 28px);"></div>
+  </div>
+  <!-- bottom-right: C -->
+  <div class="c-area">
+    <div class="mat-label">C (out_buf) — M=4 × N=4 tiles (4 subblocks of 2×2)</div>
+    <div class="tile-grid" id="c-grid" style="grid-template-columns: repeat(4, 28px);"></div>
+  </div>
+</div>
+
+<div class="bufs-view">
+  <div class="buf-card">
+    <div class="buf-label">DST — 1 subblock (2×2 tiles)</div>
+    <div class="tile-grid" id="dst-grid" style="grid-template-columns: repeat(2, 28px);"></div>
+    <div class="buf-sub">MATH writes, PACK reads. Cleared per subblock.</div>
+  </div>
+  <div class="buf-card">
+    <div class="buf-label">interm_buf — 16 tiles (running K-partial)</div>
+    <div class="tile-grid" id="interm-grid" style="grid-template-columns: repeat(4, 28px);"></div>
+    <div class="buf-sub">Holds partial sums between K-blocks. Consumed on last K-block.</div>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="btn-reset">⏮ Reset</button>
+  <button id="btn-step-back">◀ Step</button>
+  <button class="primary" id="btn-play">▶ Play</button>
+  <button id="btn-step-fwd">Step ▶</button>
+  <div class="spacer"></div>
+  <label>Speed:</label>
+  <input type="range" id="speed" min="120" max="2200" value="700" step="50">
+  <span id="speed-label" style="font-size:12px;color:var(--muted);min-width:60px;">700 ms</span>
+  <span class="frame-info">Frame <span id="frame-idx">0</span> / <span id="frame-total">—</span></span>
+</div>
+
+<script>
+// ─── Configuration ──────────────────────────────────────────────────────────
+const M_TILES = 4, K_TILES = 6, N_TILES = 4;
+const M_SB = 2, N_SB = 2;
+const SB_H = 2, SB_W = 2;        // tiles per subblock
+const BLOCK_W = 2;                // K tiles per K-block
+const NUM_K_BLOCKS = 3;
+const SB_TILES = SB_H * SB_W;     // 4
+const OUT_TILES = M_TILES * N_TILES;   // 16
+
+// ─── DOM cache ──────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+const aGrid = $('a-grid'), bGrid = $('b-grid'), cGrid = $('c-grid');
+const dstGrid = $('dst-grid'), intermGrid = $('interm-grid');
+
+// ─── Build static tile DOM ──────────────────────────────────────────────────
+function buildGrid(parent, rows, cols, idx) {
+  parent.innerHTML = '';
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const d = document.createElement('div');
+      d.className = 'tile empty';
+      d.id = `${idx}-${r}-${c}`;
+      d.textContent = `${r},${c}`;
+      parent.appendChild(d);
+    }
+  }
+}
+buildGrid(aGrid, M_TILES, K_TILES, 'a');
+buildGrid(bGrid, K_TILES, N_TILES, 'b');
+buildGrid(cGrid, M_TILES, N_TILES, 'c');
+buildGrid(dstGrid, SB_H, SB_W, 'dst');
+buildGrid(intermGrid, M_TILES, N_TILES, 'interm');
+
+// A and B start as "filled" input tiles
+function paintInputs() {
+  for (let r = 0; r < M_TILES; r++)
+    for (let c = 0; c < K_TILES; c++) {
+      const t = $(`a-${r}-${c}`);
+      t.classList.remove('empty');
+      t.classList.add('a-fill');
+    }
+  for (let r = 0; r < K_TILES; r++)
+    for (let c = 0; c < N_TILES; c++) {
+      const t = $(`b-${r}-${c}`);
+      t.classList.remove('empty');
+      t.classList.add('b-fill');
+    }
+}
+
+// ─── State tracking ─────────────────────────────────────────────────────────
+// Each tile holds an accumulation "level" 0..3 (number of K-blocks summed).
+// DST level resets per subblock — represents how many K-blocks contributed to the current subblock value.
+// interm/out are 4x4 grids in tile coords matching C.
+let state;
+
+function resetState() {
+  state = {
+    dst: [],             // 4 cells, level 0..3
+    interm: [],          // 16 cells, level 0..3
+    intermReserved: [],  // 16 cells, bool — reserved but not yet packed
+    out: [],             // 16 cells, level 0..3
+    outReserved: [],     // 16 cells, bool
+    activeARead: new Set(),
+    activeBRead: new Set(),
+    activeIntermRead: new Set(),
+    activeIntermWrite: new Set(),
+    activeOutWrite: new Set(),
+    activeDstRead: new Set(),
+    activeDstWrite: new Set(),
+    kSliceK: -1,
+    activeSb: null,      // {m_sb, n_sb} or null
+    status: { kb: '—', sb: '—', inner: '—', phase: 'idle' },
+    desc: 'Press <b>Play</b> to begin the walkthrough.',
+  };
+  for (let i = 0; i < SB_TILES; i++) state.dst.push(0);
+  for (let i = 0; i < OUT_TILES; i++) {
+    state.interm.push(0);
+    state.intermReserved.push(false);
+    state.out.push(0);
+    state.outReserved.push(false);
+  }
+}
+
+// Tile address helpers — interm and out are 4x4 indexed by (M tile, N tile)
+const cellIdx = (r, c) => r * N_TILES + c;
+
+// Per-subblock tile lists (in tile coords)
+function subblockCells(m_sb, n_sb) {
+  const cells = [];
+  for (let dr = 0; dr < SB_H; dr++)
+    for (let dc = 0; dc < SB_W; dc++)
+      cells.push({ r: m_sb*SB_H + dr, c: n_sb*SB_W + dc });
+  return cells;
+}
+
+// ─── Frame generation ───────────────────────────────────────────────────────
+function genFrames() {
+  const F = [];
+  const push = (phase, opts, desc) => F.push({ phase, ...opts, desc });
+
+  push('init', {}, 'Setup: A (4×6) and B (6×4) ready in CBs. interm_buf empty, out_buf empty. Compute C = A × B in 3 K-blocks of width 2.');
+
+  for (let kb = 0; kb < NUM_K_BLOCKS; kb++) {
+    const last = (kb === NUM_K_BLOCKS - 1);
+    push('kblock-start', { kb }, `<b>K-block ${kb}</b> begins. K-slice = A cols ${kb*2}-${kb*2+1}, B rows ${kb*2}-${kb*2+1}.`);
+    push('wait-inputs', { kb }, `<code>wait_front</code>: 8 in0 tiles + 8 in1 tiles. Producer guarantees this K-block's worth is fronted.`);
+
+    if (kb === 0) {
+      push('reserve-out', { kb }, `<code>out_buf.reserve_back(16)</code> — full output reserved up-front (SubblockGrouped, first non-last block).`);
+    }
+
+    for (let m_sb = 0; m_sb < M_SB; m_sb++) {
+      for (let n_sb = 0; n_sb < N_SB; n_sb++) {
+        push('acquire', { kb, m_sb, n_sb }, `Subblock (${m_sb},${n_sb}) — <code>tile_regs_acquire()</code>: MATH takes DST.`);
+
+        if (kb > 0) {
+          push('reload', { kb, m_sb, n_sb }, `<code>copy_block_matmul_partials()</code> pulls subblock (${m_sb},${n_sb})'s partial (${kb} K-block${kb>1?'s':''} so far) from interm_buf → DST. Then <code>interm_buf.pop_front(4)</code>.`);
+        }
+
+        for (let inner = 0; inner < BLOCK_W; inner++) {
+          push('fma', { kb, m_sb, n_sb, inner }, `Inner FMA ${inner}: <code>ckernel::matmul_block</code> — outer product of A col [m=${m_sb*2}..${m_sb*2+1}, k=${kb*2+inner}] × B row [k=${kb*2+inner}, n=${n_sb*2}..${n_sb*2+1}] accumulates into DST's 2×2.`);
+        }
+
+        if (last) push('post-compute', { kb, m_sb, n_sb }, `<code>post_compute(4)</code> — user hook (default no-op; SDPA mask slot).`);
+
+        push('commit', { kb, m_sb, n_sb }, `<code>tile_regs_commit()</code>: MATH → PACK handoff.`);
+
+        const targetName = last ? 'out_buf' : 'interm_buf';
+        push('reserve-sb', { kb, m_sb, n_sb, target: targetName }, `<code>${targetName}.reserve_back(4)</code> — packer takes 4 tiles in the next free slot${last ? ' (within the upfront 16-tile reserve)' : ''}.`);
+        push('pack-wait', { kb, m_sb, n_sb }, `<code>tile_regs_wait()</code>: PACK waits on commit.`);
+        push('pack', { kb, m_sb, n_sb, target: targetName }, `<code>pack_tile_block(0, ${targetName}, 4)</code> — DST → ${targetName} at subblock (${m_sb},${n_sb}). ${last ? 'Final value.' : `Partial accumulated through K-block ${kb}.`}`);
+        push('release', { kb, m_sb, n_sb }, `<code>tile_regs_release()</code>: DST freed for the next subblock.`);
+        push('push-sb', { kb, m_sb, n_sb, target: targetName }, `<code>${targetName}.push_back(4)</code> — subblock now visible to consumer.`);
+      }
+    }
+
+    push('pop-inputs', { kb }, `<code>pop_front</code> in0 + in1 (8 each). Producer can refill for K-block ${kb+1}.`);
+    push('kblock-end', { kb }, last
+      ? `<b>K-block ${kb} done.</b> All ${NUM_K_BLOCKS} K-blocks complete — out_buf holds final C.`
+      : `<b>K-block ${kb} done.</b> Set <code>enable_reload = true</code> so block ${kb+1} reloads partials from interm.`);
+  }
+
+  push('done', {}, '✓ Final result: <code>out_buf</code> holds C = A × B, packed in SubblockGrouped order.');
+  return F;
+}
+
+const FRAMES = genFrames();
+$('frame-total').textContent = FRAMES.length;
+
+// ─── Apply a frame to state ─────────────────────────────────────────────────
+function clearActives() {
+  state.activeARead.clear();
+  state.activeBRead.clear();
+  state.activeIntermRead.clear();
+  state.activeIntermWrite.clear();
+  state.activeOutWrite.clear();
+  state.activeDstRead.clear();
+  state.activeDstWrite.clear();
+}
+
+function applyFrame(f) {
+  state.desc = f.desc;
+  state.status.kb = (f.kb !== undefined) ? `${f.kb} / ${NUM_K_BLOCKS-1}` : '—';
+  state.status.sb = (f.m_sb !== undefined) ? `(${f.m_sb},${f.n_sb})` : '—';
+  state.status.inner = (f.inner !== undefined) ? `${f.inner}` : '—';
+  state.status.phase = f.phase;
+  clearActives();
+
+  if (f.kb !== undefined) {
+    state.kSliceK = f.kb;
+    state.activeSb = (f.m_sb !== undefined) ? { m_sb: f.m_sb, n_sb: f.n_sb } : null;
+  } else {
+    state.kSliceK = -1;
+    state.activeSb = null;
+  }
+
+  switch (f.phase) {
+    case 'init':
+      // Nothing to mutate beyond initial state.
+      state.kSliceK = -1;
+      break;
+
+    case 'kblock-start':
+    case 'wait-inputs':
+      // Slice highlight only.
+      break;
+
+    case 'reserve-out':
+      for (let i = 0; i < OUT_TILES; i++) state.outReserved[i] = true;
+      break;
+
+    case 'acquire': {
+      // Clear DST + mark all DST cells as "in use" for this subblock.
+      for (let i = 0; i < SB_TILES; i++) state.dst[i] = 0;
+      for (let i = 0; i < SB_TILES; i++) state.activeDstWrite.add(i);
+      break;
+    }
+
+    case 'reload': {
+      // DST gets loaded with f.kb K-blocks' worth of accumulation from interm.
+      // interm cells for this subblock get marked as read; their level stays
+      // (visually they remain until next pack overwrites).
+      const sb = subblockCells(f.m_sb, f.n_sb);
+      sb.forEach((cell, i) => {
+        state.dst[i] = f.kb;  // kb K-blocks worth so far
+        state.activeIntermRead.add(cellIdx(cell.r, cell.c));
+        state.activeDstWrite.add(i);
+      });
+      break;
+    }
+
+    case 'fma': {
+      const sb = subblockCells(f.m_sb, f.n_sb);
+      // DST level bumps by 1 (this inner step adds one tile's worth of FMA across K).
+      // Visually we increment the level after the FULL inner loop of the subblock —
+      // not per inner step — so the user sees the level tick once per K-step here.
+      // Mark A column tiles (m_sb*2..m_sb*2+1 rows, k=kb*2+inner col).
+      const kCol = f.kb * BLOCK_W + f.inner;
+      for (let dr = 0; dr < SB_H; dr++) {
+        state.activeARead.add((f.m_sb * SB_H + dr) * K_TILES + kCol);
+      }
+      // Mark B row tiles (k=kb*2+inner row, n_sb*2..n_sb*2+1 cols).
+      for (let dc = 0; dc < SB_W; dc++) {
+        state.activeBRead.add(kCol * N_TILES + (f.n_sb * SB_W + dc));
+      }
+      sb.forEach((cell, i) => state.activeDstWrite.add(i));
+      // Bump DST level on every inner FMA — represents this K-tile's contribution.
+      // To keep semantics clean (level = # of completed K-blocks accumulated), we
+      // only bump once per subblock — at inner==BLOCK_W-1 — so the green stays
+      // consistent. Within-block accumulation is implicit.
+      if (f.inner === BLOCK_W - 1) {
+        for (let i = 0; i < SB_TILES; i++) state.dst[i] = f.kb + 1;
+      }
+      break;
+    }
+
+    case 'post-compute':
+      // No-op visually; DST holds the about-to-be-final value.
+      break;
+
+    case 'commit':
+      // Hand-off — DST now visible to PACK.
+      break;
+
+    case 'reserve-sb': {
+      const sb = subblockCells(f.m_sb, f.n_sb);
+      if (f.target === 'interm_buf') {
+        sb.forEach(cell => state.intermReserved[cellIdx(cell.r, cell.c)] = true);
+      } else {
+        // out_buf already reserved upfront; mark this subblock as "active writer slot"
+        sb.forEach(cell => state.activeOutWrite.add(cellIdx(cell.r, cell.c)));
+      }
+      break;
+    }
+
+    case 'pack-wait':
+      break;
+
+    case 'pack': {
+      // DST contents (level kb+1) flow into target buffer at subblock (m_sb, n_sb).
+      const sb = subblockCells(f.m_sb, f.n_sb);
+      const level = f.kb + 1;
+      sb.forEach(cell => {
+        const idx = cellIdx(cell.r, cell.c);
+        if (f.target === 'interm_buf') {
+          state.interm[idx] = level;
+          state.intermReserved[idx] = false;
+          state.activeIntermWrite.add(idx);
+        } else {
+          state.out[idx] = level;
+          state.outReserved[idx] = false;
+          state.activeOutWrite.add(idx);
+        }
+        state.activeDstRead.add(sb.indexOf(cell));
+      });
+      break;
+    }
+
+    case 'release':
+      // Clear DST.
+      for (let i = 0; i < SB_TILES; i++) state.dst[i] = 0;
+      break;
+
+    case 'push-sb':
+      // Already reflected in state.interm/out; nothing extra.
+      break;
+
+    case 'pop-inputs':
+      // Visually nothing happens to A/B (they remain in the CB until producer overwrites).
+      break;
+
+    case 'kblock-end':
+      // Reset enable_reload note — no visual.
+      break;
+
+    case 'done':
+      state.kSliceK = -1;
+      state.activeSb = null;
+      break;
+  }
+}
+
+// ─── Render state into DOM ──────────────────────────────────────────────────
+function render() {
+  // Status fields
+  $('status-kb').textContent = state.status.kb;
+  $('status-sb').textContent = state.status.sb;
+  $('status-inner').textContent = state.status.inner;
+  $('status-phase').textContent = state.status.phase;
+  $('desc').innerHTML = state.desc;
+
+  // A grid: paint K-slice highlight + active reads
+  for (let r = 0; r < M_TILES; r++) {
+    for (let c = 0; c < K_TILES; c++) {
+      const t = $(`a-${r}-${c}`);
+      t.className = 'tile a-fill';
+      const inSlice = (state.kSliceK >= 0) &&
+        (c >= state.kSliceK * BLOCK_W) && (c < (state.kSliceK + 1) * BLOCK_W);
+      if (inSlice) t.classList.add('kslice');
+      if (state.activeARead.has(r * K_TILES + c)) t.classList.add('read');
+    }
+  }
+  // B grid
+  for (let r = 0; r < K_TILES; r++) {
+    for (let c = 0; c < N_TILES; c++) {
+      const t = $(`b-${r}-${c}`);
+      t.className = 'tile b-fill';
+      const inSlice = (state.kSliceK >= 0) &&
+        (r >= state.kSliceK * BLOCK_W) && (r < (state.kSliceK + 1) * BLOCK_W);
+      if (inSlice) t.classList.add('kslice');
+      if (state.activeBRead.has(r * N_TILES + c)) t.classList.add('read');
+    }
+  }
+  // C grid (out_buf)
+  for (let r = 0; r < M_TILES; r++) {
+    for (let c = 0; c < N_TILES; c++) {
+      const idx = cellIdx(r, c);
+      const t = $(`c-${r}-${c}`);
+      const lvl = state.out[idx];
+      t.className = 'tile';
+      if (state.outReserved[idx] && lvl === 0) t.classList.add('reserved');
+      else if (lvl === 0) t.classList.add('empty');
+      else t.classList.add(`lvl-${Math.min(lvl, 3)}`);
+      if (state.activeSb && state.activeSb.m_sb === Math.floor(r/SB_H) && state.activeSb.n_sb === Math.floor(c/SB_W)) {
+        t.classList.add('active-sb');
+      }
+      if (state.activeOutWrite.has(idx)) t.classList.add('write');
+    }
+  }
+  // DST grid
+  for (let r = 0; r < SB_H; r++) {
+    for (let c = 0; c < SB_W; c++) {
+      const i = r * SB_W + c;
+      const t = $(`dst-${r}-${c}`);
+      const lvl = state.dst[i];
+      t.className = 'tile';
+      if (lvl === 0) t.classList.add('empty');
+      else t.classList.add(`dst-lvl-${Math.min(lvl, 3)}`);
+      if (state.activeDstWrite.has(i)) t.classList.add('write');
+      if (state.activeDstRead.has(i)) t.classList.add('read');
+    }
+  }
+  // interm grid
+  for (let r = 0; r < M_TILES; r++) {
+    for (let c = 0; c < N_TILES; c++) {
+      const idx = cellIdx(r, c);
+      const t = $(`interm-${r}-${c}`);
+      const lvl = state.interm[idx];
+      t.className = 'tile';
+      if (state.intermReserved[idx] && lvl === 0) t.classList.add('reserved');
+      else if (lvl === 0) t.classList.add('empty');
+      else t.classList.add(`lvl-${Math.min(lvl, 3)}`);
+      if (state.activeIntermRead.has(idx)) t.classList.add('read');
+      if (state.activeIntermWrite.has(idx)) t.classList.add('write');
+    }
+  }
+
+  // Progress + frame counter
+  $('frame-idx').textContent = frameIdx;
+  const pct = FRAMES.length > 1 ? (frameIdx / (FRAMES.length - 1)) * 100 : 0;
+  $('progress').style.width = pct + '%';
+}
+
+// ─── Controller ─────────────────────────────────────────────────────────────
+let frameIdx = 0;
+let playing = false;
+let playTimer = null;
+
+function replayTo(target) {
+  resetState();
+  paintInputs();
+  for (let i = 0; i <= target && i < FRAMES.length; i++) {
+    applyFrame(FRAMES[i]);
+  }
+  frameIdx = target;
+  render();
+}
+
+function stepForward() {
+  if (frameIdx >= FRAMES.length - 1) {
+    stopPlay();
+    return;
+  }
+  frameIdx++;
+  applyFrame(FRAMES[frameIdx]);
+  render();
+}
+
+function stepBack() {
+  if (frameIdx <= 0) return;
+  replayTo(frameIdx - 1);
+}
+
+function startPlay() {
+  if (frameIdx >= FRAMES.length - 1) replayTo(0);
+  playing = true;
+  $('btn-play').textContent = '⏸ Pause';
+  const tick = () => {
+    if (!playing) return;
+    stepForward();
+    if (frameIdx >= FRAMES.length - 1) { stopPlay(); return; }
+    playTimer = setTimeout(tick, parseInt($('speed').value, 10));
+  };
+  playTimer = setTimeout(tick, parseInt($('speed').value, 10));
+}
+
+function stopPlay() {
+  playing = false;
+  $('btn-play').textContent = '▶ Play';
+  if (playTimer) clearTimeout(playTimer);
+}
+
+function reset() {
+  stopPlay();
+  replayTo(0);
+}
+
+// ─── Wire up controls ───────────────────────────────────────────────────────
+$('btn-reset').addEventListener('click', reset);
+$('btn-step-back').addEventListener('click', () => { stopPlay(); stepBack(); });
+$('btn-step-fwd').addEventListener('click', () => { stopPlay(); stepForward(); });
+$('btn-play').addEventListener('click', () => {
+  if (playing) stopPlay();
+  else startPlay();
+});
+$('speed').addEventListener('input', (e) => {
+  $('speed-label').textContent = e.target.value + ' ms';
+});
+$('speed-label').textContent = $('speed').value + ' ms';
+
+// Initial render
+replayTo(0);
+</script>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>matmul_kloop_pack — animated walkthrough</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c2330;
+    --panel-3: #232b39;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #f0883e;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --yellow: #d29922;
+    --teal: #39c5cf;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.5; }
+  .wrap { max-width: 1300px; margin: 0 auto; padding: 24px 22px 60px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 12px; font-size: 13px; }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; background: var(--panel-2); padding: 1px 5px; border-radius: 3px; }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 14px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 14px; font-size: 12px; margin: 8px 0;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .swatch { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.15); }
+
+  .status-bar {
+    display: grid;
+    grid-template-columns: 110px 130px 110px 1fr;
+    gap: 8px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; margin: 8px 0;
+  }
+  .status-cell { background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; }
+  .status-cell .lbl { display: block; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .status-cell .val { display: block; font-family: "SF Mono", Menlo, monospace; font-size: 14px; color: var(--text); margin-top: 2px; }
+  .status-cell.phase .val { color: var(--accent); }
+
+  .desc-bar {
+    background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--yellow);
+    border-radius: 4px; padding: 9px 14px; font-size: 13px; margin: 8px 0 12px; min-height: 40px;
+  }
+  .desc-bar code { background: var(--panel-3); }
+
+  .progress-bar {
+    height: 4px; background: var(--panel-2); border-radius: 2px;
+    margin: 4px 0 10px; overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--purple));
+    width: 0%;
+    transition: width 0.2s;
+  }
+
+  .main-view {
+    display: grid;
+    grid-template-columns: auto auto;
+    grid-template-rows: auto auto;
+    gap: 14px 24px;
+    margin: 14px 0;
+  }
+  .corner { background: transparent; }
+  .area { display: flex; flex-direction: column; }
+  .mat-label { font-size: 11px; color: var(--muted); font-family: "SF Mono", Menlo, monospace; margin-bottom: 6px; }
+
+  .tile-grid { display: inline-grid; gap: 2px; padding: 6px; background: #0a0d12; border-radius: 4px; }
+  .tile {
+    width: 22px; height: 22px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "SF Mono", Menlo, monospace; font-size: 8px;
+    color: var(--muted);
+    transition: background 0.18s, border-color 0.18s, box-shadow 0.18s, transform 0.12s;
+    position: relative;
+  }
+  .tile.empty { background: var(--panel-2); border-color: var(--border); color: var(--muted); }
+  .tile.a-fill { background: rgba(188,140,255,0.18); border-color: var(--purple); color: var(--text); }
+  .tile.b-fill { background: rgba(57,197,207,0.18); border-color: var(--teal); color: var(--text); }
+  .tile.c-final { background: rgba(63,185,80,0.55); border-color: var(--green); color: var(--text); font-weight: 600; }
+  .tile.dst-partial-1 { background: rgba(240,136,62,0.18); border-color: rgba(240,136,62,0.45); color: var(--text); }
+  .tile.dst-partial-2 { background: rgba(240,136,62,0.28); border-color: rgba(240,136,62,0.55); color: var(--text); }
+  .tile.dst-partial-3 { background: rgba(240,136,62,0.38); border-color: rgba(240,136,62,0.65); color: var(--text); }
+  .tile.dst-partial-4 { background: rgba(240,136,62,0.48); border-color: rgba(240,136,62,0.75); color: var(--text); }
+  .tile.dst-partial-5 { background: rgba(240,136,62,0.58); border-color: rgba(240,136,62,0.85); color: var(--text); }
+  .tile.dst-final { background: rgba(240,136,62,0.7); border-color: var(--orange); color: var(--text); font-weight: 600; }
+
+  .tile.read { box-shadow: 0 0 0 2px var(--red); z-index: 1; transform: scale(1.08); }
+  .tile.write { box-shadow: 0 0 0 2px var(--accent); z-index: 1; transform: scale(1.08); }
+  .tile.fronted { box-shadow: inset 0 0 0 1px var(--yellow); }
+  .tile.iter-active { outline: 2px solid var(--yellow); outline-offset: 1px; }
+
+  .bufs-view {
+    display: grid;
+    grid-template-columns: auto auto;
+    gap: 18px;
+    margin: 14px 0;
+    align-items: flex-start;
+  }
+  .buf-card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+  .buf-card .buf-label { font-size: 11px; color: var(--muted); font-family: "SF Mono", Menlo, monospace; margin-bottom: 6px; }
+  .buf-card .buf-sub { font-size: 10px; color: var(--muted); margin-top: 4px; }
+  .buf-card.absent {
+    opacity: 0.35; border-style: dashed;
+  }
+  .buf-card.absent .buf-label { color: var(--red); }
+
+  .scope-indicator {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-family: "SF Mono", Menlo, monospace;
+    margin-left: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--muted);
+  }
+  .scope-indicator.active {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: rgba(88,166,255,0.1);
+  }
+
+  .controls {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 14px; margin: 14px 0 8px; flex-wrap: wrap;
+  }
+  .controls button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 7px 14px; font-family: inherit; font-size: 13px; cursor: pointer;
+  }
+  .controls button:hover { background: var(--panel-3); border-color: var(--accent); }
+  .controls button.primary { background: var(--accent); color: #0a0d12; border-color: var(--accent); font-weight: 600; }
+  .controls button.primary:hover { background: #79b8ff; }
+  .controls .spacer { flex: 1; }
+  .controls label { font-size: 12px; color: var(--muted); }
+  .controls input[type=range] { width: 130px; accent-color: var(--accent); }
+  .controls .frame-info { font-family: "SF Mono", Menlo, monospace; font-size: 12px; color: var(--muted); padding: 4px 8px; background: var(--panel-2); border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>matmul_kloop_pack — animated walkthrough</h1>
+<p class="sub">
+  mla_wo decode shape: <code>C[1×28] = A[1×6] × B[6×28]</code>.
+  4 kloop calls walking N in slices of 7 tiles. Each call: ONE DST scope, 3 outer in1 segments × 2 inner FMAs = 6 FMAs, 1 pack.
+  <br>(K scaled down to 6 for visualization; mla_wo's real K is up to 44 tiles per core.)
+</p>
+
+<div class="legend">
+  <div class="legend-item"><span class="swatch" style="background:rgba(188,140,255,0.18);border-color:var(--purple)"></span>A (in0) — fronted ONCE, never popped</div>
+  <div class="legend-item"><span class="swatch" style="background:rgba(57,197,207,0.18);border-color:var(--teal)"></span>B (in1) — streams per outer block</div>
+  <div class="legend-item"><span class="swatch" style="box-shadow:inset 0 0 0 1px var(--yellow);background:rgba(57,197,207,0.18)"></span>currently in in1 CB</div>
+  <div class="legend-item"><span class="swatch" style="background:rgba(240,136,62,0.38);border-color:rgba(240,136,62,0.65)"></span>DST partial</div>
+  <div class="legend-item"><span class="swatch" style="background:rgba(240,136,62,0.7);border-color:var(--orange)"></span>DST final (K done)</div>
+  <div class="legend-item"><span class="swatch" style="background:rgba(63,185,80,0.55);border-color:var(--green)"></span>C output (final)</div>
+  <div class="legend-item"><span class="swatch" style="box-shadow:0 0 0 2px var(--red);background:var(--panel-2)"></span>read</div>
+  <div class="legend-item"><span class="swatch" style="box-shadow:0 0 0 2px var(--accent);background:var(--panel-2)"></span>write</div>
+</div>
+
+<div class="status-bar">
+  <div class="status-cell"><span class="lbl">Iter (kloop call)</span><span class="val" id="status-iter">—</span></div>
+  <div class="status-cell"><span class="lbl">Outer block</span><span class="val" id="status-block">—</span></div>
+  <div class="status-cell"><span class="lbl">Inner FMA</span><span class="val" id="status-inner">—</span></div>
+  <div class="status-cell phase"><span class="lbl">Phase</span><span class="val" id="status-phase">—</span></div>
+</div>
+
+<div class="progress-bar"><div class="progress-fill" id="progress"></div></div>
+
+<div class="desc-bar" id="desc">Press <b>Play</b> to begin.</div>
+
+<div class="main-view">
+  <!-- top-left empty -->
+  <div class="corner"></div>
+  <!-- top-right: B -->
+  <div class="area">
+    <div class="mat-label">B (in1) — K=6 × N=28 tiles &nbsp;<span class="scope-indicator" id="scope-in1">in1 CB</span></div>
+    <div class="tile-grid" id="b-grid" style="grid-template-columns: repeat(28, 22px);"></div>
+  </div>
+  <!-- bottom-left: A -->
+  <div class="area">
+    <div class="mat-label">A (in0) — M=1 × K=6 tiles &nbsp;<span class="scope-indicator" id="scope-in0">in0 CB (fronted)</span></div>
+    <div class="tile-grid" id="a-grid" style="grid-template-columns: repeat(6, 22px);"></div>
+  </div>
+  <!-- bottom-right: C -->
+  <div class="area">
+    <div class="mat-label">C (out_buf) — M=1 × N=28 tiles (4 iters × 7 tiles)</div>
+    <div class="tile-grid" id="c-grid" style="grid-template-columns: repeat(28, 22px);"></div>
+  </div>
+</div>
+
+<div class="bufs-view">
+  <div class="buf-card">
+    <div class="buf-label">DST &nbsp;<span class="scope-indicator" id="scope-dst">released</span></div>
+    <div class="tile-grid" id="dst-grid" style="grid-template-columns: repeat(7, 22px);"></div>
+    <div class="buf-sub">7 tiles held for the ENTIRE K-loop. One acquire/release per kloop call. Shade = number of K-tiles accumulated (1..6).</div>
+  </div>
+  <div class="buf-card absent">
+    <div class="buf-label">no interm_buf</div>
+    <div class="buf-sub">kloop accumulates entirely in DST — no L1 spill between K segments.</div>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="btn-reset">⏮ Reset</button>
+  <button id="btn-step-back">◀ Step</button>
+  <button class="primary" id="btn-play">▶ Play</button>
+  <button id="btn-step-fwd">Step ▶</button>
+  <div class="spacer"></div>
+  <label>Speed:</label>
+  <input type="range" id="speed" min="180" max="2400" value="700" step="60">
+  <span id="speed-label" style="font-size:12px;color:var(--muted);min-width:60px;">700 ms</span>
+  <span class="frame-info">Frame <span id="frame-idx">0</span> / <span id="frame-total">—</span></span>
+</div>
+
+<script>
+// ─── Configuration ──────────────────────────────────────────────────────────
+const M_TILES = 1, K_TILES = 6, N_TILES = 28;
+const N_PER_ITER = 7;
+const NUM_ITERS = N_TILES / N_PER_ITER;     // 4
+const NUM_BLOCKS = 3;                        // outer cb_wait/pop cycles per kloop call
+const INNER_PER_BLOCK = K_TILES / NUM_BLOCKS; // 2 inner FMAs per outer block
+const DST_TILES = N_PER_ITER;                // 7
+
+// ─── DOM ────────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+
+function buildGrid(parent, rows, cols, idx) {
+  parent.innerHTML = '';
+  for (let r = 0; r < rows; r++)
+    for (let c = 0; c < cols; c++) {
+      const d = document.createElement('div');
+      d.className = 'tile empty';
+      d.id = `${idx}-${r}-${c}`;
+      d.textContent = (rows === 1) ? `${c}` : `${r},${c}`;
+      parent.appendChild(d);
+    }
+}
+buildGrid($('a-grid'), M_TILES, K_TILES, 'a');
+buildGrid($('b-grid'), K_TILES, N_TILES, 'b');
+buildGrid($('c-grid'), M_TILES, N_TILES, 'c');
+buildGrid($('dst-grid'), 1, DST_TILES, 'dst');
+
+function paintInputs() {
+  for (let c = 0; c < K_TILES; c++) {
+    const t = $(`a-0-${c}`);
+    t.classList.remove('empty');
+    t.classList.add('a-fill');
+  }
+  for (let r = 0; r < K_TILES; r++)
+    for (let c = 0; c < N_TILES; c++) {
+      const t = $(`b-${r}-${c}`);
+      t.classList.remove('empty');
+      t.classList.add('b-fill');
+    }
+}
+
+// ─── State ──────────────────────────────────────────────────────────────────
+let state;
+function resetState() {
+  state = {
+    dst: new Array(DST_TILES).fill(0),     // 0 = empty, else = # of K-tiles accumulated (1..K_TILES)
+    dstAcquired: false,
+    out: new Array(N_TILES).fill(0),       // 0 = empty, 1 = final
+    activeARead: new Set(),
+    activeBRead: new Set(),
+    activeDstWrite: new Set(),
+    activeOutWrite: new Set(),
+    // Region currently fronted in in1 CB: { iter, block } means rows block*2..block*2+1, cols iter*7..iter*7+6
+    in1Front: null,
+    currentIter: -1,
+    status: { iter: '—', block: '—', inner: '—', phase: 'idle' },
+    desc: 'Press <b>Play</b> to begin.',
+  };
+}
+
+// ─── Frame generation ───────────────────────────────────────────────────────
+function genFrames() {
+  const F = [];
+  const push = (obj) => F.push(obj);
+
+  push({
+    phase: 'init',
+    desc: `Setup: A (1×6) is fronted in in0 CB ONCE for all ${NUM_ITERS} iters (producer pushes it once at kernel start). B (6×28) streams through in1 CB — 14 tiles fronted per outer block, popped at the end of that block.`,
+  });
+
+  for (let iter = 0; iter < NUM_ITERS; iter++) {
+    push({
+      phase: 'iter-start', iter,
+      desc: `<b>Iter ${iter}/${NUM_ITERS}</b> — kloop call #${iter+1}. Output target: C[0, ${iter*7}..${iter*7+6}]. <code>tile_regs_acquire()</code> — ONE DST scope wraps the whole K-loop.`,
+    });
+
+    for (let block = 0; block < NUM_BLOCKS; block++) {
+      push({
+        phase: 'wait', iter, block,
+        desc: `Outer block ${block}: <code>in1.wait_front(14)</code>. Producer pushed K-rows ${block*2}-${block*2+1} × N-cols ${iter*7}-${iter*7+6} (14 tiles). in0 still fronted from kernel start.`,
+      });
+
+      for (let inner = 0; inner < INNER_PER_BLOCK; inner++) {
+        const ktile = block * INNER_PER_BLOCK + inner;
+        push({
+          phase: 'fma', iter, block, inner, ktile,
+          desc: `<code>ckernel::matmul_block</code> — outer product A[0, ${ktile}] × B[${ktile}, ${iter*7}..${iter*7+6}] → DST[0..6]. Accumulates onto previous K-tiles' contributions (level ${ktile+1}/${K_TILES}).`,
+        });
+      }
+
+      push({
+        phase: 'pop', iter, block,
+        desc: `<code>in1.pop_front(14)</code> — producer can refill for ${block < NUM_BLOCKS-1 ? `outer block ${block+1}` : `next iter`}. ${block === NUM_BLOCKS-1 ? 'K is exhausted on this iter.' : ''}`,
+      });
+    }
+
+    push({
+      phase: 'commit', iter,
+      desc: `<code>tile_regs_commit()</code> — all K=6 tiles fully accumulated into DST[0..6]. Hand off to PACK thread.`,
+    });
+    push({
+      phase: 'pack', iter,
+      desc: `<code>pack_body()</code>: <code>tile_regs_wait + pack_tile_block(out_buf, 7) + push</code>. The <strong>ONE pack</strong> of the whole K-loop writes the 7 final tiles to out_buf[${iter*7}..${iter*7+6}].`,
+    });
+    push({
+      phase: 'release', iter,
+      desc: `<code>tile_regs_release()</code> — DST freed. End of kloop call ${iter+1}. ${iter < NUM_ITERS-1 ? `Caller's outer loop continues to iter ${iter+1}.` : ''}`,
+    });
+  }
+
+  push({
+    phase: 'done',
+    desc: `✓ <b>Done.</b> out_buf holds the full C[1×28] = A × B. Totals: ${NUM_ITERS} kloop calls, ${NUM_ITERS} acquire/release pairs, ${NUM_ITERS} packs, ${NUM_ITERS * K_TILES} FMAs, 0 interm_buf traffic. Producer pushed A once (6 tiles) + B in ${NUM_ITERS * NUM_BLOCKS} chunks of 14 tiles each = ${NUM_ITERS * NUM_BLOCKS * 14} tile-writes (= K·N tiles, no duplication because M=1).`,
+  });
+
+  return F;
+}
+const FRAMES = genFrames();
+$('frame-total').textContent = FRAMES.length;
+
+// ─── Apply frame ────────────────────────────────────────────────────────────
+function clearActives() {
+  state.activeARead.clear();
+  state.activeBRead.clear();
+  state.activeDstWrite.clear();
+  state.activeOutWrite.clear();
+}
+
+function applyFrame(f) {
+  state.desc = f.desc;
+  state.status.iter = (f.iter !== undefined) ? `${f.iter} / ${NUM_ITERS - 1}` : '—';
+  state.status.block = (f.block !== undefined) ? `${f.block} / ${NUM_BLOCKS - 1}` : '—';
+  state.status.inner = (f.inner !== undefined) ? `${f.inner} / ${INNER_PER_BLOCK - 1}` : '—';
+  state.status.phase = f.phase;
+  clearActives();
+
+  if (f.iter !== undefined) state.currentIter = f.iter;
+  else state.currentIter = -1;
+
+  switch (f.phase) {
+    case 'init':
+      state.currentIter = -1;
+      state.in1Front = null;
+      state.dstAcquired = false;
+      break;
+
+    case 'iter-start':
+      // Acquire DST
+      state.dstAcquired = true;
+      for (let i = 0; i < DST_TILES; i++) state.dst[i] = 0;
+      for (let i = 0; i < DST_TILES; i++) state.activeDstWrite.add(i);
+      state.in1Front = null;
+      break;
+
+    case 'wait':
+      // Producer just pushed the next 14 tiles → fronted in in1 CB
+      state.in1Front = { iter: f.iter, block: f.block };
+      // Mark the fronted region as actively-read briefly (just a wait, not actually reading yet)
+      break;
+
+    case 'fma': {
+      // A: read A[0, ktile]
+      state.activeARead.add(f.ktile);
+      // B: read B[ktile, iter*7 .. iter*7+6]
+      for (let c = 0; c < N_PER_ITER; c++) {
+        state.activeBRead.add(f.ktile * N_TILES + (f.iter * N_PER_ITER + c));
+      }
+      // DST: all 7 cells accumulate (level bumps to ktile+1)
+      const level = f.ktile + 1;
+      for (let i = 0; i < DST_TILES; i++) {
+        state.dst[i] = level;
+        state.activeDstWrite.add(i);
+      }
+      break;
+    }
+
+    case 'pop':
+      // in1 CB rolled — but if not the last block, the next wait will repopulate.
+      // For visual clarity, clear the fronted highlight here so we see the transition.
+      if (f.block === NUM_BLOCKS - 1) {
+        state.in1Front = null;  // last pop of this iter
+      } else {
+        state.in1Front = null;
+      }
+      break;
+
+    case 'commit':
+      // No buffer state change. DST about to flow to PACK.
+      for (let i = 0; i < DST_TILES; i++) state.activeDstWrite.add(i);
+      break;
+
+    case 'pack': {
+      // DST → out_buf at cols iter*7..iter*7+6.
+      const colBase = f.iter * N_PER_ITER;
+      for (let c = 0; c < N_PER_ITER; c++) {
+        state.out[colBase + c] = 1;
+        state.activeOutWrite.add(colBase + c);
+      }
+      // DST cells turning into "final" (level = K_TILES)
+      for (let i = 0; i < DST_TILES; i++) state.dst[i] = K_TILES;
+      break;
+    }
+
+    case 'release':
+      state.dstAcquired = false;
+      for (let i = 0; i < DST_TILES; i++) state.dst[i] = 0;
+      break;
+
+    case 'done':
+      state.currentIter = -1;
+      state.in1Front = null;
+      state.dstAcquired = false;
+      break;
+  }
+}
+
+// ─── Render ─────────────────────────────────────────────────────────────────
+function render() {
+  $('status-iter').textContent = state.status.iter;
+  $('status-block').textContent = state.status.block;
+  $('status-inner').textContent = state.status.inner;
+  $('status-phase').textContent = state.status.phase;
+  $('desc').innerHTML = state.desc;
+  $('frame-idx').textContent = frameIdx;
+  const pct = FRAMES.length > 1 ? (frameIdx / (FRAMES.length - 1)) * 100 : 0;
+  $('progress').style.width = pct + '%';
+
+  // Scope indicators
+  $('scope-dst').textContent = state.dstAcquired ? 'acquired' : 'released';
+  $('scope-dst').classList.toggle('active', state.dstAcquired);
+  $('scope-in1').textContent = state.in1Front ? `fronted: K[${state.in1Front.block*2}..${state.in1Front.block*2+1}] × N[${state.in1Front.iter*7}..${state.in1Front.iter*7+6}]` : 'empty';
+  $('scope-in1').classList.toggle('active', !!state.in1Front);
+
+  // A grid (1 row)
+  for (let c = 0; c < K_TILES; c++) {
+    const t = $(`a-0-${c}`);
+    t.className = 'tile a-fill';
+    if (state.activeARead.has(c)) t.classList.add('read');
+  }
+  // B grid
+  for (let r = 0; r < K_TILES; r++) {
+    for (let c = 0; c < N_TILES; c++) {
+      const t = $(`b-${r}-${c}`);
+      t.className = 'tile b-fill';
+      // Yellow highlight: tiles currently in in1 CB
+      if (state.in1Front) {
+        const f = state.in1Front;
+        const inRow = (r >= f.block * 2) && (r < f.block * 2 + 2);
+        const inCol = (c >= f.iter * 7) && (c < f.iter * 7 + 7);
+        if (inRow && inCol) t.classList.add('fronted');
+      }
+      if (state.activeBRead.has(r * N_TILES + c)) t.classList.add('read');
+    }
+  }
+  // C grid (1 row)
+  for (let c = 0; c < N_TILES; c++) {
+    const t = $(`c-0-${c}`);
+    t.className = 'tile';
+    if (state.out[c] === 1) t.classList.add('c-final');
+    else t.classList.add('empty');
+    // Iter-active outline on the current N-slice
+    if (state.currentIter >= 0) {
+      const slice_start = state.currentIter * 7;
+      if (c >= slice_start && c < slice_start + 7) {
+        t.classList.add('iter-active');
+      }
+    }
+    if (state.activeOutWrite.has(c)) t.classList.add('write');
+  }
+  // DST
+  for (let i = 0; i < DST_TILES; i++) {
+    const t = $(`dst-0-${i}`);
+    t.className = 'tile';
+    const lvl = state.dst[i];
+    if (lvl === 0) t.classList.add('empty');
+    else if (lvl === K_TILES) t.classList.add('dst-final');
+    else {
+      // Gradient by level (1..5 → partial-1..partial-5)
+      const clamped = Math.min(lvl, 5);
+      t.classList.add(`dst-partial-${clamped}`);
+    }
+    if (state.activeDstWrite.has(i)) t.classList.add('write');
+  }
+}
+
+// ─── Controller ─────────────────────────────────────────────────────────────
+let frameIdx = 0;
+let playing = false;
+let playTimer = null;
+
+function replayTo(target) {
+  resetState();
+  paintInputs();
+  for (let i = 0; i <= target && i < FRAMES.length; i++) {
+    applyFrame(FRAMES[i]);
+  }
+  frameIdx = target;
+  render();
+}
+
+function stepForward() {
+  if (frameIdx >= FRAMES.length - 1) { stopPlay(); return; }
+  frameIdx++;
+  applyFrame(FRAMES[frameIdx]);
+  render();
+}
+function stepBack() {
+  if (frameIdx <= 0) return;
+  replayTo(frameIdx - 1);
+}
+
+function startPlay() {
+  if (frameIdx >= FRAMES.length - 1) replayTo(0);
+  playing = true;
+  $('btn-play').textContent = '⏸ Pause';
+  const tick = () => {
+    if (!playing) return;
+    stepForward();
+    if (frameIdx >= FRAMES.length - 1) { stopPlay(); return; }
+    playTimer = setTimeout(tick, parseInt($('speed').value, 10));
+  };
+  playTimer = setTimeout(tick, parseInt($('speed').value, 10));
+}
+function stopPlay() {
+  playing = false;
+  $('btn-play').textContent = '▶ Play';
+  if (playTimer) clearTimeout(playTimer);
+}
+function reset() { stopPlay(); replayTo(0); }
+
+$('btn-reset').addEventListener('click', reset);
+$('btn-step-back').addEventListener('click', () => { stopPlay(); stepBack(); });
+$('btn-step-fwd').addEventListener('click', () => { stopPlay(); stepForward(); });
+$('btn-play').addEventListener('click', () => { if (playing) stopPlay(); else startPlay(); });
+$('speed').addEventListener('input', (e) => { $('speed-label').textContent = e.target.value + ' ms'; });
+$('speed-label').textContent = $('speed').value + ' ms';
+
+replayTo(0);
+</script>
+
+</div>
+</body>
+</html>
