@@ -1,0 +1,7 @@
+interface:
+  display_name: "Functional Decoder"
+  short_description: "Bring up TTNN decoder layers with PCC tests"
+  default_prompt: "Use $functional-decoder to bring up a HuggingFace decoder layer in TTNN with paged KV-cache tests, traced decode, and profiling evidence."
+
+policy:
+  allow_implicit_invocation: true
