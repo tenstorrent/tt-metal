@@ -204,6 +204,46 @@ _O_PROJ_DRAM_SHARDED_IN0_BLOCK_W = 8
 _O_PROJ_DRAM_SHARDED_PER_CORE_M = 1
 _O_PROJ_DRAM_SHARDED_PER_CORE_N = 8
 
+_DECODE_WIDTH_SHARDED_INPUT_CORES = 16
+
+
+def _decode_width_sharded_input_memory_config(k: int, num_cores: int = _DECODE_WIDTH_SHARDED_INPUT_CORES):
+    """L1 width-sharded activation layout that engages the sharded RMSNorm kernel.
+
+    Lays activations across an ``(num_cores/2) x 2`` core slab (default 8x2 =
+    16 cores) so the sharded LayerNorm kernel does not silently fall back to
+    its single-core interleaved variant. ``k`` must be divisible by
+    ``num_cores * TILE_SIZE``.
+    """
+    input_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores // 2 - 1, 1))])
+    return ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            input_grid,
+            [ttnn.TILE_SIZE, k // num_cores],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+
+def _decode_rmsnorm_program_config(hidden_size: int, num_cores: int = _DECODE_WIDTH_SHARDED_INPUT_CORES):
+    """Sharded RMSNorm program config matched to ``_decode_width_sharded_input_memory_config``."""
+    block_w = hidden_size // num_cores // ttnn.TILE_SIZE
+    subblock_w = min(4, block_w)
+    while subblock_w > 0:
+        if block_w % subblock_w == 0:
+            break
+        subblock_w -= 1
+    return ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[num_cores // 2, 2],
+        subblock_w=subblock_w,
+        block_h=1,
+        block_w=block_w,
+        inplace=False,
+    )
+
+
 _ATTN_QKV_DECODE_GRID = (8, 8)
 _ATTN_QKV_DECODE_PER_CORE_M = 1
 _ATTN_QKV_DECODE_PER_CORE_N = 1

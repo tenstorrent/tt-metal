@@ -1,11 +1,17 @@
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNLayerStack, TTNNModule
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
 from models.experimental.tt_symbiote.modules.dots_ocr_attention import TTNNDotsOCRAttention
 from models.experimental.tt_symbiote.modules.dots_ocr_mlp import TTNNDotsOCRMLP
+from models.experimental.tt_symbiote.modules.linear import (
+    _decode_rmsnorm_program_config,
+    _decode_width_sharded_input_memory_config,
+    _tp_requires_ccl,
+)
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
 
@@ -43,8 +49,90 @@ def _use_bfp8_decoder_weights(layer_idx) -> bool:
 
 
 class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
+    def move_weights_to_device_impl(self):
+        # Inherit the distributed-RMSNorm weight setup (weight_distributed +
+        # compute_kernel_config) from the parent so the interleaved fallback
+        # path still works unchanged.
+        super().move_weights_to_device_impl()
+        # Build a replicated per-device tile-layout weight sized [32, padded_dim]
+        # that the sharded multi-core RMSNorm kernel consumes directly. This
+        # is the same shape/layout the parent uses for its single-device
+        # ``tt_weight_local`` fallback, just promoted to work on every device
+        # of the mesh (no mesh_mapper -> replication).
+        dim = int(self.torch_layer.weight.shape[0])
+        padded_dim = ((dim + 31) // 32) * 32
+        weight = self.torch_layer.weight
+        if padded_dim != dim:
+            weight = torch.nn.functional.pad(weight, (0, padded_dim - dim), value=1.0)
+        self.tt_weight_sharded = ttnn.from_torch(
+            weight.unsqueeze(0).expand(32, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        self.tt_weight_sharded = ttnn.to_device(self.tt_weight_sharded, self.device)
+
+    def _forward_decode_sharded(self, inp, original_shape):
+        # Sharded LayerNorm fast path (decode only, non-TP-CCL). Runs the
+        # multi-core sharded RMSNorm kernel by re-sharding the input to the
+        # exact ``shard_in_cfg`` the program config expects, then re-sharding
+        # the output back to DRAM_MEMORY_CONFIG so downstream QKV/MLP matmuls
+        # see the same interleaved input layout as on the unsharded path.
+        # That second reshard is what isolates this optimization: nothing
+        # outside this method has to change.
+        hidden_size = int(self.torch_layer.weight.shape[0])
+        eps = getattr(self.torch_layer, "variance_epsilon", getattr(self.torch_layer, "eps", 1e-6))
+        if len(original_shape) == 3:
+            inp = ttnn.unsqueeze(inp, 1)
+        if inp.layout != ttnn.TILE_LAYOUT:
+            inp = ttnn.to_layout(inp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        shard_in_cfg = _decode_width_sharded_input_memory_config(hidden_size)
+        if inp.memory_config() != shard_in_cfg:
+            if inp.is_sharded():
+                inp = ttnn.to_memory_config(inp, shard_in_cfg)
+            else:
+                inp = ttnn.interleaved_to_sharded(inp, shard_in_cfg)
+        # HiFi4 + FP32 dest accumulator + packer L1 accumulator. The multi-core
+        # sharded RMSNorm combines partial variances across cores; the partial
+        # sums sit in the dest register and the L1 packer buffer between
+        # cores, so both knobs need maximum precision to keep the cross-core
+        # variance combine accurate. Without ``packer_l1_acc=True`` we saw
+        # downstream tokenization drift (``Hodgkin`` -> ``Hodgin`` and
+        # ``(reference group`` -> ``( (reference group``).
+        sharded_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        tt_out = ttnn.rms_norm(
+            inp,
+            epsilon=eps,
+            weight=self.tt_weight_sharded,
+            program_config=_decode_rmsnorm_program_config(hidden_size),
+            memory_config=shard_in_cfg,
+            compute_kernel_config=sharded_compute_kernel_config,
+        )
+        # Critical: re-interleave so the caller (QKV/MLP) sees the same input
+        # memory layout as the unsharded path. The QKV/MLP decode matmul
+        # program config uses ``fuse_batch=False`` which refuses sharded
+        # inputs (matmul_device_operation.cpp:416 ``program_config.fuse_batch``).
+        # Land in L1 (not DRAM) to preserve the L1 attn/MLP boundary invariant
+        # checked by test_dots_ocr_decode_one_layer_l1_boundaries and to avoid
+        # an unnecessary DRAM round-trip before the QKV matmul.
+        tt_out = ttnn.sharded_to_interleaved(tt_out, ttnn.L1_MEMORY_CONFIG)
+        if len(original_shape) == 3 and len(tt_out.shape) == 4:
+            tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
+        return tt_out
+
     def forward(self, inp):
         original_shape = inp.shape
+        # Sharded LN fast path: decode-shape (M=1) and single-device or pure DP
+        # (no TP CCL). Anything else (prefill, TP) uses the parent's
+        # interleaved RMSNorm path so this change can't affect those.
+        is_decode = len(original_shape) >= 2 and int(original_shape[-2]) == 1
+        if is_decode and not _tp_requires_ccl(self.device):
+            return self._forward_decode_sharded(inp, original_shape)
+
         if len(original_shape) == 3:
             inp = ttnn.unsqueeze(inp, 1)
         if inp.layout != ttnn.TILE_LAYOUT:
