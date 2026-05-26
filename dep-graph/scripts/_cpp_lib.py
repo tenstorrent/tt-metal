@@ -21,6 +21,126 @@ if Path(SYSTEM_LIBCLANG).exists():
     cindex.Config.set_library_file(SYSTEM_LIBCLANG)
 
 
+# ─── libclang bindings patch (Tier 1 A1) ───────────────────────────────────
+#
+# libclang 18.1.1 (the latest on PyPI as of writing) doesn't know about cursor
+# kinds emitted by clang-20. The default `BaseEnumeration.from_id` raises
+# `ValueError("Unknown template argument kind N")` on first access to such a
+# cursor, which poisoned whole TUs before we wrapped accesses in `_safe_kind`.
+#
+# The patch below intercepts `from_id` at module import: unknown IDs get a
+# sentinel registered on the fly and named `_UNKNOWN_<id>`. After registration,
+# subsequent `from_id` calls follow the normal fast path. The sentinel still
+# isn't in any of our FUNCTION_KINDS / kind comparison sets, so the walker
+# naturally treats those cursors as opaque (descends through them but does
+# not record anything).
+def _wrap_missing_libclang_apis() -> None:
+    """Register the libclang C functions cindex.py 18.1.1 didn't bind.
+
+    Two functions matter for us:
+      - `clang_getOverriddenCursors(cursor, out_array, out_count)` — given a
+        CXX_METHOD cursor, returns the parent methods it overrides. Used by
+        B2 to emit `kind=overrides` edges.
+      - `clang_getSpecializedCursorTemplate(cursor)` — already in cindex's
+        function list, but with no Python wrapper method. Returns the primary
+        template a specialization specializes. Used by B3 to emit
+        `kind=instantiates` edges.
+    """
+    import ctypes
+    from ctypes import POINTER, c_uint, byref
+
+    lib = cindex.conf.lib
+
+    # clang_getOverriddenCursors / clang_disposeOverriddenCursors. Not in
+    # cindex's functionList in 18.1.1; register manually.
+    try:
+        lib.clang_getOverriddenCursors.argtypes = [
+            cindex.Cursor, POINTER(POINTER(cindex.Cursor)), POINTER(c_uint),
+        ]
+        lib.clang_getOverriddenCursors.restype = None
+        lib.clang_disposeOverriddenCursors.argtypes = [POINTER(cindex.Cursor)]
+        lib.clang_disposeOverriddenCursors.restype = None
+    except AttributeError:
+        # libclang.so doesn't have these symbols — skip silently.
+        pass
+
+
+def get_overridden_cursors(cursor: cindex.Cursor) -> list[cindex.Cursor]:
+    """Return the parent methods that `cursor` overrides (empty for non-virtual
+    or top-of-hierarchy methods).
+
+    The returned list contains byte-copies of the underlying CXCursor structs
+    so they survive `clang_disposeOverriddenCursors`. The TU reference is
+    propagated so the AST is kept alive while these cursors are in use.
+    """
+    import ctypes
+    from ctypes import POINTER, c_uint, byref
+    lib = cindex.conf.lib
+    fn = getattr(lib, "clang_getOverriddenCursors", None)
+    dispose = getattr(lib, "clang_disposeOverriddenCursors", None)
+    if fn is None or dispose is None:
+        return []
+    out = POINTER(cindex.Cursor)()
+    num = c_uint(0)
+    try:
+        fn(cursor, byref(out), byref(num))
+    except Exception:
+        return []
+    tu = getattr(cursor, "translation_unit", None) or getattr(cursor, "_tu", None)
+    results: list[cindex.Cursor] = []
+    for i in range(num.value):
+        src = out[i]
+        # Byte-copy the Cursor struct so it survives the dispose call.
+        copy = cindex.Cursor()
+        ctypes.memmove(ctypes.addressof(copy), ctypes.addressof(src), ctypes.sizeof(cindex.Cursor))
+        if tu is not None:
+            copy._tu = tu
+        results.append(copy)
+    try:
+        dispose(out)
+    except Exception:
+        pass
+    return results
+
+
+def get_specialized_template(cursor: cindex.Cursor) -> cindex.Cursor | None:
+    """Return the primary template a specialization specializes, or None.
+
+    `clang_getSpecializedCursorTemplate` is already registered in cindex.py's
+    functionList with `Cursor.from_cursor_result` as its errcheck (which
+    returns None for null cursors). So this is a simple call.
+    """
+    try:
+        result = cindex.conf.lib.clang_getSpecializedCursorTemplate(cursor)
+    except Exception:
+        return None
+    # from_cursor_result already returns None for invalid; defend against errors.
+    return result
+
+
+def _patch_libclang_unknown_kinds() -> None:
+    base = cindex.BaseEnumeration
+    orig = base.from_id.__func__  # unwrap classmethod
+
+    def patched_from_id(cls, id):
+        try:
+            return orig(cls, id)
+        except ValueError:
+            # Lazy registration: instantiating cls(id) appends the sentinel
+            # to cls._kinds (see BaseEnumeration.__init__). Give it a name so
+            # downstream `.name` accesses don't blow up.
+            sentinel = cls(id)
+            setattr(cls, f"_UNKNOWN_{id}", sentinel)
+            cls._name_map = None  # invalidate the cached name map
+            return sentinel
+
+    base.from_id = classmethod(patched_from_id)
+
+
+_patch_libclang_unknown_kinds()
+_wrap_missing_libclang_apis()
+
+
 # ─── argv preprocessing ────────────────────────────────────────────────────
 
 COMPILER_BASENAMES = (
@@ -111,6 +231,7 @@ def load_db(db_path: Path) -> dict[str, TUEntry]:
 # prefix and are not explicitly excluded.
 DEFAULT_IN_SCOPE_PREFIXES = (
     "/workspace/ttnn/cpp/",
+    "/workspace/ttnn/api/",   # public ttnn headers (e.g. ttnn::Tensor alias)
     "/workspace/tt_metal/",
     "/workspace/tt_stl/",
 )
@@ -163,6 +284,23 @@ FUNCTION_KINDS = {
     cindex.CursorKind.DESTRUCTOR,
     cindex.CursorKind.CONVERSION_FUNCTION,
     cindex.CursorKind.FUNCTION_TEMPLATE,
+}
+
+# Kinds that can be the *target* of a nanobind binding. Functions are the
+# common case for `.def`/`.def_static`/`.def_prop_*`; fields are the target
+# for `.def_ro` / `.def_rw` (read-only / read-write attribute bindings).
+BINDABLE_KINDS = FUNCTION_KINDS | {
+    cindex.CursorKind.FIELD_DECL,
+    cindex.CursorKind.VAR_DECL,  # static fields appear as VAR_DECL
+}
+
+# Class-like declarations. B2 records nodes for these and follows their base
+# specifiers to emit `inherits` edges.
+CLASS_KINDS = {
+    cindex.CursorKind.CLASS_DECL,
+    cindex.CursorKind.STRUCT_DECL,
+    cindex.CursorKind.CLASS_TEMPLATE,
+    cindex.CursorKind.CLASS_TEMPLATE_PARTIAL_SPECIALIZATION,
 }
 
 
@@ -232,6 +370,11 @@ class Edge:
     site_line: int
     via: str | None = None
     crosses_language: bool = False
+    # B2: dispatch attribute. Set to "virtual" on call edges whose callee is a
+    # virtual method (the call may dispatch to any override at runtime), and
+    # left None for static / direct calls. Used by query.py to fan out
+    # virtual-call edges when computing blast radius.
+    via_dispatch: str | None = None
 
 
 @dataclass
@@ -247,6 +390,30 @@ class Binding:
 # ─── indexer ───────────────────────────────────────────────────────────────
 
 
+# D1: host-side functions that launch a Tensix/RISC-V kernel by passing a
+# string-literal path to a `.cpp` / `.hpp` file. The kernel itself is compiled
+# by the SFPI/RISC-V toolchain at JIT time and is NOT in our compile_commands;
+# we represent each kernel as an opaque `kind=kernel_file` node identified by
+# the path, and emit `kind=launches` edges from the calling host function.
+# Method names invoked on a `class_<T>` instance — chained off the constructor.
+# They share the constructor's return type but are method bindings, not class
+# bindings. Excluded from the class-binding detection in `_handle_call`.
+_CLASS_DEF_METHODS = {
+    "def", "def_ro", "def_rw", "def_prop_ro", "def_prop_rw",
+    "def_static", "def_submodule", "def_readonly", "def_readwrite",
+}
+
+
+KERNEL_LAUNCHERS = {
+    "CreateKernel",
+    "CreateComputeKernel",
+    "CreateDataMovementKernel",
+    "CreateReadKernel",
+    "CreateWriteKernel",
+    "CreateKernelFromPrecompiled",
+    "CreateEthernetKernel",   # speculative; harmless if absent
+}
+
 BINDING_HELPERS = {
     "bind_function",
     "bind_binary_operation",
@@ -260,7 +427,14 @@ BINDING_HELPERS = {
     "bind_binary_composite_overload",
     "bind_binary_operation_with_fast_approx",
     "bind_binary_overload_operation",
-    "def",
+    # nanobind / pybind binding methods (all share the same string-literal-first,
+    # callable-arg shape, so `_extract_binding` handles them identically).
+    "def",            # method/free function    cls.def("name", &T::method)
+    "def_ro",         # read-only field         cls.def_ro("field", &T::field)
+    "def_rw",         # read-write field        cls.def_rw("field", &T::field)
+    "def_prop_ro",    # read-only property      cls.def_prop_ro("name", &T::getter)
+    "def_prop_rw",    # read-write property     cls.def_prop_rw("name", &T::getter, &T::setter)
+    "def_static",     # static method           cls.def_static("name", &T::static_fn)
 }
 
 
@@ -359,6 +533,16 @@ class Indexer:
                 self._walk(child, current_function=cursor if cursor.is_definition() else current_function, tu_path=tu_path)
             return
 
+        if kind in CLASS_KINDS:
+            f, _, _ = cursor_loc(cursor)
+            if in_scope(f):
+                self._record_class(cursor, tu_path)
+            # Class bodies can contain methods (FUNCTION_KINDS), nested classes,
+            # and call expressions in initializers. Recurse normally.
+            for child in self._iter_children(cursor):
+                self._walk(child, current_function, tu_path)
+            return
+
         if kind == cindex.CursorKind.CALL_EXPR:
             self._handle_call(cursor, current_function, tu_path)
 
@@ -397,6 +581,112 @@ class Indexer:
             if tu_path not in node.discovered_in:
                 node.discovered_in.append(tu_path)
 
+        # B2 overrides: virtual methods get explicit `kind=overrides` edges
+        # to each parent method they override. ctypes-wrapped at module load.
+        if c.kind == cindex.CursorKind.CXX_METHOD:
+            for parent in get_overridden_cursors(c):
+                try:
+                    parent_id = node_id(parent)
+                except Exception:
+                    continue
+                if parent_id == nid:
+                    continue
+                self.edges.append(Edge(
+                    src=nid, dst=parent_id, kind="overrides",
+                    site_file=f or "", site_line=l0,
+                ))
+
+        # B3 instantiates: a function-template specialization links to its
+        # primary template. Most useful for the `bind_function<"name">`
+        # instantiations (one per ttnn op) and the `*DeviceOperation`
+        # struct-template family.
+        try:
+            primary = get_specialized_template(c)
+        except Exception:
+            primary = None
+        if primary is not None:
+            try:
+                primary_id = node_id(primary)
+            except Exception:
+                primary_id = None
+            if primary_id and primary_id != nid:
+                self.edges.append(Edge(
+                    src=nid, dst=primary_id, kind="instantiates",
+                    site_file=f or "", site_line=l0,
+                ))
+
+    def _record_class(self, c: cindex.Cursor, tu_path: str) -> None:
+        """B2: record a class/struct/class-template node, and emit `inherits`
+        edges to its base classes via CXX_BASE_SPECIFIER children.
+        """
+        try:
+            f, l0, l1 = cursor_loc(c)
+        except Exception:
+            return
+        nid = node_id(c)
+        if nid not in self.nodes:
+            self.nodes[nid] = Node(
+                id=nid,
+                language="cpp",
+                kind="class",
+                name=c.spelling,
+                qualified_name=qualified_name(c),
+                file=f or "",
+                line_start=l0,
+                line_end=l1,
+                signature=qualified_name(c),
+                is_definition=c.is_definition(),
+                is_template=c.kind == cindex.CursorKind.CLASS_TEMPLATE,
+                discovered_in=[tu_path],
+            )
+        elif tu_path not in self.nodes[nid].discovered_in:
+            self.nodes[nid].discovered_in.append(tu_path)
+
+        # B3 instantiates for class-template specializations.
+        try:
+            primary = get_specialized_template(c)
+        except Exception:
+            primary = None
+        if primary is not None:
+            try:
+                primary_id = node_id(primary)
+            except Exception:
+                primary_id = None
+            if primary_id and primary_id != nid:
+                self.edges.append(Edge(
+                    src=nid, dst=primary_id, kind="instantiates",
+                    site_file=f or "", site_line=l0,
+                ))
+
+        for child in self._iter_children(c):
+            try:
+                ck = child.kind
+            except ValueError:
+                continue
+            if ck != cindex.CursorKind.CXX_BASE_SPECIFIER:
+                continue
+            # `child.referenced` is the base class declaration cursor.
+            base = child.referenced
+            if base is None:
+                continue
+            try:
+                base_kind = base.kind
+            except ValueError:
+                continue
+            if base_kind not in CLASS_KINDS:
+                continue
+            base_id = node_id(base)
+            if base_id == nid:
+                continue
+            site_line = child.location.line if child.location else l0
+            self.edges.append(Edge(
+                src=nid,
+                dst=base_id,
+                kind="inherits",
+                site_file=f or "",
+                site_line=site_line,
+            ))
+
     def _handle_call(
         self,
         call: cindex.Cursor,
@@ -407,6 +697,20 @@ class Indexer:
         callee_name = call.spelling or (callee.spelling if callee else "")
         if callee_name in BINDING_HELPERS:
             self._extract_binding(call, callee_name, tu_path)
+        if callee_name in KERNEL_LAUNCHERS:
+            self._extract_kernel_launch(call, current_function, callee_name, tu_path)
+        # Tier 1 (3): class bindings via `nb::class_<T>(m, "Name")` AND via
+        # tt-metal's `tt_serializable_class<T>(m, "Name", ...)` helper. Both
+        # return a `class_<T>` (or `nb::class_<T>`) — detect structurally.
+        # Excludes chained `.def_*` calls on the resulting class_ instance,
+        # which share the same return type but are method bindings already
+        # handled by `_extract_binding`.
+        if (
+            callee_name
+            and callee_name not in _CLASS_DEF_METHODS
+            and self._call_returns_class_(call)
+        ):
+            self._extract_class_binding(call, tu_path)
         if current_function is None or callee is None:
             return
         if callee.kind not in FUNCTION_KINDS:
@@ -417,13 +721,211 @@ class Indexer:
             return
         site_file = call.location.file.name if call.location and call.location.file else ""
         site_line = call.location.line if call.location else 0
+        # B2: tag virtual method calls so consumers can fan out through
+        # `overrides` edges (every method that overrides this one is a
+        # potential runtime target).
+        via_dispatch: str | None = None
+        try:
+            if callee.kind == cindex.CursorKind.CXX_METHOD and callee.is_virtual_method():
+                via_dispatch = "virtual"
+        except (ValueError, AttributeError):
+            pass
         self.edges.append(Edge(
             src=node_id(current_function),
             dst=node_id(callee),
             kind="calls",
             site_file=site_file,
             site_line=site_line,
+            via_dispatch=via_dispatch,
         ))
+
+    # ─── D1: kernel-launch extraction ──────────────────────────────────
+
+    _KERNEL_PATH_SUFFIXES = (".cpp", ".hpp", ".h", ".cc", ".cxx")
+
+    def _extract_kernel_launch(
+        self,
+        call: cindex.Cursor,
+        current_function: cindex.Cursor | None,
+        launcher: str,
+        tu_path: str,
+    ) -> None:
+        """Find the first string-literal arg that looks like a kernel source
+        path, synthesize a `kind=kernel_file` node identified by that path,
+        and emit a `kind=launches` edge from `current_function`.
+        """
+        if current_function is None:
+            return
+        try:
+            args = list(call.get_arguments())
+        except Exception:
+            return
+        path: str | None = None
+        for arg in args:
+            stack = [arg]
+            while stack and path is None:
+                c = stack.pop()
+                try:
+                    kind = c.kind
+                except ValueError:
+                    continue
+                if kind == cindex.CursorKind.STRING_LITERAL:
+                    sp = c.spelling
+                    if sp and sp.startswith('"') and sp.endswith('"'):
+                        sp = sp[1:-1]
+                    if sp and any(sp.endswith(suf) for suf in self._KERNEL_PATH_SUFFIXES):
+                        path = sp
+                        break
+                    # not a path-like literal: keep looking through later args
+                if kind == cindex.CursorKind.LAMBDA_EXPR:
+                    continue
+                try:
+                    stack.extend(reversed(list(c.get_children())))
+                except ValueError:
+                    pass
+            if path is not None:
+                break
+        if path is None:
+            return
+
+        # Synthesize a stable node for the kernel file. ID is `kernel:` + the
+        # path verbatim so the merger dedups across TUs that launch the same
+        # kernel.
+        kernel_id = f"kernel:{path}"
+        if kernel_id not in self.nodes:
+            self.nodes[kernel_id] = Node(
+                id=kernel_id,
+                language="cpp",
+                kind="kernel_file",
+                name=path.rsplit("/", 1)[-1],
+                qualified_name=path,
+                file=path,
+                line_start=0,
+                line_end=0,
+                signature=path,
+                is_definition=False,
+                discovered_in=[tu_path],
+            )
+        elif tu_path not in self.nodes[kernel_id].discovered_in:
+            self.nodes[kernel_id].discovered_in.append(tu_path)
+
+        site_file = call.location.file.name if call.location and call.location.file else ""
+        site_line = call.location.line if call.location else 0
+        self.edges.append(Edge(
+            src=node_id(current_function),
+            dst=kernel_id,
+            kind="launches",
+            site_file=site_file,
+            site_line=site_line,
+            via=launcher,
+        ))
+
+    @staticmethod
+    def _call_returns_class_(call: cindex.Cursor) -> bool:
+        try:
+            t = call.type
+            if t is None:
+                return False
+            spelling = t.spelling or ""
+        except Exception:
+            return False
+        # We don't want to match Type<class_<T>> or class_ as part of an unrelated
+        # type name. Require it to be the outer type or namespace-qualified.
+        return (
+            spelling.startswith("class_<")
+            or spelling.startswith("nb::class_<")
+            or spelling.startswith("nanobind::class_<")
+            or spelling.startswith("pybind11::class_<")
+        )
+
+    def _extract_class_binding(self, call: cindex.Cursor, tu_path: str) -> None:
+        """Handle `nb::class_<T>(module, "Name")` and tt-metal helpers like
+        `tt_serializable_class<T>(module, "Name", ...)` — the Python class
+        name bound to a C++ type T.
+
+        Differs from .def-style bindings in TWO ways:
+          1. The bound symbol is a TYPE, not a function pointer. We extract
+             it from the call's RETURN TYPE's first template argument.
+          2. The python name is whichever arg is a STRING_LITERAL —
+             typically the SECOND arg (after the module), not the first.
+        """
+        # Walk every arg in order looking for the first string literal —
+        # `_find_python_name` only looks at arg[0] which doesn't fit here.
+        python_name: str | None = None
+        try:
+            args = list(call.get_arguments())
+        except Exception:
+            args = []
+        for arg in args:
+            stack = [arg]
+            while stack:
+                c = stack.pop()
+                try:
+                    kind = c.kind
+                except ValueError:
+                    continue
+                if kind == cindex.CursorKind.STRING_LITERAL:
+                    sp = c.spelling
+                    if sp and sp.startswith('"') and sp.endswith('"'):
+                        python_name = sp[1:-1]
+                    else:
+                        python_name = sp
+                    break
+                if kind == cindex.CursorKind.LAMBDA_EXPR:
+                    continue
+                try:
+                    stack.extend(reversed(list(c.get_children())))
+                except ValueError:
+                    pass
+            if python_name is not None:
+                break
+        if not python_name:
+            return
+        # Pull T out of the call's type. `nb::class_<T>(...)` has type
+        # `nb::class_<T>`, and its first template argument is the bound type.
+        # T might be a typedef / using alias (e.g. `using Tensor = tt::tt_metal::Tensor`)
+        # — canonicalize to get to the real class.
+        try:
+            call_type = call.type
+            if call_type is None:
+                return
+            if call_type.get_num_template_arguments() < 1:
+                return
+            t_type = call_type.get_template_argument_type(0)
+            # Strip typedef / using to the underlying class.
+            t_type_canon = t_type.get_canonical()
+            t_cursor = t_type_canon.get_declaration()
+        except Exception:
+            return
+        if t_cursor is None:
+            return
+        try:
+            t_kind = t_cursor.kind
+        except ValueError:
+            return
+        if t_kind not in CLASS_KINDS:
+            return
+        # Make sure the class is recorded as a node (so the binding has a
+        # resolvable cpp_node_id even if no other TU saw the class definition).
+        f, _, _ = cursor_loc(t_cursor)
+        if in_scope(f):
+            self._record_class(t_cursor, tu_path)
+        bound_id = node_id(t_cursor)
+        # Bindings dedup by (python_name, cpp_node_id, site_file, site_line);
+        # we record this one explicitly.
+        site_file = call.location.file.name if call.location and call.location.file else ""
+        site_line = call.location.line if call.location else 0
+        self.bindings.append(Binding(
+            python_name=python_name,
+            cpp_node_id=bound_id,
+            cpp_qualified_name=qualified_name(t_cursor),
+            site_file=site_file,
+            site_line=site_line,
+            helper="class_",
+        ))
+        node = self.nodes.get(bound_id)
+        if node is not None:
+            node.is_binding_target = True
 
     def _extract_binding(self, call: cindex.Cursor, helper: str, tu_path: str) -> None:
         python_name = self._find_python_name(call, helper)
@@ -433,7 +935,7 @@ class Indexer:
         site_line = call.location.line if call.location else 0
         callee_cursor = call.referenced
         helper_usr = callee_cursor.get_usr() if callee_cursor else None
-        for fn in self._find_referenced_functions(call, skip_usr=helper_usr):
+        for fn in self._find_referenced_decls(call, skip_usr=helper_usr):
             self.bindings.append(Binding(
                 python_name=python_name,
                 cpp_node_id=node_id(fn),
@@ -449,17 +951,47 @@ class Indexer:
 
     @staticmethod
     def _find_python_name(call: cindex.Cursor, helper: str) -> str | None:
-        for c in call.walk_preorder():
-            if c == call:
-                continue
-            if c.kind == cindex.CursorKind.STRING_LITERAL:
-                spelling = c.spelling
-                if spelling and spelling.startswith('"') and spelling.endswith('"'):
-                    return spelling[1:-1]
-                return spelling
-            if c.kind == cindex.CursorKind.CALL_EXPR and c != call:
-                continue
+        """Extract the Python-name string literal from a binding call.
 
+        Critically, we ONLY look at the call's direct arguments — not its full
+        subtree. For chained calls like
+            `nb::class_<T>(m, "Name").def_ro("field", &T::field)`
+        walking the full subtree of the `.def_ro(...)` call would descend
+        through its receiver into the outer constructor and pick up "Name"
+        instead of "field".
+        """
+        try:
+            args = list(call.get_arguments())
+        except Exception:
+            args = []
+        for arg in args:
+            # First string-literal in argument position is the Python name.
+            # Descend through implicit casts and the like — but stop at lambdas.
+            stack = [arg]
+            while stack:
+                c = stack.pop()
+                try:
+                    kind = c.kind
+                except ValueError:
+                    continue
+                if kind == cindex.CursorKind.STRING_LITERAL:
+                    sp = c.spelling
+                    if sp and sp.startswith('"') and sp.endswith('"'):
+                        return sp[1:-1]
+                    return sp
+                if kind == cindex.CursorKind.LAMBDA_EXPR:
+                    continue
+                try:
+                    stack.extend(reversed(list(c.get_children())))
+                except ValueError:
+                    pass
+            # Stop after the first non-string arg; the Python name is always first.
+            break
+
+        # Templated helpers like `bind_function<"name">(...)`: the literal sits
+        # between angle brackets in the source. libclang does not expose this
+        # cleanly as a child cursor, so fall back to token scanning bounded by
+        # the call's source range.
         try:
             tokens = list(call.get_tokens())
         except Exception:
@@ -486,10 +1018,13 @@ class Indexer:
         return None
 
     @staticmethod
-    def _find_referenced_functions(
+    def _find_referenced_decls(
         call: cindex.Cursor, skip_usr: str | None = None
     ) -> Iterator[cindex.Cursor]:
-        """Yield C++ function cursors that look like bound symbols.
+        """Yield C++ declaration cursors that look like bound symbols.
+
+        Covers both functions (for `.def`/`.def_static`/`.def_prop_*` bindings)
+        and fields/static-vars (for `.def_ro` / `.def_rw` attribute bindings).
 
         Walks the call's subtree, BUT does not descend into lambda bodies.
         The bound symbol of `cls.def("name", &SomeFn)` is `SomeFn`, but the
@@ -511,9 +1046,17 @@ class Indexer:
             "std::",
             "__builtin_",
         )
-        # Iterative pre-order walk, skipping LAMBDA_EXPR subtrees.
+        # Iterative pre-order walk starting from each direct argument — NOT
+        # the entire call subtree, which for chained calls
+        # `obj.def(...).def_ro(...)` would descend through the receiver and
+        # incorrectly attribute references from an unrelated outer call.
+        # Lambda subtrees are still skipped inside arg walks.
         seen: set[str] = set()
-        stack = [call]
+        try:
+            args = list(call.get_arguments())
+        except Exception:
+            args = []
+        stack: list[cindex.Cursor] = list(reversed(args))
         first = True
         while stack:
             c = stack.pop()
@@ -532,7 +1075,7 @@ class Indexer:
                     except ValueError:
                         ref_kind = None
                     if (
-                        ref_kind in FUNCTION_KINDS
+                        ref_kind in BINDABLE_KINDS
                         and ref.spelling not in BINDING_HELPERS
                         and not ref.spelling.startswith("operator")
                         and not ref.spelling.startswith("__builtin_")

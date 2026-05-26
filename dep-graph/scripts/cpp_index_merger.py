@@ -24,6 +24,31 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _cpp_lib import read_jsonl  # noqa: E402
 
+# Use orjson when available — at the scale of 1454 shards × thousands of
+# lines each, this is the difference between ~8 min and ~1 min for the merge.
+try:
+    import orjson
+    def _loads(b: bytes | str):  # type: ignore[no-redef]
+        return orjson.loads(b)
+    def _dumps(obj) -> bytes:
+        return orjson.dumps(obj)
+except ImportError:
+    def _loads(b):
+        return json.loads(b)
+    def _dumps(obj) -> bytes:
+        return json.dumps(obj, separators=(",", ":")).encode()
+
+
+def _stream_jsonl_bytes(path: Path):
+    """Yield raw byte lines from a JSONL file, skipping blanks."""
+    if not path.exists():
+        return
+    with open(path, "rb") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                yield line
+
 
 def merge(shard_root: Path, out_dir: Path, only_tus: set[str] | None = None) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -42,7 +67,7 @@ def merge(shard_root: Path, out_dir: Path, only_tus: set[str] | None = None) -> 
     bindings_path = out_dir / "bindings.jsonl"
     diag_path = out_dir / "diagnostics.jsonl"
 
-    with open(edges_path, "w") as fe, open(bindings_path, "w") as fb, open(diag_path, "w") as fd:
+    with open(edges_path, "wb") as fe, open(bindings_path, "wb") as fb, open(diag_path, "wb") as fd:
         for shard in sorted(shard_root.iterdir()):
             if not shard.is_dir():
                 continue
@@ -50,7 +75,7 @@ def merge(shard_root: Path, out_dir: Path, only_tus: set[str] | None = None) -> 
             if not manifest_path.exists():
                 continue
             try:
-                m = json.loads(manifest_path.read_text())
+                m = _loads(manifest_path.read_bytes())
             except Exception:
                 continue
             if m.get("status") != "ok":
@@ -60,7 +85,8 @@ def merge(shard_root: Path, out_dir: Path, only_tus: set[str] | None = None) -> 
                 continue
             shard_count += 1
 
-            for n in read_jsonl(shard / "nodes.jsonl"):
+            for raw in _stream_jsonl_bytes(shard / "nodes.jsonl"):
+                n = _loads(raw)
                 nid = n["id"]
                 existing = nodes.get(nid)
                 if existing is None:
@@ -80,31 +106,38 @@ def merge(shard_root: Path, out_dir: Path, only_tus: set[str] | None = None) -> 
                     if n.get("is_binding_target"):
                         existing["is_binding_target"] = True
 
-            for e in read_jsonl(shard / "edges.jsonl"):
+            for raw in _stream_jsonl_bytes(shard / "edges.jsonl"):
+                e = _loads(raw)
                 k = (e.get("src"), e.get("dst"), e.get("kind"),
                      e.get("site_file"), e.get("site_line"))
                 if k in edges_seen:
                     continue
                 edges_seen.add(k)
-                fe.write(json.dumps(e, separators=(",", ":")) + "\n")
+                fe.write(_dumps(e))
+                fe.write(b"\n")
                 edge_count += 1
 
-            for b in read_jsonl(shard / "bindings.jsonl"):
+            for raw in _stream_jsonl_bytes(shard / "bindings.jsonl"):
+                b = _loads(raw)
                 k = (b.get("python_name"), b.get("cpp_node_id"),
                      b.get("site_file"), b.get("site_line"))
                 if k in bindings_seen:
                     continue
                 bindings_seen.add(k)
-                fb.write(json.dumps(b, separators=(",", ":")) + "\n")
+                fb.write(_dumps(b))
+                fb.write(b"\n")
                 binding_count += 1
 
-            for d in read_jsonl(shard / "diagnostics.jsonl"):
-                fd.write(json.dumps(d, separators=(",", ":")) + "\n")
+            for raw in _stream_jsonl_bytes(shard / "diagnostics.jsonl"):
+                d = _loads(raw)
+                fd.write(_dumps(d))
+                fd.write(b"\n")
                 diag_count += 1
 
-    with open(out_dir / "nodes.jsonl", "w") as fn:
+    with open(out_dir / "nodes.jsonl", "wb") as fn:
         for n in nodes.values():
-            fn.write(json.dumps(n, separators=(",", ":")) + "\n")
+            fn.write(_dumps(n))
+            fn.write(b"\n")
 
     elapsed = time.time() - start
     manifest = {

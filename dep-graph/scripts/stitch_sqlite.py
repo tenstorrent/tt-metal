@@ -56,11 +56,13 @@ CREATE TABLE IF NOT EXISTS edges (
     site_line   INTEGER NOT NULL,
     crosses_language INTEGER NOT NULL DEFAULT 0,
     via_decorator TEXT,
-    via_helper    TEXT
+    via_helper    TEXT,
+    via_dispatch  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_edges_src  ON edges(src);
 CREATE INDEX IF NOT EXISTS idx_edges_dst  ON edges(dst);
 CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
+CREATE INDEX IF NOT EXISTS idx_edges_dispatch ON edges(via_dispatch);
 
 CREATE TABLE IF NOT EXISTS bindings (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,6 +91,16 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS cpp_diagnostics (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    tu        TEXT,
+    severity  TEXT,
+    message   TEXT,
+    location  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cppdiag_severity ON cpp_diagnostics(severity);
+CREATE INDEX IF NOT EXISTS idx_cppdiag_message  ON cpp_diagnostics(message);
 """
 
 
@@ -146,12 +158,15 @@ def insert_cpp_edges(con: sqlite3.Connection, cpp_dir: Path) -> int:
         rows.append((
             e["src"], e["dst"], e.get("kind", "calls"),
             e.get("site_file", ""), int(e.get("site_line", 0)),
-            int(bool(e.get("crosses_language"))), None, None,
+            int(bool(e.get("crosses_language"))), None,
+            e.get("via"),  # via_helper — used by D1 launches edges (launcher name)
+            e.get("via_dispatch"),
         ))
         if len(rows) >= 5000:
             con.executemany(
                 "INSERT INTO edges (src, dst, kind, site_file, site_line, "
-                "crosses_language, via_decorator, via_helper) VALUES (?,?,?,?,?,?,?,?)",
+                "crosses_language, via_decorator, via_helper, via_dispatch) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
                 rows,
             )
             n += len(rows)
@@ -159,7 +174,8 @@ def insert_cpp_edges(con: sqlite3.Connection, cpp_dir: Path) -> int:
     if rows:
         con.executemany(
             "INSERT INTO edges (src, dst, kind, site_file, site_line, "
-            "crosses_language, via_decorator, via_helper) VALUES (?,?,?,?,?,?,?,?)",
+            "crosses_language, via_decorator, via_helper, via_dispatch) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             rows,
         )
         n += len(rows)
@@ -214,18 +230,19 @@ def insert_py_nodes_and_refs(con: sqlite3.Connection, py_json: Path) -> dict:
     )
     py_n = len(nrows)
 
-    # intra-Python edges (still empty for now; will populate when py_index emits them)
+    # intra-Python edges (calls / binds / imports / inherits).
     py_e = 0
     if py.get("edges"):
         erows = [
             (e["src"], e["dst"], e.get("kind", "calls"),
              e.get("site_file", ""), int(e.get("site_line", 0)),
-             0, None, None)
+             0, None, None, None)
             for e in py["edges"]
         ]
         con.executemany(
             "INSERT INTO edges (src, dst, kind, site_file, site_line, "
-            "crosses_language, via_decorator, via_helper) VALUES (?,?,?,?,?,?,?,?)",
+            "crosses_language, via_decorator, via_helper, via_dispatch) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             erows,
         )
         py_e = len(erows)
@@ -267,16 +284,25 @@ def insert_py_nodes_and_refs(con: sqlite3.Connection, py_json: Path) -> dict:
             continue
         kind = "binds" if r["kind"] == "attr_access" else "calls"
 
-        # 1. Prefer py_registrations matched on the FULL dotted name.
+        # 1. Prefer py_registrations matched on the FULL dotted name OR any
+        # progressively-shorter prefix ending at chain[-1]. This catches
+        # cases like `ttnn.operations.core.from_torch` where the registered
+        # name is `ttnn.from_torch` (a re-export through __init__.py).
         full_name = ".".join(chain)
         pyreg_hits = by_pyname_pyimpl.get(full_name, [])
+        # Also try the "head.tail" 2-component form which dominates the
+        # registration table (`ttnn.X`).
+        if not pyreg_hits and len(chain) >= 2:
+            short_name = f"{chain[0]}.{chain[-1]}"
+            if short_name != full_name:
+                pyreg_hits = by_pyname_pyimpl.get(short_name, [])
         matched_here = False
         for impl_id, impl_chain, label in pyreg_hits:
             if impl_id:
                 cross_rows.append((
                     r["src"], impl_id, kind, r["site_file"], int(r["site_line"]),
                     0,  # intra-Python edge — same language
-                    label, None,
+                    label, None, None,
                 ))
                 resolved_via_pyreg += 1
                 matched_here = True
@@ -287,7 +313,7 @@ def insert_py_nodes_and_refs(con: sqlite3.Connection, py_json: Path) -> dict:
                 for cpp_id, helper in by_pyname_cpp.get(candidate, []):
                     cross_rows.append((
                         r["src"], cpp_id, kind, r["site_file"], int(r["site_line"]),
-                        1, label, helper,
+                        1, label, helper, None,
                     ))
                     resolved_via_pyreg += 1
                     matched_here = True
@@ -303,14 +329,15 @@ def insert_py_nodes_and_refs(con: sqlite3.Connection, py_json: Path) -> dict:
         for cpp_id, helper in matches:
             cross_rows.append((
                 r["src"], cpp_id, kind, r["site_file"], int(r["site_line"]),
-                1, None, helper,
+                1, None, helper, None,
             ))
             resolved_via_binding += 1
 
     if cross_rows:
         con.executemany(
             "INSERT INTO edges (src, dst, kind, site_file, site_line, "
-            "crosses_language, via_decorator, via_helper) VALUES (?,?,?,?,?,?,?,?)",
+            "crosses_language, via_decorator, via_helper, via_dispatch) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             cross_rows,
         )
 
@@ -339,8 +366,16 @@ def main() -> None:
     nn = insert_cpp_nodes(con, cpp_dir)
     ne = insert_cpp_edges(con, cpp_dir)
     nb = insert_cpp_bindings(con, cpp_dir)
+    # Stream cpp diagnostics into the DB for regression chains to query.
+    dn = 0
+    for d in read_jsonl(cpp_dir / "diagnostics.jsonl"):
+        con.execute(
+            "INSERT INTO cpp_diagnostics (tu, severity, message, location) VALUES (?,?,?,?)",
+            (d.get("tu"), str(d.get("severity", "")), d.get("message", ""), d.get("location")),
+        )
+        dn += 1
     con.commit()
-    print(f"  cpp: {nn} nodes, {ne} edges, {nb} bindings", file=sys.stderr)
+    print(f"  cpp: {nn} nodes, {ne} edges, {nb} bindings, {dn} diagnostics", file=sys.stderr)
 
     print(f"[stitch_sqlite] loading Python index from {args.py}", file=sys.stderr)
     pyres = insert_py_nodes_and_refs(con, Path(args.py))

@@ -27,6 +27,7 @@ import ast
 import json
 import os
 import sys
+from collections import defaultdict
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
@@ -127,6 +128,10 @@ class PyRef:
     site_file: str
     site_line: int
     kind: str   # "attr_access" | "call"
+    # 0-based column of the LAST component of the chain (the actual symbol
+    # being referenced). Needed for Jedi's line/col position queries — without
+    # this, the resolver can't pinpoint `execute` in `cursor.execute(...)`.
+    site_col: int = 0
 
 
 @dataclass
@@ -228,9 +233,19 @@ class FileIndexer(ast.NodeVisitor):
         #                  Used to resolve `self.X` / `cls.X` calls.
         #   imports:       local_name → ImportEntry; only module-level imports
         #                  are recorded (function-local imports are ignored).
+        #   dunder_all:    explicit `__all__ = [...]` declaration at module level,
+        #                  or None if not defined. Used when this module is the
+        #                  target of a `from <self> import *` in another file.
+        #   wildcard_imports: target modules of `from X import *` statements;
+        #                  expanded into concrete ImportEntry records in a
+        #                  post-pass once every module's public names are known.
         self.module_defs: dict[str, str] = {}
         self.class_methods: dict[str, dict[str, str]] = {}
         self.imports: dict[str, ImportEntry] = {}
+        self.dunder_all: list[str] | None = None
+        self.wildcard_imports: list[tuple[str, int]] = []
+        # class node id → list of (base_chain, lineno) for B6 inherits resolution.
+        self.class_base_chains: dict[str, list[tuple[list[str], int]]] = {}
 
     # ─ ids ─
 
@@ -320,8 +335,31 @@ class FileIndexer(ast.NodeVisitor):
                     self.nodes[nid].is_binding_caller = True
         self.scope_stack.append(nid)
         self.qualname_stack.append(qualname)
+        # Visit the function body for calls/refs.
         for stmt in node.body:
             self.visit(stmt)
+        # Also visit parameter annotations, return annotation, default values,
+        # and decorator argument expressions. Without these, references inside
+        # type hints like `def foo(x: ttnn.MeshDevice = None) -> ttnn.Tensor`
+        # would silently not produce edges.
+        args = node.args
+        for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+            if arg.annotation is not None:
+                self.visit(arg.annotation)
+        if args.vararg and args.vararg.annotation is not None:
+            self.visit(args.vararg.annotation)
+        if args.kwarg and args.kwarg.annotation is not None:
+            self.visit(args.kwarg.annotation)
+        for default in args.defaults + args.kw_defaults:
+            if default is not None:
+                self.visit(default)
+        if node.returns is not None:
+            self.visit(node.returns)
+        for dec in node.decorator_list:
+            # Visit the decorator expression itself. Registration decorators are
+            # already matched separately (above) by structural pattern; visiting
+            # their AST again is harmless — _emit_ref dedups.
+            self.visit(dec)
         self.qualname_stack.pop()
         self.scope_stack.pop()
 
@@ -342,16 +380,38 @@ class FileIndexer(ast.NodeVisitor):
         )
         if len(self.scope_stack) == 1:
             self.module_defs[node.name] = nid
+        # B6: capture base-class chains for cross-file inheritance resolution.
+        base_chains: list[tuple[list[str], int]] = []
+        for base in node.bases:
+            chain = attr_chain(base)
+            if chain:
+                base_chains.append((chain, base.lineno))
+        if base_chains:
+            self.class_base_chains[nid] = base_chains
         self.scope_stack.append(nid)
         self.qualname_stack.append(qualname)
         for stmt in node.body:
             self.visit(stmt)
+        # Visit base-class expressions and decorator expressions so refs
+        # they contain (e.g. `class X(ttnn.SomeBase)`) become edges. The
+        # caller for these refs is the class node itself; that matches
+        # the natural "X inherits from Y" reading even before we add a
+        # dedicated `inherits` edge kind (Phase 3 B6).
+        for base in node.bases:
+            self.visit(base)
+        for kw in node.keywords:
+            if kw.value is not None:
+                self.visit(kw.value)
+        for dec in node.decorator_list:
+            self.visit(dec)
         self.qualname_stack.pop()
         self.scope_stack.pop()
 
     # ─ expressions: calls and attribute accesses ─
 
-    def _emit_ref(self, src: str, chain: list[str], site_line: int, kind: str) -> None:
+    def _emit_ref(
+        self, src: str, chain: list[str], site_line: int, kind: str, site_col: int = 0,
+    ) -> None:
         # Dedup on (src, chain, line, kind) — avoids the common case where an
         # attribute appears both as a Call's func and as part of an arg walk.
         sig = (src, tuple(chain), site_line, kind)
@@ -363,6 +423,7 @@ class FileIndexer(ast.NodeVisitor):
             target_chain=chain,
             site_file=self.file_path,
             site_line=site_line,
+            site_col=site_col,
             kind=kind,
         ))
         if len(chain) >= 2 and chain[0] in ("ttnn", "tt_metal"):
@@ -372,7 +433,18 @@ class FileIndexer(ast.NodeVisitor):
         chain = attr_chain(node.func)
         src = self.scope_stack[-1]
         if chain:
-            self._emit_ref(src, chain, node.lineno, "call")
+            # For Attribute chains (`obj.method`), use the column of the LAST
+            # component — that's the position Jedi needs to resolve the method.
+            # For a bare Name, the start column is fine.
+            tgt = node.func
+            if isinstance(tgt, ast.Attribute) and tgt.end_col_offset is not None:
+                # Position one char inside the trailing identifier.
+                col = max(0, tgt.end_col_offset - 1)
+                line = tgt.end_lineno or node.lineno
+            else:
+                col = getattr(tgt, "col_offset", 0)
+                line = node.lineno
+            self._emit_ref(src, chain, line, "call", site_col=col)
         # Call-form registration: <chain>.register_python_operation(name="…")(impl)
         # Detected here when node.func is itself a Call to register_python_operation
         # and node.args has exactly one positional argument (the impl).
@@ -408,7 +480,9 @@ class FileIndexer(ast.NodeVisitor):
         chain = attr_chain(node)
         if chain and len(chain) >= 2 and chain[0] in ("ttnn", "tt_metal"):
             src = self.scope_stack[-1]
-            self._emit_ref(src, chain, node.lineno, "attr_access")
+            col = max(0, (node.end_col_offset or node.col_offset) - 1)
+            line = node.end_lineno or node.lineno
+            self._emit_ref(src, chain, line, "attr_access", site_col=col)
         self.generic_visit(node)
 
     _seen_refs: set
@@ -442,7 +516,11 @@ class FileIndexer(ast.NodeVisitor):
             return
         for alias in node.names:
             if alias.name == "*":
-                continue  # wildcard imports: skipped; would need __all__ tracking
+                # Wildcards are queued here; the global post-pass expands them
+                # using each target module's public-name set (`__all__` or
+                # the inferred public top-level names).
+                self.wildcard_imports.append((target_module, node.lineno))
+                continue
             local = alias.asname or alias.name
             self.imports[local] = ImportEntry(
                 local_name=local,
@@ -451,6 +529,21 @@ class FileIndexer(ast.NodeVisitor):
                 is_module=False,
                 line=node.lineno,
             )
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        # Only module-level `__all__ = [...]` / `__all__ = (...)` assignments
+        # count. Function-local or class-local assignments to a name `__all__`
+        # are not Python's export-list semantics.
+        if len(self.scope_stack) == 1:
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and tgt.id == "__all__":
+                    if isinstance(node.value, (ast.List, ast.Tuple)):
+                        names: list[str] = []
+                        for elt in node.value.elts:
+                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                                names.append(elt.value)
+                        self.dunder_all = names
+        self.generic_visit(node)
 
     # ─── post-pass: resolve intra-module Python edges ─────────────────────
 
@@ -510,6 +603,70 @@ class FileIndexer(ast.NodeVisitor):
             kept.append(r)
         self.refs = kept
 
+    def resolve_self_method_via_mro(
+        self,
+        class_methods_global: dict[str, dict[str, str]],
+        class_parents: dict[str, list[str]],
+    ) -> int:
+        """A4: walk parent classes (via class_parents) when resolving self.X.
+
+        Refs of shape `["self", "X"]` or `["cls", "X"]` that weren't resolved
+        in the immediate class get a second chance here: we walk up the
+        recorded parents (BFS, capped depth) looking for a matching method.
+        """
+        kept: list[PyRef] = []
+        emitted = 0
+        for r in self.refs:
+            chain = r.target_chain
+            if not (len(chain) == 2 and chain[0] in ("self", "cls")):
+                kept.append(r)
+                continue
+            class_qn = self._enclosing_class_qn(r.src)
+            if not class_qn:
+                kept.append(r)
+                continue
+            # Look up the class's node id locally so we can walk class_parents.
+            class_node_id: str | None = None
+            for nid, n in self.nodes.items():
+                if n.kind == "class" and n.qualified_name == class_qn:
+                    class_node_id = nid
+                    break
+            if class_node_id is None:
+                kept.append(r)
+                continue
+
+            method_name = chain[1]
+            # BFS up the parent chain.
+            seen: set[str] = {class_node_id}
+            frontier: list[str] = [class_node_id]
+            target_id: str | None = None
+            depth = 0
+            while frontier and depth < 6 and target_id is None:
+                next_frontier: list[str] = []
+                for cid in frontier:
+                    methods = class_methods_global.get(cid, {})
+                    if method_name in methods:
+                        target_id = methods[method_name]
+                        break
+                    for parent in class_parents.get(cid, []):
+                        if parent not in seen:
+                            seen.add(parent)
+                            next_frontier.append(parent)
+                frontier = next_frontier
+                depth += 1
+
+            if target_id and target_id != r.src:
+                self.edges.append(Edge(
+                    src=r.src, dst=target_id,
+                    kind="calls" if r.kind == "call" else "binds",
+                    site_file=r.site_file, site_line=r.site_line,
+                ))
+                emitted += 1
+                continue
+            kept.append(r)
+        self.refs = kept
+        return emitted
+
     def resolve_cross_module_refs(
         self, module_defs_global: dict[tuple[str, str], str]
     ) -> int:
@@ -559,6 +716,58 @@ class FileIndexer(ast.NodeVisitor):
             kept.append(r)
         self.refs = kept
         return emitted
+
+
+def _expand_wildcard_imports(indexers: list["FileIndexer"]) -> int:
+    """Resolve `from X import *` statements to concrete ImportEntry records.
+
+    A module's public name set is:
+      - its explicit `__all__` if defined, else
+      - every top-level def/class/import-alias name that doesn't start with `_`.
+
+    Wildcard expansion runs once (no fixed-point) — the only chained-wildcard
+    case in tt-metal would be A doing `import *` from B, which itself does
+    `import *` from C. Not observed; if it ever shows up, iterate this pass.
+    """
+    by_module = {fi.module_dotted: fi for fi in indexers}
+
+    def public_names(fi: "FileIndexer") -> list[str]:
+        if fi.dunder_all is not None:
+            return list(fi.dunder_all)
+        names: set[str] = set()
+        # Module-level defs.
+        for nid, n in fi.nodes.items():
+            if (
+                n.kind in ("function", "class")
+                and n.qualified_name == f"{fi.module_dotted}.{n.name}"
+                and not n.name.startswith("_")
+            ):
+                names.add(n.name)
+        # Import aliases bound in this module.
+        for local_name in fi.imports:
+            if not local_name.startswith("_"):
+                names.add(local_name)
+        return sorted(names)
+
+    public_map = {fi.module_dotted: public_names(fi) for fi in indexers}
+    total_expanded = 0
+    for fi in indexers:
+        for target_mod, line in fi.wildcard_imports:
+            names = public_map.get(target_mod)
+            if not names:
+                continue
+            for name in names:
+                if name in fi.imports:
+                    continue   # do not shadow an explicit import in this file
+                fi.imports[name] = ImportEntry(
+                    local_name=name,
+                    target_module=target_mod,
+                    target_name=name,
+                    is_module=False,
+                    line=line,
+                )
+                total_expanded += 1
+    return total_expanded
 
 
 def index_file(file_path: Path, module_roots: list[Path]) -> FileIndexer:
@@ -644,6 +853,10 @@ def main() -> None:
                 if n.qualified_name == f"{fi.module_dotted}.{n.name}":
                     module_defs_global[(fi.module_dotted, n.name)] = nid
 
+    # Wildcard import expansion. Must run BEFORE the re-export pass so that
+    # wildcard-imported names are available for further propagation.
+    wildcards_expanded = _expand_wildcard_imports(indexers)
+
     # Re-export pass: an `__init__.py` that does `from .core import foo` makes
     # `foo` available as `<package>.foo`. Propagate these aliases into the
     # global table so cross-package callers resolve.
@@ -673,6 +886,165 @@ def main() -> None:
     for fi in indexers:
         xmod_total += fi.resolve_cross_module_refs(module_defs_global)
 
+    # Build a shared chain resolver used by both B5 (imports edges) and B6
+    # (inherits edges). Resolution semantics match resolve_cross_module_refs:
+    # bare names look up in local module_defs, dotted-chain names go through
+    # the file's imports table + the global def table.
+    def _resolve_chain_to_node(fi: "FileIndexer", chain: list[str]) -> str | None:
+        if not chain:
+            return None
+        if len(chain) == 1:
+            local = fi.module_defs.get(chain[0])
+            if local:
+                return local
+        imp = fi.imports.get(chain[0])
+        if imp is None:
+            return None
+        if imp.is_module:
+            if len(chain) >= 2:
+                return module_defs_global.get((imp.target_module, chain[1]))
+            return None
+        # `from X import Y` → chain[0] is the alias Y
+        assert imp.target_name is not None
+        if len(chain) == 1:
+            return module_defs_global.get((imp.target_module, imp.target_name))
+        return None
+
+    # Pass 3: emit `imports` edges. Each ImportEntry on a file becomes an edge
+    # from that file's module-node to the imported entity (function/class for
+    # `from X import Y`, module-node for `import X` when X is in scope).
+    module_id_by_dotted = {fi.module_dotted: fi._module_id() for fi in indexers}
+    imports_edges = 0
+    for fi in indexers:
+        src_mod_id = fi._module_id()
+        for local_name, imp in fi.imports.items():
+            if imp.is_module:
+                # `import X` — target is the module node, if we indexed it.
+                dst = module_id_by_dotted.get(imp.target_module)
+            else:
+                # `from X import Y` — target is the entity Y in module X.
+                assert imp.target_name is not None
+                dst = module_defs_global.get((imp.target_module, imp.target_name))
+            if not dst or dst == src_mod_id:
+                continue
+            fi.edges.append(Edge(
+                src=src_mod_id,
+                dst=dst,
+                kind="imports",
+                site_file=fi.file_path,
+                site_line=imp.line,
+            ))
+            imports_edges += 1
+
+    # Pass 3.5 (B4): Jedi-backed type-aware resolution. For each ref that
+    # remains unresolved after cross-module + re-export passes, query Jedi
+    # at the ref's (line, col) for the actual symbol it resolves to. If the
+    # resolution's `full_name` matches a node in our `qualified_name` table,
+    # emit a real edge. This catches `receiver.method()`-style calls where
+    # `receiver` is a typed parameter or a locally-constructed instance.
+    from py_type_resolver import resolve_refs, jedi_available  # type: ignore
+    qn_to_node: dict[str, str] = {}
+    for fi in indexers:
+        for nid, n in fi.nodes.items():
+            qn_to_node[n.qualified_name] = nid
+    b4_edges = 0
+    if jedi_available():
+        # Group remaining refs by file so we open each Jedi Script once.
+        # Skip refs we definitely don't want Jedi for:
+        #   - chains starting with ttnn/tt_metal (cross-language stitcher)
+        #   - chains starting with self/cls (MRO pass)
+        #   - chain length 1 (bare names — already resolved or unresolvable)
+        refs_by_file: dict[str, list[tuple[int, int, int]]] = defaultdict(list)
+        ref_index_map: dict[tuple[str, int, int], list[tuple["FileIndexer", int]]] = defaultdict(list)
+        for fi in indexers:
+            for ridx, r in enumerate(fi.refs):
+                chain = r.target_chain
+                if not chain:
+                    continue
+                if chain[0] in ("ttnn", "tt_metal"):
+                    continue
+                if chain[0] in ("self", "cls"):
+                    continue
+                if len(chain) < 2:
+                    continue
+                if r.site_col <= 0 or r.site_line <= 0:
+                    continue
+                key = (r.site_file, r.site_line, r.site_col)
+                refs_by_file[r.site_file].append((ridx, r.site_line, r.site_col))
+                ref_index_map[key].append((fi, ridx))
+
+        # Pass the first module-root as Jedi's project root so the resolved
+        # full_name matches our `qualified_name` (e.g. `ttnn.operations.binary`
+        # rather than Jedi's default `ttnn.ttnn.operations.binary`).
+        project_root = str(roots[0]) if roots else None
+        resolved = resolve_refs(refs_by_file, project_root=project_root)
+        # Walk every fi's refs; for those that resolved, emit an edge and mark
+        # the ref for deletion. Build a per-fi index-set of resolved positions.
+        resolved_positions_per_fi: dict[id, set[int]] = defaultdict(set)
+        for (file_path, line, col), full_name in resolved.items():
+            node_id_match = qn_to_node.get(full_name)
+            if node_id_match is None:
+                continue
+            for fi, ridx in ref_index_map[(file_path, line, col)]:
+                r = fi.refs[ridx]
+                if node_id_match == r.src:
+                    continue
+                fi.edges.append(Edge(
+                    src=r.src,
+                    dst=node_id_match,
+                    kind="calls" if r.kind == "call" else "binds",
+                    site_file=r.site_file,
+                    site_line=r.site_line,
+                ))
+                b4_edges += 1
+                resolved_positions_per_fi[id(fi)].add(ridx)
+        # Drop resolved refs from each fi.refs to avoid double-counting later.
+        for fi in indexers:
+            resolved_set = resolved_positions_per_fi.get(id(fi), set())
+            if resolved_set:
+                fi.refs = [r for i, r in enumerate(fi.refs) if i not in resolved_set]
+
+    # Pass 4: resolve class bases → emit `inherits` edges and build the
+    # global class_parents map (consumed by A4's MRO walk for self.method).
+    class_parents: dict[str, list[str]] = {}
+    inherits_edges = 0
+    for fi in indexers:
+        for class_id, base_entries in fi.class_base_chains.items():
+            for chain, line in base_entries:
+                target = _resolve_chain_to_node(fi, chain)
+                if not target or target == class_id:
+                    continue
+                fi.edges.append(Edge(
+                    src=class_id,
+                    dst=target,
+                    kind="inherits",
+                    site_file=fi.file_path,
+                    site_line=line,
+                ))
+                class_parents.setdefault(class_id, []).append(target)
+                inherits_edges += 1
+
+    # Pass 5: MRO-aware `self.method` resolution (A4). After class_parents is
+    # built, walk up the inheritance chain to resolve self.X / cls.X calls
+    # that didn't match the immediate class. Each file's class_methods table
+    # is consulted in MRO order.
+    a4_edges = 0
+    # Build a global class_methods view so we can resolve across files.
+    class_methods_global: dict[str, dict[str, str]] = {}
+    for fi in indexers:
+        for class_qn, methods in fi.class_methods.items():
+            # class_qn is a "module.Class" qualified name; map to its node id.
+            class_node_id = None
+            for nid, n in fi.nodes.items():
+                if n.kind == "class" and n.qualified_name == class_qn:
+                    class_node_id = nid
+                    break
+            if class_node_id is None:
+                continue
+            class_methods_global[class_node_id] = methods
+    for fi in indexers:
+        a4_edges += fi.resolve_self_method_via_mro(class_methods_global, class_parents)
+
     # Aggregate.
     for fi in indexers:
         all_nodes.update(fi.nodes)
@@ -691,7 +1063,13 @@ def main() -> None:
     Path(args.out).write_text(json.dumps(out, indent=2))
     print(
         f"[py_index] {len(files)} files | {len(out['nodes'])} nodes, "
-        f"{len(out['edges'])} edges ({xmod_total} via cross-module imports), "
+        f"{len(out['edges'])} edges "
+        f"({xmod_total} via cross-module imports, "
+        f"{wildcards_expanded} wildcard names expanded, "
+        f"{imports_edges} imports-edges, "
+        f"{inherits_edges} inherits-edges, "
+        f"{a4_edges} via MRO, "
+        f"{b4_edges} via Jedi type-resolver), "
         f"{len(out['refs'])} refs, {len(out['registrations'])} registrations, "
         f"{len(out['diagnostics'])} diags -> {args.out}",
         file=sys.stderr,

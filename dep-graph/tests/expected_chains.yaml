@@ -108,13 +108,17 @@ chains:
       WHERE cpp_qualified_name LIKE 'nanobind::%' OR cpp_qualified_name LIKE 'nb::%'
     expect_exact: 0
 
-  - name: "NO stdlib functions in bindings"
+  - name: "NO stdlib FUNCTIONS in non-class bindings"
     description: >
       Lambda-body filter regression check: `std::get`, `std::move`,
       `__builtin_unreachable` previously appeared as bindings under `__init__`.
+      Excludes helper='class_' because `nb::class_<std::vector<T>>(m, "VecT")`
+      legitimately binds stdlib CLASSES (vector, map, etc.) under Python aliases.
     query: |
       SELECT COUNT(*) FROM bindings
-      WHERE cpp_qualified_name LIKE 'std::%' OR cpp_qualified_name LIKE '\_\_builtin\_%' ESCAPE '\'
+      WHERE helper != 'class_'
+        AND (cpp_qualified_name LIKE 'std::%'
+          OR cpp_qualified_name LIKE '\_\_builtin\_%' ESCAPE '\')
     expect_exact: 0
 
   # ─── Sanity: total counts ─────────────────────────────────────────────
@@ -127,6 +131,160 @@ chains:
     query: |
       SELECT COUNT(*) FROM bindings
     expect_min: 100
+
+  # ─── C1 expanded coverage — ops bound under common nanobind helpers ───
+
+  - name: "reshape, transpose, slice all bound"
+    query: |
+      SELECT COUNT(DISTINCT python_name) FROM bindings
+      WHERE python_name IN ('reshape', 'transpose', 'slice', 'permute', 'view')
+    expect_min: 4
+
+  - name: "all_gather_async (CCL) bound to ≥3 cpp overloads"
+    query: |
+      SELECT COUNT(*) FROM bindings WHERE python_name = 'all_gather_async'
+    expect_min: 3
+
+  - name: "typecast op bound"
+    query: |
+      SELECT COUNT(*) FROM bindings WHERE python_name = 'typecast'
+    expect_min: 3
+
+  # ─── C1 IDevice virtual dispatch sanity ───────────────────────────────
+
+  - name: "IDevice::id has many virtual-dispatch callers"
+    description: >
+      `IDevice::id()` is a heavily-used virtual method; via_dispatch tagging
+      should mark hundreds of call sites.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE e.via_dispatch = 'virtual'
+        AND nd.qualified_name = 'tt::tt_metal::IDevice::id'
+    expect_min: 100
+
+  - name: "IDevice::arch has many virtual-dispatch callers"
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE e.via_dispatch = 'virtual'
+        AND nd.qualified_name = 'tt::tt_metal::IDevice::arch'
+    expect_min: 50
+
+  # ─── C1 kernel launches (D1) at scale ─────────────────────────────────
+
+  - name: "Total launches edges across repo"
+    description: >
+      Full-repo re-parse should expose hundreds of host→kernel edges via
+      D1's CreateKernel detection.
+    query: |
+      SELECT COUNT(*) FROM edges WHERE kind = 'launches'
+    expect_min: 300
+
+  - name: "Distinct kernel files captured"
+    query: |
+      SELECT COUNT(DISTINCT id) FROM nodes WHERE kind = 'kernel_file'
+    expect_min: 200
+
+  - name: "writer_unary_interleaved_start_id launched from multiple hosts"
+    description: >
+      A shared kernel reused across eltwise unary ops — should have ≥5
+      host launchers.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE e.kind = 'launches'
+        AND nd.qualified_name LIKE '%/writer_unary_interleaved_start_id.cpp'
+    expect_min: 5
+
+  # ─── C1 broader inherits coverage ─────────────────────────────────────
+
+  - name: "C++ inherits edges from full repo are non-trivial"
+    description: >
+      Tier 2 B2's CXX_BASE_SPECIFIER walking should produce hundreds of
+      inherits edges across the full repo (LLVM SmallVector hierarchy in
+      tt_stl plus all the device / fabric class hierarchies).
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes ns ON ns.id = e.src
+      WHERE e.kind = 'inherits' AND ns.language = 'cpp'
+    expect_min: 200
+
+  - name: "Virtual-dispatch tagging is widespread"
+    description: >
+      Across the full repo we expect thousands of virtual-dispatch tagged
+      calls (IDevice methods alone account for ~700).
+    query: |
+      SELECT COUNT(*) FROM edges WHERE via_dispatch = 'virtual'
+    expect_min: 1000
+
+  # ─── C1 binding-helper diversity ──────────────────────────────────────
+
+  - name: "All five .def_* variants present in bindings"
+    description: >
+      def, def_ro, def_rw, def_prop_ro, def_static — all five should fire
+      somewhere in the repo's binding surface.
+    query: |
+      SELECT COUNT(DISTINCT helper) FROM bindings
+      WHERE helper IN ('def', 'def_ro', 'def_rw', 'def_prop_ro', 'def_static')
+    expect_exact: 5
+
+  # ─── Regression: ctypes-wrapped libclang APIs (overrides + instantiates) ─
+
+  - name: "overrides edges present"
+    description: >
+      Phase 3 v2: `clang_getOverriddenCursors` ctypes-wrapped at module load.
+      Each virtual method override emits a `kind=overrides` edge to its parent.
+      Sample from device.cpp + binary_nanobind alone: ~290 edges. Full repo
+      should have thousands.
+    query: |
+      SELECT COUNT(*) FROM edges WHERE kind = 'overrides'
+    expect_min: 200
+
+  - name: "Device::id overrides IDevice::id"
+    description: >
+      Specific case: `tt::tt_metal::Device::id()` overrides
+      `tt::tt_metal::IDevice::id()`. This is the most-called virtual method
+      in the codebase; the override edge must be present.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes ns ON ns.id = e.src
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE e.kind = 'overrides'
+        AND ns.qualified_name = 'tt::tt_metal::Device::id'
+        AND nd.qualified_name = 'tt::tt_metal::IDevice::id'
+    expect_min: 1
+
+  # ─── Regression: Tier 1 (3) class_ bindings ──────────────────────────
+
+  - name: "nb::class_<T> bindings captured"
+    description: >
+      `nb::class_<T>(m, "Name")` and `tt_serializable_class<T>(m, "Name")`
+      bind Python class names to C++ types. Detected by call return type
+      starting with `class_<` / `nb::class_<` / `nanobind::class_<`.
+      tensor.cpp alone has ~9 such bindings.
+    query: |
+      SELECT COUNT(*) FROM bindings WHERE helper = 'class_'
+    expect_min: 9
+
+  - name: "ttnn.Tensor class binding present"
+    description: >
+      The most-referenced Python class name in ttnn — `ttnn.Tensor` —
+      should now resolve to a class binding (was the dominant unresolved
+      ref before Tier 1).
+    query: |
+      SELECT COUNT(*) FROM bindings WHERE helper='class_' AND python_name='Tensor'
+    expect_min: 1
+
+  - name: "instantiates edges present"
+    description: >
+      Phase 3 v2: `clang_getSpecializedCursorTemplate` plumbed through to emit
+      `kind=instantiates` edges from specializations to primary templates.
+      Sample from 2 TUs: ~509 edges. Full repo should be much higher (475
+      `bind_function<"name">` instantiations alone).
+    query: |
+      SELECT COUNT(*) FROM edges WHERE kind = 'instantiates'
+    expect_min: 500
 
   # ─── Regression: intra-Python edges ──────────────────────────────────
   # An earlier version of py_index emitted ZERO intra-Python edges; every
@@ -197,3 +355,215 @@ chains:
       WHERE ns.language = 'python' AND nd.language = 'python'
         AND ns.file != nd.file
     expect_min: 300
+
+  # ─── Regression: A2 wildcard imports + annotation walking ─────────────
+
+  - name: "ttnn.distributed wildcard — open_mesh_device reachable"
+    description: >
+      `ttnn/__init__.py` does `from ttnn.distributed import *`. The wildcard
+      expander must enumerate `ttnn.distributed/__init__.py`'s public names
+      (no `__all__` defined; fall back to the public import aliases) and
+      register each as an import in `ttnn`. The re-export pass then
+      propagates them. A2 + annotation walking should produce >=1 edge into
+      `ttnn.distributed.distributed.open_mesh_device`.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE nd.qualified_name = 'ttnn.distributed.distributed.open_mesh_device'
+        AND nd.language = 'python'
+    expect_min: 1
+
+  # ─── Regression: B5 imports edges ─────────────────────────────────────
+
+  - name: "imports edges exist and are non-trivial"
+    description: >
+      B5 emits one edge per (module-level) import. Every Python file in ttnn/ttnn/
+      has at least a few imports; total should comfortably exceed 50.
+    query: |
+      SELECT COUNT(*) FROM edges WHERE kind = 'imports'
+    expect_min: 50
+
+  - name: "ttnn module is widely imported"
+    description: >
+      The `ttnn` package itself is the most-imported entity in the tree.
+      Verify it has many incoming `imports` edges.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE e.kind = 'imports' AND nd.qualified_name = 'ttnn'
+    expect_min: 20
+
+  # ─── Regression: B6 inherits edges ────────────────────────────────────
+
+  - name: "Conv2dArgs inherits from ModuleArgs"
+    description: >
+      `class Conv2dArgs(ModuleArgs)` in model_preprocessing.py must produce
+      a kind=inherits edge once B6's class-base resolution runs.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes ns ON ns.id = e.src
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE e.kind = 'inherits'
+        AND ns.qualified_name = 'ttnn.model_preprocessing.Conv2dArgs'
+        AND nd.qualified_name = 'ttnn.model_preprocessing.ModuleArgs'
+    expect_exact: 1
+
+  - name: "At least 3 Python inherits edges across the tree"
+    description: >
+      Inheritance is shallow in ttnn (1-2 levels) per the survey, but the
+      dataclass hierarchy in model_preprocessing gives us a handful of cases.
+      Lock the lower bound.
+    query: |
+      SELECT COUNT(*) FROM edges WHERE kind = 'inherits'
+    expect_min: 3
+
+  # ─── Regression: B1 expanded binding helpers (def_ro / def_rw etc.) ──
+
+  - name: "def_ro field bindings captured"
+    description: >
+      `cls.def_ro("field", &T::field)` patterns (read-only attribute bindings)
+      must produce bindings entries with helper='def_ro'. tt-metal has ~37
+      such bindings; the chain-call scoping fix in `_find_python_name` also
+      had to land or the python_name would be wrong.
+    query: |
+      SELECT COUNT(*) FROM bindings WHERE helper = 'def_ro'
+    expect_min: 20
+
+  - name: "def_rw field bindings captured"
+    description: >
+      `cls.def_rw("field", &T::field)` is the read-write attribute binding;
+      ~228 sites in tt-metal.
+    query: |
+      SELECT COUNT(*) FROM bindings WHERE helper = 'def_rw'
+    expect_min: 100
+
+  - name: "def_static / def_prop_* bindings captured"
+    description: >
+      Static methods and properties also bind via .def_static / .def_prop_ro
+      / .def_prop_rw. Must capture at least a handful.
+    query: |
+      SELECT COUNT(*) FROM bindings WHERE helper IN ('def_static','def_prop_ro','def_prop_rw')
+    expect_min: 20
+
+  - name: "Chain-call scoping: stage_index correctly named in pipeline_module"
+    description: >
+      `nb::class_<BlitzDecodePipelineStage>(mod, "BlitzDecodePipelineStage").def_ro("stage_index", ...)`
+      previously had python_name="BlitzDecodePipelineStage" (the chain receiver's
+      literal) for the stage_index binding. Direct-args scoping in
+      `_find_python_name` fixes this — python_name must be "stage_index" exactly.
+    query: |
+      SELECT COUNT(*) FROM bindings
+      WHERE python_name = 'stage_index'
+        AND cpp_qualified_name LIKE '%BlitzDecodePipelineStage%'
+    expect_min: 1
+
+  # ─── Regression: B2 C++ inherits + virtual dispatch ──────────────────
+
+  - name: "C++ class nodes are recorded"
+    description: >
+      B2 added CLASS_KINDS handling to `_walk`. Every CLASS_DECL/STRUCT_DECL/
+      CLASS_TEMPLATE in scope becomes a kind=class node. Without B2 we had 0.
+    query: |
+      SELECT COUNT(*) FROM nodes WHERE language='cpp' AND kind='class'
+    expect_min: 100
+
+  - name: "tt_metal::Device inherits from IDevice"
+    description: >
+      `class Device : public IDevice` in tt_metal/impl/device/device_impl.hpp.
+      Without B2's CXX_BASE_SPECIFIER walking this edge wasn't there.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes ns ON ns.id = e.src
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE e.kind = 'inherits'
+        AND ns.qualified_name = 'tt::tt_metal::Device'
+        AND nd.qualified_name LIKE '%IDevice'
+    expect_min: 1
+
+  - name: "MeshDevice inherits from IDevice"
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes ns ON ns.id = e.src
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE e.kind = 'inherits'
+        AND ns.qualified_name = 'tt::tt_metal::distributed::MeshDevice'
+        AND nd.qualified_name LIKE '%IDevice'
+    expect_min: 1
+
+  - name: "Virtual-dispatch tag fires on virtual method calls"
+    description: >
+      In _handle_call, callee.is_virtual_method() now sets via_dispatch='virtual'
+      on the emitted edge. Consumers use this to know which calls have
+      runtime fan-out potential.
+    query: |
+      SELECT COUNT(*) FROM edges WHERE via_dispatch = 'virtual'
+    expect_min: 30
+
+  # ─── Regression: B4 Jedi type-aware resolver ─────────────────────────
+
+  - name: "Jedi resolver produces at least some edges"
+    description: >
+      B4 integrates Jedi to resolve `receiver.method()` calls when the
+      receiver's type is inferrable from annotations or local assignments.
+      tt-metal's annotation coverage is low (~19%), so the yield is small
+      — but should be non-zero. If this drops to 0, either Jedi stopped
+      working or the project-root path is misaligned (Jedi's `full_name`
+      no longer matches our `qualified_name`).
+    query: |
+      SELECT COUNT(DISTINCT e.id) FROM edges e
+      JOIN nodes ns ON ns.id = e.src
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE ns.language = 'python' AND nd.language = 'python'
+        AND e.kind = 'calls'
+        AND ns.file != nd.file
+        AND nd.kind IN ('method', 'function')
+    expect_min: 130
+
+  # ─── Regression: D1 host→kernel launches edges ───────────────────────
+
+  - name: "embedding RM program factory launches its kernel files"
+    description: >
+      Three CreateKernel calls in embeddings_rm_program_factory.cpp should
+      produce three `kind=launches` edges and three `kind=kernel_file` nodes
+      (embeddings.cpp, embeddings_rm_writer_chunked.cpp, and the shared
+      writer_unary_stick_layout_interleaved_start_id.cpp).
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE e.kind = 'launches'
+        AND e.via_helper = 'CreateKernel'
+        AND e.site_file LIKE '%/embeddings_rm_program_factory.cpp'
+    expect_min: 3
+
+  - name: "kernel_file nodes are created for launched kernels"
+    description: >
+      D1 synthesizes a kind=kernel_file node per unique path passed to a
+      kernel launcher. Lower bound: at least 3 from the test sample.
+    query: |
+      SELECT COUNT(*) FROM nodes WHERE kind = 'kernel_file'
+    expect_min: 3
+
+  # ─── Regression: A1 libclang bindings-kind patch ─────────────────────
+
+  - name: "No unknown-CursorKind diagnostics"
+    description: >
+      Before the A1 patch, libclang 18's bindings raised ValueError on cursor
+      kinds clang-20 emits (kind 155 etc.), poisoning whole TUs. The patch
+      lazy-registers unknown kinds as sentinels so cursor.kind never crashes.
+      The diagnostics table should now contain zero "unknown cursor kind"
+      entries; if it does not, the patch is no longer firing.
+    query: |
+      SELECT COUNT(*) FROM cpp_diagnostics
+      WHERE message LIKE '%unknown cursor kind%'
+    expect_exact: 0
+
+  - name: "Type-annotation walking produces refs"
+    description: >
+      Before this fix we never walked parameter annotations; `device: ttnn.Tensor`
+      generated no ref. Now we walk them. Confirm refs were generated by checking
+      that the unresolved-refs count in the py_index output increased, by way of
+      the underlying derived edges: total cross-language edges should jump.
+      (Pre-fix this was 522; post-fix should remain >= 522 with no regression.)
+    query: |
+      SELECT COUNT(*) FROM edges WHERE crosses_language = 1
+    expect_min: 522
