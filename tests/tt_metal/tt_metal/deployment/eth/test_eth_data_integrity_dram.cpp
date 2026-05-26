@@ -287,6 +287,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet03DataIntegrityDram) {
                         errors.emplace_back(
                             sender_device->id(), receiver_device->id(), sender_core, receiver_core, processor);
                     }
+                    log_info(tt::LogTest, "    done");
 
                     prev_recv = receiver_mesh_device.get();
                     prev_sender = sender_mesh_device.get();

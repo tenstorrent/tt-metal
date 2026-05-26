@@ -732,6 +732,8 @@ bool test_check_cores(std::span<struct core_setup> cores) {
         auto* const dev = cs.mesh_device->get_devices()[0];
         pass &= bandwidth_check(dev, cs.core, cs.delta_time_addr, cs.total_transferred, cs.bw_threshold);
         pass &= data_check(dev, cs.core, cs.recv_l1_address, cs.inp);
+
+        log_info(tt::LogTest, "    done");
     }
 
     return pass;

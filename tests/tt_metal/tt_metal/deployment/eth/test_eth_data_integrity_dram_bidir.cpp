@@ -208,6 +208,7 @@ static bool run_test_integrity_dram_bidir(
 
 TEST_F(MeshDispatchFixture, TensixDeploymentEthernet04DataIntegrityDramBidir) {
     vector<LinkError> errors;
+    int n = 0;
 
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];
@@ -239,9 +240,14 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet04DataIntegrityDramBidir) {
                         receiver_core,
                         DataMovementProcessor::RISCV_0);
                 }
+                log_info(tt::LogTest, "    done");
+
+                n++;
             }
         }
     }
+
+    log_info(tt::LogTest, "Ran {} tests", n);
 
     print_summary(errors);
     ASSERT_TRUE(!errors.size());

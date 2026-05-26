@@ -137,6 +137,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet00LinkUp) {
                         errors.emplace_back(
                             sender_device->id(), receiver_device->id(), sender_core, receiver_core, processor);
                     }
+                    log_info(tt::LogTest, "    done");
 
                     n++;
                 }

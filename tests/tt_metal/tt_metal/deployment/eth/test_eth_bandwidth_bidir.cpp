@@ -153,6 +153,8 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet02BandwidthBidir) {
                         errors.emplace_back(
                             sender_device->id(), receiver_device->id(), sender_core, receiver_core, processor);
                     }
+                    log_info(tt::LogTest, "    done");
+
                     n++;
                 }
             }

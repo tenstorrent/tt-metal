@@ -22,6 +22,7 @@ testruns = re.compile(f"({timeregex}).*Test \| Ran (\d+) tests .*")
 testbw = re.compile(f"({timeregex}).*Test \|       Bandwidth (.*) Gbps, (.*) ms .*")
 testbwfail = re.compile(f"({timeregex}).*Test \|       Expected at least: (.*) Gbps, got (.*) Gbps .*")
 testsetup = re.compile(f"({timeregex}).*Test \|       set up .*")
+testdone = re.compile(f"({timeregex}).*Test \|     done.*")
 testdatacmp = re.compile(
     f"({timeregex}).*Test \|       done comparing bank (.*) and (.*) with (\d+) "
     + "mismatched words starting at (.*), ending at (.*) .*"
@@ -99,6 +100,7 @@ class EventType(Enum):
     L1DATACMP = auto()
     TESTSETUP = auto()
     TESTCHECK = auto()
+    TESTDONE = auto()
 
 
 @dataclass
@@ -290,6 +292,15 @@ def parse_setup(l: str) -> Optional[Event]:
     return Event(EventType.TESTSETUP, {})
 
 
+def parse_done(l: str) -> Optional[Event]:
+    m = testdone.match(l)
+    if m is None:
+        return None
+
+    # print(f"\tDONE")
+    return Event(EventType.TESTDONE, {})
+
+
 def parse_line(l: str) -> Optional[Event]:
     if print_logs:
         print(f"l: {l}")
@@ -306,6 +317,7 @@ def parse_line(l: str) -> Optional[Event]:
         parse_setup,
         parse_procs,
         parse_runs,
+        parse_done,
         parse_bw,
     ]
 
@@ -364,8 +376,6 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
             errors = []
             bw = {}
         elif e.typ == EventType.TESTEND:
-            if proc != "":
-                links.append(TestedLink(sdev, sdevbdf, score, rdev, rdevbdf, rcore, proc, bw, errors))
             runs.append(TestRun(test, links, e.extra["status"]))
             test = sdev = rdev = score = rcore = proc = ""
             links = []
@@ -380,16 +390,12 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
             errors = []
             bw = {}
         elif e.typ == EventType.CORES:
-            if (test in noprocs and score != "") or proc != "":
-                links.append(TestedLink(sdev, sdevbdf, score, rdev, rdevbdf, rcore, proc, bw, errors))
             score = e.extra["score"]
             rcore = e.extra["rcore"]
             proc = ""
             errors = []
             bw = {}
         elif e.typ == EventType.PROCS:
-            if proc != "" and test != stresstest:
-                links.append(TestedLink(sdev, sdevbdf, score, rdev, rdevbdf, rcore, proc, bw, errors))
             proc = e.extra["proc"]
             bw = {}
             errors = []
@@ -407,8 +413,6 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
             errors = []
             bw = {}
         elif e.typ == EventType.TESTCHECK:
-            if sdev != "":
-                links.append(TestedLink(sdev, sdevbdf, score, rdev, rdevbdf, rcore, proc, bw, errors))
             sdev = e.extra["sdev"]
             sdevbdf = e.extra["sdevbdf"]
             rdev = e.extra["rdev"]
@@ -418,6 +422,8 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
             proc = e.extra["proc"]
             errors = []
             bw = {}
+        elif e.typ == EventType.TESTDONE:
+            links.append(TestedLink(sdev, sdevbdf, score, rdev, rdevbdf, rcore, proc, bw, errors))
 
     yield from runs
 
