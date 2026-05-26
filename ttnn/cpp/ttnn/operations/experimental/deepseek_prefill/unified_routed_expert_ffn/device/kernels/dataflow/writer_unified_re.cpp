@@ -47,14 +47,19 @@ void kernel_main() {
     // don't OOB-write the output buffer.
     constexpr uint32_t M_tiles_full = get_compile_time_arg_val(16);
     // Byte offset of region_offsets within cb_idx_scratch's L1 page.
-    // (idx lives at offset 0; region_offsets is appended after it.)
+    // (idx lives at offset 0; region_offsets is appended after it.) Only
+    // used when use_region_offsets.
     constexpr uint32_t region_offsets_l1_byte_offset = get_compile_time_arg_val(17);
+    // When false, the kernel uses start_tile_row=0 (correct for the unfused
+    // extract->FFN path where the output is a fresh per-expert tensor
+    // starting at row 0). Mirrors the reader's flag.
+    constexpr bool use_region_offsets = get_compile_time_arg_val(18) != 0;
 
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
     constexpr uint32_t d_in1_num_subblocks_M = per_core_M / d_out_subblock_h;
     constexpr uint32_t d_in1_num_subblocks_N = per_core_N_d / d_out_subblock_w;
 
-    constexpr uint32_t out_accessor_offset = 18;
+    constexpr uint32_t out_accessor_offset = 19;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, get_tile_size(cb_out));
 
@@ -71,18 +76,24 @@ void kernel_main() {
         reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_counts_scratch));
     const uint32_t idx_l1 = get_read_ptr(cb_idx_scratch);
     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1);
-    const volatile tt_l1_ptr uint32_t* region_offsets_ptr =
-        reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1 + region_offsets_l1_byte_offset);
     const uint32_t global_expert_id = idx_ptr[local_expert_id];
     const uint32_t count_value = counts_ptr[global_expert_id];
     const uint32_t count_tiles = (count_value + 31) / 32;
     const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
     const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
     // Start tile row of this expert's slice in the shared output DRAM
-    // buffer. region_offsets entries are TOKEN rows and tile-aligned, so
-    // divide by 32. Added to every output tile_idx below — fuses what the
-    // separate insert op used to do.
-    const uint32_t start_tile_row = region_offsets_ptr[global_expert_id] / 32;
+    // buffer. When use_region_offsets=true (fused path): read
+    // region_offsets[global_expert_id]/32 (token rows are tile-aligned).
+    // When false (unfused path): output is a fresh per-expert tensor
+    // starting at row 0.
+    uint32_t start_tile_row = 0;
+    if constexpr (use_region_offsets) {
+        const volatile tt_l1_ptr uint32_t* region_offsets_ptr =
+            reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1 + region_offsets_l1_byte_offset);
+        start_tile_row = region_offsets_ptr[global_expert_id] / 32;
+    } else {
+        (void)region_offsets_l1_byte_offset;
+    }
 
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
         const uint32_t row0 = chunk * chunk_M_tiles + my_mt * per_core_M;

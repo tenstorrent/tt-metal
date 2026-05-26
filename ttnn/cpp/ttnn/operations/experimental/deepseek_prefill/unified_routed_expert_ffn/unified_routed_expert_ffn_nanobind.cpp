@@ -53,6 +53,7 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("global_expert_idx_table").noconvert(),
         nb::arg("expert_region_offsets").noconvert(),
         nb::arg("local_expert_id"),
+        nb::arg("use_region_offsets") = true,
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("output") = nb::none());
