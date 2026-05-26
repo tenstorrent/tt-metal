@@ -26,9 +26,13 @@ from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import cre
 from models.experimental.seamless_m4t_v2_large.tt.tt_code_hifigan import TTSeamlessM4Tv2CodeHifiGan
 
 PCC_THRESHOLD = 0.99
+SHORT_UNIT_SEQ = 16
+# ``t_audio`` is the sum of per-unit durations (≥ one frame per token); 512 units exercises the
+# chunked ``_expand_unit_embeddings_matmul``, DRAM-sliced upsample convs, and HiFi-GAN mel chunks.
+LONG_UNIT_SEQ = 512
 
 
-def _run_code_hifigan_pcc(device, batch: int) -> None:
+def _run_code_hifigan_pcc(device, batch: int, *, unit_seq: int) -> None:
     """Shared PCC body. Works on either a single-device 1×1 mesh or a multi-device 1×N mesh.
 
     Multi-device readbacks of replicated tensors go through ``to_torch_replicated_first_shard``,
@@ -46,7 +50,7 @@ def _run_code_hifigan_pcc(device, batch: int) -> None:
     torch.manual_seed(0)
     vocoder, cfg = load_pretrained_code_hifigan(weights_dir, dtype=torch.bfloat16)
 
-    seq = 16
+    seq = unit_seq
     pad_id = int(cfg.t2u_pad_token_id)
     vocab = int(cfg.unit_hifi_gan_vocab_size)
     low = max(pad_id + 1, 2)
@@ -95,12 +99,12 @@ def _run_code_hifigan_pcc(device, batch: int) -> None:
             pcc_val = -1.0
         pcc_min = min(pcc_min, pcc_val) if pcc_val >= 0 else pcc_min
         logger.info(
-            f"SeamlessM4Tv2 CodeHiFi-GAN PCC [B={batch} row={b} valid_len={valid_len}]: "
+            f"SeamlessM4Tv2 CodeHiFi-GAN PCC (unit_seq={unit_seq}) [B={batch} row={b} valid_len={valid_len}]: "
             f"{msg} (threshold {PCC_THRESHOLD})"
         )
         assert ok, f"row {b}: {msg}"
 
-    logger.info(f"SeamlessM4Tv2 CodeHiFi-GAN PCC [B={batch}] min over rows: {pcc_min}")
+    logger.info(f"SeamlessM4Tv2 CodeHiFi-GAN PCC (unit_seq={unit_seq}) [B={batch}] min over rows: {pcc_min}")
 
 
 @pytest.mark.parametrize(
@@ -130,8 +134,38 @@ def _run_code_hifigan_pcc(device, batch: int) -> None:
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_seamless_m4t_v2_code_hifigan_pcc(mesh_device, device_params, batch, reset_seeds):
+def test_seamless_m4t_v2_code_hifigan_short_seq_pcc(mesh_device, device_params, batch, reset_seeds):
+    """PCC at ``unit_seq=16`` — short 1D matmul / single-shot HiFi-GAN path."""
     _ = reset_seeds
     _ = device_params
     with mesh_default_device(mesh_device):
-        _run_code_hifigan_pcc(mesh_device, batch)
+        _run_code_hifigan_pcc(mesh_device, batch, unit_seq=SHORT_UNIT_SEQ)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(
+    "mesh_device,device_params,batch",
+    [
+        pytest.param(
+            MESH_SHAPE_P150,
+            DEVICE_PARAMS_P150_FULL,
+            1,
+            id="1x1-b1",
+            marks=pytest.mark.skipif(_requires_num_devices(1), reason="P150 (1 device)"),
+        ),
+        pytest.param(
+            MESH_SHAPE_BH_QB,
+            DEVICE_PARAMS_BH_QB_FULL,
+            1,
+            id="1x4-b1",
+            marks=pytest.mark.skipif(_requires_num_devices(4), reason="BH QB (4 devices)"),
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_seamless_m4t_v2_code_hifigan_long_seq_pcc(mesh_device, device_params, batch, reset_seeds):
+    """PCC at ``unit_seq=512`` — chunked expand matmul, DRAM-sliced upsample, HiFi-GAN mel chunks."""
+    _ = reset_seeds
+    _ = device_params
+    with mesh_default_device(mesh_device):
+        _run_code_hifigan_pcc(mesh_device, batch, unit_seq=LONG_UNIT_SEQ)
