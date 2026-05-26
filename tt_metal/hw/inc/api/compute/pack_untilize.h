@@ -86,19 +86,20 @@ ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
  * the host via CircularBufferConfig::set_unpack_face_geometry / CBFormatDescriptor::face_geometry. Callers that need
  * non-default face geometry must configure it on the output CB at program creation time.
  *
- * This default init configures BH DEST remap. Use `pack_untilize_dest_init_skip_remap` only when the caller has
- * already configured BH DEST remap and no intervening operation requires a different DEST remap state.
+ * By default this init configures BH DEST remap. Pass `configure_remap = false` only when the caller has already
+ * configured BH DEST remap and no intervening operation requires a different DEST remap state.
  *
  * Return value: None
  *
- * | Param Type | Name           | Description                                      | Type      | Valid Range               | Required              |
- * |------------|----------------|--------------------------------------------------|-----------|---------------------------|-----------------------|
- * | Template   | block_ct_dim   | Width of a single block in tiles                 | uint32_t  | 1 to max (see note)       | False (default = 8)   |
- * | Template   | full_ct_dim    | Width of a full input in tiles                   | uint32_t  | Divisible by block_ct_dim | False                 |
- * | Template   | narrow_row     |  Whether the provided input is narrow            | bool      | true/false                | False                 |
- * | Template   | row_num_datums | Number of datums per row                         | uint32_t  | >= 1                      | False                 |
- * | Template   | dense          | Packs two 2 face tiles in a single 4 face region | bool      | true/false                | False (default false) |
- * | Function   | ocb            | Output circular buffer identifier                | uint32_t  | 0 to 31                   | True                  |
+ * | Param Type | Name            | Description                                         | Type      | Valid Range               | Required              |
+ * |------------|-----------------|-----------------------------------------------------|-----------|---------------------------|-----------------------|
+ * | Template   | block_ct_dim    | Width of a single block in tiles                    | uint32_t  | 1 to max (see note)       | False (default = 8)   |
+ * | Template   | full_ct_dim     | Width of a full input in tiles                      | uint32_t  | Divisible by block_ct_dim | False                 |
+ * | Template   | narrow_row      | Whether the provided input is narrow                | bool      | true/false                | False                 |
+ * | Template   | row_num_datums  | Number of datums per row                            | uint32_t  | >= 1                      | False                 |
+ * | Template   | dense           | Packs two 2 face tiles in a single 4 face region    | bool      | true/false                | False (default false) |
+ * | Template   | configure_remap | Whether to (re)configure BH DEST remap (BH only)    | bool      | true/false                | False (default true)  |
+ * | Function   | ocb             | Output circular buffer identifier                   | uint32_t  | 0 to 31                   | True                  |
  */
 // clang-format on
 template <
@@ -106,22 +107,11 @@ template <
     uint32_t full_ct_dim = block_ct_dim,
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
-    bool dense = false>
+    bool dense = false,
+    bool configure_remap = true>
 ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     pack_untilize_detail::
-        pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, true>(
-            ocb, call_line);
-}
-
-template <
-    uint32_t block_ct_dim = 8,
-    uint32_t full_ct_dim = block_ct_dim,
-    bool narrow_row = false,
-    std::uint32_t row_num_datums = TILE_C_DIM,
-    bool dense = false>
-ALWI void pack_untilize_dest_init_skip_remap(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    pack_untilize_detail::
-        pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, false>(
+        pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, configure_remap>(
             ocb, call_line);
 }
 
