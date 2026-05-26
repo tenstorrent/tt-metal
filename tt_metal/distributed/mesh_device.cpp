@@ -1439,7 +1439,7 @@ uint32_t MeshDeviceImpl::pick_unused_dram_subchannel(uint32_t bank_id) const {
     for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
         tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
             static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
-        if (reserved.find({coord.x, coord.y}) == reserved.end()) {
+        if (!reserved.contains({coord.x, coord.y})) {
             return sub;
         }
     }

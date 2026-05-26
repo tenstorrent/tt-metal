@@ -44,7 +44,7 @@ TEST_F(DramSubchannelHelperFixture, PicksUnreservedSubchannelPerBank) {
         for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
             tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
                 static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
-            if (reserved.find({coord.x, coord.y}) == reserved.end()) {
+            if (!reserved.contains({coord.x, coord.y})) {
                 expected_free = sub;
                 break;
             }
@@ -57,7 +57,7 @@ TEST_F(DramSubchannelHelperFixture, PicksUnreservedSubchannelPerBank) {
 
         tt::umd::CoreCoord picked_coord = soc_desc.get_dram_core_for_channel(
             static_cast<int>(channel), static_cast<int>(picked), tt::CoordSystem::TRANSLATED);
-        EXPECT_TRUE(reserved.find({picked_coord.x, picked_coord.y}) == reserved.end())
+        EXPECT_FALSE(reserved.contains({picked_coord.x, picked_coord.y}))
             << "Picked subchannel " << picked << " for bank " << bank << " collides with a worker/eth endpoint";
     }
 }

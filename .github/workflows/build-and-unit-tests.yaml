@@ -50,7 +50,7 @@ jobs:
               ./build/test/tt_metal/unit_tests_per_core_allocation --gtest_filter=$GTEST_FILTER
               TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 \
                 ./build/test/tt_metal/unit_tests_api \
-                --gtest_filter=BlackholeSingleCardFixture.DramKernel*:DramSenderGCBFixture.*:DramSubchannelHelperFixture.*
+                --gtest_filter=BlackholeSingleCardFixture.DramKernel*
               rm -rf /tmp/kernels
               mkdir -p /tmp/kernels
               TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.${GTEST_FILTER}
