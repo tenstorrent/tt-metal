@@ -1,0 +1,7 @@
+interface:
+  display_name: "Optimize Decoder"
+  short_description: "Optimize TTNN decoder layers after bringup"
+  default_prompt: "Use $optimize-decoder to optimize a functional TTNN decoder layer with sharding, precision, program configs, PCC checks, and tt-perf-report evidence."
+
+policy:
+  allow_implicit_invocation: true
