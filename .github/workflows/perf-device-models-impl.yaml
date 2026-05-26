@@ -460,6 +460,12 @@ jobs:
           test -f ${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
 
       - name: Clean test name for artifact
+        # Mirror the upload step's gate so ARTIFACT_NAME is only set when the
+        # upload will actually run. Without this guard, a prior test failure
+        # skips this step (default if: success()) while the upload step still
+        # runs (its gate only checks check-device-perf-report), uploading with
+        # an empty artifact name and failing with a confusing validation error.
+        if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
         run: |
           CLEAN_NAME=$(echo "${{ matrix.test-info.name }}" | tr ' ' '-')
           echo "ARTIFACT_NAME=device-perf-report-csv-${{ matrix.test-info.test-type }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}-${CLEAN_NAME}" >> "$GITHUB_ENV"
