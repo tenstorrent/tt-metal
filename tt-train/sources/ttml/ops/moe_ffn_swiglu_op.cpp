@@ -82,20 +82,28 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     const ttsl::Span<const EltwiseUnary> no_acts;
     const ttsl::Span<const EltwiseUnary> silu_lhs(&silu_act, 1);
 
-    // Pre-zero so unused rows (per-expert pad + trailing slack) stay zero — guarantees
-    // silu(0)*0=0 in `activated`'s pad rows and zeros in y for any row not written by some
-    // expert's down_proj. moreh_full_like over ttnn::empty is ~100x faster than
-    // `ttml::core::zeros` (which roundtrips through host-side `ttnn::full`).
+    // y must be pre-zeroed because the caller can read trailing slack rows
+    // [offsets.back(), T_cap) which no expert's down_proj writes — those would be allocator
+    // garbage in ttnn::empty. gate_proj/up_proj are internal: slack garbage propagates into
+    // activated and then into d_gate_proj/d_up_proj's slack rows, but those slack rows are
+    // never read by the bwd matmuls (dW_* slice K to expert offsets, dX_via_* write only
+    // expert slots). So skip the zero for those two and leave them uninitialized.
     const uint32_t intermediate_dim = wg0_shape[-2];
     auto* device = &ttml::autograd::ctx().get_device();
     const auto dtype = grouped_value.dtype();
-    auto zeros_device = [&](const ttnn::Shape& shape) {
-        return ttnn::moreh_full_like(
-            ttnn::empty(shape, dtype, ttnn::Layout::TILE, device, ttnn::DRAM_MEMORY_CONFIG), 0.F);
+    auto y = ttnn::moreh_full_like(
+        ttnn::empty(
+            ttnn::Shape({1U, 1U, token_capacity, hidden_dim}),
+            dtype,
+            ttnn::Layout::TILE,
+            device,
+            ttnn::DRAM_MEMORY_CONFIG),
+        0.F);
+    auto empty_device = [&](const ttnn::Shape& shape) {
+        return ttnn::empty(shape, dtype, ttnn::Layout::TILE, device, ttnn::DRAM_MEMORY_CONFIG);
     };
-    auto y = zeros_device(ttnn::Shape({1U, 1U, token_capacity, hidden_dim}));
-    auto gate_proj = zeros_device(ttnn::Shape({1U, 1U, token_capacity, intermediate_dim}));
-    auto up_proj = zeros_device(ttnn::Shape({1U, 1U, token_capacity, intermediate_dim}));
+    auto gate_proj = empty_device(ttnn::Shape({1U, 1U, token_capacity, intermediate_dim}));
+    auto up_proj = empty_device(ttnn::Shape({1U, 1U, token_capacity, intermediate_dim}));
 
     // gate_proj / up_proj: each expert reads grouped[offsets[e]:offsets[e+1]] and writes into
     // the matching slice of the shared tensor (InputAndOutputRow). w_gate / w_up are [I, H],
@@ -174,17 +182,24 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         const auto& grouped_shape = grouped_value.logical_shape();
         const uint32_t intermediate_dim = gate_proj.logical_shape()[-1];
 
-        // All bwd intermediates are shared [T_cap, *] tensors. Pre-zeroed so unused rows stay
-        // zero through swiglu_bw and the dX matmuls. Same memory pattern as fwd: one shared
-        // tensor per gradient instead of E per-expert ones. moreh_full_like over ttnn::empty
-        // is ~100x faster than `ttml::core::zeros` here.
+        // dX_via_gate + dX_via_up are summed into dX which becomes grouped's gradient — slack
+        // rows escape to the caller, so they must be zero. d_activated is internal: its slack
+        // garbage flows into d_gate_proj/d_up_proj slack rows, but those are never read by
+        // dW_* (K-sliced to expert offsets) or dX_via_* (writes only expert slots). Skip its
+        // zero. The matmul writes the full expert slot for each variable_matmul, so within-slot
+        // pad rows (in the last tile of each expert) compute correctly from zero K-inputs.
         auto* device = &ttml::autograd::ctx().get_device();
         const auto dtype = grouped_value.dtype();
         auto zeros_device = [&](const ttnn::Shape& shape) {
             return ttnn::moreh_full_like(
                 ttnn::empty(shape, dtype, ttnn::Layout::TILE, device, ttnn::DRAM_MEMORY_CONFIG), 0.F);
         };
-        auto d_activated = zeros_device(ttnn::Shape({1U, 1U, gate_proj.logical_shape()[-2], intermediate_dim}));
+        auto d_activated = ttnn::empty(
+            ttnn::Shape({1U, 1U, gate_proj.logical_shape()[-2], intermediate_dim}),
+            dtype,
+            ttnn::Layout::TILE,
+            device,
+            ttnn::DRAM_MEMORY_CONFIG);
         auto dX_via_gate = zeros_device(grouped_shape);
         auto dX_via_up = zeros_device(grouped_shape);
 
