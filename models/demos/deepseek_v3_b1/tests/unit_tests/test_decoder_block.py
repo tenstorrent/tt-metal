@@ -1289,18 +1289,17 @@ def test_decoder(
 @pytest.mark.parametrize(
     "position_id",
     [
-        0,
+        # #43563 half-DEST debug: pos=127 (1-chunk) is the cheap repro of Attempt 19
         127,
-        pytest.param(511, marks=pytest.mark.skip_post_commit),
-        pytest.param(1023, marks=pytest.mark.skip_post_commit),
-        pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
     ],
 )
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+            # craq-sim: mock 2x4 BH cluster has pure mesh ethernet (no wrap-around);
+            # torus_x fails topology mapping. Use 2D mesh fabric for sim runs.
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
             "worker_l1_size": 1374544,
         }
@@ -1308,14 +1307,11 @@ def test_decoder(
     indirect=True,
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
-@pytest.mark.parametrize("num_internal_iterations", [1])
-@pytest.mark.parametrize("slot_id, num_slots", [(0, 2), (1, 2)])
-# Dense-MLP SRAM placement. DRAM list stays full (8 chunks) for sizing/CB probes;
-# placement selects which chunks the kernel processes via the SRAM matmul instead
-# of the DRAM matmul (the latter iterates 8 slots and skips SRAM-flagged ones).
-#   all-dram → 0 chunks via SRAM (baseline)
-#   all-sram → 8 chunks via SRAM (n_dram_active=0 → DRAM chain skipped at runtime)
-@pytest.mark.parametrize("dense_placement", ["all-dram", "all-sram"])
+@pytest.mark.parametrize("num_internal_iterations", [2])  # #43563 hash-debug: need 2-iter case
+@pytest.mark.parametrize("slot_id, num_slots", [(0, 1)])
+# Dense-MLP SRAM placement (kept from main; test body uses it). Narrowed to all-dram
+# baseline for the craq-sim alt-PCC run.
+@pytest.mark.parametrize("dense_placement", ["all-dram"])
 @pytest.mark.requires_grid_size((13, 10))
 @requires_hybrid_allocator
 def test_decoder_mlp(

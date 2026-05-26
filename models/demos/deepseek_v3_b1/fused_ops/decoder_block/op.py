@@ -401,6 +401,8 @@ class DecoderBlock:
             my_defines = moe.kernel_defines
             if ctx["device_kernel_defines"] is not None:
                 my_defines = ctx["device_kernel_defines"] + moe.kernel_defines
+            # #43563 half-DEST debug: gate hash_cb at flash_mla.hpp:851 on DEBUG_CB_HASH
+            my_defines = my_defines + [("DEBUG_CB_HASH", "1")]
             unified_kernel = UnifiedKernelDescriptor(
                 kernel_source="models/demos/deepseek_v3_b1/fused_ops/decoder_block/kernels/decoder_block_kernel.cpp",
                 core_ranges=full_device_grid,

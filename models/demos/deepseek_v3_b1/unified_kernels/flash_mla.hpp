@@ -20,6 +20,9 @@
 #include "api/compute/compute_kernel_api.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/sdpa.h"
 #include "api/compute/eltwise_unary/exp.h"
+#ifdef DEBUG_CB_HASH
+#include "api/compute/debug/cb_hash.h"
+#endif
 #endif
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
@@ -849,6 +852,10 @@ struct FlashMLADecode {
                 PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));
             }
             cb_push_back(sdpa_output_cb, out_chunk_tiles);
+#ifdef DEBUG_CB_HASH
+            // Attempt 19 (#43563): hash per-core SDPA output to detect iter-0/iter-1 bank divergence.
+            hash_cb(sdpa_output_cb, out_chunk_tiles, 0x30);
+#endif
             tile_regs_commit();
             tile_regs_wait();
             tile_regs_release();
