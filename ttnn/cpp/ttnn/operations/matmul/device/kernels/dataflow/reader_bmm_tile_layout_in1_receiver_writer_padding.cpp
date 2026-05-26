@@ -11,10 +11,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
-#include "api/debug/dprint.h"
-
 void kernel_main() {
-    DPRINT << "[MM_IN1R " << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << "] enter" << ENDL();
     // READER
     uint32_t rt_args_idx = 0;
     // in1 mcast args

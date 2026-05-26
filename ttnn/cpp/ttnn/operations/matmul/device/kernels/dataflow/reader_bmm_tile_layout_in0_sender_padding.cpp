@@ -17,15 +17,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-#include "api/debug/dprint.h"
-
 void kernel_main() {
-    DPRINT << "[MM_IN0S " << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << "] enter" << ENDL();
-    // print mcast args (read after rt_args_idx advances past them)
-    DPRINT << "[MM_IN0S] mcast_start=(" << get_arg_val<uint32_t>(2) << "," << get_arg_val<uint32_t>(3) << ") end=("
-           << get_arg_val<uint32_t>(4) << "," << get_arg_val<uint32_t>(5)
-           << ") num_dests=" << get_compile_time_arg_val(17) << " sender_sem_idx=" << get_compile_time_arg_val(15)
-           << " receiver_sem_idx=" << get_compile_time_arg_val(16) << ENDL();
     uint32_t rt_args_idx = 0;
     // in0 tensor args
     const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -372,19 +364,8 @@ void kernel_main() {
                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
                         // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
                         // zero for the next block
-                        {
-                            volatile tt_l1_ptr uint32_t* ssem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                get_semaphore(get_compile_time_arg_val(15)));
-                            volatile tt_l1_ptr uint32_t* rsem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                get_semaphore(get_compile_time_arg_val(16)));
-                            DPRINT << "[MM_IN0S " << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0]
-                                   << "] pre-wait sender_sem_val=" << *ssem << " receiver_sem_val=" << *rsem
-                                   << " wait_for=" << in0_mcast_num_dests << ENDL();
-                        }
                         sender_sem.wait(in0_mcast_num_dests);
                         sender_sem.set(0);
-                        DPRINT << "[MM_IN0S " << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << "] mcast start"
-                               << ENDL();
 
                         // Now we have the block in the CB address, we can mcast to dests!
                         MulticastEndpoint mcast_dst;
@@ -461,7 +442,6 @@ void kernel_main() {
             }
         }
     }
-    DPRINT << "[MM_IN0S " << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << "] done" << ENDL();
     noc.async_write_barrier();
 
     // When nnz was supplied, the receiver and compute kernels loop exactly num_batch_compute times.

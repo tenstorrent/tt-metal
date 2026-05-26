@@ -39,7 +39,6 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
@@ -151,9 +150,6 @@ void kernel_main() {
     const uint32_t eps = get_arg_val<uint32_t>(5);
     generate_bcast_col_scalar(cb_eps, eps);
 
-    DPRINT << "[NR " << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << "] enter NCHt=" << NCHt << " Wt=" << Wt
-           << " row0=" << start_tile_row << ENDL();
-
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         const uint32_t curr_tile_row = start_tile_row + ncht;
 
@@ -205,5 +201,4 @@ void kernel_main() {
         }
 #endif
     }  // ncht loop
-    DPRINT << "[NR " << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << "] done" << ENDL();
 }
