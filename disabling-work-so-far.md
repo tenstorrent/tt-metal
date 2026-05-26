@@ -1,6 +1,6 @@
 # CI Disable Work — Running Status Log
 
-Last updated: **2026-05-26T18:00 UTC** (added main-failure check timestamps + PR rebase tracking)
+Last updated: **2026-05-26T18:02 UTC** (polled active verification run 26460410854)
 
 Operational policy: **one workflow run at a time**, draft PRs only, artifact reuse for verification, Galaxy out of scope.
 
@@ -14,7 +14,7 @@ Operational policy: **one workflow run at a time**, draft PRs only, artifact reu
 
 | Run | Pipeline | Branch | Started (UTC) | Jobs | Artifact source | Status |
 |-----|----------|--------|---------------|------|-----------------|--------|
-| [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) | `(T3K) T3000 e2e tests` | `verify/ci-disable-t3000-e2e-20260526` | 2026-05-26 16:13 | `t3k_ccl_tests [wh_llmbox]` (**in progress**), `models_tttv2_llama31_8B_tests [wh_llmbox]` (**success**) | `26445104085` (Merge Gate Release, main `5e9f894`) | **ACTIVE** — pruned targeted verification for PR #45108 |
+| [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) | `(T3K) T3000 e2e tests` | `verify/ci-disable-t3000-e2e-20260526` | 2026-05-26 16:13 | `models_tttv2_llama31_8B_tests [wh_llmbox]` (**success** @ 17:15 UTC), `t3k_ccl_tests [wh_llmbox]` (**in progress** — pytest since 17:18 UTC, runner `t3k-05`) | `26445104085` (Merge Gate Release, main `5e9f894`) | **ACTIVE** — pruned targeted verification for PR #45108 |
 
 > Do **not** dispatch another workflow until this run completes.
 
@@ -41,9 +41,9 @@ Operational policy: **one workflow run at a time**, draft PRs only, artifact reu
 | Branch | `ci/disable-failing-tests-t3000-e2e-tests-20260524` |
 | Workflow | `t3000-e2e-tests.yaml` |
 
-**Last rebase on main:** 2026-05-26 ~17:18 UTC — rebased onto [`2feb3d47dee`](https://github.com/tenstorrent/tt-metal/commit/2feb3d47dee477530551c19f2b67c6f20c6ac4ea) (PR head after push: [`32e4d9b9c29`](https://github.com/tenstorrent/tt-metal/commit/32e4d9b9c296af8680f4f8ce30ff785fab3880bf)). GitHub mergeable_state still **behind** main as of same timestamp — re-check before undraft.
+**Last rebase on main:** 2026-05-26 ~17:18 UTC — rebased onto [`2feb3d47dee`](https://github.com/tenstorrent/tt-metal/commit/2feb3d47dee477530551c19f2b67c6f20c6ac4ea) (PR head: [`32e4d9b9c29`](https://github.com/tenstorrent/tt-metal/commit/32e4d9b9c296af8680f4f8ce30ff785fab3880bf)). **Behind main** as of 2026-05-26 18:02 UTC — current `main` tip [`231c7223899`](https://github.com/tenstorrent/tt-metal/commit/231c7223899cc1c42763498a13a3bee138decb78); rebase after verification completes.
 
-**Status:** Awaiting targeted verification (run [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) active).
+**Status:** Targeted verification [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) **ACTIVE** — Llama pruned job **green**; CCL pruned job running pytest.
 
 **Latest disable-set change (2026-05-26):**
 - **Removed:** Llama 3.1 batch-32 demo skips — passing on main (see removed-test row below)
@@ -131,7 +131,7 @@ Operational policy: **one workflow run at a time**, draft PRs only, artifact reu
 
 | Blocker | Status | Notes |
 |---------|--------|-------|
-| Active verification run blocks new dispatch | **Active** | Run 26460410854 in progress since 2026-05-26 16:13 UTC |
+| Active verification run blocks new dispatch | **Active** | Run 26460410854 — Llama job done (success); CCL job in pytest (polled 2026-05-26 18:02 UTC) |
 | GitHub REST `Bad credentials` with Bearer token | **Workaround** | Use `gh` CLI or `Authorization: token` header |
 | PR #45108 behind main | **Watch** | Rebased/synced 2026-05-26; re-check before undraft |
 | No compatible artifact source | **Resolved** | Used Merge Gate run `26445104085` for current verification |
@@ -139,6 +139,11 @@ Operational policy: **one workflow run at a time**, draft PRs only, artifact reu
 ---
 
 ## Change Log (append-only)
+
+### 2026-05-26 ~18:02 UTC — automation poll (no code changes)
+- Polled run 26460410854: workflow `in_progress`; Llama job **success**; CCL job **in_progress** (pytest)
+- No new workflow dispatch; no disable edits on PR #45108
+- Recorded current `main` tip `231c7223899` for post-verify rebase planning
 
 ### 2026-05-26 ~18:00 UTC — status log format update
 - Added per-test main-failure check timestamps (linked to run 26438570812)
