@@ -67,21 +67,43 @@ def test_embedding_8x4_galaxy(mesh_device):
         tp_axis=tp_axis,
     )
 
-    token_mapper = ttnn.ShardTensor2dMesh(
+    # Push tokens through a persistent H2DStreamService — same pattern as
+    # prefill_runner._build_h2d_service: global spec describes the SP-sharded,
+    # TP-replicated tensor on device; the service core drains pushed bytes into
+    # the backing tensor, which the embedding op then consumes.
+    per_chip_bytes = isl_per_chip * 4  # uint32
+    global_spec = ttnn.TensorSpec(
+        shape=ttnn.Shape([sp_factor, 1, isl_per_chip]),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
+    )
+    mapper = ttnn.create_mesh_mapper(
         mesh_device,
-        mesh_shape=mesh_device.shape,
-        dims=(0, None),
+        ttnn.MeshMapperConfig(
+            placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()],
+        ),
+    )
+    h2d_service = ttnn.H2DStreamService(
+        mesh_device=mesh_device,
+        global_spec=global_spec,
+        fifo_size_bytes=8 * per_chip_bytes,
+        scratch_cb_size_bytes=per_chip_bytes,
+        mapper=mapper,
+    )
+    logger.info(
+        f"[h2d] H2DStreamService built: global_shape=({sp_factor},1,{isl_per_chip}) "
+        f"uint32 ROW_MAJOR DRAM, per_chip_bytes={per_chip_bytes}"
     )
 
     logger.info(f"torch_tokens shape: {torch_tokens.shape}")
-    tt_tokens = ttnn.from_torch(
-        torch_tokens,
-        mesh_mapper=token_mapper,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        dtype=ttnn.uint32,
-    )
-    logger.info(f"tt_tokens shape: {tt_tokens.shape}")
+    # uint32 bit pattern == int32 bit pattern for non-negative ids (vocab fits in 18 bits).
+    flat_tokens = torch_tokens.to(torch.int32).contiguous().numpy()
+    h2d_service.forward_to_tensor_bytes(flat_tokens)
+    h2d_service.barrier()
+    tt_tokens = h2d_service.get_backing_tensor()
+    logger.info(f"tt_tokens shape (from H2D backing tensor): {tt_tokens.shape}")
+
     tt_output = tt_emb(tt_tokens)
 
     # ttnn.embedding squeezes the leading singleton: per-chip output is
