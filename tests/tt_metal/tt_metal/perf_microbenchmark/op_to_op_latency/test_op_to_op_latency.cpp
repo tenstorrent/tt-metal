@@ -126,6 +126,15 @@ struct BenchmarkConfig {
     uint32_t output_cb_depth_tiles = 0;
     // 0 = reserve N then read+push one tile at a time; 1 = reserve N, read all, push N.
     uint32_t reader_mode = 0;
+    // DRAM page size in tiles. Larger pages = fewer, larger NoC transactions
+    // per program. CB pages stay 1 tile each so compute kernel is unchanged.
+    uint32_t page_size_tiles = 1;
+    // Writer barrier mode: 0 = per-tile barrier (default, mirrors current ops);
+    //                     1 = single barrier at end of all writes.
+    uint32_t write_barrier_mode = 0;
+    // Cap active core count. 0 = use full grid (default). Used to test whether
+    // brisc_done_to_go scales with core count.
+    uint32_t num_active_cores = 0;
     bool buffer_tune = false;
     std::string buffer_tune_input_depths = "2,4,6,8,12,16,24,32";
     std::string buffer_tune_output_depths;
@@ -150,6 +159,15 @@ BenchmarkConfig parse_args(const std::vector<std::string>& args) {
     if (test_args::has_command_option(args, "--reader-batch-push")) {
         cfg.reader_mode = 1;
     }
+    if (test_args::has_command_option(args, "--reader-dbuf-trid")) {
+        // Per-trid double-buffer reader (Almeet's pipelined design).
+        cfg.reader_mode = 2;
+    }
+    cfg.page_size_tiles = test_args::get_command_option_uint32(args, "--page-size-tiles", cfg.page_size_tiles);
+    if (test_args::has_command_option(args, "--writer-barrier-at-end")) {
+        cfg.write_barrier_mode = 1;
+    }
+    cfg.num_active_cores = test_args::get_command_option_uint32(args, "--num-active-cores", cfg.num_active_cores);
     if (test_args::has_command_option(args, "--buffer-tune")) {
         cfg.buffer_tune = true;
     }
@@ -398,6 +416,8 @@ struct BuiltProgram {
     uint32_t reader_mode = 0;
     uint32_t input_cb_depth_tiles = 0;
     uint32_t output_cb_depth_tiles = 2;
+    uint32_t page_size_tiles = 1;
+    uint32_t write_barrier_mode = 0;
 };
 
 // Set reader/writer/compute runtime args (including program_id) on every active core.
@@ -428,12 +448,18 @@ void set_program_launch_args(
                      start_tile_id,
                      program_id,
                      reader_push_tile_count,
-                     reader_mode});
+                     reader_mode,
+                     built.page_size_tiles});
                 SetRuntimeArgs(
                     program,
                     built.writer_kernel,
                     core,
-                    {output_buffer_addr, tiles_per_core, start_tile_id, program_id});
+                    {output_buffer_addr,
+                     tiles_per_core,
+                     start_tile_id,
+                     program_id,
+                     built.page_size_tiles,
+                     built.write_barrier_mode});
                 SetRuntimeArgs(program, built.compute_kernel, core, {tiles_per_core, program_id});
                 start_tile_id += tiles_per_core;
             }
@@ -471,7 +497,14 @@ BuiltProgram build_program(
     uint32_t single_tile_size_bytes) {
     Program program = CreateProgram();
 
-    const auto grid = mesh_device->compute_with_storage_grid_size();
+    const auto full_grid = mesh_device->compute_with_storage_grid_size();
+    CoreCoord grid = full_grid;
+    if (cfg.num_active_cores > 0 && cfg.num_active_cores < full_grid.x * full_grid.y) {
+        const uint32_t want = cfg.num_active_cores;
+        const uint32_t gx = std::min<uint32_t>(full_grid.x, want);
+        const uint32_t gy = (want + gx - 1) / gx;
+        grid = CoreCoord{gx, std::min<uint32_t>(full_grid.y, gy)};
+    }
     constexpr bool kRowMajor = true;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(grid, total_num_tiles, kRowMajor);
@@ -507,13 +540,43 @@ BuiltProgram build_program(
         cfg.num_pages_per_core,
         push_tiles);
 
+    const uint32_t page_size_tiles = cfg.page_size_tiles > 0 ? cfg.page_size_tiles : 1;
+    TT_FATAL(
+        cfg.num_pages_per_core % page_size_tiles == 0,
+        "--num-pages-per-core ({}) must be a multiple of --page-size-tiles ({})",
+        cfg.num_pages_per_core,
+        page_size_tiles);
+    TT_FATAL(
+        input_cb_depth >= page_size_tiles,
+        "input CB depth ({}) must be >= --page-size-tiles ({})",
+        input_cb_depth,
+        page_size_tiles);
+    TT_FATAL(
+        output_cb_depth >= page_size_tiles,
+        "output CB depth ({}) must be >= --page-size-tiles ({}) so the writer can accumulate a full page",
+        output_cb_depth,
+        page_size_tiles);
+    if (cfg.reader_mode == 2) {
+        TT_FATAL(
+            input_cb_depth >= 2 * page_size_tiles,
+            "per-trid DB needs input CB depth ({}) >= 2 * --page-size-tiles ({})",
+            input_cb_depth,
+            2 * page_size_tiles);
+    } else if (page_size_tiles > 1) {
+        TT_FATAL(
+            false,
+            "--page-size-tiles > 1 currently requires --reader-dbuf-trid (reader_mode 2); "
+            "legacy modes 0/1 use tile_id as page_id and would read wrong data.");
+    }
+
     log_info(
         LogTest,
-        "Reader: push_tiles={}, input_cb_depth={}, output_cb_depth={} (compute->writer still 1 tile at a time), "
-        "reader_mode={} (0=incremental read+push, 1=batch read then push)",
+        "Reader: push_tiles={}, input_cb_depth={}, output_cb_depth={}, page_size_tiles={} (compute->writer still 1 "
+        "tile at a time), reader_mode={} (0=incremental read+push, 1=batch read then push, 2=per-trid double-buffer)",
         push_tiles,
         input_cb_depth,
         output_cb_depth,
+        page_size_tiles,
         cfg.reader_mode);
 
     CircularBufferConfig cb_in_config =
@@ -573,9 +636,23 @@ BuiltProgram build_program(
                     program,
                     reader_kernel,
                     core,
-                    {input_buffer->address(), tiles_per_core, start_tile_id, 0, push_tiles, cfg.reader_mode});
+                    {input_buffer->address(),
+                     tiles_per_core,
+                     start_tile_id,
+                     0,
+                     push_tiles,
+                     cfg.reader_mode,
+                     page_size_tiles});
                 SetRuntimeArgs(
-                    program, writer_kernel, core, {output_buffer->address(), tiles_per_core, start_tile_id, 0});
+                    program,
+                    writer_kernel,
+                    core,
+                    {output_buffer->address(),
+                     tiles_per_core,
+                     start_tile_id,
+                     0,
+                     page_size_tiles,
+                     cfg.write_barrier_mode});
                 SetRuntimeArgs(program, compute_kernel, core, {tiles_per_core, 0});
                 start_tile_id += tiles_per_core;
             }
@@ -600,6 +677,8 @@ BuiltProgram build_program(
     built.reader_mode = cfg.reader_mode;
     built.input_cb_depth_tiles = input_cb_depth;
     built.output_cb_depth_tiles = output_cb_depth;
+    built.page_size_tiles = page_size_tiles;
+    built.write_barrier_mode = cfg.write_barrier_mode;
     return built;
 }
 
@@ -814,7 +893,11 @@ bool run_buffer_tune_mode(const BenchmarkConfig& cfg) {
     log_info(LogTest, "Clock: {} MHz", get_tt_npu_clock(mesh_device->get_devices()[0]));
 
     const auto grid = mesh_device->compute_with_storage_grid_size();
-    const uint32_t num_cores = grid.x * grid.y;
+    uint32_t effective_cores = grid.x * grid.y;
+    if (tune_cfg.num_active_cores > 0 && tune_cfg.num_active_cores < effective_cores) {
+        effective_cores = tune_cfg.num_active_cores;
+    }
+    const uint32_t num_cores = effective_cores;
     const uint32_t total_num_tiles = num_cores * tune_cfg.num_pages_per_core;
 
     constexpr auto kDataFormat = tt::DataFormat::Float16_b;
@@ -822,8 +905,10 @@ bool run_buffer_tune_mode(const BenchmarkConfig& cfg) {
     const uint32_t buffer_size_bytes = total_num_tiles * single_tile_size_bytes;
     const uint64_t bytes_per_program = 2ull * total_num_tiles * single_tile_size_bytes;
 
+    const uint32_t dram_page_size_bytes =
+        (tune_cfg.page_size_tiles > 0 ? tune_cfg.page_size_tiles : 1) * single_tile_size_bytes;
     distributed::DeviceLocalBufferConfig dram_local_config{
-        .page_size = single_tile_size_bytes,
+        .page_size = dram_page_size_bytes,
         .buffer_type = BufferType::DRAM,
     };
     distributed::ReplicatedBufferConfig dram_buf_config{.size = buffer_size_bytes};
@@ -1129,18 +1214,24 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Clock: {} MHz", get_tt_npu_clock(mesh_device->get_devices()[0]));
 
         const auto grid = mesh_device->compute_with_storage_grid_size();
-        const uint32_t num_cores = grid.x * grid.y;
+        uint32_t effective_cores = grid.x * grid.y;
+        if (cfg.num_active_cores > 0 && cfg.num_active_cores < effective_cores) {
+            effective_cores = cfg.num_active_cores;
+        }
+        const uint32_t num_cores = effective_cores;
         const uint32_t total_num_tiles = num_cores * cfg.num_pages_per_core;
 
         constexpr auto kDataFormat = tt::DataFormat::Float16_b;
         const uint32_t single_tile_size_bytes = tile_size(kDataFormat);
         const uint32_t buffer_size_bytes = total_num_tiles * single_tile_size_bytes;
 
-        // Interleaved DRAM buffer: page_size == one tile, so pages are spread
-        // across DRAM banks round-robin. This is what makes the read/write
-        // pattern look like a real op.
+        // Interleaved DRAM buffer: page_size = page_size_tiles * tile_bytes
+        // (default 1 tile per page), so each NoC transaction transfers one
+        // page from one DRAM bank; pages are spread across banks round-robin.
+        const uint32_t dram_page_size_bytes =
+            (cfg.page_size_tiles > 0 ? cfg.page_size_tiles : 1) * single_tile_size_bytes;
         distributed::DeviceLocalBufferConfig dram_local_config{
-            .page_size = single_tile_size_bytes,
+            .page_size = dram_page_size_bytes,
             .buffer_type = BufferType::DRAM,
         };
         distributed::ReplicatedBufferConfig dram_buf_config{.size = buffer_size_bytes};
