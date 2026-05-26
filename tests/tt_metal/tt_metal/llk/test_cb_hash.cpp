@@ -55,8 +55,12 @@ constexpr const char* READER_KERNEL =
 constexpr const char* WRITER_KERNEL =
     "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_checkpoint.cpp";
 
-// Read the captured DPRINT file and return the hex hash from the first line
+// Read the captured DPRINT file and return the hex hash from the *last* line
 // matching "hash[0x<label>] cb=<id> tiles=<n> = 0x<hash>". Returns 0 on miss.
+//
+// The fixture's dprint file accumulates lines across run_once calls inside
+// one TEST_F body — taking the last match makes back-to-back runs see their
+// own hash rather than the first run's.
 uint32_t extract_hash(const std::string& dprint_file, uint32_t label, uint32_t cb_id, uint32_t tiles) {
     std::stringstream label_hex;
     label_hex << std::hex << label;
@@ -67,13 +71,14 @@ uint32_t extract_hash(const std::string& dprint_file, uint32_t label, uint32_t c
 
     std::ifstream f(dprint_file);
     std::string line;
+    uint32_t latest = 0u;
     while (std::getline(f, line)) {
         std::smatch m;
         if (std::regex_search(line, m, re)) {
-            return static_cast<uint32_t>(std::stoul(m[1].str(), nullptr, 16));
+            latest = static_cast<uint32_t>(std::stoul(m[1].str(), nullptr, 16));
         }
     }
-    return 0u;
+    return latest;
 }
 
 struct Setup {
@@ -186,10 +191,6 @@ TEST_F(CbHashTest, HashCbTriscDeterminism) {
 }
 
 // ---------- hash_cb_sfpu: SFPU FNV23, INT32 ----------
-//
-// NOTE: SFPU path is still pending hardware validation (BH and WH). These
-// tests still check the line-emit + determinism contract; once the SFPU
-// sequence is settled, the same harness will catch regressions.
 
 TEST_F(CbHashTest, HashCbSfpuEmitsLine) {
     this->RunTestOnDevice(
@@ -219,6 +220,42 @@ TEST_F(CbHashTest, HashCbSfpuDeterminism) {
                 f, d, "tests/tt_metal/tt_metal/test_kernels/compute/cb_hash_sfpu.cpp", tt::DataFormat::Int32, input);
             EXPECT_NE(h1, 0u);
             EXPECT_EQ(h1, h2) << "hash_cb_sfpu is not deterministic across runs";
+        },
+        this->devices_[0]);
+}
+
+// Discrimination: distinct inputs must produce distinct hashes. Catches the
+// "always returns the same constant" failure mode that EmitsLine + Determinism
+// would otherwise let pass.
+
+TEST_F(CbHashTest, HashCbTriscDiscriminates) {
+    this->RunTestOnDevice(
+        [](DPrintMeshFixture* f, const std::shared_ptr<distributed::MeshDevice>& d) {
+            std::vector<uint32_t> a(NUM_TILES * 512, 0x00010001u);  // tile of bf16 ones
+            std::vector<uint32_t> b(NUM_TILES * 512, 0x40004000u);  // tile of bf16 twos
+            uint32_t ha = run_once(
+                f, d, "tests/tt_metal/tt_metal/test_kernels/compute/cb_hash_trisc.cpp", tt::DataFormat::Float16_b, a);
+            uint32_t hb = run_once(
+                f, d, "tests/tt_metal/tt_metal/test_kernels/compute/cb_hash_trisc.cpp", tt::DataFormat::Float16_b, b);
+            EXPECT_NE(ha, 0u);
+            EXPECT_NE(hb, 0u);
+            EXPECT_NE(ha, hb) << "hash_cb_trisc returned the same value for distinct inputs: 0x" << std::hex << ha;
+        },
+        this->devices_[0]);
+}
+
+TEST_F(CbHashTest, HashCbSfpuDiscriminates) {
+    this->RunTestOnDevice(
+        [](DPrintMeshFixture* f, const std::shared_ptr<distributed::MeshDevice>& d) {
+            std::vector<uint32_t> a(NUM_TILES * 1024, 0xAAAA5555u);
+            std::vector<uint32_t> b(NUM_TILES * 1024, 0x12345678u);
+            uint32_t ha = run_once(
+                f, d, "tests/tt_metal/tt_metal/test_kernels/compute/cb_hash_sfpu.cpp", tt::DataFormat::Int32, a);
+            uint32_t hb = run_once(
+                f, d, "tests/tt_metal/tt_metal/test_kernels/compute/cb_hash_sfpu.cpp", tt::DataFormat::Int32, b);
+            EXPECT_NE(ha, 0u);
+            EXPECT_NE(hb, 0u);
+            EXPECT_NE(ha, hb) << "hash_cb_sfpu returned the same value for distinct inputs: 0x" << std::hex << ha;
         },
         this->devices_[0]);
 }

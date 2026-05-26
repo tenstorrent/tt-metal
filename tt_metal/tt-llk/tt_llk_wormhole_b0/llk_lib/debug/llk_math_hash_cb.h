@@ -31,7 +31,8 @@
 //   SFPSHFT2(0,0,0,1)         : CHAINED_COPY4 — LReg[3][i] = LReg[0][i+8] (i<24).
 //     No scheduling constraint for mode 1.
 //
-// STATUS: ISA-verified draft. Not yet hardware-validated on WH.
+// STATUS: hardware-validated on WH B0 (n150) — see
+// tests/tt_metal/tt_metal/llk/test_cb_hash.cpp. BH path still pending.
 
 #pragma once
 

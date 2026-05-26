@@ -20,7 +20,9 @@
 # trusted. The determinism test still validates the property that matters
 # for bisection debugging.
 #
-# STATUS: draft. Pending hardware validation on BH and WH.
+# STATUS: WH SFPU sequence is hardware-validated (WH B0 n150) via the
+# sibling tt-metal gtest at tests/tt_metal/tt_metal/llk/test_cb_hash.cpp.
+# BH SFPU sequence is still pending hardware bring-up.
 
 import pytest
 import torch

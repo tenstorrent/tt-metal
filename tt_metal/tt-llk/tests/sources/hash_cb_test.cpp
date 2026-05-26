@@ -18,7 +18,9 @@
 // No output CB and no PACK trip are involved — the production debug API uses
 // the same L1 slot to hand the hash from MATH to UNPACK for DPRINT.
 //
-// STATUS: draft. BH and WH SFPU sequences have not been hardware-validated.
+// STATUS: WH SFPU sequence is hardware-validated (WH B0 n150) via the
+// tt-metal gtest in tests/tt_metal/tt_metal/llk/test_cb_hash.cpp. BH SFPU
+// sequence is still pending hardware bring-up.
 // The matching pytest is tests/python_tests/test_hash_cb.py.
 
 #include <cstdint>
