@@ -56,7 +56,7 @@ def run_and_save_log(cmd: list[str], log_path: Path) -> int:
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=None,
             text=True,
         )
         for line in proc.stdout:
