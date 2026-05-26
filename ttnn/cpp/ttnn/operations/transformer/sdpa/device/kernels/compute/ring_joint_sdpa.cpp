@@ -94,33 +94,33 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    // TODO: CB indices below are hardcoded and duplicated from the program factory.
-    // They should be passed as compile-time args so the factory is the single source of truth.
-    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
-    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
-    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
-    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
-    constexpr uint32_t cb_max_in = tt::CBIndex::c_6;  // deferred norm: running max
-    constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;  // eager norm: LSE
-    constexpr uint32_t cb_prev_out = tt::CBIndex::c_7;
-    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
-    constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_9;  // 1-tile scratch for normalize_row_streaming
-    constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
-    constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
-    constexpr uint32_t cb_signal = tt::CBIndex::c_12;
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_max_out = tt::CBIndex::c_17;  // deferred norm: running max
-    constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;  // eager norm: LSE
-    constexpr uint32_t cb_qk_im = tt::CBIndex::c_13;
-    constexpr uint32_t cb_out_im_A = tt::CBIndex::c_14;
-    constexpr uint32_t cb_out_im_B = tt::CBIndex::c_15;
-    constexpr uint32_t cb_max_A = tt::CBIndex::c_18;
-    constexpr uint32_t cb_max_B = tt::CBIndex::c_19;
-    constexpr uint32_t cb_sum_A = tt::CBIndex::c_20;
-    constexpr uint32_t cb_sum_B = tt::CBIndex::c_21;
-    constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_22;
+    constexpr uint32_t cb_arg_offset = 42;
+    constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
+    constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
+    constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
+    constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 4);
+    constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
+    constexpr uint32_t cb_max_in = get_compile_time_arg_val(cb_arg_offset + 6);  // deferred norm: running max
+    constexpr uint32_t cb_lse_in = cb_max_in;                                    // eager norm: LSE
+    constexpr uint32_t cb_prev_out = get_compile_time_arg_val(cb_arg_offset + 7);
+    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 8);
+    constexpr uint32_t cb_recip_scratch =
+        get_compile_time_arg_val(cb_arg_offset + 9);  // 1-tile scratch for normalize_row_streaming
+    constexpr uint32_t cb_sum_out = get_compile_time_arg_val(cb_arg_offset + 10);
+    constexpr uint32_t cb_sum_in = get_compile_time_arg_val(cb_arg_offset + 11);
+    constexpr uint32_t cb_signal = get_compile_time_arg_val(cb_arg_offset + 12);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 13);
+    constexpr uint32_t cb_max_out = get_compile_time_arg_val(cb_arg_offset + 14);  // deferred norm: running max
+    constexpr uint32_t cb_lse_out = cb_max_out;                                    // eager norm: LSE
+    constexpr uint32_t cb_qk_im = get_compile_time_arg_val(cb_arg_offset + 15);
+    constexpr uint32_t cb_out_im_A = get_compile_time_arg_val(cb_arg_offset + 16);
+    constexpr uint32_t cb_out_im_B = get_compile_time_arg_val(cb_arg_offset + 17);
+    constexpr uint32_t cb_max_A = get_compile_time_arg_val(cb_arg_offset + 18);
+    constexpr uint32_t cb_max_B = get_compile_time_arg_val(cb_arg_offset + 19);
+    constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 20);
+    constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 21);
+    constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 22);
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
