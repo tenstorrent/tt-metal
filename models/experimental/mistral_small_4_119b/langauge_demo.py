@@ -10,7 +10,8 @@ printing each token as it is generated.
 Run::
 
     export MESH_DEVICE=T3K          # or P150x4, single, etc.
-    python models/experimental/mistral_small_4_119b/demo.py \
+    export MISTRAL4_WEIGHT_CACHE_DIR=/tmp/mistral4_weights  # optional; skip re-quantization on 2nd+ run
+    python models/experimental/mistral_small_4_119b/langauge_demo.py \
         --prompt "The capital of France is" \
         --max-new-tokens 32 \
         --n-layers 36
