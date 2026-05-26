@@ -12,23 +12,20 @@ void kernel_main() {
     constexpr uint32_t cb_x = 0;                  // input
     constexpr uint32_t cb_clip_coef_clamped = 1;  // clip_coef_clamped (held scalar)
     constexpr uint32_t cb_y = 16;                 // output
-    CircularBuffer cb_clip_coef_clamped_obj(cb_clip_coef_clamped);
-
-    constexpr uint32_t onetile = 1;
 
     compute_kernel_hw_startup(cb_x, cb_clip_coef_clamped, cb_y);
 
-    // cb_clip_coef_clamped lifecycle: CallerManaged + Scalar — single tile
-    // waited once outside the chain loop, never popped per iter (held scalar),
-    // popped once at end of kernel. External wait pairs with CallerManaged per
-    // the documented rule.
-    cb_clip_coef_clamped_obj.wait_front(onetile);
-
-    // cb_y = cb_x × cb_clip_coef_clamped[scalar bcast]
-    // Reconfig: original used `mul_tiles_bcast_scalar_init_short` (no `_with_dt`)
-    // and plain `pack_tile` — no per-iter reconfigs of either srca/srcb or pack.
-    // Chain emits BinaryDataFormatReconfig::None + PackTileReconfig::None to
-    // match (initial state set by compute_kernel_hw_startup).
+    // cb_y = cb_x × cb_clip_coef_clamped[scalar bcast].
+    // Lifecycles:
+    //   cb_x — Streaming + Scalar OperandKind (per-iter wait+pop of one tile).
+    //   cb_clip_coef_clamped — Bulk + Scalar. `window_1d<Scalar>` collapses
+    //     the Bulk window to 1 tile (the old "Bulk + Scalar over-waits"
+    //     gotcha was fixed in 14a5a61e462), so the chain emits exactly
+    //     `cb_wait_front(1)` at the head and `cb_pop_front(1)` at the tail —
+    //     no external wait/pop needed.
+    // Reconfig: original used `mul_tiles_bcast_scalar_init_short` (no
+    // `_with_dt`) and plain `pack_tile` — no per-iter format reconfig.
+    // Chain matches with `BinaryDataFormatReconfig::None` + `PackTileReconfig::None`.
     compute_kernel_lib::eltwise_chain(
         num_tiles,
         compute_kernel_lib::BinaryFpu<
@@ -37,8 +34,8 @@ void kernel_main() {
             compute_kernel_lib::BinaryFpuOp::Mul,
             compute_kernel_lib::BroadcastDim::Scalar,
             compute_kernel_lib::BinaryDataFormatReconfig::None,
-            compute_kernel_lib::Streaming,      // cb_x: per-iter wait+pop
-            compute_kernel_lib::CallerManaged,  // cb_clip_coef_clamped: external wait
+            compute_kernel_lib::Streaming,  // cb_x
+            compute_kernel_lib::Bulk,       // cb_clip_coef_clamped (Scalar → 1-tile wait+pop)
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OperandKind::Scalar>{},
@@ -48,6 +45,4 @@ void kernel_main() {
             compute_kernel_lib::OutStreaming,
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::PackTileReconfig::None>{});
-
-    cb_clip_coef_clamped_obj.pop_front(onetile);
 }
