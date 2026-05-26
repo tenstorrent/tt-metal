@@ -11,8 +11,8 @@
 
 set -euo pipefail
 
-REPO=/data/rsong/tt-metal2
-CRAQ=/data/rsong/craq-sim
+REPO="${TT_METAL_HOME:-${SLURM_SUBMIT_DIR:-/data/rsong/tt-metal2}}"
+CRAQ="${CRAQ_SIM:-/data/rsong/craq-sim}"
 BUILD="$REPO/build_Debug"
 OUT="$REPO/craq-parity-results/craq-smoke-$(date -u +%Y%m%dT%H%M%SZ)"
 SIM="$OUT/sim_wh"
@@ -46,14 +46,18 @@ MOCK_ENV="env -u TT_METAL_SIMULATOR -u TT_METAL_SIMULATOR_HOME ARCH_NAME=wormhol
 
 run_one() {
   local name="$1"
-  shift
+  local timeout_sec="${2:-900}"
+  shift 2
   local log="$OUT/${name}.log"
-  echo "=== RUN $name ===" | tee -a "$OUT/summary.txt"
+  echo "=== RUN $name (timeout=${timeout_sec}s) ===" | tee -a "$OUT/summary.txt"
   set +e
   local start end dur rc
   start=$(date +%s)
-  bash -lc "cd '$REPO' && $*" 2>&1 | tee "$log"
+  timeout "$timeout_sec" bash -lc "cd '$REPO' && $*" 2>&1 | tee "$log"
   rc=${PIPESTATUS[0]}
+  if [[ "$rc" -eq 124 ]]; then
+    echo "$name TIMEOUT after ${timeout_sec}s" | tee -a "$OUT/summary.txt"
+  fi
   set -e
   end=$(date +%s)
   dur=$((end - start))
@@ -66,17 +70,16 @@ echo -e "test\trc\tduration_sec" >>"$OUT/results.tsv"
 
 cd "$REPO"
 
-run_one "fabric_control_T3k" \
+run_one "fabric_control_T3k" 120 \
   "$MOCK_ENV ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter='ControlPlaneFixture.*T3k*'"
 
-run_one "eth_direct_send" \
+run_one "eth_direct_send" 900 \
   "$WH_ENV TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter='MeshDeviceFixture.ActiveEthKernelsDirectSendAllConnectedChips'"
 
-run_one "fabric_worker_edm" \
+run_one "fabric_worker_edm" 120 \
   "$WH_ENV ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter='*WorkerFabricEdmDatapath*:*EdmFabric*'"
 
-run_one "fabric_Fabric2D_unicast" \
-  "$WH_ENV TT_METAL_SLOW_DISPATCH_MODE=1 TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter='*Fabric2DFixture.TestUnicast*'"
+# Fabric2D unicast is covered (with timeout) in section2-quick; skip here to keep smoke fast.
 
 echo "finished $(date -u -Iseconds)" | tee -a "$OUT/summary.txt"
 echo "results: $OUT"
