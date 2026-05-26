@@ -23,12 +23,12 @@ from models.experimental.tt_symbiote.modules.linear import (
 )
 
 
-_GATE_UP_GRID = (8, 7)
+_GATE_UP_GRID = (8, 2)
 _GATE_UP_INPUT_SHARD_CORES = 16
 _GATE_UP_IN0_BLOCK_W = 3
 _GATE_UP_PER_CORE_M = 1
-_GATE_UP_PER_CORE_N = 10
-_GATE_UP_OUT_SUBBLOCK_W = 5
+_GATE_UP_PER_CORE_N = 35
+_GATE_UP_OUT_SUBBLOCK_W = 1
 
 _DOWN_PROJ_NUM_CORES = 8
 _DOWN_PROJ_IN0_BLOCK_W = 7
@@ -52,7 +52,7 @@ def _gate_up_input_memory_config(k: int):
 
 
 def _gate_up_output_memory_config():
-    output_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))])
+    output_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 2))])
     return ttnn.MemoryConfig(
         memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         buffer_type=ttnn.BufferType.L1,
@@ -106,21 +106,27 @@ def _gate_up_matmul_program_config(input_shape, weight_shape):
         return None
     if int(input_shape[-1]) != 1536 or int(weight_shape[-2]) != 1536 or int(weight_shape[-1]) != 17920:
         return None
-
-    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=_GATE_UP_GRID,
-        in0_block_w=_GATE_UP_IN0_BLOCK_W,
-        out_subblock_h=1,
-        out_subblock_w=_GATE_UP_OUT_SUBBLOCK_W,
-        out_block_h=_GATE_UP_PER_CORE_M,
-        out_block_w=_GATE_UP_PER_CORE_N,
-        per_core_M=_GATE_UP_PER_CORE_M,
-        per_core_N=_GATE_UP_PER_CORE_N,
-        fuse_batch=True,
+    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=3,
+        per_core_M=1,
+        per_core_N=35,
         fused_activation=None,
-        mcast_in0=False,
-        gather_in0=True,
     )
+
+    # return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    #     compute_with_storage_grid_size=_GATE_UP_GRID,
+    #     in0_block_w=_GATE_UP_IN0_BLOCK_W,
+    #     out_subblock_h=1,
+    #     out_subblock_w=_GATE_UP_OUT_SUBBLOCK_W,
+    #     out_block_h=_GATE_UP_PER_CORE_M,
+    #     out_block_w=_GATE_UP_PER_CORE_N,
+    #     per_core_M=_GATE_UP_PER_CORE_M,
+    #     per_core_N=_GATE_UP_PER_CORE_N,
+    #     fuse_batch=True,
+    #     fused_activation=None,
+    #     mcast_in0=False,
+    #     gather_in0=True,
+    # )
 
 
 class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFusedGateUp):
@@ -163,6 +169,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         self.tt_weight = ttnn.as_tensor(
             weight_t,
             device=self.device,
+            # dtype=ttnn.bfloat8_b,
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=weight_mapper,
@@ -190,10 +197,10 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             self.tt_bias = None
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
             fp32_dest_acc_en=False,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
@@ -210,6 +217,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         needs_ccl = _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device)
         program_config = _gate_up_matmul_program_config(input_shape, self.tt_weight.shape)
         uses_sharded_matmul = program_config is not None
+        # uses_sharded_matmul = False
         if uses_sharded_matmul:
             input_tensor = ttnn.to_memory_config(input_tensor, _gate_up_input_memory_config(int(input_shape[-1])))
             matmul_mc = _gate_up_output_memory_config()
@@ -227,6 +235,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             input_tensor,
             weight,
             bias=fused_bias,
+            # dtype=ttnn.bfloat16,
             dtype=ttnn.bfloat8_b,
             memory_config=matmul_mc,
             compute_kernel_config=self.compute_kernel_config,
