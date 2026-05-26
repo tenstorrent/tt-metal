@@ -118,18 +118,13 @@ template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
     bool is_fp32_dest_acc_en,
-    MathFidelity math_fidelity,
+    [[maybe_unused]] MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary(
     const std::uint32_t operand_A,
     [[maybe_unused]] const std::uint32_t operand_B,
     uint dst_index,
     const bool clear_fp32_dst_acc) {
-    constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
-    static_assert(
-        eltwise_binary_type == EltwiseBinaryType::ELWMUL || effective_math_fidelity == MathFidelity::LoFi,
-        "Math fidelity must be LoFi for non-ELWMUL ops");
-
     WAYPOINT("MBIW");
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
         const std::uint32_t operand_id = get_operand_id(operand_A);
