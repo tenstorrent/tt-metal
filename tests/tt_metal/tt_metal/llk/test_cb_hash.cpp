@@ -33,8 +33,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
-#include "debug_tools_fixture.hpp"
-#include "debug_tools_test_utils.hpp"
+#include "tt_metal/tt_metal/debug_tools/debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/test_utils/stimulus.hpp"
 

@@ -32,7 +32,6 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     dprint/test_print_tile.cpp
     dprint/test_print_tiles_multiple.cpp
     dprint/test_print_config_register.cpp
-    dprint/test_cb_hash.cpp
     watcher/test_assert.cpp
     watcher/test_link_training.cpp
     watcher/test_mcast_wrap_around.cpp
