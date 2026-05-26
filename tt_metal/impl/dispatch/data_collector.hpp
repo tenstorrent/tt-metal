@@ -58,7 +58,11 @@ public:
     // Only records the mapping once per runtime_id.
     void RecordKernelSourceMap(tt_metal::detail::ProgramImpl& program);
     void RecordProgramSubDevice(
-        tt::ChipId device_id, uint64_t sub_device_manager_id, uint64_t runtime_id, SubDeviceId sub_device_id);
+        tt::ChipId device_id,
+        uint64_t sub_device_manager_id,
+        uint64_t runtime_id,
+        SubDeviceId sub_device_id,
+        uint32_t num_available_worker_cores = 0);
     std::optional<tt::ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, uint64_t runtime_id) const;
     // Look up the kernel source paths for a given runtime_id.
     // Returns a comma-separated string of kernel source paths, or empty string if not found.

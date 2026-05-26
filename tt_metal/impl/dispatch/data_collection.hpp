@@ -66,11 +66,17 @@ void RecordKernelSourceMap(tt_metal::detail::ProgramImpl& program);
 struct ProgramSubDeviceInfo {
     uint8_t sub_device_id = 0;
     uint64_t sub_device_manager_id = 0;
+    // Tensix worker cores in this sub-device when recorded at dispatch; 0 means unset (use full device grid).
+    uint32_t num_available_worker_cores = 0;
 };
 
 // Record which sub-device a program executes on. Should be called at dispatch time when runtime_id is set.
 void RecordProgramSubDevice(
-    tt::ChipId device_id, uint64_t sub_device_manager_id, uint64_t runtime_id, tt::tt_metal::SubDeviceId sub_device_id);
+    tt::ChipId device_id,
+    uint64_t sub_device_manager_id,
+    uint64_t runtime_id,
+    tt::tt_metal::SubDeviceId sub_device_id,
+    uint32_t num_available_worker_cores = 0);
 
 // Look up the sub-device a program was dispatched on, keyed by physical device and runtime_id.
 std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, uint64_t runtime_id);

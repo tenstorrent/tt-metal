@@ -80,9 +80,15 @@ void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& 
 void record_program_sub_device_for_range(
     MeshDevice* mesh_device, const MeshCoordinateRange& device_range, uint64_t runtime_id, SubDeviceId sub_device_id) {
     const uint64_t sub_device_manager_id = *mesh_device->get_active_sub_device_manager_id();
+    const uint32_t num_available_worker_cores =
+        mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
     for_each_local(mesh_device, device_range, [&](const MeshCoordinate& coord) {
         tt::RecordProgramSubDevice(
-            mesh_device->impl().get_device(coord)->id(), sub_device_manager_id, runtime_id, sub_device_id);
+            mesh_device->impl().get_device(coord)->id(),
+            sub_device_manager_id,
+            runtime_id,
+            sub_device_id,
+            num_available_worker_cores);
     });
 }
 
