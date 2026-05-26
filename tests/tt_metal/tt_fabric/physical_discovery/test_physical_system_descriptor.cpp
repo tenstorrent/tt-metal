@@ -40,7 +40,7 @@ PortType expected_port_type_for_connection(const tt::tt_metal::ASICDescriptor& a
                 tt::scaleout_tools::AsicChannel{*asic_descriptor.asic_location, tt::scaleout_tools::ChanId{src_chan}})
             .port_type;
     } catch (const std::runtime_error&) {
-        return PortType::TRACE;
+        return PortType::UNKNOWN;
     }
 }
 
