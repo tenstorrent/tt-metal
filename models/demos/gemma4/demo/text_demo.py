@@ -18,7 +18,7 @@ Usage:
     # Batch-32 prefill + decode (issue #44955):
     pytest models/demos/gemma4/demo/text_demo.py::test_demo_batch_32 -k "prefill_128 and 1x1" -v
 
-    # 128k batched-prefill ceiling (skipped until chunking lands):
+    # 64k Gemma4 batched-prefill ceiling documentation:
     pytest models/demos/gemma4/demo/text_demo.py::test_demo_batch_prefill_4096_ceiling -v
 """
 
@@ -33,7 +33,7 @@ from loguru import logger
 import ttnn
 from models.demos.gemma4.tests.test_factory import PREFILL_BUCKETS, parametrize_mesh_with_fabric
 from models.demos.gemma4.tt.common import create_tt_model
-from models.demos.gemma4.tt.generator import Gemma4Generator
+from models.demos.gemma4.tt.generator import GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN, Gemma4Generator
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len, sample_host
@@ -142,18 +142,16 @@ def load_demo_prompt(target_bucket, instruct=True):
 
 # Batch-32 batched prefill helpers and tests.
 _BATCH_DEMO_SIZE = 32
-# Prefill lengths for ``test_demo_batch_32`` (includes 4096 at the 128k ceiling).
+# Prefill lengths for ``test_demo_batch_32`` (4096 exceeds the 64k chunking ceiling).
 _DEMO_BATCH_PREFILL_LENGTHS = [128, 1024, 2048, 4096]
-# Prefill lengths that stay under the 128k batched-prefill token ceiling (32 × 2048).
+# Prefill-only batch coverage (2048 chunks at 64k; see ``Gemma4Generator``).
 _BATCH_PREFILL_LENGTHS = [128, 1024, 2048]
-# Shared Generator limit (models/tt_transformers/tt/generator.py).
-_MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
 
 
 def _batch_prefill_hits_ceiling(batch_size, prompt_len):
-    """True when ``batch_size × padded prefill length`` meets/exceeds the 128k batched cap."""
+    """True when ``batch_size × padded prefill length`` meets/exceeds the 64k Gemma4 cap."""
     kernel_len = get_padded_prefill_len(prompt_len)
-    return batch_size * kernel_len >= _MAX_BATCHED_PREFILL_SEQ_LEN
+    return batch_size * kernel_len >= GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN
 
 
 def _batch_page_params(batch_size, prefill_len, max_new_tokens, page_block_size=64):
@@ -224,8 +222,8 @@ def run_batch_generation(
 ):
     """Run batched text generation through ``Gemma4Generator``.
 
-    Exercises batched prefill (including chunking at the 128k token ceiling when
-    enabled) via ``generator.prefill_forward_text``. Decode is best-effort for
+    Exercises batched prefill (including chunking at the 64k Gemma4 token ceiling)
+    via ``generator.prefill_forward_text``. Decode is best-effort for batch>1:
     batch>1: Gemma4's decode path currently prepares inputs for a single active
     user, so this demo primarily validates batched prefill coverage from #44952.
 
@@ -1064,7 +1062,7 @@ def test_demo_batch_prefill(mesh_device, model_path, prefill_len, request):
         max_new_tokens=max_new_tokens,
         max_seq_len=max_seq_len,
         page_params=page_params,
-        enable_prefill_trace=False,
+        enable_prefill_trace=True,
     )
 
     prefilled_tokens = result["prefilled_tokens"]
@@ -1089,7 +1087,7 @@ def test_demo_batch_32(mesh_device, model_path, prefill_len, request):
 
     Parametrized over prefill_len ∈ {128, 1024, 2048, 4096} per #44955.
     Uses identical prompts for all 32 users so batched prefill is eligible,
-    and exercises the chunking override at 32×4096 (128k token ceiling).
+    and exercises the chunking override at 32×4096 (64k Gemma4 token ceiling).
 
     Filter examples:
         pytest -k "test_demo_batch_32 and prefill_4096"
@@ -1133,19 +1131,16 @@ def test_demo_batch_32(mesh_device, model_path, prefill_len, request):
 
 @parametrize_mesh_with_fabric()
 def test_demo_batch_prefill_4096_ceiling(mesh_device, model_path, request):
-    """Document the 128k batched-prefill ceiling at batch 32 × seq 4096.
+    """Document the 64k Gemma4 batched-prefill ceiling at batch 32 × seq 4096.
 
-    32 × 4096 = 131072 tokens, which equals ``MAX_BATCHED_PREFILL_SEQ_LEN`` (128k).
-    Without ``Gemma4Generator`` chunking (32→16+16), the shared Generator disables
-    batched prefill and falls back to sequential per-user prefill — so this case
-    is intentionally not part of ``test_demo_batch_prefill``.
-
-    Enable this test once chunking lands; until then it skips with context.
+    32 × 4096 = 131072 tokens, which exceeds ``GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN`` (64k).
+    ``Gemma4Generator`` chunks into smaller user batches (e.g. 32→8+8+8+8 at 4096).
+    This test documents the threshold; use ``test_demo_batch_32`` for the device run.
 
     Filter examples:
         pytest -k "test_demo_batch_prefill_4096_ceiling and 1x1"
     """
-    del mesh_device, model_path  # Unused until chunking enables a real device run.
+    del mesh_device, model_path  # Documentation-only; device run is test_demo_batch_32.
 
     max_prefill = request.config.getoption("--max-prefill")
     prefill_len = 4096
@@ -1160,10 +1155,8 @@ def test_demo_batch_prefill_4096_ceiling(mesh_device, model_path, request):
 
     pytest.skip(
         f"Batch-32 prefill at seq_len={prefill_len} totals {total_tokens} tokens "
-        f"({batch_size}×{kernel_len}), which meets or exceeds "
-        f"MAX_BATCHED_PREFILL_SEQ_LEN ({_MAX_BATCHED_PREFILL_SEQ_LEN}). "
-        f"The shared Generator disables batched prefill at this ceiling and runs "
-        f"32 sequential prefills instead (look for 'Prefilling User N up to ...' in logs). "
-        f"True batched 4096 requires Gemma4Generator chunking (e.g. 32→16+16). "
-        f"Use test_demo_batch_prefill for batched-path coverage at 128/1024/2048."
+        f"({batch_size}×{kernel_len}), which exceeds "
+        f"GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN ({GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN}). "
+        f"Gemma4Generator chunks this case automatically. "
+        f"Run test_demo_batch_32[prefill_4096] for batched-path coverage."
     )
