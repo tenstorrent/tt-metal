@@ -41,16 +41,14 @@ void kernel_main() {
     // TensorAccessorArgs blocks: backing first, then output. The host packs
     // them back-to-back starting at CT-arg index 6.
     constexpr auto backing_accessor_args = TensorAccessorArgs<6>();
-    constexpr auto output_accessor_args =
-        TensorAccessorArgs<backing_accessor_args.next_compile_time_args_offset()>();
+    constexpr auto output_accessor_args = TensorAccessorArgs<backing_accessor_args.next_compile_time_args_offset()>();
 
     auto backing = TensorAccessor(backing_accessor_args, backing_tensor_addr);
     auto output = TensorAccessor(output_accessor_args, output_tensor_addr);
 
     const uint32_t cb_l1 = get_write_ptr(scratch_cb_index);
 
-    volatile tt_l1_ptr uint32_t* data_ready =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_ready_sem_addr);
+    volatile tt_l1_ptr uint32_t* data_ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_ready_sem_addr);
 
     // 1. Wait for the service core to signal a fresh transfer, then reset.
     //    The next service-core multicast-inc will set this back to 1.
