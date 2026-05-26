@@ -30,7 +30,7 @@ import os
 import sys
 import wave
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -55,9 +55,10 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model impor
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
 T2ST_WAV = OUTPUT_DIR / "t2st_hindi_speech.wav"
-# Speech-encoder L1 on BH: chain tasks use a short prefix of T2ST audio (full WAV is still saved).
-# 22s matched the pre-cap demo mel length; 24s can L1-clash after a ~43s vocoder run on BH.
-MAX_CHAIN_AUDIO_SEC = 22.0
+# The speech encoder uses a DRAM residual/LN path above ``_LONG_AUDIO_RES_DRAM_THRESHOLD``
+# (1024 mel frames ≈ 20 s) and falls back to uncached relative-position tables above 32 MB —
+# both unlock the full ~43 s T2ST audio for the chain tasks (matches HF semantics, no trim).
+MAX_CHAIN_AUDIO_SEC: Optional[float] = None
 S2ST_WAV = OUTPUT_DIR / "s2st_spanish_speech.wav"
 
 # ---------------------------------------------------------------------------
@@ -231,6 +232,15 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
     gen_max_new = int(
         getattr(cfg, "max_new_tokens", None) or getattr(model.generation_config, "max_new_tokens", 128) or 128
     )
+    # Repetition penalty discourages the decoder from re-emitting recent tokens. HF default is 1.0
+    # (no penalty); 1.05–1.2 is the typical range when greedy decoding loops on near-tied logits
+    # (e.g. S2TT on TTS-roundtripped audio can produce "she was looking for a bookshop." n-gram
+    # repeats — TT bf16/bf8 precision plus TTS noise leaves the model unsure across many steps).
+    # 1.1 is a soft setting — strong enough to break loops but not so aggressive that it biases
+    # the decoder away from the target ``tgt_lang`` token in same-language tasks (e.g. ASR).
+    rep_penalty = float(getattr(model.generation_config, "repetition_penalty", 1.0) or 1.0)
+    if rep_penalty == 1.0:
+        rep_penalty = 1.1
     gen_common = dict(
         max_new_tokens=gen_max_new,
         do_sample=False,
@@ -239,6 +249,7 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         eos_token_id=cfg.eos_token_id,
         use_kv_cache=True,
         use_decode_trace=use_decode_trace,
+        repetition_penalty=rep_penalty,
         # Do not enable in-generate conv prewarm (see ``tt_seamless_m4t_v2_model.generate``).
     )
 
@@ -325,15 +336,18 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         tt_model.clear_runtime_program_cache()
         ttnn.synchronize_device(device)
 
-        # Tasks 3–5 reuse T2ST audio; trim for the speech encoder L1 budget (full WAV kept above).
-        max_chain_samples = int(sample_rate * MAX_CHAIN_AUDIO_SEC)
+        # Tasks 3–5 reuse the full T2ST audio (matches HF demo). The speech encoder's long-audio
+        # path keeps residuals / LN in DRAM and uses an uncached relative-position table above
+        # _LONG_AUDIO_RES_DRAM_THRESHOLD, so >22 s mel inputs no longer L1-clash on BH.
         hindi_wav_chain = hindi_wav_np
-        if hindi_wav_np.size > max_chain_samples:
-            hindi_wav_chain = hindi_wav_np[:max_chain_samples]
-            print(
-                f"  Note: S2TT/S2ST/ASR use first {MAX_CHAIN_AUDIO_SEC:.0f}s of T2ST audio "
-                f"({max_chain_samples} samples); speech encoder L1 limit on BH."
-            )
+        if MAX_CHAIN_AUDIO_SEC is not None:
+            max_chain_samples = int(sample_rate * MAX_CHAIN_AUDIO_SEC)
+            if hindi_wav_np.size > max_chain_samples:
+                hindi_wav_chain = hindi_wav_np[:max_chain_samples]
+                print(
+                    f"  Note: S2TT/S2ST/ASR use first {MAX_CHAIN_AUDIO_SEC:.0f}s of T2ST audio "
+                    f"({max_chain_samples} samples)."
+                )
 
         # The Hindi speech from T2ST becomes the input for tasks 3-5.
         audio_inputs = processor(audios=hindi_wav_chain, sampling_rate=sample_rate, return_tensors="pt")
@@ -387,6 +401,10 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         # =========================================================================
         # 5. ASR — Automatic Speech Recognition (Hindi speech → Hindi text)
         # =========================================================================
+        # ASR is same-language transcription; ``repetition_penalty`` biases the decoder away from
+        # already-emitted tokens, which pushes a Hindi target toward the alternative-language
+        # vocabulary (output drifts to English). Disable penalty just for this task.
+        gen_common_asr = {**gen_common, "repetition_penalty": 1.0}
         _print_header(5, "Automatic Speech Recognition", "ASR", tgt_translate, tgt_asr)
         print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
         asr_out = tt_model.generate(
@@ -394,7 +412,7 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
             attention_mask=torch_ids_to_ttnn(device, input_speech_attn),
             generate_speech=False,
             tgt_lang=tgt_asr,
-            **gen_common,
+            **gen_common_asr,
         )
         if not isinstance(asr_out, TTSeamlessM4Tv2GreedySearchOutput):
             raise TypeError(f"ASR expected TTSeamlessM4Tv2GreedySearchOutput, got {type(asr_out)}")

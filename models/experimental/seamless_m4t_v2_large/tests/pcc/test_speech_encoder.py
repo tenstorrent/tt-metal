@@ -113,3 +113,19 @@ def test_seamless_m4t_v2_speech_encoder_very_long_mel_pcc(mesh_device, device_pa
     _ = device_params
     with mesh_default_device(mesh_device):
         _run_speech_encoder_pcc(mesh_device, seq=672)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_seamless_m4t_v2_speech_encoder_max_mel_pcc(mesh_device, device_params, reset_seeds):
+    """PCC at the full demo T2ST audio length (~43 s ≈ 2125 mel frames).
+
+    Exercises the long-audio DRAM path: residual / LN bypass the block-sharded L1 layout and the
+    relative-position embedding table runs uncached per layer (a single 2125-mel table is ~580 MB
+    bf16; caching 24 layers' worth would overflow DRAM). This is the regime the demo's chain
+    tasks (S2TT/S2ST/ASR) exercise when no audio trim is applied.
+    """
+    _ = reset_seeds
+    _ = device_params
+    with mesh_default_device(mesh_device):
+        _run_speech_encoder_pcc(mesh_device, seq=2125)
