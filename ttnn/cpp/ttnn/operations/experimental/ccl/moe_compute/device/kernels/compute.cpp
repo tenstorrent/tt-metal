@@ -303,7 +303,7 @@ void kernel_main() {
             // trailing MUL there clobbers it), so it's its own initializer — skip the per-chunk
             // init for GELU to avoid a redundant gelu_init. SILU/SWIGLU init once here.
             if constexpr (activation_type != ttnn::experimental::prim::detail::MoEActivationFunction::GELU) {
-                detail::pack_init_activation<activation_type>();
+                ::detail::pack_init_activation<activation_type>();
             }
 
             // Initialize matmul for W0
@@ -312,7 +312,7 @@ void kernel_main() {
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert
             // while first expert still being processed
-            detail::noc_semaphore_wait_min(
+            ::detail::noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                 matmul_chunk_ready_semaphore_wait_value++);
 
@@ -386,7 +386,7 @@ void kernel_main() {
                 //---------------------------------------------------------------------
                 // Apply activation
                 //---------------------------------------------------------------------
-                detail::pack_compute_activation<activation_type>();
+                ::detail::pack_compute_activation<activation_type>();
 
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
