@@ -11,7 +11,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS = 8>
 inline void llk_math_eltwise_ternary_sfpu_snake_beta(
-    uint dst_index0, uint dst_index1, uint dst_index2, uint odst, int vector_mode = (int)VectorMode::RC) {
+    uint dst_index0, uint dst_index1, uint dst_index2, uint odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_ternary_sfpu_params_(
         sfpu::calculate_snake_beta<APPROXIMATE, is_fp32_dest_acc_en, data_format, ITERATIONS>,
         dst_index0,
