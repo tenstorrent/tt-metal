@@ -620,9 +620,11 @@ void kernel_main() {
                 tile_regs_commit();
             } else {
                 reconfig_data_format_srca(fuse_pre_add ? cb_inb : cb_in, cb_ex2pe);
-                binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
+                binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                    cb_ex2pe);
                 for (auto i : block.local()) {
-                    binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe, 0, i);
+                    binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                        cb_ex2pe, 0, i);
                 }
                 tile_regs_commit();
             }
