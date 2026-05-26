@@ -59,7 +59,7 @@ def main() -> int:
 
     from ttml.common.config import DeviceConfig, load_config
 
-    from utils.llama_completer import LlamaGRPOCompleter
+    from utils.llama_completer_ttt import LlamaGRPOCompleter
 
     # tt-transformers expects fabric_config to be set BEFORE any mesh device
     # is opened. ``LlamaGRPOCompleter.setup_device`` opens the mesh inside

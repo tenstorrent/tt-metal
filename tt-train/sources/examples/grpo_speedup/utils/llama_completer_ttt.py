@@ -495,16 +495,6 @@ class LlamaGRPOCompleter:
 
         self._reset_kv_cache()
 
-        _ = self._generator.prefill_forward_text(
-            input_tokens_prefill_pt,
-            page_table=self._page_table,
-            kv_cache=kv_cache,
-            prompt_lens=prompt_lens,
-            sampling_params=None,
-            warmup_prefill=True,
-            enable_trace=enable_trace,
-        )
-        # Second call: no warmup, clean prefill (matching demo pattern)
         prefill_logits = self._generator.prefill_forward_text(
             input_tokens_prefill_pt,
             page_table=self._page_table,
