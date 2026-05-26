@@ -1,0 +1,35 @@
+Tests:
+  - name: "LinearMulticastUbench"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  - name: "LinearMulticast"
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write]
+
+    defaults:
+      ftype: mcast
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all
