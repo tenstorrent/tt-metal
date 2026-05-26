@@ -21,7 +21,10 @@ cd $TT_METAL_HOME
 #############################################
 echo "Running fabric unit tests now...";
 
-# TODO (issue: #24335) disabled slow dispatch tests for now, need to re-evaluate if need to add in a different pool.
+# DISABLED: Slow dispatch fabric tests require a dedicated runner pool that
+# supports TT_METAL_SLOW_DISPATCH_MODE=1 without impacting fast-dispatch CI.
+# Tracked in: https://github.com/tenstorrent/tt-metal/issues/24335
+# Re-enable once a suitable runner pool is identified and allocated.
 #TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 
 # Host side tests that require a card: Topology Mapping in Control Plane
@@ -36,4 +39,4 @@ echo "Running fabric unit tests now...";
 #############################################
 echo "Running fabric sanity tests now...";
 
-./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
+./build/test/tt_metal/tt_fabric/tt_fabric_tests/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_fabric/tt_fabric_tests/test_yamls/test_fabric_sanity_common.yaml

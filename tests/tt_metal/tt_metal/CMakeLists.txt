@@ -106,7 +106,7 @@ set_target_properties(
 file(
     GLOB_RECURSE kernels
     test_kernels/*
-    perf_microbenchmark/routing/kernels/*
+    ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/*
 )
 target_sources(
     metalium_test_files
@@ -118,7 +118,7 @@ target_sources(
         FILES
             ${kernels}
             perf_microbenchmark/common/kernel_utils.hpp
-            perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp
+            ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_traffic_gen.hpp
             perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp
 )
 

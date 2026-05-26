@@ -171,7 +171,7 @@ def run_mux_benchmark_test(
     num_full_size_channel_iters,
     num_iters_between_teardown_checks,
 ):
-    cmd = f"{os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_mux_bandwidth \
+    cmd = f"{os.environ['TT_METAL_HOME']}/build/test/tt_metal/tt_fabric/tt_fabric_tests/routing/test_tt_fabric_mux_bandwidth \
             --log_file {LOG_FILE_PATH} \
             --test_name {test_name} \
             --num_full_size_channels {num_full_size_channels} \

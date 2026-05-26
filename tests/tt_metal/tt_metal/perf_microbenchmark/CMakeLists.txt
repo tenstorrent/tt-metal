@@ -43,15 +43,6 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
         )
     endif()
 
-    if(${TEST_SRC} STREQUAL "routing/test_tt_fabric.cpp")
-        target_sources(${TEST_TARGET} PRIVATE ${TEST_TT_FABRIC_ADDITIONAL_SOURCES})
-        target_link_libraries(
-            ${TEST_TARGET}
-            PRIVATE
-                yaml-cpp::yaml-cpp
-                TT::ScaleoutTools
-        )
-    endif()
     target_include_directories(
         ${TEST_TARGET}
         BEFORE

@@ -106,7 +106,7 @@ std::shared_ptr<tt_metal::Program> create_receiver_program(
     auto recv_program = std::make_shared<tt_metal::Program>();
     auto recv_kernel = tt_metal::CreateKernel(
         *recv_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",
+        "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_1d_rx.cpp",
         {logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -261,7 +261,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_line_mcast_tx.cpp",
+        "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_line_mcast_tx.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -459,7 +459,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_tx.cpp",
+        "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_1d_tx.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -494,7 +494,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     auto receiver_program = tt_metal::CreateProgram();
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",
+        "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_1d_rx.cpp",
         {receiver_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -583,7 +583,7 @@ void run_unicast_test_bw_chips(
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_tx.cpp",
+        "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_1d_tx.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -657,7 +657,7 @@ void run_unicast_test_bw_chips(
     auto receiver_program = tt_metal::CreateProgram();
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",
+        "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_1d_rx.cpp",
         {receiver_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -957,7 +957,7 @@ void RunTestMCastConnAPI(
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_tx.cpp",
+        "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_1d_tx.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1045,7 +1045,7 @@ void RunTestMCastConnAPI(
             auto receiver_program = tt_metal::CreateProgram();
             auto receiver_kernel = tt_metal::CreateKernel(
                 receiver_program,
-                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",
+                "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_1d_rx.cpp",
                 {receiver_logical_core},
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1434,7 +1434,7 @@ void RunTest2DMCastConnAPI(
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_2d_mcast_tx.cpp",
+        "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_2d_mcast_tx.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1590,7 +1590,7 @@ void RunTest2DMCastConnAPI(
         auto receiver_program = tt_metal::CreateProgram();
         auto receiver_kernel = tt_metal::CreateKernel(
             receiver_program,
-            "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",
+            "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_1d_rx.cpp",
             {receiver_logical_core},
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1744,7 +1744,7 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_tx.cpp",
+        "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_1d_tx.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1803,7 +1803,7 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
             auto receiver_program = tt_metal::CreateProgram();
             auto receiver_kernel = tt_metal::CreateKernel(
                 receiver_program,
-                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",
+                "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_1d_rx.cpp",
                 receiver_logical_core,
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -2059,7 +2059,7 @@ void RunEDMConnectionStressTest(
 
                 auto kernel = tt_metal::CreateKernel(
                     program,
-                    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/"
+                    "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/"
                     "edm_fabric_connection_test_kernel.cpp",
                     worker_logical_cores_vec[i],
                     tt_metal::DataMovementConfig{
