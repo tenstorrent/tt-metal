@@ -198,7 +198,7 @@
   <section class="panel" id="panel-moreh_clip_step3">
     <h1>moreh_clip_grad_norm_step3 — <span class="badge badge-full">FULL</span></h1>
     <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/kernels/moreh_clip_grad_norm_step3_kernel.cpp</div>
-    <div class="meta"><b>Commit:</b> <span class="commit-link">98c5ebb783b</span> &nbsp; <b>Test:</b> <code>test_moreh_clip_grad_norm.py</code> — 20 PASS &nbsp; <b>Hover</b> a highlighted region to see the decision it ties to; the same color appears on both sides where the decision applies.</div>
+    <div class="meta"><b>Commits:</b> <span class="commit-link">98c5ebb783b</span> initial migration · <span class="commit-link">7ec7613c5d0</span> simplify (Bulk + Scalar absorbs the held-scalar wait/pop) &nbsp; <b>Test:</b> <code>test_moreh_clip_grad_norm.py</code> — 20 PASS &nbsp; <b>Hover</b> a highlighted region to see the decision it ties to; the same color appears on both sides where the decision applies.</div>
 
     <div class="side-by-side">
       <div class="code-col">
@@ -251,14 +251,9 @@
 
     <span class="dz" data-d="1">constexpr uint32_t cb_x = 0;
     constexpr uint32_t cb_clip_coef_clamped = 1;
-    constexpr uint32_t cb_y = 16;
-    CircularBuffer cb_clip_coef_clamped_obj(cb_clip_coef_clamped);</span>
-
-    constexpr uint32_t onetile = 1;
+    constexpr uint32_t cb_y = 16;</span>
 
     <span class="dz" data-d="5">compute_kernel_hw_startup(cb_x, cb_clip_coef_clamped, cb_y);</span>
-
-    <span class="dz" data-d="2">cb_clip_coef_clamped_obj.wait_front(onetile);</span>
 
     // cb_y = cb_x × cb_clip_coef_clamped[scalar bcast]
     compute_kernel_lib::eltwise_chain(
@@ -270,7 +265,7 @@
             compute_kernel_lib::BroadcastDim::Scalar,
             <span class="dz" data-d="4">compute_kernel_lib::BinaryDataFormatReconfig::None</span>,
             <span class="dz" data-d="3">compute_kernel_lib::Streaming</span>,
-            <span class="dz" data-d="2">compute_kernel_lib::CallerManaged</span>,
+            <span class="dz" data-d="2">compute_kernel_lib::Bulk</span>,  // window_1d&lt;Scalar&gt; → 1-tile wait+pop
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OperandKind::Scalar&gt;{},
@@ -280,8 +275,6 @@
             compute_kernel_lib::OutStreaming,
             compute_kernel_lib::OperandKind::Scalar,
             <span class="dz" data-d="4">compute_kernel_lib::PackTileReconfig::None</span>&gt;{});
-
-    <span class="dz" data-d="2">cb_clip_coef_clamped_obj.pop_front(onetile);</span>
 }</span></pre>
       </div>
     </div>
@@ -290,7 +283,7 @@
       <h4>Decisions (also visible by hovering the code)</h4>
       <ul>
         <li><span class="swatch" style="background:rgba(255,191,0,0.45)"></span><b>1 · CB ids → constexpr.</b> Chain template parameters require constexpr CB ids; <code>std::uint8_t input_id{0}; const auto cb_x = input_id++;</code> is a runtime value. Same final values (0, 1, 16), just baked at compile time.</li>
-        <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 · cb_clip_coef_clamped lifecycle: CallerManaged + external wait/pop.</b> Held scalar across the whole loop. Chain <code>CallerManaged</code> emits no wait/pop, so the explicit <code>wait_front(1)</code> + <code>pop_front(1)</code> stay outside the chain — per the <code>feedback_callermanaged_needs_external_wait.md</code> rule.</li>
+        <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 · cb_clip_coef_clamped lifecycle: Bulk + Scalar.</b> Held scalar across the whole loop. <code>window_1d&lt;Scalar&gt;</code> collapses Bulk's window to 1 tile, so the chain emits exactly <code>cb_wait_front(1)</code> at the head and <code>cb_pop_front(1)</code> at the tail — no external scaffolding needed. The old <code>feedback_bulk_scalar_overwait</code> gotcha was fixed in <code>14a5a61e462</code>; <code>CallerManaged</code> would also work but forces the caller to keep the wait/pop, which this version removes (review feedback from the initial migration in <code>98c5ebb783b</code>).</li>
         <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 · cb_x lifecycle: Streaming.</b> Original waits, uses, and pops once per iteration — straight Streaming, chain owns it.</li>
         <li><span class="swatch" style="background:rgba(207,34,46,0.40)"></span><b>4 · Reconfig flags: both None.</b> Original used <code>mul_tiles_bcast_scalar_init_short</code> (no <code>_with_dt</code>) and plain <code>pack_tile</code> — no per-iter format reconfig. Chain emits <code>BinaryDataFormatReconfig::None</code> + <code>PackTileReconfig::None</code> to match.</li>
         <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 · Init: <code>compute_kernel_hw_startup</code>.</b> Convention in already-migrated kernels (e.g. <code>moreh_dot_backward</code>). The chain's first call does its own per-element init internally, so either kernel-level init works — <code>compute_kernel_hw_startup</code> is the minimal correct one.</li>
@@ -595,8 +588,8 @@
       "1": { title: "CB ids → constexpr",
              body: "Chain template parameters require constexpr CB ids; original's <code>std::uint8_t input_id{0}; const auto cb_x = input_id++;</code> is a runtime value. Final values stay the same (0, 1, 16), baked at compile time so the chain templates type-check.",
              color: "#d6a000" },
-      "2": { title: "cb_clip_coef_clamped: CallerManaged + external wait/pop",
-             body: "Held scalar across the whole loop. <code>CallerManaged</code> emits no wait/pop inside the chain, so the explicit <code>wait_front(1)</code> + <code>pop_front(1)</code> stay outside per the <code>feedback_callermanaged_needs_external_wait</code> rule.",
+      "2": { title: "cb_clip_coef_clamped: Bulk + Scalar (one-tile wait/pop absorbed into the chain)",
+             body: "Held scalar across the whole loop. <code>window_1d&lt;Scalar&gt;</code> collapses Bulk's window to 1 tile, so the chain emits <code>cb_wait_front(1)</code> at the head and <code>cb_pop_front(1)</code> at the tail — no external scaffolding. The old <code>Bulk + Scalar over-waits</code> gotcha was fixed in <code>14a5a61e462</code>. <code>CallerManaged</code> would also work but forces the caller to keep the explicit wait/pop (initial migration used that; review feedback simplified it).",
              color: "#2ea043" },
       "3": { title: "cb_x: Streaming",
              body: "Original waits, uses, and pops once per iteration — chain <code>Streaming</code> owns both wait and pop.",
