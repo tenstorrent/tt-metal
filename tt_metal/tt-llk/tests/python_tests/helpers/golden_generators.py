@@ -1957,6 +1957,10 @@ class UnarySFPUGolden:
             return math.nan
 
     def _torch_unary(self, x, torch_fn) -> float:
+        """Apply torch_fn to scalar x in fp32, then enforce the
+        format-aware NaN rule: convert +/-inf to NaN when the dest is
+        A-exponent (Float16).
+        """
         result = torch_fn(torch.tensor(x, dtype=torch.float32)).item()
         if math.isinf(result) and not self.data_format.is_exponent_B():
             return math.nan
