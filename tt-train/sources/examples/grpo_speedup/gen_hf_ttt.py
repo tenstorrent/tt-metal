@@ -7,7 +7,7 @@
 Runs the same completion-style prompts through:
 
 * ``hf``  – HuggingFace ``transformers.AutoModelForCausalLM`` (CPU, fp32)
-* ``ttml`` – the legacy ttml ``Llama`` model via :class:`LlamaGRPOCompleterOld`
+* ``ttml`` – the ttml ``Llama`` model via :class:`LlamaCompleterTtml`
 * ``ttt``  – the new tt-transformers-backed :class:`LlamaGRPOCompleter`
 
 and prints the decoded text outputs side by side. The two TT backends share
@@ -39,14 +39,9 @@ sys.path.insert(0, str(REPO_ROOT))
 # Configuration
 # ---------------------------------------------------------------------------
 
-MODEL_ID = "TinyLlama/TinyLlama_v1.1_math_code"
+MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml"
-# tinyllama_bpe.yaml describes the v1.0/v1.1 TinyLlama architecture
-# (22 blocks, 32 heads, 4 KV groups, 2048 hidden, 32k vocab, theta=10k,
-# weight_tying=disabled). intermediate_dim is left unset so
-# ``compute_swiglu_intermediate_size(2048) == 5632`` matches the HF
-# checkpoint.
-TTML_MODEL_CONFIG_REL = "tt-train/configs/model_configs/tinyllama_bpe.yaml"
+TTML_MODEL_CONFIG_REL = "tt-train/configs/model_configs/llama3_2_1B.yaml"
 MAX_NEW_TOKENS = 50
 MAX_SEQ_LEN = 2048
 
@@ -105,7 +100,7 @@ def run_hf(prompts: List[str], pad_token_id: int) -> List[str]:
 
 
 def run_ttml(prompts: List[str]) -> List[str]:
-    """Legacy ttml ``Llama`` generation via ``LlamaGRPOCompleterOld``.
+    """ttml ``Llama`` generation via ``LlamaCompleterTtml``.
 
     Opens the autograd-context mesh device, builds the ttml model, runs
     ``generate_str`` for the batch of prompts, then drops the model and
@@ -118,7 +113,7 @@ def run_ttml(prompts: List[str]) -> List[str]:
     import ttml
     from ttml.common.config import DeviceConfig, get_model_config, load_config
 
-    from utils.llama_completer_old import LlamaCompletionCtx, LlamaGRPOCompleterOld
+    from utils.llama_completer_ttml import LlamaCompleterTtml, LlamaCompletionCtx
 
     raw = load_config(os.path.join(REPO_ROOT, TTML_DEVICE_CONFIG_REL))
     device_config = DeviceConfig(raw)
@@ -131,8 +126,8 @@ def run_ttml(prompts: List[str]) -> List[str]:
         temperature=TEMPERATURE,
     )
 
-    print(f"[ttml] building LlamaGRPOCompleterOld ({MODEL_ID})")
-    completer = LlamaGRPOCompleterOld(
+    print(f"[ttml] building LlamaCompleterTtml ({MODEL_ID})")
+    completer = LlamaCompleterTtml(
         ctx=ctx,
         transformer_config=transformer_config,
         device_config=device_config,
@@ -159,7 +154,7 @@ def run_ttt(prompts: List[str]) -> List[str]:
     import ttml
     from ttml.common.config import DeviceConfig, load_config
 
-    from utils.llama_completer import LlamaGRPOCompleter
+    from utils.llama_completer_ttt import LlamaGRPOCompleter
 
     raw = load_config(os.path.join(REPO_ROOT, TTML_DEVICE_CONFIG_REL))
     device_config = DeviceConfig(raw)
