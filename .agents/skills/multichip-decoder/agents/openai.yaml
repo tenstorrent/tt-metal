@@ -1,0 +1,4 @@
+interface:
+  display_name: "Multichip Decoder"
+  short_description: "Parallelize TTNN decoder layers across chips"
+  default_prompt: "Use $multichip-decoder to parallelize a TTNN decoder layer across the current multi-chip hardware, preserve decoder correctness, and produce golden multichip evidence."
