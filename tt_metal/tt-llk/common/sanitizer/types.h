@@ -372,7 +372,7 @@ struct DevicePrintTopCallstack
 struct ThreadOutputContext
 {
     UnwindContext operation;
-    UnwindContext previous;
+    UnwindContext fsm;
     UnwindContext current;
     std::size_t context_depth = 0;
     std::size_t silent_depth  = 0;

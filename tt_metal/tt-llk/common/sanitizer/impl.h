@@ -447,7 +447,7 @@ void operation_uninit_impl(const ThreadOutputContext& context, OperationState& s
 }
 
 template <FsmState next>
-void fsm_advance_impl(const ThreadOutputContext& context, FsmState& current, [[maybe_unused]] const OperationState& operation)
+void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_unused]] const OperationState& operation)
 {
     if (!thread_silent_get_impl(context))
     {
@@ -466,7 +466,7 @@ void fsm_advance_impl(const ThreadOutputContext& context, FsmState& current, [[m
             current,
             next,
             CTSTR("INITIALIZED"),
-            context.operation,
+            context.fsm,
             context.current);
 
         fsm_assert(
@@ -475,7 +475,7 @@ void fsm_advance_impl(const ThreadOutputContext& context, FsmState& current, [[m
             current,
             next,
             CTSTR("EXECUTED"),
-            context.operation,
+            context.fsm,
             context.current);
 
         fsm_assert(
@@ -484,7 +484,7 @@ void fsm_advance_impl(const ThreadOutputContext& context, FsmState& current, [[m
             current,
             next,
             CTSTR("UNINITIALIZED, EXECUTED"),
-            context.operation,
+            context.fsm,
             context.current);
 
         fsm_assert(
@@ -494,7 +494,7 @@ void fsm_advance_impl(const ThreadOutputContext& context, FsmState& current, [[m
             current,
             next,
             CTSTR("EXECUTED, INITIALIZED, RECONFIGURED"),
-            context.operation,
+            context.fsm,
             context.current);
 
         fsm_assert(
@@ -503,12 +503,13 @@ void fsm_advance_impl(const ThreadOutputContext& context, FsmState& current, [[m
             current,
             next,
             CTSTR("INITIALIZED, RECONFIGURED"),
-            context.operation,
+            context.fsm,
             context.current);
     }
 
     // valid transition -> commit
     current = next;
+    context.fsm = context.current;
 }
 
 } // namespace llk::san
