@@ -323,7 +323,7 @@ class PatchEmbeddingTTNN:
             x,
             self._linear_weight,
             bias=self._linear_bias,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             core_grid=self.core_grid,
@@ -424,9 +424,9 @@ class SigLIPAttentionTTNN:
             bv_padded = pad_head_dim_bias(weights["self_attn.v_proj.bias"])
 
             # Concatenate biases on device (using tensor_1d_to_2d_ttnn to avoid torch.unsqueeze)
-            bq_ttnn = tensor_1d_to_2d_ttnn(bq_padded, device, dtype=ttnn.bfloat16)
-            bk_ttnn = tensor_1d_to_2d_ttnn(bk_padded, device, dtype=ttnn.bfloat16)
-            bv_ttnn = tensor_1d_to_2d_ttnn(bv_padded, device, dtype=ttnn.bfloat16)
+            bq_ttnn = tensor_1d_to_2d_ttnn(bq_padded, device, dtype=ttnn.bfloat8_b)
+            bk_ttnn = tensor_1d_to_2d_ttnn(bk_padded, device, dtype=ttnn.bfloat8_b)
+            bv_ttnn = tensor_1d_to_2d_ttnn(bv_padded, device, dtype=ttnn.bfloat8_b)
             self.bqkv = ttnn.concat([bq_ttnn, bk_ttnn, bv_ttnn], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             self.bqkv = None
@@ -442,7 +442,7 @@ class SigLIPAttentionTTNN:
         )
 
         if "self_attn.out_proj.bias" in weights:
-            self.bo = tensor_1d_to_2d_ttnn(weights["self_attn.out_proj.bias"], device, dtype=ttnn.bfloat16)
+            self.bo = tensor_1d_to_2d_ttnn(weights["self_attn.out_proj.bias"], device, dtype=ttnn.bfloat8_b)
         else:
             self.bo = None
 
@@ -782,7 +782,7 @@ class SigLIPMLPTTNN:
             fc1_b_torch = weights["mlp.fc1.bias"]
             if pad_n > 0:
                 fc1_b_torch = torch.nn.functional.pad(fc1_b_torch, (0, pad_n))
-            self.fc1_bias = tensor_1d_to_2d_ttnn(fc1_b_torch, device, dtype=ttnn.bfloat16)
+            self.fc1_bias = tensor_1d_to_2d_ttnn(fc1_b_torch, device, dtype=ttnn.bfloat8_b)
         else:
             self.fc1_bias = None
 
@@ -802,7 +802,7 @@ class SigLIPMLPTTNN:
         )
 
         if "mlp.fc2.bias" in weights:
-            self.fc2_bias = tensor_1d_to_2d_ttnn(weights["mlp.fc2.bias"], device, dtype=ttnn.bfloat16)
+            self.fc2_bias = tensor_1d_to_2d_ttnn(weights["mlp.fc2.bias"], device, dtype=ttnn.bfloat8_b)
         else:
             self.fc2_bias = None
 

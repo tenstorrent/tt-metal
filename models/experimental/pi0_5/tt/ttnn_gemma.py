@@ -614,7 +614,7 @@ class GemmaAttentionTTNN:
             output = ttnn.linear(
                 attn_concat,
                 self.o_proj,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 program_config=oproj_pcfg,
@@ -623,7 +623,7 @@ class GemmaAttentionTTNN:
             output = ttnn.linear(
                 attn_concat,
                 self.o_proj,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 core_grid=self.core_grid,
@@ -815,7 +815,7 @@ class GemmaMLPTTNN:
             )
 
             common_kwargs = dict(
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
