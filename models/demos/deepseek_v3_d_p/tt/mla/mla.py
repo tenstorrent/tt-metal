@@ -764,28 +764,21 @@ class ttMLA:
             )
 
             local_offset = chunk_start_global // self.sp_factor
-            populated_local = chunk_end_global // self.sp_factor
+            seq_max_local = kvpe_cache.shape[2]
+            seq_max_global = seq_max_local * self.sp_factor
             kvpe_dim = self.kv_lora_rank + self.qk_rope_head_dim
             ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_batch_idx, update_idx=local_offset)
 
-            # K populated prefix: slice both batch (cache_batch_idx) and seq
-            # (populated_local). The seq trim is load-bearing — the op derives
-            # q_start_idx from K's physical seq dim, so it must equal the
-            # populated prefix, not the cache max. See Test 5 in
-            # test_ring_joint_sdpa_handoff.py for the indexed-cache bug demo.
-            tt_k_populated = ttnn.slice(
-                kvpe_cache,
-                [cache_batch_idx, 0, 0, 0],
-                [cache_batch_idx + 1, 1, populated_local, kvpe_dim],
-            )
-
-            # V is the first kv_lora_rank head-dim columns of K (MLA absorption);
-            # pass self.tt_v_latent_null (seq=0, head=kv_lora_rank) and an empty
-            # persistent V buffer. The op reads V tiles from K's gathered buffer
-            # with K's row stride and truncates each row to vDHt = kv_lora_rank/32
-            # tiles. wkv_b2 is applied to the compact attn_out after attention.
+            # K: pass kvpe_cache directly + cache_batch_idx (no slice). The op
+            # derives q_start_idx from logical_n (= chunk_end_global), so the
+            # full-cache seq dim no longer breaks intermediate chunks. See Test 5
+            # in test_ring_joint_sdpa_handoff.py for the regression check.
+            # V: self.tt_v_latent_null (seq=0, head=kv_lora_rank) tells the op to
+            # reuse K's buffer for V reads, truncated to vDHt = kv_lora_rank/32
+            # tiles per row. wkv_b2 is applied to the compact attn_out after
+            # attention so we never materialize the populated V prefix.
             persistent_k_buf = ttnn.from_torch(
-                torch.zeros(1, 1, chunk_end_global, kvpe_dim),
+                torch.zeros(1, 1, seq_max_global, kvpe_dim),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat8_b,
@@ -805,7 +798,7 @@ class ttMLA:
 
             attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 tt_q,
-                tt_k_populated,
+                kvpe_cache,
                 self.tt_v_latent_null,
                 self.joint_q,
                 self.joint_kv,
@@ -838,6 +831,7 @@ class ttMLA:
                 is_causal=True,
                 scale=self.scale,
                 is_balanced=self.is_balanced,
+                cache_batch_idx=cache_batch_idx,
             )
 
             attn_out = ttnn.linear(
