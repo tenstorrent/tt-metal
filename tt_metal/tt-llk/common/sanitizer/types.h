@@ -360,8 +360,8 @@ struct DevicePrintTopCallstack
             COMPILE_FOR_TRISC;
         std::uint32_t kernel_lma = launch->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX] +
                                    launch->kernel_config.kernel_text_offset[processor_index];
-        pc                                   = ctx.pc - kernel_lma;
-        ra                                   = ctx.ra - kernel_lma - 4;
+        pc = ctx.pc == 0xffffffff ? ctx.pc : ctx.pc - kernel_lma;
+        ra = ctx.ra == 0xffffffff ? ctx.ra : ctx.ra - kernel_lma - 4;
 #else
         pc = ctx.pc;
         ra = ctx.ra;
