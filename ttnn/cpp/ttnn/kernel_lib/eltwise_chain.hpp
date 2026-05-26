@@ -1039,7 +1039,9 @@ struct chain_math_mop_uniform;
 template <class Chain>
 struct chain_sfpu_inits_uniform;
 template <class Chain>
-struct chain_is_hoist_safe;
+struct chain_hoist_math_mop;
+template <class Chain>
+struct chain_hoist_sfpu;
 
 template <class Chain>
 inline constexpr bool chain_has_any_copy_tile_v = chain_has_any_copy_tile<Chain>::value;
@@ -1064,7 +1066,9 @@ inline constexpr bool chain_math_mop_uniform_v = chain_math_mop_uniform<Chain>::
 template <class Chain>
 inline constexpr bool chain_sfpu_inits_uniform_v = chain_sfpu_inits_uniform<Chain>::value;
 template <class Chain>
-inline constexpr bool chain_is_hoist_safe_v = chain_is_hoist_safe<Chain>::value;
+inline constexpr bool chain_hoist_math_mop_v = chain_hoist_math_mop<Chain>::value;
+template <class Chain>
+inline constexpr bool chain_hoist_sfpu_v = chain_hoist_sfpu<Chain>::value;
 
 // =============================================================================
 // 9. Public API — eltwise_chain

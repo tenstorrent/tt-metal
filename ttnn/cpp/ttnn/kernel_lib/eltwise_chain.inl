@@ -1468,10 +1468,17 @@ template <class... Es> struct chain_has_duplicate_upfront_cbs<EltwiseChain<Es...
 template <class... Es> struct chain_pack_writes_collide<EltwiseChain<Es...>>
     : detail::any_writer_dup<Es...> {};
 
-// `chain_is_hoist_safe` — encodes the FPU-init hoisting decision tree from
-// `ttnn/cpp/ttnn/kernel_lib/docs/fpu_init_hoisting.html` §6. The chain is an
-// "inner loop" (per-tile body); hoisting means running each element's init()
-// once at boot rather than per tile.
+// `chain_hoist_math_mop` / `chain_hoist_sfpu` — per-cohort hoist decisions.
+// Together they encode the FPU-init hoisting decision tree from
+// `ttnn/cpp/ttnn/kernel_lib/docs/fpu_init_hoisting.html` §6, split per
+// cohort so the chain can hoist math-MOP init even when SFPU isn't uniform.
+// Hoisting means running each element's init() once at boot rather than per
+// tile. The two cohorts (math-MOP = ADDR_MOD_0..3 + MATH MOP; SFPU =
+// ADDR_MOD_7 + SFPU CSR) are disjoint by hardware design — see
+// `llk_math_eltwise_unary_sfpu.h:24-27`, so the two decisions are independent
+// in principle. We constrain them to a single-direction implication
+// (`chain_hoist_sfpu_v` implies `chain_hoist_math_mop_v`) to keep the
+// dispatcher simple — see `eltwise_chain_partial_hoist_proposal.html`.
 //
 // Eltwise-only scope: matmul / reduce are not modeled as chain elements, so
 // gates G2 / G4 / G5 (matmul-specific ADDR_MOD_6 collisions, welford_reinit-
@@ -1592,13 +1599,26 @@ template <class... Es>
 struct chain_sfpu_inits_uniform<EltwiseChain<Es...>>
     : std::bool_constant<detail::chain_all_pred_uniform_v<detail::is_sfpu_op_t, Es...>> {};
 
+// Math-MOP cohort hoist: per-side CB consistency (G1) + math-MOP uniformity (G3).
+// True when CopyTile / BinaryFpu / DestReuseBinary / UnaryBcast inits can be
+// emitted once at boot instead of per tile. Independent of SFPU uniformity.
 template <class Chain>
-struct chain_is_hoist_safe : std::false_type {};
+struct chain_hoist_math_mop : std::false_type {};
 
 template <class... Es>
-struct chain_is_hoist_safe<EltwiseChain<Es...>>
+struct chain_hoist_math_mop<EltwiseChain<Es...>>
     : std::bool_constant<chain_per_side_cbs_consistent_v<EltwiseChain<Es...>> &&
-                         chain_math_mop_uniform_v<EltwiseChain<Es...>> &&
+                         chain_math_mop_uniform_v<EltwiseChain<Es...>>> {};
+
+// SFPU cohort hoist: requires math-MOP hoist AND SFPU init uniformity.
+// True when every element's init can be emitted at boot. This is the
+// fully-hoisted shape (the historical `chain_is_hoist_safe` case).
+template <class Chain>
+struct chain_hoist_sfpu : std::false_type {};
+
+template <class... Es>
+struct chain_hoist_sfpu<EltwiseChain<Es...>>
+    : std::bool_constant<chain_hoist_math_mop_v<EltwiseChain<Es...>> &&
                          chain_sfpu_inits_uniform_v<EltwiseChain<Es...>>> {};
 
 // =============================================================================
@@ -1722,13 +1742,11 @@ ALWI void emit_pre_element_transitions() {
 // so the init body is effectively a no-op for PackTile / PackTileBlock. Retained for symmetry
 // in case a pack element gains per-op LLK programming in a future commit.
 //
-// For FPU-clash chains (non-hoist-safe), `hoisted_init_for_each` is NOT called, so
-// pack-side `reconfig_data_format` from PackTile would never fire on the per-tile path
-// (apply_compute_phase + apply_pack_phase intentionally skip PackTile transitions —
-// init for cb-reader elements re-fires per tile to recover from FPU clash, and pack
-// reconfig has no business firing on every iteration). Emit the pack-side fold once
-// here at chain boot so `PackTileReconfig::Output` programs the pack engine before the
-// first iteration on FPU-clash chains as well.
+// `hoist_compute_init` excludes PackTile from its filtered walk (PACK is its own
+// always-hoisted cohort, disjoint from math-MOP and SFPU). `pack_init_for_each`
+// is the sole boot-time emission path for pack-side reconfig — it fires once
+// per chain regardless of the math/sfpu hoist decisions, so `PackTileReconfig::Output`
+// programs the pack engine before the first iteration in all cases.
 template <std::size_t I, class E, class... Es>
 ALWI void elem_pack_init() {
     if constexpr (is_pack_tile_op_v<E>) {
@@ -1773,7 +1791,13 @@ ALWI void pack_init_for_each(std::index_sequence<Is...>) {
 // passes the absolute tile index — identical to today's exec(i) at BlockSize=1.
 // =============================================================================
 
-template <bool EmitInit, std::size_t I, class ElemT, class... Es>
+// Per-element compute-phase emit. The two `Emit*Init` flags select per-tile
+// re-init for each cohort independently — true means the element's init() +
+// reconfig fold fires per tile (cohort not boot-hoisted); false means the
+// cohort is boot-hoisted and this branch skips it. `EmitMathInit` gates the
+// math-MOP cohort (CopyTile / BinaryFpu / DestReuseBinary / UnaryBcast);
+// `EmitSfpuInit` gates the SFPU + Fill + Rand cohort (any `is_dest_only_op_v`).
+template <bool EmitMathInit, bool EmitSfpuInit, std::size_t I, class ElemT, class... Es>
 ALWI void elem_apply_compute(
     const ElemT& elem,
     uint32_t i_outer,
@@ -1794,7 +1818,7 @@ ALWI void elem_apply_compute(
         elem.wait_per_tile(base_tile + inner_count);
         elem_wait_per_block(elem, inner_count);
         elem.wait_upfront(n_tiles);
-        if constexpr (EmitInit) {
+        if constexpr (EmitMathInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();
             ElemT::init();
         }
@@ -1815,7 +1839,7 @@ ALWI void elem_apply_compute(
         elem.pop_per_tile(i_outer);
         elem_pop_per_block(elem, inner_count);
     } else if constexpr (is_dest_only_op_v<ElemT>) {
-        if constexpr (EmitInit) {
+        if constexpr (EmitSfpuInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();
             ElemT::init();
         }
@@ -1849,7 +1873,7 @@ ALWI void elem_apply_pack(
     }
 }
 
-template <bool EmitInit, std::size_t... Is, class... Es>
+template <bool EmitMathInit, bool EmitSfpuInit, std::size_t... Is, class... Es>
 ALWI void apply_compute_phase(
     std::index_sequence<Is...>,
     uint32_t i_outer,
@@ -1861,7 +1885,7 @@ ALWI void apply_compute_phase(
     auto run_one = [&](auto idx_const, auto& elem) {
         constexpr std::size_t II = decltype(idx_const)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
-        elem_apply_compute<EmitInit, II, ElemT, Es...>(
+        elem_apply_compute<EmitMathInit, EmitSfpuInit, II, ElemT, Es...>(
             elem, i_outer, base_tile, inner_count, chain_lane_width, n_tiles);
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
@@ -1884,21 +1908,28 @@ ALWI void apply_pack_phase(
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
 }
 
-// Hoisted init+transitions for non-clash chains (F-PERF-1).
-// Boot-time emission: per-element pre-element transitions + per-element static init().
-template <std::size_t... Is, class... Es>
-ALWI void hoisted_init_for_each(std::index_sequence<Is...>, Es&... elts) {
+// Boot-time hoist of compute-cohort init (math-MOP and/or SFPU), filtered
+// per element by which cohort it belongs to. The chain dispatcher computes
+// `HoistMath` from `chain_hoist_math_mop_v` and `HoistSfpu` from
+// `chain_hoist_sfpu_v`, then this walk emits the element's transitions +
+// init() only when the element's cohort is hoisted at this level.
+//
+// PackTile is intentionally excluded from this walk — pack-side reconfig is
+// emitted unconditionally at boot via `pack_init_for_each` (PACK cohort is
+// disjoint from compute cohorts and is always hoisted).
+template <bool HoistMath, bool HoistSfpu, std::size_t... Is, class... Es>
+ALWI void hoist_compute_init(std::index_sequence<Is...>, Es&... elts) {
     auto run_one = [&](auto idx, auto& elem) {
         constexpr std::size_t II = decltype(idx)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
-        // FIX (Reg C): previously skipped Pack elements, but emit_pre_element_transitions
-        // is the only emission path for pack_reconfig_data_format declared by
-        // PackTile<...PackTileReconfig::Output>. Skipping PackTile here means non-clash
-        // chains never emit pack reconfig, leaving stale pack format from the previous
-        // chain. Includes PackTile now — its emit_pre_element_transitions fires pack
-        // reconfig; PackTile::init() is empty (no-op) so other side-effects are safe.
-        emit_pre_element_transitions<ElemT, II, Es...>();
-        ElemT::init();
+        constexpr bool emit =
+            (is_math_mop_op_v<ElemT> && HoistMath) ||
+            (is_dest_only_op_v<ElemT> && HoistSfpu);
+        if constexpr (emit) {
+            emit_pre_element_transitions<ElemT, II, Es...>();
+            ElemT::init();
+        }
+        (void)elem;
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
 }
@@ -1937,7 +1968,11 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
                   "context — pick Block (walk) or Scalar (broadcast), or switch to the 2D "
                   "`eltwise_chain(EltwiseShape, ...)` overload.");
 
-    constexpr bool emit_init_per_tile = !chain_is_hoist_safe_v<Chain>;
+    // Per-cohort hoist decisions, both compile-time. The dispatcher picks the
+    // most aggressive safe emission shape — math-MOP init can be hoisted at
+    // boot even when SFPU isn't uniform; the SFPU side then re-inits per tile.
+    constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
+    constexpr bool hoist_sfpu = chain_hoist_sfpu_v<Chain>;
 
     // ---- Block size (item 2 of eltwise_helper_proposal.md) ----
     //
@@ -1959,14 +1994,11 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
 
     using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
 
-    // ---- F-PERF-4: hoist pack init out of per-tile loop ----
-    // Pack-side init also drives the pack-format reconfig fold for FPU-clash chains
-    // (where `hoisted_init_for_each` is skipped).
+    // ---- Pack-cohort boot init — always hoisted; PACK is disjoint from compute cohorts ----
     detail::pack_init_for_each<Es...>(IdxSeq{});
 
-    if constexpr (!emit_init_per_tile) {
-        detail::hoisted_init_for_each(IdxSeq{}, elts...);
-    }
+    // ---- Compute-cohort boot init — filtered by per-cohort hoist flags ----
+    detail::hoist_compute_init<hoist_math, hoist_sfpu>(IdxSeq{}, elts...);
 
     // Outer loop processes `block_size` tiles per iter. Runtime tail handles the case
     // where `n_tiles % block_size != 0`: the last iter's inner block size clamps to
@@ -1976,7 +2008,7 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
         const uint32_t inner_count =
             (base_tile + block_size <= n_tiles) ? block_size : (n_tiles - base_tile);
         tile_regs_acquire();
-        detail::apply_compute_phase<emit_init_per_tile>(
+        detail::apply_compute_phase</*EmitMathInit=*/!hoist_math, /*EmitSfpuInit=*/!hoist_sfpu>(
             IdxSeq{}, i_outer, base_tile, inner_count, chain_lane_w, n_tiles, elts...);
         tile_regs_commit();
         tile_regs_wait();
@@ -2002,7 +2034,7 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
 
 namespace detail {
 
-template <bool EmitInit, std::size_t I, class ElemT, class... Es>
+template <bool EmitMathInit, bool EmitSfpuInit, std::size_t I, class ElemT, class... Es>
 ALWI void elem_apply_compute_2d(
     const ElemT& elem,
     uint32_t i_flat,
@@ -2023,7 +2055,7 @@ ALWI void elem_apply_compute_2d(
         elem.wait_per_tile(i_flat + inner_count);
         elem_wait_per_block(elem, inner_count);
         elem.wait_upfront_2d(Ht, Wt);
-        if constexpr (EmitInit) {
+        if constexpr (EmitMathInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();
             ElemT::init();
         }
@@ -2045,7 +2077,7 @@ ALWI void elem_apply_compute_2d(
         elem.pop_per_tile(i_flat);
         elem_pop_per_block(elem, inner_count);
     } else if constexpr (is_dest_only_op_v<ElemT>) {
-        if constexpr (EmitInit) {
+        if constexpr (EmitSfpuInit) {
             emit_pre_element_transitions<ElemT, I, Es...>();
             ElemT::init();
         }
@@ -2082,7 +2114,7 @@ ALWI void elem_apply_pack_2d(
     }
 }
 
-template <bool EmitInit, std::size_t... Is, class... Es>
+template <bool EmitMathInit, bool EmitSfpuInit, std::size_t... Is, class... Es>
 ALWI void apply_compute_phase_2d(
     std::index_sequence<Is...>,
     uint32_t i_flat,
@@ -2096,7 +2128,7 @@ ALWI void apply_compute_phase_2d(
     auto run_one = [&](auto idx_const, auto& elem) {
         constexpr std::size_t II = decltype(idx_const)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
-        elem_apply_compute_2d<EmitInit, II, ElemT, Es...>(
+        elem_apply_compute_2d<EmitMathInit, EmitSfpuInit, II, ElemT, Es...>(
             elem, i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
@@ -2143,7 +2175,9 @@ ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
     static_assert(!chain_pack_writes_collide_v<Chain>,
                   "eltwise_chain(2D): two PackTile elements collide on (cb, dst_slot).");
 
-    constexpr bool emit_init_per_tile = !chain_is_hoist_safe_v<Chain>;
+    // Per-cohort hoist decisions — see 1D entry point for rationale.
+    constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
+    constexpr bool hoist_sfpu = chain_hoist_sfpu_v<Chain>;
 
     static_assert(BlockSize >= 1, "eltwise_chain(2D): BlockSize must be >= 1");
     constexpr uint32_t chain_lane_w = chain_lane_width_v<Chain>;
@@ -2155,12 +2189,11 @@ ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
 
     using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
 
-    // Pack init hoisted to boot.
+    // Pack-cohort boot init — always hoisted.
     detail::pack_init_for_each<Es...>(IdxSeq{});
 
-    if constexpr (!emit_init_per_tile) {
-        detail::hoisted_init_for_each(IdxSeq{}, elts...);
-    }
+    // Compute-cohort boot init — filtered per cohort.
+    detail::hoist_compute_init<hoist_math, hoist_sfpu>(IdxSeq{}, elts...);
 
     const uint32_t Ht = shape.Ht;
     const uint32_t Wt = shape.Wt;
@@ -2176,7 +2209,8 @@ ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
                 (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
             const uint32_t i_flat = row_base + wt_base;
             tile_regs_acquire();
-            detail::apply_compute_phase_2d<emit_init_per_tile>(
+            detail::apply_compute_phase_2d</*EmitMathInit=*/!hoist_math,
+                                            /*EmitSfpuInit=*/!hoist_sfpu>(
                 IdxSeq{}, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt, elts...);
             tile_regs_commit();
             tile_regs_wait();
