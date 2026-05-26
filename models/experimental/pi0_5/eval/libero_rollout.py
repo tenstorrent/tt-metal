@@ -74,7 +74,9 @@ class Pi0_5LiberoAdapter:
     def __init__(
         self,
         checkpoint_dir: str,
-        tokenizer_path: str = "/storage/sdawle/pi05_weights/paligemma_tokenizer.model",
+        tokenizer_path: str = os.environ.get(
+            "PI0_TOKENIZER_PATH", "/storage/sdawle/pi05_weights/paligemma_tokenizer.model"
+        ),
         backend: str = "pytorch",
         ttnn_device=None,
         max_action_dim: int = 32,
