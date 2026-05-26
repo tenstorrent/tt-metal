@@ -243,6 +243,18 @@ _BACKENDS: List[FamilyBackend] = [
         smoke_test_entry=None,
         use_module_tree=True,
     ),
+    FamilyBackend(
+        category="VLM",
+        name="Mistral-Small-3.1 (mistral3 VLM)",
+        demo_path="models/tt_transformers/demo/simple_text_demo.py",
+        routing_mode="template",
+        canonical_hf_id="mistralai/Mistral-Small-3.1-24B-Instruct-2503",
+        notes="Mistral Small 3.1 24B multimodal instruction model. Text path runs via tt_transformers/simple_text_demo.py with HF_MODEL set; vision path is not yet ported.",
+        model_type_keys=["mistral3"],
+        pipeline_tags=["image-text-to-text"],
+        smoke_test_entry="models/tt_transformers/demo/simple_text_demo.py",
+        use_module_tree=False,
+    ),
 ]
 
 
@@ -311,6 +323,15 @@ def pick_backend_with_quality(
     for b in candidates:
         if pt and pt in {t.lower() for t in b.pipeline_tags}:
             return (b, "pipeline")
+
+    if mt:
+        for b in all_backends():
+            if mt in {k.lower() for k in b.model_type_keys}:
+                return (b, "exact")
+    if pt:
+        for b in all_backends():
+            if pt in {t.lower() for t in b.pipeline_tags}:
+                return (b, "pipeline")
 
     if candidates:
         for b in candidates:

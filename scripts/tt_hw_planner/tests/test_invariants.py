@@ -44,6 +44,19 @@ from pathlib import Path
 from typing import Optional
 
 
+def _planner_source() -> str:
+    """Concatenate cli.py + all _cli_helpers/ + commands/ modules so
+    source-grep invariant tests still work after the cli.py refactor."""
+    base = Path(cli.__file__).parent
+    out = [Path(cli.__file__).read_text()]
+    for sub in ("_cli_helpers", "commands"):
+        d = base / sub
+        if d.is_dir():
+            for f in sorted(d.glob("*.py")):
+                out.append(f.read_text())
+    return "\n".join(out)
+
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -367,7 +380,7 @@ def test_cli_has_preiter_native_snapshot_helper() -> None:
     pre-iter snapshot captures the session-start native state so the
     worst-case cap-out is "rollback to where we started" rather than
     "rollback to a stale template"."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert "_snapshot_preiter_native_stub" in src, (
         "cli.py must define _snapshot_preiter_native_stub (the pre-iter "
         "snapshot helper that prevents cap-out from silently regressing "
@@ -389,7 +402,7 @@ def test_skip_component_to_fallback_prefers_preiter_native() -> None:
     component that entered the session already-native silently throws
     away that native code in favour of the original torch-wrapper
     template — strictly worse than the session start."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     body_start = src.find("def _skip_component_to_fallback(")
     assert body_start != -1, "_skip_component_to_fallback function not found"
@@ -411,7 +424,7 @@ def test_snapshot_preiter_skips_torch_wrappers() -> None:
     a torch wrapper. In that case the .bak IS the correct floor, and
     pinning the torch-wrapper as `.preiter_native` would just create a
     misleading duplicate of `.bak` that masquerades as 'native'."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     body_start = src.find("def _snapshot_preiter_native_stub(")
     assert body_start != -1
     body = src[body_start : body_start + 2000]
@@ -519,7 +532,7 @@ def test_full_hf_reference_source_helper_exists() -> None:
     truncated `_torch_ref_summary` forward source — which is exactly
     what made decoder_head intractable (its true bug was in the
     constructor's residual chain, not the forward)."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert "def _full_hf_reference_source(" in src, (
         "cli.py must define _full_hf_reference_source for PCC_ONLY " "prompts"
     )
@@ -544,7 +557,7 @@ def test_prompt_emits_localization_and_full_hf_only_on_pcc_only() -> None:
     Tier-2 helpers). We must locate the prompt-assembly one
     specifically, which is the one that calls `localize_pcc_divergence`.
     """
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     needle = 'if failure_class == "PCC_ONLY":'
     cursor = 0
@@ -588,7 +601,7 @@ def test_effective_attempt_cap_helper_exists() -> None:
     inside `_run_auto_iterate_loop` (it closes over the per-loop
     state dicts). The function is the cap-relaxation lever for the
     structural-but-stuck PCC regime."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert "def _effective_attempt_cap(" in src, "cli.py must define _effective_attempt_cap for Tier-2 C"
 
     assert "PCC_STUCK_THRESHOLD" in src, "PCC_STUCK_THRESHOLD constant must be defined in cli.py"
@@ -599,7 +612,7 @@ def test_is_at_cap_uses_effective_attempt_cap() -> None:
     """`_is_at_cap` must consult `_effective_attempt_cap(comp)`, NOT
     the raw `max_attempts_per_component`. Otherwise the relaxation
     is dead code."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     is_at_cap_idx = src.find("def _is_at_cap(")
     assert is_at_cap_idx != -1
 
@@ -614,7 +627,7 @@ def test_effective_cap_clamps_to_hard_total() -> None:
     A bug that returned `base + extras` unconditionally would let
     a chronically-stuck PCC component loop indefinitely. We pin the
     `min(..., hard_total_attempt_cap)` clamp."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     cap_idx = src.find("def _effective_attempt_cap(")
     assert cap_idx != -1
     body = src[cap_idx : cap_idx + 2000]
@@ -628,7 +641,7 @@ def test_adaptive_cap_only_triggers_on_pcc_only_failure_class() -> None:
     """The relaxation must require the LAST failure class to be
     PCC_ONLY. Granting extra attempts on, e.g., L1_OOM or HANG
     would burn budget on unrecoverable structural bugs."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     cap_idx = src.find("def _effective_attempt_cap(")
     assert cap_idx != -1
     body = src[cap_idx : cap_idx + 2000]
@@ -719,7 +732,7 @@ def test_hang_synthesis_prints_compute_split() -> None:
     the iter. The user lost visibility into the on-device vs on-CPU
     percentages between iters. Pin: the HANG branch must also call
     `_format_compute_split` / `_format_op_split` before its `continue`."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     hang_idx = src.find("HANG detected (")
     assert hang_idx != -1
     cont_idx = src.find("continue", hang_idx)
@@ -752,7 +765,7 @@ def test_hang_synthesis_records_failure_for_consec_counter() -> None:
     Pin: the HANG synthesis branch must call
     `_record_failure_for_component(comp, \"HANG\", ...)` for each hung
     component BEFORE the `continue`."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     hang_idx = src.find("HANG detected (")
     assert hang_idx != -1, "could not locate HANG-detection branch in cli.py"
@@ -782,7 +795,7 @@ def test_scope_report_preserves_multiline_message_body() -> None:
 
     Pin: both parser AND scoper must preserve msg_lines[1:60].
     """
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     scope_idx = src.find("def _scope_report_to_demo(")
     assert scope_idx != -1
     next_def = src.find("\ndef ", scope_idx + 1)
@@ -799,7 +812,7 @@ def test_no_op_continue_path_records_failure_for_consec_counter() -> None:
     op-synth byte-identical no-op `continue` path used to skip
     `_record_failure_for_component`, so repeated no-ops never advanced
     the per-class cap-out counter. Pin: the NO_OP branch must record."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     idx = src.find("agent wrote byte-identical output")
     assert idx != -1, "could not locate the NO_OP branch banner text"
@@ -819,7 +832,7 @@ def test_wrapper_regression_continue_path_records_failure() -> None:
     """The strict-native still-wrappers branch had the same bug: it
     `continue`d before failure-recording, so wrapper-regression
     iterations never advanced the cap counter."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     idx = src.find("agent wrote torch wrapper(s) again")
     assert idx != -1
     m = re.search(r"^\s+continue\s*$", src[idx:], flags=re.MULTILINE)
@@ -836,7 +849,7 @@ def test_empty_agent_continue_path_records_failure() -> None:
     the audit. Repeated empty-agent invocations (e.g. credentials
     misconfigured, CLI version mismatch) should hit the per-class cap
     and skip the component to fallback, not just the global hard cap."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     idx = src.find("agent produced zero usable response files")
     assert idx != -1
 
@@ -871,7 +884,7 @@ def test_skip_component_restore_priority_prefers_best_native() -> None:
     that still failed) were thrown away on cap-out, restoring the
     older preiter snapshot. The priority list must explicitly mention
     best_native in the restoration chain."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     skip_idx = src.find("def _skip_component_to_fallback(")
     assert skip_idx != -1
     next_def = src.find("\n    def ", skip_idx + 1)
@@ -908,7 +921,7 @@ def test_up_auto_scopes_seed_report_to_demo_before_already_done_check() -> None:
     Pin: the `--auto` block in `up` must scope the seed report to the
     demo via `_scope_report_to_demo(...)` and ensure `seed_all_passed`
     only fires when this demo's tests actually appear in the report."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     idx = src.find("stale `most_recent_tests.xml`")
     assert idx != -1, (
@@ -941,7 +954,7 @@ def test_promote_auto_revalidates_when_structural_says_done() -> None:
     promote command must still hand off to the auto-iterate loop so
     its pre-flight pytest sweep can verify each native stub actually
     works (re-targeting failures)."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     idx = src.find("nothing to do \u2014 every NEW component is already native TTNN")
     if idx == -1:
         idx = src.find("nothing to do -- every NEW component is already native TTNN")
@@ -964,7 +977,7 @@ def test_regression_guard_uses_preiter_native_snapshot() -> None:
     restore quietly did nothing — the regressed wrapper stayed on
     disk. Pin: the regression guard must consult `.py.preiter_native`
     and `.py.last_good_native` BEFORE falling back to `.bak`."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     idx = src.find("REGRESSION GUARD: agent rewrote")
     assert idx != -1
 
@@ -1059,7 +1072,7 @@ def test_prompt_assembly_includes_escalated_scope_block() -> None:
     """The prompt-assembly path must call _format_escalated_edit_scope_block
     and concatenate its output into the final prompt string. Without
     this wiring, the table is dead code."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert "_format_escalated_edit_scope_block(" in src, "_format_escalated_edit_scope_block must be invoked in cli.py"
     assert "escalated_scope_block" in src, (
         "the prompt assembly must thread the escalated-scope block " "into the final prompt"
@@ -1072,7 +1085,7 @@ def test_component_complexity_bonus_helper_exists() -> None:
     the cap calculation. We verify by inspecting source — the
     function is a closure inside cmd_promote/cmd_up, not at module
     level, so we can't import it directly."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert "_component_complexity_bonus" in src, "complexity-bonus helper must be defined"
     assert "_op_synth_manifest(" in src
     cap_idx = src.find("def _effective_attempt_cap")
@@ -1088,7 +1101,7 @@ def test_complexity_bonus_uses_palette_and_gaps() -> None:
     ops'. Without the gaps component, a refactored model with a
     small palette but many op-NEW gaps would receive no extra
     budget despite being harder to port."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     bonus_idx = src.find("def _component_complexity_bonus")
     assert bonus_idx >= 0, "_component_complexity_bonus definition must exist"
@@ -1104,7 +1117,7 @@ def test_complexity_bonus_is_bounded() -> None:
     component cannot starve the rest of the run by exhausting the
     hard total attempt cap. The historical bug was an unbounded
     cap that let one component eat all of `hard_total_attempt_cap`."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     bonus_idx = src.find("def _component_complexity_bonus")
     assert bonus_idx >= 0
     bonus_window = src[bonus_idx : bonus_idx + 2000]
@@ -1117,7 +1130,7 @@ def test_systemic_pattern_tracker_helpers_exist() -> None:
     and feed those into the prompt assembly. Without these, the
     `repeat_error_counts` map remains L1_OOM-specific and we silently
     burn iters on shared-path bugs (e.g. ttnn_to_torch hangs)."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert "_record_systemic_failure" in src, "systemic-pattern tracker must define _record_systemic_failure"
     assert (
         "_format_systemic_pattern_block" in src
@@ -1133,7 +1146,7 @@ def test_systemic_pattern_threshold_is_at_least_two() -> None:
     given signature is NOT systemic; that's just a stub bug. Pin
     the threshold so a future edit doesn't accidentally collapse it
     to 1 (which would fire the systemic banner on every iter)."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     m = re.search(r"SYSTEMIC_THRESHOLD\s*=\s*(\d+)", src)
     assert m is not None
     assert int(m.group(1)) >= 2, (
@@ -1144,7 +1157,7 @@ def test_systemic_pattern_threshold_is_at_least_two() -> None:
 def test_systemic_block_threaded_into_prompt() -> None:
     """The systemic-pattern block must be concatenated into the
     final prompt string. Verifies the wiring, not just the helper."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert "systemic_block" in src, "prompt assembly must thread the systemic-pattern block"
 
 
@@ -1152,7 +1165,7 @@ def test_systemic_record_skips_environmental_classes() -> None:
     """`_record_systemic_failure` must NOT count DEVICE_NEEDS_RESET
     (host-hygiene events) toward the systemic threshold, otherwise
     a flaky device on a real environment would trip the banner."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     rec_idx = src.find("def _record_systemic_failure")
     assert rec_idx >= 0
     window = src[rec_idx : rec_idx + 1500]
@@ -1281,7 +1294,7 @@ def test_auto_loop_uses_report_walking_shape_probe_harvest() -> None:
     which reads from the pre-truncated 60-line details. A regression
     that flips this back to the string harvest would silently drop
     probes past line 60."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert "_extract_shape_probes_from_report(report)" in src, (
         "auto-iterate loop must use the report-walking harvest so "
         "probes past line 60 of a failure body are not dropped"
@@ -1297,7 +1310,7 @@ def test_hang_branch_feeds_systemic_tracker() -> None:
     with the SAME signature. The systemic detector exists exactly
     to catch hang-storms like this. Pin: the HANG branch must also
     feed the systemic tracker."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     hang_idx = src.find("HANG detected (")
     assert hang_idx != -1
     cont_idx = src.find("continue", hang_idx)
@@ -1451,7 +1464,7 @@ def test_preflight_hang_targeting_block_exists_in_source() -> None:
     exercise without a real pytest run."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _run_auto_iterate_loop")
     assert fn_idx > 0, "_run_auto_iterate_loop must exist"
 
@@ -1489,7 +1502,7 @@ def test_preflight_hang_target_is_last_stage_entry() -> None:
     Source-level pin guarding the [-1] indexing."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _run_auto_iterate_loop")
     fn_slice = src[fn_idx : fn_idx + 200000]
 
@@ -1521,7 +1534,7 @@ def test_preflight_compute_split_printed_before_iter_loop() -> None:
     baseline split before iter 1 starts."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _run_auto_iterate_loop")
     fn_slice = src[fn_idx : fn_idx + 200000]
 
@@ -1555,7 +1568,7 @@ def test_preflight_compute_split_is_exception_safe() -> None:
     fall through to the iter loop with a diagnostic, never propagate."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _run_auto_iterate_loop")
     fn_slice = src[fn_idx : fn_idx + 200000]
     pf_block_idx = fn_slice.find("AUTO-ITERATE pre-flight:")
@@ -1590,7 +1603,7 @@ def test_preflight_hang_handles_zero_stage_lines_gracefully() -> None:
     guard."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _run_auto_iterate_loop")
     fn_slice = src[fn_idx : fn_idx + 200000]
 
@@ -1673,7 +1686,7 @@ def test_invoke_agent_uses_stream_json_for_claude() -> None:
     `stream-json`, NOT `text`."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _invoke_agent")
     assert fn_idx > 0
     fn_end = src.find("def ", fn_idx + 100)
@@ -1709,7 +1722,7 @@ def test_invoke_agent_collects_descendants_before_kill() -> None:
     assert hasattr(cli, "_kill_agent_tree"), "the kill helper must exist"
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
 
     kill_idx = src.find("def _kill_process_tree")
     assert kill_idx > 0, "the generalized helper `_kill_process_tree` must exist"
@@ -1737,7 +1750,7 @@ def test_invoke_agent_signals_descendants_directly() -> None:
     catch detached processes that `killpg` misses."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     kill_idx = src.find("def _kill_process_tree")
     next_def = src.find("\ndef ", kill_idx + 10)
     kill_body = src[kill_idx : next_def if next_def > 0 else kill_idx + 5000]
@@ -1888,7 +1901,7 @@ def test_invoke_agent_call_site_passes_complexity_bonus() -> None:
     is dead code."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _run_auto_iterate_loop")
     fn_slice = src[fn_idx : fn_idx + 300000]
     call_idx = fn_slice.find("rc = _invoke_agent(")
@@ -1916,7 +1929,7 @@ def test_invoke_agent_uses_stall_detection() -> None:
     nothing."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _invoke_agent")
     next_def = src.find("\ndef ", fn_idx + 10)
     fn_body = src[fn_idx : next_def if next_def > 0 else fn_idx + 50000]
@@ -1942,7 +1955,7 @@ def test_invoke_agent_async_stdin_write_does_not_block_heartbeat() -> None:
     write and the heartbeat are decoupled."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _invoke_agent")
     next_def = src.find("\ndef ", fn_idx + 10)
     fn_body = src[fn_idx : next_def if next_def > 0 else fn_idx + 50000]
@@ -1986,7 +1999,7 @@ def test_partial_cpu_components_helper_reads_compute_split() -> None:
 
     from pathlib import Path
 
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _partial_cpu_components")
     assert fn_idx > 0
     next_def = src.find("\ndef ", fn_idx + 10)
@@ -2012,7 +2025,7 @@ def test_runtime_fallback_details_returns_helpers_and_kinds() -> None:
 
     from pathlib import Path
 
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _runtime_fallback_details")
     next_def = src.find("\ndef ", fn_idx + 10)
     body = src[fn_idx : next_def if next_def > 0 else fn_idx + 2000]
@@ -2034,7 +2047,7 @@ def test_iterate_loop_adds_partial_cpu_to_candidate_pool() -> None:
     that ARE partial-CPU remain in the pool)."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _run_auto_iterate_loop")
     fn_slice = src[fn_idx : fn_idx + 200000]
     pool_idx = fn_slice.find("candidate_pool = sorted(")
@@ -2063,7 +2076,7 @@ def test_partial_cpu_override_guarded_by_prev_failure_state() -> None:
     """
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _run_auto_iterate_loop")
     fn_slice = src[fn_idx : fn_idx + 200000]
     override_idx = fn_slice.find('failure_class = "PARTIAL_CPU_FALLBACK"')
@@ -2205,7 +2218,7 @@ def test_convergence_check_blocked_by_live_partial_cpu() -> None:
     """
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _run_auto_iterate_loop")
     fn_slice = src[fn_idx : fn_idx + 200000]
     gate_idx = fn_slice.find("_partial_cpu_block_convergence")
@@ -2230,7 +2243,7 @@ def test_partial_cpu_block_convergence_filters_capped_out_components() -> None:
     """
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _run_auto_iterate_loop")
     fn_slice = src[fn_idx : fn_idx + 200000]
 
@@ -2255,7 +2268,7 @@ def test_convergence_msg_describes_partial_cpu_when_allowed() -> None:
     ops are still on CPU."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _run_auto_iterate_loop")
     fn_slice = src[fn_idx : fn_idx + 200000]
 
@@ -2284,7 +2297,7 @@ def test_partial_cpu_diagnostic_banner_emitted_before_iter_continues() -> None:
     confusing iter N+1 banner with no explanation."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _run_auto_iterate_loop")
     fn_slice = src[fn_idx : fn_idx + 200000]
 
@@ -2307,7 +2320,7 @@ def test_drain_now_passes_tested_components_to_persist() -> None:
     refactor can't drop the wiring."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _run_focused_pytest")
     fn_slice = src[fn_idx : fn_idx + 50000]
     drain_idx = fn_slice.find("def _drain_now")
@@ -2328,7 +2341,7 @@ def test_iterate_loop_overrides_failure_class_for_partial_cpu() -> None:
     might be 'PCC_ONLY' or 'OTHER' and is unhelpful here."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _run_auto_iterate_loop")
     fn_slice = src[fn_idx : fn_idx + 200000]
     override_idx = fn_slice.find('failure_class = "PARTIAL_CPU_FALLBACK"')
@@ -2363,7 +2376,7 @@ def test_iterate_loop_partial_cpu_set_respects_flag() -> None:
     refactor can't drop this gate."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _run_auto_iterate_loop")
     fn_slice = src[fn_idx : fn_idx + 200000]
     pool_idx = fn_slice.find("partial_cpu_pool: List[str] = (")
@@ -2483,7 +2496,7 @@ def test_preflight_no_hardware_bail_block_exists() -> None:
     refactor can't silently remove the early-bail."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
 
     bail_idx = src.find("# PRE-FLIGHT NO-HARDWARE BAIL")
     assert bail_idx > 0, "pre-flight no-hardware bail block must exist with its " "canonical comment header"
@@ -2527,7 +2540,7 @@ def test_pytest_kill_uses_kill_process_tree() -> None:
     observed in `_invoke_agent`."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
 
     stages_idx = src.find('"  Last reported stage(s) before hang:"')
     assert stages_idx > 0, "pytest hang-timeout block (anchored on 'Last reported " "stage(s) before hang:') must exist"
@@ -2550,7 +2563,7 @@ def test_invoke_agent_non_stdin_path_uses_devnull() -> None:
     prompt) will block waiting for the parent terminal."""
     from pathlib import Path
 
-    src = (Path(cli.__file__)).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _invoke_agent")
     next_def = src.find("\ndef ", fn_idx + 10)
     fn_body = src[fn_idx : next_def if next_def > 0 else fn_idx + 50000]
@@ -2575,7 +2588,7 @@ def test_hang_branch_comments_do_not_contain_word_continue() -> None:
     window and either pass for the wrong reason or fail with a
     confusing message. Pin: no bare word `continue` in any HANG-
     branch comment between the banner and the actual statement."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     hang_idx = src.find("HANG detected (")
     assert hang_idx != -1
     cont_idx = src.find("\n            continue\n", hang_idx)
@@ -2627,7 +2640,7 @@ def test_invoke_agent_includes_grep_in_claude_tools() -> None:
     otherwise the agentic-affordances directive that tells it to
     'Grep for class <RefModule>' is nonsensical (the tool isn't
     available)."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     invoke_idx = src.find("def _invoke_agent")
     assert invoke_idx >= 0
 
@@ -2709,7 +2722,7 @@ def test_agentic_affordances_fires_on_systemic_pattern() -> None:
 def test_agentic_block_threaded_into_prompt() -> None:
     """The block must be concatenated into the final prompt string.
     Pins the wiring."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert "agentic_block" in src, "prompt assembly must thread the agentic-affordances block " "into the final prompt"
     assert "_format_agentic_affordances_block(" in src
 
@@ -2721,7 +2734,7 @@ def test_pick_target_picks_least_attempted_failed_component() -> None:
     symptom was `_pick_target` always returning `encoder_stack` because
     it sorted alphabetically, while `vision_config` and `self_attention`
     never got an attempt across 6 iters."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     pick_idx = src.find("def _pick_target() -> str:")
     assert pick_idx >= 0
     window = src[pick_idx : pick_idx + 4000]
@@ -2766,7 +2779,7 @@ def test_record_failure_only_resets_on_severity_decrease() -> None:
     must NOT reset. Previously any class change reset the counter,
     letting components cycle SHAPE -> HANG -> SHAPE -> HANG... and
     bypass the cap entirely."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     rec_idx = src.find("def _record_failure_for_component(")
     assert rec_idx >= 0
     window = src[rec_idx : rec_idx + 8000]
@@ -2788,7 +2801,7 @@ def test_record_failure_rejects_other_oscillation_as_progress() -> None:
     Iter N: SHAPE -> iter N+1: OTHER (parse glitch) -> iter N+2: SHAPE
     must NOT reset the counter (OTHER -> SHAPE = severity 100 -> 7 looks
     like progress but is just parse noise on the same bug)."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     rec_idx = src.find("def _record_failure_for_component(")
     assert rec_idx >= 0
     window = src[rec_idx : rec_idx + 8000]
@@ -2807,7 +2820,7 @@ def test_hard_total_attempt_cap_tightened() -> None:
     `--auto-max-attempts-per-component 2` it yielded 6, letting encoder_
     stack accumulate 4 attempts (2x the user's intent). New formula
     `max(3, max*2)` gives 4 for max=2, matching user expectation."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     assert "max(3, max_attempts_per_component * 2)" in src, (
         "hard_total_attempt_cap must use the tightened max(3, max*2) "
@@ -2825,7 +2838,7 @@ def test_effective_attempt_cap_always_clamps_to_hard_ceiling() -> None:
     + max_attempts_per_component=2 yielded an effective cap of 6 while
     the hard ceiling was supposed to be 4. The clamp must apply on EVERY
     return path."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     cap_idx = src.find("def _effective_attempt_cap(comp: str) -> int:")
     assert cap_idx >= 0
     window = src[cap_idx : cap_idx + 3000]
@@ -2905,7 +2918,7 @@ def test_deliverable_deadline_wired_into_invoke_agent_body() -> None:
     """Bug D: the heartbeat loop must actually USE the deliverable_dirs
     parameter — early-kill at 80% of budget if no file appeared. Pin
     the wiring via source inspection."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     invoke_idx = src.find("def _invoke_agent(")
     assert invoke_idx >= 0
 
@@ -2922,7 +2935,7 @@ def test_prompt_includes_deliverable_directive_when_budgeted() -> None:
     """Bug D: the LLM-facing prompt must tell Claude about the
     deliverable deadline so it can plan its time. Without this, claude
     treats the timeout as soft and gets killed mid-investigation."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert "DELIVERABLE DEADLINE:" in src, "prompt builder must emit the DELIVERABLE DEADLINE clause"
     assert "PARTIAL stub" in src, (
         "the directive must tell the LLM to fall back to a partial "
@@ -2935,7 +2948,7 @@ def test_prompt_deliverable_deadline_uses_effective_timeout() -> None:
     SAME formula the heartbeat loop uses (`_agent_complexity_timeout`
     applied to the user's flat budget). Otherwise complexity-bumped
     iters tell the LLM the wrong number."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     bc_idx = src.find("budget_clause = (")
     assert bc_idx >= 0
@@ -2951,7 +2964,7 @@ def test_cmd_bringup_handoff_to_chat_respects_quiet_flag() -> None:
     `quiet_handoff=True`, `cmd_bringup --handoff-to-chat` must NOT
     print the manual-flow walkthrough (which tells users to paste
     something into Cursor chat — irrelevant in auto mode)."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert 'getattr(args, "quiet_handoff", False)' in src, (
         "cmd_bringup must read `quiet_handoff` from the argv namespace "
         "and gate the manual-flow walkthrough on it being False"
@@ -2961,7 +2974,7 @@ def test_cmd_bringup_handoff_to_chat_respects_quiet_flag() -> None:
 def test_auto_loop_passes_quiet_handoff_true() -> None:
     """Bug E: the auto-loop's handoff_argv namespace must include
     `quiet_handoff=True` so the walkthrough is suppressed."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     h_idx = src.find("handoff_argv = argparse.Namespace(")
     assert h_idx >= 0
@@ -2977,7 +2990,7 @@ def test_partial_cpu_override_not_clobbered_by_reclassify() -> None:
     unconditionally three lines later and returned OTHER (no
     PARTIAL_CPU rule). That silently destroyed the override on every
     partial-CPU iter."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     assert 'failure_class != "PARTIAL_CPU_FALLBACK"' in src, (
         "auto-loop must guard the re-classify call so the PARTIAL_CPU " "override survives (Bug #1)"
@@ -2993,7 +3006,7 @@ def test_failure_class_initialized_before_partial_cpu_override() -> None:
     variable undefined and raising `UnboundLocalError`. Pre-
     initialize the variable to "" before the override branch so
     the guard's comparison is always safe."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     block_idx = src.find("_target_partial_cpu_info: Dict[str, List[str]] = (")
     assert block_idx >= 0
@@ -3017,7 +3030,7 @@ def test_regression_guard_records_failure_before_continue() -> None:
     previous version and `continue`s. Without recording the failure,
     `consecutive_same_class_attempts` never advances and the cap is
     bypassed indefinitely."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     rg_idx = src.find('"REGRESSION GUARD:')
     if rg_idx < 0:
@@ -3043,7 +3056,7 @@ def test_regression_pop_clears_all_per_component_state() -> None:
     and `last_pcc_per_component` leaves stale state that can both under-
     cap (stale low consec on a restored bad component) and over-cap
     (stale at-cap consec on a restored good component)."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     pop_idx = src.find("attempts_per_component.pop(r, None)")
     assert pop_idx >= 0
@@ -3062,7 +3075,7 @@ def test_empty_agent_records_before_cap_check() -> None:
     `_record_failure_for_component`, so the failure that would push the
     consec counter to cap didn't trigger same-iter fallback — wasting
     one extra iter."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     ec_idx = src.find("consecutive_empty_agent_calls += 1")
     assert ec_idx >= 0
@@ -3084,7 +3097,7 @@ def test_preflight_hang_seeds_record_failure() -> None:
     would then record the actual failure with `prev_class=""` (first
     failure observed = progress!), resetting the counter to 1 instead
     of accumulating the HANG that already cost the pre-flight budget."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     pfh_idx = src.find("pre-flight HANG: targeting")
     assert pfh_idx >= 0
@@ -3101,7 +3114,7 @@ def test_pick_target_all_at_cap_fallback_not_alphabetic() -> None:
     candidate_pool)[0]` — duplicating the alphabetical fixation
     pattern Bug A fixed elsewhere. Should use the same fair-rotation
     key (least attempts, then consec, then alphabetic)."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     pick_idx = src.find("def _pick_target() -> str:")
     assert pick_idx >= 0
     window = src[pick_idx : pick_idx + 4000]
@@ -3117,7 +3130,7 @@ def test_auto_loop_captures_apply_all_responses_return_code() -> None:
     """Bug #11: `cmd_bringup(apply_argv)` can return 3 on syntax-error
     / empty-apply. Previously the loop ignored this and ran pytest on
     whatever was on disk, wasting another 30-60s of TT hardware time."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     assert "apply_rc = cmd_bringup(apply_argv)" in src, (
         "auto-loop must capture cmd_bringup's return code from " "apply_all_responses (Bug #11)"
@@ -3139,7 +3152,7 @@ def test_regression_sweep_hang_records_hang() -> None:
     the loop silently continued with no record of failure and no
     rollback — leaving any partial regression state on disk and
     proceeding as if nothing happened."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     rs_idx = src.find("regression sweep hung")
     assert rs_idx >= 0
@@ -3158,7 +3171,7 @@ def test_record_failure_no_cap_advance_before_llm_invocation() -> None:
     Phase-1 autofill failure capped out the component without
     Claude ever getting to try. This test pins the guard that makes
     the cap-counter strictly an LLM-iteration counter."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     def_idx = src.find("def _record_failure_for_component(")
     assert def_idx >= 0
@@ -3194,7 +3207,7 @@ def test_record_failure_pre_llm_still_records_class_and_pcc() -> None:
     `prev_class` to compare against and the progress detector defaults
     to "first failure" (counter=1) — which is fine, but loses the
     diagnostic continuity."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     def_idx = src.find("def _record_failure_for_component(")
     body = src[def_idx : def_idx + 8000]
     guard_idx = body.find("attempts_per_component.get(comp, 0) == 0")
@@ -3404,7 +3417,7 @@ def test_convergence_path_emits_and_verifies_demo() -> None:
     `_emit_and_verify_runnable_demo(MODEL)` so a green banner implies
     `pytest demo.py::test_demo` is also green. Without this hook the
     user has to debug a broken demo manually every time."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     conv_idx = src.find('banner(f"AUTO-ITERATE converged after')
     assert conv_idx >= 0, "auto-loop must have a converged banner"
@@ -3424,7 +3437,7 @@ def test_emit_and_verify_helper_uses_subprocess_pytest() -> None:
       - The args contain `pytest` and `::test_demo`.
       - There's a non-zero timeout so a hung pytest doesn't wedge the
         whole convergence path."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     helper_idx = src.find("def _emit_and_verify_runnable_demo(")
     assert helper_idx >= 0, "helper must exist"
     body = src[helper_idx : helper_idx + 4000]
@@ -3444,7 +3457,7 @@ def test_up_and_promote_have_regen_demo_only_flag() -> None:
     case where the user has an already-converged model and wants to
     regenerate + verify the demo without re-iterating Claude (e.g.
     after a git pull clobbered demo.py)."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     occurrences = src.count('"--regen-demo-only"')
     assert occurrences >= 2, (
@@ -3492,7 +3505,7 @@ def test_memory_fit_gate_helper_exists_and_classifies_three_outcomes() -> None:
       * "no-fit"  — abort BEFORE scaffold/autofill/LLM iteration.
       * "unknown" — no LLM-style memory model (vision / multi-modal);
                     let the compat gate be the source of truth."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert "def _check_memory_fit_before_llm(" in src, (
         "_check_memory_fit_before_llm helper must be defined in cli.py " "to pre-gate LLM iteration on planner verdicts"
     )
@@ -3520,7 +3533,7 @@ def test_memory_fit_gate_enforcer_short_circuits_on_no_fit() -> None:
       2. Return None for the 'fit' and 'unknown' cases (proceed).
     The gate has no opt-out flag: memory budgets are hardware-
     determined, and an LLM rewrite cannot shrink a too-large model."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert "def _enforce_memory_fit_or_abort(" in src, "_enforce_memory_fit_or_abort wrapper must be defined in cli.py"
     fn_idx = src.find("def _enforce_memory_fit_or_abort(")
     body = src[fn_idx : fn_idx + 5000]
@@ -3539,7 +3552,7 @@ def test_cmd_up_and_promote_call_memory_fit_gate_before_llm() -> None:
     memory-fit gate before any path that could lead to LLM iteration
     (scaffold for cmd_up; the auto-iterate loop for cmd_promote).
     Otherwise the helper exists but is dead code."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     for fn_name in ("def cmd_up(", "def cmd_promote("):
         fn_idx = src.find(fn_name)
         assert fn_idx >= 0, f"{fn_name} must exist in cli.py"
@@ -3724,7 +3737,7 @@ def test_cmd_up_runs_env_check_for_supported_models() -> None:
     Otherwise environment incompatibilities only surface as runtime
     crashes inside the demo (the exact bad UX this pre-check is
     designed to prevent)."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     assert fn_idx >= 0
     block = src[fn_idx : fn_idx + 25000]
@@ -3746,7 +3759,7 @@ def test_cmd_up_skips_meta_plan_for_already_supported_models() -> None:
       - `_already_supported` check is computed BEFORE the meta-plan
       - the meta-plan call is guarded by `not _already_supported`
     """
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     assert fn_idx >= 0
     block = src[fn_idx : fn_idx + 20000]
@@ -3772,7 +3785,7 @@ def test_cmd_up_prepare_argv_uses_sane_defaults_not_none() -> None:
     pytest then rejected with `invalid int value: 'None'`. Pin:
     use the same defaults the `prepare` parser registers (1024
     and 200)."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     assert fn_idx >= 0
 
@@ -3809,7 +3822,7 @@ def test_cmd_up_auto_routes_generic_llm_backends_to_prepare_execute() -> None:
     "no closest already-ported sibling found" - a contradiction
     because Step 1 already announced "Backend match: GENERIC".
     This hit Gemma-2-27b after ~70 minutes of weight download."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     assert fn_idx >= 0
     block = src[fn_idx : fn_idx + 30000]
@@ -3835,7 +3848,7 @@ def test_audit_bug_1_generic_routing_uses_correct_probe_import() -> None:
     `_generic_backend_picked` was ALWAYS False. Result: Gemma-2-27b
     still hit the scaffold abort despite the fix. Pin the correct
     import name."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert "from .hf_probe import" not in src, (
         "cmd_up must NOT import from .hf_probe (module doesn't exist); " "the correct module is .probe"
     )
@@ -3852,7 +3865,7 @@ def test_audit_bug_2_generic_fast_path_rejects_partial_blocks() -> None:
     (sliding-window+chunked-prefill, MoE adaptations, vision tower)
     through to `prepare --execute` where they crash at runtime. Pin
     the tighter gate: only `READY` with zero PARTIAL too."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     block = src[fn_idx : fn_idx + 25000]
 
@@ -3912,7 +3925,7 @@ def test_audit_bug_5_meta_plan_skipped_for_generic_llm_route() -> None:
     (full weight load + LLM call) for a model that goes straight to
     `prepare --execute`. Pin that meta-plan is skipped when
     `_route_via_generic_llm`."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     block = src[fn_idx : fn_idx + 25000]
     meta_idx = block.find("_run_advisory_meta_plan(")
@@ -3928,7 +3941,7 @@ def test_audit_bug_6_env_compat_check_fires_before_scaffold_path() -> None:
     -> autofill -> prepare -> pytest still crashed at runtime
     instead of aborting upfront with the clear banner. Pin the
     early call."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     block = src[fn_idx : fn_idx + 25000]
 
@@ -3965,7 +3978,7 @@ def test_audit_bug_11_unknown_load_errors_do_not_trigger_pip_upgrade() -> None:
     OOM, etc.) still ran `pip install -U transformers`. That's
     wasteful and misleading. Pin that only `version` errors
     trigger the upgrade."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _preflight_load_with_autofix(")
     assert fn_idx >= 0
     body = src[fn_idx : fn_idx + 4000]
@@ -4195,7 +4208,7 @@ def test_cmd_up_calls_register_bringup_success_on_cold_start_success() -> None:
     call `_register_bringup_success` after `cmd_prepare` returns 0.
     Without this, the next time the same arch is requested it still
     has to go through inline auto-onboard."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     assert fn_idx >= 0
     block = src[fn_idx : fn_idx + 50000]
@@ -4230,7 +4243,7 @@ def test_cmd_up_calls_register_bringup_success_on_iterate_loop_graduation() -> N
     call _register_bringup_success when the loop graduates (rc == 0).
     Without this, hours of iteration are wasted because the next
     similar model has to go through inline auto-onboard AGAIN."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     block = src[fn_idx : fn_idx + 60000]
     loop_idx = block.find("_run_auto_iterate_loop(")
@@ -4389,7 +4402,7 @@ def test_cmd_up_catches_cold_start_and_routes_to_prepare_execute() -> None:
     cold-start banner, and call cmd_prepare(execute=True). Without this
     wiring the new ColdStartScaffoldError just bubbles up as a plain
     error and the user sees an abort -- defeating the whole feature."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     assert fn_idx >= 0
     block = src[fn_idx : fn_idx + 40000]
@@ -4481,7 +4494,7 @@ def test_audit_bug_19_env_compat_check_catches_hard_coded_grid_literals() -> Non
     without an adjacent `_dispatch_safe_grid`, and surfaces them as
     problems. This stops future regressions where someone reverts a
     SDPA/QKV/MLP migration."""
-    cli_src = Path(cli.__file__).read_text()
+    cli_src = _planner_source()
     fn_idx = cli_src.find("def _check_demo_environment_compat(")
     assert fn_idx >= 0
     body = cli_src[fn_idx : fn_idx + 8000]
@@ -4523,7 +4536,7 @@ def test_audit_bug_22_cmd_compat_returns_nonzero_for_targeted_with_missing_block
     then proceed to scaffold + waste an LLM iteration. Pin that
     cmd_compat now returns non-zero when ANY needed block is MISSING,
     regardless of `report.overall` text."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def cmd_compat(")
     assert fn_idx >= 0
     body = src[fn_idx : fn_idx + 6000]
@@ -4618,7 +4631,7 @@ def test_cmd_up_auto_routes_already_supported_to_prepare_execute() -> None:
         next-step hint)
       - cmd_scaffold is NOT called in the supported path
     """
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     assert fn_idx >= 0
 
@@ -4746,7 +4759,7 @@ def test_meta_plan_extract_json_handles_markdown_fences() -> None:
 def test_cmd_up_runs_meta_plan_by_default_and_no_meta_plan_disables_it() -> None:
     """Wiring test: cmd_up must call `_run_advisory_meta_plan` after
     the backend gate, AND must honor `--no-meta-plan` to disable."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     assert fn_idx >= 0
     block = src[fn_idx : fn_idx + 25000]
@@ -4768,7 +4781,7 @@ def test_cmd_up_runs_meta_plan_by_default_and_no_meta_plan_disables_it() -> None
 def test_up_has_no_meta_plan_flag() -> None:
     """The `--no-meta-plan` flag must be registered on `up` so users
     have a documented opt-out."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert '"--no-meta-plan"' in src, "--no-meta-plan must be registered on the `up` parser"
 
 
@@ -4944,7 +4957,7 @@ def test_auto_onboard_subcommand_registered() -> None:
     `python -m scripts.tt_hw_planner auto-onboard <model_id>` works.
     Also must accept `--accept` (write to disk) and `--skip-llm`
     (offline mode)."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
 
     assert '"auto-onboard"' in src, "auto-onboard must be in SUBCOMMANDS allowlist"
 
@@ -4956,7 +4969,11 @@ def test_auto_onboard_subcommand_registered() -> None:
         "auto-onboard must expose --accept (write to disk) and " "--skip-llm (offline dry-run) flags"
     )
 
-    assert "def cmd_auto_onboard(" in src, "cmd_auto_onboard must be defined"
+    from scripts.tt_hw_planner.commands import auto_onboard as _ao_cmd_mod
+
+    assert (
+        "def cmd_auto_onboard(" in Path(_ao_cmd_mod.__file__).read_text()
+    ), "cmd_auto_onboard must be defined in scripts/tt_hw_planner/commands/auto_onboard.py"
 
 
 def test_module_tree_discover_finds_high_level_components() -> None:
@@ -5212,7 +5229,7 @@ def test_loud_fallback_gate_never_aborts_uses_auto_onboard_inline() -> None:
       - PROCEEDs if `accept_closest=True` regardless (explicit
         user override).
     """
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _enforce_backend_match_quality_or_abort(")
     assert fn_idx >= 0, "_enforce_backend_match_quality_or_abort must be defined in cli.py"
     body = src[fn_idx : fn_idx + 12000]
@@ -5256,7 +5273,7 @@ def test_try_auto_onboard_inline_helper_exists_and_is_safe() -> None:
       meaning "try the closest-template fallback instead".
     - On success, return (backend, quality) re-picked from
       `pick_backend_with_quality`."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def _try_auto_onboard_inline(")
     assert fn_idx >= 0, "cli.py must define `_try_auto_onboard_inline` " "(the inline auto-onboard helper)"
     body = src[fn_idx : fn_idx + 6000]
@@ -5280,7 +5297,7 @@ def test_cmd_up_calls_loud_fallback_gate() -> None:
     """Wiring test: `cmd_up` must invoke the loud-fallback gate after
     the memory-fit gate and before scaffold. Otherwise the helper
     exists but is dead code."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     assert fn_idx >= 0
     block = src[fn_idx : fn_idx + 12000]
@@ -5299,7 +5316,7 @@ def test_up_has_accept_closest_backend_flag() -> None:
     so users have a documented escape hatch when they've manually
     verified that the closest-by-category template backend is
     structurally similar enough to their new architecture."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert '"--accept-closest-backend"' in src, "--accept-closest-backend must be registered on the `up` parser"
 
 
@@ -5313,7 +5330,7 @@ def test_memory_fit_gate_has_no_user_facing_opt_out() -> None:
     (a dry-run flag). If a future workflow genuinely needs an
     escape hatch, the right move is to make the planner's memory
     model less conservative, not to add a bypass."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert '"--allow-overcommit"' not in src, (
         "memory-fit gate must NOT have an --allow-overcommit override; " "if the planner is wrong, fix the planner"
     )
@@ -5478,7 +5495,7 @@ def test_cli_exposes_pcc_probe_layers_flag() -> None:
     --auto users have no way to opt into the new probe; a missing
     `layers` choice removes the only mode that fires the HF
     reference forward pass."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert '"--pcc-probe"' in src, (
         "cli.py must register the --pcc-probe argparse flag for the " "decode-mode per-layer probe"
     )
@@ -5492,7 +5509,7 @@ def test_pcc_repair_loop_accepts_pcc_probe_kwarg() -> None:
     structural: parse the function signature off the source so the
     test doesn't depend on importing the (heavy) cli module under
     pytest's collection."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     sig_anchor = src.find("def _pcc_repair_loop(")
     assert sig_anchor != -1, "cli.py must define _pcc_repair_loop"
     closing = src.find(") -> int:", sig_anchor)
@@ -5510,7 +5527,7 @@ def test_pcc_repair_loop_threads_pcc_probe_through_call_sites() -> None:
     -- otherwise the cli flag silently defaults to "none" on whichever
     branch was missed. A regression that adds a third call site
     without threading the kwarg would silently disable the probe."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     call_marker = "_pcc_repair_loop("
     start = 0
     invocations = 0
@@ -5558,7 +5575,7 @@ def test_maybe_run_decode_layer_probe_returns_empty_on_disabled_flag() -> None:
     directly under pytest collection (the cli module is heavy and
     has top-level torch imports), so we verify the structural
     guard via source inspection."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     helper_anchor = src.find("def _maybe_run_decode_layer_probe(")
     assert helper_anchor != -1, (
         "cli.py must define _maybe_run_decode_layer_probe as the " "wrapper that decides whether to load the HF model"
@@ -5583,7 +5600,7 @@ def test_decode_layer_probe_cache_present_for_iteration_reuse() -> None:
     that see the same collapse signature. A regression that drops the
     cache forces the HF model load on every iteration (~30s wasted
     per iter)."""
-    src = Path(cli.__file__).read_text()
+    src = _planner_source()
     assert "_DECODE_LAYER_PROBE_CACHE" in src, (
         "cli.py must define _DECODE_LAYER_PROBE_CACHE so consecutive "
         "PCC-repair iterations with the same collapse signature reuse "
