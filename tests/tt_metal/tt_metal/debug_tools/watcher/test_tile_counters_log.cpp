@@ -74,8 +74,6 @@ void RunTest(
         .entry_size = TILE_SIZE,
         .num_entries = NUM_ENTRIES_PER_DFB,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        // Legacy enable_implicit_sync = false -> disable_implicit_sync = true.
-        .disable_implicit_sync = true,
     };
 
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_tile_counters.cpp";
@@ -95,7 +93,8 @@ void RunTest(
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {TILE_COUNTER_DFB}}},
     };
 
     // NEO compute consumer kernel (4 threads = 4 Neo clusters)

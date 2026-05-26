@@ -227,7 +227,8 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx1SConfig) {
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -256,7 +257,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4SConfig) {
         .consumer_risc_mask = 0x1E,
         .num_consumers = 4,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -290,7 +292,8 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB4Sx1SConfig) {
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -322,7 +325,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1SConfig) {
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -354,7 +358,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4SConfig) {
         .consumer_risc_mask = 0xF0,
         .num_consumers = 4,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -386,7 +391,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4SConfig) {
         .consumer_risc_mask = 0x3C,
         .num_consumers = 4,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -424,7 +430,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2SConfig) {
         .consumer_risc_mask = 0x30,
         .num_consumers = 2,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -456,7 +463,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx1BConfig) {
         .consumer_risc_mask = 0x2,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -485,7 +493,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4BConfig) {
         .consumer_risc_mask = 0x1E,
         .num_consumers = 4,
         .cap = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -519,7 +528,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1BConfig) {
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -551,7 +561,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4BConfig) {
         .consumer_risc_mask = 0xF0,
         .num_consumers = 4,
         .cap = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -607,7 +618,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2BConfig) {
         .consumer_risc_mask = 0x30,
         .num_consumers = 2,
         .cap = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -658,7 +670,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4BConfig) {
         .consumer_risc_mask = 0x3C,
         .num_consumers = 4,
         .cap = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -746,7 +759,8 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_NoImplicitSync) {
         .consumer_risc_mask = 0x2,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));  // 2 cores: (0,0) and (1,0)
@@ -807,7 +821,8 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_ImplicitSync) {
         .consumer_risc_mask = 0x2,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = true};
+        .enable_producer_implicit_sync = true,
+        .enable_consumer_implicit_sync = true};
 
     Program program = CreateProgram();
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));  // 2 cores
@@ -844,7 +859,8 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup) {
         .consumer_risc_mask = 0x2,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     // 4 cores in a 2x2 grid — all identical config → should produce 1 DfbGroup.
@@ -920,7 +936,8 @@ TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1SConfig) {
         .consumer_risc_mask = 0x100,  // bit 8 = Neo0 (same as producer — intentional for INTRA)
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false,
         .tensix_scope = experimental::dfb::TensixScope::INTRA};
 
     Program program = CreateProgram();

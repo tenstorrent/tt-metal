@@ -105,11 +105,6 @@ struct DataflowBufferSpec {
     //     (derived from their bound kernels' WorkUnitSpecs).
     using DFBIdentifiers = std::vector<DFBSpecName>;
     DFBIdentifiers alias_with;  // empty vector means no aliasing
-
-    // Disable implicit sync
-    // Implicit sync is handled via ISR (available on Gen2 only)
-    // Disabling may be useful in niche cases for fine tuning performance or performance debug.
-    bool disable_implicit_sync = false;
 };
 
 // NOTE: Remote DataflowBuffer is not yet supported!

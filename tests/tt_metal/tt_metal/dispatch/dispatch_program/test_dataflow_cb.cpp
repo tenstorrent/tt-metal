@@ -155,7 +155,8 @@ TEST_F(MeshDispatchFixture, DataflowDfb) {
         .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
         .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false,
         .data_format = tt::DataFormat::Float16_b};
 
     std::vector<uint32_t> dfb_ids(total_dfbs);

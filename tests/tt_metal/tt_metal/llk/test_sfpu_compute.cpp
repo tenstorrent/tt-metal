@@ -216,21 +216,17 @@ bool run_sfpu_all_same_buffer(
     constexpr const char* WRITER = "writer";
     constexpr const char* COMPUTE = "compute";
 
-    // Legacy DataflowBufferConfig set enable_implicit_sync = false on both DFBs;
-    // mirror that with disable_implicit_sync = true.
     experimental::metal2_host_api::DataflowBufferSpec in_dfb_spec{
         .unique_id = IN_DFB,
         .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
         .num_entries = static_cast<uint32_t>(test_config.num_tiles),
         .data_format_metadata = test_config.l1_input_data_format,
-        .disable_implicit_sync = true,
     };
     experimental::metal2_host_api::DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
         .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
         .num_entries = static_cast<uint32_t>(test_config.num_tiles),
         .data_format_metadata = test_config.l1_output_data_format,
-        .disable_implicit_sync = true,
     };
 
     experimental::metal2_host_api::KernelSpec reader_spec{

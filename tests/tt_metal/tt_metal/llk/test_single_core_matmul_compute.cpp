@@ -571,7 +571,8 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
                     .consumer_risc_mask = consumer_mask,
                     .num_consumers = 1,
                     .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-                    .enable_implicit_sync = false,
+                    .enable_producer_implicit_sync = false,
+                    .enable_consumer_implicit_sync = false,
                     .data_format = tt::DataFormat::Float16_b});
         };
         in0_id = make_dfb(cb_page_size, M * K, 0x1, 0x100);
@@ -587,7 +588,8 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
                 .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
                 .num_consumers = 1,
                 .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-                .enable_implicit_sync = false,
+                .enable_producer_implicit_sync = false,
+                .enable_consumer_implicit_sync = false,
                 .data_format = tt::DataFormat::Float16_b,
                 .tensix_scope = tt_metal::experimental::dfb::TensixScope::INTRA});
     } else {

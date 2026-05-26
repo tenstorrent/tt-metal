@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <bit>
 #include <functional>
 #include <limits>
@@ -676,19 +677,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 "KernelSpec '{}' must specify a DM config for Gen1, Gen2, or both.",
                 kernel.unique_id);
 
-            // The config for the current target architecture must be specified.
-            if (is_gen2_arch()) {
-                TT_FATAL(
-                    data_movement_config.gen2_data_movement_config.has_value(),
-                    "KernelSpec '{}' must specify a Gen2 DM config when targeting Quasar.",
-                    kernel.unique_id);
-            } else if (is_gen1_arch()) {
+            // Gen1 builds still require an explicit Gen1 config (its fields — processor, NOC,
+            // NOC mode — have no universally-safe defaults). Gen2 is fully optional even on
+            // Gen2 builds: absence is treated as "use defaults" (empty disable_implicit_sync_for).
+            if (is_gen1_arch()) {
                 TT_FATAL(
                     data_movement_config.gen1_data_movement_config.has_value(),
                     "KernelSpec '{}' must specify a Gen1 DM config when targeting WH or BH.",
                     kernel.unique_id);
-            } else {
-                TT_FATAL(false, "Unknown architecture");
             }
         }
     }
@@ -839,6 +835,80 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             "KernelSpec '{}' has semaphore bindings. "
             "Semaphore bindings are not supported for compute kernels.",
             kernel.unique_id);
+    }
+
+    // Validate DM kernel disable_implicit_sync_for entries.
+    //
+    // Implicit sync is a Gen2-only, DM-only mechanism (ISR-based credit posting from NoC
+    // transaction completion). Each DM kernel can opt out per-DFB by listing the DFB's name
+    // in its Gen2DataMovementConfig::disable_implicit_sync_for vector. The opt-out applies to
+    // the side(s) of the DFB this kernel binds (producer, consumer, or both for a self-loop).
+    //
+    // Per-kernel rule: every listed name references a DFB the kernel binds (typo guard).
+    //
+    // Cross-kernel rule (per DFB): on each side independently, all DM kernels must agree —
+    // either all list the DFB, or none do. (Producer-side and consumer-side are checked
+    // separately; the underlying hardware mechanism is per-side, with one mask per side.)
+    {
+        // Per-kernel pass: typo guard.
+        for (const auto& kernel : spec.kernels) {
+            if (!kernel.is_dm_kernel()) {
+                continue;
+            }
+            const auto& dm_config = std::get<DataMovementConfiguration>(kernel.config_spec);
+            if (!dm_config.gen2_data_movement_config.has_value()) {
+                continue;
+            }
+            std::unordered_set<DFBSpecName> bound_dfbs;
+            for (const auto& binding : kernel.dfb_bindings) {
+                bound_dfbs.insert(binding.dfb_spec_name);
+            }
+            for (const auto& dfb_name : dm_config.gen2_data_movement_config->disable_implicit_sync_for) {
+                TT_FATAL(
+                    bound_dfbs.contains(dfb_name),
+                    "Kernel '{}' disable_implicit_sync_for entry references DFB '{}', which the kernel does not bind",
+                    kernel.unique_id,
+                    dfb_name);
+            }
+        }
+
+        // Cross-kernel pass: per-DFB producer-side and consumer-side agreement.
+        // Note: a single DFB can be bound by multiple producer KernelSpecs and multiple
+        // consumer KernelSpecs — ops sometimes specialize the same kernel source by CTAs,
+        // producing several KernelSpecs that share a DFB.
+        auto check_side_agreement =
+            [&](const std::vector<CollectedSpecData::DFBEndpointInfo::EndpointRecord>& endpoints,
+                const DFBSpecName& dfb_name,
+                std::string_view side_label) {
+                const KernelSpec* canonical = nullptr;
+                bool canonical_lists_dfb = false;
+                for (const auto& ep : endpoints) {
+                    if (!ep.kernel->is_dm_kernel()) {
+                        continue;
+                    }
+                    const auto& dm_config = std::get<DataMovementConfiguration>(ep.kernel->config_spec);
+                    if (!dm_config.gen2_data_movement_config.has_value()) {
+                        // Gen1-only DM kernel — can't physically participate in Gen2 implicit sync; abstains.
+                        continue;
+                    }
+                    const auto& vec = dm_config.gen2_data_movement_config->disable_implicit_sync_for;
+                    const bool lists_dfb = std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
+                    if (canonical == nullptr) {
+                        canonical = ep.kernel;
+                        canonical_lists_dfb = lists_dfb;
+                        continue;
+                    }
+                    TT_FATAL(
+                        lists_dfb == canonical_lists_dfb,
+                        "DFB '{}' has disagreeing disable_implicit_sync_for state on the {} side",
+                        dfb_name,
+                        side_label);
+                }
+            };
+        for (const auto& [dfb_name, endpoint_info] : collected.dfb_endpoints) {
+            check_side_agreement(endpoint_info.producers, dfb_name, "producer");
+            check_side_agreement(endpoint_info.consumers, dfb_name, "consumer");
+        }
     }
 
     //////////////////////////////////
@@ -1984,6 +2054,29 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
                            : experimental::dfb::TensixScope::INTER;  // currently blocked in validation
     }
 
+    // Compute the per-side implicit-sync value by polling the bound DM kernels' Gen2 votes.
+    // Sides with no DM endpoints get implicit_sync=false (no DM endpoint to enable it for).
+    // Validator guarantees per-side agreement among DM kernels, so any DM kernel's vote works.
+    auto side_implicit_sync_enabled =
+        [&](const std::vector<CollectedSpecData::DFBEndpointInfo::EndpointRecord>& endpoints) -> bool {
+        bool any_dm = false;
+        bool disabled = false;
+        for (const auto& ep : endpoints) {
+            if (!ep.kernel->is_dm_kernel()) {
+                continue;
+            }
+            any_dm = true;
+            const auto& dm_config = std::get<DataMovementConfiguration>(ep.kernel->config_spec);
+            if (!dm_config.gen2_data_movement_config.has_value()) {
+                continue;
+            }
+            const auto& vec = dm_config.gen2_data_movement_config->disable_implicit_sync_for;
+            if (std::find(vec.begin(), vec.end(), dfb_spec->unique_id) != vec.end()) {
+                disabled = true;
+            }
+        }
+        return any_dm && !disabled;
+    };
     return experimental::dfb::DataflowBufferConfig{
         .entry_size = dfb_spec->entry_size,
         .num_entries = dfb_spec->num_entries,
@@ -1993,7 +2086,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .consumer_risc_mask = consumer_risc_mask,
         .num_consumers = consumer->num_threads,
         .cap = consumer_access_pattern,
-        .enable_implicit_sync = !dfb_spec->disable_implicit_sync,
+        .enable_producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers),
+        .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
         .tensix_scope = tensix_scope,
