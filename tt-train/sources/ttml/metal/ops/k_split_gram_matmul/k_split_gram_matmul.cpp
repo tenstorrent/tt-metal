@@ -13,7 +13,7 @@ namespace ttml::metal {
 ttnn::Tensor gram_matmul(
     const ttnn::Tensor& input,
     OutputMode output_mode,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     using namespace ops::k_split_gram_matmul::device;
     operation_attributes_t attrs{.output_mode = output_mode, .math_fidelity = math_fidelity};

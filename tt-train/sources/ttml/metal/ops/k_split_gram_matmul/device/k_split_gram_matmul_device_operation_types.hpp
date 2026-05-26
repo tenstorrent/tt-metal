@@ -12,7 +12,7 @@ namespace ttml::metal::ops::k_split_gram_matmul::device {
 
 struct operation_attributes_t {
     ttml::metal::OutputMode output_mode = ttml::metal::OutputMode::UpperTriangle;
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
 };
 
 struct tensor_args_t {

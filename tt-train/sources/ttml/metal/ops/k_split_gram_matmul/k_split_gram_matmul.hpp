@@ -64,7 +64,7 @@ namespace ttml::metal {
 ttnn::Tensor gram_matmul(
     const ttnn::Tensor& input,
     OutputMode output_mode = OutputMode::UpperTriangle,
-    MathFidelity math_fidelity = MathFidelity::HiFi4,
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 
 }  // namespace ttml::metal
