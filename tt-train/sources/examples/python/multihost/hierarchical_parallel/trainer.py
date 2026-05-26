@@ -68,7 +68,6 @@ def worker(
     use_ddp: bool = False,
     use_tp: bool = False,
     num_workers: int = None,
-    use_vocab_parallel_loss: bool = False,
 ):
     """Execute worker training loop.
 
@@ -84,16 +83,13 @@ def worker(
         use_ddp: Whether to use distributed data parallel
         use_tp: Whether to use tensor parallel
         num_workers: Number of worker ranks (if None, assumes 3-tier with world_size - 2)
-        use_vocab_parallel_loss: Whether the model emits vocab-sharded logits and
-            therefore expects ``ttml.ops.distributed.vocab_parallel_cross_entropy_loss``.
-            Should be sourced from ``TransformerModelFactory.use_vocab_parallel_loss``.
 
     Returns:
         Tuple of (train_losses, val_losses) lists
     """
     # Setup loss function and causal mask
     reduce = ttml.ops.ReduceType.MEAN
-    tp_cluster_axis = ttml.mesh().axis_index("tp") if use_vocab_parallel_loss else None
+    tp_cluster_axis = ttml.mesh().axis_index("tp") if use_tp else None
 
     causal_mask = build_causal_mask(cfg.seq_len)
     tt_mask = ttml.autograd.Tensor.from_numpy(
@@ -149,7 +145,7 @@ def worker(
 
             # Forward and backward pass
             logits = model(tt_x, tt_mask)
-            if use_vocab_parallel_loss:
+            if use_tp:
                 loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
                     logits, tt_y, cluster_axis=tp_cluster_axis
                 )
