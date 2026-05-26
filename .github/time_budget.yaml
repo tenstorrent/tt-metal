@@ -102,7 +102,7 @@ ttnn:
 
 shield:
   e2e:
-    wh_llmbox: 60
+    wh_llmbox: 45
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
@@ -213,7 +213,7 @@ models:
     wh_galaxy: 0
     wh_galaxy_perf: 150
     wh_galaxy_release: 345
-    bh_galaxy: 280
+    bh_galaxy: 295
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600

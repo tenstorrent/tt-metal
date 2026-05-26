@@ -12,6 +12,7 @@ on:
           - all
           - module
           - moe_gate
+          - moe
           - mla
           - prefill_block
           - prefill_transformer
