@@ -377,6 +377,7 @@ TEST_CONFIGS = [
             "measure_accuracy": False,
         },
         id="batch-32",
+        marks=pytest.mark.skip(reason="Disabled by issue #45107"),
     ),
 ]
 
