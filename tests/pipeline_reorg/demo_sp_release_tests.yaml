@@ -87,7 +87,7 @@
   team: models
 
 # ============================================================================
-# DeepSeek V3 B1 Host IO Tests (Blitz) - Blackhole P300
+# DeepSeek V3 B1 Host IO and Decoder Sweep Tests (Blitz) - Blackhole P300 and Galaxy
 # ============================================================================
 
 - name: bh_p300_DeepSeek_B1_HostIO
@@ -99,10 +99,6 @@
       timeout: 10
   owner_id: U03HY7MK4BT
   team: models
-
-# ============================================================================
-# DeepSeek V3 B1 Unit Tests (Blitz) - Blackhole Galaxy
-# ============================================================================
 
 - name: "Single Galaxy - Decoder Sweep vs reference (DeepSeek V3 B1)"
   cmd: |
@@ -130,6 +126,10 @@
       timeout: 20
   owner_id: U0ALAR9B78T # Brayden Zhang
   team: models
+
+# ============================================================================
+# DeepSeek V3 B1 Unit Tests (Blitz) - Blackhole Galaxy
+# ============================================================================
 
 - name: bh_galaxy_DeepSeek_B1_Unit_Tests_DecoderIntegration
   cmd: |
