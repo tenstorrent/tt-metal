@@ -21,6 +21,11 @@ inline void llk_wait_tiles(const std::int32_t dfb_id, const std::uint32_t num_ti
     uint32_t tc_id = dfb::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
 
     TT_WAIT_TILES(ckernel::p_stall::STALL_UNPACK, num_tiles, tc_id);
+    asm volatile("nop");
+    asm volatile("nop");
+    asm volatile("nop");
+    asm volatile("nop");
+    asm volatile("nop");
 }
 
 /**
