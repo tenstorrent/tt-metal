@@ -56,6 +56,90 @@ constexpr std::array<std::pair<uint32_t, uint32_t>, 20> kLegacyOrder = {{
 
 }  // namespace
 
+uint32_t dst_capacity_from_flags(bool fp32_dest_acc_en, bool dst_full_sync_en) {
+    // Mirrors ttnn::get_dest_reg_count for the standard 32x32 tile shape.
+    // Half-sync doubles the accessible DST tile count; fp32 accumulation halves it.
+    uint32_t base = dst_full_sync_en ? 8u : 16u;
+    if (fp32_dest_acc_en) {
+        base /= 2u;
+    }
+    return base;
+}
+
+std::vector<std::pair<uint32_t, uint32_t>> enumerate_subblock_options(
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    bool fp32_dest_acc_en,
+    bool dst_full_sync_en,
+    bool require_legacy_writer) {
+    std::vector<std::pair<uint32_t, uint32_t>> out;
+    if (per_core_M == 0 || per_core_N == 0) {
+        return out;
+    }
+    const uint32_t cap = dst_capacity_from_flags(fp32_dest_acc_en, dst_full_sync_en);
+
+    // (h, w, sort_key tuple {-volume, fast_path_flag, |h-w|}).
+    std::vector<std::tuple<uint32_t, uint32_t, std::tuple<int32_t, int32_t, int32_t>>> candidates;
+    for (uint32_t h = 1; h <= cap; ++h) {
+        if (per_core_M % h != 0) {
+            continue;
+        }
+        for (uint32_t w = 1; w <= cap; ++w) {
+            if (per_core_N % w != 0) {
+                continue;
+            }
+            if (h * w > cap) {
+                continue;
+            }
+            if (require_legacy_writer && !(h == 1 || w == per_core_N)) {
+                continue;
+            }
+            const int32_t volume = static_cast<int32_t>(h * w);
+            const int32_t fast_path = (h == 1 || w == 1) ? 0 : 1;
+            const int32_t hw_diff = static_cast<int32_t>(h > w ? h - w : w - h);
+            candidates.emplace_back(h, w, std::make_tuple(-volume, fast_path, hw_diff));
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+        return std::get<2>(a) < std::get<2>(b);
+    });
+    out.reserve(candidates.size());
+    for (const auto& [h, w, _key] : candidates) {
+        out.emplace_back(h, w);
+    }
+    return out;
+}
+
+std::pair<uint32_t, uint32_t> largest_subblock_from_flags(
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    bool fp32_dest_acc_en,
+    bool dst_full_sync_en,
+    bool require_legacy_writer) {
+    const auto options =
+        enumerate_subblock_options(per_core_M, per_core_N, fp32_dest_acc_en, dst_full_sync_en, require_legacy_writer);
+    return options.empty() ? std::pair<uint32_t, uint32_t>{1u, 1u} : options.front();
+}
+
+L1FootprintEstimate estimate_l1_footprint(const L1EstimateInputs& inputs) {
+    const uint64_t pm = inputs.per_core_M;
+    const uint64_t pn = inputs.per_core_N;
+    const uint64_t ibw = inputs.in0_block_w;
+    const uint64_t interm_bytes = inputs.interm_tile_bytes != 0 ? inputs.interm_tile_bytes : inputs.out_tile_bytes;
+
+    L1FootprintEstimate fp;
+    fp.out_buf_bytes = pm * pn * inputs.out_tile_bytes;
+    fp.interm_buf_bytes = (inputs.fuse_bias || inputs.tile_pack_row_major) ? pm * pn * interm_bytes : 0;
+    fp.in0_buf_bytes = static_cast<uint64_t>(inputs.num_buffered_blocks) * pm * ibw * inputs.in0_tile_bytes;
+    fp.in1_buf_bytes = static_cast<uint64_t>(inputs.num_buffered_blocks) * pn * ibw * inputs.in1_tile_bytes;
+    fp.estimated_bytes = fp.out_buf_bytes + fp.interm_buf_bytes + fp.in0_buf_bytes + fp.in1_buf_bytes;
+    fp.fits_wh = fp.estimated_bytes <= L1_BUDGET_BYTES_WORMHOLE;
+    fp.fits_bh = fp.estimated_bytes <= L1_BUDGET_BYTES_BLACKHOLE;
+    fp.headroom_wh = static_cast<int64_t>(L1_BUDGET_BYTES_WORMHOLE) - static_cast<int64_t>(fp.estimated_bytes);
+    fp.headroom_bh = static_cast<int64_t>(L1_BUDGET_BYTES_BLACKHOLE) - static_cast<int64_t>(fp.estimated_bytes);
+    return fp;
+}
+
 SubblockChoice determine_largest_subblock(const SubblockTuneInputs& inputs) {
     const uint32_t dst_capacity = ttnn::get_dest_reg_count(inputs.compute_kernel_config, inputs.tile_shape);
     const uint32_t max_h = inputs.max_subblock_h.value_or(UINT32_MAX);

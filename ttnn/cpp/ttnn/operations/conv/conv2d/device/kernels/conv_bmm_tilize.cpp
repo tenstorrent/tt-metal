@@ -521,7 +521,7 @@ void kernel_main() {
                 /*transpose=*/false,
                 packer_l1_acc,
                 last_block_target,
-                compute_kernel_lib::OutputCbTileOrder::SubblockGrouped,
+                compute_kernel_lib::OutputCBLayout::SubblockMajor,
                 compute_kernel_lib::matmul_config::InitMode::None,
                 compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
                 compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
@@ -569,7 +569,7 @@ void kernel_main() {
 #ifdef SFPU_OP_INIT_ACTIVATION
                 compute_kernel_lib::add_bias_bcast_rows<
                     compute_kernel_lib::BiasBroadcast::RowBroadcast,
-                    compute_kernel_lib::OutputCbTileOrder::SubblockGrouped,
+                    compute_kernel_lib::OutputCBLayout::SubblockMajor,
                     ConvSFPUPostCompute>(
                     cb_matmul_partials,
                     cb_bias,
@@ -580,7 +580,7 @@ void kernel_main() {
 #else
                 compute_kernel_lib::add_bias_bcast_rows<
                     compute_kernel_lib::BiasBroadcast::RowBroadcast,
-                    compute_kernel_lib::OutputCbTileOrder::SubblockGrouped>(
+                    compute_kernel_lib::OutputCBLayout::SubblockMajor>(
                     cb_matmul_partials, cb_bias, cb_untilize_mode_out, bias_shape, {}, bias_block_offset);
 #endif
 

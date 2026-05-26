@@ -28,11 +28,11 @@ void kernel_main() {
 
     // Factories that emit TILE_PACK_ROW_MAJOR want absolute-offset packing so writers
     // read tiles in row-major order. Multicast factories (no define) use sequential pack.
-    constexpr compute_kernel_lib::OutputCbTileOrder output_layout =
+    constexpr compute_kernel_lib::OutputCBLayout output_layout =
 #ifdef TILE_PACK_ROW_MAJOR
-        compute_kernel_lib::OutputCbTileOrder::RowGrouped;
+        compute_kernel_lib::OutputCBLayout::TileRowMajor;
 #else
-        compute_kernel_lib::OutputCbTileOrder::SubblockGrouped;
+        compute_kernel_lib::OutputCBLayout::SubblockMajor;
 #endif
 
     // Boot-time matmul init. Mirrors the precedent of every other migrated kernel

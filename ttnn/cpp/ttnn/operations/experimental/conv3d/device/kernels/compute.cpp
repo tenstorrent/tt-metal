@@ -312,7 +312,7 @@ void kernel_main() {
                                         /*transpose=*/false,
                                         /*packer_l1_acc=*/false,
                                         compute_kernel_lib::LastBlockTarget::Out,
-                                        compute_kernel_lib::OutputCbTileOrder::SubblockGrouped,
+                                        compute_kernel_lib::OutputCBLayout::SubblockMajor,
                                         compute_kernel_lib::matmul_config::InitMode::Short,
                                         compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
                                         compute_kernel_lib::InputPolicy::WaitAndRetainOnLastBlock>(

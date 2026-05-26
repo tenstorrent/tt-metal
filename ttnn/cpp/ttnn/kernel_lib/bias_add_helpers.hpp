@@ -10,7 +10,7 @@
 #include "api/debug/assert.h"
 #include "ttnn/cpp/ttnn/kernel_lib/buffer_compat.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"  // OutputCbTileOrder
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"  // OutputCBLayout
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
 
 namespace compute_kernel_lib {
@@ -34,7 +34,7 @@ enum class BiasBroadcast { RowBroadcast, Elementwise };
  * callers build with BiasAddShape::of(...). Mirrors MatmulBlockShape so the
  * surrounding call site reads consistently when the bias phase follows matmul.
  *
- * out_row_width is only consulted when tile_order == OutputCbTileOrder::RowGrouped;
+ * out_row_width is only consulted when tile_order == OutputCBLayout::TileRowMajor;
  * when 0 (default) the helper derives it from out_subblock_w * in1_num_subblocks.
  */
 struct BiasAddShape {
@@ -42,7 +42,7 @@ struct BiasAddShape {
     uint32_t in1_num_subblocks;  // Subblock count along N (mirror of MatmulBlockShape::in1_num_subblocks).
     uint32_t out_subblock_h;     // Subblock height in tiles (mirror of MatmulBlockShape::out_subblock_h).
     uint32_t out_subblock_w;     // Subblock width in tiles (mirror of MatmulBlockShape::out_subblock_w).
-    uint32_t out_row_width = 0;  // Row stride in tiles for RowGrouped pack; ignored when tile_order == SubblockGrouped.
+    uint32_t out_row_width = 0;  // Row stride in tiles for TileRowMajor pack; ignored when tile_order == SubblockMajor.
 
     // Argument order mirrors MatmulBlockShape::of's first four args, so the
     // bias call directly under a matmul_block call can reuse the same
@@ -94,9 +94,9 @@ struct NoPostBias {
  * the upstream matmul_block's layout so the intermediate CB is consumed in the right
  * order.
  *
- * CB flow (layout=SubblockGrouped): partials_cb (wait+pop per subblock) + bias_cb
+ * CB flow (layout=SubblockMajor): partials_cb (wait+pop per subblock) + bias_cb
  *          (caller owns wait/pop) --> out_cb (reserve+push per subblock).
- * CB flow (layout=RowGrouped):    partials_cb (wait+pop per M-row-group) + bias_cb
+ * CB flow (layout=TileRowMajor):    partials_cb (wait+pop per M-row-group) + bias_cb
  *          (caller owns wait/pop) --> out_cb (reserve+push per M-row-group).
  *
  * Uses 4-phase DST management (tile_regs_acquire/commit/wait/release).
@@ -111,10 +111,10 @@ struct NoPostBias {
  *
  *   broadcast         BiasBroadcast::RowBroadcast (default, add_tiles_bcast_rows) or
  *                     BiasBroadcast::Elementwise (add_tiles).
- *   tile_order     OutputCbTileOrder::SubblockGrouped (default) or OutputCbTileOrder::RowGrouped.
+ *   tile_order     OutputCBLayout::SubblockMajor (default) or OutputCBLayout::TileRowMajor.
  *                     Must match the upstream matmul_block's layout (so the intermediate
  *                     CB tile order produced by matmul_block matches what the bias helper
- *                     reads back). See OutputCbTileOrder in matmul_block_helpers.hpp.
+ *                     reads back). See OutputCBLayout in matmul_block_helpers.hpp.
  *   PostBiasFn        Functor called per output sub-block after bias addition, before
  *                     packing. Math-thread hook (called before tile_regs_commit). Use
  *                     for non-activation math-thread post-bias work; for fused activation
@@ -165,7 +165,7 @@ struct NoPostBias {
  *
  *   bias_buf.wait_front(Nt);
  *   add_bias_bcast_rows<BiasBroadcast::RowBroadcast,
- *                       OutputCbTileOrder::SubblockGrouped>(
+ *                       OutputCBLayout::SubblockMajor>(
  *       partials_buf, bias_buf, out_buf,
  *       BiasAddShape::of(
  *           Mt,    // in0_num_subblocks
@@ -187,7 +187,7 @@ struct NoPostBias {
  *   // The last BiasAddShape::of arg is out_row_width.
  *   add_bias_bcast_rows<
  *       BiasBroadcast::RowBroadcast,
- *       OutputCbTileOrder::RowGrouped>(
+ *       OutputCBLayout::TileRowMajor>(
  *       partials_buf, bias_buf, out_buf,
  *       BiasAddShape::of(in0_num_subblocks, in1_num_subblocks,
  *                         out_subblock_h, out_subblock_w,
@@ -204,7 +204,7 @@ struct NoPostBias {
  *   // Fused SFPU activation after bias via PostBiasFn functor.
  *   add_bias_bcast_rows<
  *       BiasBroadcast::RowBroadcast,
- *       OutputCbTileOrder::SubblockGrouped,
+ *       OutputCBLayout::SubblockMajor,
  *       SFPUPostBias>(partials_buf, bias_buf, out_buf,
  *                      BiasAddShape::of(...), SFPUPostBias{});
  *
@@ -222,7 +222,7 @@ struct NoPostBias {
  */
 template <
     BiasBroadcast broadcast = BiasBroadcast::RowBroadcast,
-    OutputCbTileOrder tile_order = OutputCbTileOrder::SubblockGrouped,
+    OutputCBLayout tile_order = OutputCBLayout::SubblockMajor,
     typename PostBiasFn = bias_add_config::NoPostBias,
     typename Activation = NoneActivation,
     typename Buf = ::CircularBuffer>

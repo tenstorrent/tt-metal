@@ -18,7 +18,7 @@ namespace compute_kernel_lib {
 
 template <
     BiasBroadcast broadcast,
-    OutputCbTileOrder tile_order,
+    OutputCBLayout tile_order,
     typename PostBiasFn,
     typename Activation,
     typename Buf>
@@ -61,7 +61,7 @@ ALWI void add_bias_bcast_rows(
         add_tiles_init(partials_cb_id, bias_cb_id);
     }
 
-    if constexpr (tile_order == OutputCbTileOrder::RowGrouped) {
+    if constexpr (tile_order == OutputCBLayout::TileRowMajor) {
         // Row-major layout: upstream matmul_block pushes one M-row-group
         // (out_subblock_h × out_row_width tiles) per in0_subblock. Tile at row r, column
         // sbw*out_subblock_w + c sits at front+r*out_row_width + sbw*out_subblock_w + c.
