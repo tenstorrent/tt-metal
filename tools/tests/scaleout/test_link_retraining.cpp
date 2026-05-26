@@ -75,7 +75,7 @@ protected:
 
         // Initialize physical system descriptor
         auto psd = tt::tt_metal::run_physical_system_discovery(
-            cluster_->get_driver_mut(), distributed_context_, context_->rtoptions().get_target_device());
+            *cluster_->get_cluster_desc(), distributed_context_, context_->rtoptions().get_target_device());
         physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
         // Populate asic_id_to_chip_id map
@@ -180,11 +180,7 @@ TEST_F(DirectedRetrainingFixture, TestActiveEthRetraining) {
     // Re-run discovery
     get_physical_system_descriptor().clear();
     auto new_psd = tt::tt_metal::run_physical_system_discovery(
-        get_cluster().get_driver_mut(),
-        distributed_context_,
-        context_->rtoptions().get_target_device(),
-        true,
-        true);
+        *get_cluster().get_cluster_desc(), distributed_context_, context_->rtoptions().get_target_device(), true, true);
     get_physical_system_descriptor().merge(std::move(new_psd));
 
     validate_connectivity(get_physical_system_descriptor(), get_cabling_descriptor_path());
@@ -233,11 +229,7 @@ TEST_F(DirectedRetrainingFixture, DISABLED_TestExitNodeRetraining) {
     // Re-run discovery
     get_physical_system_descriptor().clear();
     auto new_psd = tt::tt_metal::run_physical_system_discovery(
-        get_cluster().get_driver_mut(),
-        distributed_context_,
-        context_->rtoptions().get_target_device(),
-        true,
-        true);
+        *get_cluster().get_cluster_desc(), distributed_context_, context_->rtoptions().get_target_device(), true, true);
     get_physical_system_descriptor().merge(std::move(new_psd));
 }
 
@@ -368,11 +360,7 @@ TEST_F(DirectedRetrainingFixture, TestLinkRetrainingWithDescriptorRefresh) {
     // Re-run physical system discovery with the refreshed descriptor
     get_physical_system_descriptor().clear();
     auto new_psd = tt::tt_metal::run_physical_system_discovery(
-        get_cluster().get_driver_mut(),
-        distributed_context_,
-        context_->rtoptions().get_target_device(),
-        true,
-        true);
+        *get_cluster().get_cluster_desc(), distributed_context_, context_->rtoptions().get_target_device(), true, true);
     get_physical_system_descriptor().merge(std::move(new_psd));
 
     // Validate that the refreshed topology matches the expected cabling
