@@ -2450,7 +2450,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 num_blocks = num_blocks_in_seq(prefill_len, block_size)
             if trace_enabled:
                 if page_table.shape[1] < num_blocks:
-                    padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1
+                    padding = torch.ones(page_table.shape[0], num_blocks - page_table.shape[1], dtype=torch.int32) * -1
                     page_table = torch.cat([page_table, padding], dim=1)
             return page_table[:, :num_blocks]
 
