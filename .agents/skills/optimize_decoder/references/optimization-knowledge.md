@@ -22,6 +22,7 @@ Use this reference while optimizing a functional TTNN decoder. It captures repo-
 - Explicitly configure `memory_config`, `program_config`, and `compute_kernel_config` for important ops. Defaults are often correct but suboptimal.
 - Choose shard specs and core grids that divide tensor dimensions cleanly into tiles. Padding in sharded paths is a common source of bugs or wasted work.
 - For DRAM-sharded decode matmul, weights should be width-sharded in DRAM and activations/outputs width-sharded in L1 on the matching core grid.
+- Keep the optimization target single-user prefill/decode. For MoE decoders, preserve gate-selected active-expert execution and optimize loading/running only the active experts, using TTNN sparse matmul or the closest model-local active-expert path. Dense all-expert execution is a debug baseline, not the optimized target.
 
 ## Matmul Choices
 
@@ -103,11 +104,12 @@ tt-perf-report "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_ops.csv" \
   --start-signpost PERF_DECODE \
   --end-signpost PERF_DECODE_END \
   --csv "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_perf_report.csv" \
-  --no-advice \
   > "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_perf_report.txt"
 ```
 
 Use the same pattern for prefill with `PERF_PREFILL` signposts and `prefill_*` filenames. If your installed `tt-perf-report` version uses different flags, run `tt-perf-report --help`, use the equivalent flags, and record the exact command.
+
+The required `tt-perf-report` run must keep advice enabled. If you also need a compact no-advice report for a table, run that as a secondary command and do not use it as the basis for `tt_perf_advice.json`.
 
 Check time units before computing latency. Filtered `tt-perf-report` CSVs may expose `Device Time` in microseconds; raw Tracy ops CSVs often expose `DEVICE KERNEL DURATION [ns]`.
 
@@ -120,7 +122,7 @@ For every actionable `tt-perf-report` recommendation:
 - keep it if it improves the target metric without unacceptable PCC or complexity;
 - reject it only with evidence, then continue optimizing the rest of the decoder.
 
-The final optimized decoder is not done while untried applicable advice remains.
+Do not suppress advice in the required report. The final optimized decoder is not done while untried applicable advice remains.
 
 ## Final Audit Checks
 
@@ -128,5 +130,6 @@ The final optimized decoder is not done while untried applicable advice remains.
 - Decode trace replay still measures the optimized path, not a fallback path.
 - Program configs and compute-kernel configs are serialized in artifacts.
 - PCC covers prefill and decode for every representative layer kind.
+- Optimized stress runs and passes for every representative layer kind and exercised mode; skipped stress is not a passing optimized result.
 - Final perf reports cover warmed prefill and warmed decode separately.
 - Watcher-clean evidence exists for the optimized correctness run.

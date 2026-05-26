@@ -21,6 +21,8 @@ Use these exact status strings:
 - `blocked`
 - `skipped`
 
+`fail`, `blocked`, and `skipped` are valid status values for diagnostic artifacts, but final optimized-decoder success requires `manifest.status == "pass"`. Stress is required for optimized decoder: a final passing artifact must record stress as `pass`, never `skipped`.
+
 Use these exact mode strings:
 
 - `prefill`
@@ -92,6 +94,8 @@ Use lowercase hyphen-case for `layer_kind_id` and optimization ids.
 
 ## baseline_summary.json
 
+`baseline_status` must be `pass`. If the functional baseline did not pass, stop and rerun or repair functional bringup before producing final optimized artifacts.
+
 ```json
 {
   "schema_version": 1,
@@ -138,12 +142,17 @@ This file proves the tests from `doc/functional_decoder/` still pass against the
 
 ## optimization_plan.json
 
+For MoE models, add a required step with id `single-user-moe-active-experts`, status `pass`, and evidence pointing to the report section or audit artifact that proves optimized execution follows the gate-selected active-expert path rather than a dense all-expert path.
+
 ```json
 {
   "schema_version": 1,
   "artifact_type": "optimized_decoder_plan",
   "required_steps": [
     {"id": "functional-regression", "status": "pass", "evidence": "functional_regression_results.json"},
+    {"id": "stress", "status": "pass", "evidence": "results/stress_results.json"},
+    {"id": "watcher-clean", "status": "pass", "evidence": "watcher/watcher_summary.json"},
+    {"id": "runtime-contract", "status": "pass", "evidence": "fallback_audit.md"},
     {"id": "l1-sharded-activations", "status": "pass", "evidence": "performance_results.json"},
     {"id": "program-configs", "status": "pass", "evidence": "program_config_results.json"},
     {"id": "dram-sharded-matmuls", "status": "pass", "evidence": "program_config_results.json"},
@@ -354,6 +363,8 @@ This file proves the tests from `doc/functional_decoder/` still pass against the
 
 ## results/stress_results.json
 
+Include one entry for each representative layer kind and optimized stress mode that the test suite exercises. All entries must pass for a final optimized-decoder `pass`; do not use `skipped` for stress in final golden artifacts.
+
 ```json
 {
   "schema_version": 1,
@@ -362,11 +373,12 @@ This file proves the tests from `doc/functional_decoder/` still pass against the
     {
       "layer_kind_id": "dense",
       "mode": "decode",
-      "status": "skipped",
-      "duration_seconds": 0,
-      "iteration_count": 0,
-      "reason": "stress mode not requested for this proof",
-      "command_id": null
+      "status": "pass",
+      "duration_seconds": 300,
+      "iteration_count": 1200,
+      "reason": null,
+      "command_id": "pytest_dense_decode_stress",
+      "log": "pytest/dense_stress.log"
     }
   ]
 }
