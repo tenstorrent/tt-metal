@@ -264,6 +264,8 @@ fi
 
 fi
 
+fi
+
 if section_enabled 3; then
 # --- Section 3: Galaxy ---
 for py in test_data_parallel_example_TG.py test_multidevice_TG.py; do
@@ -293,8 +295,6 @@ else
     else
         echo -e "4.llk/all\tSKIP\t0\t0\tLLK venv missing" >>"$SUMMARY"
     fi
-fi
-
 fi
 
 log "Sweep complete. Summary: $SUMMARY"
