@@ -126,69 +126,130 @@ At the current test cadence (every 3 minutes), cost is still bounded by *new* co
 
 ---
 
-## Rebuild from scratch
+## Port to another machine
 
-If `~/.sdpa-watch/` is wiped or you're setting this up on a new machine:
+Two scenarios:
 
-### Prerequisites on the machine
+- **A.** You have the old machine accessible — copy the running setup over.
+- **B.** Old machine is gone, you have only this repo branch — rebuild from the snapshot.
+
+Both end at the same place: a working `~/.sdpa-watch/` on the new host with cron firing on schedule.
+
+### Prerequisites on the new machine
+
+Install once:
 
 - `bash`, `jq`, `curl`, `git` (standard Linux)
-- `gh` (GitHub CLI) — `apt install gh` or download from cli.github.com
-- `claude` (Claude Code CLI) — `npm install -g @anthropic-ai/claude-code`
-- `cron` (and a way to start the daemon — `sudo service cron start` works on most distros)
-- A local clone of `tenstorrent/tt-metal`
+- `gh` (GitHub CLI) — `apt install gh` or grab from cli.github.com
+- `claude` (Claude Code CLI) — `npm install -g @anthropic-ai/claude-code` (needs Node.js, typically via nvm)
+- `cron` — `apt install cron`; start with `sudo service cron start`
+- A local clone of `tenstorrent/tt-metal` (needed for commit-range lookups during failure diagnosis)
 
-### What you need in hand
+### Scenario A — copy from a working machine
+
+The 7 files below are the entire watcher. Five are non-secret, two are secrets.
+
+```bash
+# On the NEW machine, create the dir
+mkdir -p ~/.sdpa-watch && chmod 700 ~/.sdpa-watch
+
+# From the OLD machine, transfer all runtime files (secrets included)
+rsync -av --include='*.sh' --include='*.txt' --include='*.md' \
+          --include='*.json' --include='api_key' --include='slack_webhook' \
+          --exclude='*' \
+          OLD-HOST:~/.sdpa-watch/  ~/.sdpa-watch/
+
+# Re-tighten secret perms (rsync may not preserve)
+chmod 600 ~/.sdpa-watch/api_key ~/.sdpa-watch/slack_webhook
+chmod +x ~/.sdpa-watch/watch.sh
+```
+
+Then jump to "Adjust host-specific bits" below.
+
+### Scenario B — rebuild from the repo snapshot (no old machine)
+
+```bash
+# Get the source files from the branch
+mkdir -p ~/.sdpa-watch && chmod 700 ~/.sdpa-watch
+git -C /path/to/tt-metal checkout skrstic/sdpa-pipeline-watcher
+cp /path/to/tt-metal/.sdpa-watch/{config.sh,watch.sh,agent_prompt.txt,README.md,SETUP.md} ~/.sdpa-watch/
+chmod +x ~/.sdpa-watch/watch.sh
+echo '{}' > ~/.sdpa-watch/state.json
+
+# Recreate secrets (you'll need fresh ones — the originals are not in the repo)
+umask 077
+printf 'sk-ant-YOUR-NEW-KEY' > ~/.sdpa-watch/api_key  && chmod 600 ~/.sdpa-watch/api_key
+printf 'https://hooks.slack.com/services/...' > ~/.sdpa-watch/slack_webhook && chmod 600 ~/.sdpa-watch/slack_webhook
+echo 'ghp_YOUR-NEW-PAT' | gh auth login --with-token
+```
+
+You need three secrets you don't get from the repo:
 
 - **Anthropic API key** (`sk-ant-...`) — https://console.anthropic.com/settings/keys
-- **GitHub PAT** (`ghp_...`) — https://github.com/settings/tokens, scope `public_repo`, no expiration
-- **Slack incoming webhook URL** — either reuse the existing `sdpa-watch` app at https://api.slack.com/apps (Incoming Webhooks → copy URL), or create a new Slack app and request workspace-admin install
+- **GitHub PAT** (`ghp_...`) — https://github.com/settings/tokens, scope `public_repo`, "No expiration"
+- **Slack incoming webhook URL** — reuse the existing `sdpa-watch` app at https://api.slack.com/apps (Incoming Webhooks → copy URL), or create a new Slack app + request workspace-admin install
 
-### Steps
+Then jump to "Adjust host-specific bits" below.
 
-1. **Create directory and save secrets:**
-   ```bash
-   mkdir -p ~/.sdpa-watch && chmod 700 ~/.sdpa-watch
-   umask 077 && printf 'sk-ant-...'  > ~/.sdpa-watch/api_key && chmod 600 ~/.sdpa-watch/api_key
-   umask 077 && printf 'https://hooks.slack.com/...' > ~/.sdpa-watch/slack_webhook && chmod 600 ~/.sdpa-watch/slack_webhook
-   echo 'ghp_...' | gh auth login --with-token
-   echo '{}' > ~/.sdpa-watch/state.json
-   ```
+### Adjust host-specific bits (applies to both scenarios)
 
-2. **Copy the four source files** from the mirror at `/localdev/skrstic/tt-metal/.sdpa-watch/` (or wherever your last working copy lives):
-   - `config.sh` — pipelines + model
-   - `watch.sh` — driver (`chmod +x`)
-   - `agent_prompt.txt` — global agent policy
-   - `README.md` + `SETUP.md` — docs
+Some values in the source files are tied to the *previous* host. Update them on the new host:
 
-3. **Verify `claude` works in a cron-mimicking env:**
-   ```bash
-   env -i HOME="$HOME" \
-     ANTHROPIC_API_KEY="$(cat ~/.sdpa-watch/api_key)" \
-     PATH=/home/skrstic/.nvm/versions/node/v22.18.0/bin:/usr/bin:/usr/local/bin \
-     "$(which claude)" --model claude-opus-4-7 -p "say hi" </dev/null
-   ```
+1. **`~/.sdpa-watch/config.sh` → `TT_METAL_DIR`** — point at the new clone's path.
+2. **`~/.sdpa-watch/watch.sh` → `ts_human` POSIX TZ string** — update if you're not in CEST/CET (`CET-1CEST,M3.5.0,M10.5.0/3`). For a list of POSIX TZ strings, see e.g. https://www.gnu.org/software/libc/manual/html_node/TZ-Variable.html. Or install `tzdata` and use `TZ='Region/City'` instead.
+3. **Cron PATH** — the `PATH=...` line in the crontab below must include the dir where `claude` lives on the new host. Find it with `dirname "$(which claude)"`.
 
-4. **Smoke test:**
-   ```bash
-   DRY_RUN=1 ~/.sdpa-watch/watch.sh
-   ~/.sdpa-watch/watch.sh
-   ```
+### Verify and install cron
 
-5. **Install cron:**
-   ```bash
-   ( crontab -l 2>/dev/null | grep -v sdpa-watch; cat <<'CRON_EOF'
-   PATH=/home/skrstic/.nvm/versions/node/v22.18.0/bin:/usr/local/bin:/usr/bin:/bin
-   0 */4 * * * /home/skrstic/.sdpa-watch/watch.sh >> /home/skrstic/.sdpa-watch/watch.log 2>&1
-   CRON_EOF
-   ) | crontab -
-   sudo service cron start
-   ```
+```bash
+# 1. Sanity-check claude works in a cron-like minimal env
+env -i HOME="$HOME" \
+  ANTHROPIC_API_KEY="$(cat ~/.sdpa-watch/api_key)" \
+  PATH="$(dirname "$(which claude)"):/usr/bin:/usr/local/bin" \
+  "$(which claude)" --model claude-opus-4-7 -p "say hi" </dev/null
+# Expect a one-line "Hi!" reply.
 
-6. **Add shell aliases** in `~/.bashrc`:
-   ```bash
-   alias sdpa='~/.sdpa-watch/watch.sh'
-   alias sdpa-dry='DRY_RUN=1 ~/.sdpa-watch/watch.sh'
-   ```
+# 2. Dry-run the watcher (no Slack post)
+DRY_RUN=1 ~/.sdpa-watch/watch.sh
 
-Adjust the `PATH` in the crontab if `claude` / `node` live elsewhere (`which claude` and `dirname "$(which claude)"`).
+# 3. Real run (posts to Slack)
+~/.sdpa-watch/watch.sh
+
+# 4. Install cron (replace PATH first line with `dirname "$(which claude)"`-prefixed value if needed)
+( crontab -l 2>/dev/null | grep -vE 'sdpa-watch|^PATH='; cat <<CRON_EOF
+PATH=$(dirname "$(which claude)"):/usr/local/bin:/usr/bin:/bin
+0 * * * * $HOME/.sdpa-watch/watch.sh >> $HOME/.sdpa-watch/watch.log 2>&1
+CRON_EOF
+) | crontab -
+sudo service cron start
+crontab -l   # verify
+
+# 5. (Optional) Shell aliases
+cat >> ~/.bashrc <<'ALIASES'
+
+# sdpa-watch shortcuts
+alias sdpa='~/.sdpa-watch/watch.sh'
+alias sdpa-dry='DRY_RUN=1 ~/.sdpa-watch/watch.sh'
+ALIASES
+```
+
+### File-by-file purpose (porting reference)
+
+| File | Required? | Notes |
+|---|---|---|
+| `~/.sdpa-watch/watch.sh` | **Required** | The driver. Must be executable. |
+| `~/.sdpa-watch/config.sh` | **Required** | Pipelines + model + `TT_METAL_DIR`. Edit `TT_METAL_DIR` per host. |
+| `~/.sdpa-watch/agent_prompt.txt` | **Required** | LLM policy. Edit only if changing behavior. |
+| `~/.sdpa-watch/api_key` | **Required** | Anthropic key (chmod 600). Per-host or shared at your discretion. |
+| `~/.sdpa-watch/slack_webhook` | **Required** | Slack URL (chmod 600). Reusable across hosts if you want all of them posting to one channel. |
+| `~/.sdpa-watch/state.json` | Optional | Per-pipeline cache. Safe to omit — initialize with `echo '{}' > state.json` (first cron tick will be expensive though, since nothing is cached). |
+| `~/.sdpa-watch/watch.log` | Skip | Local tick log; not portable. |
+| `~/.sdpa-watch/agent_errors.log` | Skip | Stderr of failed agent calls; not portable. |
+| `~/.sdpa-watch/README.md` | Optional | Docs. |
+| `~/.sdpa-watch/SETUP.md` | Optional | This file. |
+
+External state that lives outside `~/.sdpa-watch/`:
+
+- `gh auth status` (token in `~/.config/gh/hosts.yml`) — required for log fetching.
+- Crontab — must be installed per-host.
+- `~/.bashrc` aliases — optional, per-host.
