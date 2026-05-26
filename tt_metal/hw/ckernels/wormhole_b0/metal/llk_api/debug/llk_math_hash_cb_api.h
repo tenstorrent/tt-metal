@@ -8,13 +8,13 @@
 
 #ifdef DEBUG_CB_HASH
 #include "llk_math_common_api.h"
-#include "experimental/llk_math_hash_cb.h"
+#include "debug/llk_math_hash_cb.h"
 #endif
 
 // ===========================================================================
 // LLK MATH HASH CB (SFPU) — MATH-side surface for hash_cb_sfpu.
 //
-// Wraps the SFPU-backed FNV23 lanewise hash in llk_lib/experimental/
+// Wraps the SFPU-backed FNV23 lanewise hash in llk_lib/debug/
 // llk_math_hash_cb.h. Orchestration (UNPACK + cross-thread handoff) is in
 // api/compute/debug/cb_hash.h; see that header for the user-facing contract.
 //

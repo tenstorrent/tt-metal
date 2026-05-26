@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Standalone LLK test for the SFPU-backed CB hash (23-bit "FNV23"). See
-// tt_llk_{blackhole,wormhole_b0}/llk_lib/experimental/llk_math_hash_cb.h for
-// the per-arch SFPU implementations.
+// tt_llk_{blackhole,wormhole_b0}/llk_lib/debug/llk_math_hash_cb.h for the
+// per-arch SFPU implementations.
 //
 // Test data path mirrors the production hash_cb_sfpu orchestration:
 //   UNPACK: unpacks TILE_CNT INT32 tiles from buffer_A into DEST slot 0.
@@ -87,7 +87,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "ckernel_defs.h"
-#include "experimental/llk_math_hash_cb.h"
+#include "debug/llk_math_hash_cb.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "params.h"

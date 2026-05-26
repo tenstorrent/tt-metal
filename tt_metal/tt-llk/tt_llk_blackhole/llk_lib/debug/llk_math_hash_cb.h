@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Experimental SFPU-backed CB hash for DEBUG_CB_HASH (Blackhole).
+// SFPU-backed CB hash for DEBUG_CB_HASH (Blackhole).
 //
 // SFPU counterpart to the plain RISC-V scalar hash in
 // tt_metal/hw/ckernels/{arch}/metal/llk_api/debug/llk_hash_cb_api.h. Blackhole's

@@ -13,7 +13,7 @@
 #endif
 #ifdef TRISC_MATH
 #include "debug/llk_hash_cb_api.h"
-#include "experimental/llk_math_hash_cb_api.h"
+#include "debug/llk_math_hash_cb_api.h"
 #endif
 #ifdef TRISC_PACK
 #include "debug/llk_hash_cb_api.h"
@@ -31,7 +31,7 @@ namespace ckernel {
 // Pick the variant by what you can afford to disturb and what you want to
 // catch:
 //
-//   hash_cb()       — TRISC scalar, no Tensix Engine state touched.
+//   hash_cb_trisc()       — TRISC scalar, no Tensix Engine state touched.
 //                     Runs as plain RISC-V on the UNPACK thread (override
 //                     possible). Cheap to drop in anywhere. Use when you
 //                     want a baseline hash that does not perturb the
@@ -41,12 +41,12 @@ namespace ckernel {
 //   hash_cb_sfpu()  — Lanewise SFPU hash on MATH, with a DEST → L1 → UNPACK
 //                     round trip. Exercises the same TRISC pipeline as
 //                     production compute (SFPU + DEST + cross-TRISC L1
-//                     handoff), so it can surface races that hash_cb
-//                     hides. Uses DEST and SFPU LReg state — unsuitable
-//                     when those are themselves under suspicion.
+//                     handoff), so it can surface races that
+//                     hash_cb_trisc hides. Uses DEST and SFPU LReg state —
+//                     unsuitable when those are themselves under suspicion.
 //                     Algorithm: 23-bit FNV-like ("FNV23"), driven by the
 //                     SFPU multiplier width (SFPMUL24 on BH; shift-and-add
-//                     on WH). Not bit-equal to hash_cb — only compare
+//                     on WH). Not bit-equal to hash_cb_trisc — only compare
 //                     SFPU-hashes to SFPU-hashes.
 //
 // Output format (both variants):
@@ -79,9 +79,9 @@ constexpr uint32_t DEBUG_HASH_L1_READY_ADDR = MEM_LLK_DEBUG_BASE + DEBUG_HASH_L1
  * Defaults to UNPACK because the CB read pointer (fifo_rd_ptr) is only
  * populated on the UNPACK thread — cb_interface[] is not even allocated on
  * MATH (UCK_CHLKC_MATH gate in trisc.cc) and PACK tracks write pointers only.
- * To move the probe onto a different TRISC, call llk_hash_cb directly inside
- * a PACK((...)) / MATH((...)) macro and arrange for that thread to see a
- * valid L1 address by other means.
+ * To move the probe onto a different TRISC, call llk_hash_cb_trisc directly
+ * inside a PACK((...)) / MATH((...)) macro and arrange for that thread to see
+ * a valid L1 address by other means.
  *
  * Return value: None
  *
@@ -92,8 +92,8 @@ constexpr uint32_t DEBUG_HASH_L1_READY_ADDR = MEM_LLK_DEBUG_BASE + DEBUG_HASH_L1
  * | label     | A caller-chosen tag to identify this probe in the output | uint32_t | any         | True     |
  */
 // clang-format on
-ALWI void hash_cb(uint32_t cb_id, uint32_t num_tiles, uint32_t label) {
-    UNPACK((llk_hash_cb(cb_id, num_tiles, label)));
+ALWI void hash_cb_trisc(uint32_t cb_id, uint32_t num_tiles, uint32_t label) {
+    UNPACK((llk_hash_cb_trisc(cb_id, num_tiles, label)));
 }
 
 // clang-format off
@@ -106,13 +106,13 @@ ALWI void hash_cb(uint32_t cb_id, uint32_t num_tiles, uint32_t label) {
  * handoff that production compute kernels use, so this variant can flag
  * cross-TRISC races that the engine-neutral hash_cb hides.
  *
- * Trade-offs versus hash_cb:
+ * Trade-offs versus hash_cb_trisc:
  *   - Touches SFPU LReg state and DEST slot 0. Wrap the call in
  *     acquire_dst / release_dst, and expect DEST slot 0 to be clobbered.
  *   - Input CB must hold INT32 tiles; the kernel must be built with the
  *     unpack-to-dest path enabled for 32-bit formats (the standard config
  *     for INT32). See the tt-llk standalone test for an end-to-end example.
- *   - Hash value is NOT bit-equal to hash_cb's FNV-1a-32. Compare SFPU
+ *   - Hash value is NOT bit-equal to hash_cb_trisc's FNV-1a-32. Compare SFPU
  *     hashes only to other SFPU hashes.
  *
  * No caller-side output buffer is required — the L1 slot lives at a fixed
@@ -153,7 +153,7 @@ ALWI void hash_cb_sfpu(uint32_t in_cb, uint32_t num_tiles, uint32_t label) {
     MATH((llk_math_hash_cb_finish_to_l1(DEBUG_HASH_L1_HASH_ADDR, DEBUG_HASH_L1_READY_ADDR)));
 
     // UNPACK polls the ready flag, reads the hash back out of L1, and prints
-    // in the same line format as hash_cb for diff-tool parity.
+    // in the same line format as hash_cb_trisc for diff-tool parity.
     UNPACK((llk_hash_cb_sfpu_print_from_l1(
         DEBUG_HASH_L1_HASH_ADDR, DEBUG_HASH_L1_READY_ADDR, in_cb, num_tiles, label)));
 #else
