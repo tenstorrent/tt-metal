@@ -187,7 +187,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);
 
     // _llk_pack_untilize_ packs one block ct_dim of tiles (one tile row) at a time
-    std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * TEST_FACE_R_DIM;
+    std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.FACE_R_DIM;
 
     // Both unpack_to_dest and !unpack_to_dest produce one tile row at a time
     // into alternating banks (SyncHalf). Read from start of current bank (dest_idx 0);
