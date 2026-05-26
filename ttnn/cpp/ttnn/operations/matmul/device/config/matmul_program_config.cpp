@@ -1159,8 +1159,14 @@ MatmulProgramConfig get_matmul_program_config(
         uint32_t per_core_N = N;
         uint32_t in0_block_w = in0_shard_shape[1] / in0_tile.get_width();
 
-        // Non-mcast MatmulMultiCoreReuseProgramConfig factory hardcodes TILE_PACK_ROW_MAJOR=1
-        // in its compute kernel, so the tuner is free to pick any (h, w) without constraints.
+        // MatmulMultiCoreReuseProgramConfig's factory does NOT emit TILE_PACK_ROW_MAJOR — its
+        // compute kernel packs in SubblockGrouped order. For sharded output the compute kernel
+        // writes directly into the output shard (no writer-side reordering), so the on-chip
+        // tile order must already equal row-major. Force subblock_w == per_core_N OR
+        // subblock_h == 1 to make SubblockGrouped degenerate to row-major. (1d/2d mcast
+        // factories support tile_pack_row_major on the program-config side and can relax this;
+        // wiring that into this factory is tracked as a matmul-helpers follow-up.)
+        //
         // When per_core_M > M (batched matmul stacks multiple batch instances along the
         // per-core height axis), out_subblock_h must also divide M — the kernel iterates
         // per batch instance and the downstream validator enforces M % out_subblock_h == 0.
@@ -1169,6 +1175,7 @@ MatmulProgramConfig get_matmul_program_config(
             .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
         subblock_inputs.per_core_M = std::min(per_core_M, M);
         subblock_inputs.per_core_N = per_core_N;
+        subblock_inputs.subblock_w_eq_per_core_n_required = output_mem_config.is_sharded();
         subblock_inputs.prefer_fast_path = true;
         auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
         auto out_subblock_h = subblock_choice.out_subblock_h;
