@@ -212,9 +212,12 @@ def test_softmax_rejects_bfloat16_with_unsupported_config(device):
         softmax(ttnn_input, dim=-1, compute_kernel_config=bad_config)
 
 
-def test_softmax_rejects_row_major_layout(device):
-    # Row-major requires a different test setup; create directly.
+def test_softmax_accepts_row_major_layout(device):
+    """Refinement 3: ROW_MAJOR_LAYOUT is now in SUPPORTED["layout"]. The
+    entry-point converts to TILE internally and converts back on the way
+    out, preserving the user's layout end-to-end."""
     torch_input = torch.randn((1, 1, 32, 32), dtype=torch.float32)
+    torch_expected = torch.softmax(torch_input, dim=-1)
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.float32,
@@ -222,19 +225,22 @@ def test_softmax_rejects_row_major_layout(device):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    with pytest.raises(VALIDATION_ERRORS):
-        softmax(ttnn_input, dim=-1)
+    ttnn_output = softmax(ttnn_input, dim=-1)
+    assert ttnn_output.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert tuple(ttnn_output.shape) == (1, 1, 32, 32)
+    assert_with_pcc(torch_expected, ttnn.to_torch(ttnn_output), 0.999)
 
 
 @pytest.mark.parametrize(
     "bad_shape",
     [
-        (32, 32),  # rank 2
-        (1, 32, 32),  # rank 3
-        (1, 1, 1, 32, 32),  # rank 5
+        (1, 1, 1, 32, 32),  # rank 5 — still outside SUPPORTED["rank"]
+        (32,),  # rank 1 — too few dims to have a -2 axis at all
     ],
 )
-def test_softmax_rejects_non_4d(device, bad_shape):
+def test_softmax_rejects_unsupported_rank(device, bad_shape):
+    """Rank 2/3/4 are supported by Refinement 3 (rank canonicalisation);
+    rank 5+ and rank 1 stay out of SUPPORTED["rank"]."""
     torch_input = torch.randn(bad_shape, dtype=torch.float32)
     ttnn_input = ttnn.from_torch(
         torch_input,
