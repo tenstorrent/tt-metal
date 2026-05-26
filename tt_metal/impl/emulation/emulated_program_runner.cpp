@@ -286,11 +286,20 @@ struct KernelInfo {
 // namespace emission (see emit_metal2_namespaces) and the JIT cache key
 // (see cache_key_suffix). Empty for legacy kernels.
 struct Metal2BindingsSnapshot {
+    // TA bindings are kept in insertion order (matches genfiles.cpp's vector);
+    // their CRTA position drives the get_common_vararg offset.
+    struct TaEntry {
+        std::string name;
+        uint32_t cta_offset;
+        uint32_t addr_crta_offset;
+    };
+
+    bool is_metal2 = false;
     std::vector<std::string> named_runtime_args;
     std::vector<std::string> named_common_runtime_args;
     std::map<std::string, uint32_t> dfb_accessors;
     std::map<std::string, uint16_t> sem_accessors;
-    std::map<std::string, std::pair<uint32_t, uint32_t>> ta_accessors;
+    std::vector<TaEntry> ta_accessors;
 
     // Distinguishes kernels that share source/CTAs/defines but bind different
     // IDs — without this they collide on cache key and the second silently
@@ -303,8 +312,9 @@ struct Metal2BindingsSnapshot {
         for (const auto& [name, id] : sem_accessors) {
             s += ":sem:" + name + "=" + std::to_string(id);
         }
-        for (const auto& [name, offs] : ta_accessors) {
-            s += ":ta:" + name + "=" + std::to_string(offs.first) + "," + std::to_string(offs.second);
+        for (const auto& ta : ta_accessors) {
+            s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," +
+                 std::to_string(ta.addr_crta_offset);
         }
         for (const auto& name : named_runtime_args) {
             s += ":rta:" + name;
@@ -526,6 +536,7 @@ static void preprocess_kernel_source_for_x86(const std::string& src_path, const 
 
 static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& kernel) {
     Metal2BindingsSnapshot s;
+    s.is_metal2 = kernel.is_metal2_kernel();
     s.named_runtime_args = kernel.get_named_runtime_args();
     s.named_common_runtime_args = kernel.get_named_common_runtime_args();
     kernel.process_dataflow_buffer_local_accessor_handles(
@@ -534,7 +545,7 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
         [&s](const std::string& name, uint16_t id) { s.sem_accessors[name] = id; });
     kernel.process_tensor_binding_handles(
         [&s](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off) {
-            s.ta_accessors[name] = {cta_off, addr_crta_off};
+            s.ta_accessors.push_back({name, cta_off, addr_crta_off});
         });
     return s;
 }
@@ -599,12 +610,26 @@ static void emit_metal2_namespaces(
     }
     if (!s.ta_accessors.empty()) {
         f << "namespace ta {\n";
-        for (const auto& [name, offs] : s.ta_accessors) {
-            f << "using " << name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
-              << offs.first << "u, " << offs.second << "u>;\n";
-            f << "constexpr " << name << "_t " << name << "{};\n";
+        for (const auto& ta : s.ta_accessors) {
+            f << "using " << ta.name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
+              << ta.cta_offset << "u, " << ta.addr_crta_offset << "u>;\n";
+            f << "constexpr " << ta.name << "_t " << ta.name << "{};\n";
         }
         f << "}  // namespace ta\n";
+    }
+
+    // Vararg helpers — always emitted for Metal 2.0 kernels (mirrors
+    // genfiles.cpp). The CRTA buffer layout is [user-named CRTAs,
+    // TensorBinding addresses, varargs], so get_common_vararg's base skips
+    // past both the named CRTAs and the binding section.
+    if (s.is_metal2) {
+        const uint32_t named_rta_words = static_cast<uint32_t>(s.named_runtime_args.size());
+        const uint32_t named_crta_words =
+            static_cast<uint32_t>(s.named_common_runtime_args.size() + s.ta_accessors.size());
+        f << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { "
+          << "return get_arg_val<uint32_t>(" << named_rta_words << " + idx); }\n";
+        f << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { "
+          << "return get_common_arg_val<uint32_t>(" << named_crta_words << " + idx); }\n";
     }
 }
 
