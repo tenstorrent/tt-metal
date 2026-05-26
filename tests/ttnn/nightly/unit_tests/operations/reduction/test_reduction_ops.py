@@ -12,6 +12,7 @@ import torch
 import ttnn
 
 from models.common.utility_functions import comp_allclose_and_pcc, torch_random, is_wormhole_b0
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from loguru import logger
 
 TEST_PADDING_VALUE = -42
@@ -551,7 +552,7 @@ def test_generic_ops_wh_block_shard(
 @pytest.mark.parametrize("correction", [True, False])
 @pytest.mark.parametrize("dim", [-1, -2, 0, (-2, -1), (0, -2, -1), None])
 @pytest.mark.parametrize("shape", [(3, 4), (1, 1, 3, 4, 5), (3, 4, 8, 56, 33)])
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32], ids=["bfloat16", "float32"])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype):
     rank = len(shape)
     if isinstance(dim, tuple) and len(dim) > rank:
@@ -559,6 +560,27 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
 
     if op not in ("var", "std") and correction:
         pytest.skip("PyTorch supports the correction argument only for var and std")
+
+    if op in ("var", "std") and correction:
+        # Bessel's correction divides by (N - 1) where N is the number of elements
+        # reduced. With N == 1 this is a divide-by-zero, producing all-NaN output;
+        # both PyTorch and ttnn match here, but the result is mathematically
+        # degenerate and not meaningful to compare numerically.
+        if dim is None:
+            reduction_count = 1
+            for s in shape:
+                reduction_count *= s
+        elif isinstance(dim, tuple):
+            reduction_count = 1
+            for d in dim:
+                reduction_count *= shape[d]
+        else:
+            reduction_count = shape[dim]
+        if reduction_count <= 1:
+            pytest.skip("Bessel-corrected std/var with reduction count of 1 produces NaN output")
+
+    if op in ("var", "std") and scalar != 1.0 and dtype == torch.float32:
+        pytest.xfail("FPU SrcA TF32 floor on do_scale path: cb_in loses precision before the mul. Issue #45222.")
 
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=dtype)
@@ -577,29 +599,81 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
     else:
         torch_result = torch_op(scalar * torch_input, dim=dim)
 
-    rtol = 0.05
-    if op == "sum" and shape == (3, 4, 8, 56, 33):
-        # Summing large number of bfloat16 values accumulates rounding errors,
-        # and results also vary from near 0 to relatively large values (in hundreds)
-        # PCC should catch any significant errors.
-        atol = 1.5
+    if dtype == torch.float32:
+        # FP32 eps = 2^-23 ~= 1.19e-7. Tree-reduction of N values gives
+        # relative error bounded by O(log2(N) * eps); for N up to 53328 this is
+        # ~2e-6. Welford-style variance has a tighter bound of O(sqrt(N) * eps) ~ 3e-5
+        # in the worst case. rtol = 1e-4 covers all of these with margin, and the
+        # default atol = 1e-4 handles the small-magnitude regime. The one corner case
+        # is sum reduced over all dims of the largest shape: randn input has mean 0,
+        # so the expected sum can sit very close to 0 while the accumulated absolute
+        # error reaches log2(N) * eps * sqrt(N) ~ 4e-4 (scaled up to ~2e-3
+        # by the largest test scalar); for that case atol is raised to 1e-2.
+        rtol = 1e-4
+        if op == "sum" and shape == (3, 4, 8, 56, 33):
+            atol = 1e-2
+            # Same justification as atol: dim=None gives a scalar output whose
+            # magnitude can be small, so the relative Frobenius norm can be
+            # elevated even when allclose passes. 1e-2 mirrors the atol bound.
+            frobenius_threshold = 1e-2
+        else:
+            atol = 1e-4
+            # Per-element relative error after reduction is bounded by
+            # sqrt(N) * eps ~= 3e-5 (Welford var/std is the worst op); the
+            # relative Frobenius norm is bounded by the same magnitude. 1e-4
+            # gives ~3x margin.
+            frobenius_threshold = 1e-4
+        # With per-element relative errors of ~1e-5 the population correlation is
+        # essentially 1; 0.9999 provides a safe lower bound.
+        pcc = 0.9999
     else:
-        atol = 0.1
+        rtol = 0.05
+        if op == "sum" and shape == (3, 4, 8, 56, 33):
+            # Summing large number of bfloat16 values accumulates rounding errors,
+            # and results also vary from near 0 to relatively large values (in hundreds)
+            # PCC should catch any significant errors.
+            atol = 1.5
+            # dim=None reduces the largest input to a single scalar whose
+            # expected value can be near 0 (randn has mean 0), so the relative
+            # Frobenius norm ~ atol/|value| can be substantially larger than for
+            # multi-element output cases. 0.3 stays well inside what allclose
+            # already permits (atol + rtol*|value|) for any |value| >= ~6 and
+            # tightens to ~5% for typical |sum| ~ 100.
+            frobenius_threshold = 0.3
+        else:
+            atol = 0.1
+            # bf16 default PCC=0.999 implies per-element shape-noise ratio of
+            # sqrt(2*(1-PCC)) ~= 4.5%; the relative Frobenius norm is the same
+            # order of magnitude on the raw values. 0.1 gives ~2x margin.
+            # For var/std on the largest shape, outputs cluster around scalar^2
+            # or |scalar| (both >= 1), and per-element absolute error remains
+            # bounded by the same ~5% relative bf16 precision, so the Frobenius
+            # bound does not need to be loosened the way PCC does.
+            frobenius_threshold = 0.1
 
-    if op == "var" and shape == (3, 4, 8, 56, 33):
-        # For var/std there are cases where all output values are close to 1, and we're using bfloat16,
-        # so even a rounding error of 0.5 ULP has a significant impact on PCC with large tensors.
-        pcc = 0.98
-    elif op == "std" and shape == (3, 4, 8, 56, 33):
-        # For std, sqrtf() adds an extra rounding step on top of variance, further
-        # lowering PCC when values cluster near 1.0 (e.g. 3-dim reduction on large tensors).
-        # Therefore PCC threshold has to be lower. ATOL/RTOL should catch any significant errors.
-        pcc = 0.95
-    else:
-        pcc = 0.999
-    passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
+        if op == "var" and shape == (3, 4, 8, 56, 33):
+            # For var/std there are cases where all output values are close to 1, and we're using bfloat16,
+            # so even a rounding error of 0.5 ULP has a significant impact on PCC with large tensors.
+            pcc = 0.98
+        elif op == "std" and shape == (3, 4, 8, 56, 33):
+            # For std, sqrtf() adds an extra rounding step on top of variance, further
+            # lowering PCC when values cluster near 1.0 (e.g. 3-dim reduction on large tensors).
+            # Therefore PCC threshold has to be lower. ATOL/RTOL should catch any significant errors.
+            pcc = 0.95
+        else:
+            pcc = 0.999
 
-    assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
+    passing, output_msg = assert_numeric_metrics(
+        torch_result,
+        ttnn_result,
+        rtol=rtol,
+        atol=atol,
+        pcc_threshold=pcc,
+        frobenius_threshold=frobenius_threshold,
+        assert_on_fail=False,
+    )
+
+    assert passing, f"{output_msg}, torch: {torch_result}, ttnn: {ttnn_result}"
 
 
 # Test that generic reduction ops produce correct results, preserve dtype, and output

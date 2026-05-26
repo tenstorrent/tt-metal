@@ -109,15 +109,15 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction, use_legacy):
 # Regression test for fp32 Welford variance precision under large mean offsets.
 # Uses a bit-exact integer input where the true variance is known analytically:
 # variance of N consecutive integers is (N^2 - 1) / 12 (population); with N=32 and Bessel's
-# correction, sample variance = 32 * (32^2 - 1) / (12 * 31) = 88.0 exactly.  Variance is
+# correction, sample variance = 32 * (32^2 - 1) / (12 * 31) = 88.0 exactly. Variance is
 # translation-invariant *and* sign-invariant, so neither adding a large offset to every
-# element nor flipping its sign should change the answer.  If the unpacker silently routes
+# element nor flipping its sign should change the answer. If the unpacker silently routes
 # fp32 input through SrcA as TF32 (10-bit mantissa instead of 23), values that differ by
 # less than the TF32 ULP collapse to the same representation; at offset=1e6 the TF32 ULP
 # is ~512, so all 32 consecutive integers become identical and the apparent variance drops
-# to 0.  scalar=-1.0 routes through the do_scale path (mul_tiles_bcast_scalar +
+# to 0. scalar=-1.0 routes through the do_scale path (mul_tiles_bcast_scalar +
 # transpose_wh_tile of cb_scaled) without changing the expected variance, exercising a
-# different inner-loop pattern than scalar=1.0 (which short-circuits to !do_scale).  This
+# different inner-loop pattern than scalar=1.0 (which short-circuits to !do_scale). This
 # test covers all three reduction kernels (H, W, HW) and both code paths.
 @pytest.mark.parametrize("scalar", [1.0, -1.0])
 @pytest.mark.parametrize("offset", [0.0, 1e6])
@@ -131,7 +131,9 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     # structurally pinned to zero on all three reduction kernels (W, H, HW) and there is no
     # kernel-side workaround. Mark these combinations xfail to document the hardware floor.
     if scalar != 1.0 and abs(offset) >= 1024:
-        pytest.xfail("FPU SrcA TF32 floor on do_scale path: cb_in collapses to a constant before the mul")
+        pytest.xfail(
+            "FPU SrcA TF32 floor on do_scale path: cb_in collapses to a constant before the mul. Issue #45222."
+        )
     N = 32
     seq = torch.arange(N, dtype=torch.float32) + offset
     # Lay out the input so the reduction axis is the integer sequence.
@@ -152,7 +154,7 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     actual = ttnn.to_torch(ttnn.from_device(tt_out))
 
     # Tolerances are tight: with the precision-preserving unpacker path the answer is
-    # exact (deviation = 0).  atol=1e-3 here is many orders of magnitude tighter than what
+    # exact (deviation = 0). atol=1e-3 here is many orders of magnitude tighter than what
     # the buggy TF32-via-SrcA path produces (which at offset=1e6 returns exactly 0.0
     # against an expected ~88) while still allowing some small accumulation noise from
     # the SFPU Welford recurrence itself.
@@ -168,15 +170,13 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
 
 
 # Regression test for fp32 Welford variance precision when do_scale=true (non-unity scalar)
-# AND the reduction dimension crosses a tile boundary (Wt>1). The compute kernel's W-reduce
-# do_scale path multiplies each input tile by a scalar (FPU mul → cb_scaled), then transposes
-# cb_scaled into DEST for the SFPU Welford consumer.  The FPU mul produces an FP32 output in
-# DEST whose mantissa carries information beyond the TF32 precision of its inputs (multiplying
-# two 11-bit-mantissa TF32 values can yield up to ~22 bits in the FP32 result).  Preserving
-# that mantissa through the transpose read requires UnpackToDestFp32 on cb_scaled.
+# AND the reduction dimension crosses a tile boundary (Wt>1).
+# Unlike test_var_fp32_translation_invariance above, which tests whether inputs preserve
+# FP32 precision by using a large offset, this test checks that the FPU MUL result
+# is preserved in FP32, which requires UnpackToDestFp32 on cb_scaled.
 #
 # Variance of N consecutive integers 0..N-1 is (N^2 - 1) / 12 (population); with Bessel's
-# correction (sample variance) it is N * (N^2 - 1) / (12 * (N - 1)) = N * (N + 1) / 12.  The
+# correction (sample variance) it is N * (N^2 - 1) / (12 * (N - 1)) = N * (N + 1) / 12. The
 # torch.var below in fp64 computes the ground truth for any N; the formula is noted only to
 # make the smallest case (N=33, sample variance 93.5; scaled by 2.0 -> 374.0) easy to verify
 # by inspection.

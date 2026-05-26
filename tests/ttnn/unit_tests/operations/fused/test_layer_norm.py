@@ -32,10 +32,7 @@ def assert_output_accuracy(torch_output, ttnn_output, use_welford=False):
 
     The fp32 + Welford path tightens to bounds derived from a per-output-element
     error model. With unpack_to_dest_mode=UnpackToDestFp32 applied to the Welford
-    input alias (c_29 in non-fused / fused regular layer_norm and non-fused
-    large_tensor) and to the mean/M2 spill aliases (c_30/c_31 in fused
-    large_tensor), the dominant per-element error budget is:
-
+    input CB and to the mean/M2 spill CBs, the dominant per-element error budget is:
     - mean/var estimate accuracy: O(ε_tf32) relative (no per-block compounding)
     - per-op SrcA/SrcB Tf32 truncation in the post-Welford eltwise (sub, rsqrt,
       mul, mul gamma, add bias): each contributes ε_tf32 * |operand|

@@ -729,8 +729,8 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
     Both paths go through LayerNormPreAllGatherWelfordProgramFactory.
 
     Two precision regimes are exercised:
-    - The no-residual ("combined") path is pure welford with fp32 unpack-to-dest on c_0 and
-      the scratch CB c_1, so it stays at the fp32 noise floor. The "combined vs torch"
+    - The no-residual ("combined") path is pure welford with fp32 unpack-to-dest on the input
+      CB and the scratch CB, so it stays at the fp32 noise floor. The "combined vs torch"
       tolerance is set tight enough to catch a regression like the scratch CB being held
       in bf16 or losing UnpackToDestFp32.
     - The FUSE_PRE_ADD ("fused") path uses add_tiles on the FPU, which routes fp32 through
@@ -818,17 +818,17 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
 
     # Two tolerance sets:
     #
-    # - "welford" applies to the no-residual path (FUSE_PRE_ADD unset). c_0 carries fp32 with
-    #   UnpackToDestFp32, the scratch CB c_1 is fp32, and the transpose round-trip preserves
-    #   full fp32 precision, so the floor is the welford recurrence's own fp32 noise
-    #   (~sqrt(W) * eps_fp32 ~ a few times 1e-6).
+    # - "welford" applies to the no-residual path (FUSE_PRE_ADD unset). The input CB carries
+    #   fp32 with UnpackToDestFp32, the scratch CB is fp32, and the transpose round-trip
+    #   preserves full fp32 precision, so the floor is the welford recurrence's own fp32 noise
+    #   (~sqrt(W) * eps_fp32 ~ a few times 1e-6 --> Set to 1e-5).
     # - "fused" applies to any comparison involving the FUSE_PRE_ADD output. The in-kernel
     #   add_tiles consumes the input via SrcA/SrcB which routes fp32 through TF32 (10 mantissa
-    #   bits) -- a property of the FPU add path, not a bug -- so the floor is TF32 ULP at the
-    #   value magnitude: |mean| ~ 2/sqrt(W), |var| ~ 2 for randn+randn input, giving
-    #   atol_mean ~ 2/sqrt(W) * 2^-10 and atol_var ~ 2 * 2^-10. For W=128 the larger of the two
-    #   parametrizations sets the bound: atol_mean ~ 1.8e-4, atol_var ~ 2e-3.
-    # - bf16 stats: scratch CB and output are bf16, floor is bf16 quantization (~8e-3).
+    #   bits), so the floor is TF32 ULP at the value magnitude: |mean| ~ 2/sqrt(W), |var| ~ 2
+    #   for randn+randn input, giving atol_mean ~ 2/sqrt(W) * 2^-10 and atol_var ~ 2 * 2^-10.
+    #   For W=128 the larger of the two parametrizations sets the bound:
+    #   atol_mean ~ 1.8e-4 --> Set to 4e-4, atol_var ~ 2e-3. --> Set to 4e-3.
+    # - bf16 stats: scratch CB and output are bf16, floor is bf16 quantization (~8e-3) --> set to 0.01.
     if stats_dtype == ttnn.float32:
         welford_atol = 1e-5
         welford_rtol = 1e-5
@@ -861,7 +861,7 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
         ("fused vs torch: var", torch_var, fused_var, fused_atol_var, fused_rtol, fused_pcc, fused_frob_var),
         # No-residual path (FUSE_PRE_ADD unset) vs the same torch reference. Pure welford
         # path; the floor is fp32 noise, so tight tolerances catch any precision regression
-        # (e.g., the scratch CB being held in bf16, missing UnpackToDestFp32 on c_0 / c_1).
+        # (e.g., the scratch CB being held in bf16, missing UnpackToDestFp32 on the input or scratch CB).
         ("combined vs torch: mean", torch_mean, combined_mean, welford_atol, welford_rtol, welford_pcc, welford_frob),
         ("combined vs torch: var", torch_var, combined_var, welford_atol, welford_rtol, welford_pcc, welford_frob),
         # Fused-pre-add output vs manually-pre-added output. Catches fused-add-specific bugs.
@@ -923,9 +923,10 @@ def test_pre_allgather_ignores_implicit_tile_padding(device, inp_shape):
     assert_equal(out_from_torch, out_from_ones)
 
 
+@pytest.mark.parametrize("use_residual", [False, True])
 @pytest.mark.parametrize("offset", [0.0, 1e6])
 @pytest.mark.parametrize("inp_shape", [(1, 1, 32, 128)])
-def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offset):
+def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offset, use_residual):
     """Welford pre_all_gather stats are accurate for Float32 input regardless of mean offset.
 
     The Welford kernel requires fp32 precision end-to-end: the input CB and the intermediate
@@ -934,7 +935,19 @@ def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offs
     TF32 (10 mantissa bits) when routed through SrcA. When either of these conditions is
     violated, the Welford (x - M) subtraction catastrophically loses precision at large offsets
     because the subtracted values share a large common exponent.
+
+    When use_residual=True, a zero residual is passed to trigger the FUSE_PRE_ADD code path.
+    A zero residual is mathematically a no-op, so a correct end-to-end fp32 pipeline would
+    produce stats identical to the no-residual case. FUSE_PRE_ADD instead routes the input
+    through add_tiles on the FPU, which truncates SrcA/SrcB to TF32. At offset=1e6 the TF32
+    ULP (~512) dwarfs the underlying randn variation (~1), so the variance signal is destroyed
+    inside the add before welford runs.
     """
+    if use_residual:
+        pytest.xfail(
+            "FUSE_PRE_ADD TF32 floor on add_tiles: variance signal is destroyed inside the add before welford runs. Issue #45231."
+        )
+
     torch.manual_seed(0)
     torch_input = torch.randn(inp_shape, dtype=torch.float32) + offset
 
@@ -962,12 +975,25 @@ def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offs
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+
+    residual_kwargs = {}
+    if use_residual:
+        tt_res = ttnn.from_torch(
+            torch.zeros(inp_shape, dtype=torch.float32),
+            dtype=ttnn.float32,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        residual_kwargs["residual_input_tensor"] = tt_res
+
     tt_stats = ttnn.layer_norm_pre_all_gather(
         tt_inp,
         dtype=ttnn.float32,
         compute_kernel_config=kernel_config,
         program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
         recip_tensor=recip_tensor,
+        **residual_kwargs,
     )
 
     actual = ttnn.to_torch(tt_stats)
