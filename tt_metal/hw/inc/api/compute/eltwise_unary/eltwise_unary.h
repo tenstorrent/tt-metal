@@ -31,6 +31,8 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 #else
+    UNPACK((llk_unpack_pack_sync_init()));
+    UNPACK((llk_unpack_to_dest_hw_configure(icb)));
     UNPACK((llk_unpack_hw_configure(icb)));
     UNPACK((llk_unpack_A_init<false /*transpose*/, DST_ACCUM_MODE>(icb)));
 

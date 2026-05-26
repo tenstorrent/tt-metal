@@ -43,6 +43,7 @@ ALWI void acquire_dst() {
  * This is a blocking function, i.e. this function will wait until the lock is acquired.
  */
 ALWI void tile_regs_acquire() {
+    UNPACK((llk_unpack_wait_for_dest_available()));
     MATH((llk_math_wait_for_dest_available()));
 }
 
@@ -79,7 +80,10 @@ ALWI void release_dst() {
 /**
  * Release lock on DST register by MATH thread. The lock had to be previously acquired with tile_regs_acquire.
  */
-ALWI void tile_regs_commit() { MATH((llk_math_dest_section_done<DST_ACCUM_MODE>())); }
+ALWI void tile_regs_commit() {
+    UNPACK((llk_unpack_dest_section_done()));
+    MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+}
 
 /**
  * Release lock on DST register by PACK thread. The lock had to be previously acquired with tile_regs_wait.

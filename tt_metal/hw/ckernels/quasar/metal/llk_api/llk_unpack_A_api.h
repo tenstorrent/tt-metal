@@ -46,19 +46,32 @@ inline void llk_unpack_A_init(
     const std::uint32_t operand = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
-    static_assert(unpack_to_dest == false, "unpack_to_dest is not yet supported on Quasar");
     static_assert(acc_to_dest == false, "acc_to_dest is not yet supported on Quasar");
     static_assert(BType == BroadcastType::NONE, "Only BroadcastType::NONE is supported on Quasar right now");
+    static_assert(
+        !(unpack_to_dest && binary_reuse_dest != EltwiseBinaryReuseDestType::NONE),
+        "unpack_to_dest is incompatible with binary_reuse_dest");
 
     // TODO (tt-metal #42916): Once runtime asserts are added, add asserts for unsupported features above and for valid
     // transpose_of_faces and within_face_16x16_transpose values
 
-    // For Quasar, the unp_sel field is ignored if binary_reuse_dest != EltwiseBinaryReuseDestType::NONE
-    _llk_unpack_unary_operand_init_<
-        p_unpacr::UNP_A,
-        false /* TRANSPOSE_EN */,
-        false /* IS_32b_DEST_EN */,
-        binary_reuse_dest>(operand_id);
+    if constexpr (unpack_to_dest) {
+        // 32-bit unpack-to-dest path: wait for the math thread (via PACK) to release a DEST bank
+        // before configuring the UNPACR_DEST MOP for this section.
+        llk_unpack_wait_for_dest_available();
+        _llk_unpack_unary_operand_init_<
+            p_unpacr::UNP_DEST,
+            false /* TRANSPOSE_EN */,
+            true /* IS_32b_DEST_EN */,
+            EltwiseBinaryReuseDestType::NONE>(operand_id);
+    } else {
+        // For Quasar, the unp_sel field is ignored if binary_reuse_dest != EltwiseBinaryReuseDestType::NONE
+        _llk_unpack_unary_operand_init_<
+            p_unpacr::UNP_A,
+            false /* TRANSPOSE_EN */,
+            false /* IS_32b_DEST_EN */,
+            binary_reuse_dest>(operand_id);
+    }
 }
 
 /**
@@ -98,14 +111,27 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     const std::uint32_t l1_tile_index =
         g_dfb_interface[operand_id].tc_slots[g_dfb_interface[operand_id].tc_idx].rd_entry_idx + tile_index;
 
-    static_assert(unpack_to_dest == false, "unpack_to_dest is not yet supported on Quasar");
     static_assert(acc_to_dest == false, "acc_to_dest is not yet supported on Quasar");
     static_assert(BType == BroadcastType::NONE, "Only BroadcastType::NONE is supported on Quasar right now");
+    static_assert(
+        !(unpack_to_dest && binary_reuse_dest != EltwiseBinaryReuseDestType::NONE),
+        "unpack_to_dest is incompatible with binary_reuse_dest");
 
-    WAYPOINT("UPAW");
-    // For Quasar, the unp_sel field is ignored if binary_reuse_dest != EltwiseBinaryReuseDestType::NONE
-    _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_index);
-    WAYPOINT("UPAD");
+    if constexpr (unpack_to_dest) {
+        // 32-bit unpack-to-dest path: unpack the tile via UNPACR_DEST, then signal the math
+        // trisc that this DEST section has been filled. Each compute-API call to copy_tile is
+        // treated as a one-tile section here; multi-tile sections are handled at the
+        // tile_regs_acquire/commit boundary in the compute API.
+        WAYPOINT("UADW");
+        _llk_unpack_unary_operand_<p_unpacr::UNP_DEST, EltwiseBinaryReuseDestType::NONE>(l1_tile_index);
+        llk_unpack_dest_section_done();
+        WAYPOINT("UADD");
+    } else {
+        WAYPOINT("UPAW");
+        // For Quasar, the unp_sel field is ignored if binary_reuse_dest != EltwiseBinaryReuseDestType::NONE
+        _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_index);
+        WAYPOINT("UPAD");
+    }
 }
 
 /**

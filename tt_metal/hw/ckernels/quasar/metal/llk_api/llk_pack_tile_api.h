@@ -21,7 +21,7 @@
 inline void llk_pack_init(const std::uint32_t pack_output) {
     const std::uint8_t output_id = static_cast<std::uint8_t>(get_output_id(pack_output));
 
-    _llk_pack_init_(output_id);
+    _llk_pack_init_<DST_ACCUM_MODE /* EN_32B_DEST */>(output_id);
 }
 
 /**

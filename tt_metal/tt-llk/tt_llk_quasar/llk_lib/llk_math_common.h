@@ -8,6 +8,7 @@
 
 #include "cmath_common.h"
 #include "llk_defs.h"
+#include "llk_sync.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
@@ -110,61 +111,60 @@ inline void _llk_math_upk_to_dest_hw_configure_()
 }
 
 /**
- * @brief Sets the dest dvalid for a FPU/SFPU
- * @tparam SET_DEST_DVALID: which client to set data valid for, values = <p_cleardvalid::FPU/SFPU>
- **/
-template <std::uint8_t SET_DEST_DVALID, DstSync DST>
-inline void _llk_math_set_dvalid_()
+ * @brief MATH: initialize the three-semaphore DEST-bank protocol (math side).
+ *
+ * Forwards to _llk_sync_math_init_dest_sems_<DST_SYNC_MODE>(), which SEMINITs
+ * MATH_PACK (the semaphore MATH produces). UNPACK separately initializes
+ * UNPACK_MATH and bootstraps DEST_FREE in _llk_sync_unpack_init_dest_sems_().
+ *
+ * Replaces the legacy dvalid-based math/pack sync.
+ *
+ * @tparam DST_SYNC_MODE Dest-bank synchronization mode (SyncFull or SyncHalf).
+ */
+template <DstSync DST_SYNC_MODE>
+inline void _llk_math_pack_sync_init_()
 {
-    static_assert(SET_DEST_DVALID == p_cleardvalid::FPU || SET_DEST_DVALID == p_cleardvalid::SFPU, "Can only set dest dvalid for FPU and SFPU");
-
-    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::WAIT_SFPU);
-    TTI_CLEARDVALID(0, 0, 0, 0, SET_DEST_DVALID, 0);
-    if constexpr (DST == DstSync::SyncFull)
-    {
-        // For DstSync::SyncFull issue a CLEARDVALID instruction for dest bank1 as well in order to use full dest register
-        // Reset dest bank id to 0 for the given dest client to ensure SyncFull starts from bank0
-        TTI_CLEARDVALID(0, 0, 0, SET_DEST_DVALID, SET_DEST_DVALID, 0);
-    }
+    _llk_sync_math_init_dest_sems_<DST_SYNC_MODE>();
 }
 
 /**
- * All the following functions are added to enable Math <-> Pack synchronization
- * on destination register due to dest dvalid issue.
+ * @brief MATH: wait until UNPACK has filled the next DEST bank.
  *
- * The following functions should be removed once the above issue is resolved
+ * Forwards to _llk_sync_math_acquire_dest_<DST_SYNC_MODE>(), which SEMWAITs on
+ * UNPACK_MATH (produced by UNPACK in _llk_sync_unpack_commit_dest_) and SEMGETs
+ * to claim the bank.
+ *
+ * @tparam DST_SYNC_MODE Dest-bank synchronization mode (SyncFull or SyncHalf).
  */
-template <DstSync DST>
-inline void _llk_math_pack_sync_init_()
-{
-    static_assert(DST == DstSync::SyncFull || DST == DstSync::SyncHalf, "Only Dest Sync Half and Full are supported");
-
-    // Wait for previous packs to finish before claiming all dest
-    while (semaphore_read(semaphore::MATH_PACK) > 0)
-    {
-    };
-
-    _reset_dest_register_offset_();
-    _set_dest_section_base_<TRISC_ID>(_get_dest_buffer_base_());
-
-    constexpr std::uint32_t num_sem = (DST == DstSync::SyncFull) ? 1 : 2;
-    TTI_SEMINIT(num_sem, 0, 0, p_stall::SEMAPHORE_1);
-}
-
+template <DstSync DST_SYNC_MODE>
 inline void _llk_math_wait_for_dest_available_()
 {
-    TTI_SEMWAIT(p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_MAX, 0, semaphore::t6_sem(semaphore::MATH_PACK));
+    _llk_sync_math_acquire_dest_<DST_SYNC_MODE>();
 }
 
-template <DstSync DST, bool EN_32BIT_DEST>
+/**
+ * @brief MATH: signal PACK that the current DEST bank is filled with math results.
+ *
+ * Forwards to _llk_sync_math_commit_dest_(), which SEMPOSTs MATH_PACK.
+ *
+ * The HW MATH_DEST_access_id auto-rotation (programmed by
+ * _llk_unpack_to_dest_hw_configure_) fires on the last matrix-unit MOP of the
+ * section. For Flow A (no FPU MOPs) there's a TODO in
+ * _llk_sync_math_commit_dest_ about explicitly toggling access_id.
+ *
+ * @tparam EN_32BIT_DEST  Whether the dest is in 32-bit mode (Float32/Int32).
+ *                       Currently informational only; HW manages bank rotation
+ *                       via MATH_DEST_access_id when 32-bit unpack-to-dest is
+ *                       enabled, and _llk_sync_math_commit_dest_ handles the
+ *                       SW protocol uniformly for the 16-bit path.
+ * @tparam DST_SYNC_MODE  Dest-bank synchronization mode (SyncFull or SyncHalf).
+ */
+template <bool EN_32BIT_DEST, DstSync DST_SYNC_MODE>
 inline void _llk_math_dest_section_done_()
 {
-    t6_semaphore_post<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
-    if constexpr (DST == DstSync::SyncHalf)
-    {
-        _update_dest_register_offset_<EN_32BIT_DEST>();
-        std::uint32_t base_addr = _get_dest_buffer_base_();
-        TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::MATH, p_stall::WAIT_SFPU);
-        _set_dest_section_base_<TRISC_ID>(base_addr);
-    }
+    _llk_sync_math_commit_dest_();
+    // The HW MATH_DEST_access_id auto-rotation (programmed by
+    // _llk_unpack_to_dest_hw_configure_) fires on the last matrix-unit MOP of
+    // the section. For Flow A (no FPU MOPs) there's a TODO in
+    // _llk_sync_math_commit_dest_ about explicitly toggling access_id.
 }

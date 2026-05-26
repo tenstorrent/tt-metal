@@ -235,7 +235,9 @@ inline void _update_dest_register_offset_()
 // Semaphores mapping and trisc space -> tensix space conversion
 struct semaphore
 {
-    constexpr static std::uint32_t MATH_PACK = 1; // math <-> pack sync on dest register
+    constexpr static std::uint32_t MATH_PACK   = 1; // math -> pack: pack waits for MATH to fill dest
+    constexpr static std::uint32_t UNPACK_MATH = 2; // unpack -> math: MATH waits for UNPACK to fill dest (32-bit unpack-to-dest)
+    constexpr static std::uint32_t DEST_FREE   = 3; // pack -> unpack: UNPACK waits for PACK to release a dest bank
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {

@@ -69,6 +69,8 @@ struct QuasarComputeConfig {
 
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
+    // Route the unpacker directly into Dest (Quasar only). Mirrors ComputeConfiguration::unpack_to_dest_en.
+    bool unpack_to_dest_en = false;
     bool dst_full_sync_en = false;
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool bfp8_pack_precise = false;

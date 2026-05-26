@@ -4,6 +4,7 @@
 
 #include "jit_build/genfiles.hpp"
 
+#include <base_types.hpp>
 #include <circular_buffer_constants.h>
 #include "data_format.hpp"
 #include <algorithm>
@@ -37,10 +38,6 @@
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel_source.hpp"
-
-namespace tt::tt_metal {
-enum class UnpackToDestMode : uint8_t;
-}  // namespace tt::tt_metal
 
 namespace fs = std::filesystem;
 
@@ -613,12 +610,20 @@ void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t ma
 }
 
 void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& options) {
+    const bool any_non_default_unpack_to_dest_mode = std::ranges::any_of(
+        options.unpack_to_dest_mode,
+        [](auto m) { return m != UnpackToDestMode::Default; });
+    const bool unpack_to_dest_en = options.unpack_to_dest_en || any_non_default_unpack_to_dest_mode;
     fmt::format_to(
         std::ostreambuf_iterator<char>(out),
         "constexpr bool DST_ACCUM_MODE = {};\n"
-        "#define DST_SYNC_MODE DstSync::Sync{}\n",
+        "#define DST_SYNC_MODE DstSync::Sync{}\n"
+        "constexpr bool UnpackToDestEn = {};\n"
+        // TODO: per-kernel override; always false for now
+        "constexpr bool FusedMathOverDest = false;\n",
         options.fp32_dest_acc_en,
-        options.dst_full_sync_en ? "Full" : "Half");
+        options.dst_full_sync_en ? "Full" : "Half",
+        unpack_to_dest_en);
 }
 
 void emit_math_scalar_descriptors(std::ostream& out, const tt_hlk_desc& desc) {

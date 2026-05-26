@@ -19,6 +19,8 @@ constexpr bool DST_ACCUM_MODE = false;
 #define DST_SYNC_MODE DstSync::SyncHalf
 constexpr bool APPROX = true;
 constexpr std::int32_t MATH_FIDELITY = 255;
+constexpr bool UnpackToDestEn = false;
+constexpr bool FusedMathOverDest = false;
 
 // chlkc_descriptors.h (pack data format arrays)
 constexpr unsigned char pack_src_format[32] = {

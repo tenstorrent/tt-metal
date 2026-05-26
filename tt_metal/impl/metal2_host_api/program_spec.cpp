@@ -745,6 +745,19 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
         const auto& compute_config = std::get<ComputeConfiguration>(kernel.config_spec);
 
+        // unpack_to_dest_en bypasses all per-DFB unpack_to_dest_mode validation (see
+        // block comment above). The two configs are mutually exclusive: unpack_to_dest_en
+        // routes every 32-bit unpack to Dest globally, so per-DFB entries are dead config.
+        if (compute_config.unpack_to_dest_en) {
+            TT_FATAL(
+                compute_config.unpack_to_dest_mode.empty(),
+                "Kernel '{}' sets unpack_to_dest_en=true and also has unpack_to_dest_mode entries. "
+                "These are mutually exclusive: unpack_to_dest_en routes all 32-bit unpacks to Dest "
+                "globally, making per-DFB unpack_to_dest_mode entries redundant. Remove the entries.",
+                kernel.unique_id);
+            continue;
+        }
+
         // Index the kernel's DFB bindings: which are bound, which are consumed.
         std::unordered_set<DFBSpecName> bound_dfbs;
         std::unordered_set<DFBSpecName> consumed_dfbs;
@@ -2105,6 +2118,7 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         .num_threads_per_cluster = kernel_spec.num_threads,
         .math_fidelity = compute_config.math_fidelity,
         .fp32_dest_acc_en = compute_config.fp32_dest_acc_en,
+        .unpack_to_dest_en = compute_config.unpack_to_dest_en,
         .dst_full_sync_en = compute_config.dst_full_sync_en,
         .unpack_to_dest_mode = unpack_modes,
         .bfp8_pack_precise = compute_config.bfp8_pack_precise,

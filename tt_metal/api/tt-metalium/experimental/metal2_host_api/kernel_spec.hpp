@@ -38,6 +38,11 @@ struct ComputeConfiguration {
     // Configure Dest register to hold 32-bit elements (instead of the default 16-bit)
     bool fp32_dest_acc_en = false;
 
+    // Route the unpacker directly into Dest for all consumer DFBs (Quasar only).
+    // When true, the per-DFB Float32 / fp32_dest_acc_en gating that applies to
+    // unpack_to_dest_mode is bypassed and all 32-bit unpacks go to Dest.
+    bool unpack_to_dest_en = false;
+
     // Dest register sync mode:
     //   false (Half) — Dest is split in half; math and pack pipeline (double-buffered)
     //   true  (Full) — Dest is one buffer; twice the capacity, no math/pack overlap

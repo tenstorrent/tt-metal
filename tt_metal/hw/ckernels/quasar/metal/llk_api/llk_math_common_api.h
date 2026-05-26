@@ -82,16 +82,6 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
 }
 
 /**
- * @brief Sets the dest dvalid for FPU/SFPU
- *
- * @tparam SET_DEST_DVALID: which client to set data valid for, values = p_cleardvalid::FPU/SFPU
- **/
-template <std::uint8_t SET_DEST_DVALID>
-inline void llk_math_set_dvalid() {
-    _llk_math_set_dvalid_<SET_DEST_DVALID>();
-}
-
-/**
  * All the following functions are added to enable Math <-> Pack synchronization
  * on destination register using semaphores.
  *
@@ -101,26 +91,30 @@ inline void llk_math_set_dvalid() {
 
 /**
  * @brief Waits until destination register space is available.
- * Blocks on the MATH_PACK semaphore until the packer gets the semaphore.
+ * Blocks on the UNPACK_MATH semaphore (MATH side of the three-semaphore protocol)
+ * until UNPACK has filled a DEST bank.
  */
 inline void llk_math_wait_for_dest_available() {
     WAYPOINT("MWDW");
-    _llk_math_wait_for_dest_available_();
+    _llk_math_wait_for_dest_available_<DST_SYNC_MODE>();
     WAYPOINT("MWDD");
 }
 
 /**
  * @brief Signals that the current destination section is done.
- * After math is done, posts to the MATH_PACK semaphore so the packer can proceed;
+ * After math is done, posts to the MATH_PACK semaphore so the packer can proceed.
  * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
  */
 template <bool EN_32BIT_DEST>
 inline void llk_math_dest_section_done() {
-    _llk_math_dest_section_done_<DST_SYNC_MODE, EN_32BIT_DEST>();
+    _llk_math_dest_section_done_<EN_32BIT_DEST, DST_SYNC_MODE>();
 }
 
 /**
  * @brief Initializes math–pack synchronization for the destination register.
  * Waits for any previous packs to finish, resets the dest bank id, initializes the MATH_PACK semaphore
  */
-inline void llk_math_pack_sync_init() { _llk_math_pack_sync_init_<DST_SYNC_MODE>(); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+inline void llk_math_pack_sync_init() {
+    _llk_math_pack_sync_init_<DST_SYNC_MODE>();
+}

@@ -46,18 +46,6 @@ inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
 }
 
 /**
- * @brief Clears the data valid for destination register after Packer 0 is done packing
- * and zeroes out the dest bank(s) used by packer 0
- *
- * @tparam DST: Destination register buffering mode, values = [DstSync::SyncHalf, DstSync::SyncFull]
- * @tparam IS_FP32_MATH_DEST_EN: flag to show if math destination register is set to float32 mode
- **/
-template <DstSync DST, bool IS_FP32_MATH_DEST_EN>
-inline void llk_pack_dest_dvalid_section_done() {
-    _llk_pack_dest_dvalid_section_done_<DST, IS_FP32_MATH_DEST_EN>();
-}
-
-/**
  * All the following functions are added to enable Math <-> Pack synchronization
  * on the destination register using semaphores.
  *
@@ -76,10 +64,12 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
  * Posts to the math–pack semaphore and clears/zeros the dest bank(s) used by the packer;
  *
  * @tparam is_fp32_dest_acc_en True if math destination is in 32-bit mode, false for 16-bit mode.
+ *         Defaults to DST_ACCUM_MODE so single-arg callers compile-time discriminate via the
+ *         global flag rather than a runtime per-CB pack_src_format scan.
  */
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 inline void llk_pack_dest_section_done() {
-    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, is_fp32_dest_acc_en>();
+    _llk_pack_dest_section_done_<p_pacr::PACK0, is_fp32_dest_acc_en, DST_SYNC_MODE>();
 }
 
 /**
@@ -87,11 +77,11 @@ inline void llk_pack_dest_section_done() {
  * @param config Packed uint32: bits [1:0] = ReluType, bits [31:16] = threshold.
  */
 TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) {
-    _llk_pack_relu_config_<p_pacr::PACK0, false /* EN_32B_DEST */>(ckernel::ReluConfig::from_packed(config));
+    _llk_pack_relu_config_<p_pacr::PACK0, DST_ACCUM_MODE /* EN_32B_DEST */>(ckernel::ReluConfig::from_packed(config));
 }
 
 TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
-    _llk_pack_relu_config_<p_pacr::PACK0, false /* EN_32B_DEST */>(relu_config);
+    _llk_pack_relu_config_<p_pacr::PACK0, DST_ACCUM_MODE /* EN_32B_DEST */>(relu_config);
 }
 
 /**

@@ -38,6 +38,8 @@ public:
 
     // We can keep for future WH support, otherwise not used in GS
     bool fp32_dest_acc_en{};
+    // Set by host wiring, consumed by genfiles.cpp to emit constexpr bool UnpackToDestEn into the JIT prelude.
+    bool unpack_to_dest_en{};
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool bfp8_pack_precise{};
 
