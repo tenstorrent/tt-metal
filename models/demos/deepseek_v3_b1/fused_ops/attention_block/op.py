@@ -636,9 +636,6 @@ class AttentionBlock:
 
         # Get actual tile dimensions from input tensor (matches original op)
         sdpa_tile_height, sdpa_tile_width = sdpa_tile.tile_shape
-        # CB unpack face geometry (face_r_dim, num_faces) — must match tt::Tile face layout for sdpa_tile
-        sdpa_cb_unpack_face_r_dim = sdpa_tile.face_shape[0]
-        sdpa_cb_unpack_num_faces = sdpa_tile.num_faces
         sdpa_element_size_bytes = _get_element_size_bytes(sdpa_dtype)
         sdpa_l1_alignment = 16  # L1 alignment for SDPA (matches original op)
         sdpa_shard_spec = sdpa_l_mem_config.shard_spec
@@ -3020,7 +3017,6 @@ class AttentionBlock:
             page_size=sdpa_l_tile_size,
             tile=ttnn.TileDescriptor(sdpa_tile),
         )
-        sdpa_l_out_cb_format.face_geometry = (sdpa_cb_unpack_face_r_dim, sdpa_cb_unpack_num_faces)
         sdpa_l_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             sdpa_cb_l_out,
             ref_sdpa_out_interm_buffer,

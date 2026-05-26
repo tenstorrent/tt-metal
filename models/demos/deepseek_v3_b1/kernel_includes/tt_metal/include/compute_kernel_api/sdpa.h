@@ -620,7 +620,7 @@ ALWI void sdpa_tail(
     // Phase 2: Process all L blocks
     // Untilize requires operating on all blocks at once
     if constexpr (untilize) {
-        pack_untilize_dest_init<block_size, num_blocks * block_size, false, TILE_C_DIM, dense>(cb_l_out);
+        pack_untilize_dest_init_skip_remap<block_size, num_blocks * block_size, false, TILE_C_DIM, dense>(cb_l_out);
         cb_reserve_back(cb_l_out, block_size * num_blocks);
     }
     // When normalize=true, first block uses regs still held from MS phase
