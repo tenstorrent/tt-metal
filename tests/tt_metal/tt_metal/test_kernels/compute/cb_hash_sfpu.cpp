@@ -21,7 +21,7 @@ void kernel_main() {
 
     unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
 
-    acquire_dst();
+    tile_regs_acquire();
     cb_reserve_back(tt::CBIndex::c_16, per_core_tile_cnt);
 
     // The hash probe: SFPU FNV23 over the L1 bytes of CB0. Internally waits
@@ -32,10 +32,12 @@ void kernel_main() {
     // CB0 was already popped by hash_cb_sfpu. We can't re-read its tiles, so
     // just push zero tiles to CB16 to keep the writer's cb_pop_front happy.
     // (The test ignores buffer_Res content — it only checks DPRINT.)
+    tile_regs_commit();
+    tile_regs_wait();
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         pack_tile(/*ifrom_dst=*/0, tt::CBIndex::c_16);
         cb_push_back(tt::CBIndex::c_16, 1);
     }
 
-    release_dst();
+    tile_regs_release();
 }

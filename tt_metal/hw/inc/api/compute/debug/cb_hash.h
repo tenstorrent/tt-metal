@@ -68,13 +68,22 @@ constexpr uint32_t DEBUG_HASH_L1_OFFSET = 64;
 constexpr uint32_t DEBUG_HASH_L1_HASH_ADDR = MEM_LLK_DEBUG_BASE + DEBUG_HASH_L1_OFFSET;
 constexpr uint32_t DEBUG_HASH_L1_READY_ADDR = MEM_LLK_DEBUG_BASE + DEBUG_HASH_L1_OFFSET + 4;
 
+// Compile-time guard: if the debug region shrinks or the offset moves, this
+// fires instead of silently corrupting adjacent memory.
+static_assert(
+    DEBUG_HASH_L1_OFFSET + 8 <= MEM_LLK_DEBUG_SIZE,
+    "DEBUG_HASH_L1 slot (hash u32 + ready u32) exceeds the MEM_LLK_DEBUG region");
+
 // clang-format off
 /**
  * Scalar (TRISC-side) CB hash. Runs FNV-1a-32 over the L1 bytes of `cb_id` on
- * whichever TRISC dispatches the LLK — UNPACK by default. Pure RISC-V scalar
- * code: no Tensix Engine instructions are issued and no DEST / SFPU state is
- * touched, which makes this the safe default when the SFPU or DEST pipeline
- * is itself under suspicion.
+ * whichever TRISC dispatches the LLK — UNPACK by default. The resulting hash
+ * is printed via DPRINT in a stable diff-friendly format:
+ *     hash[0x<label>] cb=<cb_id> tiles=<n> = 0x<hash>
+ *
+ * Pure RISC-V scalar code: no Tensix Engine instructions are issued and no
+ * DEST / SFPU state is touched, which makes this the safe default when the
+ * SFPU or DEST pipeline is itself under suspicion.
  *
  * Defaults to UNPACK because the CB read pointer (fifo_rd_ptr) is only
  * populated on the UNPACK thread — cb_interface[] is not even allocated on
@@ -101,14 +110,18 @@ ALWI void hash_cb_trisc(uint32_t cb_id, uint32_t num_tiles, uint32_t label) {
  * SFPU-side CB hash. Computes a 23-bit ("FNV23") lanewise multiplicative hash
  * over the L1 bytes of `in_cb` on the SFPU, then routes the single-u32 result
  * through L1 (MATH writes the reduced hash to a fixed slot in the MEM_LLK_DEBUG
- * region, UNPACK polls a ready flag and reads it back) before DPRINTing. The
- * L1 round trip is deliberate: it exercises the same MATH → L1 → UNPACK
+ * region, UNPACK polls a ready flag and reads it back) before printing via
+ * DPRINT in the same format as hash_cb_trisc:
+ *     hash[0x<label>] cb=<cb_id> tiles=<n> = 0x<hash>
+ *
+ * The L1 round trip is deliberate: it exercises the same MATH → L1 → UNPACK
  * handoff that production compute kernels use, so this variant can flag
  * cross-TRISC races that the engine-neutral hash_cb hides.
  *
  * Trade-offs versus hash_cb_trisc:
  *   - Touches SFPU LReg state and DEST slot 0. Wrap the call in
- *     acquire_dst / release_dst, and expect DEST slot 0 to be clobbered.
+ *     tile_regs_acquire / tile_regs_commit, and expect DEST slot 0 to be
+ *     clobbered.
  *   - Input CB must hold INT32 tiles; the kernel must be built with the
  *     unpack-to-dest path enabled for 32-bit formats (the standard config
  *     for INT32). See the tt-llk standalone test for an end-to-end example.

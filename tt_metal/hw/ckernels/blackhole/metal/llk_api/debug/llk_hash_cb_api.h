@@ -44,6 +44,10 @@ inline void llk_hash_cb_trisc(uint32_t cb_id, uint32_t num_tiles, uint32_t label
         h = (h ^ p[i]) * 0x01000193u;
     }
 
+    // Print the hash in the diff-friendly format documented in cb_hash.h.
+    // DPRINT is safe here because hash_cb_trisc defaults to the UNPACK thread
+    // (the only TRISC with a DPRINT buffer) and the hash loop above has
+    // completed — no concurrent L1 access conflicts.
     DPRINT << "hash[0x" << HEX() << label << "] cb=" << DEC() << cb_id << " tiles=" << num_tiles << " = 0x" << HEX()
            << h << DEC() << ENDL();
 #else
