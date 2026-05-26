@@ -29,6 +29,9 @@ device buffers, and later iterations only do host→device copy + ``execute_trac
 
 Set ``DEVSTRAL2_TRACE_PREFILL=0`` to run chunked prefill untraced.
 
+Set ``DEVSTRAL2_DECODE_TRACE_2CQ=1`` to use two command queues for decode (CQ1=input
+H2D, CQ0=forward/trace). Requires ``num_command_queues=2`` on the mesh device.
+
 Usage (pytest, single Loudbox / 1x8 mesh by default)::
 
     pytest models/experimental/devstral2_large/demo/text_demo.py
@@ -40,6 +43,7 @@ pytest CLI option churn)::
     DEVSTRAL2_MAX_NEW_TOKENS=100
     DEVSTRAL2_NUM_LAYERS=         # unset/empty = full num_hidden_layers
     DEVSTRAL2_TRACE_PREFILL=1     # 0 = never capture prefill trace
+    DEVSTRAL2_DECODE_TRACE_2CQ=0  # 1 = CQ1 input H2D + CQ0 decode trace
     DEVSTRAL2_MIN_MAX_SEQ_LEN=1024  # KV floor (1024 => 8 blocks, enables flexible prefill trace)
     MESH_DEVICE=N150|N300|N150x4|P150x4|T3K|TG    # default 1x4 (Quietbox)
 
@@ -60,6 +64,13 @@ from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
+from models.experimental.devstral2_large.demo.decode_trace_2cq import (
+    DecodeTrace2CQ,
+    decode_trace_2cq_enabled,
+    num_command_queues_for_decode,
+    signal_decode_step_done,
+    stage_decode_inputs,
+)
 from models.experimental.devstral2_large.tests._devstral_weights import (
     model_prefill_weight_keys,
     require_hf_weights,
@@ -98,7 +109,7 @@ def _min_max_seq_len() -> int:
     SDPA + multi-chunk prefill trace are safe. Use 512 only if you accept int ``start_pos``
     prefill (trace disabled when cols != logical blocks).
     """
-    raw = os.environ.get("DEVSTRAL2_MIN_MAX_SEQ_LEN", "1024").strip()
+    raw = os.environ.get("DEVSTRAL2_MIN_MAX_SEQ_LEN", "4096").strip()
     floor = int(raw)
     block = Devstral2Args.kv_block_size
     if floor % block != 0:
@@ -405,6 +416,11 @@ def _generate(
     decode_tok_dev = _input_ids_to_tt(decode_tok_host_init, mesh_device)
     decode_pos_dev = _current_pos_to_tt(torch.tensor([prompt_len], dtype=torch.long), mesh_device)
 
+    decode_2cq: Optional[DecodeTrace2CQ] = None
+    if decode_trace_2cq_enabled():
+        decode_2cq = DecodeTrace2CQ.create(mesh_device, decode_tok_dev, decode_pos_dev)
+        logger.info("Decode trace 2CQ enabled (CQ1=input H2D, CQ0=forward/trace).")
+
     prefill_trace_id = None
     decode_trace_id = None
     prefill_trace_logits = None
@@ -551,29 +567,26 @@ def _generate(
                 # Untraced compile pass (kernel cache only; do not sample — avoids an extra
                 # decode step and KV write before trace capture).
                 t_compile = time.time()
-                ttnn.copy_host_to_device_tensor(
-                    _input_ids_host(torch.tensor([[next_token]], dtype=torch.long), mesh_device),
-                    decode_tok_dev,
-                )
-                ttnn.copy_host_to_device_tensor(
-                    _current_pos_host(torch.tensor([current_pos], dtype=torch.long), mesh_device),
-                    decode_pos_dev,
-                )
+                stage_decode_inputs(decode_2cq, mesh_device, decode_tok_dev, decode_pos_dev, next_token, current_pos)
                 tt_out = model(decode_tok_dev, mode="decode", current_pos=decode_pos_dev)
                 tt_out.deallocate(True)
                 ttnn.synchronize_device(mesh_device)
+                signal_decode_step_done(decode_2cq)
                 compile_decode_time = time.time() - t_compile
                 logger.info(f"Decode compile pass: {compile_decode_time*1000:.0f}ms")
 
                 # Capture trace bound to (decode_tok_dev, decode_pos_dev); first replay logits
                 # come from this capture pass.
                 t_capture = time.time()
+                stage_decode_inputs(decode_2cq, mesh_device, decode_tok_dev, decode_pos_dev, next_token, current_pos)
                 decode_trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
                 decode_trace_logits = model(decode_tok_dev, mode="decode", current_pos=decode_pos_dev)
                 ttnn.end_trace_capture(mesh_device, decode_trace_id, cq_id=0)
                 ttnn.synchronize_device(mesh_device)
+                signal_decode_step_done(decode_2cq)
                 capture_decode_time = time.time() - t_capture
-                logger.info(f"Decode trace captured in {capture_decode_time*1000:.0f}ms")
+                suffix = " (2CQ)" if decode_2cq is not None else ""
+                logger.info(f"Decode trace captured in {capture_decode_time*1000:.0f}ms{suffix}")
 
                 logits_torch = _logits_to_torch(decode_trace_logits, mesh_device, args.vocab_size)
                 next_token = int(logits_torch[0].argmax().item())
@@ -581,16 +594,10 @@ def _generate(
                 current_pos += 1
             else:
                 # Replay: refresh inputs, execute trace, then sync before reading logits.
-                ttnn.copy_host_to_device_tensor(
-                    _input_ids_host(torch.tensor([[next_token]], dtype=torch.long), mesh_device),
-                    decode_tok_dev,
-                )
-                ttnn.copy_host_to_device_tensor(
-                    _current_pos_host(torch.tensor([current_pos], dtype=torch.long), mesh_device),
-                    decode_pos_dev,
-                )
+                stage_decode_inputs(decode_2cq, mesh_device, decode_tok_dev, decode_pos_dev, next_token, current_pos)
                 ttnn.execute_trace(mesh_device, decode_trace_id, cq_id=0, blocking=False)
                 ttnn.synchronize_device(mesh_device)
+                signal_decode_step_done(decode_2cq)
                 logits_torch = _logits_to_torch(decode_trace_logits, mesh_device, args.vocab_size)
                 next_token = int(logits_torch[0].argmax().item())
                 generated.append(next_token)
@@ -617,20 +624,18 @@ def _generate(
     return decoded
 
 
+def _text_demo_device_params():
+    return {
+        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        "trace_region_size": 100_000_000,
+        "num_command_queues": num_command_queues_for_decode(),
+        "l1_small_size": DEVSTRAL2_LARGE_L1_SMALL_SIZE,
+    }
+
+
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 100_000_000,
-            "num_command_queues": 1,
-            "l1_small_size": DEVSTRAL2_LARGE_L1_SMALL_SIZE,
-        }
-    ],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_params", [_text_demo_device_params()], indirect=True)
 def test_devstral2_large_text_demo(mesh_device):
     prompt = os.environ.get("DEVSTRAL2_PROMPT") or "Write a Python function to reverse a linked list."
     max_new_tokens = int(os.environ.get("DEVSTRAL2_MAX_NEW_TOKENS") or "100")

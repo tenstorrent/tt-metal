@@ -11,6 +11,7 @@ Mirrors ``models/experimental/devstral2_small/demo/tt_demo_agent.py``:
   * chunked paged prefill (``kv_block_size`` tokens per dispatch), then
   * traced decode (default): one capture per generation, ``execute_trace`` for later
     tokens; persistent ``(token, current_pos)`` device buffers updated each step.
+  * optional ``--decode-trace-2cq``: CQ1 for input H2D, CQ0 for forward/trace replay.
 
 Sampling is CPU-side (argmax for greedy, multinomial otherwise) on the column-parallel
 ``lm_head`` output, because :class:`TtMinistral3ForCausalLM` already returns logits.
@@ -42,8 +43,12 @@ from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
+from models.experimental.devstral2_large.demo.decode_trace_2cq import (
+    DecodeTrace2CQ,
+    signal_decode_step_done,
+    stage_decode_inputs,
+)
 from models.experimental.devstral2_large.demo.text_demo import (
-    _current_pos_host,
     _current_pos_to_tt,
     _input_ids_host,
     _input_ids_to_tt,
@@ -597,6 +602,7 @@ class TTAgentConfig(ChatConfig):
     prefill_activations_dram: bool = False
     use_kv_cache: bool = True
     trace_decode: bool = True
+    trace_decode_2cq: bool = False
     verbose_runtime: bool = False
 
 
@@ -627,6 +633,7 @@ class TtAgentRuntime:
     kv_seq_len: int = 0
     cached_token_ids: Optional[torch.Tensor] = None
     system_prefix_warmed: bool = False
+    decode_2cq: Optional[DecodeTrace2CQ] = None
 
 
 def _set_fabric_1d_or_warn(enabled: bool) -> bool:
@@ -641,10 +648,12 @@ def _set_fabric_1d_or_warn(enabled: bool) -> bool:
         return False
 
 
-def _open_mesh(mesh_name: str) -> Tuple[ttnn.MeshDevice, bool]:
+def _open_mesh(mesh_name: str, *, num_command_queues: int = 1) -> Tuple[ttnn.MeshDevice, bool]:
     shape = _MESH_SHAPES.get(mesh_name)
     if shape is None:
         raise ValueError(f"Unknown --mesh-device {mesh_name!r}. Supported: {sorted(_MESH_SHAPES.keys())}")
+    if num_command_queues not in (1, 2):
+        raise ValueError(f"num_command_queues must be 1 or 2, got {num_command_queues}")
     rows, cols = shape
     is_multichip = rows * cols > 1
     fabric_set = _set_fabric_1d_or_warn(enabled=is_multichip)
@@ -652,7 +661,7 @@ def _open_mesh(mesh_name: str) -> Tuple[ttnn.MeshDevice, bool]:
         mesh_shape=ttnn.MeshShape(rows, cols),
         l1_small_size=DEVSTRAL2_LARGE_L1_SMALL_SIZE,
         trace_region_size=_TRACE_REGION_SIZE,
-        num_command_queues=1,
+        num_command_queues=num_command_queues,
     )
     return mesh_device, fabric_set
 
@@ -731,6 +740,9 @@ def _resolve_agent_max_seq_len(tokenizer: Any, config: TTAgentConfig, mesh_devic
 
 def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
     """Open mesh, build TT model + tokenizer, allocate persistent decode buffers."""
+    if config.trace_decode_2cq and not config.trace_decode:
+        raise ValueError("--decode-trace-2cq requires traced decode (do not pass --no-decode-trace).")
+
     logger.info(f"Loading tokenizer for {config.model_id}...")
     tokenizer = AutoTokenizer.from_pretrained(config.model_id, trust_remote_code=True)
     pad_token_id = getattr(tokenizer, "pad_token_id", None)
@@ -746,7 +758,8 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
     if num_layers != full_layers:
         logger.warning(f"Using --num-layers {num_layers} (full depth is {full_layers}); quality will be reduced.")
 
-    mesh_device, fabric_was_set = _open_mesh(config.mesh_device_name)
+    num_command_queues = 2 if config.trace_decode_2cq else 1
+    mesh_device, fabric_was_set = _open_mesh(config.mesh_device_name, num_command_queues=num_command_queues)
     try:
         max_seq_len = _resolve_agent_max_seq_len(tokenizer, config, mesh_device)
         args = Devstral2Args.from_hf_config(
@@ -763,6 +776,8 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
                 f"Decode trace enabled (trace_region_size={_TRACE_REGION_SIZE}); "
                 "persistent decode_tok/pos buffers per step."
             )
+        if config.trace_decode_2cq:
+            logger.info("Decode trace 2CQ enabled (CQ1=input H2D, CQ0=forward/trace).")
 
         base_keys = model_prefill_weight_keys(num_layers)
         want_lm_head = not args.tie_word_embeddings
@@ -783,6 +798,9 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
         # Persistent decode-step buffers (host copy + device tensor each decode step).
         decode_tok_dev = _input_ids_to_tt(torch.zeros((1, 1), dtype=torch.long), mesh_device)
         decode_pos_dev = _current_pos_to_tt(torch.tensor([0], dtype=torch.long), mesh_device)
+        decode_2cq = None
+        if config.trace_decode_2cq:
+            decode_2cq = DecodeTrace2CQ.create(mesh_device, decode_tok_dev, decode_pos_dev)
         block_size = int(args.kv_block_size)
         prefill_chunk_dev = _input_ids_to_tt(
             torch.full((1, block_size), int(pad_token_id), dtype=torch.long),
@@ -801,6 +819,7 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
             decode_tok_dev=decode_tok_dev,
             decode_pos_dev=decode_pos_dev,
             prefill_chunk_dev=prefill_chunk_dev,
+            decode_2cq=decode_2cq,
         )
         # Prefill and decode compile on demand; TTNN caches programs after first use.
         return runtime
@@ -1024,13 +1043,13 @@ def _sample_next(logits_row: torch.Tensor, do_sample: bool, temperature: float, 
 
 def _write_decode_inputs(rt: TtAgentRuntime, token_id: int, pos: int) -> None:
     """Refresh the persistent ``(token, current_pos)`` device buffers for one decode step."""
-    ttnn.copy_host_to_device_tensor(
-        _input_ids_host(torch.tensor([[token_id]], dtype=torch.long), rt.mesh_device),
+    stage_decode_inputs(
+        rt.decode_2cq,
+        rt.mesh_device,
         rt.decode_tok_dev,
-    )
-    ttnn.copy_host_to_device_tensor(
-        _current_pos_host(torch.tensor([pos], dtype=torch.long), rt.mesh_device),
         rt.decode_pos_dev,
+        token_id,
+        pos,
     )
 
 
@@ -1038,6 +1057,7 @@ def _decode_one_token(rt: TtAgentRuntime, token_id: int, pos: int, config: TTAge
     """Single untraced decode step (host buffer refresh + forward + sample)."""
     _write_decode_inputs(rt, token_id, pos)
     tt_out = rt.model(rt.decode_tok_dev, mode="decode", current_pos=rt.decode_pos_dev)
+    signal_decode_step_done(rt.decode_2cq)
     ttnn.synchronize_device(rt.mesh_device)
     logits_torch = _logits_to_torch(tt_out, rt.mesh_device, rt.args.vocab_size)
     next_token = _sample_next(
@@ -1061,8 +1081,18 @@ def _run_traced_decode_loop(
     """Traced decode: compile once, capture once, then ``execute_trace`` for remaining steps.
 
     Uses persistent ``decode_tok_dev`` / ``decode_pos_dev`` (host→device copy each step).
+    When ``trace_decode_2cq`` is set, input H2D uses CQ1 and forward/trace uses CQ0.
     Trace is released before the next prefill in ``generate_assistant_text_tt``.
     """
+    if rt.decode_2cq is not None:
+        return _run_traced_decode_loop_2cq(
+            rt,
+            next_token=next_token,
+            current_pos=current_pos,
+            config=config,
+            max_extra_tokens=max_extra_tokens,
+        )
+
     extra: List[int] = []
     pos = current_pos
     tok = next_token
@@ -1090,6 +1120,64 @@ def _run_traced_decode_loop(
         else:
             ttnn.execute_trace(rt.mesh_device, rt.decode_trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(rt.mesh_device)
+
+        logits_torch = _logits_to_torch(rt.decode_trace_logits, rt.mesh_device, rt.args.vocab_size)
+        tok = _sample_next(
+            logits_torch[0],
+            do_sample=bool(config.do_sample),
+            temperature=float(config.temperature),
+            top_p=float(config.top_p),
+        )
+        extra.append(tok)
+        pos += 1
+
+    return extra
+
+
+def _run_traced_decode_loop_2cq(
+    rt: TtAgentRuntime,
+    *,
+    next_token: int,
+    current_pos: int,
+    config: TTAgentConfig,
+    max_extra_tokens: int,
+) -> List[int]:
+    """Traced decode with CQ1 input staging and CQ0 forward/trace (see ``DecodeTrace2CQ``)."""
+    pipe = rt.decode_2cq
+    assert pipe is not None
+
+    extra: List[int] = []
+    pos = current_pos
+    tok = next_token
+
+    for iteration in range(max_extra_tokens):
+        if tok in rt.eos_ids:
+            break
+
+        stage_decode_inputs(pipe, rt.mesh_device, rt.decode_tok_dev, rt.decode_pos_dev, tok, pos)
+
+        if iteration == 0:
+            tt_out = rt.model(rt.decode_tok_dev, mode="decode", current_pos=rt.decode_pos_dev)
+            tt_out.deallocate(True)
+            ttnn.synchronize_device(rt.mesh_device)
+            signal_decode_step_done(pipe)
+
+            stage_decode_inputs(pipe, rt.mesh_device, rt.decode_tok_dev, rt.decode_pos_dev, tok, pos)
+
+            rt.decode_trace_id = ttnn.begin_trace_capture(rt.mesh_device, cq_id=0)
+            rt.decode_trace_logits = rt.model(rt.decode_tok_dev, mode="decode", current_pos=rt.decode_pos_dev)
+            ttnn.end_trace_capture(rt.mesh_device, rt.decode_trace_id, cq_id=0)
+            ttnn.synchronize_device(rt.mesh_device)
+            signal_decode_step_done(pipe)
+            if max_extra_tokens > 1:
+                _log_runtime_verbose(
+                    config,
+                    "Decode trace captured with 2CQ (CQ1=H2D, CQ0=trace replay).",
+                )
+        else:
+            ttnn.execute_trace(rt.mesh_device, rt.decode_trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(rt.mesh_device)
+            signal_decode_step_done(pipe)
 
         logits_torch = _logits_to_torch(rt.decode_trace_logits, rt.mesh_device, rt.args.vocab_size)
         tok = _sample_next(
@@ -1354,7 +1442,7 @@ def parse_tt_args() -> TTAgentConfig:
     p.add_argument(
         "--max-seq-len",
         type=int,
-        default=None,
+        default=4096,
         metavar="S",
         help="KV/RoPE cap (default: system + max-context + max-new + 256, rounded up to 512).",
     )
@@ -1383,6 +1471,11 @@ def parse_tt_args() -> TTAgentConfig:
         help="Disable traced decode (full model dispatch every token).",
     )
     p.add_argument(
+        "--decode-trace-2cq",
+        action="store_true",
+        help="Overlap decode input H2D (CQ1) with forward/trace (CQ0); requires traced decode.",
+    )
+    p.add_argument(
         "--verbose",
         action="store_true",
         help="Log KV warm-up, incremental prefill, and decode-trace capture during chat (default: off).",
@@ -1409,6 +1502,7 @@ def parse_tt_args() -> TTAgentConfig:
         prefill_activations_dram=a.prefill_dram,
         use_kv_cache=not a.no_kv_cache,
         trace_decode=not a.no_decode_trace,
+        trace_decode_2cq=a.decode_trace_2cq,
         verbose_runtime=a.verbose,
     )
 

@@ -17,17 +17,29 @@ Run::
 
     pytest models/experimental/devstral2_large/tests/perf/test_e2e_performant.py -k L10
     pytest models/experimental/devstral2_large/tests/perf/test_e2e_performant.py -k L88
+
+With decode trace + 2CQ (CQ1 input H2D, CQ0 trace replay)::
+
+    DEVSTRAL2_DECODE_TRACE_2CQ=1 pytest models/experimental/devstral2_large/tests/perf/test_e2e_performant.py -k L10
 """
 
 from __future__ import annotations
 
 import time
+from typing import Optional
 
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+from models.experimental.devstral2_large.demo.decode_trace_2cq import (
+    DecodeTrace2CQ,
+    decode_trace_2cq_enabled,
+    num_command_queues_for_decode,
+    signal_decode_step_done,
+    stage_decode_inputs,
+)
 from models.experimental.devstral2_large.demo.text_demo import _mesh_device_param
 from models.experimental.devstral2_large.tests._devstral_weights import (
     model_prefill_weight_keys,
@@ -125,6 +137,11 @@ def _run_devstral2_perf(
         torch.tensor([padded_prompt_len], dtype=torch.long), mesh_device, on_device=True
     )
 
+    decode_2cq: Optional[DecodeTrace2CQ] = None
+    if decode_trace_2cq_enabled():
+        decode_2cq = DecodeTrace2CQ.create(mesh_device, decode_tok_dev, decode_pos_dev)
+        logger.info("Decode trace 2CQ enabled for perf (CQ1=H2D, CQ0=trace replay).")
+
     prefill_trace_id = None
     decode_trace_id = None
     try:
@@ -161,29 +178,43 @@ def _run_devstral2_perf(
         )
 
         # ── Decode: compile pass (untimed) ─────────────────────────────────
+        decode_token = 0
+        decode_pos = padded_prompt_len
         t = time.time()
+        if decode_2cq is not None:
+            stage_decode_inputs(decode_2cq, mesh_device, decode_tok_dev, decode_pos_dev, decode_token, decode_pos)
         tt_out = model(decode_tok_dev, mode="decode", current_pos=decode_pos_dev)
         ttnn.synchronize_device(mesh_device)
+        signal_decode_step_done(decode_2cq)
         decode_compile_time = time.time() - t
         tt_out.deallocate(True)
 
         # Capture decode trace bound to (decode_tok_dev, decode_pos_dev)
+        if decode_2cq is not None:
+            stage_decode_inputs(decode_2cq, mesh_device, decode_tok_dev, decode_pos_dev, decode_token, decode_pos)
         decode_trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         decode_trace_logits = model(decode_tok_dev, mode="decode", current_pos=decode_pos_dev)
         ttnn.end_trace_capture(mesh_device, decode_trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
+        signal_decode_step_done(decode_2cq)
 
-        # Time decode replays
+        # Time decode replays. With 2CQ, include per-step input H2D (matches text_demo / agent).
         t = time.time()
-        for _ in range(decode_iters):
+        for replay_idx in range(decode_iters):
+            if decode_2cq is not None:
+                replay_pos = decode_pos + replay_idx
+                stage_decode_inputs(decode_2cq, mesh_device, decode_tok_dev, decode_pos_dev, decode_token, replay_pos)
             ttnn.execute_trace(mesh_device, decode_trace_id, cq_id=0, blocking=False)
-        ttnn.synchronize_device(mesh_device)
+            ttnn.synchronize_device(mesh_device)
+            if decode_2cq is not None:
+                signal_decode_step_done(decode_2cq)
         decode_total_time = time.time() - t
         decode_replay_time = decode_total_time / decode_iters
         decode_tok_per_s = decode_iters / decode_total_time
         decode_trace_logits.deallocate(True)
+        cq_note = " 2CQ" if decode_2cq is not None else ""
         logger.info(
-            f"Decode: compile={decode_compile_time*1000:.0f}ms, "
+            f"Decode{cq_note}: compile={decode_compile_time*1000:.0f}ms, "
             f"replay={decode_replay_time*1000:.2f}ms ({decode_tok_per_s:.2f} tok/s/user)"
         )
 
@@ -199,12 +230,22 @@ def _run_devstral2_perf(
             "decode_throughput_tok_per_s_per_user": decode_tok_per_s,
             "padded_prompt_len": padded_prompt_len,
             "decode_iters": decode_iters,
+            "decode_trace_2cq": float(decode_2cq is not None),
         }
     finally:
         if prefill_trace_id is not None:
             ttnn.release_trace(mesh_device, prefill_trace_id)
         if decode_trace_id is not None:
             ttnn.release_trace(mesh_device, decode_trace_id)
+
+
+def _e2e_perf_device_params():
+    return {
+        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        "trace_region_size": 100_000_000,
+        "num_command_queues": num_command_queues_for_decode(),
+        "l1_small_size": DEVSTRAL2_LARGE_L1_SMALL_SIZE,
+    }
 
 
 @pytest.mark.timeout(0)
@@ -218,18 +259,7 @@ def _run_devstral2_perf(
     ids=["L10", "L88"],
 )
 @pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 100_000_000,
-            "num_command_queues": 1,
-            "l1_small_size": DEVSTRAL2_LARGE_L1_SMALL_SIZE,
-        }
-    ],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_params", [_e2e_perf_device_params()], indirect=True)
 def test_devstral2_large_e2e_performant(
     mesh_device,
     num_layers,
