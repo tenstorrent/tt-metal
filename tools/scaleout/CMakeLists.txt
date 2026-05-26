@@ -77,6 +77,7 @@ target_link_libraries(
     PUBLIC
         TT::STL
         umd::tt-umd
+        fmt::fmt-header-only
     PRIVATE
         fmt::fmt-header-only
         enchantum::enchantum

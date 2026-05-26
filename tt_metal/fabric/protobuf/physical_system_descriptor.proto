@@ -20,6 +20,7 @@ message EthConnection {
     uint32 dst_chan = 2;
     bool is_local = 3;
     PortType port_type = 4;
+    PortType port_type = 4;
 }
 
 // Connection edge to another ASIC with multiple ethernet connections
