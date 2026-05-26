@@ -198,10 +198,18 @@ def test_softmax_rejects_non_tile_aligned_w(device):
         softmax(ttnn_input, dim=-1)
 
 
-def test_softmax_rejects_bfloat16(device):
+def test_softmax_rejects_bfloat16_with_unsupported_config(device):
+    """bf16 input was the Phase-0 rejection case; Refinement 2 adds the four
+    bf16 precision names. The op still rejects bf16 paired with a (fidelity,
+    accumulator) combo not in PRECISION_CONFIG (e.g. HiFi3 — bf16 modes ship
+    only at HiFi2 and HiFi4)."""
     ttnn_input = _make_input(device, dtype=ttnn.bfloat16)
+    bad_config = ttnn.ComputeConfigDescriptor(
+        math_fidelity=ttnn.MathFidelity.HiFi3,
+        fp32_dest_acc_en=True,
+    )
     with pytest.raises(VALIDATION_ERRORS):
-        softmax(ttnn_input, dim=-1)
+        softmax(ttnn_input, dim=-1, compute_kernel_config=bad_config)
 
 
 def test_softmax_rejects_row_major_layout(device):

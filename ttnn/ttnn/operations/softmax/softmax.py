@@ -107,7 +107,16 @@ INPUT_TAGGERS = {
 # eval/golden_tests/softmax/feature_spec.py and op_requirements.md).
 
 SUPPORTED = {
-    "precision": ["fp32_hifi4_fp32acc"],
+    "precision": [
+        "fp32_hifi4_fp32acc",
+        # Refinement 2: bf16 input across the four (fidelity, accumulator) combos.
+        # Each name bundles (input dtype, math_fidelity, fp32_dest_acc_en); see
+        # eval/golden_tests/softmax/feature_spec.py:PRECISION_CONFIG.
+        "bf16_hifi2_fp32acc",
+        "bf16_hifi2_bf16acc",
+        "bf16_hifi4_fp32acc",
+        "bf16_hifi4_bf16acc",
+    ],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "rank": [4],

@@ -122,8 +122,8 @@ def create_program_descriptor(
     # numeric_stable=True → 3 reader passes (max, sum/exp, mul). False → 2 (sum/exp, mul).
     num_input_passes = 3 if numeric_stable else 2
 
-    input_page_size = input_tensor.buffer_page_size()  # fp32 tile = 4096 B
-    output_page_size = output_tensor.buffer_page_size()  # fp32 tile = 4096 B
+    input_page_size = input_tensor.buffer_page_size()
+    output_page_size = output_tensor.buffer_page_size()
 
     # Advisory deviation from op_design.md: scaler CB is fp32, not bf16.
     # The design table says bf16 for the scaler, but with bf16 the reduce
@@ -133,8 +133,25 @@ def create_program_descriptor(
     # The scaler dataflow helper (`prepare_reduce_scaler`) explicitly
     # supports both Float16_b and Float32 formats, so making the CB fp32
     # preserves the full SrcA precision through the multiply-accumulate.
+    # Same applies for bf16 input + fp32 dest acc — the upcast-then-multiply
+    # through Float32 scaler matches the dest accumulator width.
     scaler_dtype = ttnn.float32
     scaler_page_size = ttnn.tile_size(scaler_dtype)  # fp32 tile = 4096 B
+
+    # Refinement 2 — intermediate-CB format selection (per /numeric-formats-metal §4).
+    #
+    # cb_max, cb_inv_sum, cb_centered_exp park running-accumulator state across
+    # phase boundaries (max across passes 2&3, inv_sum across pass 3, the per-block
+    # exp(x-max) between sub+exp and the reduce/mul). When fp32_dest_acc_en=True we
+    # keep these at Float32 regardless of input dtype — otherwise the dest-accumulator
+    # fp32 gain is erased at the pack-to-CB boundary. When fp32_dest_acc_en=False we
+    # let intermediates match the input dtype (dest is bf16-wide anyway).
+    if compute_kernel_config.fp32_dest_acc_en:
+        intermediate_dtype = ttnn.float32
+        intermediate_page_size = ttnn.tile_size(intermediate_dtype)  # 4096 B for fp32
+    else:
+        intermediate_dtype = input_tensor.dtype
+        intermediate_page_size = input_page_size
 
     # ------- Core grid + work distribution -------
     device = input_tensor.device()
@@ -217,35 +234,35 @@ def create_program_descriptor(
             ],
         ),
         ttnn.CBDescriptor(
-            total_size=cb_max_pages * input_page_size,
+            total_size=cb_max_pages * intermediate_page_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_MAX,
-                    data_format=input_tensor.dtype,
-                    page_size=input_page_size,
+                    data_format=intermediate_dtype,
+                    page_size=intermediate_page_size,
                 )
             ],
         ),
         ttnn.CBDescriptor(
-            total_size=cb_inv_sum_pages * input_page_size,
+            total_size=cb_inv_sum_pages * intermediate_page_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_INV_SUM,
-                    data_format=input_tensor.dtype,
-                    page_size=input_page_size,
+                    data_format=intermediate_dtype,
+                    page_size=intermediate_page_size,
                 )
             ],
         ),
         ttnn.CBDescriptor(
-            total_size=cb_centered_exp_pages * input_page_size,
+            total_size=cb_centered_exp_pages * intermediate_page_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_CENTERED_EXP,
-                    data_format=input_tensor.dtype,
-                    page_size=input_page_size,
+                    data_format=intermediate_dtype,
+                    page_size=intermediate_page_size,
                 )
             ],
         ),
