@@ -14,6 +14,7 @@ KSplitGramMatmulDeviceOperation::program_factory_t KSplitGramMatmulDeviceOperati
 void KSplitGramMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
+    TT_FATAL(input.device()->arch() == tt::ARCH::BLACKHOLE, "KSplitGramMatmul is only supported on Blackhole.");
     TT_FATAL(input.storage_type() == tt::tt_metal::StorageType::DEVICE, "Input tensor must be on device");
     TT_FATAL(input.buffer() != nullptr, "Input tensor must be allocated on device");
     TT_FATAL(input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Input tensor must be in DRAM");
