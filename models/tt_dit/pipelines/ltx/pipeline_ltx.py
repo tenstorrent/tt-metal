@@ -208,6 +208,15 @@ class LTXPipeline:
         self.checkpoint_name: str | None = None
         self.gemma_path: str | None = None
 
+        # Optional LoRA specs fused into the transformer state dict on next
+        # ``_prepare_transformer`` call. Empty by default — distilled-LoRA stage-2
+        # pipelines (see ``LTXAVTwoStagesPipeline``) toggle these between stages.
+        # The cache key is suffixed when non-empty so LoRA-fused and base weights
+        # do not alias in ``TT_DIT_CACHE_DIR``.
+        from ...utils.lora import LoraSpec  # local import to avoid circulars
+
+        self._lora_specs: list[LoraSpec] = []
+
     @staticmethod
     def _resolve_checkpoint_file(checkpoint: str, default_filename: str = "ltx-2.3-22b-dev.safetensors") -> str:
         """Resolve a checkpoint reference to a local file path.ß"""
@@ -381,13 +390,33 @@ class LTXPipeline:
 
         Mirrors Wan's `lambda: state.torch_model.state_dict()` but for safetensors —
         Wan keeps the torch model in host RAM; LTX reads the safetensors on demand.
+        When ``self._lora_specs`` is non-empty the resulting state dict is fused
+        with those LoRAs before being returned (mirrors the reference
+        ``DiffusionStage(loras=...)`` builder path).
         """
         from safetensors.torch import load_file
 
         logger.info(f"Transformer cache miss — loading safetensors: {self.checkpoint_name}")
         raw = load_file(self.checkpoint_name)
         prefix = "model.diffusion_model."
-        return {k[len(prefix) :]: v for k, v in raw.items() if k.startswith(prefix)}
+        sd = {k[len(prefix) :]: v for k, v in raw.items() if k.startswith(prefix)}
+        if self._lora_specs:
+            from ...utils.lora import fuse_loras_into
+
+            sd = fuse_loras_into(sd, self._lora_specs)
+        return sd
+
+    def _transformer_cache_name(self) -> str:
+        """Cache key for ``cache_module.load_model``. Append a LoRA tag so the
+        base and LoRA-fused weights do not collide in ``TT_DIT_CACHE_DIR``.
+        """
+        base = os.path.basename(self.checkpoint_name).removesuffix(".safetensors")
+        if not self._lora_specs:
+            return base
+        tag = "+".join(
+            f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in self._lora_specs
+        )
+        return f"{base}.lora-{tag}"
 
     def _prepare_transformer(self) -> None:
         """Push transformer weights onto the mesh. Cached when `TT_DIT_CACHE_DIR` is set.
@@ -413,7 +442,7 @@ class LTXPipeline:
             )
         cache_module.load_model(
             self.transformer,
-            model_name=os.path.basename(self.checkpoint_name).removesuffix(".safetensors"),
+            model_name=self._transformer_cache_name(),
             subfolder="transformer",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
@@ -1455,8 +1484,18 @@ class LTXPipeline:
         ge_gamma: float = 2.0,
         profiler=None,
         profiler_iteration: int = 0,
+        sigmas: torch.Tensor | None = None,
+        initial_video_latent: torch.Tensor | None = None,
+        initial_audio_latent: torch.Tensor | None = None,
+        noise_scale: float | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run AV denoising with full MultiModalGuider guidance. Returns (video_latent, audio_latent)."""
+        """Run AV denoising with full MultiModalGuider guidance. Returns (video_latent, audio_latent).
+
+        Stage-2 / refine usage: pass ``sigmas`` (the explicit schedule), the
+        upsampled ``initial_video_latent`` plus the stage-1 ``initial_audio_latent``,
+        and ``noise_scale = sigmas[0]`` to renoise. Set all guidance scales to
+        their neutral values (``cfg=1.0, stg=0.0, mod=1.0, ge_gamma=0.0``).
+        """
         from ...utils.ltx import AudioLatentShape, VideoPixelShape
 
         B = 1
@@ -1499,13 +1538,42 @@ class LTXPipeline:
             else None
         )
 
-        sigmas = compute_sigmas(steps=num_inference_steps, num_tokens=video_N + audio_N)
-        if seed is not None:
-            torch.manual_seed(seed)
-        video_lat = torch.randn(B, video_N, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
-        audio_lat_real = torch.randn(B, audio_N_real, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
-        audio_lat = torch.zeros(B, audio_N, self.in_channels)
-        audio_lat[:, :audio_N_real, :] = audio_lat_real
+        if sigmas is None:
+            sigmas = compute_sigmas(steps=num_inference_steps, num_tokens=video_N + audio_N)
+        else:
+            assert (
+                len(sigmas) == num_inference_steps + 1
+            ), f"sigmas length {len(sigmas)} must equal num_inference_steps+1 ({num_inference_steps+1})"
+
+        if initial_video_latent is not None:
+            assert noise_scale is not None, "noise_scale required when initial_video_latent is provided"
+            if seed is not None:
+                torch.manual_seed(seed)
+            init_v = initial_video_latent.float()
+            if init_v.dim() == 2:
+                init_v = init_v.unsqueeze(0)
+            noise_v = torch.randn_like(init_v)
+            video_lat = init_v * (1.0 - noise_scale) + noise_v * noise_scale
+        else:
+            if seed is not None:
+                torch.manual_seed(seed)
+            video_lat = torch.randn(B, video_N, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
+
+        if initial_audio_latent is not None:
+            assert noise_scale is not None, "noise_scale required when initial_audio_latent is provided"
+            if seed is not None:
+                torch.manual_seed(seed + 1)
+            init_a = initial_audio_latent.float()
+            if init_a.dim() == 2:
+                init_a = init_a.unsqueeze(0)
+            audio_lat = torch.zeros(B, audio_N, self.in_channels)
+            audio_lat[:, :audio_N_real, :] = init_a[:, :audio_N_real, :]
+            noise_a = torch.randn_like(audio_lat)
+            audio_lat = audio_lat * (1.0 - noise_scale) + noise_a * noise_scale
+        else:
+            audio_lat_real = torch.randn(B, audio_N_real, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
+            audio_lat = torch.zeros(B, audio_N, self.in_channels)
+            audio_lat[:, :audio_N_real, :] = audio_lat_real
 
         do_cfg = video_cfg_scale > 1.0 or audio_cfg_scale > 1.0
         do_stg = video_stg_scale != 0.0 or audio_stg_scale != 0.0
