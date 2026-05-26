@@ -80,8 +80,8 @@ class _TTMoEDecodeExpertState:
     extra K/N tile each). Bias + shared experts together is not supported (raises).
     """
 
-    def _load_weights():
-        # TODO eventually support caching and loading weights
+    def _load_weights(self):
+        # TODO (AM) eventually support loading weights from path
         pass
 
     @staticmethod

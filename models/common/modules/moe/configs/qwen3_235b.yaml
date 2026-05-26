@@ -1,5 +1,5 @@
 # qwen3_235b
-mesh_shape: [16, 4]
+mesh_shape: [8, 4]
 cluster_axis: 0
 batch_per_device: 32
 hidden_size: 4096

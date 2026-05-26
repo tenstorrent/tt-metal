@@ -1,10 +1,10 @@
 # qwen35_397b
-mesh_shape: [16, 4]
+mesh_shape: [16, 8]
 cluster_axis: 0
 batch_per_device: 32
 hidden_size: 4096
 select_experts_k: 10
-num_routed_experts: 128
+num_routed_experts: 512
 num_shared_experts: 1
 has_bias: false
 

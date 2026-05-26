@@ -4,7 +4,7 @@ cluster_axis: 0
 batch_per_device: 32
 hidden_size: 2048
 select_experts_k: 8
-num_routed_experts: 128
+num_routed_experts: 256
 num_shared_experts: 1
 has_bias: false
 
