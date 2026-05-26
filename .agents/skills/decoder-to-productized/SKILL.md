@@ -43,7 +43,7 @@ What is **not yet** there:
 
 This skill produces those. Outputs are **added** to the same directory; nothing is moved.
 
-## Inputs to confirm with the user before starting
+## Inputs to check starting
 
 | Input | Where to find it |
 |---|---|
@@ -174,8 +174,6 @@ Launch vLLM with `additional_config: { "tt": { "register_test_models": true } }`
 
 **Production**: add an entry to `register_tt_models()` in `vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py`. The HF arch string gets `TT` prepended (`LlamaForCausalLM` → `TTLlamaForCausalLM`).
 
-Default to harness-only; ask the user before adding a plugin entry.
-
 ## Step 5. Verification — teacher-forcing pass
 
 ### One-time setup: generate the HF reference
@@ -222,7 +220,7 @@ entry[1]             top1=0.945 (121/128)  top5=1.000 (128/128)  top100=1.000 (1
 AGGREGATE            top1=0.957 (155/162)  top5=1.000 (162/162)  top100=1.000 (162/162)
 ```
 
-Heuristic: **top-5 ≥ 99%** and **top-100 = 100%** indicate the port is functionally correct. Lower top-1 reflects quantization (bf8 vs bf16); meaningful but not a hard fail. Report numbers; let the user set the bar.
+Heuristic: **top-5 ≥ 99%** and **top-100 = 100%** indicate the port is functionally correct. Lower top-1 reflects quantization (bf8 vs bf16); meaningful but not a hard fail. If top-5 or top-100 are less than this it indicates a problem that must be investigated - either a bug or an over-aggressive low-precision datatype for example.
 
 ### Common failure modes
 

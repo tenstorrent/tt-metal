@@ -98,7 +98,7 @@ python tools/tracy/process_ops_logs.py --date
 Copy the final CSV into the artifact directory and run:
 
 ```bash
-export ARTIFACT_DIR="models/demos/<model>/doc/optimized_decoder"
+export ARTIFACT_DIR="models/autoports/<model>/doc/optimized_decoder"
 cp <ops_perf_results_*.csv> "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_ops.csv"
 tt-perf-report "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_ops.csv" \
   --start-signpost PERF_DECODE \
