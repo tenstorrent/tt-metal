@@ -84,17 +84,20 @@ def test_embedding_8x4_galaxy(mesh_device):
     logger.info(f"tt_tokens shape: {tt_tokens.shape}")
     tt_output = tt_emb(tt_tokens)
 
-    expected_per_chip_shape = (1, 1, isl_per_chip, emb_dim // tp_factor)
+    # ttnn.embedding squeezes the leading singleton: per-chip output is
+    # [1, isl_per_chip, emb_dim / tp_factor] (3D), not the 4D shape the docstring claims.
+    expected_per_chip_shape = (1, isl_per_chip, emb_dim // tp_factor)
     assert (
         tuple(tt_output.shape) == expected_per_chip_shape
     ), f"Embedding output shape {tuple(tt_output.shape)} != expected {expected_per_chip_shape}"
     logger.info(f"Embedding output per-chip shape: {tuple(tt_output.shape)}")
 
     # Host reference: torch.nn.functional.embedding on the same tokens/weight.
-    # Shape: [sp_factor, 1, isl_per_chip, emb_dim] — SP-sharded along dim 0, TP shards emb_dim.
-    torch_output = F.embedding(torch_tokens, torch_weight)
+    # F.embedding on tokens [sp_factor, 1, isl_per_chip] returns [sp_factor, 1, isl_per_chip, emb_dim];
+    # squeeze the spare singleton to match the gathered TT shape [sp_factor, isl_per_chip, emb_dim].
+    torch_output = F.embedding(torch_tokens, torch_weight).squeeze(1)
 
-    # Gather TP shards back to a [sp_factor, 1, isl_per_chip, emb_dim] tensor and compare.
+    # Gather: TP composer composes mesh dim 0 (SP) along tensor dim 0, mesh dim 1 (TP) along dim -1.
     tt_host = ttnn.to_torch(tt_output, mesh_composer=get_tp_mesh_composer(mesh_device), dtype=torch.bfloat16)
     logger.info(f"TT gathered host shape: {tuple(tt_host.shape)}")
 
