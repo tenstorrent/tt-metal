@@ -192,14 +192,21 @@ void kernel_main() {
             mul_bcast_cols_init_short(input_cb, reduce_result_cb);
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 cb_reserve_back(mul_rms_result_cb, block_size);
+                // Standard acquire→math→commit→wait→pack→release ordering
+                // (matches composite post_allgather). MATH issues all block
+                // muls then commits; PACK can then drain dst registers while
+                // the next block's MATH can already acquire+issue. Math TRISC
+                // and Pack TRISC overlap across blocks.
                 tile_regs_acquire();
-                tile_regs_wait();
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                     const uint32_t abs_idx = row_base + col_tile + i;
                     mul_tiles_bcast_cols(input_cb, reduce_result_cb, abs_idx, 0, i);
-                    pack_tile(i, mul_rms_result_cb);
                 }
                 tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                    pack_tile(i, mul_rms_result_cb);
+                }
                 tile_regs_release();
                 cb_push_back(mul_rms_result_cb, block_size);
             }
@@ -241,13 +248,16 @@ void kernel_main() {
                     // Don't pop intermediate — Phase 3b needs to read it again.
                     cb_wait_front(intermediate_cb, col_tile + block_size);
                     cb_reserve_back(rotated_input_cb, block_size);
+                    // Standard acquire→math→commit→wait→pack→release.
                     tile_regs_acquire();
-                    tile_regs_wait();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                         matmul_tiles(intermediate_cb, transformation_mat_cb, col_tile + i, 0, i);
-                        pack_tile(i, rotated_input_cb);
                     }
                     tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                        pack_tile(i, rotated_input_cb);
+                    }
                     tile_regs_release();
                     cb_push_back(rotated_input_cb, block_size);
                 }
@@ -312,13 +322,16 @@ void kernel_main() {
                     cb_wait_front(intermediate_cb, block_size);
                     cb_wait_front(rotated_input_cb, block_size);
                     cb_reserve_back(output_cb, block_size);
+                    // Standard acquire→math→commit→wait→pack→release.
                     tile_regs_acquire();
-                    tile_regs_wait();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                         add_tiles(intermediate_cb, rotated_input_cb, i, i, i);
-                        pack_tile(i, output_cb);
                     }
                     tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                        pack_tile(i, output_cb);
+                    }
                     tile_regs_release();
                     cb_push_back(output_cb, block_size);
                     cb_pop_front(intermediate_cb, block_size);
