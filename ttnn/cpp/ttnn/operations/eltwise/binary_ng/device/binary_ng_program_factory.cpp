@@ -312,11 +312,25 @@ void overwrite_compute_kernel_name_and_defines(
     }
 }
 
+// Returns true on the (arch, broadcast, dtype) tuple that hangs the LLK
+// `unary_bcast` path on Blackhole: COL bcast + BFLOAT16 input + fp32_dest_acc_en.
+bool hits_bh_col_bcast_bf16_to_fp32_hang(
+    SubtileBroadcastType subtile_broadcast_type, DataType a_dtype, DataType b_dtype, bool fp32_dest_acc_en) {
+    const bool is_col_bcast =
+        subtile_broadcast_type == SubtileBroadcastType::COL_A || subtile_broadcast_type == SubtileBroadcastType::COL_B;
+    const bool has_bf16_input = a_dtype == DataType::BFLOAT16 || b_dtype == DataType::BFLOAT16;
+    return tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && is_col_bcast && fp32_dest_acc_en && has_bf16_input;
+}
+
 bool is_llk_bcast(
     const SubtileBroadcastType subtile_broadcast_type,
     const DataType a_dtype,
     const DataType b_dtype,
-    [[maybe_unused]] const DataType c_dtype) {
+    const bool fp32_dest_acc_en) {
+    if (hits_bh_col_bcast_bf16_to_fp32_hang(subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en)) {
+        return false;
+    }
+
     auto all_match = [&](DataType dt) { return a_dtype == dt && b_dtype == dt; };
 
     if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
@@ -731,8 +745,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
     bool use_llk_bcast =
-        !inputs_row_major &&
-        CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype);
+        !inputs_row_major && CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(
+                                 operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en);
 
     // The B2D broadcast path for BFP formats introduces rounding that EXP/EXP2
     // amplifies beyond acceptable tolerance.
@@ -745,6 +759,28 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
          operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
          operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B)) {
+        use_llk_bcast = false;
+    }
+
+    // Integer relational ops on UInt16 use either the FPU SUB + {EQZ/NEZ} postprocess
+    // path (EQ/NE) or direct SFPU comparison (LT/GT/LE/GE), both with DEST configured
+    // for Fp16_b accumulation (fp32_dest_acc_en is false for UInt16).  Under SCALAR
+    // broadcast the B2D datacopy unpacker writes a single u16 lane into all DEST
+    // positions; the resulting Fp16_b-tagged DEST is then read back by the postprocess
+    // or SFPU comparison kernel, which interprets the integer bit pattern through the
+    // format-conversion path and corrupts the comparison result (#36217).
+    // Fall back to software broadcast for this combination - non-broadcast u16
+    // relational ops and broadcasted arithmetic u16 ops (no postprocess) are
+    // unaffected.
+    if (use_llk_bcast && a_data_format == tt::DataFormat::UInt16 && b_data_format == tt::DataFormat::UInt16 &&
+        (op_config.postprocess.has_value() ||
+         (std::holds_alternative<OpConfig::SfpuBinaryOp>(op_config.binary_op) &&
+          (std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::LT ||
+           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::GT ||
+           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::LE ||
+           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::GE))) &&
+        (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
          operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B)) {
         use_llk_bcast = false;
     }

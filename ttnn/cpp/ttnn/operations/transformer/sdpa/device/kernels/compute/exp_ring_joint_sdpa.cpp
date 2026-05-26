@@ -212,7 +212,11 @@ void kernel_main() {
                 cb_sum_out,
                 cb_sum_in,
                 cb_signal,
-                needs_lightweight_mask>(
+                needs_lightweight_mask,
+                false,  // is_causal_sdpa
+                false,  // is_balanced_sdpa
+                false,  // chunked_enabled
+                local_padded_Nt>(
                 global_q_start,
                 global_q_end,
                 num_kv_chunks,
@@ -220,7 +224,6 @@ void kernel_main() {
                 ring_iter,
                 ring_id,
                 num_local_k_chunks,
-                local_padded_Nt,
                 logical_nt,
                 ring_iter_needs_global_n_mask,
                 ring_iter_needs_joint_n_mask,
@@ -231,7 +234,11 @@ void kernel_main() {
                 acc_state,
                 is_last_ring_iter,
                 q_per_core,
-                lw_mask);
+                lw_mask,
+                /*skip_first_half_q=*/false,
+                /*use_zigzag_balancing=*/false,
+                ChunkedContext{},
+                /*is_first_active_iter=*/(ring_iter == 0));
         } else {
             sdpa_ring<
                 cb_qk_im,

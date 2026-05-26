@@ -305,7 +305,9 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         "expert_region_offsets");
 
     if (is_tile_layout) {
-        // c_18: receive buffer for idle-core untilized data written back via NOC (TILE_LAYOUT only)
+        // c_18: receive buffer for idle-core untilized data written back via NOC (TILE_LAYOUT only).
+        // dtype/page-size inherited from output_tensor: BFLOAT16 in the bf16 path,
+        // FP8_E4M3 (auto-resolves to tt::DataFormat::Fp8_e4m3) in the fp8 path.
         detail::create_tensor_cb(
             program,
             sender_core_grid,
@@ -599,7 +601,10 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             /*buffering_factor=*/hidden_size / (32 * cb_factor),
             /*cb_id=*/tt::CBIndex::c_0,
             "dispatched_buffer_idle");
-        // c_2 on idle cores: untilized output rows, one full batch (read_batch_size rows)
+        // c_2 on idle cores: untilized output rows, one full batch (read_batch_size rows).
+        // dtype/page-size inherited from output_tensor: BFLOAT16 in the bf16 path,
+        // FP8_E4M3 (auto-resolves to tt::DataFormat::Fp8_e4m3) in the fp8 path. The packer
+        // selects the correct pack format based on the destination CB's DataFormat.
         detail::create_tensor_cb(
             program,
             idle_core_grid,
