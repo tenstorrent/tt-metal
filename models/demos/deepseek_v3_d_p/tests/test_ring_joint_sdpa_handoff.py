@@ -2392,3 +2392,368 @@ def test_kv_pad_aware_rotation_reuse_across_multi_slab_calls(mesh_device, device
         kv_actual_isl = logical_n
 
     assert max(slabs_seen) > 2
+
+
+# ===========================================================================
+# Test 5: cache_batch_idx + chunked-prefill q_start_idx regression
+# ===========================================================================
+#
+# Motivation
+# ----------
+# Test 2 (test_index_based_kv_access_ttnn) showed that the `cache_batch_idx`
+# kwarg lets the caller pass the whole KV cache (all batch slots, full seq)
+# and have the op select the right batch slot internally. That test runs in
+# *full-sequence* mode (Q.seq == K.seq per chip, so chunked_enabled = False
+# in the compute kernel and q_start_idx = 0 by construction).
+#
+# The chunked-MLA branch (ipotkonjak/chunked_attn_tests) wants to use the
+# same API for chunked prefill, so it doesn't have to seq-trim the cache
+# before each op call:
+#
+#     # WITH: pass whole cache, op selects slot + (we hoped) infers q offset
+#     attn_out = ring_joint_sdpa(tt_q_chunk, kvpe_cache, ...,
+#                                logical_n=populated_global,
+#                                cache_batch_idx=cache_batch_idx)
+#
+# vs. the current pattern:
+#
+#     # WITHOUT: caller seq-trims to populated_local first
+#     tt_k_populated = ttnn.slice(kvpe_cache, [cb, 0, 0, 0],
+#                                 [cb + 1, 1, populated_local, KVPE_DIM])
+#     attn_out = ring_joint_sdpa(tt_q_chunk, tt_k_populated, ..., logical_n=...)
+#
+# This test asks: does the indexed API also work for chunked prefill?
+#
+# The bug this guards against
+# ---------------------------
+# `q_start_idx_t` (= the absolute Q-tile offset of the current chunk) is
+# derived in the compute kernel as
+#
+#   q_start_idx_t = chunked_enabled
+#                   ? logical_nt - q_local_padded_Nt * ring_size
+#                   : 0
+#
+# Before the fix, this used `kv_local_padded_Nt` instead of `logical_nt`.
+# kv_local_padded_Nt comes from the *physical* K tensor's seq dim:
+#
+#   const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len();
+#       — ring_joint_sdpa_program_factory.cpp:178
+#   // local_kv_seq_len() = input_k.logical_shape()[2]
+#       — ring_joint_sdpa_device_operation_types.hpp:105
+#
+# In the slice-first pattern, K.seq == populated_local, so for chunk i the
+# kernel sees kv_local_padded_Nt = populated_local / 32 = (i+1) * chunk_t,
+# and q_start_idx_t works out to i * chunk_t — the correct absolute offset
+# for this chunk's Q.
+#
+# In the cache_batch_idx pattern, K.seq == seq_len_max_local (the cache's
+# physical seq dim), so kv_local_padded_Nt = n_chunks_total * chunk_t for
+# *every* chunk, and q_start_idx_t = (n_chunks_total - 1) * chunk_t — i.e.
+# the kernel always thinks this chunk is the *last* chunk of the prefill.
+# The causal mask is then placed off by (n_chunks_total - 1 - i) chunks
+# for every intermediate chunk.
+#
+# The fixed path derives q_start_idx from `logical_n` (`populated_global`
+# here), so full-cache indexed callers and slice-first callers use the same
+# populated-prefix offset.
+#
+# What this test does
+# -------------------
+# Build a chunked-prefill scenario with n_chunks_total = 4 and run the
+# same intermediate chunk (chunk 1 of 4) twice:
+#
+#   Reference call: K = seq-trimmed slice (populated_global per device),
+#       no cache_batch_idx, logical_n = populated_global.
+#       Expected: PCC vs torch chunked-causal MLA-SDPA reference > 0.97.
+#
+#   Indexed call:   K = full cache (seq_len_max_local per device, with
+#       multiple batch slots — our data in cache_batch_idx, distinct noise
+#       in the other slot so a wrong-slot read would corrupt the answer),
+#       cache_batch_idx set, logical_n = populated_global (same).
+#       Expected: PCC vs same reference > 0.97. Before the fix this was
+#       about 0.84 because q_start_idx pointed at the last chunk instead
+#       of the current intermediate chunk.
+# ===========================================================================
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4)], ids=["2x2", "2x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    ids=["line"],
+    indirect=True,
+)
+@pytest.mark.timeout(0)
+def test_index_based_kv_cache_chunked_q_start_idx_regression(mesh_device, device_params):
+    sp_axis = 0
+    tp_axis = 1
+    mesh_shape = list(mesh_device.shape)
+    sp = mesh_shape[sp_axis]
+    tp = mesh_shape[tp_axis]
+    num_heads = tp * tp
+    num_heads_local = num_heads // tp
+
+    # Chunked-prefill geometry: 4 chunks per device, exercise chunk 1 (intermediate).
+    chunk_size_local = 32  # 1 tile per chunk per chip
+    chunk_size_global = chunk_size_local * sp
+    n_chunks_total = 4
+    seq_len_max = n_chunks_total * chunk_size_global
+    seq_len_max_local = seq_len_max // sp
+
+    chunk_idx = 1  # intermediate chunk — q_start_idx mismatch is largest here
+    populated_chunks = chunk_idx + 1
+    populated_global = populated_chunks * chunk_size_global
+    populated_local = populated_global // sp
+    q_abs_offset = chunk_idx * chunk_size_global
+
+    # Cache has 2 batch slots so cache_batch_idx is doing real work
+    # (slot 0 = noise, slot 1 = our data). A wrong-slot read corrupts the answer.
+    cache_batch = 2
+    cache_batch_idx = 1
+
+    scale = QK_HEAD_DIM**-0.5
+    topology = _topology_from(device_params)
+
+    torch.manual_seed(42)
+    # Q is just this chunk's tokens — single chunk has identical natural/balanced layouts.
+    q_host = torch.randn(1, num_heads, chunk_size_global, KVPE_DIM, dtype=torch.bfloat16)
+    # K populated prefix in natural order, then reshuffled into the balanced-growing layout.
+    k_natural = torch.randn(1, 1, populated_global, KVPE_DIM, dtype=torch.bfloat16)
+    v_natural = torch.randn(1, num_heads, populated_global, V_HEAD_DIM, dtype=torch.bfloat16)
+    k_host_populated = _to_balanced_growing(k_natural, sp, chunk_size_local, populated_chunks)
+    v_host_populated = _to_balanced_growing(v_natural, sp, chunk_size_local, populated_chunks)
+
+    tt_ccl = get_tt_ccl(mesh_device)
+
+    # Q (sp-sharded on seq, tp-sharded on heads)
+    q_shard_dims = [None, None]
+    q_shard_dims[sp_axis] = 2
+    q_shard_dims[tp_axis] = 1
+    tt_q = ttnn.from_torch(
+        q_host,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=q_shard_dims),
+    )
+
+    # Reference K/V (populated_local per device)
+    k_shard_dims = [None, None]
+    k_shard_dims[sp_axis] = 2
+    tt_k_populated = ttnn.from_torch(
+        k_host_populated,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=k_shard_dims),
+    )
+    v_shard_dims = [None, None]
+    v_shard_dims[sp_axis] = 2
+    v_shard_dims[tp_axis] = 1
+    tt_v_populated = ttnn.from_torch(
+        v_host_populated,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=v_shard_dims),
+    )
+
+    # Full-cache K/V (seq_len_max_local per device, with batch slots). Each chip's
+    # whole seq_len_max_local slab is built per chip: the leading `populated_local`
+    # cells hold chip-r's balanced slab of the populated prefix; the trailing cells
+    # are noise (op should mask them via logical_n). Slot 0 is pure noise everywhere
+    # to detect slot-misread bugs.
+    k_per_chip = []
+    v_per_chip = []
+    for chip in range(sp):
+        k_chip = torch.randn(cache_batch, 1, seq_len_max_local, KVPE_DIM, dtype=torch.bfloat16) * 100
+        v_chip = torch.randn(cache_batch, num_heads, seq_len_max_local, V_HEAD_DIM, dtype=torch.bfloat16) * 100
+        # k_host_populated has dim 2 = populated_global with chip-r's balanced slab
+        # at [chip*populated_local : (chip+1)*populated_local].
+        chip_lo = chip * populated_local
+        chip_hi = chip_lo + populated_local
+        k_chip[cache_batch_idx, 0, :populated_local, :] = k_host_populated[0, 0, chip_lo:chip_hi, :]
+        v_chip[cache_batch_idx, :, :populated_local, :] = v_host_populated[0, :, chip_lo:chip_hi, :]
+        k_per_chip.append(k_chip)
+        v_per_chip.append(v_chip)
+    k_host_full_assembled = torch.cat(k_per_chip, dim=2)  # [cb, 1, seq_len_max, KVPE_DIM]
+    v_host_full_assembled = torch.cat(v_per_chip, dim=2)  # [cb, nh, seq_len_max, V_HEAD_DIM]
+
+    k_full_shard_dims = [None, None]
+    k_full_shard_dims[sp_axis] = 2
+    tt_k_full = ttnn.from_torch(
+        k_host_full_assembled,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=k_full_shard_dims),
+    )
+    v_full_shard_dims = [None, None]
+    v_full_shard_dims[sp_axis] = 2
+    v_full_shard_dims[tp_axis] = 1
+    tt_v_full = ttnn.from_torch(
+        v_host_full_assembled,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=v_full_shard_dims),
+    )
+
+    # Empty joint placeholders
+    joint_shard_dims = [None, None]
+    joint_shard_dims[tp_axis] = 1
+    joint_q = ttnn.from_torch(
+        torch.zeros(1, num_heads_local, 0, KVPE_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=joint_shard_dims),
+    )
+    joint_kv = ttnn.from_torch(
+        torch.zeros(1, 1, 0, KVPE_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    joint_v = ttnn.from_torch(
+        torch.zeros(1, num_heads_local, 0, V_HEAD_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=joint_shard_dims),
+    )
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+    persistent_v_shard_dims = [None, None]
+    persistent_v_shard_dims[tp_axis] = 1
+
+    def make_pbufs(seq_total):
+        pk = ttnn.from_torch(
+            torch.zeros(cache_batch if seq_total == seq_len_max else 1, 1, seq_total, KVPE_DIM),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]),
+        )
+        pv = ttnn.from_torch(
+            torch.zeros(cache_batch if seq_total == seq_len_max else 1, num_heads, seq_total, V_HEAD_DIM),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_v_shard_dims
+            ),
+        )
+        return pk, pv
+
+    out_concat_dims = [None, None]
+    out_concat_dims[tp_axis] = 1
+    out_concat_dims[sp_axis] = 2
+
+    # ----- Reference: seq-trimmed K (no cache_batch_idx) -----
+    pk_ref, pv_ref = make_pbufs(populated_global)
+    logger.info(
+        f"Reference call: K seq = populated_global = {populated_global} (per device {populated_local}), "
+        f"no cache_batch_idx, logical_n = {populated_global}."
+    )
+    attn_out_ref, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+        tt_q,
+        tt_k_populated,
+        tt_v_populated,
+        joint_q,
+        joint_kv,
+        joint_v,
+        persistent_output_buffer_k=pk_ref,
+        persistent_output_buffer_v=pv_ref,
+        joint_strategy="rear",
+        logical_n=populated_global,
+        program_config=_make_program_config(mesh_device),
+        compute_kernel_config=compute_kernel_config,
+        dim=2,
+        multi_device_global_semaphore=tt_ccl.ring_attention_ccl_semaphore_handles,
+        num_links=1,
+        cluster_axis=sp_axis,
+        mesh_device=mesh_device,
+        topology=topology,
+        subdevice_id=tt_ccl.worker_sub_device_id,
+        ccl_core_grid_offset=tt_ccl.ring_attention_ccl_core_grid_offset,
+        use_column_major_ccl=True,
+        is_causal=True,
+        scale=scale,
+        is_balanced=False,
+    )
+    tt_out_ref_host = ttnn.to_torch(
+        attn_out_ref,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape),
+    ).to(torch.bfloat16)
+    ref_torch = _causal_chunked_mla_sdpa_torch(q_host, k_natural, v_natural, q_abs_offset, scale)
+    _, pcc_ref_msg = assert_with_pcc(ref_torch, tt_out_ref_host, 0.97)
+    logger.success(f"Reference call (slice + no cache_batch_idx): PCC vs torch = {pcc_ref_msg}")
+
+    # ----- Indexed call: full-cache K + cache_batch_idx -----
+    pk_bug, pv_bug = make_pbufs(seq_len_max)
+    logger.info(
+        f"Indexed call: K seq = seq_len_max = {seq_len_max} (per device {seq_len_max_local}), "
+        f"cache_batch_idx = {cache_batch_idx}, logical_n = {populated_global} (same as reference)."
+    )
+    attn_out_bug, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+        tt_q,
+        tt_k_full,
+        tt_v_full,
+        joint_q,
+        joint_kv,
+        joint_v,
+        persistent_output_buffer_k=pk_bug,
+        persistent_output_buffer_v=pv_bug,
+        joint_strategy="rear",
+        logical_n=populated_global,
+        program_config=_make_program_config(mesh_device),
+        compute_kernel_config=compute_kernel_config,
+        dim=2,
+        multi_device_global_semaphore=tt_ccl.ring_attention_ccl_semaphore_handles,
+        num_links=1,
+        cluster_axis=sp_axis,
+        mesh_device=mesh_device,
+        topology=topology,
+        subdevice_id=tt_ccl.worker_sub_device_id,
+        ccl_core_grid_offset=tt_ccl.ring_attention_ccl_core_grid_offset,
+        use_column_major_ccl=True,
+        is_causal=True,
+        scale=scale,
+        is_balanced=False,
+        cache_batch_idx=cache_batch_idx,
+    )
+    tt_out_bug_host = ttnn.to_torch(
+        attn_out_bug,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape),
+    ).to(torch.bfloat16)
+
+    # Direct PCC vs the torch reference. This is the regression check for
+    # indexed-cache chunked prefill: q_start_idx must be based on logical_n,
+    # not the full cache's physical sequence length.
+    _, pcc_bug_msg = assert_with_pcc(ref_torch, tt_out_bug_host, 0.97)
+    logger.success(
+        f"Indexed call (full cache + cache_batch_idx): PCC vs torch = {pcc_bug_msg} "
+        f"(chunk_idx={chunk_idx}, n_chunks_total={n_chunks_total}, q_abs_offset={q_abs_offset}). "
+        f"Correct q_start_idx = logical_nt - q_local_padded_Nt * sp = {q_abs_offset // 32} tiles; "
+        f"the old physical-cache formula would have used "
+        f"{(seq_len_max_local - chunk_size_local) * sp // 32} tiles."
+    )
