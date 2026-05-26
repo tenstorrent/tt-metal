@@ -23,6 +23,11 @@ using namespace ckernel;
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type, MathFidelity math_fidelity>
 inline void eltwise_binary_configure_addrmod()
 {
+    static_assert(math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL, "Math fidelity larger than LoFi only works with Eltwise multiply");
+    static_assert(
+        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) || (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
+        "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
+
     constexpr std::uint32_t fidelity_increment = is_high_fidelity(math_fidelity) ? 1 : 0;
     constexpr std::uint8_t srcb_incr           = (bcast_type == BroadcastType::NONE || bcast_type == BroadcastType::COL) ? MAX_FPU_ROWS : 0;
     addr_mod_t {
@@ -54,6 +59,10 @@ inline void eltwise_binary_configure_addrmod()
 template <EltwiseBinaryType eltwise_binary_type>
 inline auto eltwise_binary_func(std::uint8_t clr_src, std::uint8_t acc_to_dest, std::uint8_t broadcast_type, std::uint8_t addr_mod)
 {
+    static_assert(
+        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) || (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
+        "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
+
     if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWADD)
     {
         return TT_OP_ELWADD(clr_src, acc_to_dest, broadcast_type, addr_mod, 0 /*dst*/);
@@ -79,6 +88,9 @@ inline auto eltwise_binary_func(std::uint8_t clr_src, std::uint8_t acc_to_dest, 
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_dest, const ckernel::TensorShape &tensor_shape)
 {
+    static_assert(
+        math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL,
+        "Math fidelity larger than LoFi only works with Eltwise multiply");
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const std::uint32_t num_faces           = tensor_shape.total_num_faces();
     const std::uint32_t num_faces_c_dim     = tensor_shape.num_faces_c_dim;
@@ -162,13 +174,6 @@ template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type,
 inline void _llk_math_eltwise_binary_standard_init_(const ckernel::TensorShape &tensor_shape, const std::uint32_t acc_to_dest)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
-    LLK_ASSERT(
-        math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL,
-        "Math fidelity larger than LoFi only works with Eltwise multiply");
-    LLK_ASSERT(
-        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
-            (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
-        "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
 
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();
     eltwise_binary_configure_mop_standard<eltwise_binary_type, src_b_bcast_type, math_fidelity>(acc_to_dest, tensor_shape);
@@ -199,9 +204,10 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape &tenso
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
-    LLK_ASSERT(
-        math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL,
-        "Math fidelity larger than LoFi only works with Eltwise multiply");
+    static_assert(math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL, "Math fidelity larger than LoFi only works with Eltwise multiply");
+    static_assert(
+        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) || (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
+        "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
     // Dest counter always jumps by 32x32 tile spacing regardless of actual tile size
@@ -318,6 +324,7 @@ inline void eltwise_binary_reuse_dest_as_src()
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc_to_dest, const ckernel::TensorShape &tensor_shape)
 {
+    static_assert(math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL, "Math fidelity larger than LoFi only works with Eltwise multiply");
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     constexpr bool high_fidelity    = is_high_fidelity(math_fidelity);
     constexpr std::uint8_t addr_mod = ADDR_MOD_0;
@@ -405,13 +412,6 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_init_(const ckernel::Tensor
 {
     static_assert(binary_reuse_dest != EltwiseBinaryReuseDestType::NONE, "Use _llk_math_eltwise_binary_standard_init_ for no dest reuse");
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
-    LLK_ASSERT(
-        math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL,
-        "Math fidelity larger than LoFi only works with Eltwise multiply");
-    LLK_ASSERT(
-        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
-            (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
-        "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
 
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();
     eltwise_binary_configure_mop_with_dest_reuse<eltwise_binary_type, src_b_bcast_type, math_fidelity>(acc_to_dest, tensor_shape);
@@ -473,13 +473,14 @@ template <
 inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape &tensor_shape, std::uint32_t dst_index, const bool clear_fp32_dst_acc)
 {
     static_assert(binary_reuse_dest != EltwiseBinaryReuseDestType::NONE, "Use _llk_math_eltwise_binary_standard_ for no dest reuse");
+    static_assert(math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL, "Math fidelity larger than LoFi only works with Eltwise multiply");
+    static_assert(
+        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) || (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
+        "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const std::uint32_t num_faces       = tensor_shape.total_num_faces();
     const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
     const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
-    LLK_ASSERT(
-        math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL,
-        "Math fidelity larger than LoFi only works with Eltwise multiply");
 
     // Dest counter always jumps by 32x32 tile spacing regardless of actual tile size
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
@@ -665,6 +666,11 @@ inline void eltwise_binary_configure_addrmod()
 template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_eltwise_binary_init_(std::uint32_t srca_reuse_count = 4)
 {
+    static_assert(math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL, "Math fidelity larger than LoFi only works with Eltwise multiply");
+    static_assert(
+        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) || (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
+        "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
+
     eltwise_binary_configure_addrmod();
 
     /*
