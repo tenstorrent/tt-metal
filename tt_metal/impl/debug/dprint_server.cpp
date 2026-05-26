@@ -507,8 +507,8 @@ void DevicePrintImpl::print_buffer_data(
                     return;
                 }
                 auto payload_bytes = buffer_remaining_bytes.subspan(0, header->message_payload);
-                auto formatted_message =
-                    elf_parser->format_message(header->info_id, payload_bytes, format_message_buffer);
+                std::string formatted_message{
+                    elf_parser->format_message(header->info_id, payload_bytes, format_message_buffer)};
                 if (!formatted_message.empty()) {
                     // Find if we have something buffered from before
                     if (!risc_data.message_buffer.empty()) {
