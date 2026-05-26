@@ -3,6 +3,7 @@
 # Top-level files
 /* @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 METALIUM_GUIDE.md @davorchap @tenstorrent/codeowner-bypass
+.agents/ @yieldthought @tchedaTT @tenstorrent/codeowner-bypass
 
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
