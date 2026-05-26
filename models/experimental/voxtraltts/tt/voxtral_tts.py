@@ -30,11 +30,12 @@ from models.experimental.voxtraltts.tt.audio_tokenizer.model import (
     VoxtralTTAudioTokenizer,
     extract_audio_tokenizer_state_dict,
 )
-from models.experimental.voxtraltts.tt.text_model import VoxtralTTTextModel
+from models.experimental.voxtraltts.tt.text_model import VoxtralTTTextModel, patch_text_model_fp32_rms_norms
 from models.experimental.voxtraltts.tt.voxtral_tt_args import (
     _load_safetensors_state_dict,
     voxtral_text_default_optimizations,
 )
+from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
 
 ACOUSTIC_CFG_ALPHA_DEFAULT = 1.2
 
@@ -102,6 +103,13 @@ class VoxtralTTSPipeline:
             preloaded_state_dict=full,
             optimizations=text_optimizations,
         )
+        patch_text_model_fp32_rms_norms(
+            text,
+            mesh_device=mesh_device,
+            state_dict=full,
+            dim=cfg.dim,
+            norm_eps=cfg.norm_eps,
+        )
         acoustic = VoxtralTTAcousticModel.create_from_model_name(
             mesh_device,
             model_name_or_path=model_name_or_path,
@@ -138,6 +146,22 @@ class VoxtralTTSPipeline:
             raise ImportError("huggingface_hub required for HF model files.") from exc
         return Path(hf_hub_download(self.model_name_or_path, filename=filename))
 
+    def _load_voice_embedding(self, voice: str) -> torch.Tensor:
+        """Load voice ``.pt`` once; cached in ``self._voice_emb_cache``."""
+        if not hasattr(self, "_voice_emb_cache"):
+            self._voice_emb_cache: dict[str, torch.Tensor] = {}
+        cached = self._voice_emb_cache.get(voice)
+        if cached is not None:
+            return cached
+        voice_path = self._resolve_model_file(f"voice_embedding/{voice}.pt")
+        try:
+            voice_emb = torch.load(str(voice_path), map_location="cpu", weights_only=True)
+        except TypeError:
+            voice_emb = torch.load(str(voice_path), map_location="cpu")
+        voice_emb = voice_emb.to(dtype=torch.bfloat16)
+        self._voice_emb_cache[voice] = voice_emb
+        return voice_emb
+
     def _build_voice_injected_embeds(
         self,
         prompt_token_ids: list[int],
@@ -146,12 +170,7 @@ class VoxtralTTSPipeline:
         """Prompt token IDs + voice injection → ``[S, dim]`` bfloat16 CPU embeddings."""
         input_ids = torch.tensor(prompt_token_ids, dtype=torch.long)
         embeds = F.embedding(input_ids, self.tok_embedding_weight)
-        voice_path = self._resolve_model_file(f"voice_embedding/{voice}.pt")
-        try:
-            voice_emb = torch.load(str(voice_path), map_location="cpu", weights_only=True)
-        except TypeError:
-            voice_emb = torch.load(str(voice_path), map_location="cpu")
-        voice_emb = voice_emb.to(dtype=torch.bfloat16)
+        voice_emb = self._load_voice_embedding(voice)
         audio_mask = input_ids == self.audio_token_id
         n_audio = int(audio_mask.sum().item())
         if n_audio != voice_emb.shape[0]:
@@ -171,8 +190,83 @@ class VoxtralTTSPipeline:
         )
         return emb.squeeze(0).to(dtype=torch.bfloat16)
 
+    # @torch.no_grad()
+    # def forward(
+    #     self,
+    #     text: str,
+    #     voice: str = "casual_male",
+    #     max_tokens: int = 2500,
+    #     seed: int = 0,
+    #     *,
+    #     fixed_step_count: bool = False,
+    #     include_waveform_decode: bool = True,
+    # ) -> VoxtralTTSGenerateOutput:
+    #     """TT TTS: prefill → acoustic loop → optional waveform decode. Returns codes + waveform."""
+    #     torch.manual_seed(seed)
+    #
+    #     request = compose_speech_request(text, self.model_name_or_path, voice=voice)
+    #     prompt_token_ids: list[int] = request["prompt_token_ids"]
+    #     S_prompt = len(prompt_token_ids)
+    #
+    #     inputs_embeds = self._build_voice_injected_embeds(prompt_token_ids, voice)
+    #     last_hidden = self.text.prefill_from_embeds(inputs_embeds, start_pos=0)
+    #
+    #     cfg_alpha = torch.tensor(ACOUSTIC_CFG_ALPHA_DEFAULT, dtype=torch.bfloat16)
+    #     generated_codes: list[torch.Tensor] = []
+    #     current_pos = S_prompt
+    #
+    #     for step_idx in range(max_tokens):
+    #         torch.manual_seed(acoustic_fm_noise_seed(seed, step_idx))
+    #         audio_codes = self.acoustic.forward(last_hidden.unsqueeze(0), cfg_alpha).to(torch.long)
+    #
+    #         generated_codes.append(audio_codes[0].detach().cpu())
+    #         if not fixed_step_count and int(audio_codes[0, 0].item()) == self.end_audio_id:
+    #             break
+    #
+    #         mm_embed = self._audio_codes_to_mm_embed(audio_codes)
+    #         last_hidden = self.text.decode_step_from_embeds(mm_embed, current_pos)
+    #         current_pos += 1
+    #
+    #     if not generated_codes:
+    #         empty_wav = torch.tensor([], dtype=torch.float32)
+    #         return VoxtralTTSGenerateOutput(
+    #             waveform=empty_wav,
+    #             codes_b37t=torch.empty((1, 37, 0), dtype=torch.long),
+    #             shifted_codes_t37=torch.empty((0, 37), dtype=torch.long),
+    #             hit_end_audio=False,
+    #         )
+    #
+    #     stacked = torch.stack(generated_codes, dim=0)
+    #     eoa = (stacked[:, 0] == self.end_audio_id).nonzero(as_tuple=False)
+    #     hit_end_audio = len(eoa) > 0
+    #     cut = int(eoa[0].item()) if len(eoa) else stacked.shape[0]
+    #     shifted_audio_tokens = stacked[:cut]
+    #     audio_tokens = shifted_audio_tokens - 2
+    #     if audio_tokens.numel() == 0:
+    #         empty_wav = torch.tensor([], dtype=torch.float32)
+    #         return VoxtralTTSGenerateOutput(
+    #             waveform=empty_wav,
+    #             codes_b37t=torch.empty((1, 37, 0), dtype=torch.long),
+    #             shifted_codes_t37=shifted_audio_tokens.long(),
+    #             hit_end_audio=hit_end_audio,
+    #         )
+    #     codes_b37t = audio_tokens.T.unsqueeze(0).long()
+    #
+    #     if include_waveform_decode:
+    #         wav = self.decode_waveform_from_codes_tt(codes_b37t)
+    #         expected_samples = audio_tokens.shape[0] * self._downsample_factor
+    #         waveform = wav.reshape(-1)[:expected_samples].reshape(1, 1, -1)
+    #     else:
+    #         waveform = torch.zeros(1, 1, 0, dtype=torch.float32)
+    #     return VoxtralTTSGenerateOutput(
+    #         waveform=waveform,
+    #         codes_b37t=codes_b37t,
+    #         shifted_codes_t37=shifted_audio_tokens.long(),
+    #         hit_end_audio=hit_end_audio,
+    #     )
+
     @torch.no_grad()
-    def forward(
+    def forward_device_resident(
         self,
         text: str,
         voice: str = "casual_male",
@@ -182,7 +276,7 @@ class VoxtralTTSPipeline:
         fixed_step_count: bool = False,
         include_waveform_decode: bool = True,
     ) -> VoxtralTTSGenerateOutput:
-        """TT TTS: prefill → acoustic loop → optional waveform decode. Returns codes + waveform."""
+        """Same AR loop as :meth:`forward`; final waveform decode on TT device."""
         torch.manual_seed(seed)
 
         request = compose_speech_request(text, self.model_name_or_path, voice=voice)
@@ -196,7 +290,8 @@ class VoxtralTTSPipeline:
         generated_codes: list[torch.Tensor] = []
         current_pos = S_prompt
 
-        for _ in range(max_tokens):
+        for step_idx in range(max_tokens):
+            torch.manual_seed(acoustic_fm_noise_seed(seed, step_idx))
             audio_codes = self.acoustic.forward(last_hidden.unsqueeze(0), cfg_alpha).to(torch.long)
 
             generated_codes.append(audio_codes[0].detach().cpu())
@@ -206,6 +301,8 @@ class VoxtralTTSPipeline:
             mm_embed = self._audio_codes_to_mm_embed(audio_codes)
             last_hidden = self.text.decode_step_from_embeds(mm_embed, current_pos)
             current_pos += 1
+
+        ttnn.synchronize_device(self.mesh_device)
 
         if not generated_codes:
             empty_wav = torch.tensor([], dtype=torch.float32)
@@ -233,10 +330,34 @@ class VoxtralTTSPipeline:
         codes_b37t = audio_tokens.T.unsqueeze(0).long()
 
         if include_waveform_decode:
-            wav = self.decode_waveform_from_codes_tt(codes_b37t)
+            ttnn.synchronize_device(self.mesh_device)
+            codes_2d_tt = ttnn.from_torch(
+                audio_tokens.to(torch.uint32).contiguous(),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            codes_t_tt = ttnn.permute(codes_2d_tt, (1, 0))
+            if codes_2d_tt.is_allocated():
+                ttnn.deallocate(codes_2d_tt)
+            codes_b37t_tt = ttnn.reshape(codes_t_tt, (1, 37, int(audio_tokens.shape[0])))
+            if codes_t_tt is not codes_b37t_tt and codes_t_tt.is_allocated():
+                ttnn.deallocate(codes_t_tt)
+
+            latent_tt = self.audio_tokenizer.latent_from_codes_tt(codes_b37t_tt)
+            if codes_b37t_tt.is_allocated():
+                ttnn.deallocate(codes_b37t_tt)
+            mel_tt = self.audio_tokenizer.decode_latent_to_mel_b1tc(latent_tt)
+            ttnn.deallocate(latent_tt)
+            wav_tt = self.audio_tokenizer.pretransform_decode_tt(mel_tt)
+            ttnn.deallocate(mel_tt)
+            wav = ttnn.to_torch(wav_tt).float()
+            if wav_tt.is_allocated():
+                ttnn.deallocate(wav_tt)
+
             expected_samples = audio_tokens.shape[0] * self._downsample_factor
-            wav_flat = wav.detach().cpu().float().reshape(-1)
-            waveform = wav_flat[:expected_samples].reshape(1, 1, -1)
+            waveform = wav.reshape(-1)[:expected_samples].reshape(1, 1, -1)
         else:
             waveform = torch.zeros(1, 1, 0, dtype=torch.float32)
         return VoxtralTTSGenerateOutput(
@@ -246,7 +367,7 @@ class VoxtralTTSPipeline:
             hit_end_audio=hit_end_audio,
         )
 
-    __call__ = forward
+    __call__ = forward_device_resident
 
     @torch.no_grad()
     def generate(
@@ -260,7 +381,7 @@ class VoxtralTTSPipeline:
         include_waveform_decode: bool = True,
     ) -> torch.Tensor:
         """Compatibility wrapper returning only the final waveform."""
-        return self.forward(
+        return self.forward_device_resident(
             text=text,
             voice=voice,
             max_tokens=max_tokens,
@@ -280,8 +401,8 @@ class VoxtralTTSPipeline:
         fixed_step_count: bool = False,
         include_waveform_decode: bool = True,
     ) -> VoxtralTTSGenerateOutput:
-        """Run the same free-running path as :meth:`generate`, returning generated codes for diagnostics."""
-        return self.forward(
+        """Run the device-resident path (:meth:`forward_device_resident`), returning generated codes."""
+        return self.forward_device_resident(
             text=text,
             voice=voice,
             max_tokens=max_tokens,
@@ -291,12 +412,15 @@ class VoxtralTTSPipeline:
         )
 
     def decode_waveform_from_codes_tt(self, codes_b37t: torch.Tensor) -> torch.Tensor:
-        """``[B,37,T]`` int CPU codes → float32 waveform (TT latent + decoder + pretransform)."""
+        """``[B,37,T]`` int CPU codes → float32 waveform (latent + decoder + pretransform on TT)."""
         latent_tt = self.audio_tokenizer.latent_from_codes(codes_b37t)
         mel_tt = self.audio_tokenizer.decode_latent_to_mel_b1tc(latent_tt)
         ttnn.deallocate(latent_tt)
-        wav = self.audio_tokenizer.pretransform_decode_torch(mel_tt)
+        wav_tt = self.audio_tokenizer.pretransform_decode_tt(mel_tt)
         ttnn.deallocate(mel_tt)
+        wav = ttnn.to_torch(wav_tt).float()
+        if wav_tt.is_allocated():
+            ttnn.deallocate(wav_tt)
         return wav
 
     def _acoustic_hidden_tile_copy(self, llm_hidden_tt: ttnn.Tensor) -> ttnn.Tensor:
