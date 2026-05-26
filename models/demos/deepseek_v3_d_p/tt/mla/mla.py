@@ -506,10 +506,23 @@ class ttMLA:
         cache_layer_idx: int = 0,
         on_layer_complete: Optional[Callable[[int], None]] = None,
         actual_isl: Optional[int] = None,
+        chunk_start_global: Optional[int] = None,
+        cache_user_id: int = 0,
+        num_cache_layers: Optional[int] = None,
     ) -> ttnn.Tensor:
         signpost(header="MLA_START")
         num_heads_local = self.num_heads // self.tp_factor
         seq_len_local = hidden_states.shape[2]
+
+        # Cache batch dim is laid out user-major: each user reserves num_cache_layers
+        # contiguous slots. For single-user callers (default), cache_user_id == 0 and
+        # num_cache_layers can be left None, preserving the original cache_layer_idx
+        # indexing.
+        if num_cache_layers is None:
+            assert cache_user_id == 0, "num_cache_layers must be set when cache_user_id != 0"
+            cache_batch_idx = cache_layer_idx
+        else:
+            cache_batch_idx = cache_user_id * num_cache_layers + cache_layer_idx
 
         # q_projection
         tt_q = ttnn.linear(
@@ -647,61 +660,170 @@ class ttMLA:
         ttnn.deallocate(tt_kv_rope)
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
 
-        # Zero the padding region of THIS layer's slot before fill so migration
-        # streams clean zeros (not residual data from a prior request) for the
-        # decode side. Slice the cache to batch=cache_layer_idx so the page math
-        # in zero_cache_range hits this layer's slot, not layer 0.
-        if on_layer_complete is not None:
-            assert actual_isl is not None, "actual_isl required when on_layer_complete is set"
-            seq_len_local = kvpe_cache.shape[2]
-            seq_len_total = seq_len_local * self.sp_factor
-            zero_cache_padding_zigzag(
-                kvpe_cache=kvpe_cache[cache_layer_idx],
-                global_end_token=actual_isl,
-                sp_factor=self.sp_factor,
-                seq_len=seq_len_total,
-                decode_chunk_align=DECODE_CHUNK_ALIGN,
-                tp_factor=self.tp_factor,
+        if chunk_start_global is None:
+            # Single-shot prefill: fill whole local slot, run on-device ring SDPA.
+
+            # Zero the padding region of THIS layer's slot before fill so migration
+            # streams clean zeros (not residual data from a prior request) for the
+            # decode side. Slice the cache to batch=cache_batch_idx so the page math
+            # in zero_cache_range hits this user/layer's slot, not slot 0.
+            if on_layer_complete is not None:
+                assert actual_isl is not None, "actual_isl required when on_layer_complete is set"
+                seq_len_local = kvpe_cache.shape[2]
+                seq_len_total = seq_len_local * self.sp_factor
+                zero_cache_padding_zigzag(
+                    kvpe_cache=kvpe_cache[cache_batch_idx],
+                    global_end_token=actual_isl,
+                    sp_factor=self.sp_factor,
+                    seq_len=seq_len_total,
+                    decode_chunk_align=DECODE_CHUNK_ALIGN,
+                    tp_factor=self.tp_factor,
+                )
+
+            ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_batch_idx)
+
+            if on_layer_complete is not None:
+                on_layer_complete(self.layer_idx)
+
+            tt_v_embedding = ttnn.linear(
+                tt_kv_nope,
+                self.wkv_b2_weight,
+                compute_kernel_config=self.default_compute_kernel_config,
+                **self._get_mm_kwargs("wkv_b2", seq_len_local),
             )
 
-        ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_layer_idx)
+            attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                tt_q,
+                tt_kvpe,
+                tt_v_embedding,
+                self.joint_q,
+                self.joint_kv,
+                self.joint_v,
+                persistent_output_buffer_k=self.persistent_k_output_buffer,
+                persistent_output_buffer_v=self.persistent_v_output_buffer,
+                joint_strategy="rear",
+                logical_n=seq_len_local * self.sp_factor,
+                program_config=self._get_sdpa_program_config(seq_len_local),
+                compute_kernel_config=self.default_compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
+                num_links=self.ccl_num_links,
+                cluster_axis=self.sp_axis,
+                mesh_device=self.mesh_device,
+                topology=self.ccl_topology,
+                subdevice_id=self.tt_ccl.worker_sub_device_id,
+                ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
+                use_column_major_ccl=True,
+                is_causal=True,
+                scale=self.scale,
+                is_balanced=self.is_balanced,
+            )
+        else:
+            # Chunked prefill via ring_joint_sdpa chunked-prefill mode: write this
+            # chunk's K/V at its local offset, then call the op with Q = current
+            # chunk (per-device seq = seq_len_local) and K/V = populated prefix
+            # (per-device seq = populated_local). The op enters chunked mode
+            # implicitly when Q.seq < K.seq, treats it as mathematically causal
+            # (is_causal=True required), and derives the Q absolute offset from
+            # logical_n - chunk_size. The cache's sequential per-SP layout is
+            # exactly the "balanced growing" layout the op expects.
+            assert not self.is_balanced, "Chunked prefill currently requires is_balanced=False"
+            assert on_layer_complete is None, "on_layer_complete not yet supported in chunked prefill"
 
-        if on_layer_complete is not None:
-            on_layer_complete(self.layer_idx)
+            chunk_size_global = seq_len_local * self.sp_factor
+            chunk_end_global = chunk_start_global + chunk_size_global
+            tile_size = ttnn.TILE_SIZE
+            assert (
+                chunk_start_global % (tile_size * self.sp_factor) == 0
+                and chunk_size_global % (tile_size * self.sp_factor) == 0
+            ), (
+                f"chunk_start_global ({chunk_start_global}) and chunk_size_global "
+                f"({chunk_size_global}) must be multiples of TILE_SIZE * sp_factor "
+                f"({tile_size * self.sp_factor})"
+            )
 
-        tt_v_embedding = ttnn.linear(
-            tt_kv_nope,
-            self.wkv_b2_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
-            **self._get_mm_kwargs("wkv_b2", seq_len_local),
-        )
+            local_offset = chunk_start_global // self.sp_factor
+            populated_local = chunk_end_global // self.sp_factor
+            kvpe_dim = self.kv_lora_rank + self.qk_rope_head_dim
+            ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_batch_idx, update_idx=local_offset)
 
-        attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-            tt_q,
-            tt_kvpe,
-            tt_v_embedding,
-            self.joint_q,
-            self.joint_kv,
-            self.joint_v,
-            persistent_output_buffer_k=self.persistent_k_output_buffer,
-            persistent_output_buffer_v=self.persistent_v_output_buffer,
-            joint_strategy="rear",
-            logical_n=seq_len_local * self.sp_factor,
-            program_config=self._get_sdpa_program_config(seq_len_local),
-            compute_kernel_config=self.default_compute_kernel_config,
-            dim=2,
-            multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
-            num_links=self.ccl_num_links,
-            cluster_axis=self.sp_axis,
-            mesh_device=self.mesh_device,
-            topology=self.ccl_topology,
-            subdevice_id=self.tt_ccl.worker_sub_device_id,
-            ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
-            use_column_major_ccl=True,
-            is_causal=True,
-            scale=self.scale,
-            is_balanced=self.is_balanced,
-        )
+            # Per-device K populated prefix from the cache slot. Slicing into
+            # interleaved DRAM also flattens away the ND_SHARDED cache layout.
+            tt_k_populated = ttnn.slice(
+                kvpe_cache,
+                [cache_batch_idx, 0, 0, 0],
+                [cache_batch_idx + 1, 1, populated_local, kvpe_dim],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            # Expand V latent for the whole populated prefix: slice off the
+            # kv-lora cols, run wkv_b2.
+            tt_kv_lora_populated = ttnn.slice(
+                tt_k_populated,
+                [0, 0, 0, 0],
+                [1, 1, populated_local, self.kv_lora_rank],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            tt_v_populated = ttnn.linear(
+                tt_kv_lora_populated,
+                self.wkv_b2_weight,
+                compute_kernel_config=self.default_compute_kernel_config,
+                **self._get_mm_kwargs("wkv_b2", populated_local),
+            )
+
+            # Persistent AG buffers must match N_global = populated_local * sp
+            # exactly (op validates N_global == N_local_kv * ring_size). The
+            # __init__ buffers are sized to max_seq, so allocate per-chunk.
+            persistent_k_shard_dims = [None, None]
+            persistent_v_shard_dims = [None, None]
+            persistent_v_shard_dims[self.tp_axis] = 1
+            persistent_k_buf = ttnn.from_torch(
+                torch.zeros(1, 1, chunk_end_global, kvpe_dim),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=persistent_k_shard_dims
+                ),
+            )
+            persistent_v_buf = ttnn.from_torch(
+                torch.zeros(1, self.num_heads, chunk_end_global, self.v_head_dim),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=persistent_v_shard_dims
+                ),
+            )
+
+            attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                tt_q,
+                tt_k_populated,
+                tt_v_populated,
+                self.joint_q,
+                self.joint_kv,
+                self.joint_v,
+                persistent_output_buffer_k=persistent_k_buf,
+                persistent_output_buffer_v=persistent_v_buf,
+                joint_strategy="rear",
+                logical_n=chunk_end_global,
+                program_config=self._get_sdpa_program_config(seq_len_local),
+                compute_kernel_config=self.default_compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
+                num_links=self.ccl_num_links,
+                cluster_axis=self.sp_axis,
+                mesh_device=self.mesh_device,
+                topology=self.ccl_topology,
+                subdevice_id=self.tt_ccl.worker_sub_device_id,
+                ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
+                use_column_major_ccl=True,
+                is_causal=True,
+                scale=self.scale,
+                is_balanced=self.is_balanced,
+            )
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v_out = ttnn.linear(
