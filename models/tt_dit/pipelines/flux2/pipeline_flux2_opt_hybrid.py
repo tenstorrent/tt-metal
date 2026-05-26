@@ -324,7 +324,6 @@ class Flux2Pipeline:
         spatial_sequence_length = (latents_height // self._patch_size) * (latents_width // self._patch_size)
 
         logger.info("encoding prompts...")
-        breakpoint()
 
         pce = profiler("encoder", profiler_iteration) if profiler else nullcontext()
         with pce:
