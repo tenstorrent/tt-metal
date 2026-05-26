@@ -15,7 +15,7 @@ from typing import Any
 
 import torch
 
-from .math_perf_env import ace_step_concat_kwargs
+from .math_perf_env import ace_step_concat_kwargs, ace_step_flush_device_profiler
 from .vae.decoder import TtOobleckDecoder
 
 # TTNN conv_transpose2d width-sharded kernels assert on activation×weight geometry; very short
@@ -362,6 +362,7 @@ class TtOobleckVaeDecoder:
                 wav_one = self.decode_chunk_traced(latents_btc)
             else:
                 wav_one = dec(latents_btc)
+            ace_step_flush_device_profiler(dec.device)
             return _crop_audio_tail(wav_one, initial_pad_lat, clone_output=use_chunk_trace)
 
         stride = chunk_size - 2 * overlap
@@ -396,6 +397,7 @@ class TtOobleckVaeDecoder:
                 wav = dec(latent_chunk)
             finally:
                 _safe_deallocate(latent_chunk)
+            ace_step_flush_device_profiler(dec.device)
             # Decoder ends with conv2 → often TILE; trim uses ttnn.slice which is not safe on TILE
             # for arbitrary [T_start, T_end) (same 32-tile alignment rules as latents).
             wav = ttnn.to_layout(wav, ttnn.ROW_MAJOR_LAYOUT)
