@@ -1,6 +1,6 @@
 # CI Disable Work — Running Status Log
 
-Last updated: **2026-05-26T19:15 UTC** (verification run 26460410854 completed; log analysis)
+Last updated: **2026-05-26T20:35 UTC** (revalidation poll; no code/disable changes)
 
 Operational policy: **one workflow run at a time**, draft PRs only, artifact reuse for verification, Galaxy out of scope.
 
@@ -38,34 +38,34 @@ _None — safe to dispatch at most one new verification run when needed._
 | Branch | `ci/disable-failing-tests-t3000-e2e-tests-20260524` |
 | Workflow | `t3000-e2e-tests.yaml` |
 
-**Last rebase on main:** 2026-05-26 ~19:15 UTC — branch up to date with [`4b466c68cf3`](https://github.com/tenstorrent/tt-metal/commit/4b466c68cf3702d7d3f75cedf1e387eeb102ed5b) (`main` tip at rebase check); PR head [`362a0074c85`](https://github.com/tenstorrent/tt-metal/commit/362a0074c85842a7dbc56e189520b461a2d4c2c3).
+**Last rebase on main:** 2026-05-26 ~20:30 UTC — confirmed up to date with [`ff4b73d01`](https://github.com/tenstorrent/tt-metal/commit/ff4b73d01641cc35e43d994372d3127445375150) (`main` tip); PR head [`7a1c5d55f1f`](https://github.com/tenstorrent/tt-metal/commit/7a1c5d55f1f1f52d3cf56d4b0941e412cb79d9e0). No rebase commit needed this cycle.
 
-**Status:** Targeted verification [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) **completed failure** — Llama pruned job **green** (confirms Llama skip removal); CCL pruned job still red. Existing 14 CCL disables validated; **no new disables added** (trace-buffer candidate below fails 3× rule — only 1/5 recent main runs).
+**Status:** Draft; `mergeable_state: blocked` (CI). Targeted verification [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) **completed failure** — Llama pruned job **green**; CCL pruned job still red. **Main revalidation (2026-05-26 ~20:30 UTC):** latest `main` `(T3K) T3000 e2e tests` run still [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812); all 14 CCL disables still justified (CCL job failed; AI summary lists same six failure classes including disabled tests). **No new disables** — trace-buffer `rs_input_shape2` still **1/5** recent main runs (3× rule).
 
 **Latest disable-set change (2026-05-26):**
 - **Removed:** Llama 3.1 batch-32 demo skips — passing on main (see removed-test row below)
 - **Kept:** All CCL disables below (still failing on main as of last check)
 
-**Main check source run:** [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) on `main` @ [`213a10be7cb`](https://github.com/tenstorrent/tt-metal/commit/213a10be7cb02a2f47a1af33f1fc0720b1452533) — checked **2026-05-26 09:25 UTC** (job `t3k_ccl_tests [wh_llmbox]` failed; `models_tttv2_llama31_8B_tests [wh_llmbox]` passed)
+**Main check source run:** [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) on `main` @ [`213a10be7cb`](https://github.com/tenstorrent/tt-metal/commit/213a10be7cb02a2f47a1af33f1fc0720b1452533) — checked **2026-05-26 20:30 UTC** (still latest completed `main` e2e run; `t3k_ccl_tests [wh_llmbox]` failed; `models_tttv2_llama31_8B_tests [wh_llmbox]` passed)
 
 **Currently disabled — main status (issue #45107):**
 
 | Disabled test ID | Still failing on main? | Last checked (UTC) | Main run |
 |------------------|------------------------|--------------------|----------|
-| `test_all_gather_matmul_async[ag_output_shape0-perf-no_barrier_with_persistent-chunking]` | **Yes** — dtype mismatch (Float vs BFloat16) | 2026-05-26 09:25 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
-| `test_all_gather_matmul_async[ag_output_shape0-check-barrier_with_persistent-default]` | **Yes** — same error class | 2026-05-26 09:25 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
-| `test_all_gather_matmul_async[ag_output_shape0-perf-barrier_without_persistent-default]` | **Yes** — same error class | 2026-05-26 09:25 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
-| `test_all_gather_matmul_async[ag_output_shape1-check-barrier_with_persistent-default]` | **Yes** — same error class | 2026-05-26 09:25 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
-| `test_all_gather_matmul_async[ag_output_shape1-perf-no_barrier_with_persistent-chunking]` | **Yes** — same error class | 2026-05-26 09:25 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
-| `test_all_gather_matmul_async[ag_output_shape1-check-barrier_without_persistent-chunking]` | **Yes** — same error class | 2026-05-26 09:25 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
-| `test_ring_joint_sdpa_program_cache[bf16-sd35-no_trace]` | **Yes** — `cache_entries_counter` / `CacheEntriesCounter` | 2026-05-26 09:25 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
-| `test_ring_joint_sdpa_program_cache[bf8_b-sd35-no_trace]` | **Yes** — same error class | 2026-05-26 09:25 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
-| `test_ring_joint_sdpa_program_cache[bf4_b-sd35-no_trace]` | **Yes** — same error class | 2026-05-26 09:25 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
-| `test_all_broadcast_sharded_2x4` (ROW_MAJOR + bfloat16) | **Yes** — `CacheEntriesCounter` undefined | 2026-05-26 09:25 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
-| `test_all_broadcast_sharded_2x4` (TILE + bfloat16) | **Yes** — same error class | 2026-05-26 09:25 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
-| `test_all_broadcast_sharded_2x4` (TILE + bfloat8_b) | **Yes** — same error class | 2026-05-26 09:25 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
-| `test_decode_perf[wormhole_b0-…-2x4_grid-True-device_params0]` | **Yes** — zero-output accuracy assertion | 2026-05-26 09:25 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
-| `test_all_to_all_combine_no_trace_submesh[…-fabric_1d_line_axis_1]` | **Yes** — zero-output accuracy assertion | 2026-05-26 09:25 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
+| `test_all_gather_matmul_async[ag_output_shape0-perf-no_barrier_with_persistent-chunking]` | **Yes** — dtype mismatch (Float vs BFloat16) | 2026-05-26 20:30 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
+| `test_all_gather_matmul_async[ag_output_shape0-check-barrier_with_persistent-default]` | **Yes** — same error class | 2026-05-26 20:30 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
+| `test_all_gather_matmul_async[ag_output_shape0-perf-barrier_without_persistent-default]` | **Yes** — same error class | 2026-05-26 20:30 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
+| `test_all_gather_matmul_async[ag_output_shape1-check-barrier_with_persistent-default]` | **Yes** — same error class | 2026-05-26 20:30 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
+| `test_all_gather_matmul_async[ag_output_shape1-perf-no_barrier_with_persistent-chunking]` | **Yes** — same error class | 2026-05-26 20:30 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
+| `test_all_gather_matmul_async[ag_output_shape1-check-barrier_without_persistent-chunking]` | **Yes** — same error class | 2026-05-26 20:30 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
+| `test_ring_joint_sdpa_program_cache[bf16-sd35-no_trace]` | **Yes** — `cache_entries_counter` / `CacheEntriesCounter` | 2026-05-26 20:30 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
+| `test_ring_joint_sdpa_program_cache[bf8_b-sd35-no_trace]` | **Yes** — same error class | 2026-05-26 20:30 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
+| `test_ring_joint_sdpa_program_cache[bf4_b-sd35-no_trace]` | **Yes** — same error class | 2026-05-26 20:30 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
+| `test_all_broadcast_sharded_2x4` (ROW_MAJOR + bfloat16) | **Yes** — `CacheEntriesCounter` undefined | 2026-05-26 20:30 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
+| `test_all_broadcast_sharded_2x4` (TILE + bfloat16) | **Yes** — same error class | 2026-05-26 20:30 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
+| `test_all_broadcast_sharded_2x4` (TILE + bfloat8_b) | **Yes** — same error class | 2026-05-26 20:30 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
+| `test_decode_perf[wormhole_b0-…-2x4_grid-True-device_params0]` | **Yes** — zero-output accuracy assertion | 2026-05-26 20:30 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
+| `test_all_to_all_combine_no_trace_submesh[…-fabric_1d_line_axis_1]` | **Yes** — zero-output accuracy assertion | 2026-05-26 20:30 | [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
 
 **Removed from disable set (was disabled, now passing on main):**
 
@@ -78,7 +78,7 @@ _None — safe to dispatch at most one new verification run when needed._
 
 | Test ID | Error (same on verify + main 26438570812) | Consecutive main failures | Last checked (UTC) |
 |---------|-------------------------------------------|---------------------------|--------------------|
-| `test_reduce_scatter_async_sharded_to_interleaved[wormhole_b0-fabric_ring-rs_input_shape2-…-HEIGHT_SHARDED-…-L1-…]` | `TT_FATAL: Creating trace buffers of size 1409024B … only 1271456B allocated` | **1/5** recent main runs (26438570812 only; absent in 26389759743, 26354956826, 26326515951, 26274534025) | 2026-05-26 19:15 |
+| `test_reduce_scatter_async_sharded_to_interleaved[wormhole_b0-fabric_ring-rs_input_shape2-…-HEIGHT_SHARDED-…-L1-…]` | `TT_FATAL: Creating trace buffers of size 1409024B … only 1271456B allocated` | **1/5** recent main runs (26438570812 only; absent in 26389759743, 26354956826, 26326515951, 26274534025) | 2026-05-26 20:30 |
 
 **Next:** Wait for 2 more consecutive main runs with same trace-buffer error before disabling; then CCL-only pruned verify with artifact reuse. Do not chase the 90m global job timeout on CCL (pytest continued after first failure).
 
@@ -138,12 +138,18 @@ _None — safe to dispatch at most one new verification run when needed._
 | Trace-buffer disable candidate | **Watch** | `rs_input_shape2` / fabric_ring — only 1/5 main runs; need 3× same error before skip |
 | CCL job 90m timeout after first failure | **Out of scope** | Global job timeout; not a disable target |
 | GitHub REST `Bad credentials` with Bearer token | **Workaround** | Use `gh` CLI or `Authorization: token` header |
-| PR #45108 behind main | **Resolved** | Up to date with `main` @ `4b466c68cf3` (2026-05-26 19:15 UTC) |
+| PR #45108 behind main | **Resolved** | Up to date with `main` @ `ff4b73d01` (confirmed 2026-05-26 20:30 UTC) |
 | No compatible artifact source | **Resolved** | Used Merge Gate run `26445104085` for verification |
 
 ---
 
 ## Change Log (append-only)
+
+### 2026-05-26 ~20:35 UTC — automation poll (status log only)
+- Confirmed PR #45108 rebased on `main` @ `ff4b73d01`; head `7a1c5d55f1f`; still draft/blocked
+- Revalidated 14 CCL disables against latest `main` e2e run [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) — still failing
+- Trace-buffer `rs_input_shape2` still 1/5 main runs — not disabled
+- No disable edits; no verification dispatch
 
 ### 2026-05-26 ~19:15 UTC — verification complete (no code changes)
 - Run 26460410854 **completed failure**: Llama **success**, CCL **failure** (trace buffer `rs_input_shape2` + 90m timeout)
