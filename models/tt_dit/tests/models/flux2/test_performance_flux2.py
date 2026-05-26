@@ -49,7 +49,7 @@ NUM_PERF_RUNS = 3
         "bh_qb",
         "bh_lb",
         "bh_glx_linear",
-        "bh_glx_ring_sp0tp1",
+        "bh_glx_ring_sp0tp1_nofsdp",
         "bh_glx_ring_sp1tp0",
         "bh_glx_ring_sp0tp1_fsdp",
     ],
