@@ -38,7 +38,7 @@
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 2 --timeout=60 \
       --junitxml=pytest-report-wormhole-2-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-../../../../tests/pipeline_reorg/llk_smoke_tests.yaml -n 10 --reset-card-between-files -x \
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -n 10 --reset-card-between-files -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 2 \
       --timeout=60 \
