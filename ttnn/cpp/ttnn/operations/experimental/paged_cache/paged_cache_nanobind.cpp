@@ -93,10 +93,10 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         Paged fill cache operation. This operation expects the following inputs: cache_tensor, input_tensor, and page_table.
         It uses either batch_idx_tensor (if provided, kwarg batch_idx_tensor) or batch_idx (kwarg batch_idx) as a fallback to determine the batch index for updating the cache.
         cache_tensor shape: [max_num_blocks, 1, block_size, head_dim]
-        input_tensor shape: [1, num_heads, input_seq_len, head_dim]
+        input_tensor shape: [input_batch, num_heads, input_seq_len, head_dim]
         page_table shape: [batch_size, max_num_blocks_per_seq]
-        batch_idx_tensor (optional) shape: [1] (scalar uint32 tensor)
-        batch_idx (scalar, defaults to 0) is used if batch_idx_tensor is not provided.
+        batch_idx_tensor (optional) shape: [input_batch], dtype int32 or uint32, ROW_MAJOR layout, INTERLEAVED DRAM — one batch_idx per input batch row.
+        batch_idx (scalar, defaults to 0) is used if batch_idx_tensor is not provided; in that case input_batch must be 1.
         mesh_coords (optional) is a set of MeshCoordinate objects that specify the mesh coordinates to execute on.
 
         ``head_dim`` is read from ``input_tensor.padded_shape[-1]``. ``block_size``

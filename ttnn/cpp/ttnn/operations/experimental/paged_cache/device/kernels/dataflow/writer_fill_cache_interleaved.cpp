@@ -38,11 +38,18 @@ void kernel_main() {
     constexpr uint32_t log2_page_table_stick_size = get_compile_time_arg_val(6);
     constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(7);
 
-    // New compile-time args for optional batch_idx_tensor
+    // Compile-time args for optional batch_idx_tensor.
+    // When use_batch_idx_tensor is true, runtime arg 4 is the address of a
+    // 1D int tensor with `batch_idx_num_elements` entries:
+    //   1            -> single-batch (legacy) path; input_tensor.shape[0] == 1.
+    //   input_batch  -> batched path; one batch_idx per input batch row,
+    //                   selected per row via `num_blocks_per_batch`.
     constexpr bool use_batch_idx_tensor = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t cb_id_batch_idx = get_compile_time_arg_val(9);  // CB for reading from batch_idx_tensor
-    constexpr uint32_t batch_idx_stick_size =
-        get_compile_time_arg_val(10);  // Expected to be small (e.g., 4 for uint32)
+    constexpr uint32_t cb_id_batch_idx = get_compile_time_arg_val(9);
+    constexpr uint32_t batch_idx_stick_size = get_compile_time_arg_val(10);  // per-element size, e.g. 4 for uint32
+    constexpr uint32_t batch_idx_num_elements = get_compile_time_arg_val(11);
+    constexpr uint32_t num_blocks_per_batch = get_compile_time_arg_val(12);  // num_heads * input_seq_len_t
+    constexpr bool batched_fill = batch_idx_num_elements > 1;
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t page_table_addr = get_arg_val<uint32_t>(1);
@@ -56,44 +63,79 @@ void kernel_main() {
         return;  // Early exit, no work done
     }
 
-    constexpr auto s0_args = TensorAccessorArgs<11>();
+    constexpr auto s0_args = TensorAccessorArgs<13>();
     constexpr auto page_table_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     constexpr auto batch_idx_tensor_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
 
-    uint32_t batch_idx;
+    // Resolve batch_idx source. For use_batch_idx_tensor=true we load the
+    // (small) 1D tensor into an L1 CB once so per-row lookups stay local.
+    // For use_batch_idx_tensor=false the scalar fallback in arg 4 is used.
+    volatile tt_l1_ptr uint32_t* batch_idx_arr = nullptr;
+    uint32_t scalar_batch_idx = 0;
     if constexpr (use_batch_idx_tensor) {
-        uint32_t batch_idx_tensor_addr = batch_arg;  // Arg 4 is the address
-
-        const auto batch_idx_gen = TensorAccessor(batch_idx_tensor_args, batch_idx_tensor_addr);
-        cb_reserve_back(cb_id_batch_idx, 1);  // Expecting 1 element (the batch_idx)
-        uint32_t batch_idx_cb_wr_ptr = get_write_ptr(cb_id_batch_idx);
-        uint64_t batch_idx_noc_addr = batch_idx_gen.get_noc_addr(0);
-        noc_async_read(batch_idx_noc_addr, batch_idx_cb_wr_ptr, batch_idx_stick_size);
+        const auto batch_idx_gen = TensorAccessor(batch_idx_tensor_args, batch_arg);
+        cb_reserve_back(cb_id_batch_idx, 1);
+        const uint32_t batch_idx_cb_wr_ptr = get_write_ptr(cb_id_batch_idx);
+        // The tensor is a contiguous 1D int (uint32/int32) tensor in DRAM with
+        // `batch_idx_num_elements` entries; one TensorAccessor stick covers it.
+        const uint64_t batch_idx_noc_addr = batch_idx_gen.get_noc_addr(0);
+        noc_async_read(batch_idx_noc_addr, batch_idx_cb_wr_ptr, batch_idx_stick_size * batch_idx_num_elements);
         noc_async_read_barrier();
-        volatile tt_l1_ptr uint32_t* batch_idx_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_idx_cb_wr_ptr);
-        batch_idx = batch_idx_ptr[0];
+        batch_idx_arr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_idx_cb_wr_ptr);
     } else {
-        batch_idx = batch_arg;  // Arg 4 is the scalar fallback value
+        scalar_batch_idx = batch_arg;
     }
 
     const uint32_t tile_bytes = get_tile_size(cb_id_in);
     const DataFormat data_format = get_dataformat(cb_id_in);
 
     const auto out_gen = TensorAccessor(s0_args, dst_addr);
-
     const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr);
-    cb_reserve_back(cb_id_page_table, 1);
-    uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
-    uint64_t page_table_noc_addr = page_table_gen.get_noc_addr(batch_idx);
-    noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
-    noc_async_read_barrier();
 
+    cb_reserve_back(cb_id_page_table, 1);
+    const uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
     volatile tt_l1_ptr uint32_t* page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
 
+    // Cache the last batch for which page_table was loaded. Legacy path loads
+    // once on the first row (cache miss) and then hits for all remaining rows;
+    // batched path re-loads on batch boundaries within this core's row range.
+    uint32_t cached_batch = (uint32_t)-1;
+
     for (uint32_t row_id = start_row_num; row_id < start_row_num + num_rows; ++row_id) {
-        uint32_t cur_head = row_id / num_blocks_of_work_per_head;
-        uint32_t seq_tile_id = row_id % num_blocks_of_work_per_head;
+        // Decode row_id → (cur_batch, cur_head, seq_tile_id).
+        // Input layout: [input_batch, num_heads, input_seq_len_t]
+        //   row_id = cur_batch * num_blocks_per_batch
+        //            + cur_head * num_blocks_of_work_per_head
+        //            + seq_tile_id
+        // On the legacy path (batched_fill == false) cur_batch is always 0
+        // and the per-batch arithmetic is elided.
+        uint32_t cur_batch;
+        uint32_t row_within_batch;
+        if constexpr (batched_fill) {
+            cur_batch = row_id / num_blocks_per_batch;
+            row_within_batch = row_id - cur_batch * num_blocks_per_batch;
+        } else {
+            cur_batch = 0;
+            row_within_batch = row_id;
+        }
+        const uint32_t cur_head = row_within_batch / num_blocks_of_work_per_head;
+        const uint32_t seq_tile_id = row_within_batch % num_blocks_of_work_per_head;
+
+        uint32_t batch_idx;
+        if constexpr (use_batch_idx_tensor) {
+            batch_idx = batch_idx_arr[batched_fill ? cur_batch : 0];
+        } else {
+            batch_idx = scalar_batch_idx;
+        }
+
+        // Reload page_table row only on batch boundary.
+        if (batch_idx != cached_batch) {
+            const uint64_t page_table_noc_addr = page_table_gen.get_noc_addr(batch_idx);
+            noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
+            noc_async_read_barrier();
+            cached_batch = batch_idx;
+        }
+
         uint32_t physical_tile_id =
             virtual_seq_tile_id_to_physical_tile_id<num_heads, block_size_t, Wt>(seq_tile_id, cur_head, page_table_ptr);
 
