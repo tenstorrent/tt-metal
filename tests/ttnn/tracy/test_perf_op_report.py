@@ -178,6 +178,10 @@ various_ops_test = {
 }
 
 EXPECTED_DEVICE_OP_COUNT = 5
+SUB_DEVICE_AVAILABLE_CORE_COUNTS = {0: 16, 1: 5}
+SUB_DEVICE_0_MATMUL_CORE_COUNT = 4
+SUB_DEVICE_0_BINARY_CORE_COUNT = 16
+SUB_DEVICE_1_BINARY_CORE_COUNT = 5
 
 
 @skip_for_blackhole()
@@ -223,6 +227,51 @@ class TestVariousOpsProfile:
         assert (
             positive_durations.sum() >= EXPECTED_DEVICE_OP_COUNT
         ), "Expected non-zero DEVICE FW DURATION [ns] for profiled ops"
+
+    def test_core_counts_match_sub_device(self, run_test_do_post_proc):
+        res, _request = run_test_do_post_proc
+        op_rows = res[res["OP TYPE"] != "signpost"].copy()
+        assert "CORE COUNT" in op_rows.columns
+        assert "AVAILABLE WORKER CORE COUNT" in op_rows.columns
+
+        op_rows["SUB DEVICE ID"] = pd.to_numeric(op_rows["SUB DEVICE ID"], errors="coerce")
+        op_rows["CORE COUNT"] = pd.to_numeric(op_rows["CORE COUNT"], errors="coerce")
+        op_rows["AVAILABLE WORKER CORE COUNT"] = pd.to_numeric(op_rows["AVAILABLE WORKER CORE COUNT"], errors="coerce")
+
+        failures = []
+        for _, row in op_rows.iterrows():
+            sub_device_id = int(row["SUB DEVICE ID"])
+            op_code = str(row["OP CODE"]).lower()
+            core_count = int(row["CORE COUNT"])
+            available_cores = int(row["AVAILABLE WORKER CORE COUNT"])
+            expected_available = SUB_DEVICE_AVAILABLE_CORE_COUNTS[sub_device_id]
+
+            if available_cores != expected_available:
+                failures.append(
+                    f"{row['OP CODE']} on sub-device {sub_device_id}: "
+                    f"expected AVAILABLE WORKER CORE COUNT={expected_available}, got {available_cores}"
+                )
+
+            if "matmul" in op_code:
+                expected_core_count = SUB_DEVICE_0_MATMUL_CORE_COUNT
+            elif sub_device_id == 0:
+                expected_core_count = SUB_DEVICE_0_BINARY_CORE_COUNT
+            else:
+                expected_core_count = SUB_DEVICE_1_BINARY_CORE_COUNT
+
+            if core_count != expected_core_count:
+                failures.append(
+                    f"{row['OP CODE']} on sub-device {sub_device_id}: "
+                    f"expected CORE COUNT={expected_core_count}, got {core_count}"
+                )
+
+            if core_count > available_cores:
+                failures.append(
+                    f"{row['OP CODE']} on sub-device {sub_device_id}: "
+                    f"CORE COUNT ({core_count}) exceeds AVAILABLE WORKER CORE COUNT ({available_cores})"
+                )
+
+        assert not failures, "Core count mismatches:\n" + "\n".join(failures)
 
     def test_sub_device_id_matches_device_csv_when_present(self, run_test_do_post_proc):
         res, request = run_test_do_post_proc
