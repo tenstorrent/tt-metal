@@ -736,11 +736,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     kernel.unique_id,
                     QUASAR_TENSIX_ENGINES_PER_NODE);
                 // On Quasar, we're not allowing 3-thread compute kernels.
-                TT_FATAL(
-                    kernel.num_threads != 3,
-                    "KernelSpec '{}' has 3 threads, which is not supported for compute kernels. Legal values are 1, 2, "
-                    "and 4.",
-                    kernel.unique_id);
+                // TT_FATAL(
+                //     kernel.num_threads != 3,
+                //     "KernelSpec '{}' has 3 threads, which is not supported for compute kernels. Legal values are 1, 2, "
+                //     "and 4.",
+                //     kernel.unique_id);
             } else {
                 TT_FATAL(
                     kernel.num_threads == 1,

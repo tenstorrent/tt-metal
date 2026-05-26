@@ -377,6 +377,13 @@ inline void risc_init() {
 }
 
 inline __attribute__((interrupt, hot)) void handle_interrupt() {
+    // Benchmark marker: first instruction of ISR. In RTL traces, correlate this cycle with
+    // the fired txn_id visible in the OVERLAY_RD_CMD_BUF pending register immediately after.
+    asm volatile("nop");
+    asm volatile("nop");
+    asm volatile("nop");
+    asm volatile("nop");
+    asm volatile("nop");
     uint64_t mcause;
     asm volatile("csrr %0, mcause" : "=r"(mcause));
     if ((mcause & 0x8000000000000000) == 0) {  // this is HW exception

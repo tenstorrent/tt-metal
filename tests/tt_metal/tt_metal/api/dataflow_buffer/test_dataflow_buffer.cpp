@@ -2200,4 +2200,885 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
     }
 }
 
+// Average-case DFB init benchmark.
+//
+// Three DFBs on one core:
+//   DFB_SS  – 4Sx4S DM→Tensix  (strided producer × strided consumer, no remapper)
+//   DFB_SA  – 4Sx4A DM→Tensix  (strided producer × ALL consumer, uses remapper)
+//   DFB_T6  – 4Sx4S Tensix→DM  (strided producer × strided consumer, no remapper)
+//
+// Kernels are no-ops (finish() with 0 entries) so that measured time reflects
+// setup_local_dfb_interfaces overhead only, not data movement.
+TEST_F(MeshDeviceFixture, BenchmarkCaseTwo) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB init benchmarks require Quasar";
+    }
+
+    IDevice* device = this->devices_.at(0)->get_devices()[0];
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
+    constexpr uint32_t ENTRY_SIZE  = 1024;
+    constexpr uint32_t NUM_ENTRIES = 16;
+    constexpr uint8_t  NUM_IN_THREADS = 4;
+    constexpr uint8_t  NUM_OUT_THREADS = 2;
+
+    constexpr const char* DFB_SS  = "dfb_ss";   // 4Sx4S DM→Tensix
+    constexpr const char* DFB_SA  = "dfb_sa";   // 4Sx4A DM→Tensix
+    constexpr const char* DFB_T6  = "dfb_t6";   // 4Sx4S Tensix→DM
+    constexpr const char* READER  = "reader_dm";
+    constexpr const char* COMPUTE = "compute";
+    constexpr const char* WRITER  = "writer_dm";
+
+    // Configs used only to carry data_format; num_producers/consumers/patterns
+    // are inferred by the framework from the kernel DFB bindings below.
+    experimental::dfb::DataflowBufferConfig ss_cfg{
+        .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES,
+        .num_producers = NUM_IN_THREADS, .pap = dfb::AccessPattern::STRIDED,
+        .num_consumers = NUM_IN_THREADS, .cap = dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = true};
+    experimental::dfb::DataflowBufferConfig sa_cfg{
+        .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES,
+        .num_producers = NUM_IN_THREADS, .pap = dfb::AccessPattern::STRIDED,
+        .num_consumers = NUM_IN_THREADS, .cap = dfb::AccessPattern::ALL,
+        .enable_implicit_sync = true};
+    experimental::dfb::DataflowBufferConfig t6_cfg{
+        .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES,
+        .num_producers = NUM_IN_THREADS, .pap = dfb::AccessPattern::STRIDED,
+        .num_consumers = NUM_OUT_THREADS, .cap = dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = true};
+
+    experimental::metal2_host_api::DataflowBufferSpec dfb_ss_spec{
+        .unique_id            = DFB_SS,
+        .entry_size           = ENTRY_SIZE,
+        .num_entries          = NUM_ENTRIES,
+        .data_format_metadata = ss_cfg.data_format,
+        .disable_implicit_sync = !ss_cfg.enable_implicit_sync,
+    };
+    experimental::metal2_host_api::DataflowBufferSpec dfb_sa_spec{
+        .unique_id            = DFB_SA,
+        .entry_size           = ENTRY_SIZE,
+        .num_entries          = NUM_ENTRIES,
+        .data_format_metadata = sa_cfg.data_format,
+        .disable_implicit_sync = !sa_cfg.enable_implicit_sync,
+    };
+    experimental::metal2_host_api::DataflowBufferSpec dfb_t6_spec{
+        .unique_id            = DFB_T6,
+        .entry_size           = ENTRY_SIZE,
+        .num_entries          = NUM_ENTRIES,
+        .data_format_metadata = t6_cfg.data_format,
+        .disable_implicit_sync = !t6_cfg.enable_implicit_sync,
+    };
+
+    const experimental::metal2_host_api::DataMovementConfiguration gen2_dm_cfg{
+        .gen2_data_movement_config =
+            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}};
+
+    // Reader DM: producer on DFB_SS (STRIDED) and DFB_SA (STRIDED)
+    experimental::metal2_host_api::KernelSpec reader_spec{
+        .unique_id   = READER,
+        .source      = experimental::metal2_host_api::KernelSpec::SourceFilePath{
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_avg_reader_dm.cpp"},
+        .num_threads = NUM_IN_THREADS,
+        .dfb_bindings = {
+            {
+                .dfb_spec_name       = DFB_SS,
+                .local_accessor_name = "ss_out",
+                .endpoint_type       = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                .access_pattern      = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+            },
+            {
+                .dfb_spec_name       = DFB_SA,
+                .local_accessor_name = "sa_out",
+                .endpoint_type       = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                .access_pattern      = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+            },
+        },
+        .config_spec = gen2_dm_cfg,
+    };
+
+    // Compute: STRIDED consumer on DFB_SS, ALL consumer on DFB_SA, STRIDED producer on DFB_T6
+    experimental::metal2_host_api::KernelSpec compute_spec{
+        .unique_id   = COMPUTE,
+        .source      = experimental::metal2_host_api::KernelSpec::SourceFilePath{
+            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_avg_compute.cpp"},
+        .num_threads = NUM_IN_THREADS,
+        .dfb_bindings = {
+            {
+                .dfb_spec_name       = DFB_SS,
+                .local_accessor_name = "ss_in",
+                .endpoint_type       = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                .access_pattern      = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+            },
+            {
+                .dfb_spec_name       = DFB_SA,
+                .local_accessor_name = "sa_in",
+                .endpoint_type       = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                .access_pattern      = experimental::metal2_host_api::DFBAccessPattern::ALL,
+            },
+            {
+                .dfb_spec_name       = DFB_T6,
+                .local_accessor_name = "t6_out",
+                .endpoint_type       = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                .access_pattern      = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+            },
+        },
+        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+    };
+
+    // Writer DM: STRIDED consumer on DFB_T6
+    experimental::metal2_host_api::KernelSpec writer_spec{
+        .unique_id   = WRITER,
+        .source      = experimental::metal2_host_api::KernelSpec::SourceFilePath{
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_avg_writer_dm.cpp"},
+        .num_threads = NUM_OUT_THREADS,
+        .dfb_bindings = {{
+            .dfb_spec_name       = DFB_T6,
+            .local_accessor_name = "t6_in",
+            .endpoint_type       = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+            .access_pattern      = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+        }},
+        .config_spec = gen2_dm_cfg,
+    };
+
+    experimental::metal2_host_api::WorkUnitSpec wu{
+        .unique_id    = "bench_avg_wu",
+        .kernels      = {READER, COMPUTE, WRITER},
+        .target_nodes = core_range_set,
+    };
+
+    experimental::metal2_host_api::ProgramSpec spec{
+        .program_id       = "bench_avg",
+        .kernels          = {reader_spec, compute_spec, writer_spec},
+        .dataflow_buffers = {dfb_ss_spec, dfb_sa_spec, dfb_t6_spec},
+        .work_units       = {wu},
+    };
+
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*this->devices_.at(0), spec);
+
+    experimental::metal2_host_api::ProgramRunParams run_params;
+    run_params.kernel_run_params = {
+        {.kernel_spec_name = READER},
+        {.kernel_spec_name = COMPUTE},
+        {.kernel_spec_name = WRITER},
+    };
+    experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+}
+
+// Worst-case DFB init benchmark.
+//
+// Three concurrent 4Sx4A DM→Tensix DFBs are the hardware worst case for
+// DM0's setup_local_dfb_interfaces.
+//
+// Per-tensix TC budget (16 DM-visible TCs per tensix):
+//   Each DFB allocates 5 TCs on each of the consumer tensix IDs:
+//     - 1 producer TC (DM k → tensix k)
+//     - 4 consumer TCs (Neo k gets 1 TC per DM producer × 4 producers, all on tensix k)
+//   So each DFB uses 5 TCs on tensix 0–3 → max DFBs = floor(16/5) = 3.
+//   3 DFBs × 5 = 15/16 TCs used per tensix.
+//
+// Remapper: 3 DFBs × 4 producers (each 1-to-4 fan-out) = 12/16 1-to-many entries used.
+// This yields 12 remapper write_all_configs() calls with 4 set_clientR_slot writes
+// each = 48 total clientR writes — the maximum achievable given the TC constraint.
+//
+// Kernels are no-ops so that measured time reflects setup overhead only.
+TEST_F(MeshDeviceFixture, BenchmarkCaseFour) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB init benchmarks require Quasar";
+    }
+
+    IDevice* device = this->devices_.at(0)->get_devices()[0];
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
+    constexpr uint32_t ENTRY_SIZE    = 1024;
+    constexpr uint32_t NUM_ENTRIES   = 16;
+    constexpr uint8_t  NUM_PRODUCERS = 4;  // DM STRIDED producers per DFB
+    constexpr uint8_t  NUM_CONSUMERS = 4;  // Tensix ALL consumers per DFB
+
+    constexpr const char* DFB0    = "dfb0";
+    constexpr const char* DFB1    = "dfb1";
+    constexpr const char* DFB2    = "dfb2";
+    constexpr const char* READER  = "reader_dm";
+    constexpr const char* COMPUTE = "compute";
+
+    experimental::dfb::DataflowBufferConfig sa_cfg{
+        .entry_size    = ENTRY_SIZE,    .num_entries = NUM_ENTRIES,
+        .num_producers = NUM_PRODUCERS, .pap         = dfb::AccessPattern::STRIDED,
+        .num_consumers = NUM_CONSUMERS, .cap         = dfb::AccessPattern::ALL,
+        .enable_implicit_sync = true};
+
+    auto make_dfb_spec = [&](const char* id) {
+        return experimental::metal2_host_api::DataflowBufferSpec{
+            .unique_id            = id,
+            .entry_size           = ENTRY_SIZE,
+            .num_entries          = NUM_ENTRIES,
+            .data_format_metadata = sa_cfg.data_format,
+            .disable_implicit_sync = !sa_cfg.enable_implicit_sync,
+        };
+    };
+
+    const experimental::metal2_host_api::DataMovementConfiguration gen2_dm_cfg{
+        .gen2_data_movement_config =
+            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}};
+
+    // Reader DM: 4 STRIDED producers on all three DFBs
+    experimental::metal2_host_api::KernelSpec reader_spec{
+        .unique_id   = READER,
+        .source      = experimental::metal2_host_api::KernelSpec::SourceFilePath{
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst_reader_dm.cpp"},
+        .num_threads = NUM_PRODUCERS,
+        .dfb_bindings = {
+            {.dfb_spec_name = DFB0, .local_accessor_name = "out0",
+             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
+            {.dfb_spec_name = DFB1, .local_accessor_name = "out1",
+             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
+            {.dfb_spec_name = DFB2, .local_accessor_name = "out2",
+             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
+        },
+        .config_spec = gen2_dm_cfg,
+    };
+
+    // Compute: 4 ALL consumers on all three DFBs (each Neo gets a full copy via remapper)
+    experimental::metal2_host_api::KernelSpec compute_spec{
+        .unique_id   = COMPUTE,
+        .source      = experimental::metal2_host_api::KernelSpec::SourceFilePath{
+            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst_compute.cpp"},
+        .num_threads = NUM_CONSUMERS,
+        .dfb_bindings = {
+            {.dfb_spec_name = DFB0, .local_accessor_name = "in0",
+             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::ALL},
+            {.dfb_spec_name = DFB1, .local_accessor_name = "in1",
+             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::ALL},
+            {.dfb_spec_name = DFB2, .local_accessor_name = "in2",
+             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::ALL},
+        },
+        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+    };
+
+    experimental::metal2_host_api::WorkUnitSpec wu{
+        .unique_id    = "bench_worst_wu",
+        .kernels      = {READER, COMPUTE},
+        .target_nodes = core_range_set,
+    };
+
+    experimental::metal2_host_api::ProgramSpec spec{
+        .program_id       = "bench_worst",
+        .kernels          = {reader_spec, compute_spec},
+        .dataflow_buffers = {make_dfb_spec(DFB0), make_dfb_spec(DFB1), make_dfb_spec(DFB2)},
+        .work_units       = {wu},
+    };
+
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*this->devices_.at(0), spec);
+
+    experimental::metal2_host_api::ProgramRunParams run_params;
+    run_params.kernel_run_params = {
+        {.kernel_spec_name = READER},
+        {.kernel_spec_name = COMPUTE},
+    };
+    experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+}
+
+
+// Average-case-two DFB init benchmark.
+//
+// Three concurrent 4Sx4S DM→Tensix DFBs: 4 STRIDED DM producers, 4 STRIDED
+// Tensix consumers. This is a STRIDED-STRIDED variant of BenchmarkCaseWorst
+// (which uses ALL consumers). No remapper is used, making this a clean mid-point
+// between BenchmarkCaseBest (1 DFB, no remapper) and BenchmarkCaseWorst (remapper).
+//
+// Per-tensix TC budget:
+//   Each 4Sx4S DFB uses 1 TC per (producer, consumer) pair, all on the same tensix.
+//   4 pairs × 3 DFBs = 12 TCs total, 3 per tensix (12/16 used).
+//   No remapper entries.
+//
+// Threshold table (same as BenchmarkCaseWorst, num_entries=16, num_producers=4):
+//   num_txn_ids=2, hw_threshold=8, per_txn=2, tiles_to_post=2
+//
+// Reuses dfb_bench_worst_reader_dm.cpp (4 DM threads, 2 reads per DFB)
+// and dfb_bench_worst_compute.cpp (4 Neo threads, wait_front(1)+pop_front(2) per DFB).
+TEST_F(MeshDeviceFixture, BenchmarkCaseThree) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB init benchmarks require Quasar";
+    }
+
+    IDevice* device = this->devices_.at(0)->get_devices()[0];
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
+    constexpr uint32_t ENTRY_SIZE    = 1024;
+    constexpr uint32_t NUM_ENTRIES   = 16;
+    constexpr uint8_t  NUM_PRODUCERS = 4;  // DM STRIDED producers per DFB
+    constexpr uint8_t  NUM_CONSUMERS = 4;  // Tensix STRIDED consumers per DFB
+
+    constexpr const char* DFB0    = "avg2_dfb0";
+    constexpr const char* DFB1    = "avg2_dfb1";
+    constexpr const char* DFB2    = "avg2_dfb2";
+    constexpr const char* READER  = "reader_dm";
+    constexpr const char* COMPUTE = "compute";
+
+    experimental::dfb::DataflowBufferConfig ss_cfg{
+        .entry_size    = ENTRY_SIZE,    .num_entries = NUM_ENTRIES,
+        .num_producers = NUM_PRODUCERS, .pap         = dfb::AccessPattern::STRIDED,
+        .num_consumers = NUM_CONSUMERS, .cap         = dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = true};
+
+    auto make_dfb_spec = [&](const char* id) {
+        return experimental::metal2_host_api::DataflowBufferSpec{
+            .unique_id             = id,
+            .entry_size            = ENTRY_SIZE,
+            .num_entries           = NUM_ENTRIES,
+            .data_format_metadata  = ss_cfg.data_format,
+            .disable_implicit_sync = !ss_cfg.enable_implicit_sync,
+        };
+    };
+
+    const experimental::metal2_host_api::DataMovementConfiguration gen2_dm_cfg{
+        .gen2_data_movement_config =
+            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}};
+
+    // Reader DM: 4 STRIDED producers on all three DFBs.
+    // Reuses dfb_bench_worst_reader_dm.cpp: same kernel structure, per_txn=2.
+    experimental::metal2_host_api::KernelSpec reader_spec{
+        .unique_id   = READER,
+        .source      = experimental::metal2_host_api::KernelSpec::SourceFilePath{
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst_reader_dm.cpp"},
+        .num_threads = NUM_PRODUCERS,
+        .dfb_bindings = {
+            {.dfb_spec_name = DFB0, .local_accessor_name = "out0",
+             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
+            {.dfb_spec_name = DFB1, .local_accessor_name = "out1",
+             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
+            {.dfb_spec_name = DFB2, .local_accessor_name = "out2",
+             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
+        },
+        .config_spec = gen2_dm_cfg,
+    };
+
+    // Compute: 4 STRIDED consumers on all three DFBs.
+    // Reuses dfb_bench_worst_compute.cpp: tiles_to_post=2 for 4Sx4S matches 4Sx4A.
+    experimental::metal2_host_api::KernelSpec compute_spec{
+        .unique_id   = COMPUTE,
+        .source      = experimental::metal2_host_api::KernelSpec::SourceFilePath{
+            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst_compute.cpp"},
+        .num_threads = NUM_CONSUMERS,
+        .dfb_bindings = {
+            {.dfb_spec_name = DFB0, .local_accessor_name = "in0",
+             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
+            {.dfb_spec_name = DFB1, .local_accessor_name = "in1",
+             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
+            {.dfb_spec_name = DFB2, .local_accessor_name = "in2",
+             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
+        },
+        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+    };
+
+    experimental::metal2_host_api::WorkUnitSpec wu{
+        .unique_id    = "bench_avg2_wu",
+        .kernels      = {READER, COMPUTE},
+        .target_nodes = core_range_set,
+    };
+
+    experimental::metal2_host_api::ProgramSpec spec{
+        .program_id       = "bench_avg2",
+        .kernels          = {reader_spec, compute_spec},
+        .dataflow_buffers = {make_dfb_spec(DFB0), make_dfb_spec(DFB1), make_dfb_spec(DFB2)},
+        .work_units       = {wu},
+    };
+
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*this->devices_.at(0), spec);
+
+    experimental::metal2_host_api::ProgramRunParams run_params;
+    run_params.kernel_run_params = {
+        {.kernel_spec_name = READER},
+        {.kernel_spec_name = COMPUTE},
+    };
+    experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+}
+
+
+// Worst-case-two DFB init benchmark.
+//
+// Stresses the DFB init loop with the maximum number of DFBs achievable under
+// the TC budget when a single 4-thread compute kernel consumes all of them.
+//
+// With a single compute kernel (num_threads=4), all 4 Neo threads consume EVERY
+// DFB via the ALL pattern. This forces every DFB to be 1Sx4A (1 DM producer,
+// 4 Neo consumers). TC cost per DFB:
+//   - 1 producer TC on producer tensix
+//   - 1 consumer TC per Neo tensix (Neo k shares tensix k with DM k → 2 TCs
+//     on the producer tensix, 1 TC on each other tensix) = 5 TCs total
+//
+// Cycling 4 DMs with 3 DFBs each: each tensix accumulates 3×2 + 3×1×3 = 15 TCs.
+// Maximum: 4 DMs × 3 DFBs = 12 DFBs (60/64 TCs used, 15 per tensix).
+//
+// Contrast with BenchmarkCaseWorst (3×4Sx4A):
+//   - Same 12 remapper entries (1-to-4), same 48 set_clientR_slot writes.
+//   - 4× more DFBs (12 vs 3) → 4× more init loop iterations per RISC.
+//   - 4 separate single-thread DM readers vs 1 four-thread DM reader.
+//
+// Remapper: 12 entries (all 1-to-4), 48 set_clientR_slot writes.
+// Kernels are no-ops; readers share dfb_bench_worst_reader_dm.cpp (3 DFBs),
+// compute uses dfb_bench_worst2_compute.cpp (12 DFBs, num_threads=4).
+TEST_F(MeshDeviceFixture, BenchmarkCaseFive) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB init benchmarks require Quasar";
+    }
+
+    IDevice* device = this->devices_.at(0)->get_devices()[0];
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
+    constexpr uint32_t ENTRY_SIZE  = 1024;
+    constexpr uint32_t NUM_ENTRIES = 16;
+
+    auto dfb_id = [](char group, int i) -> std::string {
+        return std::string("dfb_") + group + std::to_string(i);
+    };
+
+    // 1Sx4A: 1 DM STRIDED producer, 4 Neo ALL consumers (1-to-4 remapper entry).
+    experimental::dfb::DataflowBufferConfig cfg_1s4a{
+        .entry_size    = ENTRY_SIZE, .num_entries = NUM_ENTRIES,
+        .num_producers = 1,          .pap         = dfb::AccessPattern::STRIDED,
+        .num_consumers = 4,          .cap         = dfb::AccessPattern::ALL,
+        .enable_implicit_sync = true};
+
+    auto make_dfb_spec = [&](const std::string& id) {
+        return experimental::metal2_host_api::DataflowBufferSpec{
+            .unique_id             = id,
+            .entry_size            = ENTRY_SIZE,
+            .num_entries           = NUM_ENTRIES,
+            .data_format_metadata  = cfg_1s4a.data_format,
+            .disable_implicit_sync = !cfg_1s4a.enable_implicit_sync,
+        };
+    };
+
+    const experimental::metal2_host_api::DataMovementConfiguration gen2_dm_cfg{
+        .gen2_data_movement_config =
+            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}};
+
+    // Each reader: single DM, 1Sx4A, needs per_txn=8 reads (not 2 like WC1).
+    // Uses dfb_bench_worst2_reader_dm.cpp which issues 8 reads per DFB.
+    const char* READER_SRC  =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst2_reader_dm.cpp";
+    const char* COMPUTE_SRC =
+        "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst2_compute.cpp";
+
+    // Each reader: 1 DM thread, STRIDED producer on 3 DFBs.
+    auto make_reader_bindings = [&](char group)
+        -> std::vector<experimental::metal2_host_api::KernelSpec::DFBBinding> {
+        std::vector<experimental::metal2_host_api::KernelSpec::DFBBinding> b;
+        for (int i = 0; i < 3; i++) {
+            b.push_back({
+                .dfb_spec_name       = dfb_id(group, i),
+                .local_accessor_name = "out" + std::to_string(i),
+                .endpoint_type       = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                .access_pattern      = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+            });
+        }
+        return b;
+    };
+
+    // Single compute kernel: 4 Neo threads, ALL consumer on all 12 DFBs.
+    std::vector<experimental::metal2_host_api::KernelSpec::DFBBinding> compute_bindings;
+    {
+        int in_idx = 0;
+        for (char g : {'a', 'b', 'c', 'd'}) {
+            for (int i = 0; i < 3; i++) {
+                compute_bindings.push_back({
+                    .dfb_spec_name       = dfb_id(g, i),
+                    .local_accessor_name = "in" + std::to_string(in_idx++),
+                    .endpoint_type       = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                    .access_pattern      = experimental::metal2_host_api::DFBAccessPattern::ALL,
+                });
+            }
+        }
+    }
+
+    std::vector<experimental::metal2_host_api::KernelSpec> kernels;
+    for (char g : {'a', 'b', 'c', 'd'}) {
+        kernels.push_back({
+            .unique_id    = std::string("reader_") + g,
+            .source       = experimental::metal2_host_api::KernelSpec::SourceFilePath{READER_SRC},
+            .num_threads  = 1,
+            .dfb_bindings = make_reader_bindings(g),
+            .config_spec  = gen2_dm_cfg,
+        });
+    }
+    kernels.push_back({
+        .unique_id    = "compute_all",
+        .source       = experimental::metal2_host_api::KernelSpec::SourceFilePath{COMPUTE_SRC},
+        .num_threads  = 4,
+        .dfb_bindings = compute_bindings,
+        .config_spec  = experimental::metal2_host_api::ComputeConfiguration{},
+    });
+
+    // 12 DFB specs: 3 per group × 4 groups.
+    std::vector<experimental::metal2_host_api::DataflowBufferSpec> dfb_specs;
+    for (char g : {'a', 'b', 'c', 'd'}) {
+        for (int i = 0; i < 3; i++) {
+            dfb_specs.push_back(make_dfb_spec(dfb_id(g, i)));
+        }
+    }
+
+    std::vector<std::string> all_kernel_ids = {
+        "reader_a", "reader_b", "reader_c", "reader_d", "compute_all"};
+
+    experimental::metal2_host_api::WorkUnitSpec wu{
+        .unique_id    = "bench_worst2_wu",
+        .kernels      = all_kernel_ids,
+        .target_nodes = core_range_set,
+    };
+
+    experimental::metal2_host_api::ProgramSpec spec{
+        .program_id       = "bench_worst2",
+        .kernels          = kernels,
+        .dataflow_buffers = dfb_specs,
+        .work_units       = {wu},
+    };
+
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*this->devices_.at(0), spec);
+
+    experimental::metal2_host_api::ProgramRunParams run_params;
+    for (const auto& kid : all_kernel_ids) {
+        run_params.kernel_run_params.push_back({.kernel_spec_name = kid});
+    }
+    experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+}
+
+
+
+// Worst-case-three DFB init benchmark.
+//
+// Uses the experimental explicit producer_risc_mask / consumer_risc_mask APIs
+// to mix 6 independent DM producers with a single 4-thread compute consumer,
+// creating 32 DFBs that are impossible to express through the standard binding
+// API (which can only select the first N DMs for an N-thread kernel).
+//
+// Configuration: 16 × 1Sx1S + 16 × 1Sx2A = 32 DFBs, 64/64 TCs, 6 DMs active
+//
+//   1Sx1S DFBs (0–15): one DM producer, one Neo STRIDED consumer (no remapper)
+//     DFB  0– 3 : DM4 (t0) → Neo0 (t0)   [4 TCs on t0]
+//     DFB  4– 7 : DM5 (t1) → Neo1 (t1)   [4 TCs on t1]
+//     DFB  8–11 : DM4 (t0) → Neo2 (t2)   [4 TCs on t2]
+//     DFB 12–15 : DM5 (t1) → Neo3 (t3)   [4 TCs on t3]
+//
+//   1Sx2A DFBs (16–31): one DM producer, two Neo ALL consumers (remapper 1-to-2)
+//     DFB 16–19 : DM2 (t2) → {Neo0, Neo2}  [t0:+4, t2:+8]
+//     DFB 20–23 : DM3 (t3) → {Neo0, Neo2}  [t0:+4, t2:+4, t3:+4]
+//     DFB 24–27 : DM0 (t0) → {Neo1, Neo3}  [t0:+4, t1:+4, t3:+4]
+//     DFB 28–31 : DM1 (t1) → {Neo1, Neo3}  [t1:+8, t3:+4]
+//
+// TC totals: t0=16, t1=16, t2=16, t3=16 (64/64 used).
+// Remapper:  16 × 1-to-2 entries — exhausts all 16 one-to-many remapper slots.
+//            32 set_clientR_slot writes.
+//
+// Implicit sync is enabled to exercise ISR setup. num_entries=1 is required to
+// stay within the 32-slot TxnIdAllocator budget: with num_entries=1 the
+// compute_optimal_txn_id_count function returns 1 (no n≥2 divides 1), so each
+// DFB consumes exactly 1 txn ID. Any even num_entries would return n=2 (budget
+// exhausted at DFB 17). Kernels route via mhartid / NEO_ID CSR and use
+// DataflowBuffer(uint16_t(id)) directly (no generated binding constants).
+TEST_F(MeshDeviceFixture, BenchmarkCaseSeven) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB init benchmarks require Quasar";
+    }
+
+    IDevice* device = this->devices_.at(0)->get_devices()[0];
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
+    constexpr uint32_t ENTRY_SIZE  = 1024;
+    // num_entries=1 is intentional: compute_optimal_txn_id_count iterates n=2..32
+    // looking for num_entries % (n * num_producers * num_tcs_per_risc) == 0.
+    // With num_entries=1 no n≥2 divides 1, so the function returns 1 txn ID per DFB.
+    // 32 DFBs × 1 txn ID = 32, fitting exactly in the 32-slot TxnIdAllocator budget.
+    // Any even num_entries (e.g. 4) would return n=2, exhausting the budget at DFB 17.
+    constexpr uint32_t NUM_ENTRIES = 1;
+
+    // risc_mask bit positions
+    // DM k  → bit k        (bits 0–7)
+    // Neo k → bit (8 + k)  (bits 8–11)
+    constexpr uint16_t DM0  = (1u << 0);
+    constexpr uint16_t DM1  = (1u << 1);
+    constexpr uint16_t DM2  = (1u << 2);
+    constexpr uint16_t DM3  = (1u << 3);
+    constexpr uint16_t DM4  = (1u << 4);
+    constexpr uint16_t DM5  = (1u << 5);
+    constexpr uint16_t NEO0 = (1u << 8);
+    constexpr uint16_t NEO1 = (1u << 9);
+    constexpr uint16_t NEO2 = (1u << 10);
+    constexpr uint16_t NEO3 = (1u << 11);
+
+    Program program = CreateProgram();
+
+    // -----------------------------------------------------------------------
+    // 1Sx1S DFBs (IDs 0–15): STRIDED producer, STRIDED consumer, no remapper.
+    // TC is shared on the Neo consumer's tensix.
+    // -----------------------------------------------------------------------
+    auto make_1sx1s = [&](uint16_t producer_dm, uint16_t consumer_neo) {
+        return experimental::dfb::DataflowBufferConfig{
+            .entry_size          = ENTRY_SIZE,
+            .num_entries         = NUM_ENTRIES,
+            .producer_risc_mask  = producer_dm,
+            .num_producers       = 1,
+            .pap                 = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask  = consumer_neo,
+            .num_consumers       = 1,
+            .cap                 = dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = true,
+        };
+    };
+
+    // DFBs 0–3: DM4 → Neo0
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1s(DM4, NEO0));
+    }
+    // DFBs 4–7: DM5 → Neo1
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1s(DM5, NEO1));
+    }
+    // DFBs 8–11: DM4 → Neo2
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1s(DM4, NEO2));
+    }
+    // DFBs 12–15: DM5 → Neo3
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1s(DM5, NEO3));
+    }
+
+    // -----------------------------------------------------------------------
+    // 1Sx2A DFBs (IDs 16–31): STRIDED producer, ALL consumer, remapper 1-to-2.
+    // 1 prod TC on DM's tensix + 1 cons TC on each Neo consumer's tensix.
+    // -----------------------------------------------------------------------
+    auto make_1sx2a = [&](uint16_t producer_dm, uint16_t consumer_neos) {
+        return experimental::dfb::DataflowBufferConfig{
+            .entry_size          = ENTRY_SIZE,
+            .num_entries         = NUM_ENTRIES,
+            .producer_risc_mask  = producer_dm,
+            .num_producers       = 1,
+            .pap                 = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask  = consumer_neos,
+            .num_consumers       = 2,
+            .cap                 = dfb::AccessPattern::ALL,
+            .enable_implicit_sync = true,
+        };
+    };
+
+    // DFBs 16–19: DM2 (t2) → {Neo0 (t0), Neo2 (t2)}
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM2, NEO0 | NEO2));
+    }
+    // DFBs 20–23: DM3 (t3) → {Neo0 (t0), Neo2 (t2)}
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM3, NEO0 | NEO2));
+    }
+    // DFBs 24–27: DM0 (t0) → {Neo1 (t1), Neo3 (t3)}
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM0, NEO1 | NEO3));
+    }
+    // DFBs 28–31: DM1 (t1) → {Neo1 (t1), Neo3 (t3)}
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM1, NEO1 | NEO3));
+    }
+
+    // -----------------------------------------------------------------------
+    // Kernels: created with the low-level experimental Quasar API.
+    // DFB risc masks are already set above; no BindDataflowBufferToProducerConsumerKernels call needed.
+    // -----------------------------------------------------------------------
+    constexpr const char* DM_KERNEL_SRC =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst3_dm.cpp";
+    constexpr const char* COMPUTE_KERNEL_SRC =
+        "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst3_compute.cpp";
+
+    // 6-thread DM kernel: DM0–DM5 all run the same source; each checks mhartid
+    // and operates only on DFBs for which its bit is set in producer_risc_mask.
+    experimental::quasar::CreateKernel(
+        program,
+        DM_KERNEL_SRC,
+        core_range_set,
+        experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = 6,
+        });
+
+    // 4-thread compute kernel: Neo0–Neo3 all run the same source; each checks
+    // NEO_ID and operates only on DFBs for which its bit is set in consumer_risc_mask.
+    experimental::quasar::CreateKernel(
+        program,
+        COMPUTE_KERNEL_SRC,
+        core_range_set,
+        experimental::quasar::QuasarComputeConfig{
+            .num_threads_per_cluster = 4,
+        });
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+}
+
+// BenchmarkWorstCaseFour — exhausts all 16 one-to-many remapper slots AND exercises
+// 8 of the 48 one-to-one remapper slots simultaneously, for 24 total remapper entries.
+//
+// This is the first test to use both remapper slot types at once.
+//
+// DFB layout (24 DFBs total):
+//   1Sx2A (DFBs  0–15): 16 × 1-to-2 remapper entries (all 16 one-to-many slots)
+//     DFB  0– 3: DM2 → {Neo0, Neo2}
+//     DFB  4– 7: DM3 → {Neo0, Neo2}
+//     DFB  8–11: DM0 → {Neo1, Neo3}
+//     DFB 12–15: DM1 → {Neo1, Neo3}
+//
+//   1Sx1A (DFBs 16–23): 8 × 1-to-1 remapper entries (from the 48 one-to-one slots)
+//     DFB 16–17: DM2 → Neo1
+//     DFB 18–19: DM3 → Neo1
+//     DFB 20–21: DM2 → Neo3
+//     DFB 22–23: DM0 → Neo0
+//
+// TC budget: 64/64 (exactly 16 per tensix):
+//   t0: 4(DM0 prod 8-11) + 4(Neo0 cons DM2) + 4(Neo0 cons DM3) + 2(DM0 prod 22-23) + 2(Neo0 cons 22-23) = 16
+//   t1: 4(DM1 prod 12-15)+ 4(Neo1 cons DM0) + 4(Neo1 cons DM1) + 2(Neo1 cons 16-17) + 2(Neo1 cons 18-19) = 16
+//   t2: 4(DM2 prod 0-3)  + 4(Neo2 cons DM2) + 4(Neo2 cons DM3) + 2(DM2 prod 16-17)  + 2(DM2 prod 20-21)  = 16
+//   t3: 4(DM3 prod 4-7)  + 4(Neo3 cons DM0) + 4(Neo3 cons DM1) + 2(DM3 prod 18-19)  + 2(Neo3 cons 20-21) = 16
+//
+// Remapper: 16 × 1-to-2 (all 16 one-to-many slots) + 8 × 1-to-1 (8 of 48 one-to-one slots)
+//           = 24 total remapper entries, 16×2 + 8×1 = 40 set_clientR_slot writes.
+// TxnId budget: 24 DFBs × 1 txn ID = 24 ≤ 32 (fits with num_entries=1).
+TEST_F(MeshDeviceFixture, BenchmarkCaseSix) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB init benchmarks require Quasar";
+    }
+
+    IDevice* device = this->devices_.at(0)->get_devices()[0];
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
+    constexpr uint32_t ENTRY_SIZE  = 1024;
+    // num_entries=1: ensures each DFB consumes exactly 1 TxnId (24 DFBs × 1 = 24 ≤ 32 budget)
+    // while keeping enable_implicit_sync=true to exercise ISR setup.
+    constexpr uint32_t NUM_ENTRIES = 1;
+
+    // risc_mask bit positions: DM k → bit k (bits 0–7), Neo k → bit (8+k) (bits 8–11)
+    constexpr uint16_t DM0  = (1u << 0);
+    constexpr uint16_t DM1  = (1u << 1);
+    constexpr uint16_t DM2  = (1u << 2);
+    constexpr uint16_t DM3  = (1u << 3);
+    constexpr uint16_t NEO0 = (1u << 8);
+    constexpr uint16_t NEO1 = (1u << 9);
+    constexpr uint16_t NEO2 = (1u << 10);
+    constexpr uint16_t NEO3 = (1u << 11);
+
+    Program program = CreateProgram();
+
+    // -----------------------------------------------------------------------
+    // 1Sx2A DFBs (IDs 0–15): STRIDED producer, ALL consumer — 16 × 1-to-2 remapper
+    // entries, consuming all 16 one-to-many remapper slots.
+    // Each DFB: 1 prod TC on DM's tensix + 1 cons TC on each of 2 Neo tensixes = 3 TCs.
+    // -----------------------------------------------------------------------
+    auto make_1sx2a = [&](uint16_t producer_dm, uint16_t consumer_neos) {
+        return experimental::dfb::DataflowBufferConfig{
+            .entry_size          = ENTRY_SIZE,
+            .num_entries         = NUM_ENTRIES,
+            .producer_risc_mask  = producer_dm,
+            .num_producers       = 1,
+            .pap                 = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask  = consumer_neos,
+            .num_consumers       = 2,
+            .cap                 = dfb::AccessPattern::ALL,
+            .enable_implicit_sync = true,
+        };
+    };
+
+    // DFBs 0–3: DM2(t2) → {Neo0(t0), Neo2(t2)}
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM2, NEO0 | NEO2));
+    }
+    // DFBs 4–7: DM3(t3) → {Neo0(t0), Neo2(t2)}
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM3, NEO0 | NEO2));
+    }
+    // DFBs 8–11: DM0(t0) → {Neo1(t1), Neo3(t3)}
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM0, NEO1 | NEO3));
+    }
+    // DFBs 12–15: DM1(t1) → {Neo1(t1), Neo3(t3)}
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM1, NEO1 | NEO3));
+    }
+
+    // -----------------------------------------------------------------------
+    // 1Sx1A DFBs (IDs 16–23): STRIDED producer, ALL consumer (1 Neo) — 8 × 1-to-1
+    // remapper entries, exercising 8 of the 48 one-to-one remapper slots.
+    // Each DFB: 1 prod TC on DM's tensix + 1 cons TC on Neo's tensix = 2 TCs.
+    // -----------------------------------------------------------------------
+    auto make_1sx1a = [&](uint16_t producer_dm, uint16_t consumer_neo) {
+        return experimental::dfb::DataflowBufferConfig{
+            .entry_size          = ENTRY_SIZE,
+            .num_entries         = NUM_ENTRIES,
+            .producer_risc_mask  = producer_dm,
+            .num_producers       = 1,
+            .pap                 = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask  = consumer_neo,
+            .num_consumers       = 1,
+            .cap                 = dfb::AccessPattern::ALL,
+            .enable_implicit_sync = true,
+        };
+    };
+
+    // DFBs 16–17: DM2(t2) → Neo1(t1)  [+2 prod on t2, +2 cons on t1]
+    for (int i = 0; i < 2; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1a(DM2, NEO1));
+    }
+    // DFBs 18–19: DM3(t3) → Neo1(t1)  [+2 prod on t3, +2 cons on t1]
+    for (int i = 0; i < 2; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1a(DM3, NEO1));
+    }
+    // DFBs 20–21: DM2(t2) → Neo3(t3)  [+2 prod on t2, +2 cons on t3]
+    for (int i = 0; i < 2; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1a(DM2, NEO3));
+    }
+    // DFBs 22–23: DM0(t0) → Neo0(t0)  [+2 prod on t0, +2 cons on t0]
+    for (int i = 0; i < 2; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1a(DM0, NEO0));
+    }
+
+    // -----------------------------------------------------------------------
+    // Kernels: 4-thread DM kernel (DM0–DM3) and 4-thread compute kernel (Neo0–Neo3).
+    // -----------------------------------------------------------------------
+    constexpr const char* DM_KERNEL_SRC =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst4_dm.cpp";
+    constexpr const char* COMPUTE_KERNEL_SRC =
+        "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst4_compute.cpp";
+
+    experimental::quasar::CreateKernel(
+        program,
+        DM_KERNEL_SRC,
+        core_range_set,
+        experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = 4,
+        });
+
+    experimental::quasar::CreateKernel(
+        program,
+        COMPUTE_KERNEL_SRC,
+        core_range_set,
+        experimental::quasar::QuasarComputeConfig{
+            .num_threads_per_cluster = 4,
+        });
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+}
+
+
 }  // end namespace tt::tt_metal
