@@ -256,39 +256,6 @@ def torch_to_tt_tensor(py_tensor, device):
     return tt_tensor
 
 
-### Padding / Unpadding ###
-def pad_by_zero(
-    x: torch.Tensor,
-    device=None,
-    tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED),
-    tt_dtype=ttnn.bfloat16,
-):
-    initial_shape = x.shape
-    pad_shape = list(x.shape)
-    while len(pad_shape) < 4:
-        pad_shape.insert(0, 1)
-    if pad_shape[-1] % 32 != 0 or pad_shape[-2] % 32 != 0:
-        # Pad in torch before creating TT tensor.
-        # Certain datatypes like BFP8_B requires inputs to already be a specific size when creating the tensor, so we need to pad first
-        x = torch.nn.functional.pad(
-            x.reshape(pad_shape),
-            (
-                0,
-                _nearest_32(pad_shape[-1]) - pad_shape[-1],
-                0,
-                _nearest_32(pad_shape[-2]) - pad_shape[-2],
-            ),
-        )
-        x = ttnn.Tensor(x, tt_dtype)
-        x = x.to(ttnn.TILE_LAYOUT)
-        if device is not None:
-            x = x.to(device, tt_memory_config)
-
-    else:
-        x = torch2tt_tensor(x, device, tt_memory_config=tt_memory_config, tt_dtype=tt_dtype)
-    return x, initial_shape
-
-
 def unpad_from_zero(x, desired_shape):
     if x.padded_shape[-1] == desired_shape[-1] and x.padded_shape[-2] == desired_shape[-2]:
         x = tt2torch_tensor(x)
