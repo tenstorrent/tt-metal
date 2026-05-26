@@ -68,8 +68,8 @@ def h2d_socket_sync(service: ttnn.H2DStreamService, worker_cores: ttnn.CoreRange
     num_workers = len(workers)
     assert num_workers > 0, "h2d_socket_sync: worker_cores must contain at least one core"
 
-    page_size = backing.buffer().page_size()
-    num_pages = backing.buffer().num_pages()
+    page_size = backing.buffer_page_size()
+    num_pages = backing.buffer_num_pages()
     # Contiguous chunks; the last worker absorbs the remainder so we never drop pages.
     base_pages_per_worker = num_pages // num_workers
     remainder = num_pages % num_workers
