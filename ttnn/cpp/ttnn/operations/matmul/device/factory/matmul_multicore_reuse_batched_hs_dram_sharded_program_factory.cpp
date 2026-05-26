@@ -562,15 +562,15 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
         in0_reader_args.push_back(uint32_t{1u});
         in0_reader_args.push_back(uint32_t{input_storage_noc_x[worker_idx]});
         in0_reader_args.push_back(uint32_t{input_storage_noc_y[worker_idx]});
-        in0_reader_args.push_back(in0_tensor.mesh_buffer().get_reference_buffer());
+        in0_reader_args.push_back(in0_tensor);
         in0_reader_kernel_desc.emplace_runtime_args(core, in0_reader_args);
 
         // in1 writer runtime args
         KernelDescriptor::RTArgList in1_writer_args;
         in1_writer_args.push_back(uint32_t{1u});
-        in1_writer_args.push_back(in1_tensor.mesh_buffer().get_reference_buffer());
+        in1_writer_args.push_back(in1_tensor);
         if (opt_bias.has_value()) {
-            in1_writer_args.push_back(opt_bias->mesh_buffer().get_reference_buffer());
+            in1_writer_args.push_back(opt_bias);
         } else {
             in1_writer_args.push_back(uint32_t{0u});
         }
@@ -578,7 +578,7 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
         in1_writer_args.push_back(uint32_t{vc});
         in1_writer_args.push_back(uint32_t{output_storage_noc_x[worker_idx]});
         in1_writer_args.push_back(uint32_t{output_storage_noc_y[worker_idx]});
-        in1_writer_args.push_back(out_tensor.mesh_buffer().get_reference_buffer());
+        in1_writer_args.push_back(out_tensor);
         in1_writer_kernel_desc.emplace_runtime_args(core, in1_writer_args);
 
         // Compute runtime args
@@ -630,14 +630,11 @@ ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create
         const auto& c = bias.value();
         TT_FATAL(c.storage_type() == StorageType::DEVICE, "Bias tensor must be on device");
         TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
-        TT_FATAL(
-            c.mesh_tensor().mesh_buffer().get_reference_buffer() != nullptr,
-            "Operands to matmul need to be allocated in buffers on device!");
         bias_tensor = c.mesh_tensor();
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt::tt_metal::IDevice* device = a.mesh_tensor().mesh_buffer().get_reference_buffer()->device();
+    tt::tt_metal::IDevice* device = &a.mesh_tensor().device_mut();
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");
@@ -660,8 +657,6 @@ ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create
         "Input B buffer size ({}) must be divisible by single tile size ({})",
         b.mesh_buffer().device_local_size(),
         in1_single_tile_size);
-    TT_FATAL(
-        out_tensor.mesh_buffer().get_reference_buffer() != nullptr, "Output buffer should be allocated on device!");
 
     TT_FATAL(
         ashape[-1] == bshape[-2],
