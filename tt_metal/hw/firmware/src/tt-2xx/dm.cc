@@ -110,7 +110,6 @@ void device_setup() {
     // instn_buf
     // pc_buf
     // clock gating
-    // NOC setup
     set_deassert_addresses();
     setup_isr_csrs();
     // wzeromem
@@ -221,6 +220,7 @@ extern "C" uint32_t _start1() {
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
+        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
         trigger_sync_register_init();
 
         DeviceProfilerInit();
@@ -294,7 +294,7 @@ extern "C" uint32_t _start1() {
                 // noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
                 my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
                 my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
-                noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+                overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 // re-initialize the NoCs
                 // uint8_t cmd_buf;
                 // if (noc_mode == DM_DEDICATED_NOC) {
@@ -413,6 +413,7 @@ extern "C" uint32_t _start1() {
         setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
+        overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
         WAYPOINT("R1");
         while (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {
