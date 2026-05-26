@@ -50,10 +50,10 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    MeshDevice& device = a.device_mut();
+    tt::tt_metal::IDevice* device = &a.device_mut();
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device.arch(), operation_attributes.compute_kernel_config.value());
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
     (void)packer_l1_acc;
 
     const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
@@ -69,7 +69,7 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
             "from device compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() should invoke "
             "ttnn::operations::matmul::normalize_program_config() on the program config first. This will become "
             "a hard error in a future release.");
-        auto device_grid = device.compute_with_storage_grid_size();
+        auto device_grid = device->compute_with_storage_grid_size();
         pc.allowed_worker_cores =
             CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(device_grid.x - 1, device_grid.y - 1)));
     }
@@ -195,9 +195,9 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     const auto throttle_level = ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
     std::map<std::string, std::string> mm_kernel_defines;
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_cores, mm_kernel_defines);
+        device->arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device.arch(), num_cores, mm_kernel_defines, throttle_level);
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // Compute kernel(s) — one per core group with different tile counts
     // bmm compute kernel: B, Mt, Nt are just 3 for loops that act as 1 large loop,

@@ -2002,7 +2002,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     const CoreRangeSet& hop_cores,
     const MeshTensor& in0_tensor,
     const MeshTensor& in1_tensor,
-    std::vector<tt_metal::Buffer*> out_buffers,
+    std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> out_buffers,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
     const tt::tt_metal::Tile& output_tile,
@@ -2236,7 +2236,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
                                    .set_page_size(output_cb_index, output_single_tile_size)
                                    .set_tile_dims(output_cb_index, output_tile)
-                                   .set_globally_allocated_address(*out_buffer);
+                                   .set_globally_allocated_address(out_buffer);
             auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
             cb_outputs.push_back(cb_output);
             output_cb_indices.push_back(output_cb_index);
@@ -2265,7 +2265,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
                                    .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                    .set_tile_dims(output_cb_index, output_tile)
                                    .set_tile_dims(interm0_cb_index, output_tile)
-                                   .set_globally_allocated_address(*out_buffer);
+                                   .set_globally_allocated_address(out_buffer);
             auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
             cb_outputs.push_back(cb_output);
             output_cb_indices.push_back(output_cb_index);
@@ -5011,10 +5011,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             !transpose_b,
             "Transpose B is ({}) not supported for gather_in0, please use a different program configuration",
             transpose_b);
-        std::vector<tt_metal::Buffer*> out_buffers;
+        std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> out_buffers;
         out_buffers.reserve(output_tensors.size());
         for (const auto& output_tensor : output_tensors) {
-            out_buffers.push_back(output_tensor.mesh_tensor().mesh_buffer().get_reference_buffer());
+            out_buffers.push_back(output_tensor.mesh_tensor());
         }
         return reuse_mcast_1d_optimized_helpers::process_gather_in0_program_and_create_override_variables(
             program,
