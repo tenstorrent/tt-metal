@@ -1255,15 +1255,251 @@ class TTSeamlessM4Tv2Model:
         ttnn.deallocate(cross_4d)
         return dec_out, padded_dec_seq
 
-    def _greedy_next_token(self, logits: ttnn.Tensor, dec_len: int) -> Tuple[ttnn.Tensor, int]:
-        """Slice ``[B, dec_seq, V]`` → ``[B, 1, V]`` at position ``dec_len-1``, then ``ttnn.argmax`` → ``[B, 1]``.
+    def _logits_to_host(self, logits: ttnn.Tensor, dec_idx: int) -> "torch.Tensor":
+        """Slice ``[B, S, V]`` at ``dec_idx`` and read back as fp32 torch tensor ``[V]``.
 
-        Returns ``(next_token_uint32 [B, 1], next_token_id_int)``. The scalar int is read for the EOS check.
+        Used by beam search to compute log-softmax + scores on host.
         """
+        import torch as _torch
+
+        batch = int(logits.shape[0])
+        vocab_w = int(logits.shape[2])
+        last = ttnn.slice(logits, [0, dec_idx, 0], [batch, dec_idx + 1, vocab_w], (1, 1, 1))
+        host = to_torch_replicated_first_shard(last).to(_torch.float32).reshape(batch, vocab_w)
+        ttnn.deallocate(last)
+        return host[0]
+
+    def _generate_beam_kv(
+        self,
+        enc_tt: ttnn.Tensor,
+        enc_attn_tt: ttnn.Tensor,
+        seed_tokens: List[int],
+        *,
+        num_beams: int,
+        max_new_tokens: int,
+        eos_ids: set,
+        repetition_penalty: float,
+        length_penalty: float = 1.0,
+        early_stopping: bool = True,
+    ) -> List[int]:
+        """K-beam search over the text decoder + KV cache.
+
+        Allocates ``num_beams`` independent KV caches, runs decoder forward once per beam per
+        step, scores candidates host-side, and re-orders caches via ``ttnn.copy`` when a beam's
+        parent changes. Returns the best beam's full token sequence (seed + decoded tokens),
+        ranked by ``score / length^length_penalty``. ``early_stopping=True`` matches HF.
+
+        Memory: ``num_beams * (24 layers × 2 × bf16 K-cache + cross cache)`` of DRAM.
+        Compute: ``num_beams ×`` the greedy decode cost (sequential per-beam forwards).
+        """
+        import torch as _torch
+
+        device = self.device
+        K = int(num_beams)
+        if K < 1:
+            raise ValueError(f"num_beams must be >= 1 (got {num_beams})")
+        seed_len = len(seed_tokens)
+        if seed_len + max_new_tokens > self.max_text_seq_len:
+            raise ValueError(
+                f"seed_len ({seed_len}) + max_new_tokens ({max_new_tokens}) exceeds "
+                f"max_text_seq_len ({self.max_text_seq_len})"
+            )
+        enc_seq = int(enc_tt.shape[1])
+
+        # Allocate K independent KV caches. Each beam runs the full decoder graph against its
+        # own cache; per-step we'll ``ttnn.copy`` parent K/V into child slots when beams shuffle.
+        beam_kv: List[list] = []
+        beam_cross: List[list] = []
+        for _ in range(K):
+            kv, cross = init_text_decoder_kv_cache(
+                device,
+                num_hidden_layers=self.text_decoder.num_hidden_layers,
+                num_attention_heads=self.decoder_attention_heads,
+                hidden_size=self.hidden_size,
+                max_batch_size=1,
+                max_seq_len=self.max_text_seq_len,
+                encoder_seq_len=enc_seq,
+            )
+            beam_kv.append(kv)
+            beam_cross.append(cross)
+        decode_cross_4d = build_cross_attn_mask_4d(enc_attn_tt, tgt_seq=1, device=device)
+
+        # Prefill once on beam 0, then ``ttnn.copy`` its KV / cross caches into beams 1..K-1.
+        # Same input would produce the same K/V; copy is much cheaper than redundant prefills.
+        warm_tt0 = _ttnn_ids_from_list([seed_tokens], device)
+        warm_out0 = self._prefill_text_decoder_kv_cache(warm_tt0, enc_tt, enc_attn_tt, beam_kv[0], beam_cross[0])
+        ttnn.deallocate(warm_tt0)
+        for k in range(1, K):
+            for layer in range(self.text_decoder.num_hidden_layers):
+                ttnn.copy(beam_kv[0][layer][0], beam_kv[k][layer][0])
+                ttnn.copy(beam_kv[0][layer][1], beam_kv[k][layer][1])
+                ttnn.copy(beam_cross[0][layer][0], beam_cross[k][layer][0])
+                ttnn.copy(beam_cross[0][layer][1], beam_cross[k][layer][1])
+
+        # Score the seed prefix → top-K initial tokens so beams diverge from step 0.
+        if warm_out0 is None:
+            seed_logits = None
+        else:
+            seed_logits_tt = self._lm_head(warm_out0)
+            ttnn.deallocate(warm_out0)
+            seed_logits = self._logits_to_host(seed_logits_tt, seed_len - 1)
+            ttnn.deallocate(seed_logits_tt)
+
+        # ``_prefill_text_decoder_kv_cache`` may or may not return the prefill hidden state — fall
+        # back to a no-op token if it returned ``None`` (this matches the greedy path).
+        if seed_logits is None:
+            seed_logp = _torch.zeros(K)
+            init_tokens = [seed_tokens[-1]] * K
+        else:
+            log_probs0 = _torch.log_softmax(seed_logits, dim=-1)
+            if repetition_penalty > 1.0:
+                ids = _torch.as_tensor([t for t in seed_tokens if 0 <= t < log_probs0.numel()], dtype=_torch.int64)
+                if ids.numel() > 0:
+                    scores = log_probs0[ids]
+                    log_probs0[ids] = _torch.where(scores < 0, scores * repetition_penalty, scores / repetition_penalty)
+            topk = _torch.topk(log_probs0, k=K)
+            seed_logp = topk.values
+            init_tokens = [int(t) for t in topk.indices.tolist()]
+
+        seqs: List[List[int]] = [list(seed_tokens) + [t] for t in init_tokens]
+        scores: List[float] = [float(s) for s in seed_logp.tolist()]
+        finished: List[bool] = [tok in eos_ids for tok in init_tokens]
+        cur_pos = seed_len  # next decode writes at cur_pos+1
+
+        for _step in range(max_new_tokens - 1):
+            if all(finished):
+                break
+
+            # Per-beam decode at cur_pos (the token we just emitted).
+            beam_log_probs: List["torch.Tensor"] = []
+            for k in range(K):
+                if finished[k]:
+                    beam_log_probs.append(None)  # type: ignore[arg-type]
+                    continue
+                logits = self._decode_token_with_kv_cache(
+                    int(seqs[k][cur_pos]),
+                    cur_pos,
+                    enc_tt,
+                    enc_attn_tt,
+                    beam_kv[k],
+                    beam_cross[k],
+                    True,
+                    cross_4d=decode_cross_4d,
+                    batch_size=1,
+                )
+                lp_host = self._logits_to_host(logits, 0)
+                ttnn.deallocate(logits)
+                lp = _torch.log_softmax(lp_host, dim=-1)
+                if repetition_penalty > 1.0:
+                    ids = _torch.as_tensor([t for t in seqs[k] if 0 <= t < lp.numel()], dtype=_torch.int64)
+                    if ids.numel() > 0:
+                        s_at = lp[ids]
+                        lp[ids] = _torch.where(s_at < 0, s_at * repetition_penalty, s_at / repetition_penalty)
+                beam_log_probs.append(lp)
+
+            # Build candidates: for each live beam, score = beam_score + log_p(token).
+            # Pick top-K tokens per beam (K*K total), then global top-K of those.
+            candidates: List[Tuple[float, int, int]] = []  # (score, parent_beam, token_id)
+            for k in range(K):
+                if finished[k]:
+                    candidates.append((scores[k], k, -1))  # frozen
+                    continue
+                topk = _torch.topk(beam_log_probs[k], k=K)
+                for j in range(K):
+                    tok = int(topk.indices[j].item())
+                    candidates.append((scores[k] + float(topk.values[j].item()), k, tok))
+            candidates.sort(key=lambda c: c[0], reverse=True)
+            new_beams = candidates[:K]
+
+            # Apply the chosen beams. If a beam's parent != its slot index, copy the parent's KV
+            # caches (self-attn + cross-attn) into this slot so the next decode sees the right K/V.
+            new_seqs: List[List[int]] = [None] * K  # type: ignore[list-item]
+            new_scores: List[float] = [0.0] * K
+            new_finished: List[bool] = [False] * K
+            copy_plan: List[Tuple[int, int]] = []  # (src_parent, dst_slot)
+            for slot, (sc, parent, tok) in enumerate(new_beams):
+                new_scores[slot] = sc
+                if tok < 0:
+                    # Frozen finished beam — keep its sequence.
+                    new_seqs[slot] = list(seqs[parent])
+                    new_finished[slot] = True
+                else:
+                    new_seqs[slot] = list(seqs[parent]) + [tok]
+                    new_finished[slot] = tok in eos_ids
+                if parent != slot:
+                    copy_plan.append((parent, slot))
+
+            # KV cache re-order: copy parent → slot. Two-step (stash → write) to avoid overwriting
+            # a parent before another child reads it. For batch=1 the practical case is K<=4 with
+            # at most a few crossings per step, so simple per-layer ``ttnn.copy`` is OK.
+            for parent, slot in copy_plan:
+                for layer in range(self.text_decoder.num_hidden_layers):
+                    ttnn.copy(beam_kv[parent][layer][0], beam_kv[slot][layer][0])
+                    ttnn.copy(beam_kv[parent][layer][1], beam_kv[slot][layer][1])
+
+            seqs = new_seqs
+            scores = new_scores
+            finished = new_finished
+            cur_pos += 1
+
+        ttnn.deallocate(decode_cross_4d)
+
+        # Length-normalize and pick the best beam.
+        def _norm_score(s: float, length: int) -> float:
+            l = max(1, length - seed_len)
+            return s / (l**length_penalty)
+
+        ranked = sorted(range(K), key=lambda k: _norm_score(scores[k], len(seqs[k])), reverse=True)
+        return seqs[ranked[0]]
+
+    def _greedy_next_token(
+        self,
+        logits: ttnn.Tensor,
+        dec_len: int,
+        *,
+        repetition_penalty: float = 1.0,
+        prev_token_ids: Optional[List[int]] = None,
+    ) -> Tuple[ttnn.Tensor, int]:
+        """Slice ``[B, dec_seq, V]`` → ``[B, 1, V]`` at position ``dec_len-1``, then ``argmax`` → ``[B, 1]``.
+
+        Returns ``(next_token_uint32 [B, 1], next_token_id_int)``. The scalar int is read for the
+        EOS check. When ``repetition_penalty > 1.0`` and ``prev_token_ids`` is non-empty, the HF
+        ``RepetitionPenaltyLogitsProcessor`` rule is applied host-side before the ``argmax`` (this
+        matches HF semantics: positive logits at already-emitted token ids are divided by
+        ``penalty``, negative logits are multiplied — both reduce the probability of repeats).
+        Host-side ``argmax`` over a ``[V=256k]`` row is sub-ms on CPU so the per-step roundtrip is
+        cheap relative to the decoder forward.
+        """
+        import torch as _torch
+
         batch = int(logits.shape[0])
         idx = dec_len - 1
         vocab_w = int(logits.shape[2])
         last = ttnn.slice(logits, [0, idx, 0], [batch, idx + 1, vocab_w], (1, 1, 1))
+
+        apply_penalty = repetition_penalty > 1.0 and prev_token_ids
+        if apply_penalty:
+            host = to_torch_replicated_first_shard(last).to(_torch.float32).reshape(batch, vocab_w)
+            ttnn.deallocate(last)
+            # HF RepetitionPenaltyLogitsProcessor: ``score < 0 -> *penalty, else /penalty``.
+            ids = _torch.as_tensor(list(prev_token_ids), dtype=_torch.int64)
+            ids = ids[(ids >= 0) & (ids < vocab_w)]
+            if ids.numel() > 0:
+                scores = host[:, ids]
+                penalized = _torch.where(
+                    scores < 0, scores * float(repetition_penalty), scores / float(repetition_penalty)
+                )
+                host[:, ids] = penalized
+            next_id_int = int(host[0].argmax().item())
+            next_uint = ttnn.from_torch(
+                _torch.tensor([[next_id_int]] * batch, dtype=_torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            return next_uint, next_id_int
+
         argmax = ttnn.argmax(last, dim=-1)  # [B, 1] int32
         ttnn.deallocate(last)
         # Reshape if argmax dropped a dim
@@ -1351,12 +1587,22 @@ class TTSeamlessM4Tv2Model:
             raise ValueError("`text_sequences` is only valid when `generate_speech=True`.")
         kwargs_text, kwargs_speech = format_speech_generation_kwargs(kwargs)
 
-        if kwargs_text.get("num_beams", 1) != 1:
-            raise NotImplementedError("TT generate currently supports num_beams=1 only.")
+        num_beams = int(kwargs_text.get("num_beams", 1) or 1)
+        if num_beams < 1:
+            raise ValueError(f"num_beams must be >= 1 (got {num_beams})")
         if kwargs_text.get("do_sample", False):
-            raise NotImplementedError("TT generate currently supports do_sample=False (greedy) only.")
+            raise NotImplementedError("TT generate currently supports do_sample=False (greedy/beam) only.")
+        length_penalty = float(kwargs_text.get("length_penalty", 1.0) or 1.0)
+        early_stopping = bool(kwargs_text.get("early_stopping", True))
 
         max_new_tokens = int(kwargs_text.get("max_new_tokens", 20))
+        repetition_penalty = float(kwargs_text.get("repetition_penalty", 1.0) or 1.0)
+        if self.generation_config is not None and "repetition_penalty" not in kwargs_text:
+            rp_cfg = getattr(self.generation_config, "repetition_penalty", None)
+            if rp_cfg is not None:
+                repetition_penalty = float(rp_cfg)
+        if repetition_penalty < 1.0:
+            raise ValueError(f"repetition_penalty must be >= 1.0 (got {repetition_penalty})")
         eos_ids = _eos_id_set(kwargs_text.get("eos_token_id"))
         if self.generation_config is not None:
             eos_ids |= _eos_id_set(getattr(self.generation_config, "eos_token_id", None))
@@ -1428,6 +1674,21 @@ class TTSeamlessM4Tv2Model:
 
         if reuse_text_sequences:
             pass
+        elif num_beams > 1 and use_kv_cache:
+            # Multi-beam search path. Allocates K independent KV caches and runs per-beam decoder
+            # forwards with host-side top-K scoring + length-normalized beam selection.
+            seq_host = self._generate_beam_kv(
+                enc_tt,
+                enc_attn_tt,
+                seq_host,
+                num_beams=num_beams,
+                max_new_tokens=max_new_tokens,
+                eos_ids=eos_ids,
+                repetition_penalty=repetition_penalty,
+                length_penalty=length_penalty,
+                early_stopping=early_stopping,
+            )
+            sequences_tt = _ttnn_ids_from_list([seq_host], self.device)
         elif use_kv_cache:
             if seed_len + max_new_tokens > self.max_text_seq_len:
                 raise ValueError(
@@ -1465,7 +1726,9 @@ class TTSeamlessM4Tv2Model:
                 cross_valid = True
                 logits = self._lm_head(warm_out)
                 ttnn.deallocate(warm_out)
-                next_tt, next_id = self._greedy_next_token(logits, seed_len)
+                next_tt, next_id = self._greedy_next_token(
+                    logits, seed_len, repetition_penalty=repetition_penalty, prev_token_ids=seq_host
+                )
                 ttnn.deallocate(logits)
                 ttnn.deallocate(next_tt)
                 seq_host.append(next_id)
@@ -1498,7 +1761,9 @@ class TTSeamlessM4Tv2Model:
                         cross_4d=decode_cross_4d,
                         batch_size=batch_size,
                     )
-                next_tt, next_id = self._greedy_next_token(logits, 1)
+                next_tt, next_id = self._greedy_next_token(
+                    logits, 1, repetition_penalty=repetition_penalty, prev_token_ids=seq_host
+                )
                 ttnn.deallocate(logits)
                 ttnn.deallocate(next_tt)
                 seq_host.append(next_id)
@@ -1533,7 +1798,9 @@ class TTSeamlessM4Tv2Model:
                     prebuilt_causal_4d=gen_causal,
                     prebuilt_cross_4d=gen_cross,
                 )
-                next_tt, next_id = self._greedy_next_token(logits, dec_len)
+                next_tt, next_id = self._greedy_next_token(
+                    logits, dec_len, repetition_penalty=repetition_penalty, prev_token_ids=seq_host
+                )
                 ttnn.deallocate(logits)
                 ttnn.deallocate(sequences_tt)
                 ttnn.deallocate(next_tt)

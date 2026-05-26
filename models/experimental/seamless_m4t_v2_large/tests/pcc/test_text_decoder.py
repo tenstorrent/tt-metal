@@ -140,7 +140,14 @@ def test_seamless_m4t_v2_text_decoder_pcc(mesh_device, device_params, reset_seed
         _run_text_decoder_pcc(mesh_device)
 
 
-def _run_text_decoder_kv_cache_pcc(device, cache_dtype, *, max_seq_len: int = 64, decode_start_pos: int = 8) -> None:
+def _run_text_decoder_kv_cache_pcc(
+    device,
+    cache_dtype,
+    *,
+    max_seq_len: int = 64,
+    decode_start_pos: int = 8,
+    decode_steps: int = 4,
+) -> None:
     """Shared KV-cache PCC body; mesh-safe readback via ``to_torch_replicated_first_shard``.
 
     ``max_seq_len`` controls the KV cache program bucket (HF ``max_position_embeddings`` is 4096).
@@ -160,7 +167,6 @@ def _run_text_decoder_kv_cache_pcc(device, cache_dtype, *, max_seq_len: int = 64
 
     batch, enc_seq = 1, 32
     prefill_len = decode_start_pos
-    decode_steps = 4
     if prefill_len + decode_steps > max_seq_len:
         raise ValueError(
             f"decode_start_pos ({prefill_len}) + decode_steps ({decode_steps}) " f"exceeds max_seq_len ({max_seq_len})"
