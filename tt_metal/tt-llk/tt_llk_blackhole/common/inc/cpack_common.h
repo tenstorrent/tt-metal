@@ -615,7 +615,18 @@ inline void configure_pack(
 
     set_packer_config<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, num_faces, partial_face);
 
-    // LLK_ASSERT to verify pack_reads_per_xy_plane is 1?
+    // PACK_COUNTERS_SEC0_pack_per_xy_plane = cfg_reg_array[3][0 +: 8];
+    // PACK_COUNTERS_SEC0_pack_reads_per_xy_plane = cfg_reg_array[3][8 +: 8];
+    // PACK_COUNTERS_SEC0_pack_xys_per_tile = cfg_reg_array[3][16 +: 7];
+    // PACK_COUNTERS_SEC0_pack_yz_transposed = cfg_reg_array[3][23 +: 1];
+    pack_counters_u pack_counters;
+    pack_counters.val = 0;
+    // Number of reads per face used for resetting tile position generator for edge masks.
+    pack_counters.f.pack_reads_per_xy_plane = 1;
+    for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
+    {
+        cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i] = pack_counters.val; // disable auto last generation
+    }
 
     pck_edge_offset_u pck_edge_offset;
     pck_edge_offset.val    = 0;
