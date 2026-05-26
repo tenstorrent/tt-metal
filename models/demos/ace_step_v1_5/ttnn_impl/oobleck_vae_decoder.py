@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .math_perf_env import ace_step_concat_kwargs
+from .math_perf_env import ace_step_concat_kwargs, ace_step_flush_device_profiler
 from .vae.decoder import TtOobleckDecoder
 
 # TTNN conv_transpose2d width-sharded kernels assert on activation×weight geometry; very short
@@ -207,6 +207,7 @@ class TtOobleckVaeDecoder:
 
         if latent_frames <= chunk_size:
             wav_one = dec(latents_btc)
+            ace_step_flush_device_profiler(dec.device)
             return _crop_audio_tail(wav_one, initial_pad_lat)
 
         stride = chunk_size - 2 * overlap
@@ -234,6 +235,7 @@ class TtOobleckVaeDecoder:
 
             latent_chunk = ttnn.slice(latents_btc, (0, win_start, 0), (1, win_end, c_lat))
             wav = dec(latent_chunk)
+            ace_step_flush_device_profiler(dec.device)
             # Decoder ends with conv2 → often TILE; trim uses ttnn.slice which is not safe on TILE
             # for arbitrary [T_start, T_end) (same 32-tile alignment rules as latents).
             wav = ttnn.to_layout(wav, ttnn.ROW_MAJOR_LAYOUT)
