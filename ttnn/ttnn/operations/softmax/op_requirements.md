@@ -76,7 +76,7 @@ stress L1.
 verifier CLI reports `supported_fail = 0` with the Phase-0 SUPPORTED block
 unchanged.
 
-### [ ] Refinement 2 — Numerical configurability (bf16 precisions + compute_kernel_config surface)
+### [x] Refinement 2 — Numerical configurability (bf16 precisions + compute_kernel_config surface)
 
 **Goal**: add the four bf16 precision modes to `SUPPORTED["precision"]`:
 - `bf16_hifi2_fp32acc`

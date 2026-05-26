@@ -120,3 +120,82 @@
   regression on Phase-0 cells. The Refinement-1 commit chain also
   includes `tests/ttnn/unit_tests/operations/softmax/probes/probe_001.py`
   (PCC/RMS measurement probe used during tolerance tuning).
+
+## Refinement 2 — Numerical configurability (bf16 precisions + compute_kernel_config surface)
+- **Date**: 2026-05-26
+- **What was done**: Added the four bf16 precision names to
+  `SUPPORTED["precision"]` (`bf16_hifi2_fp32acc`, `bf16_hifi2_bf16acc`,
+  `bf16_hifi4_fp32acc`, `bf16_hifi4_bf16acc`). Per `/numeric-formats-metal`,
+  the kernel was already helper-routed end-to-end (`compute_kernel_lib::reduce`,
+  `binary_op` sub/mul with INPUT_AND_OUTPUT data-format reconfig,
+  `compute_kernel_lib::sfpu_exp`, `accumulate_reduce_block`), so zero kernel
+  changes were required. The single program-descriptor change was the
+  intermediate-CB format policy: `cb_max`, `cb_inv_sum`, and `cb_centered_exp`
+  now follow `compute_kernel_config.fp32_dest_acc_en` (Float32 when True,
+  input dtype when False) instead of always tracking `input_tensor.dtype`.
+  This preserves the dest-accumulator fp32 gain across phase boundaries
+  for the `bf16 + fp32acc` modes — the canonical precision-leak pattern
+  the skill warns against. The scaler CB stays Float32 (Phase-0 advisory
+  deviation, also correct for bf16 + fp32acc). No `UnpackToDestFp32`
+  tagging is applicable here — `cb_max`, `cb_inv_sum`, `cb_centered_exp`
+  are each consumed by an FPU helper (sub / mul / reduce), so the
+  exclusivity rule (§1.5) forbids tagging them.
+
+  The public entry point already exposed `compute_kernel_config` and
+  `_resolve_precision_name` already enumerated all five precision combos
+  (Phase-0 left them in the dictionary keyed by name; Refinement 2 just
+  flipped them into SUPPORTED). The default-None path still resolves to
+  `fp32_hifi4_fp32acc`, so behaviour is byte-identical when callers pass
+  nothing.
+
+- **SUPPORTED at Refinement 2**: precision adds the four bf16 names;
+  every other axis unchanged.
+- **EXCLUSIONS at Refinement 2**: unchanged (`[]`). The skill flagged
+  `bf16 + non_tile_aligned_dim` as the canonical candidate, but
+  `non_tile_aligned` isn't in SUPPORTED yet (Refinement 4), so the
+  intersection is empty for this refinement. If bf16 + alignment turns out
+  to fail when Refinement 4 lands, that's where it gets recorded.
+
+- **Accuracy achieved** (measured by
+  `tests/ttnn/unit_tests/operations/softmax/test_softmax_precision_matrix.py`,
+  60 cells = 5 precisions × 3 shapes × 2 dims × 2 numeric_stable):
+  - `fp32_hifi4_fp32acc` (Phase-0 baseline): PCC ≥ 0.9999992 on every
+    cell; max_abs ≤ 3.5e-5; rms_rel ≤ 1.4e-3 — well under TOLERANCES
+    band (0.999, 0.01).
+  - `bf16_hifi2_fp32acc`: PCC ≥ 0.999, max_abs ≤ 6e-3, rms_rel ≤ 4.0e-2
+    — under TOLERANCES band (0.99, 0.05).
+  - `bf16_hifi2_bf16acc`: PCC ≥ 0.999, max_abs ≤ 1e-2, rms_rel ≤ 0.10
+    — under TOLERANCES band (0.98, 0.13).
+  - `bf16_hifi4_fp32acc`: PCC ≥ 0.999, max_abs ≤ 6e-3, rms_rel ≤ 4.0e-2
+    — under TOLERANCES band (0.99, 0.05). HiFi4 ≥ HiFi2 as expected.
+  - `bf16_hifi4_bf16acc`: PCC ≥ 0.999, max_abs ≤ 1e-2, rms_rel ≤ 0.10
+    — under TOLERANCES band (0.98, 0.13).
+  All five modes hold their TOLERANCES bands without widening.
+
+- **Golden test progress**: **200 / 200 supported-pass cells passing**
+  (was 40 / 40 at end of Refinement 1). 1200 xfailed
+  (correctly rejected by `validate()` — every cell with a non-SUPPORTED
+  layout, alignment, or rank). 0 supported_fail, 0 xpass-strict (no drift).
+  The `Done when` criterion (`≥ 32 supported_pass cells per precision,
+  160 total across precisions`) is met with 40 per precision × 5 precisions = 200.
+
+- **Issues encountered**: None. The pass condition from
+  `/numeric-formats-metal` ("if the kernel is helper-routed and has no
+  hard-coded sizes, this lands with zero compute-kernel changes") held —
+  only the program descriptor's intermediate-CB block changed.
+
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/softmax/test_softmax_precision_matrix.py`
+    — the canonical precision-matrix test for this op (per
+    `/numeric-formats-metal` §10). Parametrised over 5 precision names ×
+    3 shapes × 2 dims × 2 numeric_stable = 60 positive cases; 4 negative
+    cases verifying bf16 + (HiFi3, LoFi) configs are rejected; 4 bf16
+    smoke tests confirming each new precision mode accepts a small bf16
+    input.
+
+- **Tests modified**:
+  - `tests/ttnn/unit_tests/operations/softmax/test_softmax.py`:
+    `test_softmax_rejects_bfloat16` → `test_softmax_rejects_bfloat16_with_unsupported_config`.
+    bf16 + default config (HiFi4 + fp32_dest_acc=True) now resolves to
+    a valid precision name; the rejection contract moves to bf16 + HiFi3
+    (no PRECISION_CONFIG entry).
