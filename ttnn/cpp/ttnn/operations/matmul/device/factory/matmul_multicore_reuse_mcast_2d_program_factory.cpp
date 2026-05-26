@@ -1237,9 +1237,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             }
 
             {
-                std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> in0_args(
+                std::vector<std::variant<uint32_t, std::reference_wrapper<const tt::tt_metal::MeshTensor>>> in0_args(
                     mm_in0_sender_args.begin(), mm_in0_sender_args.end());
-                in0_args[0] = in0_tensor.mesh_buffer().get_reference_buffer();
+                in0_args[0] = in0_tensor;
                 in0_sender_kernel_desc.emplace_runtime_args(core, in0_args);
             }
 
@@ -1399,12 +1399,12 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     }
                 }
                 {
-                    std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> in1_sender_variant(
-                        mm_in1_sender_writer_args.begin(), mm_in1_sender_writer_args.end());
-                    in1_sender_variant[0] = in1_tensor.mesh_buffer().get_reference_buffer();
-                    in1_sender_variant[7] = out_tensor.mesh_buffer().get_reference_buffer();
+                    std::vector<std::variant<uint32_t, std::reference_wrapper<const tt::tt_metal::MeshTensor>>>
+                        in1_sender_variant(mm_in1_sender_writer_args.begin(), mm_in1_sender_writer_args.end());
+                    in1_sender_variant[0] = in1_tensor;
+                    in1_sender_variant[7] = out_tensor;
                     if (bias_mesh.has_value()) {
-                        in1_sender_variant[18] = bias_mesh->mesh_buffer().get_reference_buffer();
+                        in1_sender_variant[18] = bias_mesh;
                     }
                     in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_sender_variant);
                 }
@@ -1490,9 +1490,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 }
 
                 {
-                    std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> in1_recv_variant(
-                        mm_in1_receiver_writer_args.begin(), mm_in1_receiver_writer_args.end());
-                    in1_recv_variant[2] = out_tensor.mesh_buffer().get_reference_buffer();
+                    std::vector<std::variant<uint32_t, std::reference_wrapper<const tt::tt_metal::MeshTensor>>>
+                        in1_recv_variant(mm_in1_receiver_writer_args.begin(), mm_in1_receiver_writer_args.end());
+                    in1_recv_variant[2] = out_tensor;
                     // left half
                     if (core.x <= half_core || (transpose_mcast and core.y == start_core_y)) {
                         in1_receiver_writer_kernel_desc.emplace_runtime_args(core, in1_recv_variant);
@@ -3249,11 +3249,6 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
         "Num output blocks along y ({}) must be smaller than or equal to the number of rows in compute grid ({})!",
         num_blocks_y,
         num_cores_y);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Grayskull Device Setup
-    ////////////////////////////////////////////////////////////////////////////
-    TT_FATAL(output.mesh_buffer().get_reference_buffer() != nullptr, "Output buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Sub-device start core
