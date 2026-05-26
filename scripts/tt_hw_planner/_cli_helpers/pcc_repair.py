@@ -99,9 +99,11 @@ def _pcc_repair_loop(
                 agentic_probe_path.unlink(missing_ok=True)
             except Exception:
                 pass
+            from ..discovery import BRINGUP_ROOT as _BRINGUP_ROOT
+
             agentic_ctx = AgenticContext(
                 model_id=model_id,
-                workspace_root=Path(REPO_ROOT),
+                workspace_root=Path(_BRINGUP_ROOT()),
                 probe_output_path=agentic_probe_path,
                 max_iters=max_iters,
             )

@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..discovery import safe_relative_to_root
+
 
 def _bringup_cwd() -> Path:
     env = os.environ.get("TT_HW_PLANNER_BRINGUP_CWD")

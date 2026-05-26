@@ -1770,7 +1770,7 @@ def _git_worktree_diff_hash() -> str:
     try:
         out = _sp.run(
             ["git", "-c", "color.ui=never", "diff", "--stat"],
-            cwd=REPO_ROOT,
+            cwd=BRINGUP_ROOT(),
             capture_output=True,
             timeout=10,
             check=False,
@@ -2089,7 +2089,7 @@ def _git_changed_files() -> List[str]:
     try:
         out = _sp.run(
             ["git", "status", "--porcelain"],
-            cwd=REPO_ROOT,
+            cwd=BRINGUP_ROOT(),
             capture_output=True,
             timeout=10,
             check=False,
@@ -2571,7 +2571,7 @@ def _emit_and_verify_runnable_demo(
     Caller is expected to surface `message` in the convergence banner.
     Failures are non-fatal — the model IS still on device, the PCC suite
     proved it; the demo verification is a final usability check on top."""
-    rr = repo_root or REPO_ROOT
+    rr = repo_root or BRINGUP_ROOT()
     print()
     print(sep)
     print(f"  AUTO-EMIT runnable demo for {model_id}")
@@ -3514,7 +3514,7 @@ def _run_focused_pytest(
     env["PYTHONUNBUFFERED"] = "1"
     proc = subprocess.Popen(
         cmd,
-        cwd=str(REPO_ROOT),
+        cwd=str(BRINGUP_ROOT()),
         env=env,
         start_new_session=True,
         stdout=subprocess.PIPE,

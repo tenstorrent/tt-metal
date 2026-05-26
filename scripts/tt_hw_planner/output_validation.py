@@ -234,10 +234,15 @@ def load_demo_first_prompt(
 def _detect_repo_root() -> Optional[Path]:
     """Best-effort detection of the tt-metal repo root.
 
-    Walks up from this module's location looking for the canonical
-    ``models/tt_transformers/demo`` directory. Returns ``None`` if
-    not found.
+    When the planner runs inside an isolated worktree (env var
+    TT_HW_PLANNER_BRINGUP_CWD set), return that. Otherwise walk up
+    from this module's location to find ``models/tt_transformers/demo``.
     """
+    from .discovery import BRINGUP_ROOT, REPO_ROOT as _CANONICAL_REPO_ROOT
+
+    root = BRINGUP_ROOT()
+    if root != _CANONICAL_REPO_ROOT and (root / "models" / "tt_transformers" / "demo").is_dir():
+        return root
     here = Path(__file__).resolve()
     for parent in here.parents:
         if (parent / "models" / "tt_transformers" / "demo").is_dir():

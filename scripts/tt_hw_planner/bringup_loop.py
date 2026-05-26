@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .bringup import REPO_ROOT
+from .discovery import safe_relative_to_root
 from .family_backends import DEFAULT_TEMPLATE_PYTEST_EXCLUDE_K
 
 
@@ -787,9 +788,11 @@ def _run_pytest_target(test_path: Path, *, exclude_k: str) -> Tuple[str, str]:
     import signal as _signal
 
     timeout_s = int(_os.environ.get("TT_PLANNER_PYTEST_TIMEOUT_S", "600"))
+    from .discovery import BRINGUP_ROOT
+
     proc = subprocess.Popen(
         cmd,
-        cwd=str(REPO_ROOT),
+        cwd=str(BRINGUP_ROOT()),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
