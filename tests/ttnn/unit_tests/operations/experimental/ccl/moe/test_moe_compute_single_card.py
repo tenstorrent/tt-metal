@@ -85,13 +85,13 @@ def _run_moe_compute_single_card_test(
     (no dispatch axis on 1x1 mesh) and compute_only is fixed to True.
     """
     # The MoE op uses tilize cores keyed off the per-arch layout table in the program
-    # factory's `get_layout()` (issue #41827 M3 PR1) and matmul cores from
+    # factory's `get_layout()` (see #41827) and matmul cores from
     # `get_optimal_dram_bank_to_logical_worker_assignment`. WH expects a 7x10 unharvested
     # logical worker grid (drain at (6,9)); BH expects an 11x10 grid (drain at (10,9)).
     # On a harvested WH (e.g. n150_L = 7x9 grid with COL-axis dispatch) the harvested-row
     # remapping shifts the matmul layout into the y=8 row, which then overlaps the
     # filtered tilize cores — the op TT_FATALs on `tilize and matmul bounding boxes
-    # cannot overlap`. Untangling the matmul/tilize layouts under harvest is full M3 scope
+    # cannot overlap`. Untangling the matmul/tilize layouts under harvest is a follow-up
     # (arch-aware core placement); for now we skip on harvested grids.
     arch = mesh_device.arch()
     grid = mesh_device.compute_with_storage_grid_size()
@@ -121,7 +121,6 @@ def _run_moe_compute_single_card_test(
     # Single device, no CCL: cluster_axis is None.
     cluster_axis = None
     num_layers = 1
-    num_iterations = 1
 
     # Derived dims (mirrors run_moe_compute_test in test_moe_compute_6U.py).
     num_devices = mesh_shape[0] * mesh_shape[1]
@@ -406,16 +405,13 @@ def _run_moe_compute_single_card_test(
 
     base_pcc_threshold = _get_base_pcc_threshold(activation_type, has_bias)
 
-    # Arch- and sim-aware PCC floor (issue #41827 M3 PR1).
+    # Arch- and sim-aware PCC floor (see #41827).
     # ttsim has known partial fidelity (e.g. pack_untilize_dest), so the floor on sim is
     # lower than on real silicon. Take the min with the helper's default so we don't
     # accidentally relax a tighter threshold that might land later.
+    # WH and BH currently share the same floor; differentiate here when they diverge.
     _on_simulator = bool(os.environ.get("TT_METAL_SIMULATOR"))
-    if arch == ttnn.device.Arch.BLACKHOLE:
-        _arch_floor = 0.84 if _on_simulator else 0.984
-    else:
-        # WORMHOLE_B0 keeps the historical floor used in M1.
-        _arch_floor = 0.84 if _on_simulator else 0.984
+    _arch_floor = 0.84 if _on_simulator else 0.984
     base_pcc_threshold = min(base_pcc_threshold, _arch_floor)
 
     per_expert_tokens_all_passed = validate_per_expert_tokens(
@@ -507,7 +503,7 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape):
         N=2048,
         hidden_size=7168,
         output_height_shard_dim=4,
-        output_width_shard_dim=4,  # DeepSeekRingConfig::OUTPUT_WIDTH_SHARD_DIM
+        output_width_shard_dim=4,  # DeepSeek hidden=7168 → auto_output_width_shard_dim=4
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SILU,
     )
@@ -546,7 +542,7 @@ def test_moe_compute_single_card_deepseek_with_bias(mesh_device, mesh_shape):
     )
 
 
-# GPT-OSS canonical config from MODELS_1x16 (test_moe_compute_6U.py:121):
+# GPT-OSS canonical config from the GPT-OSS entry in `_MODELS_1x8` (test_moe_compute_6U.py):
 #   experts_per_device=4, has_bias=True, activation=SWIGLU, output_width_shard_dim=3.
 # This single test exercises FOUR distinct BH-specific gaps the baseline DS-v3 test misses:
 #   1. The w2_shard_tiles COMPLEMENTARY branch — for Ht=Nt=90, n_big_ht + n_big_nt == n_cores
@@ -560,7 +556,8 @@ def test_moe_compute_single_card_deepseek_with_bias(mesh_device, mesh_shape):
 # Required environment on BH: TT_MOE_BH_N=12.
 # Why: hidden_size=2880 → output_width_shard_dim = auto_output_width_shard_dim(2880) = 3
 # (Ht=90 has no divisor ≤4 except 3). The op validates matmul_num_cores % num_data_parallel_cores
-# == 0 (moe_compute_device_operation.cpp:128-133). On BH the matmul ring is bh_ring_size cores:
+# == 0 in validate_on_program_cache_miss (moe_compute_device_operation.cpp). On BH the matmul
+# ring is bh_ring_size cores:
 #   N=8:  8 % 3 ≠ 0 → validate REJECTS (correctly — 8-core ring can't split into 3 cols)
 #   N=12: 12 % 3 == 0 → passes validate, then the kernel actually exercises gap (1)
 #   N=16: 16 % 3 ≠ 0 → validate REJECTS (correctly — same reason)
@@ -593,7 +590,7 @@ def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape):
             pytest.xfail(
                 f"GPT-OSS on BH requires TT_MOE_BH_N=12 (current={bh_n}). hidden_size=2880 "
                 f"forces output_width_shard_dim=3 (auto_output_width_shard_dim) and the op "
-                f"validates matmul_num_cores % 3 == 0 (moe_compute_device_operation.cpp:128-133). "
+                f"validates matmul_num_cores % 3 == 0 in moe_compute_device_operation.cpp. "
                 f"On BH the matmul ring is bh_ring_size cores: 8%3≠0 and 16%3≠0; only 12%3==0. "
                 f"The BH default is 12; this xfail only fires when an explicit override picks 8 or 16."
             )
