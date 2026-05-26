@@ -823,52 +823,46 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         "group_norm welford with Float32 input requires fp32_dest_acc_en=true in the compute "
         "kernel config; otherwise precision is silently lost in the unpacker format conversion.");
 
-    // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
-    // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode). For CBs consumed by
-    // any FPU op (mul_tiles, add_tiles, sub_tiles, *_bcast_*, reduce_tile), setting the flag
-    // is unsafe: per base_types.hpp the CB becomes "incompatible with unpacking to SRCA/B",
-    // and on Wormhole/Blackhole that combination produces garbage in SrcA (not silent TF32
-    // truncation as one might assume).
-    //
-    // c_0 (input) has two consumers in the welford kernel: transpose_wh_tile during the
-    //   welford intake (non-TILIZE_IN branch) and sub_tiles_bcast_scalar during the final
-    //   (x - mean) normalization. The latter is FPU on SrcA, so the flag cannot be set on
-    //   c_0 directly. Instead we register c_19 as a second buffer index pointing to the same
-    //   L1 allocation, with UnpackToDestFp32 set on that alias only. The compute kernel
-    //   reads via c_19 for the welford intake transpose (UnpackToDest path preserves the full
-    //   23-bit mantissa into DEST, which the SFPU welford then consumes) and via c_0 for the
-    //   final-stage FPU sub. Same multi-buffer-index aliasing pattern as in layernorm.
-    // c_29 is the tilized-input CB used by the welford TILIZE_IN path; its only consumer is
-    //   transpose_wh_tile (final normalization reads c_0, not c_29). Pure unary-only path,
-    //   so the flag is safe and preserves full mantissa width into the welford recurrence.
-    //
-    // Other FP32 CBs were considered and rejected because, even though they pass through an
-    // unpack-to-DEST-capable op (copy_tile / transpose_wh_tile), the next consumer is a pack
-    // into a CB whose downstream reader is an FPU op (add_tiles / mul_tiles / sub_tiles /
-    // *_bcast_*) reading via SrcA, which truncates to TF32 regardless of what was preserved
-    // in DEST. Setting the flag on those CBs would incur the cost without delivering a
-    // user-visible precision win:
-    //   - cb_xmm (c_25): the (x - mean) intermediate. copy_tile into DEST then pack to cb_x;
-    //     cb_x is read by add_tiles (FPU on SrcA) for accumulation. TF32 truncation at the
-    //     add_tiles step erases any preserved mantissa.
-    //   - cb_x (c_24): accumulates (x - mean) results across groups via repeated add_tiles,
-    //     each of which reads cb_x via SrcA (truncating to TF32) before producing the next
-    //     FP32 sum. The final stored value does carry one add_tiles step's worth of FP32
-    //     precision, so an UnpackToDestFp32 alias on the final copy_tile out to cb_out would
-    //     preserve roughly one mantissa-bit step beyond TF32 -- but the accumulated TF32
-    //     errors from every earlier SrcA read of cb_x dominate the residual, so the gain
-    //     doesn't justify the alias machinery.
     // welford_unpack_fp32_active is true iff the compute kernel's intake transpose_wh_tile
     // reads from a CB that carries UnpackToDestFp32, regardless of which CB is used: c_29
     // in the TILIZE_IN branch (configured below) or the c_19 alias of c_0 in the
     // non-TILIZE_IN branch (welford_fp32_alias). Both paths route the transpose through
-    // llk_math_transpose_dest and write SFPU replay slot 0, so the kernel's SFPU re-init
-    // after the transpose must fire iff this is true. welford_fp32_alias is the
-    // non-TILIZE_IN sub-case (c_19 alias is only useful when c_0 isn't itself the consumer
-    // of the FP32 transpose, i.e. when tilize_in is false).
+    // llk_math_transpose_dest, whose math-side init records slots [16, 32) of the math-thread
+    // replay buffer (clobbering welford's LREG2 / LREG3 portions), so the kernel's SFPU re-init
+    // after the transpose must fire iff this is true.
     const bool welford_unpack_fp32_active =
         use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32;
+
+    // welford_fp32_alias is the non-TILIZE_IN sub-case (c_19 alias is only useful when
+    // c_0 isn't itself the consumer of the FP32 transpose, i.e. when tilize_in is false).
     const bool welford_fp32_alias = welford_unpack_fp32_active && !tilize_in;
+
+    // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
+    // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode):
+    // c_0 (input) has two consumers in the welford kernel: transpose_wh_tile during the
+    //   welford intake (non-TILIZE_IN branch) and sub_tiles_bcast_scalar during the final
+    //   (x - mean) normalization. The latter is FPU on SrcA, so the flag cannot be set on
+    //   c_0 directly. Instead we register c_19 as a second buffer index pointing to the same
+    //   SRAM allocation, with UnpackToDestFp32 set on that alias only. The compute kernel
+    //   reads via c_19 for the welford intake transpose (UnpackToDest path preserves the full
+    //   23-bit mantissa into DEST, which the SFPU welford then consumes) and via c_0 for the
+    //   final-stage FPU sub.
+    // c_29 is the tilized-input CB used by the welford TILIZE_IN path; its only consumer is
+    //   transpose_wh_tile (final normalization reads c_0, not c_29). Pure unary-only path,
+    //   so the flag is safe.
+    //
+    // Other FP32 CBs were considered and rejected because, even though they pass through an
+    // unpack-to-DEST-capable op, the next consumer is a pack into a CB whose downstream
+    // reader is an FPU op reading via SrcA, which truncates to TF32 regardless of what
+    // was preserved in DEST. Setting the flag would incur the cost without improving precision:
+    //   - cb_xmm (c_25): the (x - mean) intermediate. copy_tile into DEST then pack to cb_x;
+    //     cb_x is read by add_tiles (FPU on SrcA) for accumulation.
+    //   - cb_x (c_24): accumulates (x - mean) results across groups via repeated add_tiles,
+    //     each of which reads cb_x via SrcA (truncating to TF32) before producing the next
+    //     FP32 sum. The final stored value does carry one add_tiles step's worth of FP32
+    //     precision, so an UnpackToDestFp32 alias on the final copy_tile would
+    //     preserve ~ one mantissa-bit step beyond TF32, but the accumulated TF32
+    //     errors from previous iteration dominate, so the gain doesn't justify the overhead.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (welford_unpack_fp32_active) {

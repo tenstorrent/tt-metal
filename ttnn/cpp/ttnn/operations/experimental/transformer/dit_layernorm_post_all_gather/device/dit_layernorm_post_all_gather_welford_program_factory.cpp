@@ -233,19 +233,15 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
 
     // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
     // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode). For those, setting
-    // the flag preserves the full 23-mantissa fp32 by bypassing SrcA. Setting the flag on a
-    // CB consumed by any FPU op (mul_tiles, add_tiles, sub_tiles, *_bcast_*, reduce_tile)
+    // the flag preserves the full 23-mantissa fp32 by bypassing SrcA.
+    // c_1 (stats) is consumed only by copy_tile inside combine_welford_partials.
+    // Set the flag so the per-row mean/M2 recombine reads full mantissa.
+    //
+    // Note that setting the flag on a CB consumed by any FPU op (mul_tiles, add_tiles,*_bcast_*, ...)
     // is unsafe: per base_types.hpp the CB is "incompatible with unpacking to SRCA/B", and
     // on Wormhole/Blackhole that combination produces garbage in SrcA (not silent TF32
     // truncation as one might assume).
-    //
-    // c_0 (input) is consumed only by sub_tiles_bcast_cols (FPU). Do NOT enable the flag
-    //   for it -- inputs already arrive in SrcA as TF32 via the supported fp32 -> Tf32 ->
-    //   SrcA conversion, and switching to "unpack to fp32 -> SrcA" silently corrupts the
-    //   subtraction.
-    // c_1 (stats) is consumed only by copy_tile inside combine_welford_partials -- a real
-    //   unpack-to-DEST candidate. When stats arrive in Float32 we set the flag so the
-    //   per-row mean/M2 recombine reads full mantissa.
+    // c_0 (input) is consumed only by sub_tiles_bcast_cols (FPU), so we must not enable the flag on it.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (fp32_dest_acc_en && stats_data_format == tt::DataFormat::Float32) {

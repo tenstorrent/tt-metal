@@ -44,11 +44,9 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     CircularBuffer cb_interm_pre_add_obj(cb_interm_pre_add);
     CircularBuffer cb_ex_obj(cb_ex);
     CircularBuffer cb_ex2_obj(cb_ex2);
-    // When welford_state_fp32_alias is true these are c_30 / c_31 -- distinct buffer indices
-    // sharing cb_ex / cb_ex2's L1 allocations but configured with unpack_to_dest_mode=
-    // UnpackToDestFp32. When false they collapse onto cb_ex / cb_ex2 so the per-block
-    // reserve/push/pop calls on the aliases below are no-ops on the same semaphore as the
-    // primary; the if-constexpr gates avoid double-counting in that case.
+    // When welford_state_fp32_alias is true these are c_30/c_31; distinct buffer indices
+    // sharing cb_ex/cb_ex2's SRAM allocations but configured with UnpackToDestFp32.
+    // When false, cb_ex_welford == cb_ex and cb_ex2_welford == cb_ex2.
     CircularBuffer cb_ex_welford_obj(cb_ex_welford);
     CircularBuffer cb_ex2_welford_obj(cb_ex2_welford);
 
@@ -69,11 +67,9 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     cb_ex_obj.reserve_back(1);
     cb_ex2_obj.reserve_back(1);
     if constexpr (welford_state_fp32_alias) {
-        // Reserve the aliases too. cb_ex_welford / cb_ex2_welford share cb_ex / cb_ex2's L1
-        // allocations but have independent semaphores; compute is the producer of both via
-        // pack_tile to cb_ex / cb_ex2, so we push the alias semaphores side-by-side after each
-        // pack so the next block's wait_front on the aliases (used by copy_tile for fp32
-        // precision) sees the data.
+        // Reserve the aliases too. Aliases share SRAM, but have independent read/write counters
+        // and need to be kept in sync so the next block's wait_front on the aliases (used by
+        // copy_tile for fp32 precision) sees the data.
         cb_ex_welford_obj.reserve_back(1);
         cb_ex2_welford_obj.reserve_back(1);
     }
@@ -123,11 +119,9 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             cb_ex2_welford_obj.wait_front(1);
         }
         tile_regs_acquire();
-        // Reload running mean / M2 from the aliases. With welford_state_fp32_alias active
-        // these are c_30 / c_31 in UnpackToDest fp32 mode (is_32bit_input(Float32, Float32)
-        // is true) so copy_tile takes the Dst path and preserves the full 23-bit mantissa.
-        // When inactive cb_ex_welford == cb_ex (and the unpack_dst_format stays Tf32) so the
-        // SrcA path takes over, matching the original behavior.
+        // Reload running mean/M2 from the aliases. With welford_state_fp32_alias active
+        // these are c_30/c_31 in UnpackToDestFp32 mode so copy_tile takes the Dst path that
+        // preserves the full FP32 precision. Otherwise, cb_ex_welford == cb_ex.
         reconfig_data_format_srca(cb_in, cb_ex_welford);
         copy_tile_init(cb_ex_welford);
         copy_tile(cb_ex_welford, 0, mean_dst);
@@ -139,13 +133,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         reconfig_data_format_srca(cb_ex2_welford, cb_interm_pre_add);
         transpose_wh_init_short(cb_interm_pre_add);
         for (auto i : block.local()) {
-            // Welford's needs transposed input tile. The fused-pre-add path intentionally does
-            // not enable UnpackToDestFp32 on cb_interm_pre_add: c_23 carries the post-add result
-            // which already lost precision through the FPU add (SrcA Tf32), so routing the
-            // welford read through UnpackToDest would preserve fp32 bytes that no longer carry
-            // fp32 information. Keeping cb_interm_pre_add in Default unpack mode also avoids the
-            // SFPU replay-slot conflict between transpose_dest and welford -- the SrcA path
-            // doesn't touch slot 0 -- so no welford_reinit / sfpu_init re-arming is needed here.
+            // Welford's needs transposed input tile
             transpose_wh_tile(cb_interm_pre_add, i, input_dst);
 
             // Welford over this tile: include only valid elements, never padding.
@@ -249,7 +237,7 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
     uint32_t sample_idx = 0;
     reconfig_data_format_srca(cb_x_welford);
-    // Full transpose_wh hw init when the alias is active. cb_x_welford's buffer index isn't
+    // Full transpose_wh_init when the alias is active. cb_x_welford's buffer index isn't
     // visible to compute_kernel_hw_startup at the top of kernel_main (only cb_in is), so we
     // run the full init once to program all hw config registers for it. The non-alias path
     // (cb_x_welford == cb_in) uses transpose_wh_init_short since cb_in's hw config is
@@ -266,10 +254,10 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     for (uint32_t wt = 0; wt < (Wt - 1); ++wt) {
         if constexpr (welford_fp32_alias) {
             cb_x_welford_obj.wait_front(1);
-            // welford_init / the previous iteration's welford_reinit left SFPU replay slot 0
-            // holding the welford recurrence. The fp32 transpose_wh_tile uses a MOP that
-            // references slot 0 for its transpose instructions, so re-init transpose state
-            // to put transpose code back into slot 0.
+            // SFPU replay slots [0, 32) currently hold the welford recurrence (welford uses the
+            // full 32-slot math-thread replay buffer; the recovery block below re-records all
+            // of it after each transpose). transpose_wh_init_short re-records slots [16, 32)
+            // with the transpose-dest setup so transpose_wh_tile below can replay them.
             transpose_wh_init_short(cb_x_welford);
         } else {
             cb_in_obj.wait_front(1);
@@ -277,10 +265,14 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         // Welford's needs transposed input tile
         transpose_wh_tile(cb_x_welford, 0, input_dst);
         if constexpr (welford_fp32_alias) {
-            // transpose_wh_tile took the UnpackToDest fp32 path which clobbered the welford
-            // recurrence in SFPU replay slot 0. Restore welford state before welford_update.
-            // welford_reinit also reprograms unpack-A for an UnpackToDest (transpose=0) read;
-            // the next iteration's transpose_wh_init_short switches it back.
+            // transpose_wh_tile took the UnpackToDestFp32 path. Its math-side init clobbered
+            // the welford recurrence at slots [16, 32) (LREG2 / LREG3 portions) and the unpack
+            // side left UNPACK A configured for a transposed read. Two distinct calls are
+            // needed to restore welford state before welford_update:
+            //   1. welford_reinit reprograms UNPACK A for an UnpackToDest (transpose=0) read
+            //      and rebuilds MATH-side address mods / MOP for the welford datacopy path.
+            //   2. llk_math_welfords_sfpu_init re-records all 32 slots of the SFPU replay
+            //      buffer with the welford recurrence (via _program_welfords_replay_buffer_).
             welford_reinit(cb_x_welford);
             MATH((llk_math_welfords_sfpu_init()));
         }
@@ -339,19 +331,18 @@ void kernel_main() {
     constexpr uint32_t W = get_compile_time_arg_val(5);
     constexpr uint32_t tile_width = get_compile_time_arg_val(6);
     constexpr bool fuse_pre_add = static_cast<bool>(get_compile_time_arg_val(8));
-    // welford_fp32_alias mirrors layernorm_welford.cpp: when true, cb_x_welford is a multi-
-    // buffer-index alias of cb_x configured with unpack_to_dest_mode=UnpackToDestFp32 so the
-    // welford section reads full fp32 into DEST while the post-welford eltwise still reads
-    // cb_x via SrcA (Tf32). When false, cb_x_welford collapses onto cb_x and the alias-side
-    // wait/pop ops are skipped via if constexpr to avoid double-counting cb_x's semaphore.
+    // welford_fp32_alias: when true, cb_x_welford is a multi-buffer-index alias of cb_x
+    // configured with UnpackToDestFp32 so the welford section reads full fp32 into DEST
+    // while the post-welford eltwise still reads cb_x via SrcA (Tf32).
+    // When false, cb_x_welford == cb_x.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
     constexpr auto cb_x_welford = get_named_compile_time_arg_val("cb_x_welford");
 
-    // welford_state_fp32_alias: when true, cb_ex_welford / cb_ex2_welford are c_30 / c_31
-    // multi-buffer-index aliases of cb_ex (c_18) / cb_ex2 (c_19) configured for UnpackToDest
-    // fp32. The fused welford path's per-block copy_tile reads of the running mean / M2 use
-    // these aliases to take the Dst fp32 path (preserves all 23 mantissa bits) instead of the
-    // SrcA Tf32 path (10 mantissa bits). When false the aliases collapse onto cb_ex / cb_ex2.
+    // welford_state_fp32_alias: when true, cb_ex_welford/cb_ex2_welford are c_30/c_31
+    // multi-buffer-index aliases of cb_ex (c_18) / cb_ex2 (c_19) configured for UnpackToDestFp32.
+    // The fused welford path's per-block copy_tile reads of the running mean / M2 use
+    // these aliases to take the Dst fp32 path (preserves FP32 precision) instead of the
+    // SrcA Tf32 path. When false, cb_ex_welford == cb_ex and cb_ex2_welford == cb_ex2.
     constexpr bool welford_state_fp32_alias = get_named_compile_time_arg_val("welford_state_fp32_alias") != 0;
     constexpr auto cb_ex_welford = get_named_compile_time_arg_val("cb_ex_welford");
     constexpr auto cb_ex2_welford = get_named_compile_time_arg_val("cb_ex2_welford");
@@ -522,12 +513,11 @@ void kernel_main() {
         cb_ex2pe_obj.wait_front(onetile);
         cb_ex_obj.wait_front(onetile);
 
-        // Lockstep the cb_x_welford alias's fifo pointers with cb_in's across the eltwise pass.
+        // Lockstep the cb_x_welford alias's read/write pointers with cb_in's across the eltwise pass.
         // The reader pushes cb_x_welford in pass 2 to match its pass 1 push (see
         // reader_unary_interleaved_ln_large_tensor_welford.cpp); compute pops it here to match
-        // cb_in's pop. Both share L1 but have independent (rd_ptr, wr_ptr, semaphore) state;
-        // popping cb_x_welford keeps it aligned with cb_in so the welford section of the next
-        // NCHt iteration reads from the right L1 offset after CB wrap.
+        // cb_in's pop. Both share SRAM but have independent state; popping cb_x_welford keeps it aligned
+        // with cb_in so the next NCHt Welford iteration reads from the correct SRAM offset after CB wrap.
         CircularBuffer cb_x_welford_obj_eltwise(cb_x_welford);
 
         for (auto block : generic::blocks(Wt, blk)) {
@@ -538,7 +528,7 @@ void kernel_main() {
             if constexpr (welford_fp32_alias && !fuse_pre_add) {
                 // cb_x_welford was pushed by the reader in pass 2; wait for the push and pop in
                 // lockstep with cb_in. We do not actually read cb_x_welford in the eltwise pass
-                // (FPU consumes cb_in via SrcA); this is purely a fifo-pointer sync.
+                // (FPU consumes cb_in via SrcA); this is purely a FIFO-pointer sync.
                 cb_x_welford_obj_eltwise.wait_front(block.full_block_size());
             }
             tile_regs_acquire();
@@ -584,11 +574,11 @@ void kernel_main() {
             // IGNORE) skip-optimization at the start of the eltwise block does not reset
             // whatever state needs resetting. Blackhole is unaffected.
             //
-            // When the trigger is present (Wormhole AND any UnpackToDestFp32 alias active in
-            // this kernel), stage (x - mean) through cb_xmm and use the standard
-            // mul_tiles_bcast_cols path so the multiply reads through SrcA instead of
-            // reusing DEST. Otherwise, keep the original DEST_TO_SRCB reuse path, which
-            // avoids an extra pack/unpack round-trip.
+            // If we're on Wormhole and any UnpackToDestFp32 alias is active in
+            // this kernel, stage (x - mean) through cb_xmm and use the mul_tiles_bcast_cols
+            // path so the multiply reads through SrcA instead of reusing DEST.
+            // In all other cases, use the DEST_TO_SRCB reuse path, to avoid an extra pack/unpack
+            // round-trip. Tracked in Issue #45216.
             constexpr bool wh_dest_reuse_workaround_needed =
 #if defined(ARCH_WORMHOLE)
                 (welford_fp32_alias || welford_state_fp32_alias);

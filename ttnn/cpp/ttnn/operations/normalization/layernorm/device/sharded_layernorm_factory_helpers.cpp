@@ -829,7 +829,7 @@ void add_kernel_descriptors(
         // Welford-fp32 alias of cb_x (c_0 in non-fused mode, c_24 in fused mode). When the
         // alias is active the kernel reads cb_x_welford for the welford section so the unpacker
         // takes the UnpackToDest fp32 path; the post-welford eltwise still reads cb_x via SrcA.
-        // When inactive cb_x_welford collapses onto cb_x at the kernel side (see
+        // When inactive, cb_x_welford == cb_x at the kernel side (see
         // layernorm_sharded_welford.cpp) so the named arg can stay present unconditionally.
         {"cb_x_welford", tt::CBIndex::c_29},
         {"welford_fp32_alias", static_cast<uint8_t>(kernel_config.welford_fp32_alias ? 1 : 0)},

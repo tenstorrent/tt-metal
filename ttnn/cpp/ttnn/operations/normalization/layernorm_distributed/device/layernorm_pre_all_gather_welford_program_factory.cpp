@@ -138,7 +138,9 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     // (in_data_format == Float32 && fp32_dest_acc_en && !fuse_pre_add). The non-FUSE compute
     // kernel branch uses this to gate the welford_reinit + llk_math_welfords_sfpu_init pair
     // after each transpose_wh_tile: needed iff transpose_wh_tile took the UnpackToDest fp32
-    // path (writing SFPU replay slot 0), unneeded when the transpose routes through SrcA.
+    // path (whose math-side init records slots [16, 32) of the math-thread replay buffer,
+    // clobbering welford's LREG2 / LREG3 portions), unneeded when the transpose routes through
+    // SrcA (which skips llk_math_transpose_dest entirely).
     // Passed as a named compile-time arg so it doesn't ride on a positional slot that depends
     // on FUSE_PRE_ADD (which would shift if anything is later added inside the #if FUSE_PRE_ADD
     // block of the compute kernel).

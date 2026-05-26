@@ -164,14 +164,12 @@ void kernel_main() {
     CircularBuffer cb_in_obj(cb_in);
 
     // Welford-fp32 alias of cb_in. When welford_fp32_alias is true, cb_x_welford_named points
-    // to c_29, a separate buffer index sharing cb_in's L1 allocation but configured with
-    // unpack_to_dest_mode=UnpackToDestFp32 so the welford section's transpose_wh_tile takes
-    // the UnpackToDest path and preserves full fp32 into DEST. When false, fall back to cb_in
-    // so the welford section reads via the same SrcA Tf32 path as before. The two indices
-    // have independent semaphores so the fused path pushes both side by side; the non-fused
-    // path reads c_0 (sharded buffer) without semaphore manipulation, and so does the alias.
-    constexpr auto cb_x_welford_named = get_named_compile_time_arg_val("cb_x_welford");
+    // to c_29, a separate buffer index sharing cb_in's SRAM but configured with UnpackToDestFp32,
+    // so Welford's transpose_wh_tile preserves fp32 precision in DEST. The two aliased indices
+    // have independent read/write pointers so the fused path pushes both side by side; the non-fused
+    // path reads c_0 (sharded) without read/write pointer manipulation, and so does the alias.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
+    constexpr auto cb_x_welford_named = get_named_compile_time_arg_val("cb_x_welford");
     constexpr auto cb_x_welford = welford_fp32_alias ? cb_x_welford_named : cb_in;
     CircularBuffer cb_x_welford_obj(cb_x_welford);
 
@@ -255,10 +253,10 @@ void kernel_main() {
     add_tiles_init(cb_in0, cb_in1);
     cb_in_obj.reserve_back(num_tiles_per_block);
     if constexpr (welford_fp32_alias) {
-        // cb_x_welford shares cb_in's L1 allocation but has its own semaphore. Compute is the
+        // cb_x_welford shares cb_in's SRAM but has its own read/write pointers. Compute is the
         // producer of cb_in (post-add result) on the fused path, so reserve and push both
         // indices side by side. pack_tile writes once via cb_in's wr_ptr; the alias
-        // semaphore lets the welford section wait_front on c_29 independently.
+        // lets the welford section wait_front on c_29 independently of cb_in.
         cb_x_welford_obj.reserve_back(num_tiles_per_block);
     }
     for (uint32_t i = 0; i < block_ht; i++) {
@@ -292,9 +290,9 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     reconfig_data_format_srca(cb_x_welford);
     cb_ex_partial_obj.reserve_back(num_block_ht_result_tiles);
-    // Full transpose_wh hw init when the alias is active. cb_x_welford's buffer index isn't
+    // Full transpose_wh_init when the alias is active. cb_x_welford's buffer index isn't
     // visible to binary_op_init_common / unary_op_init_common at the top of kernel_main (only
-    // cb_in0 / cb_in is), so we run the full init once to program all hw config registers
+    // cb_in0/cb_in is), so we run the full init once to program all hw config registers
     // (pack, math hw_configure) for it. For the non-alias path cb_x_welford == cb_in and
     // transpose_wh_init_short suffices.
     if constexpr (welford_fp32_alias) {
@@ -312,17 +310,22 @@ void kernel_main() {
         // Do the full Welford tiles
         for (uint32_t w = 0; w < num_full_welford_tiles; w++) {
             if constexpr (welford_fp32_alias) {
-                // welford_init / the previous iteration's welford_reinit left SFPU replay
-                // slot 0 holding the welford recurrence. The fp32 transpose_wh_tile uses a MOP
-                // that references slot 0 for its transpose instructions, so re-init transpose
-                // state to put transpose code back into slot 0 before this iteration's
-                // transpose.
+                // SFPU replay slots [0, 32) currently hold the welford recurrence (welford uses
+                // the full 32-slot math-thread replay buffer; the recovery block below re-records
+                // all of it after each transpose). transpose_wh_init_short re-records slots
+                // [16, 32) with the transpose-dest setup so transpose_wh_tile below can replay them.
                 transpose_wh_init_short(cb_x_welford);
             }
             transpose_wh_tile(cb_x_welford, w + index_h_offset, welford_input_dst);
             if constexpr (welford_fp32_alias) {
-                // transpose_wh_tile took the UnpackToDest fp32 path which clobbered the
-                // welford recurrence in slot 0. Restore welford state before welford_update.
+                // transpose_wh_tile took the UnpackToDestFp32 path. Its math-side init clobbered
+                // the welford recurrence at slots [16, 32) (LREG2 / LREG3 portions) and the
+                // unpack side left UNPACK A configured for a transposed read. Two distinct calls
+                // are needed to restore welford state before welford_update:
+                //   1. welford_reinit reprograms UNPACK A for an UnpackToDest (transpose=0) read
+                //      and rebuilds MATH-side address mods / MOP for the welford datacopy path.
+                //   2. llk_math_welfords_sfpu_init re-records all 32 slots of the SFPU replay
+                //      buffer with the welford recurrence (via _program_welfords_replay_buffer_).
                 welford_reinit(cb_x_welford);
                 MATH((llk_math_welfords_sfpu_init()));
             }

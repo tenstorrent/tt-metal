@@ -121,21 +121,20 @@ void kernel_main() {
     constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
     constexpr uint32_t cb_in_id = tt::CBIndex::c_29;
     // Welford-fp32 alias for cb_in0 (non-TILIZE_IN path). Shares L1 memory with cb_in0 but has
-    // its own buffer index configured with unpack_to_dest_mode=UnpackToDestFp32, so the welford
-    // intake's transpose_wh_tile takes the UnpackToDest fp32 path and preserves the full
-    // 23-bit mantissa into DEST for the SFPU welford. cb_in0 itself stays in Default mode so
-    // the final-stage sub_tiles_bcast_scalar (FPU on SrcA) keeps working. When the alias is
-    // inactive, cb_in0_welford_id == cb_in0_id and the alias-side wait/pop operations collapse
-    // onto cb_in0 (gated by welford_fp32_alias).
-    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
-    // welford_unpack_fp32_active covers both the TILIZE_IN branch (reading c_29 with
-    // UnpackToDestFp32) and the non-TILIZE_IN alias branch (welford_fp32_alias). Both route
-    // transpose_wh_tile through llk_math_transpose_dest, which writes SFPU replay slot 0;
-    // the SFPU re-init after the transpose is gated on this so it fires iff slot 0 was
-    // actually clobbered. For bf16 input, neither CB carries the flag, transpose routes
-    // through SrcA, and the re-init is gated out.
-    constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
+    // its own buffer index configured with unpack_to_dest_mode=UnpackToDestFp32
+    // cb_in0 is in Default mode so the final-stage sub_tiles_bcast_scalar (FPU on SrcA) keeps working.
     constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
+    // Boolean indicating whether the welford kernel uses the alias CB.
+    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
+    // True when the welford intake CB is configured with UnpackToDestFp32, i.e. the FP32
+    // path. Covers both the TILIZE_IN branch (intake CB is c_29) and the non-TILIZE_IN
+    // alias branch (intake CB is cb_in0_welford, see welford_fp32_alias). On this path,
+    // transpose_wh_tile routes through llk_math_transpose_dest, whose math-side init
+    // records slots [16, 32) of the math-thread replay buffer, clobbering welford's
+    // LREG2 / LREG3 portions, so the welford SFPU state must be re-initialized after each
+    // transpose. For bf16 input, transpose routes through SrcA without touching the
+    // math-thread replay buffer, so no re-init is needed.
+    constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
     constexpr uint32_t cb_eps_id = tt::CBIndex::c_3;
     constexpr uint32_t cb_gamma_id = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta_id = tt::CBIndex::c_6;
@@ -305,9 +304,10 @@ void kernel_main() {
                     cb_in0.wait_front(1);
                     if constexpr (welford_fp32_alias) {
                         // The reader pushed 1 tile to cb_in0; mirror push on the alias so its
-                        // wr_ptr/rd_ptr advance in lockstep with cb_in0's. They share L1 memory
-                        // (multi-buffer-index alias) so no data movement is needed -- this is
-                        // purely semaphore bookkeeping.
+                        // wr_ptr/rd_ptr advance in lockstep with cb_in0's. They share SRAM
+                        // (multi-buffer-index alias) so no data movement is needed; this is
+                        // purely bookkeeping. Done in compute rather than in reader, so reader
+                        // is generic (works for consumers that need aliasing and those that don't).
                         cb_in0_welford.reserve_back(1);
                         cb_in0_welford.push_back(1);
                         cb_in0_welford.wait_front(1);
@@ -321,16 +321,13 @@ void kernel_main() {
 #endif
 
                     // Re-establish the welford SFPU replay buffer state. When transpose_wh_tile
-                    // takes the unpack-to-DEST fp32 path -- either the TILIZE_IN branch (cb_in
-                    // is c_29 with UnpackToDestFp32) or the non-TILIZE_IN branch when
-                    // welford_fp32_alias is active (cb_in0_welford is c_19 with UnpackToDestFp32)
-                    // -- transpose_wh_tile calls llk_math_transpose_dest, which writes to SFPU
-                    // replay buffer slot 0, the same slot welford_init programmed with the
-                    // welford recurrence. Without this re-init, welford_update_rows would replay
-                    // stale transpose-dest ops. When the unpack-to-DEST fp32 path is inactive
-                    // (e.g. bf16 input), transpose_wh_tile routes through SrcA without touching
-                    // the SFPU replay buffer, so the re-init is gated out to avoid any
-                    // unintended side effects on LLK state in that path.
+                    // takes the unpack-to-DEST fp32 path, transpose_wh_tile calls
+                    // llk_math_transpose_dest, whose math-side init records slots [16, 32) of
+                    // the math-thread replay buffer, clobbering welford's LREG2 / LREG3 portions.
+                    // Without this re-init, welford_update_rows would replay stale transpose-dest ops.
+                    // When the unpack-to-DEST fp32 path is inactive, transpose_wh_tile routes
+                    // through SrcA without touching the math-thread replay buffer, so re-init is
+                    // not needed.
                     if constexpr (welford_unpack_fp32_active) {
                         MATH((llk_math_welfords_sfpu_init()));
                     }
@@ -447,8 +444,7 @@ void kernel_main() {
                     cb_in0.wait_front(1);
                     if constexpr (welford_fp32_alias) {
                         // Lockstep with cb_in0 across all phases so the alias's rd_ptr stays
-                        // aligned with cb_in0's. Even though the alias isn't read in this final
-                        // normalization phase, drifting would break the next batch's intake.
+                        // aligned with cb_in0's.
                         cb_in0_welford.reserve_back(1);
                         cb_in0_welford.push_back(1);
                     }

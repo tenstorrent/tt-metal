@@ -27,7 +27,7 @@ void kernel_main() {
     // Welford-fp32 alias of cb_in (non-fused) -- shares L1 memory with cb_in0 but has its own
     // semaphore. The compute kernel waits on cb_x_welford for the welford section because that
     // buffer index is configured with unpack_to_dest_mode=UnpackToDestFp32. When the alias is
-    // inactive cb_x_welford collapses onto cb_in or cb_x; the gate below avoids double-counting.
+    // inactive, cb_x_welford == cb_in (non-fused) or cb_x (fused); the gate below avoids double-counting.
     constexpr uint32_t cb_id_x_welford = get_named_compile_time_arg_val("cb_x_welford");
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
 

@@ -453,9 +453,10 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     // mean in the (x - E[x]) step). Issue #33694 in the tenstorrent/tt-metal repo tracks the
     // precision regression this fixes.
     //
-    // copy_tile's UnpackToDest fp32 path doesn't record into SFPU replay slot 0 (the welford
-    // recurrence stays intact), so no welford_reinit / sfpu_init re-arming is needed here --
-    // unlike the cb_x_welford alias above which has to work around transpose_wh_tile's MOP.
+    // copy_tile's UnpackToDest fp32 path doesn't record into the math-thread replay buffer (the
+    // welford recurrence at slots [0, 32) stays intact), so no welford_reinit / sfpu_init
+    // re-arming is needed here, unlike the cb_x_welford alias above which has to work around
+    // transpose_wh_tile's math-side init that records slots [16, 32).
     const bool welford_state_fp32_alias = use_welford_and_not_rms_norm && fuse_pre_add && large_tensor_needed &&
                                           cb_data_format == tt::DataFormat::Float32;
 
@@ -490,8 +491,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         {"welford_fp32_alias", static_cast<uint8_t>(welford_fp32_alias ? 1 : 0)},
         // Mean / M2 spill aliases. When welford_state_fp32_alias is active these point to
         // c_30 / c_31 (separate buffer indices, same allocations as c_18 / c_19) configured
-        // for UnpackToDest fp32. When inactive they collapse onto c_18 / c_19 so the kernel's
-        // copy_tile calls fall through to the existing SrcA Tf32 path.
+        // for UnpackToDest fp32. When inactive, cb_ex_welford == c_18 and cb_ex2_welford == c_19
+        // so the kernel's copy_tile calls fall through to the existing SrcA Tf32 path.
         {"cb_ex_welford", welford_state_fp32_alias ? tt::CBIndex::c_30 : tt::CBIndex::c_18},
         {"cb_ex2_welford", welford_state_fp32_alias ? tt::CBIndex::c_31 : tt::CBIndex::c_19},
         {"welford_state_fp32_alias", static_cast<uint8_t>(welford_state_fp32_alias ? 1 : 0)},

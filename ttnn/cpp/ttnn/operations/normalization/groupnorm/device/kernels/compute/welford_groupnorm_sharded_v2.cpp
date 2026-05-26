@@ -40,19 +40,20 @@ void kernel_main() {
     constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(24);
     constexpr uint32_t tile_width = get_compile_time_arg_val(25);
 
-    // Welford-fp32 alias args, set by the host as named compile-time args. When the alias
-    // is active, cb_in0_welford_id points to c_29 (shares L1 with c_0) and cb_in_welford_id
-    // points to c_31 (shares L1 with c_1). Both alias indices are configured with
-    // unpack_to_dest_mode=UnpackToDestFp32 so the welford intake's transpose_wh_tile takes the
-    // UnpackToDest fp32 path, preserving the full 23-bit mantissa into DEST for the SFPU
-    // welford. The final-stage sub_tiles_bcast_scalar still reads c_0 / c_1 (Default SrcA path).
-    // When inactive, the alias ids collapse onto c_0 / c_1 and the alias-side ops are no-ops.
+    // Welford-fp32 alias args. When the alias is active, cb_in0_welford_id points
+    // to c_29 (shares SRAM with c_0) and cb_in_welford_id points to c_31 (shares SRAM with c_1).
+    // Both alias indices are configured with unpack_to_dest_mode=UnpackToDestFp32 so
+    // transpose_wh_tile preserves FP32 precision for the SFPU Welford.
+    // The final-stage sub_tiles_bcast_scalar reads c_0 / c_1 (Default SrcA path).
     //
-    // Unlike the mcast / no_mcast groupnorm kernels there is no separate
-    // welford_unpack_fp32_active flag here: this kernel has no TILIZE_IN-vs-non-TILIZE_IN split
-    // that would let the unpack-to-DEST fp32 path be active on one branch but not the other,
-    // so welford_fp32_alias alone is both the "use the alias indices" and the "gate the SFPU
-    // re-init after transpose" predicate.
+    // Unlike the mcast / no_mcast groupnorm kernels, no separate
+    // welford_unpack_fp32_active flag is needed here. Both the TILIZE_IN and
+    // non-TILIZE_IN branches route the welford intake transpose through an alias
+    // CB (cb_in_welford_id or cb_in0_welford_id), so the unpack-to-DEST fp32
+    // path is active on both branches iff the alias is active. In the
+    // mcast/no_mcast kernels the TILIZE_IN branch tilizes directly into the
+    // unpack-fp32 CB without an alias, so those kernels need the unpack-fp32
+    // state and the alias gating to be tracked independently.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
     constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
     constexpr uint32_t cb_in_welford_id = get_named_compile_time_arg_val("cb_in_welford");
@@ -143,7 +144,9 @@ void kernel_main() {
     cb_in.wait_front(per_core_MN);
     if constexpr (welford_fp32_alias) {
         // The tilize call above pushed per_core_MN tiles into cb_in (c_1). Mirror that push
-        // on the alias (c_31) so it tracks cb_in's state -- they share L1 memory.
+        // on the alias (c_31) so it tracks cb_in's state They share SRAM (multi-buffer-index alias)
+        // so no data movement is needed; this is purely bookkeeping. Done in compute rather than
+        // in reader, so reader is generic (works for consumers that need aliasing and those that don't).
         cb_in_welford.reserve_back(per_core_MN);
         cb_in_welford.push_back(per_core_MN);
         cb_in_welford.wait_front(per_core_MN);
@@ -169,11 +172,14 @@ void kernel_main() {
         uint32_t tile_id = b * block_hw;
         cb_ex_partial.reserve_back(2);
         if constexpr (welford_fp32_alias) {
-            // Full transpose_wh hw init for the alias buffer index so the unpack-to-DEST fp32
-            // path is configured before the per-tile transpose_wh_init_short below switches to
-            // it. The non-alias path retains the prior cb_in0_id init.
-            transpose_wh_init(cb_in0_welford_id, cb_ex_partial_id);
+            // Full transpose_wh hw init for the alias buffer index consumed by the
+            // welford loop below, so the unpack-to-DEST fp32 path is configured before the
+            // per-tile transpose_wh_init_short switches to it.
+#ifdef TILIZE_IN
             transpose_wh_init(cb_in_welford_id, cb_ex_partial_id);
+#else
+            transpose_wh_init(cb_in0_welford_id, cb_ex_partial_id);
+#endif
         } else {
             transpose_wh_init(cb_in0_id, cb_ex_partial_id);
         }
@@ -213,18 +219,14 @@ void kernel_main() {
                 transpose_wh_tile(cb_in0_welford_id, tile_id, input_dst);
 #endif
 
-                // Re-establish the welford SFPU replay buffer state. When welford_fp32_alias is
-                // active, the transpose_wh_tile above reads from cb_in0_welford (c_29) or
-                // cb_in_welford (c_31), both configured with UnpackToDestFp32, so the call
-                // routes through llk_math_transpose_dest and writes to SFPU replay buffer
-                // slot 0 -- the same slot welford_init programmed with the welford recurrence.
-                // Without this re-init, welford_update_rows would replay stale transpose-dest
-                // ops. When welford_fp32_alias is inactive, the alias ids collapse onto cb_in0
-                // (c_0) / cb_in (c_1), neither of which can carry the flag because both also
-                // feed sub_tiles_bcast_scalar in the final-normalization stage (FPU on SrcA);
-                // transpose_wh_tile routes through SrcA without touching the SFPU replay
-                // buffer, so the re-init is gated out to avoid any unintended side effects on
-                // LLK state in that path.
+                // Re-establish the welford SFPU replay buffer state. When transpose_wh_tile
+                // takes the unpack-to-DEST fp32 path, transpose_wh_tile calls
+                // llk_math_transpose_dest, whose math-side init records slots [16, 32) of
+                // the math-thread replay buffer, clobbering welford's LREG2 / LREG3 portions.
+                // Without this re-init, welford_update_rows would replay stale transpose-dest ops.
+                // When the unpack-to-DEST fp32 path is inactive, transpose_wh_tile routes
+                // through SrcA without touching the math-thread replay buffer, so re-init is
+                // not needed.
                 if constexpr (welford_fp32_alias) {
                     MATH((llk_math_welfords_sfpu_init()));
                 }

@@ -182,7 +182,12 @@ void kernel_main() {
                 cb_scaled_obj.pop_front(onetile);
             } else {
                 cb_in_obj.wait_front(onetile);
-                transpose_wh_init_short(cb_in);
+                if constexpr (welford_fp32_input) {
+                    // Re-records the transpose-dest setup at math-thread replay slots [16, 32)
+                    // and reprograms UNPACK A for a transposed read (the previous iteration's
+                    // welford_reinit toggled UNPACK A back to transpose=0).
+                    transpose_wh_init_short(cb_in);
+                }
                 transpose_wh_tile(cb_in, 0, input_dst);
                 cb_in_obj.pop_front(onetile);
             }
@@ -196,8 +201,9 @@ void kernel_main() {
             //      mean/M2 accumulator).
             //
             // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_wh_tile routes
-            // through SrcA without touching the SFPU replay buffer, so the re-init pair is gated
-            // out to avoid unintended LLK side effects on the bf16 path.
+            // through SrcA without touching the SFPU replay buffer, and welford_update is pure
+            // SFPU and does not disturb the UNPACK/MATH datacopy state set by the pre-loop
+            // transpose_wh_init_short, so the per-iteration init/reinit triple is gated out.
             if constexpr (welford_fp32_input) {
                 welford_reinit(cb_in);
                 MATH((llk_math_welfords_sfpu_init()));

@@ -718,38 +718,29 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         "kernel config; otherwise precision is silently lost in the unpacker format conversion.");
 
     // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
-    // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode). For CBs consumed by
-    // any FPU op (mul_tiles, add_tiles, sub_tiles, *_bcast_*, reduce_tile), setting the flag
-    // is unsafe: per base_types.hpp the CB becomes "incompatible with unpacking to SRCA/B",
-    // and on Wormhole/Blackhole that combination produces garbage in SrcA (not silent TF32
-    // truncation as one might assume).
-    //
+    // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode).
     // The welford_groupnorm_sharded_v2 kernel feeds both c_0 (non-TILIZE_IN) and c_1
     // (TILIZE_IN) through both transpose_wh_tile (welford intake) and sub_tiles_bcast_scalar
     // (final (x - mean) normalization). The FPU consumer means neither CB can carry the flag
-    // directly. The fix is the multi-buffer-index aliasing pattern used in layernorm: register
-    // c_29 as a second buffer index on c_0's L1 allocation and c_31 on c_1's, set
+    // directly. The workaround is the multi-buffer-index aliasing pattern: register
+    // c_29 as a second buffer index on c_0's SRAM and c_31 on c_1's, set
     // UnpackToDestFp32 on the alias indices, and have the kernel read the welford intake
     // transpose via the alias (UnpackToDest fp32 path preserves the full 23-bit mantissa into
     // DEST for the SFPU welford) while keeping the final-stage sub_tiles_bcast_scalar on the
     // primary index (Default mode, SrcA path).
     //
     // Other FP32 CBs were considered and rejected because, even though they pass through an
-    // unpack-to-DEST-capable op (copy_tile / transpose_wh_tile), the next consumer is a pack
-    // into a CB whose downstream reader is an FPU op (add_tiles / mul_tiles / sub_tiles /
-    // *_bcast_*) reading via SrcA, which truncates to TF32 regardless of what was preserved
-    // in DEST. Setting the flag on those CBs would incur the cost without delivering a
-    // user-visible precision win:
+    // unpack-to-DEST-capable op, the next consumer is a pack into a CB whose downstream
+    // reader is an FPU op reading via SrcA, which truncates to TF32 regardless of what
+    // was preserved in DEST. Setting the flag would incur the cost without improving precision:
     //   - cb_xmm (c_2): the (x - mean) intermediate. copy_tile into DEST then pack to cb_x;
-    //     cb_x is read by add_tiles (FPU on SrcA) for accumulation. TF32 truncation at the
-    //     add_tiles step erases any preserved mantissa.
+    //     cb_x is read by add_tiles (FPU on SrcA) for accumulation.
     //   - cb_x (c_13): accumulates (x - mean) results across groups via repeated add_tiles,
     //     each of which reads cb_x via SrcA (truncating to TF32) before producing the next
     //     FP32 sum. The final stored value does carry one add_tiles step's worth of FP32
-    //     precision, so an UnpackToDestFp32 alias on the final copy_tile out to cb_out would
-    //     preserve roughly one mantissa-bit step beyond TF32 -- but the accumulated TF32
-    //     errors from every earlier SrcA read of cb_x dominate the residual, so the gain
-    //     doesn't justify the alias machinery.
+    //     precision, so an UnpackToDestFp32 alias on the final copy_tile would
+    //     preserve ~ one mantissa-bit step beyond TF32, but the accumulated TF32
+    //     errors from previous iteration dominate, so the gain doesn't justify the overhead.
     const bool welford_fp32_alias = use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32;
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
@@ -760,9 +751,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
-    // Welford-fp32 alias args, passed as named compile-time args so the slots aren't anchored
-    // to a position in the positional vector (which would shift if any future arg was added
-    // ahead of them). Only attached on the welford compute kernel; the non-welford
+    // Welford-fp32 alias args. Only attached on the welford compute kernel; the non-welford
     // groupnorm_sharded_v2.cpp never references these names. Read by welford_groupnorm_sharded_v2.cpp.
     const uint32_t cb_in0_welford_arg =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_29) : static_cast<uint32_t>(tt::CBIndex::c_0);
