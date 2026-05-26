@@ -242,15 +242,20 @@ Tensor create_tt_tensor_from_host_data(
             auto src_tensor_layout =
                 compute_input_tensor_layout(src_dtype, device_shard_shape, memory_config, layout, optional_tile);
 
-            const bool construct_on_mesh_device = construct_on_device && has_sufficient_device_memory(
-                                                                             device,
-                                                                             src_tensor_layout,
-                                                                             device_shard_shape,
-                                                                             src_dtype,
-                                                                             dst_dtype,
-                                                                             layout,
-                                                                             memory_config,
-                                                                             optional_tile);
+            // Mirror can_construct_on_single_device's sharded guard: the on-device tilize/typecast
+            // pipeline's L1 circular-buffer footprint is not modeled by has_sufficient_device_memory
+            // (which only checks the target buffer pool, e.g. DRAM). For wide width-sharded TILE
+            // targets this leads to L1 OOM at program compile time, so force host construction.
+            const bool construct_on_mesh_device = construct_on_device && !memory_config.is_sharded() &&
+                                                  has_sufficient_device_memory(
+                                                      device,
+                                                      src_tensor_layout,
+                                                      device_shard_shape,
+                                                      src_dtype,
+                                                      dst_dtype,
+                                                      layout,
+                                                      memory_config,
+                                                      optional_tile);
 
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
