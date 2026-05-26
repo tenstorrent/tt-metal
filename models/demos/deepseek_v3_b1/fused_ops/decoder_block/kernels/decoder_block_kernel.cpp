@@ -27,6 +27,7 @@
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
+#include "api/debug/dprint.h"  // craq-sim progress markers
 #include "../../../unified_kernels/rmsnorm.hpp"
 #include "../../../unified_kernels/mcast.hpp"
 #include "../../../unified_kernels/matmul.hpp"
@@ -3786,7 +3787,10 @@ void kernel_main() {
 
     constexpr uint32_t termination_semaphore_addr = get_named_compile_time_arg_val("termination_semaphore_addr");
     deepseek_b1_ops::PersistentLoop<persistent_mode == 1> loop(termination_semaphore_addr, num_iterations);
+    uint32_t __craqsim_iter = 0;
+    DPRINT << "[CRAQSIM] kernel_main start" << ENDL();
     while (loop.next()) {
+        DPRINT << "[CRAQSIM] iter " << __craqsim_iter << " begin" << ENDL();
         {
             DeviceZoneScopedN("MLA_CB_RECONFIG");
             unified_kernels::reconfig_cb_interfaces(mla_cb_config);
@@ -3812,10 +3816,12 @@ void kernel_main() {
         }
 #endif
 #endif
+        DPRINT << "[CRAQSIM] iter " << __craqsim_iter << " mla_body start" << ENDL();
         {
             DeviceZoneScopedN("MLA");
             mla_body();
         }
+        DPRINT << "[CRAQSIM] iter " << __craqsim_iter << " mla_body end" << ENDL();
         {
             DeviceZoneScopedN("MOE_CB_RECONFIG");
             unified_kernels::reconfig_cb_interfaces(moe_cb_config);
@@ -3833,11 +3839,15 @@ void kernel_main() {
             }
             setup_moe_sharded_buffers();
         }
+        DPRINT << "[CRAQSIM] iter " << __craqsim_iter << " moe_body start" << ENDL();
         {
             DeviceZoneScopedN("MOE");
             moe_body();
         }
+        DPRINT << "[CRAQSIM] iter " << __craqsim_iter << " moe_body end" << ENDL();
+        __craqsim_iter++;
     }
+    DPRINT << "[CRAQSIM] kernel_main done after " << __craqsim_iter << " iters" << ENDL();
 
     // ====================================================================
     // Mcast: Teardown persistent mcast
