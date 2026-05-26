@@ -191,6 +191,24 @@ def preprocess_semantic_tokenizer_weights(
             gamma = hf_state.get(f"{bp}.gamma", None)
             ffn_gamma = hf_state.get(f"{bp}.ffn_gamma", None)
 
+            # Fold gamma into dw_conv weights — eliminates 2 BinaryNg mul ops per block.
+            # gamma[out_ch] scales each output channel: w[oc, :, :] *= gamma[oc]
+            if gamma is not None:
+                gamma_f = gamma.float()
+                dw.weight = (dw.weight * gamma_f[:, None, None]).contiguous()
+                if dw.bias is not None:
+                    dw.bias = (dw.bias * gamma_f).contiguous()
+                gamma = None
+
+            # Fold ffn_gamma into linear2 weights — eliminates 2 BinaryNg mul ops per block.
+            # ffn_gamma[out_ch] scales each output: w[oc, :] *= ffn_gamma[oc]
+            if ffn_gamma is not None:
+                ffn_gamma_f = ffn_gamma.float()
+                l2_w = (l2_w * ffn_gamma_f[:, None]).contiguous()
+                if l2_b is not None:
+                    l2_b = (l2_b * ffn_gamma_f).contiguous()
+                ffn_gamma = None
+
             ffn_dim = l1_w.shape[0]
             blk = Block1DWeightsHost(
                 dw_conv=dw,
@@ -200,8 +218,8 @@ def preprocess_semantic_tokenizer_weights(
                 linear1_b=l1_b.float().contiguous() if l1_b is not None else None,
                 linear2_w=l2_w.contiguous(),
                 linear2_b=l2_b.float().contiguous() if l2_b is not None else None,
-                gamma=gamma.float().contiguous() if gamma is not None else None,
-                ffn_gamma=ffn_gamma.float().contiguous() if ffn_gamma is not None else None,
+                gamma=None,
+                ffn_gamma=None,
                 dim=dim,
                 ffn_dim=ffn_dim,
                 eps=eps,
@@ -247,6 +265,59 @@ def _tile_linear(t: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+
+
+def _tile_linear_ws(t: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+    """[out, in] → [1, 1, in, out] TILE WIDTH-sharded in L1 (column-parallel).
+
+    Shards the output dimension (last axis of the transposed weight) across cores.
+    Each core holds [in_dim, out_dim/n_cores] so the activation is broadcast and
+    every core independently computes its output-channel slice — no all-reduce.
+    Falls back to DRAM TILE when out_dim is too small to split tile-aligned.
+    """
+    out_dim, in_dim = t.shape  # PyTorch weight is [out, in]
+    # After transpose for ttnn.linear: [in_dim, out_dim] — shard along out_dim.
+    grid = device.compute_with_storage_grid_size()
+    ny, nx = grid.y, grid.x
+
+    # Find max n_cores where out_dim / n_cores is a multiple of 32 (tile width).
+    n_cores = 0
+    for n in range(min(ny * nx, out_dim // 32), 1, -1):
+        if out_dim % (n * 32) == 0:
+            if n <= nx:
+                n_cores = n
+                break
+            elif n % nx == 0 and n // nx <= ny:
+                n_cores = n
+                break
+
+    if n_cores < 2:
+        return _tile_linear(t, device, dtype)  # not enough parallelism
+
+    if n_cores <= nx:
+        core_grid = ttnn.CoreGrid(y=1, x=n_cores)
+    else:
+        core_grid = ttnn.CoreGrid(y=n_cores // nx, x=nx)
+
+    # Also need in_dim to be tile-aligned (it is: always a multiple of 32).
+    if in_dim % 32 != 0:
+        return _tile_linear(t, device, dtype)
+
+    tdtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    w_dram = ttnn.as_tensor(
+        t.to(tdtype).t().unsqueeze(0).unsqueeze(0).contiguous(),
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    shard_cfg = ttnn.create_sharded_memory_config(
+        shape=(in_dim, out_dim),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.interleaved_to_sharded(w_dram, shard_cfg)
 
 
 def _norm_w_tt(w: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
@@ -391,11 +462,13 @@ class TTBlock1DDevice:
             if s is None:
                 return None
             C = s.shape[0]
+            # TILE layout avoids runtime TilizeWithValPadding before each ttnn.mul call.
+            # C is always a multiple of 32 (32, 64, ..., 2048) so TILE is safe.
             return ttnn.as_tensor(
                 s.to(tdtype).view(1, 1, 1, C).contiguous(),
                 device=device,
                 dtype=compute_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
@@ -406,7 +479,7 @@ class TTBlock1DDevice:
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x: [B, 1, T, C] → [B, 1, T, C]"""
-        # Mixer (depthwise conv) path
+        # Mixer (depthwise conv) path — DRAM throughout (conv2d requires DRAM input)
         residual = x
         x = ttnn.rms_norm(
             x, weight=self.norm_w, epsilon=self.eps, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -416,7 +489,7 @@ class TTBlock1DDevice:
             x = ttnn.mul(x, self.gamma, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.add(residual, x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # FFN path — linear ops on last dim (C), no explicit permute needed in NHWC
+        # FFN path
         residual = x
         x = ttnn.rms_norm(
             x,
@@ -428,7 +501,7 @@ class TTBlock1DDevice:
         x = ttnn.linear(
             x, self.linear1_w, bias=self.linear1_b, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        x = ttnn.gelu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.gelu(x, fast_and_approximate_mode=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.linear(
             x, self.linear2_w, bias=self.linear2_b, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -436,57 +509,6 @@ class TTBlock1DDevice:
             x = ttnn.mul(x, self.ffn_gamma, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.add(residual, x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x
-
-
-# ──────────────────────────────────────────────────────────────
-# Device-side TT functional helpers (TTNN equivalents of torch fallbacks)
-# ──────────────────────────────────────────────────────────────
-
-
-def comp_pcc(golden: torch.Tensor, calculated: torch.Tensor, pcc_threshold: float = 0.99) -> "tuple[bool, float]":
-    """Pearson Correlation Coefficient between two tensors (flattened).
-
-    Returns (passes_threshold, pcc_value).
-    """
-    g = golden.float().flatten()
-    c = calculated.float().flatten()
-    pcc_val = torch.corrcoef(torch.stack([g, c]))[0, 1].item()
-    return pcc_val >= pcc_threshold, pcc_val
-
-
-def _tt_conv_rms_norm(x: ttnn.Tensor, weight: ttnn.Tensor, eps: float) -> ttnn.Tensor:
-    """ConvRMSNorm on [B, 1, T, C] NHWC: RMS-normalise over C, then scale.
-
-    TTNN equivalent of _conv_rms_norm.  ttnn.rms_norm normalises the last dim
-    so no transpose is needed — NHWC already has C last.
-    weight must be in [1, 1, C//32, 32] ROW_MAJOR as produced by _norm_w_tt.
-    """
-    return ttnn.rms_norm(
-        x,
-        weight=weight,
-        epsilon=eps,
-        compute_kernel_config=_HIFI4,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-
-def _tt_apply_conv1d(x: ttnn.Tensor, conv: "TTConv1d") -> ttnn.Tensor:
-    """Causal-padded Conv1d on [B, 1, T, C] NHWC → [B, 1, T_out, out_ch].
-
-    TTNN equivalent of _apply_conv1d.  Delegates to TTConv1d which computes
-    the extra right-pad and dispatches to ttnn.conv2d.
-    """
-    return conv(x)
-
-
-def _tt_block1d_forward(x: ttnn.Tensor, blk: "TTBlock1DDevice") -> ttnn.Tensor:
-    """Block1D forward on [B, 1, T, C] NHWC → [B, 1, T, C].
-
-    TTNN equivalent of _block1d_forward.  Runs mixer (depthwise conv +
-    layer-scale + residual) and FFN (linear → gelu → linear + layer-scale +
-    residual) entirely on device via TTBlock1DDevice.
-    """
-    return blk(x)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -500,7 +522,7 @@ class TTSemanticTokenizer:
     All convolutions, norms, and linear ops run on device via TTConv1d / TTBlock1DDevice.
     Device must be opened with l1_small_size=32768 for conv support on Blackhole.
 
-    Input:  [B, 1, 1, T] raw audio
+    Input:  [B, 1, T, 1] raw audio NHWC
     Output: [B, 1, T_enc, vae_dim]
     """
 
@@ -519,19 +541,15 @@ class TTSemanticTokenizer:
 
         self._head_conv = TTConv1d(weights.head_conv, device)
 
-    def forward(self, audio: ttnn.Tensor, golden: Optional[torch.Tensor] = None) -> ttnn.Tensor:
+    def forward(self, audio: ttnn.Tensor) -> ttnn.Tensor:
         """Encode audio to semantic latents (all ops on device).
 
         Args:
-            audio:  [B, 1, 1, T] raw audio tensor on device.
-            golden: optional [B, vae_dim, T_enc] torch reference tensor.
-                    If provided, PCC between TTNN output and golden is printed.
+            audio: [B, 1, T, 1] raw audio tensor on device in NHWC layout.
         """
         B = audio.shape[0]
-        T = audio.shape[-1]
 
-        # [B, 1, 1, T] → [B, 1, T, 1] NHWC for TTConv1d
-        x = ttnn.reshape(audio, [B, 1, T, 1])
+        x = audio
         if x.dtype != ttnn.bfloat16:
             x = ttnn.typecast(x, ttnn.bfloat16)
 
@@ -550,14 +568,7 @@ class TTSemanticTokenizer:
             )
 
         x = self._head_conv(x)  # [B, 1, T_enc, vae_dim]
-
-        if golden is not None:
-            # [B, 1, T_enc, vae_dim] NHWC → [B, vae_dim, T_enc] channels-first
-            out_torch = ttnn.to_torch(x).squeeze(1).permute(0, 2, 1)
-            passed, pcc_val = comp_pcc(golden, out_torch)
-            print(f"[TTSemanticTokenizer] PCC = {pcc_val:.6f} ({'PASS' if passed else 'FAIL'})")
-
         return x
 
-    def __call__(self, audio: ttnn.Tensor, golden: Optional[torch.Tensor] = None) -> ttnn.Tensor:
-        return self.forward(audio, golden)
+    def __call__(self, audio: ttnn.Tensor) -> ttnn.Tensor:
+        return self.forward(audio)

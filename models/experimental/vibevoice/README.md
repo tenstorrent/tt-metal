@@ -8,7 +8,8 @@ Weights are **not** vendored in this tree. Point to a local checkout of the HF s
 export VIBEVOICE_MODEL_PATH=/path/to/VibeVoice-1.5B
 ```
 
-Default (if unset): `/home/iguser/devstral2/VibeVoice/VibeVoice-1.5B`
+Default (if unset): legacy path `/home/iguser/devstral2/VibeVoice/VibeVoice-1.5B`, else newest
+`~/.cache/huggingface/hub/models--microsoft--VibeVoice-1.5B/snapshots/<rev>/` if downloaded.
 
 ## Layout
 

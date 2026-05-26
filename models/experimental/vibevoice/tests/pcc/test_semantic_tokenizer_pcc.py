@@ -94,8 +94,8 @@ def test_semantic_tokenizer_pcc(mesh_device, vv_config, sem_tok_state):
     weights = preprocess_semantic_tokenizer_weights(sem_tok_state, mesh_device, cfg)
     tokenizer_tt = TTSemanticTokenizer(weights, mesh_device)
 
-    # Input: [1, 1, 1, T] for TT (B, 1, H=1, T)
-    audio_4d = audio.unsqueeze(0)  # [1, 1, 1, T]
+    # Input: [1, 1, T, 1] NHWC — reshape on host (free, avoids device DRAM reshape)
+    audio_4d = audio.unsqueeze(-1)  # [1, 1, T, 1]
     audio_tt = ttnn.as_tensor(
         audio_4d,
         device=mesh_device,

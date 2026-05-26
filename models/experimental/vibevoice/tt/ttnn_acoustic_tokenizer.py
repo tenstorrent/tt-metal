@@ -89,6 +89,20 @@ def _get_block_weights(hf_state: dict, prefix: str, dim: int, eps: float, causal
     gamma = hf_state.get(f"{prefix}.gamma", None)
     ffn_gamma = hf_state.get(f"{prefix}.ffn_gamma", None)
 
+    if gamma is not None:
+        gamma_f = gamma.float()
+        dw.weight = (dw.weight * gamma_f[:, None, None]).contiguous()
+        if dw.bias is not None:
+            dw.bias = (dw.bias * gamma_f).contiguous()
+        gamma = None
+
+    if ffn_gamma is not None:
+        ffn_gamma_f = ffn_gamma.float()
+        l2_w = (l2_w * ffn_gamma_f[:, None]).contiguous()
+        if l2_b is not None:
+            l2_b = (l2_b * ffn_gamma_f).contiguous()
+        ffn_gamma = None
+
     ffn_dim = l1_w.shape[0]
     return Block1DWeightsHost(
         dw_conv=dw,
@@ -98,8 +112,8 @@ def _get_block_weights(hf_state: dict, prefix: str, dim: int, eps: float, causal
         linear1_b=l1_b.float().contiguous() if l1_b is not None else None,
         linear2_w=l2_w.contiguous(),
         linear2_b=l2_b.float().contiguous() if l2_b is not None else None,
-        gamma=gamma.float().contiguous() if gamma is not None else None,
-        ffn_gamma=ffn_gamma.float().contiguous() if ffn_gamma is not None else None,
+        gamma=None,
+        ffn_gamma=None,
         dim=dim,
         ffn_dim=ffn_dim,
         eps=eps,
@@ -363,9 +377,8 @@ class TTAcousticTokenizer:
             for blk in blocks:
                 x = blk(x)
 
-        x = self._dec_head_conv(x)  # [B, 1, T_audio, 1]
-        T_audio = x.shape[2]
-        return ttnn.reshape(x, [B, 1, 1, T_audio])
+        x = self._dec_head_conv(x)  # [B, 1, T_audio, 1] NHWC — kept as-is
+        return x
 
     def __call__(self, audio: ttnn.Tensor) -> ttnn.Tensor:
         return self.encode(audio)

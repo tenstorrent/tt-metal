@@ -130,7 +130,7 @@ def main():
         # Load voice audio
         print(f"[demo_ttnn] Loading voice from {args.voice}")
         voice_audio = _load_audio(args.voice)  # [T]
-        voice_audio_4d = voice_audio.view(1, 1, 1, -1).to(torch.bfloat16)
+        voice_audio_4d = voice_audio.view(1, 1, -1, 1).to(torch.bfloat16)  # [B, 1, T, 1] NHWC
         voice_audio_tt = ttnn.as_tensor(
             voice_audio_4d,
             device=mesh_device,
