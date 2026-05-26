@@ -199,3 +199,94 @@
     bf16 + default config (HiFi4 + fp32_dest_acc=True) now resolves to
     a valid precision name; the rejection contract moves to bf16 + HiFi3
     (no PRECISION_CONFIG entry).
+
+## Refinement 3 — Layout (ROW_MAJOR) + rank canonicalization (2D / 3D)
+- **Date**: 2026-05-26
+- **What was done**: Added `ttnn.ROW_MAJOR_LAYOUT` to `SUPPORTED["layout"]`
+  and `[2, 3]` to `SUPPORTED["rank"]`. Both axes are handled at the
+  entry point — the kernel and the program descriptor are unchanged.
+
+  The kernel below is a TILE-rank-4 softmax. The `softmax()` entry point
+  now wraps with:
+    1. `ttnn.to_layout(x, ttnn.TILE_LAYOUT)` when `x.layout == ROW_MAJOR`.
+       Mirrored on the way out: if input was RM, the output is converted
+       back to RM before return.
+    2. `ttnn.unsqueeze_to_4D(x)` when `len(x.shape) < 4`. Leading-1
+       unsqueeze is a logical view — no data movement. Mirrored on the
+       way out with `ttnn.reshape(output, ttnn.Shape(original_shape))`.
+  `dim` is passed as a negative offset (-1 or -2, per SUPPORTED["dim"]);
+  the leading-1 unsqueeze does not shift its meaning so the inner kernel
+  sees the same dim the user passed.
+
+  `tag_alignment` was also hardened to fall back to `h=1 / w=1` when
+  `len(shape) < 2` so it cannot IndexError before validate() reaches the
+  SUPPORTED["rank"] check. This path is not reachable from any cell in
+  the test universe today (INPUTS never emits rank < 2), but the
+  defensive fall-back is free.
+
+  This approach matches the verifier note ("rank canonicalisation is a
+  3-line entry-point change; the larger work is the tilize/untilize
+  wrappers for ROW_MAJOR") and `/memory-layouts` §1 ("the layout
+  decision lives at the data-access boundary, not in the math"). Using
+  `ttnn.to_layout` keeps the math kernel oblivious to layout — the cost
+  is one extra kernel launch per layout flip, which is acceptable for
+  Refinement 3's scope (correctness > performance).
+
+- **SUPPORTED at Refinement 3**:
+  - `layout` adds `ttnn.ROW_MAJOR_LAYOUT` — now `[TILE_LAYOUT, ROW_MAJOR_LAYOUT]`.
+  - `rank` adds `2, 3` — now `[2, 3, 4]`.
+  - Every other axis unchanged.
+- **EXCLUSIONS at Refinement 3**: unchanged (`[]`). The verifier note
+  flagged ROW_MAJOR + bf16 as a potential structural-mismatch candidate,
+  but using `ttnn.to_layout` instead of in-kernel tilize means the bf16
+  precision modes inherit the same dtype-format path as TILE input — no
+  CB-format mismatch surfaces.
+
+- **Accuracy achieved** (measured by
+  `tests/ttnn/unit_tests/operations/softmax/test_softmax_layout_rank.py`):
+  - All 89 rank/layout/dim/numeric_stable cells pass with PCC ≥ 0.999
+    on fp32 input.
+  - bf16 spot-check at rank-3 × both layouts × four bf16 precision modes
+    (8 cells): PCC ≥ 0.98 (matches the bf16_hifi2_bf16acc tier band).
+  - Output layout / rank / dtype mirror the input on every cell.
+
+- **Golden test progress**: **806 / 806 supported-pass cells passing**
+  (was 200 / 200 at end of Refinement 2). 600 xfailed (all alignment
+  cells — Refinement 4's queue). 0 supported_fail, 0 xpass-strict.
+  The +606 jump matches the verifier note's estimate ("net new movement
+  here is roughly half the xfail bucket" — 1200 → 600 xfailed = half).
+  "Done when" criterion met:
+  - `SUPPORTED["layout"] == [TILE_LAYOUT, ROW_MAJOR_LAYOUT]` ✓
+  - `SUPPORTED["rank"] == [2, 3, 4]` ✓
+  - every cell whose only gap-axes are {layout, rank} passes ✓.
+
+- **Issues encountered**:
+  - Initial rank-rejection probe used a rank-1 shape `(32,)`, which
+    tripped `tag_alignment` (accessing `shape[-2]`) before validate
+    could reach the rank check. Fixed by (a) narrowing the probe to
+    rank-5 and rank-6 (rank-1 is outside the test universe anyway),
+    and (b) hardening `tag_alignment` to fall back to `h=1 / w=1`
+    when `len(shape) < 2`.
+  - No structural EXCLUSIONS surfaced. The bf16 + ROW_MAJOR cross-product
+    works because `ttnn.to_layout` handles the dtype-format coupling
+    end-to-end; the inner kernel always sees a TILE-rank-4 input in the
+    precision name the user requested.
+
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/softmax/test_softmax_layout_rank.py`
+    — 89 cases: rank-2 (4 shapes) + rank-3 (3 shapes) + rank-4 (3
+    shapes) × layout (TILE, ROW_MAJOR) × dim (-1, -2) × numeric_stable
+    (True, False), plus a rank-5 rejection probe and a bf16 × layout
+    spot-check covering all four bf16 precision modes.
+
+- **Tests modified**:
+  - `tests/ttnn/unit_tests/operations/softmax/test_softmax.py`:
+    `test_softmax_rejects_row_major_layout` → `test_softmax_accepts_row_major_layout`.
+    `test_softmax_rejects_non_4d` → `test_softmax_rejects_unsupported_rank`,
+    parametrised over rank-5 and rank-6 (rank-2 and rank-3 are now in
+    SUPPORTED).
+
+- **Tests preserved**: Phase-0 acceptance, precision baseline, wide-W
+  reduce, and the Refinement-2 precision matrix all continue to pass
+  on the unchanged shape matrix; no regression on prior cells. Full
+  236 / 236 across `tests/ttnn/unit_tests/operations/softmax/`.

@@ -109,7 +109,7 @@ the verifier CLI counts ≥ 32 supported_pass cells per precision (160 total
 across precisions) modulo any EXCLUSIONS entries explicitly recorded; `helpers.TOLERANCES`
 bands hold without widening.
 
-### [ ] Refinement 3 — Layout (ROW_MAJOR) + rank canonicalization (2D / 3D)
+### [x] Refinement 3 — Layout (ROW_MAJOR) + rank canonicalization (2D / 3D)
 
 **Goal**: bundle two entry-point shape-handling changes that share the program
 descriptor surface:
