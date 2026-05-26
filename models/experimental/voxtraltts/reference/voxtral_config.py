@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_VOXTRAL_MODEL = "mistralai/Voxtral-4B-TTS-2603"
+DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN = 512
 
 
 @dataclass(frozen=True)
