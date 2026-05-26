@@ -230,7 +230,7 @@ run_quad_galaxy_unit_tests() {
   local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include ${tcp_interface} --tag-output"
   local mpirun_args="$mpi_host $mpirun_args_base"
 
-  local descriptor_path="${DESCRIPTOR_PATH:-/etc/mpirun}"
+  local mesh_graph="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
 
   # TODO: Currently failing
   #mpirun-ulfm $mpi_run_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail=$((fail + $?))
@@ -238,7 +238,7 @@ run_quad_galaxy_unit_tests() {
   local cv_log="${TT_METAL_HOME}/generated/artifacts/test_summary_junit/cluster_validation_console.log"
   mkdir -p "${TT_METAL_HOME}/generated/artifacts/test_summary_junit"
   set +e
-  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib -x TT_METAL_CACHE="${TT_METAL_CACHE}" ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path ${descriptor_path}/cabling_descriptor.textproto --deployment-descriptor-path ${descriptor_path}/deployment_descriptor.textproto 2>&1 | tee "$cv_log"
+  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib -x TT_METAL_CACHE="${TT_METAL_CACHE}" ./build/tools/scaleout/run_cluster_validation 2>&1 | tee "$cv_log"
   ec="${PIPESTATUS[0]}"
   set -e
   fail=$((fail + ec))
@@ -251,7 +251,7 @@ run_quad_galaxy_unit_tests() {
   _test_run_summary_append_junit_rows "infra_quad_mesh_device_trace" "${j_mesh}" "$ec"
 
   # TODO: Currently failing on 1D/2D tests
-  #tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail=$((fail + $?))
+  tt_run --tcp-interface "$tcp_interface" --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail=$((fail + $?))
 
   j_ccl="$(_test_run_summary_junit_path infra_quad_ccl_quad_host_mesh)"
   _test_run_summary_exec tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" env TT_METAL_CACHE="${TT_METAL_CACHE}" pytest -svv --junitxml="${j_ccl}" tests/nightly/tg/ccl/ -k "quad_host_mesh"
@@ -376,6 +376,10 @@ setup_dual_galaxy_env() {
         echo "File '$RANK_BINDING_YAML' does not exist."
         exit 1
     fi
+    if ! test -f "$MESH_GRAPH_DESCRIPTOR"; then
+        echo "File '$MESH_GRAPH_DESCRIPTOR' does not exist."
+        exit 1
+    fi
 
     resolve_deepseekv3_model
     resolve_deepseekv3_cache
@@ -401,6 +405,10 @@ setup_quad_galaxy_env() {
     fi
     if ! test -f "$RANK_BINDING_YAML"; then
         echo "File '$RANK_BINDING_YAML' does not exist."
+        exit 1
+    fi
+    if ! test -f "$MESH_GRAPH_DESCRIPTOR"; then
+        echo "File '$MESH_GRAPH_DESCRIPTOR' does not exist."
         exit 1
     fi
 
@@ -675,9 +683,13 @@ run_quad_deepseekv3_module_tests() {
     fail=0
     setup_quad_galaxy_env
 
-    if ! run_deepseekv3_module_test_files "deepseekv3_module_quad"; then
-        fail=$((fail + 1))
-    fi
+    local test_path="models/demos/deepseek_v3/tests/test_model.py"
+    local junit_path="$(_test_run_summary_junit_path deepseekv3_module_quad_bspm)"
+
+    _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" "${test_path}"
+    local ec="${_TEST_RUN_LAST_EC}"
+    fail=$((fail + ec))
+    _test_run_summary_append_junit_rows "deepseekv3_module_quad_bspm" "${junit_path}" "${ec}"
 
     if [[ $fail -ne 0 ]]; then
         exit 1
