@@ -124,6 +124,7 @@
       --mpi-args "--host $PIPELINE_HOSTS --map-by slot --bind-to none --tag-output" \
       python3 -m pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io_decoder_sweep_chunked_trace.py::test_run_host_io_decoder_sweep_chunked_trace_world_size_4 \
       --timeout=1200
+  model: deepseek_decode
   skus:
     bh_galaxy:
       timeout: 20
@@ -134,7 +135,7 @@
   cmd: |
     python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
       --bucket decoder_integration
-  model: deepseek_decode
+  model: deepseek_unit_tests
   skus:
     bh_galaxy:
       timeout: 35
@@ -145,7 +146,7 @@
   cmd: |
     python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
       --bucket pure_local_matmul_expert
-  model: deepseek_decode
+  model: deepseek_unit_tests
   skus:
     bh_galaxy:
       timeout: 75
@@ -156,7 +157,7 @@
   cmd: |
     python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
       --bucket pure_local_single_device_remainder
-  model: deepseek_decode
+  model: deepseek_unit_tests
   skus:
     bh_galaxy:
       timeout: 15
@@ -168,7 +169,7 @@
     python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
       --bucket fast_dispatch \
       --bucket lm_head_sampling_perf
-  model: deepseek_decode
+  model: deepseek_unit_tests
   skus:
     bh_galaxy:
       timeout: 15
@@ -181,7 +182,7 @@
       --bucket fabric_2d \
       --bucket prepare_weights_hybrid_allocator \
       --bucket host_io_risk
-  model: deepseek_decode
+    model: deepseek_unit_tests
   skus:
     bh_galaxy:
       timeout: 65
@@ -195,7 +196,7 @@
       --bucket fabric_2d_torus_y \
       --bucket fabric_2d_torus_y_xy_skip_only \
       --bucket fabric_1d
-  model: deepseek_decode
+  model: deepseek_unit_tests
   skus:
     bh_galaxy:
       timeout: 15
