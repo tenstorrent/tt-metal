@@ -1479,7 +1479,6 @@ class MLA1D(AbstractModule):
         # Paged Update Cache
 
         cls._fwd_decode_paged_update_cache(kvpe_cache, tt_kvpe, position_idxs, page_table, mesh_shape, row_idx, cfg)
-        ttnn.deallocate(tt_kvpe)
 
         # Q Rope + Nope
 
@@ -1626,7 +1625,6 @@ class MLA1D(AbstractModule):
         v_head_dim: int,
     ) -> ttnn.Tensor:
         # Q path: norm + wq_b (interleaved in0 + DRAM WIDTH sharded in1)
-        device = tt_q.device()
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         wq_b_program_config = build_prefill_matmul_program_config(
             seq_len,

@@ -468,6 +468,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"packet_header_cb_id", client_interface_cb_id},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"num_data_parallel_cores", num_data_parallel_cores},
+        {"use_init_semaphore", use_init_semaphore},
         {"noc_x_start", start_coord.x},
         {"noc_y_start", start_coord.y},
         {"noc_x_end", end_coord.x},

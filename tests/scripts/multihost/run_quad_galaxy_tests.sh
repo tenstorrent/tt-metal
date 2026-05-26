@@ -353,47 +353,6 @@ maybe_use_quad_ring_prepared_model() {
     fi
 }
 
-resolve_deepseekv3_model() {
-    local default_model="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked"
-    local local_quad_ring_model="/data/deepseek/DeepSeek-R1-0528-dequantized-stacked-quad-ring"
-    if [[ -z "${DEEPSEEK_V3_HF_MODEL_OVERRIDE:-}" && -z "${DEEPSEEK_V3_HF_MODEL:-}" && ! -d "${default_model}" && -d "${local_quad_ring_model}" ]]; then
-        default_model="${local_quad_ring_model}"
-    fi
-    local model_path="${DEEPSEEK_V3_HF_MODEL_OVERRIDE:-${DEEPSEEK_V3_HF_MODEL:-${default_model}}}"
-
-    if [[ ! -d "${model_path}" ]]; then
-        echo "Warning: DeepSeek V3 model directory not visible from orchestrator: ${model_path}" >&2
-        echo "  This is expected in CI Docker containers; model must exist on Galaxy hosts." >&2
-        echo "  For local testing, pass --model-path <path> (or set DEEPSEEK_V3_HF_MODEL_OVERRIDE)." >&2
-    fi
-
-    export DEEPSEEK_V3_HF_MODEL="${model_path}"
-    echo "Using DeepSeek V3 model: ${DEEPSEEK_V3_HF_MODEL}"
-}
-
-maybe_use_quad_ring_prepared_model() {
-    local ds_quad_torus="${DS_QUAD_USE_TORUS_MODE:-1}"
-    ds_quad_torus="${ds_quad_torus,,}"
-    case "${ds_quad_torus}" in
-        ""|1|true|yes|on) ;;
-        *) return 0 ;;
-    esac
-
-    local model_path="${DEEPSEEK_V3_HF_MODEL:-}"
-    if [[ -z "${model_path}" ]]; then
-        return 0
-    fi
-    if [[ "${model_path}" == *-quad-ring ]]; then
-        return 0
-    fi
-
-    local quad_ring_candidate="${model_path}-quad-ring"
-    if [[ -d "${quad_ring_candidate}" ]]; then
-        export DEEPSEEK_V3_HF_MODEL="${quad_ring_candidate}"
-        echo "Using quad-ring prepared DeepSeek model: ${DEEPSEEK_V3_HF_MODEL}"
-    fi
-}
-
 setup_dual_galaxy_env() {
     _ensure_local_tt_metal_cache
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"

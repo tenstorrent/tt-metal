@@ -113,6 +113,7 @@ void kernel_main() {
     constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
     constexpr uint32_t num_token_parallel_cores = get_named_compile_time_arg_val("num_token_parallel_cores");
     constexpr uint32_t num_data_parallel_cores = get_named_compile_time_arg_val("num_data_parallel_cores");
+    constexpr bool use_init_semaphore = get_named_compile_time_arg_val("use_init_semaphore") == 1;
     constexpr uint32_t noc_x_start = get_named_compile_time_arg_val("noc_x_start");
     constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
     constexpr uint32_t noc_x_end = get_named_compile_time_arg_val("noc_x_end");
@@ -261,6 +262,7 @@ void kernel_main() {
             token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
 
         noc_semaphore_wait(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
+
         for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
             const uint32_t st = dense_token_maps_l1_ptr
                 [(e * (global_num_tokens + 1) + token_split_offsets[e] + dt) * dense_token_maps_stride_elm];

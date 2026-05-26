@@ -122,25 +122,6 @@ void kernel_main() {
         noc_semaphore_wait_min(sync_semaphore_ptr, 1);
     }
 
-    // wait for metadata to be ready
-    auto* sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_semaphore_addr);
-    if (sync_core) {
-        noc_semaphore_wait(sync_semaphore_ptr, 1);
-        // swap start/end coordinates because this kernel is using NOC1
-        const uint64_t semaphore_mc_addr =
-            get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, sync_semaphore_addr, /*noc=*/1);
-        noc_semaphore_set_multicast(
-            sync_semaphore_addr,
-            semaphore_mc_addr,
-            num_token_parallel_cores * num_data_parallel_cores - 1,
-            /*linked=*/false,
-            /*noc=*/1);
-        noc_async_writes_flushed(/*noc=*/1);
-
-    } else {
-        noc_semaphore_wait_min(sync_semaphore_ptr, 1);
-    }
-
     // read dense token counts
     cb_reserve_back(token_counts_cb_id, 1);
     const uint32_t token_counts_l1_addr = get_write_ptr(token_counts_cb_id);
