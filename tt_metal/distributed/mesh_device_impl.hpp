@@ -305,11 +305,11 @@ public:
     // HAL exposes programmable DRAM cores; TT_FATAL otherwise.
     ::tt::tt_metal::DriscL1Arena& drisc_l1_arena();
 
-    // Returns a DRAM subchannel for `bank_id` whose physical NoC coord isn't already
+    // Returns the logical DRAM core for `bank_id` whose physical NoC coord isn't already
     // claimed by the SOC descriptor as a worker_endpoint or eth_endpoint — i.e. one
     // safe for a DRISC kernel to occupy. Throws if no free subchannel exists, or
     // TT_FATALs if bank_id is out of range. Used by the DRAM-sender GCB factory.
-    uint32_t pick_unused_dram_subchannel(uint32_t bank_id) const;
+    CoreCoord pick_unused_dram_logical_core(uint32_t bank_id) const;
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     void enable_program_cache() override;

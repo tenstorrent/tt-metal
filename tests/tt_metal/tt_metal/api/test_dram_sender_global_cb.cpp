@@ -73,7 +73,7 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
     constexpr uint32_t kGcbSize = 1024;
     auto gcb = experimental::CreateGlobalCircularBufferWithDramSenders(
         mesh_device_, bank_to_receivers, kGcbSize, BufferType::L1);
-    // Use the sender coord the factory resolved; recomputing via pick_unused_dram_subchannel
+    // Use the sender coord the factory resolved; recomputing via pick_unused_dram_logical_core
     // would couple this test to the picker's current strategy.
     const CoreCoord sender_logical = gcb.sender_receiver_core_mapping().at(0).first;
 

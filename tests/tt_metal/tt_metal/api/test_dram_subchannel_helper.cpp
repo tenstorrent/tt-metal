@@ -51,14 +51,15 @@ TEST_F(DramSubchannelHelperFixture, PicksUnreservedSubchannelPerBank) {
         }
         ASSERT_LT(expected_free, num_subchannels) << "Test setup error: no free subchannel for bank " << bank;
 
-        uint32_t picked = mesh_device->impl().pick_unused_dram_subchannel(bank);
-        EXPECT_EQ(picked, expected_free) << "Mismatch for bank " << bank;
-        ASSERT_LT(picked, num_subchannels);
+        const CoreCoord expected_logical =
+            soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank), static_cast<int>(expected_free));
+        const CoreCoord picked_logical = mesh_device->impl().pick_unused_dram_logical_core(bank);
+        EXPECT_EQ(picked_logical, expected_logical) << "Mismatch for bank " << bank;
 
         tt::umd::CoreCoord picked_coord = soc_desc.get_dram_core_for_channel(
-            static_cast<int>(channel), static_cast<int>(picked), tt::CoordSystem::TRANSLATED);
+            static_cast<int>(channel), static_cast<int>(expected_free), tt::CoordSystem::TRANSLATED);
         EXPECT_FALSE(reserved.contains({picked_coord.x, picked_coord.y}))
-            << "Picked subchannel " << picked << " for bank " << bank << " collides with a worker/eth endpoint";
+            << "Picked logical core for bank " << bank << " collides with a worker/eth endpoint";
     }
 }
 
@@ -67,7 +68,7 @@ TEST_F(DramSubchannelHelperFixture, RejectsOutOfRangeBank) {
     auto* device = mesh_device->get_devices()[0];
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
     const uint32_t num_banks = soc_desc.get_num_dram_views();
-    EXPECT_ANY_THROW(mesh_device->impl().pick_unused_dram_subchannel(num_banks));
+    EXPECT_ANY_THROW(mesh_device->impl().pick_unused_dram_logical_core(num_banks));
 }
 
 }  // namespace tt::tt_metal

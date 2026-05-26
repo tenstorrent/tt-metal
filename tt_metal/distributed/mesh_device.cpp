@@ -1421,7 +1421,7 @@ D2HSocket* MeshDeviceImpl::get_realtime_profiler_socket() const {
     return *drisc_l1_arena_;
 }
 
-uint32_t MeshDeviceImpl::pick_unused_dram_subchannel(uint32_t bank_id) const {
+CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const {
     const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());
     const uint32_t num_banks = soc_desc.get_num_dram_views();
     TT_FATAL(bank_id < num_banks, "bank_id={} out of range (num_banks={})", bank_id, num_banks);
@@ -1440,7 +1440,7 @@ uint32_t MeshDeviceImpl::pick_unused_dram_subchannel(uint32_t bank_id) const {
         tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
             static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
         if (!reserved.contains({coord.x, coord.y})) {
-            return sub;
+            return soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
         }
     }
     TT_THROW(
