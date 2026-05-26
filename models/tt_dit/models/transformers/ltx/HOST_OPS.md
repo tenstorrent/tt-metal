@@ -30,6 +30,6 @@ Operations that remain on host (CPU) and cannot currently be moved to device. Se
 
 **Why on host:** bf16 device matmul over K=4096 with near-zero gate weights accumulates error; compounds over 48 layers × N denoise steps (latent PCC dropped to 0.92). Host `F.linear` in fp32 gives PCC 0.997+.
 
-**What it does:** Reads hidden states from device, computes `2 * sigmoid(F.linear(x))` on host, pushes bf16 gate tensor back for on-device multiply in BHNE space before `to_out`.
+**What it does:** All-gathers SP (and uses already TP-gathered) hidden states, computes `2 * sigmoid(F.linear(x))` on the **full** sequence on host, then re-shards the gate to SP×TP so each audio token gets its own gate. Previously only device 0 was read, so SP shard 1 was gated with shard-0 values (ghost vocals / harmony).
 
 **Permanent fix:** On-device gate with fp32 accumulation, or batched async readback to hide latency.
