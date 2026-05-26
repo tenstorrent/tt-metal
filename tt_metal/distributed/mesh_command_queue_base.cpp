@@ -409,9 +409,10 @@ void MeshCommandQueue::enqueue_write_shards(
     std::vector<distributed::ShardDataTransfer> distributed_shard_data_transfers;
     distributed_shard_data_transfers.reserve(shard_data_transfers.size());
     for (const auto& shard_data_transfer : shard_data_transfers) {
-        distributed_shard_data_transfers.push_back(distributed::ShardDataTransfer{shard_data_transfer.shard_coord}
-                                                       .host_data(shard_data_transfer.host_data)
-                                                       .region(shard_data_transfer.region));
+        distributed_shard_data_transfers.push_back(
+            distributed::ShardDataTransfer{shard_data_transfer.shard_coord}
+                .host_data(shard_data_transfer.host_data)
+                .region(shard_data_transfer.region));
     }
     this->enqueue_write_shards(mesh_buffer, distributed_shard_data_transfers, blocking);
 }
@@ -423,9 +424,10 @@ void MeshCommandQueue::enqueue_read_shards(
     std::vector<distributed::ShardDataTransfer> distributed_shard_data_transfers;
     distributed_shard_data_transfers.reserve(shard_data_transfers.size());
     for (const auto& shard_data_transfer : shard_data_transfers) {
-        distributed_shard_data_transfers.push_back(distributed::ShardDataTransfer{shard_data_transfer.shard_coord}
-                                                       .host_data(shard_data_transfer.host_data)
-                                                       .region(shard_data_transfer.region));
+        distributed_shard_data_transfers.push_back(
+            distributed::ShardDataTransfer{shard_data_transfer.shard_coord}
+                .host_data(shard_data_transfer.host_data)
+                .region(shard_data_transfer.region));
     }
     this->enqueue_read_shards(distributed_shard_data_transfers, mesh_buffer, blocking);
 }
