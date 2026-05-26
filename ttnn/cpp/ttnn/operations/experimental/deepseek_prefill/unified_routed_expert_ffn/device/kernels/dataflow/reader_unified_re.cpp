@@ -130,8 +130,13 @@ void kernel_main() {
     constexpr uint32_t K_down_tiles_padded = get_compile_time_arg_val(23);
     // Byte offset of expert_region_offsets within cb_idx_scratch's single
     // L1 page. The CB is sized to hold idx (at offset 0) followed by
-    // region_offsets (at this offset).
+    // region_offsets (at this offset). Only used when use_region_offsets.
     constexpr uint32_t region_offsets_l1_byte_offset = get_compile_time_arg_val(24);
+    // When false, skip the region_offsets DRAM read and use start_tile_row=0
+    // (correct for the unfused extract->FFN path where `x` is already the
+    // per-expert slice starting at row 0). Also lets the host shrink
+    // CB_IDX_SCRATCH to just the idx page (one fewer page worth of L1).
+    constexpr bool use_region_offsets = get_compile_time_arg_val(25) != 0;
 
     constexpr uint32_t g_in0_block_num_tiles = per_core_M * in0_block_w_gu;
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
@@ -140,7 +145,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 25;
+    constexpr uint32_t x_accessor_offset = 26;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
 
@@ -183,25 +188,33 @@ void kernel_main() {
     cb_reserve_back(cb_idx_scratch, 1);
     const uint32_t counts_l1 = get_write_ptr(cb_counts_scratch);
     const uint32_t idx_l1 = get_write_ptr(cb_idx_scratch);
-    const uint32_t region_offsets_l1 = idx_l1 + region_offsets_l1_byte_offset;
     noc_async_read_page(0, counts_acc, counts_l1);
     noc_async_read_page(0, idx_acc, idx_l1);
-    noc_async_read_page(0, region_offsets_acc, region_offsets_l1);
+    if constexpr (use_region_offsets) {
+        const uint32_t region_offsets_l1 = idx_l1 + region_offsets_l1_byte_offset;
+        noc_async_read_page(0, region_offsets_acc, region_offsets_l1);
+    } else {
+        (void)region_offsets_acc;
+        (void)region_offsets_l1_byte_offset;
+    }
     noc_async_read_barrier();
     cb_push_back(cb_counts_scratch, 1);
     cb_push_back(cb_idx_scratch, 1);
 
     const volatile tt_l1_ptr uint32_t* counts_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_l1);
     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
-    const volatile tt_l1_ptr uint32_t* region_offsets_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(region_offsets_l1);
     const uint32_t global_expert_id = idx_ptr[local_expert_id];
     const uint32_t count_value = counts_ptr[global_expert_id];
-    // region_offsets entries are in TOKEN rows and are guaranteed
-    // tile-aligned (each per-expert region starts on a 32-row boundary in
-    // dispatched_buffer). Convert to tile rows once and apply to all DRAM
-    // tile_idx calculations for x reads in this expert's chunk loop.
-    const uint32_t start_tile_row = region_offsets_ptr[global_expert_id] / 32;
+    // start_tile_row: when use_region_offsets, the per-expert offset within
+    // the shared dispatched_buffer (region_offsets entries are TOKEN rows,
+    // tile-aligned — divide by 32). When false, x is the already-extracted
+    // per-expert slice starting at row 0.
+    uint32_t start_tile_row = 0;
+    if constexpr (use_region_offsets) {
+        const volatile tt_l1_ptr uint32_t* region_offsets_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1 + region_offsets_l1_byte_offset);
+        start_tile_row = region_offsets_ptr[global_expert_id] / 32;
+    }
     // count_value is in TOKEN rows. Convert to tile rows (ceil) then to chunks.
     // For count=0 the loop is empty (no chunks processed). For count > 0 we
     // process ceil(count_tiles / chunk_M_tiles) chunks; the remaining chunks

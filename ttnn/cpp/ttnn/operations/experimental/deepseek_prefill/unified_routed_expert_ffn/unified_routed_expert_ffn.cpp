@@ -22,6 +22,7 @@ ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& global_expert_idx_table,
     const ttnn::Tensor& expert_region_offsets,
     uint32_t local_expert_id,
+    bool use_region_offsets,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& output) {
     // Single-op fused routed-expert FFN. One device Program runs gate matmul,
@@ -74,6 +75,7 @@ ttnn::Tensor unified_routed_expert_ffn(
         expert_region_offsets,
         local_expert_id,
         chunk_M_tiles,
+        use_region_offsets,
         compute_kernel_config.has_value() ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
                                           : std::nullopt,
         output);
@@ -137,6 +139,7 @@ ttnn::Tensor unified_routed_expert_moe(
                 global_expert_idx_table,
                 expert_region_offsets,
                 local_expert,
+                /*use_region_offsets=*/true,
                 compute_kernel_config,
                 /*output=*/expert_outputs);
         }
@@ -144,9 +147,17 @@ ttnn::Tensor unified_routed_expert_moe(
     }
 
     // Fallback: unfused extract -> FFN -> insert per expert. Used for
-    // num_routed_experts > 64 (e.g. 256 experts). Same semantics as the
-    // pre-task-#37 path. expert_outputs aliases dispatched_buffer (insert
-    // writes in-place); FFN gets a per-expert extracted buffer.
+    // num_routed_experts > 64 (e.g. 256 experts). `tokens` from extract is
+    // a per-expert (max_dispatched_tokens_per_expert, emb) tensor with
+    // rows starting at 0 — region_offsets do NOT apply to it. Pass
+    // use_region_offsets=false so the FFN kernel:
+    //   (a) uses start_tile_row=0 for x reads and output writes (correctness
+    //       — otherwise the kernel would OOB-read past the small `tokens`
+    //       buffer), and
+    //   (b) drops the region_offsets slot from CB_IDX_SCRATCH and reduces
+    //       CB_OUT staging (L1 budget — the combined-page CB pushes the
+    //       static CB region past the L1 allocator's buffer placement on
+    //       the 256-expert / 32-per-chip case at large M).
     auto expert_outputs = dispatched_buffer;
     for (uint32_t local_expert = 0; local_expert < experts_per_chip; ++local_expert) {
         auto tokens = ttnn::extract(
@@ -165,6 +176,7 @@ ttnn::Tensor unified_routed_expert_moe(
             global_expert_idx_table,
             expert_region_offsets,
             local_expert,
+            /*use_region_offsets=*/false,
             compute_kernel_config,
             std::nullopt);
         expert_outputs = ttnn::insert(

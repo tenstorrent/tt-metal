@@ -25,10 +25,26 @@ struct UnifiedRoutedExpertFfnParams {
     // counts[global_id]).
     uint32_t local_expert_id = 0;
 
+    // When true (fused extract+FFN+insert path): kernels add
+    // start_tile_row = expert_region_offsets[global_id]/32 to all DRAM tile
+    // indices so x reads and output writes hit this expert's slice of a
+    // shared dispatched_buffer. CB_IDX_SCRATCH page holds both idx and
+    // region_offsets.
+    //
+    // When false (unfused path): x is the already-extracted per-expert
+    // tokens tensor and output is a fresh per-expert tensor, both starting
+    // at row 0. Kernels use start_tile_row=0 and skip the region_offsets
+    // DRAM read. CB_IDX_SCRATCH holds only idx — saves the region_offsets
+    // page slot, freeing L1 for the 256-expert / 32-per-chip configuration
+    // where the combined-page CB pushed past the L1 budget and clashed
+    // with allocated L1 buffers at program create.
+    bool use_region_offsets = true;
+
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id");
-    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id); }
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("chunk_M_tiles", "local_expert_id", "use_region_offsets");
+    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id, use_region_offsets); }
 };
 
 // Tensors fed into the op.

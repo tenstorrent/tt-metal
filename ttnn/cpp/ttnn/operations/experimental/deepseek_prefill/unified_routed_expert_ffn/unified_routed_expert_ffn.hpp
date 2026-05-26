@@ -47,6 +47,7 @@ ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& global_expert_idx_table,
     const ttnn::Tensor& expert_region_offsets,
     uint32_t local_expert_id,
+    bool use_region_offsets = true,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& output = std::nullopt);
 

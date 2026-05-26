@@ -302,8 +302,18 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         partials_d_df,
         /*tiles=*/d_out_block_num_tiles,
         partials_d_tile_size);
-    // Output CB: writer drains one subblock at a time.
-    make_cb(CB_OUT, out_df, /*tiles=*/d_out_subblock_h * d_out_subblock_w * 4, out_tile_size);
+    // Output CB: writer drains one subblock at a time. In the unfused path
+    // (use_region_offsets=false, 256-expert / 32-per-chip case) the L1
+    // budget is tight enough that the prior 4-subblock staging pushed the
+    // static CB region into already-allocated L1 buffers. Drop to 2
+    // subblocks (still pipelines compute/writer one-ahead) only on that
+    // path; keep 4 for the fused path where L1 has headroom.
+    const uint32_t cb_out_stage_count = op.use_region_offsets ? 4u : 2u;
+    make_cb(
+        CB_OUT,
+        out_df,
+        /*tiles=*/d_out_subblock_h * d_out_subblock_w * cb_out_stage_count,
+        out_tile_size);
     // cb_in0_down_full: reader pushes per_core_M × in0_block_w_d tiles of activated
     // once per down K-block. Single-buffered to save L1.
     // cb_in0_down_full double-buffered — fits because we eliminated
@@ -323,17 +333,22 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         tt::tt_metal::CircularBufferConfig(counts_page_size, {{CB_COUNTS_SCRATCH, tt::DataFormat::UInt32}})
             .set_page_size(CB_COUNTS_SCRATCH, counts_page_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, counts_cb_cfg);
-    // CB_IDX_SCRATCH holds BOTH idx and region_offsets in one page:
-    //   bytes [0, idx_page_size)                     -> idx table
-    //   bytes [idx_page_size, idx_page_size+region)  -> region_offsets
-    // Reader reads both into the single L1 page (idx first, region_offsets
-    // appended), pushes 1. Writer/compute cb_wait_front(cb_idx, 1) and read
-    // their respective offset. The L1 conflict that arose from this growth
-    // on the 256-expert case is mitigated by moving offset_cumsum output to
-    // DRAM (tt_moe_routing_setup.py) so the L1 buffer that previously sat
-    // at the conflict address goes away.
+    // CB_IDX_SCRATCH:
+    //   * use_region_offsets=true (fused path): holds BOTH idx and
+    //     region_offsets in one page:
+    //       bytes [0, idx_page_size)                     -> idx table
+    //       bytes [idx_page_size, idx_page_size+region)  -> region_offsets
+    //     Reader reads both into the single L1 page (idx first,
+    //     region_offsets appended), pushes 1. Writer/compute cb_wait_front
+    //     and read at their respective offset.
+    //   * use_region_offsets=false (unfused path): holds ONLY idx. Saves
+    //     one region_offsets page per core; combined with the smaller
+    //     CB_OUT staging this drops the static CB region below the L1
+    //     buffer placed near the top of L1 (the placement the prior
+    //     offset_cumsum-output-to-DRAM mitigation already shifted around).
     const uint32_t region_offsets_page_size = region_offsets_buffer->aligned_page_size();
-    const uint32_t idx_cb_page_size = idx_page_size + region_offsets_page_size;
+    const uint32_t idx_cb_page_size =
+        op.use_region_offsets ? (idx_page_size + region_offsets_page_size) : idx_page_size;
     tt::tt_metal::CircularBufferConfig idx_cb_cfg =
         tt::tt_metal::CircularBufferConfig(idx_cb_page_size, {{CB_IDX_SCRATCH, tt::DataFormat::UInt32}})
             .set_page_size(CB_IDX_SCRATCH, idx_cb_page_size);
@@ -378,8 +393,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // idx at offset 0 and region_offsets at offset idx_page_bytes
         // within the same L1 page. Pass idx_page_bytes so the kernels know
         // where to split. CT arg slot here is the byte offset of
-        // region_offsets within the shared idx-scratch L1 page.
+        // region_offsets within the shared idx-scratch L1 page. Only read
+        // when use_region_offsets=true; otherwise unused.
         idx_page_size,
+        // use_region_offsets: when false, the kernel skips the
+        // region_offsets DRAM read and uses start_tile_row=0 (correct for
+        // the unfused extract->FFN path where `x` is already the per-expert
+        // slice).
+        static_cast<uint32_t>(op.use_region_offsets),
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -425,7 +446,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         M_tiles_full,  // 16
         // Byte offset of region_offsets within CB_IDX_SCRATCH's L1 page.
         // Writer reads idx at offset 0 and region_offsets at this offset.
-        idx_page_size,  // 17
+        // Only used when use_region_offsets=true.
+        idx_page_size,                                 // 17
+        static_cast<uint32_t>(op.use_region_offsets),  // 18
     };
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(scratch_buffer).append_to(writer_ct_args);
