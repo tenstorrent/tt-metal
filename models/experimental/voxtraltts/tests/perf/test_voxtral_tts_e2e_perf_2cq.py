@@ -514,10 +514,13 @@ def _run_pipeline(
 def _load_pipeline_or_skip(device: ttnn.Device) -> VoxtralTTSPipeline:
     name = resolve_voxtral_model_name_or_skip()
     try:
+        from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_default_optimizations
+
         return VoxtralTTSPipeline.from_model_name(
             device,
             model_name_or_path=name,
             text_max_seq_len=_TEXT_MAX_SEQ_LEN,
+            text_optimizations=voxtral_text_default_optimizations,
         )
     except Exception as exc:
         pytest.skip(f"TT pipeline load failed: {exc}")
