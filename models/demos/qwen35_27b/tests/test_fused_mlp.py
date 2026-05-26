@@ -65,15 +65,15 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, hf_model, reset_seeds, 
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
-    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
+    # Ref model needs partial state dict -- fused mlp layer only -- but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix(model_args.mlp_cls.__name__, 0)
-    partial_state_dict = {
+    fused_mlp_state_dict = {
         k[len(first_layer_prefix) + 1 :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
     # HF Qwen3_5MLP names its linears gate_proj/up_proj/down_proj; our cached state_dict uses w1/w3/w2.
     # Remap so the reference model can load with strict key matching.
     ref_map = {"w1.weight": "gate_proj.weight", "w2.weight": "down_proj.weight", "w3.weight": "up_proj.weight"}
-    fused_mlp_state_dict = {ref_map.get(k, k): v for k, v in partial_state_dict.items()}
+    fused_mlp_state_dict = {ref_map.get(k, k): v for k, v in fused_mlp_state_dict.items()}
 
     reference_model = model_args.reference_mlp()
     reference_model.load_state_dict(fused_mlp_state_dict)
