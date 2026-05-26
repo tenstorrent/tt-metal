@@ -1807,7 +1807,6 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_r3_buffer_offset"),
                 get_named_compile_time_arg_val("reduce_socket_page_size"),
                 get_named_compile_time_arg_val("reduce_total_num_workers"),
-                get_named_compile_time_arg_val("reduce_persistent_fabric_signal_enable"),
                 get_named_compile_time_arg_val("reduce_is_exit_column"),
                 1,  // useRawSemAddrs
                 0,  // isReduceToAll
@@ -1960,16 +1959,7 @@ void kernel_main() {
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 18),  // r3_sem_addr
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 19),  // socket_config_addr
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 20),  // metadata_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 21),  // agg_sem_l1_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 22),  // agg_core_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 23),  // agg_core_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 24),  // persistent_enable
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 25),  // persistent_dst_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 26),  // persistent_dst_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 27),  // persistent_dst_mesh_id
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 28),  // persistent_dst_chip_id
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 29),  // persistent_dst_sem_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 30),  // shard_idx
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 21),  // shard_idx
         };
     }
 #endif
