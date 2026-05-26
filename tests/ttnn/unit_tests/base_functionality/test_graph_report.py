@@ -64,6 +64,19 @@ def _import_to_db(report_dict, tmp_path):
     return conn, conn.cursor()
 
 
+def _import_to_db_with_comparison_sidecar(report_dict, comparison_sidecar, tmp_path):
+    """Write report plus comparison sidecar, import, return (connection, cursor)."""
+    report_path = tmp_path / "report.json"
+    with open(report_path, "w") as f:
+        json.dump(report_dict, f)
+    sidecar_path = report_path.with_suffix(graph_report.COMPARISON_RECORDS_SIDECAR_SUFFIX)
+    with open(sidecar_path, "w") as f:
+        json.dump(comparison_sidecar, f)
+    db_path = graph_report.import_report(report_path, tmp_path / "output")
+    conn = sqlite3.connect(db_path)
+    return conn, conn.cursor()
+
+
 class TestImportGraphUnit:
     """Pure unit tests for import_graph function - no device required."""
 
@@ -115,6 +128,95 @@ class TestImportGraphUnit:
         assert len(input_rows) == 1, f"Expected 1 input tensor, got {len(input_rows)}"
         assert input_rows[0][2] == 42, f"Expected tensor_id 42 (resolved from node 1), got {input_rows[0][2]}"
 
+        conn.close()
+
+    def test_comparison_sidecar_imports_records_and_golden_tensors(self, tmp_path):
+        """Comparison mode records are imported from the JSON sidecar."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.relu"},
+                "connections": [],
+                "input_tensors": [2],
+            },
+            {
+                "counter": 2,
+                "node_type": "tensor",
+                "params": {"tensor_id": "100", "shape": "[1,32]", "dtype": "BFLOAT16", "layout": "TILE"},
+                "connections": [1],
+            },
+            {
+                "counter": 3,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.relu"},
+                "connections": [4],
+                "duration_ns": 100,
+            },
+            {
+                "counter": 4,
+                "node_type": "tensor",
+                "params": {"tensor_id": "101", "shape": "[1,32]", "dtype": "BFLOAT16", "layout": "TILE"},
+                "connections": [],
+            },
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        comparison_sidecar = {
+            "version": 1,
+            "local_tensor_comparison_records": [
+                {
+                    "tensor_id": 101,
+                    "golden_tensor_id": 1001,
+                    "matches": True,
+                    "desired_pcc": 0.9999,
+                    "actual_pcc": 1.0,
+                }
+            ],
+            "global_tensor_comparison_records": [
+                {
+                    "tensor_id": 101,
+                    "golden_tensor_id": 1002,
+                    "matches": True,
+                    "desired_pcc": 0.9999,
+                    "actual_pcc": 1.0,
+                }
+            ],
+            "tensors": [
+                {
+                    "tensor_id": 1001,
+                    "shape": "torch.Size([1, 32])",
+                    "dtype": "torch.bfloat16",
+                    "layout": "torch.strided",
+                    "memory_config": None,
+                    "device_id": None,
+                    "address": None,
+                    "buffer_type": None,
+                },
+                {
+                    "tensor_id": 1002,
+                    "shape": "torch.Size([1, 32])",
+                    "dtype": "torch.bfloat16",
+                    "layout": "torch.strided",
+                    "memory_config": None,
+                    "device_id": None,
+                    "address": None,
+                    "buffer_type": None,
+                },
+            ],
+        }
+
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db_with_comparison_sidecar(report, comparison_sidecar, tmp_path)
+
+        cursor.execute("SELECT * FROM local_tensor_comparison_records")
+        assert cursor.fetchall() == [(101, 1001, 1, 0.9999, 1.0)]
+
+        cursor.execute("SELECT * FROM global_tensor_comparison_records")
+        assert cursor.fetchall() == [(101, 1002, 1, 0.9999, 1.0)]
+
+        cursor.execute("SELECT tensor_id FROM tensors WHERE tensor_id IN (1001, 1002) ORDER BY tensor_id")
+        assert cursor.fetchall() == [(1001,), (1002,)]
         conn.close()
 
     def test_multiple_output_tensors(self, tmp_path):
