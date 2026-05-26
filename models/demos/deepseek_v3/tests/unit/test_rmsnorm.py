@@ -129,7 +129,7 @@ def test_rmsnorm_pre_all_gather_single_device(device):
 @pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 90112, "fabric_config": get_fabric_config()}], indirect=True
+    "device_params", [{"trace_region_size": 0, "fabric_config": get_fabric_config()}], indirect=True
 )
 def test_rmsnorm_pre_all_gather_mesh_device(mesh_device, enable_trace, device_params):
     """
@@ -369,7 +369,7 @@ def test_rmsnorm_post_all_gather(device):
 @pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 90112, "fabric_config": get_fabric_config()}], indirect=True
+    "device_params", [{"trace_region_size": 0, "fabric_config": get_fabric_config()}], indirect=True
 )
 def test_rmsnorm_distributed_mesh_device(mesh_device, enable_trace, device_params):
     """
@@ -623,7 +623,7 @@ def test_rmsnorm_single_device(device, inp_shape, weight_shape):
 )
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 90112, "fabric_config": get_fabric_config()}], indirect=True
+    "device_params", [{"trace_region_size": 0, "fabric_config": get_fabric_config()}], indirect=True
 )
 @pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
 def test_rmsnorm_mesh_device(mesh_device, inp_shape, weight_shape, enable_trace, device_params):
