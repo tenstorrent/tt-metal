@@ -46,7 +46,9 @@ def _skip_if_unsupported():
         pytest.skip(f"SFPU hash not supported on {TestConfig.CHIP_ARCH}")
 
 
-def _run_hash_kernel(formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc):
+def _run_hash_kernel(
+    formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc
+):
     """Run the SFPU hash kernel and return the 23-bit hash."""
     configuration = TestConfig(
         "sources/hash_cb_test.cpp",
@@ -93,10 +95,14 @@ def test_hash_cb_sfpu(formats, num_tiles, seed, dest_acc):
         sfpu=True,
     )
 
-    hw_hash = _run_hash_kernel(formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc)
+    hw_hash = _run_hash_kernel(
+        formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc
+    )
 
     # Sanity: hash should be non-zero and fit in 23 bits.
-    assert hw_hash != 0, "SFPU hash returned zero — kernel likely did not execute correctly"
+    assert (
+        hw_hash != 0
+    ), "SFPU hash returned zero — kernel likely did not execute correctly"
     assert hw_hash <= MASK23, f"SFPU hash {hex(hw_hash)} exceeds 23-bit range"
 
 
@@ -120,6 +126,10 @@ def test_hash_cb_sfpu_determinism(formats, num_tiles, seed, dest_acc):
         sfpu=True,
     )
 
-    h1 = _run_hash_kernel(formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc)
-    h2 = _run_hash_kernel(formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc)
+    h1 = _run_hash_kernel(
+        formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc
+    )
+    h2 = _run_hash_kernel(
+        formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc
+    )
     assert h1 == h2, f"SFPU hash non-deterministic across runs: {hex(h1)} vs {hex(h2)}"
