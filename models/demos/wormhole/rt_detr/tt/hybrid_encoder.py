@@ -17,7 +17,7 @@ def _sinusoidal_pos_embed(h, w, embed_dim, device):
     """Generates 2D sincos pos embeddings exactly matching Lyuwenyu's block-concat math."""
     grid_w = torch.arange(int(w), dtype=torch.float32)
     grid_h = torch.arange(int(h), dtype=torch.float32)
-    grid_w, grid_h = torch.meshgrid(grid_w, grid_h, indexing='ij')
+    grid_w, grid_h = torch.meshgrid(grid_w, grid_h, indexing='xy')
 
     assert embed_dim % 4 == 0, 'Embed dimension must be divisible by 4'
     pos_dim = embed_dim // 4
@@ -59,7 +59,6 @@ def _upsample_concat(x_fine, x_coarse, device, h_out, w_out, c):
     # 4. Native distributed nearest-neighbor interpolation
     x_up_4d = ttnn.upsample(x_coarse_4d, 2, mode="nearest", memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Now that data is safely in a new buffer, we can garbage collect the original un-tiled buffer
     ttnn.deallocate(x_coarse_rm)
 
     # 5. Reshape and re-tile for downstream CSP layers
@@ -76,9 +75,7 @@ def _upsample_concat(x_fine, x_coarse, device, h_out, w_out, c):
     return out
 
 def _csp_rep_layer(x, params, device, h, w):
-    x1_pre, _ = conv_block(x, params.conv1, device, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0), input_height=h, input_width=w, activation="")
-    x1 = ttnn.silu(x1_pre, memory_config=ttnn.L1_MEMORY_CONFIG)
-    ttnn.deallocate(x1_pre)
+    x1, _ = conv_block(x, params.conv1, device, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0), input_height=h, input_width=w, activation="silu")
 
     for bn in params.bottlenecks:
         out1, _ = conv_block(x1, bn.conv1, device, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), input_height=h, input_width=w, activation="")
@@ -87,12 +84,12 @@ def _csp_rep_layer(x, params, device, h, w):
         ttnn.deallocate(out1)
         ttnn.deallocate(out2)
         
+        # Standalone SiLU (happens after addition, cannot be fused into conv)
         x1 = ttnn.silu(out_add, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(out_add)
 
-    x2_pre, _ = conv_block(x, params.conv2, device, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0), input_height=h, input_width=w, activation="")
-    x2 = ttnn.silu(x2_pre, memory_config=ttnn.L1_MEMORY_CONFIG)
-    ttnn.deallocate(x2_pre)
+    x2, _ = conv_block(x, params.conv2, device, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0), input_height=h, input_width=w, activation="silu")
+    
     out = ttnn.add(x1, x2, memory_config=ttnn.L1_MEMORY_CONFIG)
     ttnn.deallocate(x1)
     ttnn.deallocate(x2)
@@ -112,7 +109,7 @@ def hybrid_encoder(s3, s4, s5, params, device, return_debug=False):
     pre_aifi_p5_tt = ttnn.clone(p5, memory_config=ttnn.DRAM_MEMORY_CONFIG) if return_debug else None
 
     # AIFI — run directly on 400 tokens, no padding
-    pos5 = _sinusoidal_pos_embed(h5, w5, _EMBED_DIM, device)
+    pos5 = _sinusoidal_pos_embed(h5, w5, 256, device) # Using 256 directly or _EMBED_DIM
     p5_out = run_aifi(p5, params.encoder_layers, device, pos_embed=pos5)
     ttnn.deallocate(pos5)
     ttnn.deallocate(p5)
@@ -120,15 +117,13 @@ def hybrid_encoder(s3, s4, s5, params, device, return_debug=False):
     # Capture post-AIFI p5
     post_aifi_p5_tt = ttnn.clone(p5_out, memory_config=ttnn.DRAM_MEMORY_CONFIG) if return_debug else None
 
-    # FPN path
-    p5_lat_pre, _ = conv_block(p5_out, params.lateral_convs[0], device, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0), input_height=h5, input_width=w5, activation="")
-    p5_lat = ttnn.silu(p5_lat_pre, memory_config=ttnn.L1_MEMORY_CONFIG)
-    ttnn.deallocate(p5_lat_pre)
+    # FPN path - FUSED SiLU
+    p5_lat, _ = conv_block(p5_out, params.lateral_convs[0], device, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0), input_height=h5, input_width=w5, activation="silu")
 
     # Capture post-lateral-conv p5
     p5_lat_debug = ttnn.clone(p5_lat, memory_config=ttnn.DRAM_MEMORY_CONFIG) if return_debug else None
 
-    p4_cat = _upsample_concat(p4, p5_lat, device, h4, w4, _EMBED_DIM)
+    p4_cat = _upsample_concat(p4, p5_lat, device, h4, w4, 256)
 
     # Capture p4 after upsample+concat (before fpn_block[0])
     p4_cat_debug = ttnn.clone(p4_cat, memory_config=ttnn.DRAM_MEMORY_CONFIG) if return_debug else None
@@ -139,14 +134,13 @@ def hybrid_encoder(s3, s4, s5, params, device, return_debug=False):
     # Capture p4 after fpn_block[0]
     p4_td_debug = ttnn.clone(p4_td, memory_config=ttnn.DRAM_MEMORY_CONFIG) if return_debug else None
 
-    p4_lat_pre, _ = conv_block(p4_td, params.lateral_convs[1], device, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0), input_height=h4, input_width=w4, activation="")
-    p4_lat = ttnn.silu(p4_lat_pre, memory_config=ttnn.L1_MEMORY_CONFIG)
-    ttnn.deallocate(p4_lat_pre)
+    # FPN path - FUSED SiLU
+    p4_lat, _ = conv_block(p4_td, params.lateral_convs[1], device, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0), input_height=h4, input_width=w4, activation="silu")
 
     # Capture post-lateral-conv p4
     p4_lat_debug = ttnn.clone(p4_lat, memory_config=ttnn.DRAM_MEMORY_CONFIG) if return_debug else None
 
-    p3_cat = _upsample_concat(p3, p4_lat, device, h3, w3, _EMBED_DIM)
+    p3_cat = _upsample_concat(p3, p4_lat, device, h3, w3, 256)
 
     # Capture p3 after upsample+concat (before fpn_block[1])
     p3_cat_debug = ttnn.clone(p3_cat, memory_config=ttnn.DRAM_MEMORY_CONFIG) if return_debug else None
@@ -157,10 +151,8 @@ def hybrid_encoder(s3, s4, s5, params, device, return_debug=False):
     # Capture p3 after fpn_block[1]
     p3_out_debug = ttnn.clone(p3_out, memory_config=ttnn.DRAM_MEMORY_CONFIG) if return_debug else None
 
-    # PAN path
-    p3_down_pre, _ = conv_block(p3_out, params.downsample_convs[0], device, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), input_height=h3, input_width=w3, activation="")
-    p3_down = ttnn.silu(p3_down_pre, memory_config=ttnn.L1_MEMORY_CONFIG)
-    ttnn.deallocate(p3_down_pre)
+    # PAN path 
+    p3_down, _ = conv_block(p3_out, params.downsample_convs[0], device, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), input_height=h3, input_width=w3, activation="silu")
 
     p4_cat2 = ttnn.concat([p3_down, p4_lat], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
     p4_out, _, _ = _csp_rep_layer(p4_cat2, params.pan_blocks[0], device, h4, w4)
@@ -168,9 +160,8 @@ def hybrid_encoder(s3, s4, s5, params, device, return_debug=False):
     ttnn.deallocate(p4_lat)
     ttnn.deallocate(p4_cat2)
 
-    p4_down_pre, _ = conv_block(p4_out, params.downsample_convs[1], device, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), input_height=h4, input_width=w4, activation="")
-    p4_down = ttnn.silu(p4_down_pre, memory_config=ttnn.L1_MEMORY_CONFIG)
-    ttnn.deallocate(p4_down_pre)
+    # PAN path 
+    p4_down, _ = conv_block(p4_out, params.downsample_convs[1], device, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), input_height=h4, input_width=w4, activation="silu")
 
     p5_cat2 = ttnn.concat([p4_down, p5_lat], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
     p5_out_final, _, _ = _csp_rep_layer(p5_cat2, params.pan_blocks[1], device, h5, w5)
@@ -191,6 +182,3 @@ def hybrid_encoder(s3, s4, s5, params, device, return_debug=False):
         }
         return [p3_out, p4_out, p5_out_final], debug_tensors
     return [p3_out, p4_out, p5_out_final]
-
-    
-

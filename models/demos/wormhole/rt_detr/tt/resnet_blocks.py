@@ -16,12 +16,19 @@ def _out_spatial(in_h, in_w, kernel, stride, padding):
 def conv_block(x, params, device, kernel_size, stride, padding,
                input_height, input_width, activation=None):
 
+    activation_param = None
+    if activation == "relu":
+        activation_param = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+    elif activation == "silu":
+        activation_param = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
+
+    # Let TTNN automatically build the CoreRangeSet and block-shard across all cores
     conv_config = ttnn.Conv2dConfig(
         deallocate_activation=False,
-        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) if activation == "relu" else None,
+        activation=activation_param, 
         reshard_if_not_optimal=True,
     )
-
+    
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2, 
@@ -43,7 +50,7 @@ def conv_block(x, params, device, kernel_size, stride, padding,
         padding=padding,
         conv_config=conv_config,
         compute_config=compute_config,  
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG, 
     )
 
     out_h, out_w = _out_spatial(input_height, input_width, kernel_size, stride, padding)

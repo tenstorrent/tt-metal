@@ -25,8 +25,8 @@ def generate_graph(config_path, out_path="docs/rtdetr_model_graph"):
     dummy = torch.randn(1, 3, 640, 640)
     print(f"input shape: {dummy.shape}")
 
-    with torch.no_grad():
-        out = model(dummy)
+    # REMOVED torch.no_grad() so the autograd graph is built for tracing!
+    out = model(dummy)
 
     if isinstance(out, dict):
         # torchviz needs a single tensor; sum scalars from all outputs
@@ -36,6 +36,10 @@ def generate_graph(config_path, out_path="docs/rtdetr_model_graph"):
 
     dot = make_dot(out_tensor, params=dict(model.named_parameters()))
     dot.format = "pdf"
+    
+    # ensure the docs directory exists
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    
     dot.render(out_path, cleanup=True)
     print(f"graph saved to {out_path}.pdf")
 

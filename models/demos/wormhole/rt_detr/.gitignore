@@ -3,3 +3,4 @@ weights/
 __pycache__/
 generated/
 RT-DETR/rtdetr_pytorch/output/
+models/demos/wormhole/rt_detr/RT-DETR/

@@ -87,59 +87,61 @@ def run_ttnn_rtdetr_inference(img, torch_model, tt_params, device):
     # 1. TTNN Backbone
     x_tt = _to_device(img, device, nchw_to_nhwc=True)
     s3_tt, s4_tt, s5_tt = presnet50(x_tt, tt_params["backbone"], device)
+    ttnn.deallocate(x_tt)
 
     # 2. TTNN Encoder
     p3_tt, p4_tt, p5_tt = hybrid_encoder(s3_tt, s4_tt, s5_tt, tt_params["encoder"], device)
+    ttnn.deallocate(s3_tt)
+    ttnn.deallocate(s4_tt)
+    ttnn.deallocate(s5_tt)
 
-    # 3. Pull and reshape for the Decoder handoff
+    # 3. Pull and reshape for the Decoder handoff (PyTorch bridge)
     p3_pt = _pull(p3_tt, device).squeeze(1).reshape(1, 80, 80, 256).permute(0, 3, 1, 2)
     p4_pt = _pull(p4_tt, device).squeeze(1).reshape(1, 40, 40, 256).permute(0, 3, 1, 2)
     p5_pt = _pull(p5_tt, device).squeeze(1).reshape(1, 20, 20, 256).permute(0, 3, 1, 2)
+    ttnn.deallocate(p3_tt)
+    ttnn.deallocate(p4_tt)
+    ttnn.deallocate(p5_tt)
 
     with torch.no_grad():
-        # Apply encoder projection
+        # Apply encoder projection and get spatial shapes
         memory_pt, spatial_shapes, level_start_index = \
             torch_model.decoder._get_encoder_input([p3_pt, p4_pt, p5_pt])
-        
-        spatial_shapes = torch.tensor(spatial_shapes)
+       
+        spatial_shapes_tensor = torch.tensor(spatial_shapes)
 
-        # Generate initial queries and unactivated reference points
+        # Generate initial queries and reference points
         tgt, init_ref_unact, _, _ = torch_model.decoder._get_decoder_input(
-            memory_pt, spatial_shapes
+            memory_pt, spatial_shapes_tensor
         )
-        
-        init_reference = init_ref_unact.sigmoid()
 
-    # 4. Push to TTNN Decoder
-    memory_tt = _to_device(memory_pt.unsqueeze(1), device, mem_config=ttnn.L1_MEMORY_CONFIG)
-    query_tt  = _to_device(tgt.reshape(1, 1, 300, 256), device, mem_config=ttnn.L1_MEMORY_CONFIG)
-    
-    # Dummy query_pos_tt (dynamically overwritten inside run_decoder)
-    query_pos_tt = ttnn.from_torch(
-        torch.zeros(1, 1, 300, 256, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-        device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
-
+    # 4. Convert queries to TTNN
+    query_tt = _to_device(tgt.reshape(1, 1, 300, 256), device, mem_config=ttnn.L1_MEMORY_CONFIG)
+   
+    # 5. Run TTNN Decoder (memory_pt stays as PyTorch tensor)
     query_out, final_ref_points = run_decoder(
-        query_tt, 
-        query_pos_tt, 
+        query_tt,
         torch_decoder=torch_model.decoder,
         tt_layer_params=tt_params["decoder"],
-        memory=memory_tt,
-        ref_points=init_reference, 
-        spatial_shapes=spatial_shapes,
+        memory_torch=memory_pt,
+        ref_points=init_ref_unact,
+        spatial_shapes=spatial_shapes_tensor,
         device=device,
     )
 
-    # 5. Prediction heads
+    # 6. Pull final query output for prediction heads
     query_torch = _pull(query_out, device).view(1, 300, 256)
+    ttnn.deallocate(query_out)
+
+    # 7. Prediction heads
     with torch.no_grad():
         logits = torch_model.decoder.dec_score_head[-1](query_torch)
-        boxes = final_ref_points.view(1, 300, 4) 
-        
-    return logits, boxes, (x_tt, s3_tt, s4_tt, s5_tt, p3_tt, p4_tt, p5_tt, memory_tt, query_tt, query_out)
+        boxes = final_ref_points.view(1, 300, 4)
+   
+    # 8. Clean up remaining TTNN tensors
+    ttnn.deallocate(query_tt)
+   
+    return logits, boxes
 
 
 # Visualisation
@@ -162,7 +164,7 @@ def draw_detections(image_path: Path, detections: list[dict], out_path: Path):
 
         draw.rectangle([x1, y1, x2, y2], outline="red", width=2)
         text = f"{label} {score:.2f}"
-        
+       
         bbox_text = draw.textbbox((x1, y1 - 16), text, font=font)
         draw.rectangle(bbox_text, fill="red")
         draw.text((x1, y1 - 16), text, fill="white", font=font)
@@ -188,12 +190,12 @@ def main():
 
     print(f"Found {len(image_paths)} demo image(s): {[p.name for p in image_paths]}")
 
-    #  Device 
+    #  Device
     mesh_shape = ttnn.MeshShape(1, 2)
     device = ttnn.open_mesh_device(mesh_shape, l1_small_size=16384)
 
     try:
-        #  Load PyTorch model 
+        #  Load PyTorch model
         print("\nLoading PyTorch model...")
         cfg   = YAMLConfig(str(config_path))
         model = cfg.model
@@ -202,7 +204,7 @@ def main():
         model.eval()
         print("  Model loaded and in eval mode.")
 
-        #  Push weights to TTNN 
+        #  Push weights to TTNN
         print("\nPushing weights to TTNN device...")
         tt_params = {
             "backbone": get_backbone_parameters(model, device),
@@ -212,15 +214,15 @@ def main():
         }
         print("  Weights loaded successfully.")
 
-        #  Image transform 
+        #  Image transform
         transform = T.Compose([
             T.Resize(input_size),
             T.ToTensor(),
         ])
 
-        all_results = {}   
+        all_results = {}  
 
-        #  Per-image inference 
+        #  Per-image inference
         for img_path in image_paths:
             print(f"\n{'='*60}")
             print(f"Processing: {img_path.name}")
@@ -231,7 +233,7 @@ def main():
             img_tensor = transform(orig_img).unsqueeze(0)  
 
             with torch.no_grad():
-                logits, boxes, tt_tensors = run_ttnn_rtdetr_inference(
+                logits, boxes = run_ttnn_rtdetr_inference(
                     img_tensor, model, tt_params, device
                 )
 
@@ -276,15 +278,13 @@ def main():
             else:
                 print("    (no detections above threshold)")
 
-            # save 
+            # save
             out_img_path = output_dir / f"{img_path.stem}_detected{img_path.suffix}"
             draw_detections(img_path, detections, out_img_path)
 
-            #  Free TTNN Memory for next loop 
-            del tt_tensors
             torch.cuda.empty_cache()
 
-        #  Save combined JSON 
+        #  Save combined JSON
         json_path = output_dir / "detections.json"
         with open(json_path, "w") as f:
             json.dump(all_results, f, indent=2)

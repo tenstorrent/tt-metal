@@ -1,148 +1,235 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-#
-# SPDX-License-Identifier: Apache-2.0
-# RT-DETR (Real-Time DEtection TRansformer)
+# RT-DETR on Tenstorrent Wormhole
 
 ## Platforms
 - Wormhole (N300)
 
 ## Introduction
 
-This repository implements **RT-DETR** (Real-Time DEtection TRansformer) using TTNN APIs for high-performance object detection on Tenstorrent hardware.
+This repository implements **RT-DETR** (Real-Time DEtection TRansformer) using TTNN APIs for high-performance object detection on Tenstorrent Wormhole hardware.
 
-RT-DETR is an end-to-end object detector that overcomes the slow inference speed of standard DETR models. It achieves this via an efficient hybrid architecture:
-- **CNN Backbone**: ResNet-50 for multi-scale feature extraction.
-- **AIFI Encoder**: Advanced Image Feature Interaction (Transformer) to process high-level semantic features.
-- **Decoder**: Cross-attention mechanisms for bounding box and class prediction.
+RT-DETR is an end-to-end object detector that overcomes the slow inference speed of standard DETR models via an efficient hybrid architecture:
 
-Reference:[DETRs Beat YOLOs on Real-time Object Detection](https://arxiv.org/abs/2304.08069) (Zhao et al., 2023)
-Official Repo: [lyuwenyu/RT-DETR](https://github.com/lyuwenyu/RT-DETR)
+- **CNN Backbone** — PResNet-50 for multi-scale feature extraction
+- **Hybrid Encoder** — AIFI transformer on the coarsest scale (20×20) + CCFM neck (FPN top-down + PAN bottom-up) with CSPRepLayer blocks
+- **Transformer Decoder** — 6-layer decoder with deformable cross-attention for bounding box and class prediction
 
-## Prerequisites
+Reference: [DETRs Beat YOLOs on Real-time Object Detection](https://arxiv.org/abs/2304.08069) (Zhao et al., 2023)  
+Official repo: [lyuwenyu/RT-DETR](https://github.com/lyuwenyu/RT-DETR)
 
-1. **TT-Metalium / TTNN Installation**
-   Follow the installation guide at [INSTALLING.md](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md). Ensure your environment variables are sourced correctly.
-
-2. **Python Dependencies**
-   ```bash
-   pip install torch torchvision pillow pycocotools pytest
-   ```
-
-3. **Download Weights**
-   ```bash
-   mkdir -p weights
-   wget https://github.com/lyuwenyu/storage/releases/download/v0.1/rtdetr_r50vd_6x_coco_from_paddle.pth -O weights/rtdetr_r50vd.pth
-   ```
+---
 
 ## Model Architecture
 
-### Backbone (ResNet-50)
+### Backbone (PResNet-50)
 | Parameter | Value |
-|-----------|-------|
-| Stem | 3x3 Convolutions + MaxPool |
-| Bottleneck Blocks | [3, 4, 6, 3] layout |
-| Extracted Features | C3, C4, C5 (Multi-scale) |
+|---|---|
+| Stem | 3× Conv3×3 + MaxPool |
+| Bottleneck layout | [3, 4, 6, 3] |
+| Extracted features | S3 (80×80), S4 (40×40), S5 (20×20) |
+| BN folding | Folded into conv weights at load time |
 
-### Transformer Encoder (AIFI)
+### Encoder (HybridEncoder)
 | Parameter | Value |
-|-----------|-------|
-| Hidden Dimension | 256 |
-| Attention Heads | 8 |
-| Feed-Forward Dim | 1024 |
-| Num Layers | 1 (AIFI spec) / Configurable up to 6 |
-| Sequence Length | 300 (Flattened features) |
+|---|---|
+| Hidden dimension | 256 |
+| AIFI attention heads | 8 |
+| AIFI sequence length | 400 tokens (20×20) |
+| FFN dimension | 1024 |
+| Neck | FPN top-down + PAN bottom-up, CSPRepLayer blocks |
 
-## Quick Start Guide
+### Decoder
+| Parameter | Value |
+|---|---|
+| Layers | 6 |
+| Queries | 300 |
+| Self-attention | On-device (TTNN) |
+| Cross-attention | CPU fallback (deformable attention) |
+| FFN | On-device (TTNN) |
 
-### 1. Run Inference Demo (End-to-End)
-Runs a sample image through the TTNN-optimized backbone and encoder, generating bounding boxes.
-```bash
-python3 demo/demo_inference.py
-```
-*Output saved to `demo/output.jpg`.*
-
-### 2. Run Performance Benchmark
-Measures the throughput and latency of the optimized Transformer Encoder.
-```bash
-python3 benchmark.py
-```
-
-### 3. Run Unit Tests (Correctness)
-Validates that the TTNN implementation mathematically aligns with the PyTorch reference (PCC Check).
-```bash
-# Test full ResNet-50 backbone fusion
-python3 tests/unit/test_resnet50_full.py
-
-# Test Transformer Encoder stack
-python3 tests/unit/test_encoder_stack.py
-```
-
-### 4. Run COCO Evaluation
-Evaluates the model on the COCO val2017 dataset to compute mAP. *(Requires COCO dataset to be present in `data/coco/`)*.
-```bash
-python3 tests/evaluate_coco.py
-```
+---
 
 ## Directory Structure
 
-```text
-models/demos/wormhole/rt_detr/
-├── README.md                           # This file
+```
+rt_detr/
 ├── demo/
-│   ├── sample.jpg                      # Input image
-│   ├── demo_inference.py               # End-to-end visualization demo
-│   └── output.jpg                      # Resulting bounding boxes
+│   ├── demo.py                  # Demo inference script
+│   ├── demo_images/             # Input images
+│   └── demo_output/             # Annotated output images
 ├── tt/
-│   ├── __init__.py
-│   ├── attention.py                    # TTNN Multihead Attention
-│   ├── resnet_blocks.py                # TTNN Fused ResNet Bottlenecks
-│   ├── rtdetr_encoder.py               # TTNN AIFI Encoder logic
-│   └── weight_utils.py                 # Weight compression/DRAM offloading
+│   ├── resnet_blocks.py         # conv_block, residual_block
+│   ├── resnet_backbone.py       # PResNet-50 forward pass
+│   ├── rtdetr_encoder.py        # AIFI encoder layer
+│   ├── hybrid_encoder.py        # HybridEncoder (AIFI + CCFM)
+│   ├── rtdetr_decoder.py        # Transformer decoder
+│   ├── weight_utils.py          # Weight extraction and BN folding
+│   └── attention.py             # Attention utilities
 ├── tests/
-│   ├── evaluate_coco.py                # COCO mAP evaluation script
-│   └── unit/
-│       ├── test_encoder_stack.py       # Encoder PCC tests
-│       └── test_resnet50_full.py       # Backbone PCC tests
-├── benchmark.py                        # Performance profiling script
-└── weights/                            # PyTorch state dicts (downloaded)
+│   ├── test_end_to_end_pcc.py   # End-to-end PCC validation
+│   └── evaluate_coco.py         # COCO mAP evaluation
+├── weights/
+│   └── rtdetr_r50vd.pth         # Downloaded by setup.sh
+├── data/
+│   └── coco/                    # COCO val2017 (optional, for evaluation)
+├── RT-DETR/                     # Lyuwenyu reference repo (cloned by setup.sh)
+│   └── rtdetr_pytorch/
+├── setup.sh
+└── requirements.txt
 ```
 
-## Implementation Details & Optimizations
+---
 
-This implementation was optimized across three distinct stages to maximize utilization of the Wormhole N300 silicon.
+## Setup
 
-### Stage 1: Bring-Up & Precision
-1. **Math Fidelity**: Enforced `WormholeComputeKernelConfig` with `MathFidelity.HiFi4` and 32-bit floating-point accumulation to prevent precision degradation across deep attention layers.
-2. **Weight Preprocessing**: Dynamically folds PyTorch Batch-Normalization parameters into convolutional weights at load-time to eliminate BN ops during inference.
+### 1. Prerequisites
 
-### Stage 2: Memory Sharding & Operator Fusion
-1. **Hardware SDPA**: Fully utilized `ttnn.transformer.scaled_dot_product_attention` with multicast eligibility, ensuring the Tensix cores perform fused attention compute without host fallbacks.
-2. **Native Tensor Manipulations**: Eliminated all `to_torch()` calls mid-execution by performing all `reshape` and `transpose` operations natively on-device.
-3. **L1 Interleaved Strategy**: Intermediate tensors and activations are pinned to `L1 SRAM` (`ttnn.L1_MEMORY_CONFIG`), while static weights are offloaded to `DRAM` to maximize compute throughput.
-4. **Fused ReLU**: Integrated ReLU activations directly into the `ttnn.conv2d` dispatch for the ResNet backbone.
+- Tenstorrent Wormhole N300 device (1×2 mesh)
+- TT-Metalium with TTNN — follow [INSTALLING.md](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md) and make sure your environment variables are sourced
+- Python 3.10+
 
-### Stage 3: Deep Hardware Optimizations
-1. **BFP8 Weight Compression**: Cast heavy dense Matrix Multiply weights (Q, K, V, FFN linears) to `ttnn.bfloat8_b`, effectively doubling memory bandwidth while maintaining >0.99 PCC.
-2. **Fused GELU**: Fused the GELU activation directly into the FFN Linear kernel, eliminating standalone read/write cycles in L1.
-3. **CNN-Transformer Device Fusion**: Pushed the Positional Embedding addition down to the device, removing the final host-device synchronization barrier between the CNN and Transformer.
+### 2. Run setup.sh
 
-## Performance Results
+`setup.sh` handles everything in one shot: installs Python dependencies, clones the Lyuwenyu reference repo, and downloads the model checkpoint.
 
-**Profiling results on N300 (Wormhole B0):**
-*Metrics represent the fully optimized RT-DETR AIFI Transformer Encoder processing a standard 300-query sequence at Batch Size 1.*
+**Always run it with `source`, not `bash`:**
 
-| Metric | Stage 1 (Base TTNN) | Stage 2 (L1 + SDPA + Fusions) | Stage 3 (BFP8 + Device Embed) | Total Speedup |
-|--------|---------------------|-------------------------------|-------------------------------|---------------|
-| **Device Latency** | ~45.0 ms | 6.5 ms | **0.83 ms** | **~54x** |
-| **Throughput (FPS)** | ~22 FPS | ~150 FPS | **1199.50 FPS** | **~54x** |
-| **Math Fidelity** | HiFi4 | HiFi4 | HiFi4 | - |
-| **Weight Precision** | BFLOAT16 | BFLOAT16 | BFLOAT8_B | Half Bandwidth |
+```bash
+source setup.sh
+```
 
-**End-to-End Accuracy (COCO val2017):**
-* **mAP**: 46.7
-* **PCC (vs PyTorch)**: 0.9998
+> **Why `source`?**  
+> `bash setup.sh` spawns a child process — any `export` inside it is thrown away when the script exits, so `PYTHONPATH` never makes it back to your shell. `source` (equivalently `. setup.sh`) runs the script inside your current shell so the export sticks for the rest of the session.
+
+### 3. Make PYTHONPATH permanent
+
+To avoid re-sourcing on every new terminal, add the export to your shell profile once:
+
+```bash
+echo "export PYTHONPATH=\"$(pwd)/RT-DETR/rtdetr_pytorch:\$PYTHONPATH\"" >> ~/.bashrc
+source ~/.bashrc
+```
+
+### 4. Verify the setup
+
+```bash
+python -c "from src.core import YAMLConfig; print('OK')"
+```
+
+---
+
+## Running the Demo
+
+Place images in `demo/demo_images/` (`.jpg`, `.jpeg`, `.png`, `.bmp`, `.webp` are all supported), then:
+
+```bash
+python demo/demo.py
+```
+
+Annotated images are written to `demo/demo_output/` with bounding boxes, class labels, and confidence scores drawn on them. A `detections.json` summary is also saved there.
+
+Example terminal output:
+
+```
+Found 3 image(s)
+
+── street.jpg
+   person                0.921  [120,80,310,450]
+   car                   0.876  [400,200,650,380]
+   traffic light         0.743  [290,60,330,140]
+   → demo/demo_output/street_detected.jpg
+
+── sample.jpg
+   dog                   0.954  [80,120,420,390]
+   couch                 0.811  [30,200,600,480]
+   → demo/demo_output/sample_detected.jpg
+```
+
+---
+
+## Running Tests
+
+### End-to-End PCC Validation
+
+Runs the full TT pipeline against the PyTorch reference and checks per-channel correlation (PCC) at every stage — backbone outputs, encoder FPN/PAN intermediates, decoder layer outputs, and final logits/boxes.
+
+```bash
+pytest tests/test_end_to_end_pcc.py -v
+```
+
+Expected results:
+
+| Test | Threshold | Result |
+|---|---|---|
+| `test_pred_logits_pcc` | PCC ≥ 0.90 |  pass |
+| `test_pred_boxes_pcc` | PCC ≥ 0.90 |  pass |
+| `test_top5_labels_and_scores` | score diff < 0.05 | pass |
+| `test_box_iou_fired_detections` | IoU > 0.90 |  pass |
+
+The test loads `demo/demo_images/sample.jpg` as the input image. If that file is absent it falls back to a zero tensor.
+
+### COCO mAP Evaluation
+
+Evaluates the full TTNN pipeline over the COCO 2017 validation set (5000 images). Supports checkpoint/resume — if interrupted it picks up where it left off.
+
+Download the data first:
+
+```bash
+cd data/coco
+wget http://images.cocodataset.org/zips/val2017.zip && unzip val2017.zip
+wget http://images.cocodataset.org/annotations/annotations_trainval2017.zip && unzip annotations_trainval2017.zip
+cd ../..
+```
+
+Then run:
+
+```bash
+python tests/evaluate_coco.py
+```
+
+**End-to-end accuracy on COCO val2017:**
+
+| Metric | Value |
+|---|---|
+| mAP (AP @ IoU=0.50:0.95) | **49.8** |
+| AP @ IoU=0.50 | 67.9 |
+| AP @ IoU=0.75 | 53.6 |
+| AR @ 100 dets | 66.0 |
+| PCC vs PyTorch (logits) | 0.92 |
+| PCC vs PyTorch (boxes) | 0.97 |
+
+---
+
+| Metric | Value | Notes |
+| :--- | :--- | :--- |
+| Hardware | Wormhole N300 (B0) | Tenstorrent accelerator |
+| Batch size | 1 | Single image inference |
+| Weight precision | BF16 | HiFi4 math fidelity |
+| Device latency | **61.11 ms** | On-device FW duration |
+| Host latency | 139.95 ms | Includes dispatch + cold cache |
+| Device throughput | **~16 FPS** | 1000 / 61.11 ms |
+| Ops traced | 1,860 | All on-device, zero PyTorch fallbacks |
+| Core utilisation | 56% at max (64 cores) | 1,042 / 1,860 ops at full 64 cores |
+| Top bottleneck | Matmul — 27.5% | Of total device kernel time |
+
+> Full op-level analysis: [`performance_report.md`](./perfromance_report.md) · Trace: `ops_perf_results_rtdetr_2026_05_25_05_51_41.csv`
+---
+
+## Implementation Notes
+
+**BatchNorm folding** — All conv+BN pairs are folded at weight-load time in `weight_utils.py`, removing BN from the inference graph with no accuracy loss.
+
+**Weight layout** — Conv weights stay on host in the format `ttnn.conv2d` expects. Linear weights are transposed and uploaded to DRAM in TILE_LAYOUT at load time.
+
+**Mesh device** — Targets a 1×2 Wormhole mesh. Weights are replicated via `ReplicateTensorToMesh`; outputs are pulled back with `ConcatMeshToTensor`.
+
+**Decoder cross-attention** — Deformable multi-scale attention is not yet natively implemented in TTNN for Wormhole. Each of the 6 decoder layers falls back to the PyTorch CPU implementation for the cross-attention step, with one host↔device query transfer per layer.
+
+**Memory management** — All intermediate TTNN tensors are explicitly deallocated with `ttnn.deallocate` to prevent L1/DRAM fragmentation across the backbone→encoder→decoder pipeline.
+
+---
 
 ## References
 
 - [RT-DETR Paper](https://arxiv.org/abs/2304.08069)
 - [RT-DETR Official Implementation](https://github.com/lyuwenyu/RT-DETR)
+- [TT-Metalium INSTALLING.md](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)

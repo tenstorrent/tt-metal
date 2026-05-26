@@ -99,8 +99,6 @@ def _run_tt_pipeline(sample_input, tt_params, torch_model, device, ref_topk_ind,
             tt_f = tt_nchw.float()
 
         elif pt_nchw.dim() == 3:
-            # Flat sequence: (1, seq, C) — e.g. post-AIFI before reshape
-            # TTNN is (1, 1, seq, C), just flatten both for comparison
             pt_f = pt_nchw.float().reshape(-1)
             tt_f = tt_raw.squeeze(1).float().reshape(-1)
 
@@ -132,7 +130,7 @@ def _run_tt_pipeline(sample_input, tt_params, torch_model, device, ref_topk_ind,
         p_pt = torch_model.encoder(s_pt)
         p3_pt, p4_pt, p5_pt = p_pt[0], p_pt[1], p_pt[2]
 
-        # FPN intermediate goldens — mirror PyTorch HybridEncoder.forward step by step
+        # FPN intermediate goldens
         with torch.no_grad():
             proj_feats = [
                 torch_model.encoder.input_proj[i](feat)
@@ -153,11 +151,9 @@ def _run_tt_pipeline(sample_input, tt_params, torch_model, device, ref_topk_ind,
 
             # Post-AIFI golden — keep as (1, 400, 256) flat, matching TTNN's (1, 1, 400, 256)
             post_aifi_p5_pt = torch_model.encoder.encoder[0](src_flatten, pos_embed=pos_embed_pt)
-            # shape: (1, 400, 256) — 3D, check_spatial handles this now
 
-            # For FPN golden computations, reshape to NCHW separately
             post_aifi_p5_pt_nchw = post_aifi_p5_pt.permute(0, 2, 1).reshape(1, 256, 20, 20).contiguous()
-            proj_feats[2] = post_aifi_p5_pt_nchw  # use NCHW version for FPN ops
+            proj_feats[2] = post_aifi_p5_pt_nchw  
 
             enc = torch_model.encoder
 
@@ -196,7 +192,6 @@ def _run_tt_pipeline(sample_input, tt_params, torch_model, device, ref_topk_ind,
             .contiguous()
         )
 
-        # Decoder bridge goldens
         decoder_pt = torch_model.decoder
         memory_pt, spatial_shapes, _ = decoder_pt._get_encoder_input(p_pt)
 
@@ -250,7 +245,7 @@ def _run_tt_pipeline(sample_input, tt_params, torch_model, device, ref_topk_ind,
     check_spatial("Backbone s5", s5_pt, s5)
 
 
-    # 2. TTNN Encoder — single call with optional debug outputs
+    # 2. TTNN Encoder 
     if return_debug:
         encoder_outs, debug_tt = hybrid_encoder(
             s3, s4, s5, tt_params["encoder"], device, return_debug=True
@@ -308,13 +303,6 @@ def _run_tt_pipeline(sample_input, tt_params, torch_model, device, ref_topk_ind,
 
     n_levels = len(spatial_shapes)
 
-    # Push unmasked memory — decoder_layer applies valid_mask internally
-    memory_tt = ttnn.from_torch(
-        memory_tt_eval.unsqueeze(1).to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-        device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if hasattr(device, 'get_num_devices') else None,
-    )
     query_tt = ttnn.from_torch(
         target_tt_eval.unsqueeze(1).to(torch.bfloat16),
         dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
@@ -345,8 +333,8 @@ def _run_tt_pipeline(sample_input, tt_params, torch_model, device, ref_topk_ind,
 
         query_tt = decoder_layer(
             query_tt, query_pos_tt, torch_layer, tt_params_layer,
-            memory_tt, ref_points_input, spatial_shapes, device, 8,
-            valid_mask=None,  # mask already applied to memory above
+            memory_tt_eval, ref_points_input, spatial_shapes, device, 8, 
+            valid_mask=None,  
         )
 
         query_torch_out = _pull(query_tt, device).view(1, 300, 256)

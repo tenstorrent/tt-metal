@@ -4,6 +4,7 @@
 
 import json
 import sys
+import gc
 from pathlib import Path
 
 import torch
@@ -14,6 +15,9 @@ from torchvision.datasets import CocoDetection
 from tqdm import tqdm
 
 import ttnn
+
+import warnings
+warnings.filterwarnings("ignore")
 
 THIS_DIR = Path(__file__).parent.resolve()
 PROJECT = THIS_DIR.parent
@@ -36,22 +40,33 @@ COCO_CLASS_IDS = [
     64, 65, 67, 70, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 84, 85, 86, 87, 88, 89, 90,
 ]
 
+# ==============================================================================
+# GLOBAL MESH CACHE: Prevents C++ PyBind Memory Leaks
+# ==============================================================================
+_global_composer = None
+_global_mapper = None
+
+def _get_global_utils(device):
+    global _global_composer, _global_mapper
+    if _global_composer is None and hasattr(device, 'get_num_devices'):
+        _global_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+        _global_mapper = ttnn.ReplicateTensorToMesh(device)
+    return _global_composer, _global_mapper
+
 def _to_device(tensor, device, nchw_to_nhwc=False, mem_config=ttnn.DRAM_MEMORY_CONFIG):
+    _, mapper = _get_global_utils(device)
     t = tensor.permute(0, 2, 3, 1).contiguous() if nchw_to_nhwc else tensor.contiguous()
     return ttnn.from_torch(
         t.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
         device=device, memory_config=mem_config, 
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        mesh_mapper=mapper,
     )
 
 def _pull(tt_tensor, device):
+    composer, _ = _get_global_utils(device)
     return ttnn.to_torch(
-        tt_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0),
+        tt_tensor, mesh_composer=composer,
     )[0:1].float()
-
-
-
-# Full TTNN Forward Pass
 
 
 def run_ttnn_rtdetr_inference(img, torch_model, tt_params, device):
@@ -76,27 +91,17 @@ def run_ttnn_rtdetr_inference(img, torch_model, tt_params, device):
         
         # Get targets and unactivated reference points
         tgt, init_ref_unact, _, _ = torch_model.decoder._get_decoder_input(memory_pt, spatial_shapes)
-        
         init_reference = init_ref_unact.sigmoid()
 
-    # 4. Push to TTNN Decoder
-    memory_tt = _to_device(memory_pt.unsqueeze(1), device, mem_config=ttnn.L1_MEMORY_CONFIG)
-    query_tt  = _to_device(tgt.reshape(1, 1, 300, 256), device, mem_config=ttnn.L1_MEMORY_CONFIG)
-    
-    query_pos_tt = ttnn.from_torch(
-        torch.zeros(1, 1, 300, 256, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-        device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
+    # 4. Push Queries to TTNN Decoder (Memory stays on CPU!)
+    query_tt = _to_device(tgt.reshape(1, 1, 300, 256), device, mem_config=ttnn.L1_MEMORY_CONFIG)
 
     # 5. Run TTNN Decoder Stack
     query_out, final_ref_points = run_decoder(
-        query_tt, 
-        query_pos_tt, 
+        query_tt=query_tt, 
         torch_decoder=torch_model.decoder,
         tt_layer_params=tt_params["decoder"],
-        memory=memory_tt,
+        memory_torch=memory_pt,  
         ref_points=init_reference, 
         spatial_shapes=spatial_shapes,
         device=device
@@ -108,20 +113,34 @@ def run_ttnn_rtdetr_inference(img, torch_model, tt_params, device):
         logits = torch_model.decoder.dec_score_head[-1](query_torch)
         boxes = final_ref_points.view(1, 300, 4) 
 
-    # Return tt_tensors for explicit garbage collection
-    tt_tensors = (x_tt, s3_tt, s4_tt, s5_tt, p3_tt, p4_tt, p5_tt, memory_tt, query_tt, query_pos_tt, query_out)
+    tt_tensors = (x_tt, s3_tt, s4_tt, s5_tt, p3_tt, p4_tt, p5_tt, query_tt, query_out)
     return logits, boxes, tt_tensors
 
 
-
+# ==============================================================================
 # COCO Evaluation Loop
-
+# ==============================================================================
 
 def main():
     data_dir = PROJECT / "data/coco/val2017"
     ann_file = PROJECT / "data/coco/annotations/instances_val2017.json"
     config_path = PROJECT / "RT-DETR/rtdetr_pytorch/configs/rtdetr/rtdetr_r50vd_6x_coco.yml"
     ckpt_path = PROJECT / "weights/rtdetr_r50vd.pth"
+    res_file = PROJECT / "results.json"
+
+    # --- CHECKPOINT RESUME LOGIC ---
+    results = []
+    processed_img_ids = set()
+    if res_file.exists():
+        try:
+            with open(res_file, "r") as f:
+                results = json.load(f)
+                processed_img_ids = {r["image_id"] for r in results}
+            print(f"\n[CHECKPOINT FOUND] Resuming evaluation! Skipping {len(processed_img_ids)} already completed images.")
+        except Exception:
+            print("\n[CHECKPOINT CORRUPT] Starting from scratch.")
+            results = []
+            processed_img_ids = set()
 
     mesh_shape = ttnn.MeshShape(1, 2)
     device = ttnn.open_mesh_device(mesh_shape, l1_small_size=16384)
@@ -150,12 +169,15 @@ def main():
         loader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
         coco_gt = COCO(str(ann_file))
 
-        results = []
         print(f"\nRunning End-to-End TTNN Eval on {len(dataset)} images...")
         
         with torch.no_grad():
             for i, (img, _) in enumerate(tqdm(loader)):
                 img_id = dataset.ids[i]
+                
+                # --- SKIP IF ALREADY PROCESSED ---
+                if int(img_id) in processed_img_ids:
+                    continue
                 
                 # Execute Full TTNN Pipeline
                 logits, boxes, tt_tensors = run_ttnn_rtdetr_inference(img, model, tt_params, device)
@@ -169,10 +191,15 @@ def main():
 
                 scores, labels = torch.max(logits, dim=-1)
                 
-                # COCO generally evaluates everything above a very low threshold (0.001 - 0.05)
+                # COCO generally evaluates everything above a very low threshold
                 keep = scores > 0.05
 
-                for score, label, box in zip(scores[keep], labels[keep], boxes[keep]):
+                # Force everything to primitive CPU numpy/lists immediately
+                scores_cpu = scores[keep].cpu().tolist()
+                labels_cpu = labels[keep].cpu().tolist()
+                boxes_cpu  = boxes[keep].cpu().tolist()
+
+                for score, label, box in zip(scores_cpu, labels_cpu, boxes_cpu):
                     cx, cy, w, h = box
                     x1 = (cx - w / 2) * orig_w
                     y1 = (cy - h / 2) * orig_h
@@ -182,16 +209,32 @@ def main():
                     results.append(
                         {
                             "image_id": int(img_id),
-                            "category_id": COCO_CLASS_IDS[int(label.item())],
-                            "bbox": [float(x1), float(y1), float(w_abs), float(h_abs)],
-                            "score": float(score.item()),
+                            "category_id": COCO_CLASS_IDS[int(label)], 
+                            "bbox": [x1, y1, w_abs, h_abs],            
+                            "score": score,
                         }
                     )
                 
+                # ==========================================
+                # AGGRESSIVE GARBAGE COLLECTION
+                # ==========================================
+                for t in tt_tensors:
+                    if t is not None:
+                        ttnn.deallocate(t)
                 del tt_tensors
-                torch.cuda.empty_cache()
+                
+                # Nuke massive host PyTorch objects
+                del img, logits, boxes, scores, labels
+                del scores_cpu, labels_cpu, boxes_cpu
+                
+                # Force PyBind & Python to sweep RAM
+                gc.collect()
 
-        res_file = PROJECT / "results.json"
+                processed_img_ids.add(int(img_id))
+                if len(processed_img_ids) % 25 == 0:
+                    with open(res_file, "w") as f:
+                        json.dump(results, f)
+
         with open(res_file, "w") as f:
             json.dump(results, f)
 
@@ -204,7 +247,6 @@ def main():
 
     finally:
         ttnn.close_mesh_device(device)
-
 
 if __name__ == "__main__":
     main()
