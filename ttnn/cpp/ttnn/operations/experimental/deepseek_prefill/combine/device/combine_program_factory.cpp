@@ -5,6 +5,8 @@
 #include "combine_device_operation.hpp"
 #include <algorithm>
 #include <array>
+#include <bitset>
+#include <map>
 #include <utility>
 #include <limits>
 #include <tt-metalium/core_coord.hpp>
@@ -273,25 +275,42 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         untilizer_cores_per_sender,
         senders_with_extra_untilizer);
 
-    // ProgramDescriptor semaphores carry an explicit `.id` field — legacy
-    // CreateSemaphore() auto-assigned the next available ID per core, so we
-    // mirror that by maintaining a manual counter.  All semaphore ranges in
-    // this function nest (sender_core_grid ⊆ sender_and_idle_grid ⊆
-    // worker_core_range_set), so a single monotonic counter is sufficient to
-    // guarantee per-core uniqueness across every allocation site.
-    uint32_t next_sema_id = 0;
-    uint32_t zero_init_semaphore_id = next_sema_id++;
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = zero_init_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = sender_core_grid,
-        .initial_value = 0});
-    uint32_t zero_init_barrier_semaphore_id = next_sema_id++;
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = zero_init_barrier_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = sender_core_grid,
-        .initial_value = 0});
+    // ProgramDescriptor semaphores carry an explicit `.id` field that maps directly
+    // to the per-core L1 sem slot (16 slots / core).  Sem core_ranges in this function
+    // do NOT all nest (per-pair data_ready and per-untilizer credits are scoped to
+    // disjoint subsets), so a global monotonic counter would push ids past 16 even
+    // though no individual core needs that many slots.  Emulate the legacy
+    // CreateSemaphore() auto-id behaviour by tracking per-core slot usage and
+    // picking the lowest id free on every core in a sem's core_range_set; sems
+    // scoped to disjoint cores can reuse the same id.
+    std::map<CoreCoord, std::bitset<16>> per_core_sema_slots;
+    auto add_sema = [&](const CoreRangeSet& crs, uint32_t initial_value = 0) -> uint32_t {
+        auto cores = corerange_to_cores(crs);
+        for (uint32_t id = 0; id < 16; id++) {
+            bool free_everywhere = true;
+            for (const auto& c : cores) {
+                if (per_core_sema_slots[c].test(id)) {
+                    free_everywhere = false;
+                    break;
+                }
+            }
+            if (free_everywhere) {
+                for (const auto& c : cores) {
+                    per_core_sema_slots[c].set(id);
+                }
+                desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                    .id = id,
+                    .core_type = tt::CoreType::WORKER,
+                    .core_ranges = crs,
+                    .initial_value = static_cast<uint16_t>(initial_value)});
+                return id;
+            }
+        }
+        TT_THROW("No free L1 semaphore slot (per-core 16 limit) for the requested core range set");
+    };
+
+    uint32_t zero_init_semaphore_id = add_sema(sender_core_grid);
+    uint32_t zero_init_barrier_semaphore_id = add_sema(sender_core_grid);
 
     const uint32_t read_batch_size = is_tile_layout ? dispatched_buffer.tensor_spec().tile().get_height() : 8;
 
@@ -601,12 +620,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             sender_and_untilizer_ranges.insert(cr);
         }
         CoreRangeSet sender_and_untilizer_grid(sender_and_untilizer_ranges);
-        counter_ready_semaphore_id = next_sema_id++;
-        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = counter_ready_semaphore_id,
-            .core_type = tt::CoreType::WORKER,
-            .core_ranges = sender_and_untilizer_grid,
-            .initial_value = 0});
+        counter_ready_semaphore_id = add_sema(sender_and_untilizer_grid);
         // Per (sender, untilizer) pair:
         //   data_ready (init 0, scoped to {sender, untilizer}): untilizer ++ after each row write;
         //                  sender atomically dec(-1) per row consumed.  Count = rows in flight
@@ -629,20 +643,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 CoreRangeSet pair_grid(
                     std::set<CoreRange>{CoreRange(sender_cores[s]), CoreRange(sender_untilizer_groups[s][c])});
                 CoreRangeSet untilizer_only_grid(std::set<CoreRange>{CoreRange(sender_untilizer_groups[s][c])});
-                uint32_t data_ready_id = next_sema_id++;
-                desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-                    .id = data_ready_id,
-                    .core_type = tt::CoreType::WORKER,
-                    .core_ranges = pair_grid,
-                    .initial_value = 0});
-                data_ready_semaphore_ids[s].push_back(data_ready_id);
-                uint32_t credits_id = next_sema_id++;
-                desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-                    .id = credits_id,
-                    .core_type = tt::CoreType::WORKER,
-                    .core_ranges = untilizer_only_grid,
-                    .initial_value = 0});
-                credits_semaphore_ids[s].push_back(credits_id);
+                data_ready_semaphore_ids[s].push_back(add_sema(pair_grid));
+                credits_semaphore_ids[s].push_back(add_sema(untilizer_only_grid));
             }
         }
     }
@@ -841,12 +843,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             }}},
         });
 
-        zi_done_semaphore_id = next_sema_id++;
-        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = zi_done_semaphore_id,
-            .core_type = tt::CoreType::WORKER,
-            .core_ranges = worker_core_range_set,
-            .initial_value = 0});
+        zi_done_semaphore_id = add_sema(worker_core_range_set);
     }
 
     if (create_zi_kernel) {
