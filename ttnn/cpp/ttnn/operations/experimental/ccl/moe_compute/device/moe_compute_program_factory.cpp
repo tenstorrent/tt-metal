@@ -1610,7 +1610,7 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
     const ttnn::Tensor& matmul_output_tensor = tensor_return_value[4];
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto& shared_variables = cached_workload.shared_variables[range];
+        const auto& shared_variables = cached_workload.shared_variables.at(range);
 
         // Update sharded circular buffer address
         tt::tt_metal::UpdateDynamicCircularBufferAddress(

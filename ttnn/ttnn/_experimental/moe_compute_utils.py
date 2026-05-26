@@ -875,7 +875,6 @@ def get_weight_mem_configs(
     w2_shard_map,
     dram_core_range_set,
     has_bias=False,
-    mesh_device=None,
 ):
     """
     Get memory configurations for W0/W1 and W2 weight tensors.
