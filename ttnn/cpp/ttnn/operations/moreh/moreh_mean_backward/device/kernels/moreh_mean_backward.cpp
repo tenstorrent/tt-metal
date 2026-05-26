@@ -10,6 +10,7 @@
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"
 
 void kernel_main() {
     // compile-time args
@@ -31,90 +32,54 @@ void kernel_main() {
 
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
     cb_in1_obj.wait_front(onetile);
+
+    // Stage A: cb_intermed0 = add_bcast<dim>(cb_in1, cb_in0) (or plain copy if no bcast).
+    //   bcast dim chosen at compile time from (ht_need_bcast, wt_need_bcast).
+    //   cb_in1 CallerManaged + Scalar (held outside the loop).
+    //   cb_in0 Streaming + Scalar (chain owns wait+pop).
+    //   cb_intermed0 OutStreaming + Scalar.
+    // Reconfig: *_init_short_with_dt + pack_tile_with_dt -> Input + Output.
+    //
+    // Four (ht_need_bcast × wt_need_bcast) cases collapse into one chain via two
+    // mutually-exclusive OptionalChainElement gates: BinaryFpu<Add, bcast_dim> runs
+    // when any bcast is needed (Scalar / Row / Col); CopyTile runs when neither is
+    // needed (faster than add(zero, x) for the no-bcast path).
+    constexpr bool has_bcast = ht_need_bcast || wt_need_bcast;
+    constexpr auto bcast_dim = (ht_need_bcast && wt_need_bcast) ? compute_kernel_lib::BroadcastDim::Scalar
+                               : ht_need_bcast                  ? compute_kernel_lib::BroadcastDim::Row
+                               : wt_need_bcast                  ? compute_kernel_lib::BroadcastDim::Col
+                                                                : compute_kernel_lib::BroadcastDim::None;
+
     for (uint32_t i = 0; i < num_output_tiles; i++) {
-        // Stage A: cb_intermed0 = add_bcast<dim>(cb_in1, cb_in0) (or plain copy if no bcast).
-        //   bcast dim chosen at compile time from (ht_need_bcast, wt_need_bcast).
-        //   cb_in1 CallerManaged + Scalar (held outside the loop).
-        //   cb_in0 Streaming + Scalar (chain owns wait+pop).
-        //   cb_intermed0 OutStreaming + Scalar.
-        // Reconfig: *_init_short_with_dt + pack_tile_with_dt -> Input + Output.
-        if constexpr (ht_need_bcast && wt_need_bcast) {
-            compute_kernel_lib::eltwise_chain(
-                onetile,
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::OptionalChainElement<
+                has_bcast,
                 compute_kernel_lib::BinaryFpu<
                     cb_in1,
                     cb_in0,
                     compute_kernel_lib::BinaryFpuOp::Add,
-                    compute_kernel_lib::BroadcastDim::Scalar,
+                    bcast_dim,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
                     compute_kernel_lib::CallerManaged,
                     compute_kernel_lib::Streaming,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    cb_intermed0,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
-        } else if constexpr (ht_need_bcast) {
-            compute_kernel_lib::eltwise_chain(
-                onetile,
-                compute_kernel_lib::BinaryFpu<
-                    cb_in1,
-                    cb_in0,
-                    compute_kernel_lib::BinaryFpuOp::Add,
-                    compute_kernel_lib::BroadcastDim::Row,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::CallerManaged,
-                    compute_kernel_lib::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    cb_intermed0,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
-        } else if constexpr (wt_need_bcast) {
-            compute_kernel_lib::eltwise_chain(
-                onetile,
-                compute_kernel_lib::BinaryFpu<
-                    cb_in1,
-                    cb_in0,
-                    compute_kernel_lib::BinaryFpuOp::Add,
-                    compute_kernel_lib::BroadcastDim::Col,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::CallerManaged,
-                    compute_kernel_lib::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    cb_intermed0,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
-        } else {
-            // No bcast: plain copy_tile(cb_in0) -> cb_intermed0.
-            compute_kernel_lib::eltwise_chain(
-                onetile,
+                    compute_kernel_lib::OperandKind::Scalar>>{},
+            compute_kernel_lib::OptionalChainElement<
+                !has_bcast,
                 compute_kernel_lib::CopyTile<
                     cb_in0,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::Streaming,
                     compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::CopyTileReconfig::Input>{},
-                compute_kernel_lib::PackTile<
-                    cb_intermed0,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutStreaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
-        }
+                    compute_kernel_lib::CopyTileReconfig::Input>>{},
+            compute_kernel_lib::PackTile<
+                cb_intermed0,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutStreaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         // Stage B: cb_out0 = cb_intermed0 * cb_scalar (SCALAR bcast).
         compute_kernel_lib::eltwise_chain(
