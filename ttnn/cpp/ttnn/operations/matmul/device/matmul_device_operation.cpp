@@ -422,28 +422,23 @@ void validate_matmul_fused_operations(
     const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
     const operations::matmul::MatmulProgramConfig& chosen_program_config) {
     // Determine which fused operations the chosen program config supports.
-    bool config_supports_bias = false;
-    bool config_supports_activation = false;
+    bool config_supports_fused_ops = false;
     std::visit(
-        [&config_supports_bias, &config_supports_activation](const auto& pc) {
+        [&config_supports_fused_ops](const auto& pc) {
             using T = std::decay_t<decltype(pc)>;
-            // All configs support fused activation except MultiCore and Reuse.
-            config_supports_activation = !std::is_same_v<T, operations::matmul::MatmulMultiCoreProgramConfig> &&
-                                         !std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseProgramConfig>;
-            // DRAM-sharded configs support activation but not bias, so bias requires
-            // both activation support and a non-DRAM-sharded config.
-            config_supports_bias =
-                config_supports_activation &&
-                !std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig> &&
-                !std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>;
+            // MultiCore and Reuse configs do not support fused bias or activation.
+            // All other configs (multicast, 1D, DRAM-sharded variants) support both.
+            config_supports_fused_ops = !std::is_same_v<T, operations::matmul::MatmulMultiCoreProgramConfig> &&
+                                        !std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseProgramConfig>;
         },
         chosen_program_config);
 
     // Reject bias or activation if the selected config does not support them.
     TT_FATAL(
-        !optional_bias.has_value() || config_supports_bias, "Bias is not supported for this matmul program config");
+        !optional_bias.has_value() || config_supports_fused_ops,
+        "Bias is not supported for this matmul program config");
     TT_FATAL(
-        !fused_activation.has_value() || config_supports_activation,
+        !fused_activation.has_value() || config_supports_fused_ops,
         "Fused activation is not supported for this matmul program config");
 }
 
