@@ -36,7 +36,7 @@ if str(_SIDECAR_DIR) not in sys.path:
     sys.path.insert(0, str(_SIDECAR_DIR))
 
 try:
-    from tt_power_sidecar import detect_devices, PowerPoller  # noqa: E402
+    from tt_power_sidecar import detect_devices, PowerPoller, compute_report  # noqa: E402
 except ImportError as _e:
     raise ImportError(
         "conftest_power.py requires tt_power_sidecar.py in the same directory (%s). "
@@ -53,54 +53,6 @@ class PowerMonitorResult:
     def __init__(self) -> None:
         self.report: dict[str, Any] | None = None
         self.report_path: Path | None = None
-
-
-def _build_report(
-    poller: PowerPoller,
-    duration_s: float,
-    devices: list[Any],
-    test_name: str,
-    poll_interval_ms: int,
-) -> dict[str, Any]:
-    """Build the JSON-serialisable report dict from a completed poller run."""
-    device_reports: dict[str, Any] = {}
-    for dev in devices:
-        # Defensive None filter — poller already drops them, but guard aggregates.
-        s = [(ts, w) for ts, w in poller.samples.get(dev.index, []) if w is not None]
-        n = len(s)
-        if n == 0:
-            device_reports[str(dev.index)] = {
-                "energy_J": 0.0,
-                "energy_Wh": 0.0,
-                "avg_power_W": 0.0,
-                "peak_power_W": 0.0,
-                "min_power_W": 0.0,
-                "sample_count": 0,
-                "backend": dev.backend_name,
-            }
-            continue
-        powers = [x[1] for x in s]
-        energy = 0.0
-        for i in range(1, n):
-            dt = s[i][0] - s[i - 1][0]
-            energy += (s[i][1] + s[i - 1][1]) / 2.0 * dt
-        sampling_span = s[-1][0] - s[0][0] if n > 1 else 0.0
-        avg = energy / sampling_span if sampling_span > 0 else powers[0]
-        device_reports[str(dev.index)] = {
-            "energy_J": round(energy, 3),
-            "energy_Wh": round(energy / 3600.0, 6),
-            "avg_power_W": round(avg, 3),
-            "peak_power_W": round(max(powers), 3),
-            "min_power_W": round(min(powers), 3),
-            "sample_count": n,
-            "backend": dev.backend_name,
-        }
-    return {
-        "test_name": test_name,
-        "duration_s": round(duration_s, 3),
-        "poll_interval_ms": poll_interval_ms,
-        "devices": device_reports,
-    }
 
 
 # pytest fixture
@@ -124,6 +76,12 @@ def power_monitor(
 
     if not devices:
         # No hardware — yield a no-op result so tests still run in CI.
+        result.report = {
+            "test_name": request.node.nodeid,
+            "duration_s": 0.0,
+            "poll_interval_ms": int(interval_s * 1000),
+            "devices": {},
+        }
         yield result
         return
 
@@ -136,13 +94,16 @@ def power_monitor(
     wall_end = time.monotonic()
     poller.stop()
 
-    report = _build_report(
-        poller,
-        wall_end - wall_start,
-        devices,
-        request.node.nodeid,
-        int(interval_s * 1000),
+    report = compute_report(
+        command=["<pytest-fixture>", request.node.nodeid],
+        exit_code=0,
+        wall_start=wall_start,
+        wall_end=wall_end,
+        poll_interval_ms=int(interval_s * 1000),
+        devices=devices,
+        poller=poller,
     )
+    report["test_name"] = request.node.nodeid
     result.report = report
 
     # Write JSON report to pytest's tmp directory.

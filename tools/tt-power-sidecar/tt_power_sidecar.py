@@ -70,9 +70,9 @@ def _discover_sysfs_devices_inner() -> dict[int, Path]:
 
     Inner implementation; callers use ``_discover_sysfs_devices()`` (adds timeout).
     """
-    devices: dict[int, Path] = {}
+    devices_raw: list[tuple[str, Path]] = []  # (sort_key, power_file)
     if not _HWMON_BASE.is_dir():
-        return devices
+        return {}
 
     for entry in sorted(p.name for p in _HWMON_BASE.iterdir()):
         hwmon_dir = _HWMON_BASE / entry
@@ -89,13 +89,21 @@ def _discover_sysfs_devices_inner() -> dict[int, Path]:
         except (IOError, OSError):
             continue
 
-        # tt-kmd hwmon names; fallback patterns for future driver versions.
-        if name in _TT_HWMON_NAMES or "tenstorrent" in name or name.startswith("tt"):
-            # Sequential index based on discovery order.
-            idx = len(devices)
-            devices[idx] = power_file
+        if not (name in _TT_HWMON_NAMES or "tenstorrent" in name or name.startswith("tt")):
+            continue
 
-    return devices
+        # Try to get PCI bus address for stable ordering (matches /dev/tenstorrent/{N}).
+        sort_key = entry  # fallback: hwmon dir name
+        try:
+            device_link = (hwmon_dir / "device").resolve()
+            sort_key = device_link.name  # e.g. "0000:03:00.0"
+        except (OSError, ValueError):
+            pass
+
+        devices_raw.append((sort_key, power_file))
+
+    devices_raw.sort(key=lambda t: t[0])
+    return {idx: path for idx, (_, path) in enumerate(devices_raw)}
 
 
 def _discover_sysfs_devices(timeout_s: float = 15) -> dict[int, Path]:
@@ -167,85 +175,42 @@ def _try_import_pyluwen() -> Any:
 def _discover_pyluwen_devices(timeout_s: float = 10) -> dict[int, Any]:
     """Return {device_index: chip_object} via pyluwen, or empty dict.
 
-    ``detect_chips()`` is a C extension that holds the GIL while talking to
-    ARC firmware.  On degraded multi-chip systems it can block for minutes,
-    making thread-based timeouts useless.  We run it in a subprocess instead:
-    separate GIL, killable via SIGKILL after *timeout_s*.
-
-    The subprocess returns JSON ``[{"index": int, "local": bool}, ...]``.
-    Only local (PCIe-attached) chips get full chip objects via a second
-    in-process call.  Systems with only remote chips (T3000, galaxy)
-    exit early.
+    Runs detect_chips() in a daemon thread with a hard timeout.  On degraded
+    multi-chip systems, detect_chips() holds the GIL and blocks — the daemon
+    thread is abandoned if it does not complete within timeout_s.
     """
-    # Probe chip topology in an isolated subprocess.
-    _PROBE_SCRIPT = (
-        "import json, sys\n"
-        "try:\n"
-        "    from pyluwen import detect_chips\n"
-        "    chips = detect_chips()\n"
-        "    out = []\n"
-        "    for i, c in enumerate(chips):\n"
-        "        try:\n"
-        "            local = (c.as_wh() is not None or c.as_bh() is not None)\n"
-        "        except Exception:\n"
-        "            local = False\n"
-        "        out.append({'index': i, 'local': local})\n"
-        "    print(json.dumps(out))\n"
-        "except Exception:\n"
-        "    sys.exit(1)\n"
-    )
-
-    chip_info = None
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-c", _PROBE_SCRIPT],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=timeout_s,
-        )
-        if proc.returncode == 0:
-            chip_info = json.loads(proc.stdout.decode().strip() or "[]")
-    except subprocess.TimeoutExpired:
-        _eprint(
-            "[tt-power-sidecar] WARNING: pyluwen detect_chips() subprocess timed out "
-            "after %ds (ARC RESPONSE_Q busy after a prior workload). "
-            "Proceeding without pyluwen devices." % timeout_s
-        )
-        return {}
-    except Exception:
-        pass  # pyluwen not installed or probe script failed; fall through to empty return
-
-    if not chip_info:
+    pl = _try_import_pyluwen()
+    if not pl:
         return {}
 
-    # All-remote systems (T3000, galaxy): nothing pyluwen can add.
-    local_indices = {c["index"] for c in chip_info if c.get("local")}
-    if not local_indices:
-        return {}
-
-    # Get chip objects for local chips only (ARC is healthy if subprocess was fast).
     result: dict[int, Any] = {}
 
-    def _detect_local() -> None:
-        pl = _try_import_pyluwen()
-        if not pl:
-            return
+    def _detect() -> None:
         try:
             chips = pl.detect_chips()
             for idx, chip in enumerate(chips):
-                if idx in local_indices:
+                try:
+                    local = chip.as_wh() is not None or chip.as_bh() is not None
+                except Exception:
+                    local = False
+                if local:
                     result[idx] = chip
         except Exception:
-            pass  # ARC became unavailable between probe and object creation; skip pyluwen
+            pass
 
-    t = threading.Thread(target=_detect_local, daemon=True)
+    t = threading.Thread(target=_detect, daemon=True)
     t.start()
     t.join(timeout=timeout_s)
     if t.is_alive():
         _eprint(
-            "[tt-power-sidecar] WARNING: pyluwen chip object creation timed out "
-            "after %ds. Proceeding without pyluwen devices." % timeout_s
+            "[tt-power-sidecar] WARNING: pyluwen detect_chips() timed out after %ds "
+            "(ARC RESPONSE_Q busy after a prior workload). "
+            "Proceeding without pyluwen devices." % timeout_s
         )
+        return {}
+
+    # All-remote systems (T3000, galaxy): nothing pyluwen can add.
+    if not result:
         return {}
 
     return result

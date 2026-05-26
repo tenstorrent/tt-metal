@@ -40,6 +40,10 @@ Three backend modes are available via `--backend`:
 | `sysfs` | sysfs hwmon only — reads `/sys/class/hwmon/hwmonN/power1_input` (µW) exposed by `tt-kmd`.  Zero Python dependencies.  **Safe for multi-chip systems.** |
 | `pyluwen` | pyluwen firmware telemetry only.  ⚠️ **Do not use on T3000 or galaxy systems** — see Known Limitations. |
 
+> **CI recommendation:** use `--backend sysfs` explicitly on any CI runner.
+> It has zero Python dependencies, never contacts firmware, and is safe regardless
+> of system topology (single-chip, T3000, or galaxy).
+
 ## JSON output format
 
 ```json
@@ -51,6 +55,7 @@ Three backend modes are available via `--backend`:
   "devices": {
     "0": {
       "energy_J": 48.2,
+      "energy_Wh": 0.013389,
       "avg_power_W": 39.1,
       "peak_power_W": 75.0,
       "min_power_W": 15.0,
@@ -62,7 +67,7 @@ Three backend modes are available via `--backend`:
 ```
 
 Energy is computed via trapezoidal integration of the power samples over
-wall-clock time.
+wall-clock time.  `energy_Wh = energy_J / 3600`.
 
 ## Pytest fixture
 
@@ -90,8 +95,7 @@ it via `pytest_plugins`.
 
 ### pyluwen backend on multi-chip systems (T3000 / galaxy)
 
-**Do not use the pyluwen backend (or `--backend auto` when sysfs is absent) on
-T3000 or galaxy systems.**
+**Do not use `--backend pyluwen` explicitly on T3000 or galaxy systems.**
 
 `pyluwen` reads power telemetry by sending ARC messages over Ethernet
 (`RemoteCommunicationLegacyFirmware::read_non_mmio`).  On a T3000 with 8
@@ -101,6 +105,11 @@ response queues (`RESPONSE_Q out of sync`), which then causes
 test that initialises the mesh fabric — even tests that are unrelated to the
 sidecar.
 
-**Workaround:** use `--backend sysfs` on multi-chip runners, or omit the sidecar
-entirely on those runners.  The T3000 fast-test workflow (`t3000-fast-tests-impl.yaml`)
-does not wrap fabric or CCL tests with the sidecar for this reason.
+**`--backend auto` is safe on T3000.**  When `tt-kmd` is loaded, `auto` detects
+≥2 local sysfs devices and selects the sysfs path — no ARC traffic is generated.
+The T3000 fabric and CCL jobs in CI (`t3000-fast-tests-impl.yaml`) use
+`--backend auto` for exactly this reason.
+
+**Workaround for explicit control:** use `--backend sysfs` on any multi-chip
+runner to guarantee sysfs is used regardless of what pyluwen might otherwise
+detect.

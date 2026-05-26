@@ -144,14 +144,18 @@ jobs:
             profiler_flag="--post-commit"
           fi
           python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+            --backend sysfs \
             --out /work/power_report.json \
-            -- ./tests/scripts/run_profiler_regressions.sh $profiler_flag
+            -- ./tests/scripts/run_profiler_regressions.sh "$profiler_flag"
 
       - name: Upload power report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: power-report-profiler-${{ inputs.arch }}
+          # /docker-job/ is the host-side mount of the Docker runner's /work/ directory.
+          # The sidecar writes --out /work/power_report.json inside the container;
+          # this host path is what the upload-artifact action reads.
           path: ${{ github.workspace }}/docker-job/power_report.json
           if-no-files-found: warn
           retention-days: 30
