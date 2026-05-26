@@ -7,7 +7,73 @@ SDPA-related failures and posts a digest to Slack on a cron schedule.
 - **Red pipelines** get a full block: every failing in-scope test, a short cause for each, and a likely-cause commit if attributable.
 - **Out-of-scope failures** (anything not SDPA-related) are completely ignored, no count, no mention.
 
-Currently watches 7 pipelines (see `config.sh`). Cron currently fires every 3 minutes (test cadence — change when ready).
+Currently watches 7 pipelines (see `config.sh`). Cron currently fires every hour.
+
+---
+
+## Where things live (read this once)
+
+The watcher has two locations, and the distinction matters:
+
+- **Runtime** = `~/.sdpa-watch/`. The cron job, `watch.sh`, the cache, secrets, and logs all live here. **This is the source of truth.** If this directory is intact and cron is running, the service is working — regardless of anything else.
+- **Repo snapshot** = `/localdev/skrstic/tt-metal/.sdpa-watch/` on branch `skrstic/sdpa-pipeline-watcher`. A point-in-time **copy** of the source files (no secrets, no cache) committed for review and portability. The runtime never reads from here.
+
+You can delete the repo snapshot and the service keeps running. You cannot delete `~/.sdpa-watch/` without breaking it.
+
+---
+
+## First-time setup on a new machine
+
+### What you need to provide (3 secrets + 1 path)
+
+| Input | Where to get it | Goes into |
+|---|---|---|
+| Anthropic API key (`sk-ant-...`) | https://console.anthropic.com/settings/keys | `~/.sdpa-watch/api_key` (chmod 600) |
+| GitHub PAT (`ghp_...`, scope `public_repo`) | https://github.com/settings/tokens | `gh auth login --with-token` |
+| Slack incoming webhook URL | https://api.slack.com/apps → existing `sdpa-watch` app → Incoming Webhooks (or create a new app + admin approval) | `~/.sdpa-watch/slack_webhook` (chmod 600) |
+| Path to your tt-metal clone | `pwd` inside the clone | `TT_METAL_DIR=` in `~/.sdpa-watch/config.sh` |
+
+### What you run manually
+
+```bash
+# 1. Install OS deps (once)
+sudo apt install -y cron jq curl gh    # plus Node.js (nvm) for `claude` CLI
+npm install -g @anthropic-ai/claude-code
+
+# 2. Set up the runtime dir from the repo snapshot
+mkdir -p ~/.sdpa-watch && chmod 700 ~/.sdpa-watch
+cp /path/to/tt-metal/.sdpa-watch/{config.sh,watch.sh,agent_prompt.txt,README.md,SETUP.md} ~/.sdpa-watch/
+chmod +x ~/.sdpa-watch/watch.sh
+echo '{}' > ~/.sdpa-watch/state.json
+
+# 3. Drop in the 3 secrets
+umask 077
+printf 'sk-ant-YOUR-KEY'              > ~/.sdpa-watch/api_key && chmod 600 ~/.sdpa-watch/api_key
+printf 'https://hooks.slack.com/...' > ~/.sdpa-watch/slack_webhook && chmod 600 ~/.sdpa-watch/slack_webhook
+echo 'ghp_YOUR-PAT' | gh auth login --with-token
+
+# 4. Edit `TT_METAL_DIR=` in ~/.sdpa-watch/config.sh to point at your clone
+
+# 5. Smoke test (no Slack post)
+DRY_RUN=1 ~/.sdpa-watch/watch.sh
+
+# 6. Real post
+~/.sdpa-watch/watch.sh
+
+# 7. Install cron (hourly; adjust schedule + PATH if `claude` lives elsewhere)
+( crontab -l 2>/dev/null | grep -vE 'sdpa-watch|^PATH='; cat <<CRON_EOF
+PATH=$(dirname "$(which claude)"):/usr/local/bin:/usr/bin:/bin
+0 * * * * $HOME/.sdpa-watch/watch.sh >> $HOME/.sdpa-watch/watch.log 2>&1
+CRON_EOF
+) | crontab -
+sudo service cron start
+
+# 8. (Optional) shell aliases — append to ~/.bashrc
+echo "alias sdpa='~/.sdpa-watch/watch.sh'"            >> ~/.bashrc
+echo "alias sdpa-dry='DRY_RUN=1 ~/.sdpa-watch/watch.sh'" >> ~/.bashrc
+```
+
+For host-specific tweaks (POSIX time zone string, copying from an existing machine via rsync, file-by-file porting reference), see [`SETUP.md`](SETUP.md) → "Port to another machine".
 
 ---
 
@@ -118,7 +184,7 @@ Edit `MODEL=` in `config.sh`:
 | `~/.sdpa-watch/agent_errors.log` | Stderr from `claude -p` (only useful on agent errors). |
 | `~/.sdpa-watch/SETUP.md` | Setup history, rebuild-from-scratch, design notes. |
 
-A snapshot of the source files (no secrets, no cache) is committed under `/localdev/skrstic/tt-metal/.sdpa-watch/` on the `skrstic/sdpa-pipeline-watcher` branch. The runtime always reads from `~/.sdpa-watch/` — re-sync the branch manually if you want to update the snapshot.
+See "Where things live" at the top of this README for the runtime-vs-snapshot distinction.
 
 ---
 
