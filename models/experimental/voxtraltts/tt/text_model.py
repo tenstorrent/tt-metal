@@ -9,11 +9,46 @@ from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import TensorGroup
 
+from models.experimental.voxtraltts.tt.rmsnorm import VoxtralTextRMSNorm
 from models.experimental.voxtraltts.tt.text_decoder_layer import remap_voxtral_text_state_dict
 from models.experimental.voxtraltts.tt.voxtral_tt_args import (
     get_VoxtralTTArgs,
     voxtral_text_default_optimizations,
 )
+
+
+def patch_text_model_fp32_rms_norms(
+    text: "VoxtralTTTextModel",
+    *,
+    mesh_device,
+    state_dict: dict[str, object],
+    dim: int,
+    norm_eps: float,
+) -> None:
+    """Swap tt_transformers DistributedNorm/RMSNorm with HF-faithful fp32-promoting norms."""
+    remapped = remap_voxtral_text_state_dict(state_dict)
+    for layer_idx, layer_block in enumerate(text.inner.layers):
+        layer_block.attention_norm = VoxtralTextRMSNorm(
+            device=mesh_device,
+            dim=dim,
+            state_dict=remapped,
+            weight_key=f"layers.{layer_idx}.attention_norm",
+            eps=norm_eps,
+        )
+        layer_block.ff_norm = VoxtralTextRMSNorm(
+            device=mesh_device,
+            dim=dim,
+            state_dict=remapped,
+            weight_key=f"layers.{layer_idx}.ffn_norm",
+            eps=norm_eps,
+        )
+    text.inner.norm = VoxtralTextRMSNorm(
+        device=mesh_device,
+        dim=dim,
+        state_dict=remapped,
+        weight_key="norm",
+        eps=norm_eps,
+    )
 
 
 def _decode_activation_dtype(args) -> ttnn.DataType | None:
