@@ -524,16 +524,20 @@ def print_test_summary_per_chip(t: TestCase, runs: list[TestRun]):
             ensure_dev(l.dst_dev)
 
             chips[l.src_dev]["tests"] += 1
-            chips[l.dst_dev]["tests"] += 1
+            if l.src_dev != l.dst_dev:
+                chips[l.dst_dev]["tests"] += 1
             if len(l.bw):
                 have_bws = True
                 chips[l.src_dev]["bws"].append(l.bw["bw"])
-                chips[l.dst_dev]["bws"].append(l.bw["bw"])
+                if l.src_dev != l.dst_dev:
+                    chips[l.dst_dev]["bws"].append(l.bw["bw"])
 
             chips[l.src_dev]["errors"] += len(l.errors)
-            chips[l.dst_dev]["errors"] += len(l.errors)
+            if l.src_dev != l.dst_dev:
+                chips[l.dst_dev]["errors"] += len(l.errors)
             chips[l.src_dev]["bdf"] = l.src_devbdf
-            chips[l.dst_dev]["bdf"] = l.dst_devbdf
+            if l.src_dev != l.dst_dev:
+                chips[l.dst_dev]["bdf"] = l.dst_devbdf
 
         avg = lambda x: sum(x) / len(x)
         headers = ["chip id", "chip bdf", "tests"]
