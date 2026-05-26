@@ -23,15 +23,15 @@ Read these in full before doing anything — they are the load-bearing context f
 3. [.agents/notes/dev-environment.md](../../notes/dev-environment.md) — Python env, mesh devices, crash recovery, weight paths.
 4. [.agents/notes/design-conventions.md](../../notes/design-conventions.md) — Protocol+ABC, shared contracts, factory by convention.
 
-Also read the canonical decoder block interface this skill consumes:
+Also read a reference for what a ported decoder block tends to look like in this codebase:
 
-5. **`models/tt_transformers/tt/decoder.py::TransformerBlock`** — the ported decoder block your input directory provides is expected to match this interface. Specifically: `LightweightModule` subclass, `__init__(args, mesh_device, tt_ccl, dtype, state_dict, layer_num, weight_cache_path, transformation_mats, paged_attention_config=None, use_paged_kv_cache=False, ...)`, and a `forward(x, current_pos, rot_mats_global=None, rot_mats_local=None, user_id=0, mode="decode", page_table=None, chunk_page_table=None, chunk_start_idx=None, kv_cache=None, batch_size=1) -> ttnn.Tensor` returning a hidden state fractured across devices.
+5. **`models/tt_transformers/tt/decoder.py::TransformerBlock`** — typical shape: `LightweightModule` subclass, `__init__(args, mesh_device, tt_ccl, dtype, state_dict, layer_num, weight_cache_path, transformation_mats, paged_attention_config=None, use_paged_kv_cache=False, ...)`, `forward(x, current_pos, rot_mats_global=None, rot_mats_local=None, user_id=0, mode="decode", page_table=None, chunk_page_table=None, chunk_start_idx=None, kv_cache=None, batch_size=1) -> ttnn.Tensor` returning a hidden state fractured across devices. **The decoder in your input dir is the source of truth — read it and match what it actually exposes.** Don't coerce it to this signature; if it differs (extra kwargs, different return shape, no `tt_ccl`, etc.), adapt your model wrapper to whatever's there.
 
 ## When to use
 
 The previous pipeline stages have produced a `models/autoports/<model_name>/` directory containing:
 
-- A **ported TTNN decoder block** matching the `TransformerBlock` interface in `tt_transformers/tt/decoder.py` (see Background reading §5). Verified independently.
+- A **ported TTNN decoder block** at `<model_dir>/tt/decoder.py` (or similarly named module). Verified independently. Its interface is whatever the decoder file itself exposes — `tt_transformers/tt/decoder.py::TransformerBlock` (Background reading §5) is a reference for the typical shape, not a required signature. Read the actual file before scaffolding.
 - **Supporting modules** the decoder needs (attention, MLP, norm, RoPE), typically alongside it.
 - A pin of the **HuggingFace model id or local checkpoint path** for the model being ported.
 
@@ -50,7 +50,7 @@ This skill produces those. Outputs are **added** to the same directory; nothing 
 | Model directory | `models/autoports/<model_name>/` containing the ported decoder block + supporting modules. |
 | HF model id or local checkpoint | Pinned in the model dir as `config.py` (module-level `HF_MODEL_ID`). If absent, ask. Prefer local checkpoint paths under `/proj_sw/user_dev/` when available — avoids HF auth. |
 | Mesh / device label | `config.py` (module-level `MESH_DEVICE`); one of `N150` / `N300` / `T3K` / `TG`. |
-| Sampling expectations | Greedy/argmax is mandatory for the readiness path. Anything richer is out of scope until vLLM serving is verified. |
+| Sampling expectations | Implement on-device sampling (`models/common/sampling/`); the model must run argmax-equivalent sampling for the readiness path. Full stochastic sampling is exercised by vLLM later. |
 
 If any input isn't clear, ask before scaffolding files.
 
@@ -62,11 +62,11 @@ The decoder block is one layer; this file wraps `n_layers` copies of it into a s
 
 | What | Detail |
 |---|---|
-| Construction | `__init__(args, mesh_device, dtype, state_dict, weight_cache_path, paged_attention_config, ...)`. Build embedding → `N × TransformerBlock` → final norm → LM head. Load weights from `state_dict`. |
-| Embedding + LM head | Load from the HF state dict. Many modern models tie the LM head to embedding weights — detect and handle. |
-| Decoder stack | Instantiate `n_layers` copies of the ported decoder block, passing each its `layer_num` and the matching slice of `state_dict`. Match `TransformerBlock.__init__`'s signature (see Background reading §5). |
+| Construction | `__init__(args, mesh_device, dtype, state_dict, weight_cache_path, paged_attention_config, ...)`. Build embedding → `N ×` (whatever the local decoder block is called) → final norm → LM head → **on-device sampler** (see step 2's "Sampling location" note). Load weights from `state_dict`. |
+| Embedding + LM head | Load from the HF state dict. Check `hf_config.tie_word_embeddings`: if True, the LM head reuses the embedding weight matrix (transpose). If False (e.g. Llama 3.1 8B), load `lm_head.weight` as a separate tensor from the state dict. |
+| Decoder stack | Instantiate `n_layers` copies of the ported decoder block, passing each its `layer_num` and the matching slice of `state_dict`. Match the decoder's *actual* `__init__` signature as found in `<model_dir>/tt/decoder.py` — the `tt_transformers` `TransformerBlock` (Background reading §5) is a typical reference but your input may diverge. |
 | KV cache surface | If `paged_attention_config` is set, each decoder layer's attention allocates a paged K/V via its own `init_kv_cache` (see `models/tt_transformers/tt/attention.py:382` for the canonical pattern: host shape `(max_num_blocks, n_kv_heads, block_size, head_dim)`, kept on DRAM, replicated to mesh). Expose `layer.attention.layer_past` so the generator can harvest per-layer K/V handles. |
-| Forward methods | Two entry points — `ttnn_prefill_forward(tokens, *, current_pos, kv_cache, page_table, ...)` and `ttnn_decode_forward(tokens, *, current_pos, kv_cache, page_table, ...)`. Each runs the decoder stack with the right `mode` arg (`"prefill"` vs `"decode"`), applies final norm + LM head, returns logits. Mirror `tt_transformers.tt.model.Transformer.forward`. |
+| Forward methods | Two entry points — `ttnn_prefill_forward(tokens, *, current_pos, kv_cache, page_table, sampling_params=None, ...)` and `ttnn_decode_forward(tokens, *, current_pos, kv_cache, page_table, sampling_params=None, ...)`. Each runs the decoder stack with the right `mode` arg (`"prefill"` vs `"decode"`), applies final norm + LM head, and either returns logits (when `sampling_params is None`) or runs the on-device sampler and returns sampled tokens. Mirror `tt_transformers.tt.model.Transformer.forward`. |
 | Mesh replication | Weights replicated via `ttnn.ReplicateTensorToMesh` for single-chip / small meshes; sharded for larger meshes. Cache to disk via `cache_file_name=` so re-runs are fast. |
 
 ### Key patterns to mirror
@@ -77,8 +77,14 @@ The decoder block is one layer; this file wraps `n_layers` copies of it into a s
 
 ### Anti-patterns
 
-- Don't allocate the KV cache at the top level. Each attention module allocates its own via `init_kv_cache` so the layout matches what `paged_fill_cache` expects. See [tt-transformers-gotchas.md §1](../../notes/tt-transformers-gotchas.md).
-- Don't bake `max_batch_size` / `max_seq_len` into the model in ways that prevent vLLM passing different values later. Pass them through `args`.
+- **Don't allocate the KV cache at the top level.** Each decoder layer's attention allocates its own via `init_kv_cache` so the layout matches what `paged_fill_cache` expects (see [tt-transformers-gotchas.md §1](../../notes/tt-transformers-gotchas.md)). The generator harvests the per-layer handles after construction:
+  ```python
+  tt_kv_cache = [layer.attention.layer_past for layer in model.layers]
+  ```
+- **Don't bake `max_batch_size` / `max_seq_len` into the model** in ways that prevent vLLM passing different values later. Pass them through `args`.
+- **Don't monkey-patch upstream tt_transformers** to inject the local decoder block (e.g. `models.tt_transformers.tt.model.TransformerBlock = LocalTransformerBlock`). It works but mutates the upstream module globally and breaks the moment any other code path imports the real `Transformer`. Either:
+  - subclass `tt_transformers.tt.model.Transformer` and override `__init__` to instantiate `self.layers` from the local decoder block, *or*
+  - write the model wrapper from scratch in `tt/model.py`, mirroring the `Transformer` structure but using your local decoder block directly. This is what step 1 expects.
 
 ## Step 2. Write `<model_dir>/tt/generator.py` — contract surface
 
@@ -93,6 +99,20 @@ This is the load-bearing artifact. It must satisfy the contract in `models/commo
 | Attributes / lifecycle | `tokenizer`, `reset()` | both |
 
 Greedy / argmax sampling only on the readiness path. `generate()` returns the model's own predictions, not the forced tokens — the readiness runner uses these for accuracy comparison.
+
+**Sampling location:** **Implement on-device sampling** in the model wrapper (`tt/model.py`). It's what vLLM serving will need shortly, and tt-metal already provides the building blocks under `models/common/sampling/` (`SamplingParams`, `tt_sampling`, `tt_log_probs`, `tt_penalties`). `models/tt_transformers/tt/generator.py` shows how `SamplingParams` is threaded through `prefill_forward_text` / `decode_forward`.
+
+The low-level `prefill_forward` / `decode_forward` should accept a `sampling_params` kwarg and return:
+- logits (shape `[batch, vocab]` for decode, `[batch, 1, vocab]` for prefill) when `sampling_params is None`
+- sampled tokens (shape `[batch]` for decode, `[batch, 1]` for prefill) when `sampling_params` is provided
+
+This matches the contract's "logits or sampled tokens" allowance and what vLLM will pass in.
+
+For the **readiness path**, the high-level `generate()` still needs deterministic argmax for top-K hit-rate comparison. Pick one of:
+- pass `SamplingParams(temperature=0, ...)` so the on-device sampler runs in argmax mode and returns tokens directly, or
+- pass `sampling_params=None` and host-argmax the returned logits.
+
+Either produces identical token IDs for greedy sampling. The first option exercises the on-device sampler in the readiness test (recommended).
 
 ### Responsibilities
 
@@ -225,13 +245,15 @@ Out of scope for the current iteration. The vLLM serving harness is being design
 
 | Topic | Path |
 |---|---|
-| Decoder block interface (canonical) | `models/tt_transformers/tt/decoder.py::TransformerBlock` |
+| Decoder block interface (typical reference; the input decoder is the source of truth) | `models/tt_transformers/tt/decoder.py::TransformerBlock` |
 | Generator contract (Protocol + ABC) | `models/common/readiness_check/contract.py` |
 | Readiness runner (teacher forcing) | `models/common/readiness_check/run_teacher_forcing.py` |
 | Reference generator (HF teacher) | `models/common/readiness_check/generate.py` |
 | Reference file schema | `models/common/readiness_check/schema.py` |
 | Full model wrapper — structural template | `models/tt_transformers/tt/model.py::Transformer` |
 | Paged KV allocation pattern | `models/tt_transformers/tt/attention.py::init_kv_cache` |
+| On-device sampling utilities | `models/common/sampling/` (`SamplingParams`, `tt_sampling`, `tt_log_probs`, `tt_penalties`) |
+| Sampling threading reference | `models/tt_transformers/tt/generator.py` (how `SamplingParams` flows through prefill / decode) |
 | Generator — kwarg shapes to mirror | `models/tt_transformers/tt/generator.py` |
 | Generator — full standalone example | `models/demos/deepseek_v3/tt/generator.py` |
 | Thin vLLM adapter template | `models/tt_transformers/tt/generator_vllm.py` |

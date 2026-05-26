@@ -16,8 +16,8 @@ contract in `contract.py`, and a reference file produced by
 
 CLI:
     python -m models.common.readiness_check.run_teacher_forcing \\
-        --model-dir models/autoports/llama31_8b_readiness_shim \\
-        --reference models/common/readiness_check/references/llama31_8b_instruct.refpt \\
+        --model-dir models/autoports/<model_name> \\
+        --reference models/common/readiness_check/references/<model>.refpt \\
         --mesh-device N150
 """
 
