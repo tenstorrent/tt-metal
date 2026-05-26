@@ -1,6 +1,6 @@
 ---
 name: optimize-decoder
-description: Optimize a functional TTNN transformer decoder layer implementation after functional-decoder bringup. Use when taking an already-correct paged prefill/decode decoder layer and improving performance with L1-sharded activations, explicit memory/program configs, DRAM-sharded decode matmuls, lower-precision weights/activations/KV cache, compute-kernel fidelity tuning, tt-perf-report advice, PCC preservation, watcher-clean proof, and final golden optimized-decoder artifacts.
+description: Optimize a functional TTNN transformer decoder layer implementation after functional-decoder bringup. Use when taking an already-correct paged prefill/decode decoder layer and improving performance with L1-sharded activations, explicit memory/program configs, DRAM-sharded decode matmuls, lower-precision weights/activations/KV cache, MoE gate-selected active-expert execution, compute-kernel fidelity tuning, tt-perf-report advice, PCC preservation, required passing stress, watcher-clean proof, and final golden optimized-decoder artifacts.
 ---
 
 # Optimize Decoder
@@ -9,7 +9,9 @@ description: Optimize a functional TTNN transformer decoder layer implementation
 
 Take a decoder layer that already passed the `functional_decoder` step and optimize it to make the best practical use of TTNN and the target hardware. The target is hardware-limited execution: DRAM-bound ops should approach DRAM bandwidth limits, compute-bound ops should use the right math fidelity and core grids, and unnecessary data movement should disappear.
 
-This is not done until the original functional bringup test contract still passes against the optimized implementation, optimized PCC and performance checks pass, the production trace path runs where applicable, watcher-clean correctness evidence exists, and final `tt-perf-report` evidence shows what remains limiting.
+This is not done until the original functional bringup test contract still passes against the optimized implementation, optimized PCC and performance checks pass, the optimized stress test runs and passes, the production trace path runs where applicable, watcher-clean correctness evidence exists, and final `tt-perf-report` evidence shows what remains limiting.
+
+A diagnostic failure packet is useful when an external blocker must be documented, but it is not goal completion. Do not mark the optimization goal complete with a `fail` manifest; a normal optimized-decoder run completes only with passing final artifacts, or with a true externally blocked state backed by evidence.
 
 ## Required Reference Reads
 
@@ -18,15 +20,17 @@ Before implementation, read these bundled references:
 - `references/optimization-knowledge.md` for TTNN optimization patterns, code paths, precision defaults, and `tt-perf-report` usage.
 - `references/artifact-formats.md` for exact artifact names, JSON schemas, status values, and markdown headings.
 
-Also read the target model's `doc/functional_decoder/` artifacts before changing code. Those artifacts define the functional baseline, representative layer kinds, tested shapes, synthetic weights, PCC, trace behavior, and sequence limits.
+Also read the target model's `doc/functional_decoder/` artifacts before changing code. Those artifacts define the functional baseline, representative layer kinds, tested shapes, synthetic weights, PCC, trace behavior, and sequence limits. Parse `doc/functional_decoder/manifest.json` and require `"status": "pass"` before optimizing; if it is missing, failed, blocked, or skipped, repair or rerun functional bringup first unless the user explicitly requested diagnostic optimization analysis.
 
 ## Definition Of Done
 
-- Start from a passing functional decoder implementation and preserve the same public test surface.
+- Start from `doc/functional_decoder/manifest.json` with `"status": "pass"` and preserve the same public test surface.
 - Rerun the functional decoder prefill, decode, PCC, KV-cache, determinism, stress, trace, and watcher checks against the optimized implementation. Optimized tests are additions to that contract, not replacements, unless the original test is cleanly parameterized to exercise the optimized backend with identical assertions.
+- Run and pass the optimized stress test for every representative layer kind and exercised mode; final optimized artifacts must not mark stress as skipped.
 - Pass optimized prefill and decode PCC with `PCC >= 0.995` for every representative layer kind and mode.
 - Record PCC deltas against the functional decoder baseline; any material drop must be explained.
 - Keep paged KV cache and traced decode semantics intact.
+- Preserve the single-user prefill/decode target. For MoE layers, optimize the gate-selected active-expert path: keep end-to-end gate-plus-expert correctness, load only selected experts from DRAM where possible, and use TTNN sparse matmul or equivalent active-expert execution instead of densifying all experts except for debug baselines.
 - Run a watcher-enabled optimized correctness pass and require it to be watcher-clean, or include evidence for a specific false positive.
 - Report warmed per-layer prefill and decode latency with Tracy signposts and `tt-perf-report`.
 - Use L1-sharded activations in decode wherever the op chain can keep them there.
@@ -42,7 +46,7 @@ Also read the target model's `doc/functional_decoder/` artifacts before changing
 
 ## Optimization Workflow
 
-1. Read the functional artifacts under `models/demos/<model>/doc/functional_decoder/`.
+1. Read the functional artifacts under `models/demos/<model>/doc/functional_decoder/` and confirm `manifest.json` has `"status": "pass"`.
 2. Reproduce the functional decoder's final PCC and perf commands before optimizing, unless the prompt provides fresh baseline evidence.
 3. Profile warmed prefill and warmed decode separately with signposts around only the measured windows.
 4. Run `tt-perf-report` on each profile and classify ops as DRAM-bound, compute-bound, communication-bound, or data-movement-only.
@@ -53,7 +57,8 @@ Also read the target model's `doc/functional_decoder/` artifacts before changing
 9. Tune precision and fidelity one group at a time: WQKV/WO, FF1/FF3, FF2, activation, KV cache, SDPA, and norms.
 10. After each accepted optimization, rerun the focused PCC and perf check for the affected layer kind and mode.
 11. Rerun the full functional decoder correctness suite in optimized mode before declaring the optimization done.
-12. At the end, rerun the complete optimized golden proof suite and write only that final evidence to `doc/optimized_decoder/`.
+12. Run the optimized stress test and require a passing result.
+13. At the end, rerun the complete optimized golden proof suite and write only that final evidence to `doc/optimized_decoder/`.
 
 ## Precision Defaults
 
@@ -84,7 +89,7 @@ python -m pip install tt-perf-report
 tt-perf-report --help
 ```
 
-Generate the ops CSV with Tracy or the device profiler fallback, then run `tt-perf-report` for prefill and decode separately using the final artifact filenames. Record every command in `commands.sh`.
+Generate the ops CSV with Tracy or the device profiler fallback, then run `tt-perf-report` for prefill and decode separately using the final artifact filenames. Keep advice enabled for the required advice run; do not use `--no-advice` for the run that feeds `tt_perf_advice.json`. Record every command in `commands.sh`.
 
 Treat `tt-perf-report` as required but not an oracle. Try its optimization advice. If advice does not improve performance, hurts PCC, or does not apply to the architecture, record the advice, trial result, and rejection reason in `tt_perf_advice.json`, then continue with the rest of the model.
 
@@ -120,6 +125,7 @@ results/stress_results.json
 watcher/watcher_summary.json
 pytest/<layer_kind_id>_prefill.log
 pytest/<layer_kind_id>_decode.log
+pytest/<layer_kind_id>_stress.log
 pytest/<layer_kind_id>_watcher.log
 watcher/<layer_kind_id>/generated/watcher/watcher.log
 watcher/<layer_kind_id>/generated/watcher/kernel_names.txt
