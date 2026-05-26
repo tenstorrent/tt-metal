@@ -259,7 +259,7 @@ class SamplingGenerator:
             out[: bitmask.shape[0], :packed_width] = bitmask.to(torch.int32)
         return out
 
-    def _bitmask_mesh_mapper(self):
+    def _bitmask_mesh_mapper(self, packed_dim: int):
         cluster_shape = tuple(self.tt_sampling.cluster_shape)
         if len(cluster_shape) != 2:
             raise ValueError(f"Expected 2D cluster shape, got {cluster_shape}")
@@ -277,9 +277,9 @@ class SamplingGenerator:
 
         sampling_dp = int(self.tt_sampling._sampling_dp)
         if sampling_axis == 0:
-            dims = (-1, 0) if sampling_dp > 1 else (-1, None)
+            dims = (packed_dim, 0) if sampling_dp > 1 else (packed_dim, None)
         elif sampling_axis == 1:
-            dims = (0, -1) if sampling_dp > 1 else (None, -1)
+            dims = (0, packed_dim) if sampling_dp > 1 else (None, packed_dim)
         else:
             raise ValueError(f"sampling_all_gather_axis must be 0 or 1, got {sampling_axis}")
 
@@ -290,16 +290,14 @@ class SamplingGenerator:
             return logits
 
         bitmask = self._format_bitmask_for_sampling(bitmask)
+        bitmask = bitmask.unsqueeze(-1)
         op_kwargs = {"sub_core_grids": self.sub_core_grids} if self.sub_core_grids is not None else {}
         tt_bitmask = ttnn.from_torch(
             bitmask,
             device=self.mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=self._bitmask_mesh_mapper(),
-        )
-        tt_bitmask = ttnn.reshape(
-            tt_bitmask, (self.seed_manager.max_batch_size, self._bitmask_packed_width, 1), **op_kwargs
+            mesh_mapper=self._bitmask_mesh_mapper(packed_dim=-2),
         )
         tt_bitmask = ttnn.bitwise_right_shift(tt_bitmask, self._bitmask_arange, **op_kwargs)
         tt_bitmask = ttnn.bitwise_and(tt_bitmask, 1, **op_kwargs)
