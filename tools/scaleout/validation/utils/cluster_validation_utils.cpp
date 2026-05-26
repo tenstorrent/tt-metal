@@ -658,7 +658,7 @@ LinkMetricsResult process_link_statuses(
 }
 
 struct PortInfo {
-    tt::scaleout_tools::PortType port_type = tt::scaleout_tools::PortType::TRACE;
+    tt::scaleout_tools::PortType port_type = tt::scaleout_tools::PortType::UNKNOWN;
     tt::scaleout_tools::PortId port_id{0};
 };
 

@@ -43,7 +43,7 @@ struct AsicChannel {
 std::ostream& operator<<(std::ostream& os, const AsicChannel& asic_channel);
 
 struct Port {
-    PortType port_type = PortType::TRACE;
+    PortType port_type = PortType::UNKNOWN;
     PortId port_id{0};
 };
 
