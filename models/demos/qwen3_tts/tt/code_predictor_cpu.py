@@ -10,6 +10,7 @@ to cause the Talker to diverge from the HF reference after ~8 decode steps.
 """
 
 import glob
+import os
 
 import torch
 import torch.nn.functional as F
@@ -45,12 +46,15 @@ class CPUCodePredictor:
         )
         model = Qwen3ForCausalLM(cfg)
 
-        snap_dirs = glob.glob(f"/root/.cache/huggingface/hub/models--{model_path.replace('/', '--')}/snapshots/*/")
-        if not snap_dirs:
-            from huggingface_hub import snapshot_download
-            snapshot_download(model_path)
+        if os.path.isdir(model_path) and glob.glob(os.path.join(model_path, "*.safetensors")):
+            snap_dir = model_path.rstrip("/") + "/"
+        else:
             snap_dirs = glob.glob(f"/root/.cache/huggingface/hub/models--{model_path.replace('/', '--')}/snapshots/*/")
-        snap_dir = snap_dirs[0]
+            if not snap_dirs:
+                from huggingface_hub import snapshot_download
+                snapshot_download(model_path)
+                snap_dirs = glob.glob(f"/root/.cache/huggingface/hub/models--{model_path.replace('/', '--')}/snapshots/*/")
+            snap_dir = snap_dirs[0]
 
         full_sd = {}
         for f in sorted(glob.glob(snap_dir + "*.safetensors")):

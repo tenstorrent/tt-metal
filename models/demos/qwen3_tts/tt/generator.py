@@ -25,8 +25,11 @@ Input embedding construction (from HF modeling_qwen3_tts.py):
       2    | text_proj(\n)                      | -
       3    | tts_pad                            | codec(think_id)
       4    | tts_pad                            | codec(think_bos_id)
-      5    | tts_bos                            | codec(language_id)
-      6+N  | text_proj(text_tokens) + tts_eos   | codec_pad * (N+1)
+      5    | tts_pad                            | codec(language_id)
+      6    | tts_pad                            | codec(think_eos_id)
+     (7)   | tts_pad                            | speaker_embed  (voice cloning only)
+      N    | tts_bos                            | codec(pad_id)
+      N+1..| text_proj(text_tokens) + tts_eos   | codec_pad * (N_text+1)
       last | tts_pad                            | codec_bos
 
     During decode, the input at each step is:
@@ -144,6 +147,7 @@ class TTSGenerator:
         language: str = "japanese",
         ref_audio: Optional[np.ndarray] = None,
         ref_sr: int = 24000,
+        speaker_emb_tt=None,
         max_new_tokens: int = 2048,
         temperature: float = 0.9,
         top_k: int = 50,
@@ -158,6 +162,8 @@ class TTSGenerator:
             language: Language code (e.g., "japanese")
             ref_audio: Optional reference audio for voice cloning [num_samples]
             ref_sr: Sample rate of reference audio
+            speaker_emb_tt: Optional pre-loaded speaker embedding (ttnn.Tensor).
+                           Takes priority over ref_audio if both are provided.
             max_new_tokens: Maximum codec tokens to generate
             temperature: Sampling temperature
             top_k: Top-k sampling parameter
@@ -168,21 +174,28 @@ class TTSGenerator:
         """
         t0 = time.time()
 
-        # Step 1: Build input embeddings (CPU + device)
-        input_embeds, trailing_text_hidden, tts_pad_embed = self._build_input_embeds(text, language)
+        # Step 1+2: Get speaker embedding as CPU tensor (if voice cloning)
+        speaker_emb_torch = None
+        if speaker_emb_tt is not None:
+            speaker_emb_torch = ttnn.to_torch(
+                speaker_emb_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1),
+            ).squeeze()[:self.talker_args.dim].unsqueeze(0)  # [1, dim]
+            logger.info(f"Using pre-loaded speaker embedding (norm={speaker_emb_torch.norm():.4f})")
+        elif ref_audio is not None:
+            speaker_emb_torch = self.speaker_encoder.extract_embedding(ref_audio, ref_sr)  # [1, dim]
+            logger.info(f"Speaker embedding extracted (norm={speaker_emb_torch.norm():.4f})")
+
+        # Build input embeddings with speaker position inserted (CPU + device)
+        input_embeds, trailing_text_hidden, tts_pad_embed = self._build_input_embeds(
+            text, language, speaker_emb_torch=speaker_emb_torch,
+        )
         seq_len = input_embeds.shape[1]
         logger.info(f"Built input embeddings: seq_len={seq_len}")
-
-        # Step 2: Extract speaker embedding (TT) if reference audio provided
-        speaker_emb = None
-        if ref_audio is not None:
-            speaker_emb = self._encode_speaker(ref_audio, ref_sr)
-            logger.info(f"Speaker embedding extracted: {speaker_emb.shape}")
 
         # Step 3+4: Talker (CB0) + Code Predictor (CB1-15) per decode step
         all_codebooks = self._generate_and_predict(
             input_embeds, trailing_text_hidden, tts_pad_embed,
-            speaker_emb, max_new_tokens, temperature, top_k, top_p,
+            None, max_new_tokens, temperature, top_k, top_p,
             repetition_penalty=repetition_penalty,
         )
         num_frames = all_codebooks.shape[1]
@@ -197,7 +210,9 @@ class TTSGenerator:
 
         return waveform, 24000
 
-    def _build_input_embeds(self, text: str, language: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _build_input_embeds(
+        self, text: str, language: str, speaker_emb_torch: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Build the full prefill input embeddings (text_side + codec_side).
 
         Follows the HF Qwen3-TTS generate() logic (modeling_qwen3_tts.py:2082-2226).
@@ -206,6 +221,9 @@ class TTSGenerator:
         Args:
             text: Input text string
             language: Language code (e.g., "japanese")
+            speaker_emb_torch: Optional [1, dim] CPU torch tensor from speaker encoder.
+                When provided, inserted as a codec-side position between think_eos
+                and codec_pad (paired with tts_pad on the text side).
 
         Returns:
             input_embeds: [1, seq_len, dim] combined text+codec embeddings
@@ -265,8 +283,12 @@ class TTSGenerator:
         codec_tag = codec_embed([args.codec_think_id, args.codec_think_bos_id, language_id, args.codec_think_eos_id])
         # Codec suffix: [codec_pad_id, codec_bos_id]
         codec_suffix = codec_embed([args.codec_pad_id, args.codec_bos_id])
-        # Full codec prefill (no speaker): [think, think_bos, lang, think_eos, pad, bos]
-        codec_prefill = torch.cat([codec_tag, codec_suffix], dim=1)  # [1, 6, dim]
+        # Full codec prefill: [think, think_bos, lang, think_eos, (speaker?), pad, bos]
+        if speaker_emb_torch is not None:
+            spk = speaker_emb_torch.float().view(1, 1, -1)  # [1, 1, dim]
+            codec_prefill = torch.cat([codec_tag, spk, codec_suffix], dim=1)  # [1, 7, dim]
+        else:
+            codec_prefill = torch.cat([codec_tag, codec_suffix], dim=1)  # [1, 6, dim]
 
         # --- Role prefix: first 3 tokens through text_projection ---
         role_ids = input_ids[:, :3]
@@ -290,19 +312,15 @@ class TTSGenerator:
         part_role = role_proj  # [1, 3, dim]
 
         # Part 2: Codec tag with tts_pad/tts_bos overlay (text_side + codec_side)
-        # HF: tts_pad * (N-2) + tts_bos paired with codec_prefill[:-1]
-        # codec_prefill has 6 entries: [think, think_bos, lang, think_eos, pad, bos]
-        # codec_prefill[:-1] = first 5: [think, think_bos, lang, think_eos, pad]
-        # text_side: [tts_pad, tts_pad, tts_pad, tts_bos, first_text_token]
-        # But in non-streaming mode, the first_text_token part is removed and replaced
-        num_codec_prefill_m1 = codec_prefill.shape[1] - 1  # 5
+        # codec_prefill[:-1] = all entries except codec_bos (last)
+        # text_side: tts_pad * (len-2) + tts_bos, paired element-wise with codec_prefill[:-1]
+        # Without speaker: 5 positions, with speaker: 6 positions (extra tts_pad+speaker_emb)
+        num_codec_prefill_m1 = codec_prefill.shape[1] - 1
         text_side_tag = torch.cat([
-            tts_pad_embed.expand(-1, num_codec_prefill_m1 - 1, -1),  # [1, 4, dim] tts_pad*4
-            tts_bos_embed,  # [1, 1, dim]
-        ], dim=1)  # [1, 5, dim] — but wait, the HF code is (N-2) pads + bos where N = codec_prefill.shape[1]
-        # Actually: tts_pad * (codec_prefill.shape[1] - 2) + tts_bos = tts_pad*4 + tts_bos = 5 items
-        # These are added to codec_prefill[:-1] (5 items)
-        part_tag = text_side_tag + codec_prefill[:, :-1, :]  # [1, 5, dim]
+            tts_pad_embed.expand(-1, num_codec_prefill_m1 - 1, -1),
+            tts_bos_embed,
+        ], dim=1)
+        part_tag = text_side_tag + codec_prefill[:, :-1, :]
 
         # Part 3: Non-streaming mode — all text content tokens + tts_eos added with codec_pad
         # Text content = input_ids[:, 3:-5] (skip role prefix and suffix)

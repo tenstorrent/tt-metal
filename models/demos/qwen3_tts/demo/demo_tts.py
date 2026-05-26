@@ -27,6 +27,17 @@ Usage (TT device — voice cloning):
         --ref_audio reference.wav \
         --output output.wav \
         --backend tt
+
+Usage (TT device — save speaker embedding for reuse):
+    python models/demos/qwen3_tts/demo/demo_tts.py \
+        --ref_audio reference.wav \
+        --save_speaker speaker.safetensors \
+        --text "こんにちは" --backend tt
+
+Usage (TT device — reuse saved speaker embedding):
+    python models/demos/qwen3_tts/demo/demo_tts.py \
+        --load_speaker speaker.safetensors \
+        --text "こんにちは" --backend tt
 """
 
 import argparse
@@ -100,18 +111,31 @@ def run_tt(args):
             ttnn.DispatchCoreType.ETH if len(device_ids) > 1 else ttnn.DispatchCoreType.WORKER
         ),
     )
-    ttnn.enable_program_cache(mesh_device)
+    try:
+        mesh_device.enable_program_cache()
+    except AttributeError:
+        ttnn.enable_program_cache(mesh_device)
 
     print(f"Building TTS generator from {args.model_path}...")
     generator = TTSGenerator.build(args.model_path, mesh_device, max_seq_len=args.max_new_tokens + 512)
 
+    from models.demos.qwen3_tts.tt.speaker_encoder import SpeakerEncoder
+
     ref_audio = None
     ref_sr = 24000
-    if args.ref_audio:
+    speaker_emb_tt = None
+
+    if args.load_speaker:
+        speaker_emb_tt = SpeakerEncoder.load_embedding(args.load_speaker, mesh_device)
+        print(f"Loaded speaker embedding from {args.load_speaker}")
+    elif args.ref_audio:
         ref_audio_raw, ref_sr = sf.read(args.ref_audio, dtype="float32")
         if ref_audio_raw.ndim > 1:
             ref_audio_raw = ref_audio_raw.mean(axis=1)
         ref_audio = ref_audio_raw
+        if args.save_speaker:
+            generator.speaker_encoder.save_embedding(ref_audio, ref_sr, args.save_speaker)
+            print(f"Saved speaker embedding to {args.save_speaker}")
 
     print(f"Generating speech for: '{args.text}' (language={args.language})")
     t0 = time.time()
@@ -120,6 +144,7 @@ def run_tt(args):
         language=args.language,
         ref_audio=ref_audio,
         ref_sr=ref_sr,
+        speaker_emb_tt=speaker_emb_tt,
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
         top_k=args.top_k,
@@ -146,6 +171,8 @@ def main():
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--ref_audio", type=str, default=None, help="Reference audio for voice cloning")
     parser.add_argument("--ref_text", type=str, default=None, help="Transcript of reference audio")
+    parser.add_argument("--save_speaker", type=str, default=None, help="Save speaker embedding to .safetensors file")
+    parser.add_argument("--load_speaker", type=str, default=None, help="Load speaker embedding from .safetensors file")
     parser.add_argument("--max_new_tokens", type=int, default=2048)
     parser.add_argument("--temperature", type=float, default=0.9)
     parser.add_argument("--top_k", type=int, default=50)

@@ -136,6 +136,70 @@ class SpeakerEncoder:
         return emb_tt
 
     @torch.inference_mode()
+    def extract_embedding(self, audio: np.ndarray, sr: int = 24000) -> torch.Tensor:
+        """Extract speaker embedding as a CPU torch tensor (for saving).
+
+        Args:
+            audio: [num_samples] numpy array, float32
+            sr: sample rate (must be 24000)
+
+        Returns:
+            torch.Tensor [1, enc_dim] float32
+        """
+        assert sr == 24000, f"Expected 24kHz audio, got {sr}Hz"
+        mel = mel_spectrogram(audio, sr=sr).to(self.dtype)
+        embedding = self.model(mel)  # [1, enc_dim]
+        return embedding.float()
+
+    def save_embedding(self, audio: np.ndarray, sr: int, path: str) -> torch.Tensor:
+        """Extract speaker embedding from audio and save to .safetensors file.
+
+        Args:
+            audio: [num_samples] numpy array, float32
+            sr: sample rate (must be 24000)
+            path: output file path (.safetensors)
+
+        Returns:
+            torch.Tensor [1, enc_dim] the saved embedding
+        """
+        from safetensors.torch import save_file
+
+        embedding = self.extract_embedding(audio, sr)
+        save_file(
+            {"speaker_embedding": embedding},
+            path,
+            metadata={"enc_dim": str(self.enc_dim), "sample_rate": str(sr)},
+        )
+        logger.info(f"Saved speaker embedding to {path} (enc_dim={self.enc_dim}, norm={embedding.norm():.4f})")
+        return embedding
+
+    @staticmethod
+    def load_embedding(path: str, mesh_device) -> "ttnn.Tensor":
+        """Load saved speaker embedding and transfer to TT device.
+
+        Args:
+            path: path to .safetensors file
+            mesh_device: TT mesh device
+
+        Returns:
+            ttnn.Tensor [1, 1, 1, enc_dim] on device (bfloat16, TILE_LAYOUT)
+        """
+        from safetensors.torch import load_file
+
+        data = load_file(path)
+        embedding = data["speaker_embedding"]  # [1, enc_dim]
+        logger.info(f"Loaded speaker embedding from {path}: {embedding.shape}, norm={embedding.norm():.4f}")
+
+        emb_tt = ttnn.from_torch(
+            embedding.unsqueeze(0).unsqueeze(0),  # [1, 1, 1, enc_dim]
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        return emb_tt
+
+    @torch.inference_mode()
     def encode_mel(self, mel: torch.Tensor) -> "ttnn.Tensor":
         """Extract speaker embedding from pre-computed mel spectrogram.
 

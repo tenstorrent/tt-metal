@@ -16,6 +16,15 @@ Usage (TT device — voice cloning):
     python models/demos/qwen3_tts/demo/demo_ja.py \
         --text "こんにちは" --ref_audio reference.wav --backend tt
 
+Usage (TT device — save speaker embedding for reuse):
+    python models/demos/qwen3_tts/demo/demo_ja.py \
+        --ref_audio reference.wav --save_speaker speaker.safetensors \
+        --text "こんにちは" --backend tt
+
+Usage (TT device — reuse saved speaker embedding):
+    python models/demos/qwen3_tts/demo/demo_ja.py \
+        --load_speaker speaker.safetensors --text "こんにちは" --backend tt
+
 Interactive mode (continuous text input):
     python models/demos/qwen3_tts/demo/demo_ja.py --interactive --backend tt
 
@@ -63,7 +72,7 @@ def generate_one_reference(model, text, language, gen_config):
     return wav, sr, elapsed
 
 
-def generate_one_tt(generator, text, language, gen_config, ref_audio=None, ref_sr=24000):
+def generate_one_tt(generator, text, language, gen_config, ref_audio=None, ref_sr=24000, speaker_emb_tt=None):
     """Generate one utterance with TT pipeline."""
     t0 = time.time()
     waveform, sr = generator.generate(
@@ -71,6 +80,7 @@ def generate_one_tt(generator, text, language, gen_config, ref_audio=None, ref_s
         language=language,
         ref_audio=ref_audio,
         ref_sr=ref_sr,
+        speaker_emb_tt=speaker_emb_tt,
         max_new_tokens=gen_config.get("max_new_tokens", 2048),
         temperature=gen_config.get("temperature", 0.9),
         top_k=gen_config.get("top_k", 50),
@@ -134,21 +144,39 @@ def run_single(args):
 
     ref_audio = None
     ref_sr = 24000
-    if args.ref_audio:
-        ref_audio_raw, ref_sr = sf.read(args.ref_audio, dtype="float32")
-        if ref_audio_raw.ndim > 1:
-            ref_audio_raw = ref_audio_raw.mean(axis=1)
-        ref_audio = ref_audio_raw
+    speaker_emb_tt = None
 
     print(f"Text: {args.text}")
     print(f"Language: {args.language}, Backend: {args.backend}")
 
     if args.backend == "reference":
+        if args.ref_audio:
+            ref_audio_raw, ref_sr = sf.read(args.ref_audio, dtype="float32")
+            if ref_audio_raw.ndim > 1:
+                ref_audio_raw = ref_audio_raw.mean(axis=1)
+            ref_audio = ref_audio_raw
         model = build_reference_model(args.model_path, args.device)
         wav, sr, elapsed = generate_one_reference(model, args.text, args.language, gen_config)
     else:
         generator, mesh_device = build_tt_generator(args.model_path, args.max_new_tokens)
-        wav, sr, elapsed = generate_one_tt(generator, args.text, args.language, gen_config, ref_audio, ref_sr)
+
+        from models.demos.qwen3_tts.tt.speaker_encoder import SpeakerEncoder
+
+        if args.load_speaker:
+            speaker_emb_tt = SpeakerEncoder.load_embedding(args.load_speaker, mesh_device)
+            print(f"Loaded speaker embedding from {args.load_speaker}")
+        elif args.ref_audio:
+            ref_audio_raw, ref_sr = sf.read(args.ref_audio, dtype="float32")
+            if ref_audio_raw.ndim > 1:
+                ref_audio_raw = ref_audio_raw.mean(axis=1)
+            ref_audio = ref_audio_raw
+            if args.save_speaker:
+                generator.speaker_encoder.save_embedding(ref_audio, ref_sr, args.save_speaker)
+                print(f"Saved speaker embedding to {args.save_speaker}")
+
+        wav, sr, elapsed = generate_one_tt(
+            generator, args.text, args.language, gen_config, ref_audio, ref_sr, speaker_emb_tt
+        )
 
     save_and_report(wav, sr, elapsed, args.output, args.text)
 
@@ -179,10 +207,16 @@ def run_preset(args):
         return
 
     mesh_device = None
+    speaker_emb_tt = None
     if args.backend == "reference":
         model = build_reference_model(args.model_path, args.device)
     else:
         generator, mesh_device = build_tt_generator(args.model_path, args.max_new_tokens)
+        if args.load_speaker:
+            from models.demos.qwen3_tts.tt.speaker_encoder import SpeakerEncoder
+
+            speaker_emb_tt = SpeakerEncoder.load_embedding(args.load_speaker, mesh_device)
+            print(f"Loaded speaker embedding from {args.load_speaker}")
 
     results = []
     print(f"\nGenerating {len(texts)} preset texts ({args.backend})...\n")
@@ -193,7 +227,7 @@ def run_preset(args):
         if args.backend == "reference":
             wav, sr, elapsed = generate_one_reference(model, text, args.language, gen_config)
         else:
-            wav, sr, elapsed = generate_one_tt(generator, text, args.language, gen_config)
+            wav, sr, elapsed = generate_one_tt(generator, text, args.language, gen_config, speaker_emb_tt=speaker_emb_tt)
 
         result = save_and_report(wav, sr, elapsed, output_path, text)
         result["name"] = name
@@ -230,10 +264,16 @@ def run_interactive(args):
     os.makedirs(output_dir, exist_ok=True)
 
     mesh_device = None
+    speaker_emb_tt = None
     if args.backend == "reference":
         model = build_reference_model(args.model_path, args.device)
     else:
         generator, mesh_device = build_tt_generator(args.model_path, args.max_new_tokens)
+        if args.load_speaker:
+            from models.demos.qwen3_tts.tt.speaker_encoder import SpeakerEncoder
+
+            speaker_emb_tt = SpeakerEncoder.load_embedding(args.load_speaker, mesh_device)
+            print(f"Loaded speaker embedding from {args.load_speaker}")
 
     print("\nQwen3-TTS Interactive Mode (Japanese)")
     print("Type text to synthesize. Commands: /quit, /preset <name|all>")
@@ -268,7 +308,7 @@ def run_interactive(args):
                     if args.backend == "reference":
                         wav, sr, elapsed = generate_one_reference(model, ptext, args.language, gen_config)
                     else:
-                        wav, sr, elapsed = generate_one_tt(generator, ptext, args.language, gen_config)
+                        wav, sr, elapsed = generate_one_tt(generator, ptext, args.language, gen_config, speaker_emb_tt=speaker_emb_tt)
                     save_and_report(wav, sr, elapsed, output_path, ptext)
                 continue
 
@@ -278,7 +318,7 @@ def run_interactive(args):
             if args.backend == "reference":
                 wav, sr, elapsed = generate_one_reference(model, text, args.language, gen_config)
             else:
-                wav, sr, elapsed = generate_one_tt(generator, text, args.language, gen_config)
+                wav, sr, elapsed = generate_one_tt(generator, text, args.language, gen_config, speaker_emb_tt=speaker_emb_tt)
             save_and_report(wav, sr, elapsed, output_path, text)
 
     except KeyboardInterrupt:
@@ -299,6 +339,8 @@ def main():
     parser.add_argument("--backend", type=str, choices=["reference", "tt"], default="reference")
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--ref_audio", type=str, default=None, help="Reference audio for voice cloning")
+    parser.add_argument("--save_speaker", type=str, default=None, help="Save speaker embedding to .safetensors file")
+    parser.add_argument("--load_speaker", type=str, default=None, help="Load speaker embedding from .safetensors file")
     parser.add_argument("--max_new_tokens", type=int, default=2048)
     parser.add_argument("--temperature", type=float, default=0.9)
     parser.add_argument("--top_k", type=int, default=50)
