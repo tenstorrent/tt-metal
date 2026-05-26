@@ -1080,3 +1080,169 @@ This is the **strongest masking** we've seen so far in any patch. 2c only collap
 **State.** Probe B left in place; test parametrize narrowed to pos=127 only (multi-chunk hangs sdpa_tail; needs a different scratch CB).
 
 ---
+
+## Attempt 24 — Swap final `pack_block_contiguous` for `pack_tile` (per-tile loop)
+
+**What.** Replaced the final mm2 → `sdpa_output_cb` pack loop (`flash_mla.hpp:812-816`) with per-tile `pack_tile(mm2_dst_tile_offset + i + j, sdpa_output_cb, i + j)` calls. Removed `pack_block_contiguous_init(sdpa_output_cb)` at line 741 (pack_tile is documented as not needing explicit init — `tt_metal/hw/inc/api/compute/pack.h:44`). Reverted Attempt-23+ pre-recip dump block. Restored Attempt-19's `hash_cb(sdpa_output_cb, out_chunk_tiles, 0x30)` after the final `cb_push_back`.
+
+**Motivation.** Direct test of "is `pack_block_contiguous` itself bank-asymmetric on identical DEST input?" If swapping to `pack_tile` collapses the hash distribution, the experimental block-contiguous MOP/replay machinery is implicated.
+
+**Result @ pos=127, `num_internal_iterations=2`.**
+
+| Metric | Attempt 19 | pack_tile |
+|---|---|---|
+| MLP PCC | 0.9901647631143314 | **0.9483054293745399** (fails 0.975 threshold) |
+| Hash unique / total at `0x30` | 32 / 32 | 23 / 32 |
+| Paired cores (iter-0 == iter-1) | 0 / 16 | 9 / 16 |
+
+**Conclusion (contaminated).** Initially read as a "strong signal" (9/16 cores fixed) but the PCC drop to 0.9483 — far below 0.975 threshold — means `pack_tile` is writing **different** bytes than `pack_block_contiguous`, so the hash comparison is apples-to-oranges. Two distinct findings entangled:
+
+1. `pack_tile` produces different L1 output than `pack_block_contiguous` for this kernel (PCC 0.99 → 0.95).
+2. Among those (wrong) bytes, 9/16 cores happen to be bank-symmetric.
+
+We cannot infer that `pack_block_contiguous` is the bug op from this experiment.
+
+**State.** Reverted.
+
+---
+
+## Attempt 25 — Swap final pack for `pack_tile_block` (canonical sibling)
+
+**What.** Replaced inner loop with `pack_tile_block(mm2_dst_tile_offset + i, sdpa_output_cb, output_granularity)` — the canonical multi-tile pack API documented at `pack.h:101`, using `llk_matmul_pack` under the hood. Kept everything else as in Attempt 24 (no `pack_block_contiguous_init`).
+
+**Motivation.** `pack_tile` and `pack_tile_block` use the same LLK dispatch (`llk_pack` / `llk_matmul_pack`); the latter packs N tiles in one call. If both produce the same hash distribution, the API doesn't matter; if `pack_tile_block` matches `pack_block_contiguous`'s correctness, the bug is in `pack_block_contiguous`'s MOP specifically.
+
+**Result @ pos=127.**
+
+| Metric | Attempt 19 | pack_tile | pack_tile_block |
+|---|---|---|---|
+| MLP PCC | 0.9901647631143314 | 0.9483054293745399 | **0.9483054293745399** (bit-identical to pack_tile) |
+| Unique / total | 32 / 32 | 23 / 32 | 20 / 32 |
+| Paired cores | 0 / 16 | 9 / 16 | 12 / 16 |
+
+**Conclusion (structural error found).** `pack_tile` and `pack_tile_block` produce **identical** numerics (PCC bit-identical), confirming the regression is structural, not API-specific. The reason: mm2's DEST occupies 16 *mini-tiles* (8×32 layout from `TD_8x32`), which is 4 standard-32×32-tile-equivalents. `pack_tile_block(..., ntiles=16)` interprets `ntiles=16` as **16 standard 32×32 tiles** and reads 4× past the actual mm2 region into the adjacent DEST scratch (max/sum/corr_exp/mm1 — all positioned per `flash_mla.hpp:711-719`). So we were hashing "mm2 + scratch" L1 bytes, not pure mm2. The 12 paired cores reflect "scratch areas happen to be bank-symmetric on those cores", not "the bug was in pack_block_contiguous".
+
+`pack_block_contiguous` uses a MOP that's configured via `_llk_pack_block_contiguous_mop_config_(pack_dst_format, face_r_dim, num_faces)` — and that mop_config reads CB metadata (`get_output_face_r_dim`, `get_output_num_faces`), so it adapts to mini-tile geometry. `pack_tile` / `pack_tile_block` use the default packer dispatch that assumes standard tiles.
+
+**State.** Reverted.
+
+---
+
+## Attempt 26 — Surgical RMW: `pack_reads_per_xy_plane = face_r_dim`
+
+**What.** Inspection of the LLK reveals (`tt_llk_blackhole/llk_lib/experimental/llk_pack_block.h:40-42`):
+
+> Precondition: `_llk_pack_init_` or `_llk_pack_configure_addrmod_` + `set_packer_strides` must have been called to establish the normal pack ADDR_MOD_0/1/2 and strides. This function only replaces the MOP.
+
+`pack_block_contiguous_init` programs the MOP and REPLAY buffer for the mini-tile face geometry (via `get_output_face_r_dim` / `get_output_num_faces`), but the precondition state — addr_mods, strides, **pack counters** — comes from whatever upstream `llk_pack_init` last ran. In our pipeline the last upstream init was for standard 32×32 tiles, so `PACK_COUNTERS_SEC0.pack_reads_per_xy_plane = FACE_R_DIM = 16`. With our 8×32 mini-tile output CBs, the tile position generator's Y wraps past mini-tile boundaries, generating wrong `EdgeMask` selections (per `tt-isa-documentation/WormholeB0/.../Packers/EdgeMasking.md`).
+
+Surgical patch — a single RMW to `PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW` before `pack_block_contiguous_init(sdpa_output_cb)`:
+
+```cpp
+PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(
+    get_output_face_r_dim(get_output_id(sdpa_output_cb)))));
+pack_block_contiguous_init(sdpa_output_cb);
+```
+
+**Result @ pos=127.**
+
+| Metric | Baseline | RMW with `face_r_dim` (=8) |
+|---|---|---|
+| MLP PCC | 0.9901647631143314 | **0.9901647631143314 (bit-identical)** |
+| Unique / total | 32 / 32 | **29 / 32** |
+| Paired cores | 0 / 16 | **3 / 16** |
+
+PCC stays at baseline (correctness preserved). 3 cores now have bit-identical iter-0 / iter-1 output.
+
+**Conclusion.** `pack_reads_per_xy_plane` IS a real stale-state issue — patching it cleanly fixes 3 cores out of 16. But 13 cores are unaffected, so this counter is not the dominant asymmetry source for most of them.
+
+**State.** Kept (refined to value `1` in Attempt 27).
+
+---
+
+## Attempt 27 — RMW with value `1` (Nikola's "safe everywhere except pack_untilize")
+
+**What.** Per HW-team guidance: `pack_reads_per_xy_plane = 1` is safe for any pack op that isn't `pack_untilize`. Forces the tile position generator's Y to wrap after every iteration. Replaced the dynamic `get_output_face_r_dim(...)` value with hardcoded `1`.
+
+**Result @ pos=127.**
+
+| Metric | Baseline | RMW=8 (face_r_dim) | **RMW=1** |
+|---|---|---|---|
+| MLP PCC | 0.9901647631143314 | 0.9901647631143314 | **0.9901647631143314** |
+| Unique / total | 32 / 32 | 29 / 32 | **28 / 32** |
+| Paired cores | 0 / 16 | 3 / 16 | **4 / 16** |
+
+One additional core collapses. PCC unchanged.
+
+**Conclusion.** Best surgical fix found so far. Kept as the in-tree patch.
+
+**State.** Kept.
+
+---
+
+## Attempt 28 — Reset all PAC ADC counters (X/Y/Z/W on both channels)
+
+**What.** Hypothesis follow-up after reading `tt-isa-documentation/.../Packers/InputAddressGenerator.md` + `OutputAddressGenerator.md`: PACR's DEST read address is composed from ADC Channel[0] X/Y/Z/W, and the L1 write address from Channel[1] Y/Z/W. `_llk_pack_block_contiguous_` (`tt_llk_blackhole/.../llk_pack_block.h:189-204`) only resets `ch0_z` (mask `0b0001`) on entry and `ch0_z`+`ch1_z` (mask `0b0101`) on exit. All other ADC fields are inherited from upstream. If `ch0_y` is non-zero on entry, the first PACR reads from row `ch0_y` instead of row 0 — landing in different DEST contents on bank 0 vs bank 1.
+
+Tried two placements of `TTI_SETADCXY(p_setadc::PAC, 0,0,0,0, 0b1111) + TTI_SETADCZW(p_setadc::PAC, 0,0,0,0, 0b1111)`:
+
+**28a — pre-chunk-loop** (right after the new RMW, before `pack_block_contiguous_init`):
+| MLP PCC | 0.0006286624305142914 (catastrophic) |
+| Paired cores | 1 / 16 |
+
+The chunk loop's compute ops (`reduce_max`/`reduce_sum`/MM2) rely on ADC state being set by their own inits; zeroing it at flash_mla entry corrupts the chunk's mid-pack ops.
+
+**28b — post-chunk-loop, pre-final-pack** (between `compute_sdpa_recip` and the final pack loop):
+| MLP PCC | 0.004497569060970548 (catastrophic) |
+| Paired cores | 5 / 16 |
+
+Still catastrophic. `compute_sdpa_recip` and the chunk loop deliberately leave ADC in the state the next pack needs (set_dst_write_addr only sets `ch0_w`; the rest must be correct from the prior op for the pack's MOP to read mm2 at the right DEST address).
+
+**Conclusion.** ADC counters at the boundary BETWEEN compute ops are NOT "stale upstream garbage" — they are the load-bearing state machine output of the prior compute. Resetting them breaks the pipeline. The PACR-level partial reset (only `ch0_z`) in `_llk_pack_block_contiguous_` is intentional, not a bug.
+
+**State.** Reverted.
+
+---
+
+## Attempt 29 — Reset only `ch0_y` (surgical narrowing of Attempt 28)
+
+**What.** Most ADC fields needed to stay (per 28), but `ch0_y` is the one most likely to misdirect DEST reads at a half-DEST granularity (rows vs face boundaries). Replaced the full reset with `TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0010)` — only `ch0_y = 0`.
+
+**Result @ pos=127** (on top of Attempt 27's RMW=1):
+
+| Metric | RMW=1 only | RMW=1 + `ch0_y` reset |
+|---|---|---|
+| MLP PCC | 0.9901647631143314 | 0.9901647631143314 (bit-identical) |
+| Unique / total | 28 / 32 | **30 / 32** |
+| Paired cores | 4 / 16 | **2 / 16** |
+
+PCC preserved, but paired-core count DROPPED from 4 to 2. Resetting `ch0_y` made cores diverge MORE.
+
+**Conclusion.** `ch0_y` at flash_mla's final-pack entry is consistent between iter-0 and iter-1 on the cores that previously matched — forcing it to 0 shifts those cores into a different (asymmetric) DEST region. So `ch0_y` was load-bearing on those cores, not stale.
+
+**State.** Reverted.
+
+---
+
+## Updated handoff (post Attempts 24-29)
+
+**Confirmed surgical fix in tree:**
+```cpp
+PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1)));
+pack_block_contiguous_init(sdpa_output_cb);
+```
+4 of 16 cores' bank-asymmetry collapses; PCC unchanged. Real stale-state bug found and fixed (one of multiple).
+
+**Asymmetry sources remaining (12/16 cores still divergent):**
+- NOT pack-side ADC residue (Attempts 28-29 ruled out).
+- NOT pack MOP/REPLAY config (Attempt 25 ruled out the API).
+- Possibly: `PCK_EDGE_OFFSET_SEC` mask / `TILE_ROW_SET_MAPPING` left at non-default by upstream.
+- Possibly: ADDR_MOD_PACK_SEC values left at non-default — `llk_pack.h:49-68` shows default `y_src.incr=4`, `y_dst.incr=4`, but if upstream used `untilize` or `tilize` variants, increments differ.
+- Most likely: **compute-side bank-asymmetry** in the chunk loop (`reduce_max` / `reduce_sum` SFPSTORE-SFPLOAD round-trips) or in `compute_sdpa_recip` itself. The bank-asymmetric bytes are already in DEST when pack runs; pack faithfully transmits them to L1.
+
+**Next probe candidates:**
+1. Hash DEST→L1 dump RIGHT AFTER `compute_sdpa_recip`, pre-final-pack — does mm2 in DEST already differ between iter-0 and iter-1? (Caveat: any added pack acts as a masking probe per Attempts 23+. Hash via SFPU path (#43060) would be less invasive.)
+2. Inspect `PCK_EDGE_OFFSET_SEC0_mask` and `TILE_ROW_SET_MAPPING_0` via tt-exalens at flash_mla entry vs after the patch.
+3. Run RMW=1 patch at `position_id=8190` (multi-chunk, MLP-PCC-alternation case) to see if the partial fix moves the downstream MLP PCC gap.
+
+---

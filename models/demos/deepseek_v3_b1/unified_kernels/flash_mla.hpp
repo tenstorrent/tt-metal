@@ -738,6 +738,12 @@ struct FlashMLADecode {
                 sdpa_output_cb = cb_out_o;
                 sdpa_ms_cb = cb_out_ms;
             }
+            // PATCH (#43563): pack_block_contiguous_init programs only the MOP +
+            // REPLAY buffer. The PACR address counters come from whatever
+            // upstream op last ran llk_pack_init. For our 8x32 mini-tile path
+            // PACK_COUNTERS pack_reads_per_xy_plane is left at upstream's
+            // FACE_R_DIM=16; safe value for everything except pack_untilize is 1.
+            PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1)));
             pack_block_contiguous_init(sdpa_output_cb);
             uint32_t num_chunks = (k_chunk_end - k_chunk_start + args.num_cores_per_head - 1) / args.num_cores_per_head;
             bool mask_last_chunk = k_chunk_end == k_num_chunks && (cur_pos + 1) % args.k_chunk_size != 0;
@@ -775,32 +781,6 @@ struct FlashMLADecode {
                     !sdpa_output_is_final && last_chunk,
                     mask_last_chunk && last_chunk);
             }
-            // DEBUG #43563: dump *pre-recip* mm2 (raw P*V accumulator) to a
-            // per-iter dedicated CB BEFORE the tail's compute_sdpa_recip
-            // cancellation. Two debug CBs, both bound to `mla_iter_dump_buffer`
-            // at disjoint L1 offsets:
-            //   cb_out_in     -> offset 0     (iter-0)
-            //   cb_iter1_dump -> offset 24576 (iter-1)
-            // Per-TRISC2 static counter selects: first flash_mla call (iter-0)
-            // packs to cb_out_in; second call (iter-1) packs to cb_iter1_dump.
-            // Both packed bytes survive until host readback. Packs the raw mm2
-            // because flash-attention scale-invariance (compute_sdpa_recip)
-            // cancels iter-0/iter-1 bank-asymmetry in the *post*-recip output
-            // (verified: post-recip dump shows bit-identical iter-0/iter-1).
-            // The bank-asymmetric signal lives in the PRE-recip mm2.
-            // SAFE ONLY at pos=127 (sdpa_tail does not consume cb_out_in).
-            {
-                static uint32_t flash_mla_iter_dump_call_count = 0;
-                const uint32_t debug_dump_cb = (flash_mla_iter_dump_call_count == 0) ? cb_out_in : cb_iter1_dump;
-                cb_reserve_back(debug_dump_cb, out_chunk_tiles);
-                pack_block_contiguous_init(debug_dump_cb);
-                for (uint32_t i = 0; i < out_chunk_tiles; i += output_granularity) {
-                    pack_block_contiguous(mm2_dst_tile_offset + i, debug_dump_cb, output_granularity);
-                }
-                cb_push_back(debug_dump_cb, out_chunk_tiles);
-                pack_block_contiguous_init(sdpa_output_cb);
-                flash_mla_iter_dump_call_count++;
-            }
             if (!sdpa_output_is_final) {
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
                 pack_block_contiguous(max_dst_tile_offset, sdpa_ms_cb, 1);
@@ -815,6 +795,11 @@ struct FlashMLADecode {
                 PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));
             }
             cb_push_back(sdpa_output_cb, out_chunk_tiles);
+            // PATCH (#43563 debug): Attempt 19 hash diagnostic. Bug-present
+            // signal is 32 unique / 32 emissions at pos=127. If the
+            // pack_tile-vs-pack_block_contiguous swap changes this, the pack
+            // pathway is implicated.
+            hash_cb(sdpa_output_cb, out_chunk_tiles, 0x30);
             tile_regs_commit();
             tile_regs_wait();
             tile_regs_release();
