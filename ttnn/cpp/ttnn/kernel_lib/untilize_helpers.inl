@@ -11,8 +11,8 @@
  * It should only be included by untilize_helpers.hpp.
  */
 
-#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dfb_helpers_compute.hpp"
+#include "api/dataflow/dataflow_buffer.h"
 
 namespace compute_kernel_lib {
 
@@ -43,7 +43,7 @@ constexpr uint32_t compute_num_blocks(uint32_t total_width, uint32_t max_block_w
 // Standalone Init/Uninit Wrapper Functions Implementations
 // =============================================================================
 
-template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb, untilize_config::RemapMode remap_mode>
+template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb, untilize_config::RemapMode remap_mode>
 ALWI void untilize_init() {
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
     constexpr bool use_block_based_pack = (block_width_tiles > dest_limit);
@@ -54,22 +54,22 @@ ALWI void untilize_init() {
 
     if constexpr (use_block_based_pack) {
         if constexpr (configure_remap) {
-            pack_untilize_init<sub_block_width, block_width_tiles>(input_cb, output_cb);
+            pack_untilize_init<sub_block_width, block_width_tiles>(input_dfb, output_dfb);
         } else {
-            pack_untilize_init_skip_remap<sub_block_width, block_width_tiles>(input_cb, output_cb);
+            pack_untilize_init_skip_remap<sub_block_width, block_width_tiles>(input_dfb, output_dfb);
         }
     } else {
         if constexpr (configure_remap) {
-            pack_untilize_init<block_width_tiles, block_width_tiles>(input_cb, output_cb);
+            pack_untilize_init<block_width_tiles, block_width_tiles>(input_dfb, output_dfb);
         } else {
-            pack_untilize_init_skip_remap<block_width_tiles, block_width_tiles>(input_cb, output_cb);
+            pack_untilize_init_skip_remap<block_width_tiles, block_width_tiles>(input_dfb, output_dfb);
         }
     }
 }
 
-template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
+template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
 ALWI void untilize_uninit() {
-    pack_untilize_uninit(output_cb);
+    pack_untilize_uninit(output_dfb);
 }
 
 // =============================================================================
@@ -78,25 +78,25 @@ ALWI void untilize_uninit() {
 
 template <
     uint32_t block_width_tiles,
-    uint32_t input_cb,
-    uint32_t output_cb,
+    uint32_t input_dfb,
+    uint32_t output_dfb,
     untilize_config::InitUninitMode init_uninit_mode,
     untilize_config::WaitMode wait_mode,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
     untilize_config::RemapMode remap_mode>
 ALWI void untilize(uint32_t num_blocks) {
     // Compile-time validation
-    static_assert(input_cb != output_cb, "Untilize cannot be done in-place: input_cb and output_cb must be different");
+    static_assert(input_dfb != output_dfb, "Untilize cannot be done in-place: input_dfb and output_dfb must be different");
     static_assert(block_width_tiles > 0, "block_width_tiles must be greater than 0");
-    static_assert(input_cb < 32, "Invalid input_cb: must be less than 32");
-    static_assert(output_cb < 32, "Invalid output_cb: must be less than 32");
+    static_assert(input_dfb < 32, "Invalid input_dfb: must be less than 32");
+    static_assert(output_dfb < 32, "Invalid output_dfb: must be less than 32");
 
     // Runtime parameter validation
     ASSERT(num_blocks > 0);
 
     // Untilize output must not be a block float format (Bfp8/4/2 and _b variants).
     // Block floats have shared exponents that break tile-to-row-major reinterpretation.
-    PACK(ASSERT(!is_block_float_format(pack_dst_format[output_cb])));
+    PACK(ASSERT(!is_block_float_format(pack_dst_format[output_dfb])));
 
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
 
@@ -111,11 +111,11 @@ ALWI void untilize(uint32_t num_blocks) {
 
     // Reconfigure register datatypes if requested
     if constexpr (use_unpack_reconfig) {
-        reconfig_data_format_srca(input_cb);
+        reconfig_data_format_srca(input_dfb);
     }
 
     if constexpr (use_pack_reconfig) {
-        pack_reconfig_data_format(output_cb);
+        pack_reconfig_data_format(output_dfb);
     }
 
     // Determine which dispatch path to use
@@ -127,14 +127,14 @@ ALWI void untilize(uint32_t num_blocks) {
         use_block_based_pack ? (block_width_tiles / num_sub_blocks) : block_width_tiles;
     constexpr bool configure_remap = (remap_mode == untilize_config::RemapMode::Configure);
 
-    // Validate CB capacity.
+    // Validate DFB capacity.
     // Guarded because get_local_cb_interface() references cb_interface, which is
     // not defined for the MATH TRISC (trisc.cc excludes it via #if !defined(UCK_CHLKC_MATH)).
-    PACK(ASSERT(get_cb_num_pages(output_cb) >= block_width_tiles));
+    PACK(ASSERT(get_dfb_num_pages(output_dfb) >= block_width_tiles));
     if constexpr (use_block_based_pack) {
-        UNPACK(ASSERT(get_cb_num_pages(input_cb) >= sub_block_width));
+        UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= sub_block_width));
     } else {
-        UNPACK(ASSERT(get_cb_num_pages(input_cb) >= block_width_tiles));
+        UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= block_width_tiles));
     }
 
     // =================================================================
@@ -146,15 +146,15 @@ ALWI void untilize(uint32_t num_blocks) {
         init_uninit_mode == untilize_config::InitUninitMode::InitOnly) {
         if constexpr (use_block_based_pack) {
             if constexpr (configure_remap) {
-                pack_untilize_init<sub_block_width, block_width_tiles>(input_cb, output_cb);
+                pack_untilize_init<sub_block_width, block_width_tiles>(input_dfb, output_dfb);
             } else {
-                pack_untilize_init_skip_remap<sub_block_width, block_width_tiles>(input_cb, output_cb);
+                pack_untilize_init_skip_remap<sub_block_width, block_width_tiles>(input_dfb, output_dfb);
             }
         } else {
             if constexpr (configure_remap) {
-                pack_untilize_init<block_width_tiles, block_width_tiles>(input_cb, output_cb);
+                pack_untilize_init<block_width_tiles, block_width_tiles>(input_dfb, output_dfb);
             } else {
-                pack_untilize_init_skip_remap<block_width_tiles, block_width_tiles>(input_cb, output_cb);
+                pack_untilize_init_skip_remap<block_width_tiles, block_width_tiles>(input_dfb, output_dfb);
             }
         }
     }
@@ -163,13 +163,13 @@ ALWI void untilize(uint32_t num_blocks) {
     // UPFRONT WAITING (if requested)
     // =================================================================
 
-    // Construct CircularBuffer objects for sync operations
-    CircularBuffer in_cb(input_cb);
-    CircularBuffer out_cb(output_cb);
+    // Construct DataflowBuffer objects for sync operations
+    DataflowBuffer in_dfb(input_dfb);
+    DataflowBuffer out_dfb(output_dfb);
 
     if constexpr (wait_mode == untilize_config::WaitMode::WaitUpfront) {
         uint32_t total_tiles = block_width_tiles * num_blocks;
-        in_cb.wait_front(total_tiles);
+        in_dfb.wait_front(total_tiles);
     }
 
     // =================================================================
@@ -184,15 +184,15 @@ ALWI void untilize(uint32_t num_blocks) {
         // =============================================================
 
         for (uint32_t r = 0; r < num_blocks; ++r) {
-            out_cb.reserve_back(block_width_tiles);
+            out_dfb.reserve_back(block_width_tiles);
             for (uint32_t b = 0; b < num_sub_blocks; ++b) {
                 if constexpr (wait_mode == untilize_config::WaitMode::WaitBlock) {
-                    in_cb.wait_front(sub_block_width);
+                    in_dfb.wait_front(sub_block_width);
                 }
-                pack_untilize_block<sub_block_width, block_width_tiles>(input_cb, 1, output_cb, b);
-                in_cb.pop_front(sub_block_width);
+                pack_untilize_block<sub_block_width, block_width_tiles>(input_dfb, 1, output_dfb, b);
+                in_dfb.pop_front(sub_block_width);
             }
-            out_cb.push_back(block_width_tiles);
+            out_dfb.push_back(block_width_tiles);
         }
 
     } else {
@@ -203,12 +203,12 @@ ALWI void untilize(uint32_t num_blocks) {
 
         for (uint32_t r = 0; r < num_blocks; ++r) {
             if constexpr (wait_mode == untilize_config::WaitMode::WaitBlock) {
-                in_cb.wait_front(block_width_tiles);
+                in_dfb.wait_front(block_width_tiles);
             }
-            out_cb.reserve_back(block_width_tiles);
-            pack_untilize_block<block_width_tiles, block_width_tiles>(input_cb, 1, output_cb, 0);
-            in_cb.pop_front(block_width_tiles);
-            out_cb.push_back(block_width_tiles);
+            out_dfb.reserve_back(block_width_tiles);
+            pack_untilize_block<block_width_tiles, block_width_tiles>(input_dfb, 1, output_dfb, 0);
+            in_dfb.pop_front(block_width_tiles);
+            out_dfb.push_back(block_width_tiles);
         }
     }
 
@@ -219,7 +219,7 @@ ALWI void untilize(uint32_t num_blocks) {
     if constexpr (
         init_uninit_mode == untilize_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == untilize_config::InitUninitMode::UninitOnly) {
-        pack_untilize_uninit(output_cb);
+        pack_untilize_uninit(output_dfb);
     }
 }
 
