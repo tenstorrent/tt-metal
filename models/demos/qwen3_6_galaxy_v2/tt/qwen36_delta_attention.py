@@ -101,11 +101,15 @@ def _causal_conv1d_fir_mesh(
                 memory_config=memory_config,
             )
     else:
-        pad_torch = torch.zeros(B, kernel_size - 1, D, dtype=torch.bfloat16)
+        # V4: follow x_rm dtype so fp32 activation mode doesn't trip
+        # ttnn.concat([pad, x_rm])'s same-dtype assertion.
+        x_dtype = x_rm.dtype
+        pad_torch_dtype = torch.float32 if x_dtype == ttnn.float32 else torch.bfloat16
+        pad_torch = torch.zeros(B, kernel_size - 1, D, dtype=pad_torch_dtype)
         pad = ttnn.from_torch(
             pad_torch,
             device=mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=x_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=memory_config,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -521,17 +525,22 @@ class TtQwen36DeltaAttention(LightweightModule):
 
     def _build_conv_zero_pad(self):
         """Replicated zero buffer used by _causal_conv1d_fir_mesh when no
-        conv_state has been written yet. Sized for max_batch_size."""
+        conv_state has been written yet. Sized for max_batch_size.
+
+        V4: dtype follows self.dtype so fp32-weights mode produces an fp32 pad
+        that matches the fp32 x_rm at the concat site.
+        """
+        is_fp32 = self.dtype == ttnn.float32
         pad_torch = torch.zeros(
             self.max_batch_size,
             self.conv_kernel - 1,
             self.conv_per_row,
-            dtype=torch.bfloat16,
+            dtype=torch.float32 if is_fp32 else torch.bfloat16,
         )
         return ttnn.from_torch(
             pad_torch,
             device=self.mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32 if is_fp32 else ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -585,17 +594,22 @@ class TtQwen36DeltaAttention(LightweightModule):
         as ``_conv_zero_pad``. Each row gets its own conv_per_row=1280
         channels (sharded by the conv-weight loader); the buffer itself is
         replicated and only read/written through the per-row conv path.
+
+        V4: dtype follows self.dtype so fp32-weights mode keeps the buffer
+        fp32 — required because `ttnn.copy(new_conv_state, self.conv_state_buffer)`
+        cannot do dtype conversion on ROW_MAJOR tensors.
         """
+        is_fp32 = self.dtype == ttnn.float32
         buf_torch = torch.zeros(
             self.max_batch_size,
             self.conv_kernel - 1,
             self.conv_per_row,
-            dtype=torch.bfloat16,
+            dtype=torch.float32 if is_fp32 else torch.bfloat16,
         )
         return ttnn.from_torch(
             buf_torch,
             device=self.mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32 if is_fp32 else ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -608,7 +622,14 @@ class TtQwen36DeltaAttention(LightweightModule):
         zero_state = torch.zeros(
             self.max_batch_size, self.n_v_per_row, self.head_dim, self.head_dim, dtype=torch.float32
         )
-        zero_conv = torch.zeros(self.max_batch_size, self.conv_kernel - 1, self.conv_per_row, dtype=torch.bfloat16)
+        # V4: match conv_state_buffer dtype (which follows self.dtype)
+        is_fp32 = self.dtype == ttnn.float32
+        zero_conv = torch.zeros(
+            self.max_batch_size,
+            self.conv_kernel - 1,
+            self.conv_per_row,
+            dtype=torch.float32 if is_fp32 else torch.bfloat16,
+        )
         new_state = ttnn.from_torch(
             zero_state,
             device=self.mesh_device,

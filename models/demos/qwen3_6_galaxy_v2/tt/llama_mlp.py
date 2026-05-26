@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 import torch.nn.functional as F
 
@@ -67,7 +69,10 @@ class TtLlamaMLP(LightweightModule):
         # when attention output flows through MLP via the full TtTransformer
         # decoder. The 4L/64L precision floor requires bf16 across all
         # 64 layers (matches olmo session-11 residual-stream dtype lesson).
-        _mlp_force_bf16 = args.is_qwen or getattr(args, "is_qwen36", False)
+        # V4: QWEN36_FP32_WEIGHTS=1 escapes the bf16 lock-in for VLM precision push.
+        _mlp_force_bf16 = (args.is_qwen or getattr(args, "is_qwen36", False)) and (
+            os.environ.get("QWEN36_FP32_WEIGHTS", "0") != "1"
+        )
         as_sharded_tensor = lambda name, type, dim: ttnn.as_tensor(
             torch_weight(name[:2]).unsqueeze(0).unsqueeze(0),  # Grab only the wX part of the name
             dtype=ttnn.bfloat16 if _mlp_force_bf16 else type,

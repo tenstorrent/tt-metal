@@ -267,8 +267,16 @@ class TtLlamaAttention(LightweightModule):
         )
         if _qwen36_attn_bf8:
             self.dtype = ttnn.bfloat8_b
+        elif getattr(configuration, "is_qwen36", False):
+            # V4: optional fp32 escape for multimodal precision push. Default is bf16
+            # per V2-7b lock-in. Set QWEN36_FP32_WEIGHTS=1 to honor caller-passed dtype
+            # (e.g. ttnn.float32) for attention weights — used by VLM prefill PCC test.
+            if os.environ.get("QWEN36_FP32_WEIGHTS", "0") == "1":
+                self.dtype = dtype
+            else:
+                self.dtype = ttnn.bfloat16
         else:
-            self.dtype = ttnn.bfloat16 if getattr(configuration, "is_qwen36", False) else dtype
+            self.dtype = dtype
         self.qk_norm = configuration.qk_norm
 
         if self.is_qwen36:

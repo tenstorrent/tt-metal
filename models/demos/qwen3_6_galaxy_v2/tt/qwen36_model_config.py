@@ -216,6 +216,11 @@ class TtQwen36ModelArgs(TtModelArgs):
 
         self.model_base_path = Path(self.CKPT_DIR)
         self.model_cache_path = Path(self.CACHE_PATH)
+
+        # V4: extend the parent's bf16/bf8b cache-name map with an fp32 entry so
+        # `dtype=ttnn.float32` weight loading has a distinct cache dir. Used by
+        # multimodal prefill PCC tests (QWEN36_FP32_WEIGHTS=1).
+        self._dtype_cache_name_extra = {ttnn.float32: "tensor_cache_fp32"}
         self.tokenizer_path = self.TOKENIZER_PATH + "/tokenizer.model"
 
         self.instruct = instruct
@@ -338,6 +343,16 @@ class TtQwen36ModelArgs(TtModelArgs):
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+        # V4-9 (investigated, neither helped — kept here for documentation):
+        # • QWEN36_FORCE_HIFI4=1 caused matmul subblock register-count TT_FATAL
+        #   (HiFi4 doubles dest-register usage; existing program configs overflow)
+        # • QWEN36_HIFI2_EXACT=1 (math_approx_mode=False) produced identical PCC
+        #   (matmul code path doesn't use the approximations these flags affect)
+        # The bf16+bf8b multimodal-prefill PCC ceiling is ~0.83 last-token vs HF
+        # reference, limited by smooth ~0.6%/layer compounding on vision-feature
+        # inputs with outlier channels (abs max ~186). Closing further requires
+        # retuning matmul subblocks for HiFi4 or reverting bf8b → bf16 matmul
+        # output dtype (V2-CONFIG-E) for the prefill path.
         self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
         self.model_config["LO_FI_COMPUTE_CONFIG"] = self.compute_kernel_config_lofi
 
@@ -1057,8 +1072,15 @@ class TtQwen36ModelArgs(TtModelArgs):
         self.partial_rotary_factor = text_cfg.get("partial_rotary_factor", self.partial_rotary_factor)
         self.rope_dim = int(self.head_dim * self.partial_rotary_factor)
 
+    def weight_cache_path(self, dtype):
+        # Override parent's bf16/bf8b-only mapping to support fp32 (V4 multimodal
+        # PCC push). Falls through to parent for the standard two dtypes.
+        if dtype == ttnn.float32:
+            cache_name = "tensor_cache_fp32_instruct" if self.instruct else "tensor_cache_fp32"
+            return self.model_cache_path / cache_name
+        return super().weight_cache_path(dtype)
+
     # Shape helper required by parent infrastructure.
-    @property
     def cluster_shape_xy(self):
         return tuple(self.cluster_shape)
 
