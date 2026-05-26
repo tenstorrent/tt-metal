@@ -9,7 +9,12 @@ from __future__ import annotations
 import os
 
 from .._ttnn import get_ttnn
-from ..math_perf_env import ace_step_vae_activation_storage_dtype, ace_step_vae_host_weight_staging_dtype
+from ..math_perf_env import (
+    ace_step_flush_device_profiler,
+    ace_step_profiler_flush_every_layer,
+    ace_step_vae_activation_storage_dtype,
+    ace_step_vae_host_weight_staging_dtype,
+)
 from .block import TtOobleckDecoderBlock, _strip_prefix
 from .conv1d import TtConv1d
 from .snake import TtSnake1d
@@ -129,6 +134,10 @@ class TtOobleckDecoder:
         if ace_step_device_num_chips(device) > 1:
             ace_step_synchronize_device(ttnn, device)
         print("[ace_step_v1_5] VAE: decoder ready", flush=True)
+        ace_step_flush_device_profiler(device)
+
+        self._profiler_flush_every = ace_step_profiler_flush_every_layer()
+        self._profiler_layer_idx = 0
 
         # Per-shape trace cache: (B, T, C) -> (trace_id, in_buf, out_buf).
         # Populated on the 2nd call with a given shape (1st call is warmup so programs compile
@@ -155,14 +164,26 @@ class TtOobleckDecoder:
             )
         return self._trace_api  # type: ignore[return-value]
 
+    def _maybe_flush_device_profiler(self) -> None:
+        every = int(getattr(self, "_profiler_flush_every", 0) or 0)
+        if every <= 0:
+            return
+        self._profiler_layer_idx = int(getattr(self, "_profiler_layer_idx", 0)) + 1
+        if self._profiler_layer_idx % every == 0:
+            ace_step_flush_device_profiler(self.device)
+
     def _forward(self, x):
         """Core decode computation without normalization; used for both eager and traced paths."""
         ttnn = self.ttnn
         x = self.conv1(x)
+        self._maybe_flush_device_profiler()
         for block in self.blocks:
             x = block(x)
+            self._maybe_flush_device_profiler()
         x = self.snake1(x)
+        self._maybe_flush_device_profiler()
         x = self.conv2(x)
+        self._maybe_flush_device_profiler()
         return x
 
     def __call__(self, x):

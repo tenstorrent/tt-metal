@@ -28,6 +28,11 @@ buffers on conv / Snake / overlap-add glue — same path as PCC (no env toggle).
 Set ``ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=1`` for opt-in ``bfloat8_b`` conv/Snake **compute** (inter-op
 buffers stay BF16 ``ROW_MAJOR``). Validate with ``tests/test_vae_decoder_pcc.py -k bfloat8_activations``.
 
+Large ``1×1`` conv im2col matmuls (``61440×128``, ``30720×128``, ``7680×256``) use tuned 1D
+reuse (**tall-M** ``MultiCast1D``, ``mcast_in0=0``) by default — including under Tracy — so
+``ttnn.conv1d`` does not probe 640 M-tiles as 640 cores. Set ``ACE_STEP_VAE_LARGE_M_MATMUL=0``
+to force the default conv path.
+
 **Important:** do **not** set ``ACE_STEP_USE_TRACE=1`` for this test (device profiler flush and TTNN
 trace capture are incompatible — same constraint as the DiT / conditioning Tracy harnesses).
 
@@ -52,6 +57,8 @@ Optional environment variables:
 - ``ACE_STEP_PERF_SEED`` (default ``0``): RNG seed for synthetic latents.
 - ``ACE_STEP_TRACY_EACH_VAE_ITER``: set to ``1`` for one Tracy signpost per perf iteration.
 - ``ACE_STEP_PROFILER_FLUSH_EVERY``: flush device profiler every N perf iterations (default ``1``).
+- ``ACE_STEP_PROFILER_FLUSH_EVERY_LAYER`` (default ``1`` when profiling): drain profiler rings after
+  each VAE layer / decode tile so Tracy merge finds ops in ``cpp_device_perf_report.csv``.
 - ``ACE_STEP_PERF_MAX_SECONDS``: optional wall-time budget on the timed perf pass.
 
 If Tracy's merge step fails with ``Device data missing``, run without ``-p`` for host-only timelines, or
@@ -74,6 +81,10 @@ import ttnn
 from models.common.utility_functions import Profiler
 from models.demos.ace_step_v1_5.run_prompt_to_wav import _DEFAULT_CKPT_DIR, _ensure_variant
 from models.demos.ace_step_v1_5.torch_ref.vae.oobleck_decoder import OobleckDecoder
+from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
+    ace_step_enable_tracy_profiler_env,
+    ace_step_flush_device_profiler,
+)
 from models.demos.ace_step_v1_5.ttnn_impl.oobleck_vae_decoder import TtOobleckVaeDecoder
 from models.demos.ace_step_v1_5.ttnn_impl.vae import TtOobleckDecoder
 
@@ -113,18 +124,6 @@ def _tracy_signpost(label: str) -> None:
         return
     try:
         signpost(label)
-    except Exception:
-        pass
-
-
-def _ace_step_flush_device_profiler(device) -> None:
-    if os.environ.get("TTNN_OP_PROFILER") != "1" and os.environ.get("TT_METAL_DEVICE_PROFILER") != "1":
-        return
-    if os.environ.get("ACE_STEP_USE_TRACE", "").lower() in ("1", "true", "yes"):
-        return
-    try:
-        ttnn.synchronize_device(device)
-        ttnn.ReadDeviceProfiler(device)
     except Exception:
         pass
 
@@ -266,7 +265,7 @@ def _run_vae_tracy_harness(
 
     profiler.end("ace_step_vae_init", force_enable=True)
     ttnn.synchronize_device(device)
-    _ace_step_flush_device_profiler(device)
+    ace_step_flush_device_profiler(device)
 
     # --- COMPILE PASS -----------------------------------------------------------------
     profiler.start("ace_step_vae_compile_pass", force_enable=True)
@@ -278,7 +277,7 @@ def _run_vae_tracy_harness(
         pass
     profiler.end("ace_step_vae_compile_pass", force_enable=True)
     ttnn.synchronize_device(device)
-    _ace_step_flush_device_profiler(device)
+    ace_step_flush_device_profiler(device)
 
     # --- WARMUP -----------------------------------------------------------------------
     profiler.start("ace_step_vae_warmup", force_enable=True)
@@ -291,7 +290,7 @@ def _run_vae_tracy_harness(
             pass
     profiler.end("ace_step_vae_warmup", force_enable=True)
     ttnn.synchronize_device(device)
-    _ace_step_flush_device_profiler(device)
+    ace_step_flush_device_profiler(device)
 
     # --- PERF PASS --------------------------------------------------------------------
     profiler.enable()
@@ -307,11 +306,11 @@ def _run_vae_tracy_harness(
         except Exception:
             pass
         if flush_every > 0 and (iter_idx + 1) % flush_every == 0:
-            _ace_step_flush_device_profiler(device)
+            ace_step_flush_device_profiler(device)
 
     ttnn.synchronize_device(device)
     profiler.end("ace_step_vae_perf_pass")
-    _ace_step_flush_device_profiler(device)
+    ace_step_flush_device_profiler(device)
 
     try:
         ttnn.deallocate(lat_tt)
@@ -352,13 +351,22 @@ def _run_vae_tracy_harness(
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-def test_perf_ace_step_vae_tracy_profile(device):
+def test_perf_ace_step_vae_tracy_profile(device, request):
     """Profile chunked Oobleck VAE decode (once per generate) with Tracy signposts."""
+    ace_step_enable_tracy_profiler_env()
+
+    def _final_profiler_flush() -> None:
+        for _ in range(2):
+            ace_step_flush_device_profiler(device)
+
+    request.addfinalizer(_final_profiler_flush)
+
     use_tiny = os.environ.get("ACE_STEP_VAE_PERF_TINY", "").lower() in ("1", "true", "yes")
     latent_frames = _resolve_latent_frames(tiny=use_tiny)
 
     if use_tiny:
         vae, c_lat = _build_tiny_vae(device=device)
+        ace_step_flush_device_profiler(device)
         _run_vae_tracy_harness(
             device,
             vae=vae,
@@ -396,6 +404,7 @@ def test_perf_ace_step_vae_tracy_profile(device):
         activation_dtype=act_dtype,
         weights_dtype=act_dtype,
     )
+    ace_step_flush_device_profiler(device)
     _run_vae_tracy_harness(
         device,
         vae=vae,
