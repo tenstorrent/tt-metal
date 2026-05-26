@@ -369,12 +369,14 @@ static bool data_check(
     if (total_errors) {
         log_critical(
             tt::LogTest,
-            "      [device: {}, core: {}] {} mismatched words starting at {:08x}, ending at {:08x}",
+            "      [device: {}, core: {}] {} mismatched words"
+            " starting at {:08x}, ending at {:08x}, out of {:08x}",
             recv_device->id(),
             recv_core,
             total_errors,
             first_error,
-            last_error);
+            last_error,
+            inputs.size());
     }
 
     return !total_errors;
@@ -709,12 +711,14 @@ static bool tensix_compare_dram_banks(
     if (total_errors) {
         log_critical(
             tt::LogTest,
-            "      done comparing bank {} and {} with {} mismatched words starting at {:08x}, ending at {:08x}",
+            "      done comparing bank {} and {} with {} mismatched words"
+            " starting at {:08x}, ending at {:08x}, out of {:08x}",
             dram_bank_id0,
             dram_bank_id1,
             total_errors,
             first_error,
-            last_error);
+            last_error,
+            total_bytes);
     }
     return !total_errors;
 }

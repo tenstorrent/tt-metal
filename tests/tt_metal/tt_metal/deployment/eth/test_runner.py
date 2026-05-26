@@ -25,11 +25,11 @@ testsetup = re.compile(f"({timeregex}).*Test \|       set up .*")
 testdone = re.compile(f"({timeregex}).*Test \|     done.*")
 testdatacmp = re.compile(
     f"({timeregex}).*Test \|       done comparing bank (.*) and (.*) with (\d+) "
-    + "mismatched words starting at (.*), ending at (.*) .*"
+    + "mismatched words starting at (.*), ending at (.*), out of (.*) .*"
 )
 testl1datacmp = re.compile(
     f"({timeregex}).*Test \|       \[device: (.*), core: (.*)\] (.*) "
-    + "mismatched words starting at (.*), ending at (.*) .*"
+    + "mismatched words starting at (.*), ending at (.*), out of (.*) .*"
 )
 locinfo = "sdev: \[(.*) \((.*)\)\], rdev: \[(.*) \((.*)\)\], score: \[(.*)\], rcore: \[(.*)\], processor: \[(.*)\]"
 testcheck = re.compile(f"({timeregex}).*Test \| core_check: {locinfo} .*")
@@ -220,7 +220,10 @@ def parse_l1datacmp(l: str) -> Optional[Event]:
     errors = int(m.group(4))
     starting = m.group(5)
     ending = m.group(6)
-    # print(f"\tL1DATACMP {dev}, {core}, {errors}, {starting}, {ending}")
+    total = m.group(7)
+
+    rate = errors * 4 / int(total, 16)
+    # print(f"\tL1DATACMP {dev}, {core}, {errors}, {starting}, {ending}, {total}")
     return Event(
         EventType.L1DATACMP,
         {
@@ -229,6 +232,8 @@ def parse_l1datacmp(l: str) -> Optional[Event]:
             "errors": errors,
             "starting": starting,
             "ending": ending,
+            "total": total,
+            "rate": rate,
         },
     )
 
@@ -243,7 +248,10 @@ def parse_datacmp(l: str) -> Optional[Event]:
     errors = int(m.group(4))
     starting = m.group(5)
     ending = m.group(6)
-    # print(f"\tDATACMP {bank0}, {bank1}, {errors}, {starting}, {ending}")
+    total = m.group(7)
+    rate = errors * 4 / int(total, 16)
+
+    # print(f"\tDATACMP {bank0}, {bank1}, {errors}, {starting}, {ending}, {total}")
     return Event(
         EventType.DATACMP,
         {
@@ -252,6 +260,8 @@ def parse_datacmp(l: str) -> Optional[Event]:
             "errors": errors,
             "starting": starting,
             "ending": ending,
+            "total": total,
+            "rate": rate,
         },
     )
 
@@ -482,21 +492,19 @@ def print_test_summary(t: TestCase, runs: list[TestRun]):
         for l in r.links:
             name = link_name(l)
             if name not in links:
-                links[name] = {"count": 0, "pass": True, "errors": 0, "bw": 0.0}
+                links[name] = {"count": 0, "pass": True, "errors": [], "bw": 0.0}
 
             links[name]["count"] += 1
             if "bw" in l.bw:
                 links[name]["bw"] += l.bw["bw"]
                 bw = True
 
-            if len(l.errors):
-                links[name]["errors"] += 1
-                links[name]["pass"] = False
+            links[name]["errors"] += l.errors
 
         headers = ["link name", "test count"]
         if bw:
             headers += ["avg bw"]
-        headers += ["errors", "pass"]
+        headers += ["errors", "error rate", "pass"]
         rows = []
         for k in sorted(links.keys()):
             row = [
@@ -507,7 +515,14 @@ def print_test_summary(t: TestCase, runs: list[TestRun]):
             if bw:
                 row += [f'{links[k]["bw"] / links[k]["count"]:.3f}']
 
-            row += [links[k]["errors"], "OK" if links[k]["pass"] else "FAIL"]
+            rate = 0
+            for e in links[k]["errors"]:
+                if "data" not in e:
+                    continue
+
+                rate = max(rate, e["data"]["rate"])
+
+            row += [len(links[k]["errors"]), f"{rate * 100:.2f}%", "FAIL" if len(links[k]["errors"]) else "OK"]
             rows.append(row)
 
         print(table(f"{t} test summary", headers, rows))
