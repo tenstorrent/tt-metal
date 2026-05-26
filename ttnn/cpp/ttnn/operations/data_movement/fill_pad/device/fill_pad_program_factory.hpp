@@ -6,6 +6,8 @@
 
 #include "fill_pad_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <array>
 #include <bit>
 
@@ -66,13 +68,6 @@ inline std::string get_where_data_fmt(ttnn::DataType dtype) {
 
 namespace ttnn::prim {
 
-struct FillPadSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id = 0;
-    tt::tt_metal::KernelHandle writer_kernel_id = 0;
-    tt::tt_metal::KernelHandle compute_kernel_id = 0;
-    std::vector<CoreCoord> cores;
-};
-
 // Handles DRAM tensors (Interleaved + DRAM sharded).
 //
 // Work splitting is unified across three border-tile phases (right / bottom /
@@ -83,44 +78,16 @@ struct FillPadSharedVariables {
 // with num == 0 are skipped. A single compute kernel binary covers all cores
 // (CT has_right_pad / has_bottom_pad gate the phase branches at compile time).
 struct FillPadProgramFactory {
-    using shared_variables_t = FillPadSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const FillPadParams& operation_attributes, const FillPadInputs& tensor_args, Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const FillPadParams& operation_attributes,
-        const FillPadInputs& tensor_args,
-        Tensor& tensor_return_value);
-};
-
-struct FillPadL1ShardedSharedVariables {
-    // Indexed by has_right_pad (0/1); 0 means that group is unused.
-    std::array<tt::tt_metal::KernelHandle, 2> reader_kernel_ids = {0, 0};
-    std::array<tt::tt_metal::KernelHandle, 2> writer_kernel_ids = {0, 0};
-    std::vector<tt::tt_metal::KernelHandle> compute_kernel_ids;
-    std::vector<CoreCoord> active_cores;
-    // has_right_pad per active core (for override_runtime_arguments)
-    std::vector<uint32_t> active_core_has_right_pad;
 };
 
 // Handles all L1-sharded tensors (HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED).
 // Unlike `FillPadProgramFactory` which gives each core a comparable number of borders,
 // with FillPadL1ShardedProgramFactory, each core only processes its own local L1 data (no balancing).
 struct FillPadL1ShardedProgramFactory {
-    using shared_variables_t = FillPadL1ShardedSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const FillPadParams& operation_attributes, const FillPadInputs& tensor_args, Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const FillPadParams& operation_attributes,
-        const FillPadInputs& tensor_args,
-        Tensor& tensor_return_value);
 };
 
 }  // namespace ttnn::prim
