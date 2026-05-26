@@ -369,7 +369,7 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
             # Skip ``HybridAttentionForCausalLM.decode_forward``, which is a
             # NotImplementedError placeholder; route to ``Generator``'s
             # actual decode implementation.
-            return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
+            return super().decode_forward_text(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         # Legacy uniform path (vLLM falls back here when ``get_kv_cache_spec``
