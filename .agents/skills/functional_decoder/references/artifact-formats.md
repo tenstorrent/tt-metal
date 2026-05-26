@@ -209,6 +209,8 @@ pytest models/demos/example/tests/test_layer.py -k "dense and prefill" -vv 2>&1 
 
 ## results/pcc_results.json
 
+For MoE models, entries in `results` are full decoder outputs after the TTNN gate/router selects experts and the TTNN expert path computes, weights, and reduces those selected experts. Gate-only and expert-only PCCs are optional diagnostics; put them in `component_results` and do not treat them as a substitute for the full decoder result.
+
 ```json
 {
   "schema_version": 1,
@@ -227,6 +229,18 @@ pytest models/demos/example/tests/test_layer.py -k "dense and prefill" -vv 2>&1 
       "trace_replay_used": false,
       "command_id": "pytest_dense_prefill",
       "log": "pytest/dense_prefill.log"
+    }
+  ],
+  "component_results": [
+    {
+      "layer_kind_id": "moe",
+      "mode": "prefill",
+      "component": "gate",
+      "pcc": 0.999,
+      "passed": true,
+      "diagnostic_only": true,
+      "command_id": "pytest_moe_prefill_components",
+      "log": "pytest/moe_prefill_components.log"
     }
   ]
 }

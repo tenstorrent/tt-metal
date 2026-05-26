@@ -1,6 +1,6 @@
 ---
 name: functional-decoder
-description: Bring up functional TTNN implementations of HuggingFace transformer decoder layers in tt-metal. Use when implementing each unique decoder-layer kind for an LLM, reading HF decoder architecture, generating synthetic weights from real tensor statistics, writing paged prefill/decode PCC pytests, proving KV-cache correctness, tracing warmed decode, profiling warmed prefill/decode with Tracy, and auditing for watcher-clean execution with no runtime torch or host fallback except explicit boundaries.
+description: Bring up functional TTNN implementations of HuggingFace transformer decoder layers in tt-metal. Use when implementing each unique decoder-layer kind for an LLM, reading HF decoder architecture, targeting single-user prefill/decode, validating MoE gate-plus-active-expert behavior, generating synthetic weights from real tensor statistics, writing paged prefill/decode PCC pytests, proving KV-cache correctness, tracing warmed decode, profiling warmed prefill/decode with Tracy, and auditing for watcher-clean execution with no runtime torch or host fallback except explicit boundaries.
 ---
 
 # Functional Decoder Bringup
@@ -10,6 +10,8 @@ description: Bring up functional TTNN implementations of HuggingFace transformer
 Build working TTNN code and pytests for each unique HuggingFace decoder-layer kind in a target model. This is not a planning-only skill: success means checked-in implementation, tests, and evidence.
 
 The final tests must run without downloading model weights. Use real model weights only to collect per-tensor statistics, then generate meaningful synthetic weights from those statistics for CI and local tests.
+
+Target single-user prefill and decode by default. Multi-user throughput is a later optimization unless the user explicitly asks for it. For MoE models, the primary path should run the real gate/router and then compute only the experts selected by that gate, aiming to use `ttnn.sparse_matmul` so DRAM traffic and compute follow active experts rather than dense all-expert matmuls.
 
 ## Required Reference Reads
 
@@ -24,6 +26,8 @@ Do not skip these reads. The `SKILL.md` body defines the workflow; the reference
 
 - Implement one parameterized TTNN decoder layer path per meaningful layer kind.
 - Test the first representative layer index of each kind by default.
+- Target single-user prefill/decode behavior by default; document any shape padding needed to satisfy tiled TTNN ops without treating it as multi-user coverage.
+- For MoE layers, the full decoder PCC must include gate/router, expert selection, active experts, expert weighting/reduction, and the surrounding decoder residual/norm path end-to-end.
 - Optimized TTNN ops used where appropriate, e.g. use sdpa_decode instead of hand-implementing attention in ttnn primitives (although if you need to implement something that ttnn does not have an op/transformers op/experimental op for or the existing op does not cover this model's case it is of then ok to write your own implementation out of primitives)
 - Pass prefill and decode PCC against the HF reference decoder layer with `PCC >= 0.998`.
 - Use paged KV cache only; non-paged attention is at best optional debug scaffolding, not a final path.
@@ -43,9 +47,10 @@ Fold HF model reading into the bringup. Before coding, write down the model fact
 2. Locate the installed HF implementation in `transformers/models/<family>/configuration_*.py` and `modeling_*.py`; use `inspect.getfile()` if the path is unclear.
 3. Record hidden size, intermediate size, number of attention heads, KV heads, head dim, RoPE theta/scaling, norm type and eps, activation, bias flags, attention implementation, cache API, and `layer_types` or equivalent.
 4. Read the decoder-layer forward path, attention path, RoPE application, cache update, MLP/MoE path, residual ordering, and any pre/post norm or layer-scale behavior.
-5. Map HF state-dict key names and shapes for the selected representative layer indices.
-6. Compare with the closest existing tt-metal model or `models/common` primitive before inventing a new implementation.
-7. For novel architectures, do a structural diff against a close HF reference model by comparing configs, classes, method signatures, and roles such as attention, MLP, MoE, RMSNorm, RoPE, decoder layer, and causal LM.
+5. For MoE models, record router/gate projection, top-k selection, routing-weight normalization, expert tensor layout, shared-expert behavior if any, and how HF applies selected experts back into the decoder output.
+6. Map HF state-dict key names and shapes for the selected representative layer indices.
+7. Compare with the closest existing tt-metal model or `models/common` primitive before inventing a new implementation.
+8. For novel architectures, do a structural diff against a close HF reference model by comparing configs, classes, method signatures, and roles such as attention, MLP, MoE, RMSNorm, RoPE, decoder layer, and causal LM.
 
 ## Layer-Kind Selection
 
@@ -63,6 +68,8 @@ Prefer partial weight access:
 
 For every real tensor used by the TTNN layer, record at least name, shape, dtype, mean, and standard deviation in a small checked-in stats artifact. Final pytests must synthesize weights from those stats and must not require HF weight downloads. Inputs should be drawn from a distribution that matches what the model's normalization path is expected to produce.
 
+For MoE models, collect enough router and expert tensor statistics to synthesize the gate and the experts selected by that gate. Do not validate only a hand-picked expert path unless it is clearly labeled as debug-only and followed by the full gated decoder PCC.
+
 ## Implementation Guidance
 
 - Prefer `models/common` modules when their contracts fit the target architecture.
@@ -70,6 +77,8 @@ For every real tensor used by the TTNN layer, record at least name, shape, dtype
 - Keep setup-time conversion separate from runtime forward paths. Lazy or cached weight conversion is fine; hidden torch work in forward paths is not.
 - Start correctness-first with BF16, tile layout, and DRAM memory where useful, then optimize layout/sharding after PCC is stable.
 - Treat host movement between prefill and decode as an explicit boundary. It may be used in a layer bringup test, but the decoder implementation should not depend on host interaction once layers are stacked into a full model.
+- For MoE, use the gate output to drive sparse expert execution. Prefer the GPT-OSS pattern in `models/demos/gpt_oss/tt/topk.py` plus `models/demos/gpt_oss/tt/experts/decode.py` and `models/demos/gpt_oss/tt/experts/prefill.py`: top-k router output feeds sparse expert matmuls instead of running every expert densely.
+- Keep separate gate PCC and expert PCC tests useful for debugging, but do not let them substitute for a full decoder PCC where the gate selects the active experts end-to-end as in a real model run.
 
 ## Required Tests
 
@@ -80,6 +89,7 @@ Required test behavior:
 - Instantiate the HF decoder layer directly when possible; use full `AutoModelForCausalLM` only when layer isolation is impractical.
 - Load no real weights in normal test execution; use checked-in synthetic weights generated from recorded real-tensor stats.
 - Compare TTNN vs HF for prefill and decode with `PCC >= 0.998`.
+- For MoE layers, the required prefill/decode PCC compares the full decoder output after the TTNN gate selects experts and the TTNN expert path computes/weights/reduces those selected experts. Optional gate-only or expert-only PCC checks may be recorded as diagnostics.
 - Exercise paged prefill, paged decode update, and paged SDPA decode.
 - Use randomized or permuted page tables, nonzero user slots where applicable, and nontrivial current positions.
 - Test decode at the full sequence length supported by the reference model unless KV-cache DRAM capacity prevents it.
@@ -193,7 +203,7 @@ Required JSON contents:
 - `layer_kinds.json`: one object per representative layer kind with layer kind id, representative layer index, reason it is unique, features, implementation files, pytest ids, expected max prefill length, and expected max decode context length.
 - `weight_stats.json`: one object per real tensor used to seed synthetic weights with layer kind id, layer index, tensor name, shape, dtype, mean, std, and deterministic synthetic seed.
 - `sequence_limits.json`: requested reference max lengths, tested max lengths, pass/fail, and evidence for any reduction caused by KV-cache DRAM, L1, or other device limits.
-- `results/pcc_results.json`: one object per layer kind and mode with PCC, threshold, pass/fail, output shape, dtype, input seed, whether trace replay was used, and the command id from `commands.sh`.
+- `results/pcc_results.json`: one full-decoder object per layer kind and mode with PCC, threshold, pass/fail, output shape, dtype, input seed, whether trace replay was used, and the command id from `commands.sh`. For MoE, this full-decoder object must include gate and selected experts end-to-end; optional gate-only or expert-only component PCCs are diagnostics.
 - `results/kv_cache_results.json`: cache shape, page-table shape, page-table seed, tested positions, tested user slots, comparison method, and pass/fail per layer kind.
 - `results/determinism_results.json`: repeated-run count, bytewise or numeric equality method, pass/fail, and any nondeterministic tensors.
 - `results/stress_results.json`: whether stress was run, duration seconds, iteration count, pass/fail, or reason it was skipped.
