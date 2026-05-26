@@ -76,6 +76,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
+# Lyric/timbre encoders use intermediate ≥ 6144; gate/up L1 CBs need in0_block_w=1 there.
+_WIDE_MLP_INTERMEDIATE_THRESHOLD = 4608
+
 
 def _l1_memory_kwargs(ttnn: Any) -> dict:
     mc = getattr(ttnn, "L1_MEMORY_CONFIG", None)
@@ -554,7 +557,7 @@ def ace_step_linear_kwargs_memory_config(
     linear_out_l1: Any | None,
     dram: Any | None,
 ) -> Any | None:
-    """L1 linear outputs only when the 1D-mcast program is active; DRAM matmul must not use L1."""
+    """L1 linear outputs when a tuned 1D/2D mcast program is active; DRAM matmul must not use L1."""
     if program_config is not None and linear_out_l1 is not None:
         return linear_out_l1
     return dram
@@ -609,6 +612,40 @@ def ace_step_nlp_concat_heads(ttnn: Any, ctx: Any, *, l1_mc: Any | None = None) 
     ctx = ttnn.permute(ctx, (0, 2, 1, 3), **_kw)
     ctx = ttnn.reshape(ctx, (B, 1, S, H * Dh), **_kw)
     return ctx
+
+
+def ace_step_try_nlp_qkv_heads_split(
+    ttnn: Any,
+    *,
+    q_b1sd: Any,
+    kv_b1sd: Any | None = None,
+    num_heads: int,
+    num_kv_heads: int,
+    memory_config: Any | None = None,
+) -> tuple[Any, Any, Any] | None:
+    """Split ``[B,1,S,H*Dh]`` Q (and optional fused ``[B,1,S,2*kv_h*Dh]`` KV) into ``[B,H,S,Dh]`` heads.
+
+    Replaces three ``reshape`` + three ``permute`` (~205 μs/layer) with one
+    ``nlp_create_qkv_heads`` call when available. Returns ``None`` on missing op or signature mismatch.
+    """
+    experimental = getattr(ttnn, "experimental", None)
+    nlp_heads = getattr(experimental, "nlp_create_qkv_heads", None) if experimental is not None else None
+    if nlp_heads is None:
+        return None
+    mc = memory_config if memory_config is not None else ace_step_linear_l1_memory_config(ttnn)
+    try:
+        kw: dict = {
+            "num_heads": int(num_heads),
+            "num_kv_heads": int(num_kv_heads),
+            "transpose_k_heads": False,
+        }
+        if mc is not None:
+            kw["memory_config"] = mc
+        if kv_b1sd is not None:
+            return nlp_heads(q_b1sd, kv_b1sd, **kw)
+        return nlp_heads(q_b1sd, **kw)
+    except Exception:
+        return None
 
 
 def ace_step_eltwise_l1_memory_config(ttnn: Any):
@@ -890,6 +927,90 @@ def ace_step_dit_activation_from_torch(
     )
 
 
+def _mcast_2d_linear_program_config(
+    device: Any,
+    *,
+    m_dim: int,
+    k_dim: int,
+    n_dim: int,
+    grid_size: tuple[int, int] | None = None,
+    in0_block_w: int = 4,
+    out_subblock_h: int = 1,
+    out_subblock_w: int = 4,
+    fuse_batch: bool = False,
+):
+    """2D mcast matmul program config (``MatmulMultiCoreReuseMultiCastProgramConfig``).
+
+    Parallelizes ``M`` over grid height and ``N`` over grid width. Used for DiT prefill
+    linears (e.g. ``256×2048×2048`` fused ``wkv``, ``256×3072×3072`` MLP gate/up) where
+    1D mcast only spreads ``N`` and leaves ~16 cores active on Blackhole.
+
+    **``in0_block_w`` WARNING**: default is 4 (suited for BF16 weights where accumulation order
+    does not affect output quality). For **BFP8 weight** linears, pass ``in0_block_w=2`` —
+    the larger value changes K-tile accumulation order and produces audible WAV noise across
+    28+ DiT encoder layers (same root cause as the reverted ``in0_block_w_cap=4`` in 1D mcast).
+    """
+    import ttnn
+
+    cfg_cls = getattr(ttnn, "MatmulMultiCoreReuseMultiCastProgramConfig", None)
+    if cfg_cls is None or not hasattr(device, "compute_with_storage_grid_size"):
+        return None
+
+    dev_grid = device.compute_with_storage_grid_size()
+    if grid_size is None:
+        gx = min(8, max(1, int(dev_grid.x)))
+        gy = min(4, max(1, int(dev_grid.y)))
+    else:
+        gx = min(int(grid_size[0]), max(1, int(dev_grid.x)))
+        gy = min(int(grid_size[1]), max(1, int(dev_grid.y)))
+
+    tile = int(getattr(ttnn, "TILE_SIZE", 32))
+    m = max(tile, int(m_dim))
+    k = max(tile, int(k_dim))
+    n = max(tile, int(n_dim))
+
+    m_tiles = (m + tile - 1) // tile
+    k_tiles = max(1, k // tile)
+    n_tiles = max(1, (n + tile - 1) // tile)
+
+    per_core_m = max(1, (m_tiles + gy - 1) // gy)
+    per_core_n = max(1, (n_tiles + gx - 1) // gx)
+
+    in0_w = min(int(in0_block_w), k_tiles)
+    while k_tiles % in0_w != 0 and in0_w > 1:
+        in0_w -= 1
+
+    osh = min(int(out_subblock_h), per_core_m)
+    while per_core_m % osh != 0 and osh > 1:
+        osh -= 1
+    osw = min(int(out_subblock_w), per_core_n)
+    while per_core_n % osw != 0 and osw > 1:
+        osw -= 1
+    while osh * osw > 4 and (osh > 1 or osw > 1):
+        if osw > osh and osw > 1:
+            osw -= 1
+        elif osh > 1:
+            osh -= 1
+        else:
+            break
+
+    return cfg_cls(
+        compute_with_storage_grid_size=(gx, gy),
+        in0_block_w=in0_w,
+        out_subblock_h=osh,
+        out_subblock_w=osw,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=bool(fuse_batch),
+    )
+
+
+def _ace_step_dit_prefill_m_dim(*, batch_size: int, seq_len: int) -> int:
+    return max(1, int(batch_size)) * max(1, int(seq_len))
+
+
 def _mcast_1d_linear_program_config(
     device: Any,
     *,
@@ -1009,7 +1130,7 @@ def ace_step_dit_attn_linear_program_config(
         in_dim=in_dim,
         out_dim=out_dim,
         batch_size=batch_size,
-        in0_block_w_cap=2,
+        in0_block_w_cap=2,  # BFP8: cap=4 changes K-tile accumulation → audible noise on DiT
         out_subblock_h_cap=4,
         out_subblock_w=2,
     )
@@ -1025,6 +1146,13 @@ def ace_step_dit_attn_linear_program_config(
         out_subblock_h_cap=4,
         out_subblock_w=1,
     )
+
+
+def _ace_step_cond_in0_block_w_cap(*, intermediate_size: int | None = None) -> int:
+    """``in0_block_w`` cap for Qwen3 / condition linears (not DiT BFP8 2D mcast paths)."""
+    if intermediate_size is not None and int(intermediate_size) >= _WIDE_MLP_INTERMEDIATE_THRESHOLD:
+        return 1
+    return 4
 
 
 def ace_step_cond_linear_program_config(
@@ -1043,7 +1171,7 @@ def ace_step_cond_linear_program_config(
         in_dim=in_dim,
         out_dim=out_dim,
         batch_size=batch_size,
-        in0_block_w_cap=2,
+        in0_block_w_cap=_ace_step_cond_in0_block_w_cap(),
         out_subblock_h_cap=2 if short else 4,
         out_subblock_w=2 if short else 1,
     )
@@ -1056,21 +1184,23 @@ def ace_step_cond_mlp_gate_up_linear_program_config(
     hidden_size: int,
     intermediate_size: int,
     batch_size: int = 1,
+    out_dim: int | None = None,
 ):
     """Program config for condition MLP gate/up (e.g. 32×6144×6144).
 
     Lyric/timbre encoders use intermediate 6144×2048; ``in0_block_w=2`` plus L1-hosted
     activations can overrun per-core circular-buffer budget (static CB vs tensor L1).
-    Use ``in0_block_w_cap=1`` on this wide path by default.
+    Use ``in0_block_w_cap=1`` when ``intermediate_size >= 4608``; ``4`` for Qwen3/DiT-scale MLPs.
     """
     short = int(seq_len) <= 64
+    n_out = int(out_dim) if out_dim is not None else int(intermediate_size)
     return _mcast_1d_linear_program_config(
         device,
         seq_len=seq_len,
         in_dim=hidden_size,
-        out_dim=intermediate_size,
+        out_dim=n_out,
         batch_size=batch_size,
-        in0_block_w_cap=1,
+        in0_block_w_cap=_ace_step_cond_in0_block_w_cap(intermediate_size=intermediate_size),
         out_subblock_h_cap=2 if short else 4,
         out_subblock_w=2 if short else 1,
     )
@@ -1085,6 +1215,17 @@ def ace_step_dit_fused_wkv_linear_program_config(
     batch_size: int = 1,
 ):
     """Program config for fused ``wkv`` (e.g. 256×2048×2048 when ``hidden_size=1024``, GQA ``fused_kv_dim=2048``)."""
+    m_dim = _ace_step_dit_prefill_m_dim(batch_size=batch_size, seq_len=seq_len)
+    if m_dim >= 128:
+        pc = _mcast_2d_linear_program_config(
+            device,
+            m_dim=m_dim,
+            k_dim=int(hidden_size),
+            n_dim=int(fused_kv_dim),
+            in0_block_w=2,  # cap=4 causes BFP8 K-tile accumulation order change → WAV noise
+        )
+        if pc is not None:
+            return pc
     return _mcast_1d_linear_program_config(
         device,
         seq_len=seq_len,
@@ -1106,6 +1247,17 @@ def ace_step_dit_mlp_gate_up_linear_program_config(
     batch_size: int = 1,
 ):
     """Program config for MLP ``gate_proj`` / ``up_proj`` (e.g. 256×3072×3072)."""
+    m_dim = _ace_step_dit_prefill_m_dim(batch_size=batch_size, seq_len=seq_len)
+    if m_dim >= 128:
+        pc = _mcast_2d_linear_program_config(
+            device,
+            m_dim=m_dim,
+            k_dim=int(hidden_size),
+            n_dim=int(intermediate_size),
+            in0_block_w=2,  # cap=4 causes BFP8 K-tile accumulation order change → WAV noise
+        )
+        if pc is not None:
+            return pc
     return _mcast_1d_linear_program_config(
         device,
         seq_len=seq_len,
@@ -1126,7 +1278,18 @@ def ace_step_dit_mlp_down_proj_linear_program_config(
     hidden_size: int,
     batch_size: int = 1,
 ):
-    """Program config for MLP ``down_proj`` (e.g. 256×3072×3072 when intermediate==hidden)."""
+    """Program config for MLP ``down_proj`` (e.g. 256×3072×1024)."""
+    m_dim = _ace_step_dit_prefill_m_dim(batch_size=batch_size, seq_len=seq_len)
+    if m_dim >= 128:
+        pc = _mcast_2d_linear_program_config(
+            device,
+            m_dim=m_dim,
+            k_dim=int(intermediate_size),
+            n_dim=int(hidden_size),
+            in0_block_w=2,  # cap=4 causes BFP8 K-tile accumulation order change → WAV noise
+        )
+        if pc is not None:
+            return pc
     return _mcast_1d_linear_program_config(
         device,
         seq_len=seq_len,
