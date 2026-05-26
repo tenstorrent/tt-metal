@@ -117,9 +117,11 @@ thread_local tt_emule::TileCounterArray* __emule_tc_array = nullptr;
 //                        runs on (DM count for DM kernels, active-engine count
 //                        for compute).
 //
-// __emule_my_thread_id — backs get_my_thread_id(). Same value as __processor_id
-//                        today, but kept separate for type (uint32_t vs uint8_t)
-//                        and public-API surface.
+// __emule_my_thread_id — backs get_my_thread_id(). Index of this processor within
+//                        the kernel's processor list (0-based), matching the Quasar
+//                        firmware's my_thread_id semantics. NOT the same as
+//                        __processor_id: e.g. a consumer on RISCV_1 has
+//                        __processor_id=1 but __emule_my_thread_id=0 (first consumer).
 thread_local uint8_t __processor_id = 0;
 thread_local uint8_t __emule_neo_id = 0;
 thread_local uint8_t __emule_trisc_id = 0;
@@ -274,7 +276,8 @@ struct KernelInfo {
     bool run_all_variants = false;
     std::vector<uint32_t> rt_args;
     std::vector<uint32_t> common_rt_args;
-    uint8_t processor_id = 0;
+    uint8_t processor_id = 0;  // RISC-V processor ID (mhartid); used for DFB role resolution
+    uint8_t thread_idx = 0;    // Index within this kernel's processor list → __emule_my_thread_id
     bool is_tensix = false;    // true for Tensix/compute kernels (DFB mask uses bits 8-23)
     uint32_t num_threads = 1;  // number of engines (for get_num_threads())
 };
@@ -285,6 +288,12 @@ struct DeferredCompile {
     std::unordered_map<std::string, uint32_t> named_compile_args;
     std::map<std::string, std::string> defines;
     std::string extra_inc;
+    // Metal 2.0 named-binding info — used to emit args:: / dfb:: / ta:: namespaces
+    // in the JIT wrapper so kernels that include experimental/kernel_args.h compile.
+    std::vector<std::string> named_runtime_args;           // positional RTA names
+    std::vector<std::string> named_common_runtime_args;    // positional CRTA names
+    std::map<std::string, uint32_t> dfb_accessors;         // accessor_name → logical_dfb_id
+    std::map<std::string, std::pair<uint32_t, uint32_t>> ta_accessors;  // accessor_name → {cta_off, crta_off}
 };
 
 struct PendingKernelInfo {
@@ -294,6 +303,7 @@ struct PendingKernelInfo {
     std::vector<uint32_t> rt_args;
     std::vector<uint32_t> common_rt_args;
     uint8_t processor_id = 0;
+    uint8_t thread_idx = 0;    // Index within this kernel's processor list
     bool is_tensix = false;
     uint32_t num_threads = 1;
 };
@@ -471,6 +481,13 @@ static void preprocess_kernel_source_for_x86(const std::string& src_path, const 
     src = std::regex_replace(
         src, l1_arg_ptr_re, "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr(get_arg_val<uint32_t>$2))");
 
+    // Metal 2.0 named-arg pattern: reinterpret_cast<T*>(static_cast<uintptr_t>(get_arg(args::NAME)))
+    static const std::regex l1_named_arg_ptr_re(
+        R"(reinterpret_cast<([^>]+\*)>\s*\(\s*static_cast<uintptr_t>\s*\(\s*get_arg\s*\(\s*([^)]+)\s*\)\s*\)\s*\))");
+    src = std::regex_replace(
+        src, l1_named_arg_ptr_re,
+        "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr(static_cast<uint32_t>(get_arg($2))))");
+
     std::ofstream out(out_path);
     if (!out) {
         throw std::runtime_error("preprocess_kernel_source_for_x86: cannot write " + out_path);
@@ -484,6 +501,10 @@ static std::function<void()> jit_compile_kernel(
     const std::unordered_map<std::string, uint32_t>& named_compile_args,
     const std::map<std::string, std::string>& defines,
     const std::string& extra_include_flags,
+    const std::vector<std::string>& named_runtime_args = {},
+    const std::vector<std::string>& named_common_runtime_args = {},
+    const std::map<std::string, uint32_t>& dfb_accessors = {},
+    const std::map<std::string, std::pair<uint32_t, uint32_t>>& ta_accessors = {},
     const std::string& disk_cache_so_path_arg = "") {
     const std::string jit_inc = TT_EMULE_JIT_INCLUDE_DIR;
     const std::string parent_inc = TT_EMULE_INCLUDE_DIR;
@@ -525,6 +546,56 @@ static std::function<void()> jit_compile_kernel(
             }
         }
         f << "#include \"jit_kernel_stubs.hpp\"\n";
+        // Emit Metal 2.0 named-binding namespaces after jit_kernel_stubs.hpp so that
+        // experimental::RtaArg / CrtaArg / CtaVal and DFBAccessor are already defined.
+        // These replace kernel_args_generated.h / kernel_bindings_generated.h from the
+        // real JIT build, allowing kernels that use args:: / dfb:: / ta:: to compile.
+        //
+        // Pull in the type headers needed by the declarations below; these are
+        // normally included by the kernel source itself, but the namespace blocks
+        // appear before the kernel #include so the types must be pre-declared here.
+        if (!named_compile_args.empty() || !named_runtime_args.empty() ||
+            !named_common_runtime_args.empty()) {
+            f << "#include \"experimental/kernel_args.h\"\n";
+        }
+        if (!dfb_accessors.empty()) {
+            f << "#include \"api/dataflow/dataflow_buffer.h\"\n";
+        }
+        if (!ta_accessors.empty()) {
+            f << "#include \"api/tensor/tensor_accessor.h\"\n";
+        }
+        if (!named_compile_args.empty() || !named_runtime_args.empty() ||
+            !named_common_runtime_args.empty()) {
+            f << "namespace args {\n";
+            for (size_t i = 0; i < named_runtime_args.size(); ++i) {
+                f << "constexpr ::experimental::RtaArg<uint32_t> " << named_runtime_args[i]
+                  << "{" << (i * sizeof(uint32_t)) << "u};\n";
+            }
+            for (size_t i = 0; i < named_common_runtime_args.size(); ++i) {
+                f << "constexpr ::experimental::CrtaArg<uint32_t> " << named_common_runtime_args[i]
+                  << "{" << (i * sizeof(uint32_t)) << "u};\n";
+            }
+            for (const auto& [name, val] : named_compile_args) {
+                f << "constexpr ::experimental::CtaVal<uint32_t> " << name << "{" << val << "u};\n";
+            }
+            f << "}  // namespace args\n";
+        }
+        if (!dfb_accessors.empty()) {
+            f << "namespace dfb {\n";
+            for (const auto& [name, id] : dfb_accessors) {
+                f << "constexpr DFBAccessor " << name << "{" << id << "u};\n";
+            }
+            f << "}  // namespace dfb\n";
+        }
+        if (!ta_accessors.empty()) {
+            f << "namespace ta {\n";
+            for (const auto& [name, offs] : ta_accessors) {
+                f << "using " << name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
+                  << offs.first << "u," << offs.second << "u>;\n";
+                f << "constexpr " << name << "_t " << name << "{};\n";
+            }
+            f << "}  // namespace ta\n";
+        }
         f << "#include \"" << patched_kernel_path << "\"\n";
         f << "extern \"C\" { void __emule_kernel_entry() { kernel_main(); } }\n";
     }
@@ -681,6 +752,7 @@ static void populate_bank_mapping(
         dram_bank_to_noc_xy[0][ch] = noc_xy;  // NOC 0
         dram_bank_to_noc_xy[1][ch] = noc_xy;  // NOC 1 (same for emulation)
         bank_to_dram_offset[ch] = static_cast<int32_t>(metal_soc.get_address_offset(ch));
+
         log_debug(
             tt::LogMetal,
             "  DRAM bank[{}]: core({},{}) noc_xy=0x{:04x} offset=0x{:x}",
@@ -942,6 +1014,22 @@ static void collect_kernels(
             auto* qck = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(kernel.get());
             bool is_quasar_compute = is_tensix && (qck != nullptr);
 
+            // Collect Metal 2.0 named-binding info so the JIT wrapper can emit
+            // args:: / dfb:: / ta:: namespace declarations.
+            std::vector<std::string> named_rt_args = kernel->get_named_runtime_args();
+            std::vector<std::string> named_crta_args = kernel->get_named_common_runtime_args();
+            std::map<std::string, uint32_t> dfb_accessor_map;
+            kernel->process_dataflow_buffer_local_accessor_handles(
+                [&dfb_accessor_map](const std::string& accessor_name, uint16_t logical_dfb_id) {
+                    dfb_accessor_map[accessor_name] = logical_dfb_id;
+                });
+            std::map<std::string, std::pair<uint32_t, uint32_t>> ta_accessor_map;
+            kernel->process_tensor_binding_handles(
+                [&ta_accessor_map](
+                    const std::string& accessor_name, uint32_t cta_offset, uint32_t addr_crta_offset) {
+                    ta_accessor_map[accessor_name] = {cta_offset, addr_crta_offset};
+                });
+
             // Helper: compute cache key from a defines map (preserves upstream's sorted
             // iteration of named_compile_args and defines for key stability).
             auto compute_cache_key = [&](const std::map<std::string, std::string>& defs) -> std::string {
@@ -984,7 +1072,8 @@ static void collect_kernels(
                         g_jit_cache[key] = disk_fn;
                     } else {
                         deferred_compiles[key] =
-                            DeferredCompile{src_path, compile_args, named_compile_args, defs, extra_inc};
+                            DeferredCompile{src_path, compile_args, named_compile_args, defs, extra_inc,
+                                            named_rt_args, named_crta_args, dfb_accessor_map, ta_accessor_map};
                     }
                 }
             };
@@ -1023,6 +1112,7 @@ static void collect_kernels(
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
                         CoreCoord logical_core(x, y);
                         auto& rt_args_data = kernel->runtime_args(logical_core);
+                        uint8_t tidx = 0;
                         for (uint8_t proc_id : procs.proc_ids) {
                             pending_core_kernels[logical_core].push_back(PendingKernelInfo{
                                 variant_cache_keys,
@@ -1030,6 +1120,7 @@ static void collect_kernels(
                                 rt_args_data,
                                 common_rt,
                                 proc_id,
+                                tidx++,
                                 is_tensix,
                                 procs.num_threads});
                         }
@@ -1059,7 +1150,10 @@ static void jit_compile_pending(
             futures.emplace_back(
                 key, std::async(std::launch::async, [&dc, cache_path, tmp_path]() {
                     auto fn = jit_compile_kernel(
-                        dc.src_path, dc.compile_args, dc.named_compile_args, dc.defines, dc.extra_inc, tmp_path);
+                        dc.src_path, dc.compile_args, dc.named_compile_args, dc.defines, dc.extra_inc,
+                        dc.named_runtime_args, dc.named_common_runtime_args,
+                        dc.dfb_accessors, dc.ta_accessors,
+                        tmp_path);
                     std::filesystem::rename(tmp_path, cache_path);
                     return fn;
                 }));
@@ -1509,7 +1603,7 @@ static void launch_cores(
                             __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
                             __emule_trisc_id = 0;
                             __emule_num_threads = ki.num_threads;
-                            __emule_my_thread_id = ki.processor_id;
+                            __emule_my_thread_id = ki.thread_idx;
 
                             log_debug(
                                 tt::LogMetal,
@@ -1635,7 +1729,7 @@ void execute_program_emulated(IDevice* device, Program& program) {
     for (auto& [logical_core, pending_list] : pending_core_kernels) {
         for (auto& pk : pending_list) {
             KernelInfo ki{
-                {}, pk.run_all_variants, pk.rt_args, pk.common_rt_args, pk.processor_id, pk.is_tensix, pk.num_threads};
+                {}, pk.run_all_variants, pk.rt_args, pk.common_rt_args, pk.processor_id, pk.thread_idx, pk.is_tensix, pk.num_threads};
             ki.variants.reserve(pk.variant_cache_keys.size());
             for (const auto& key : pk.variant_cache_keys) {
                 ki.variants.push_back(resolved_fns.at(key));
