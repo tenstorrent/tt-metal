@@ -72,15 +72,27 @@ class TtMistral4DecoderLayer(LightweightModule):
         state_dict: dict,
         layer_idx: int,
         compute_kernel_config,
+        cache_dir=None,
     ):
         super().__init__()
         self.compute_kernel_config = compute_kernel_config
         prefix = text_decoder_layer_state_dict_prefix(layer_idx)
+        _cf = (lambda key: str(cache_dir / key)) if cache_dir is not None else (lambda _: None)
 
         # Norms
-        self.input_norm_w = _load_norm_weight(state_dict, prefix + "input_layernorm.weight", HIDDEN_SIZE, mesh_device)
+        self.input_norm_w = _load_norm_weight(
+            state_dict,
+            prefix + "input_layernorm.weight",
+            HIDDEN_SIZE,
+            mesh_device,
+            cache_file_name=_cf(prefix + "input_layernorm.weight"),
+        )
         self.post_attn_norm_w = _load_norm_weight(
-            state_dict, prefix + "post_attention_layernorm.weight", HIDDEN_SIZE, mesh_device
+            state_dict,
+            prefix + "post_attention_layernorm.weight",
+            HIDDEN_SIZE,
+            mesh_device,
+            cache_file_name=_cf(prefix + "post_attention_layernorm.weight"),
         )
 
         # Attention
@@ -89,6 +101,7 @@ class TtMistral4DecoderLayer(LightweightModule):
             state_dict=state_dict,
             layer_prefix=prefix,
             compute_kernel_config=compute_kernel_config,
+            cache_dir=cache_dir,
         )
 
         # bfloat4_b: 36 layers × 3 expert stacks × 64 MB = 6.9 GB; bf16 would be 27.6 GB (OOM).
@@ -97,6 +110,7 @@ class TtMistral4DecoderLayer(LightweightModule):
             state_dict=state_dict,
             layer_prefix=prefix,
             expert_dtype=ttnn.bfloat4_b,
+            cache_dir=cache_dir,
         )
 
     def forward(
