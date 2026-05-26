@@ -60,11 +60,11 @@
   team: runtime
 
 # --- Context, Device, Misc, JIT Build ---
-# NOTE: unit_tests_noc dropped, mock-coexistence tests filtered (#39849).
+# NOTE: unit_tests_noc dropped.
 - name: runtime_core
   # MetalContextIntegrationTest.Legacy disabled by #44767.
   cmd: |
-    ./build/test/tt_metal/unit_tests_context --gtest_filter='-MetalContextIntegrationTest.MockDeviceOnly:MetalContextIntegrationTest.Coexisting*:MetalContextIntegrationTest.ForkMockAndRealDevice:MetalContextIntegrationTest.Legacy'
+    ./build/test/tt_metal/unit_tests_context --gtest_filter='-MetalContextIntegrationTest.Legacy'
     ./build/test/tt_metal/unit_tests_device
     ./build/test/tt_metal/unit_tests_misc
     ./build/test/tt_metal/unit_tests_jit_build
