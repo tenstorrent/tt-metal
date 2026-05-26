@@ -146,22 +146,36 @@ class VoxtralTTTextModel:
         self,
         inputs_embeds: torch.Tensor,
         start_pos: int = 0,
-    ) -> torch.Tensor:
+        *,
+        collect_layer_hiddens: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Prefill via per-token decode (KV-safe; avoids P150 prefill L1 overflow). Returns ``[dim]`` hidden."""
         S = inputs_embeds.shape[0]
         embeds = inputs_embeds.to(dtype=torch.bfloat16)
 
         last_hidden: torch.Tensor | None = None
+        layer_hiddens: dict[str, torch.Tensor] = {}
         for i in range(S):
-            last_hidden = self.decode_step_from_embeds(embeds[i], start_pos + i)
+            is_last = i == S - 1
+            if collect_layer_hiddens and is_last:
+                last_hidden, layer_hiddens = self.decode_step_from_embeds(
+                    embeds[i], start_pos + i, collect_layer_hiddens=True
+                )
+            else:
+                last_hidden = self.decode_step_from_embeds(embeds[i], start_pos + i)
 
+        assert last_hidden is not None
+        if collect_layer_hiddens:
+            return last_hidden, layer_hiddens
         return last_hidden
 
     def decode_step_from_embeds(
         self,
         x_embed: torch.Tensor,
         current_pos_idx: int,
-    ) -> torch.Tensor:
+        *,
+        collect_layer_hiddens: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """One decode step from a CPU embedding; returns post-norm ``[dim]`` hidden (pre-LM-head)."""
         dim = self.inner.args.dim
         args = self.inner.args
@@ -187,6 +201,7 @@ class VoxtralTTTextModel:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.inner.mesh_device),
         )
 
+        layer_hiddens: dict[str, torch.Tensor] = {}
         for i, layer in enumerate(self.inner.layers):
             x_tt = layer(
                 x_tt,
@@ -198,13 +213,20 @@ class VoxtralTTTextModel:
                 page_table=page_table,
                 kv_cache=None,
             )
+            if collect_layer_hiddens:
+                host_layer = self.inner.concat_host_output(x_tt)
+                layer_hiddens[f"layer.{i}"] = host_layer[0, 0, 0, :dim].to(dtype=torch.bfloat16)
 
         lm_norm_cfg = args.get_norm_config("lm_head", Mode.DECODE, self.inner.prefetcher)
         x_norm = self.inner.norm(x_tt, mode=Mode.DECODE, norm_config=lm_norm_cfg)
         ttnn.deallocate(x_tt)
         host = self.inner.concat_host_output(x_norm)
         ttnn.deallocate(x_norm)
-        return host[0, 0, 0, :dim].to(dtype=torch.bfloat16)
+        hidden = host[0, 0, 0, :dim].to(dtype=torch.bfloat16)
+        if collect_layer_hiddens:
+            layer_hiddens["layer.final_norm"] = hidden
+            return hidden, layer_hiddens
+        return hidden
 
     def decode_step_from_embeds_tt(
         self,

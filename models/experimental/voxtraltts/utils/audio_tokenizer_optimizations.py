@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 import ttnn
 
+from models.experimental.voxtraltts.utils.config_helpers import COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER
+
 
 @dataclass(frozen=True)
 class AudioTokenizerOptimizations:
@@ -22,22 +24,12 @@ class AudioTokenizerOptimizations:
 
 
 def voxtral_audio_tokenizer_default_optimizations() -> AudioTokenizerOptimizations:
-    """Production decode: BFP8 weights, HiFi2 matmuls/SDPA, BF16 activations."""
+    """Production decode: BFP8 weights, HiFi4 matmuls/SDPA + fp32 dest acc, BF16 activations."""
     return AudioTokenizerOptimizations(
         weight_dtype=ttnn.bfloat8_b,
         activation_dtype=ttnn.bfloat16,
-        matmul_compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        ),
-        sdpa_compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        ),
+        matmul_compute_kernel_config=COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER,
+        sdpa_compute_kernel_config=COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER,
     )
 
 
