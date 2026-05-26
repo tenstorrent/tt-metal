@@ -64,6 +64,11 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
             page_table.has_value(),
             "num_kv_heads_override is only supported in paged mode (when page_table is provided)");
     }
+    if (operation_attributes.cache_position_modulo.has_value()) {
+        TT_FATAL(
+            page_table.has_value(),
+            "cache_position_modulo is only supported in paged mode (when page_table is provided)");
+    }
 
     // Per-block element-count consistency. The program factory wires the kernel's
     // per-block stride from (num_heads, effective_block_size, input_head_dim) read off
@@ -103,6 +108,15 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
             "effective block_size ({}) must be a multiple of TILE_HEIGHT ({})",
             effective_block_size,
             tt::constants::TILE_HEIGHT);
+        if (operation_attributes.cache_position_modulo.has_value()) {
+            const uint32_t cache_position_modulo = operation_attributes.cache_position_modulo.value();
+            TT_FATAL(
+                cache_position_modulo > 0 && cache_position_modulo % effective_block_size == 0,
+                "cache_position_modulo ({}) must be a positive multiple of effective block_size ({}); "
+                "otherwise a wrapped position would split across blocks and the kernel can't address it.",
+                cache_position_modulo,
+                effective_block_size);
+        }
     } else {
         TT_FATAL(
             input_head_dim == cache_tensor.padded_shape()[-1],
@@ -279,12 +293,14 @@ ttsl::hash::hash_t PagedUpdateCacheDeviceOperation::compute_program_hash(
     // - mesh_coords: affects program factory selection
     // - block_size_override: enters compile-time args
     // - num_kv_heads_override: enters compile-time args
+    // - cache_position_modulo: enters compile-time args
     return operation::hash_operation<PagedUpdateCacheDeviceOperation>(
         args.compute_kernel_config,
         args.share_cache,
         args.mesh_coords,
         args.block_size_override,
         args.num_kv_heads_override,
+        args.cache_position_modulo,
         tensor_args,
         program_factory.index());
 }
@@ -304,7 +320,8 @@ ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::tensor_return_value_t
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
     std::optional<uint32_t> block_size_override,
-    std::optional<uint32_t> num_kv_heads_override) {
+    std::optional<uint32_t> num_kv_heads_override,
+    std::optional<uint32_t> cache_position_modulo) {
     using OperationType = ttnn::experimental::prim::PagedUpdateCacheDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
@@ -317,7 +334,8 @@ ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::tensor_return_value_t
         .share_cache = share_cache_arg,
         .mesh_coords = mesh_coords,
         .block_size_override = block_size_override,
-        .num_kv_heads_override = num_kv_heads_override};
+        .num_kv_heads_override = num_kv_heads_override,
+        .cache_position_modulo = cache_position_modulo};
 
     auto tensor_args = OperationType::tensor_args_t{
         .cache_tensor = cache_tensor,

@@ -52,8 +52,12 @@ void kernel_main() {
     constexpr bool q_locally_available = get_compile_time_arg_val(33) == 1;
     constexpr bool use_k_mcast = get_compile_time_arg_val(34) == 1;
     constexpr uint32_t Bmask = get_compile_time_arg_val(35);
+    // 0 = unbounded cache (legacy); nonzero = wrap virtual tile index mod this value
+    // before page_table lookup. Value is in TILE rows (= cache_position_modulo /
+    // TILE_HEIGHT). Validated to be a multiple of block_size_t at op level.
+    constexpr uint32_t capacity_t = get_compile_time_arg_val(36);
 
-    constexpr auto q_args = TensorAccessorArgs<36>();
+    constexpr auto q_args = TensorAccessorArgs<37>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -270,7 +274,8 @@ void kernel_main() {
                     k_tile_bytes,
                     barrier_threshold,
                     is_page_table_sharded,
-                    use_k_mcast>(
+                    use_k_mcast,
+                    capacity_t>(
                     k_chunk_tiles,
                     cur_head,
                     Sk_chunk_t_dynamic,
@@ -294,7 +299,8 @@ void kernel_main() {
                     v_tile_bytes,
                     barrier_threshold,
                     is_page_table_sharded,
-                    reuse_k>(
+                    reuse_k,
+                    capacity_t>(
                     v_chunk_tiles,
                     cur_head,
                     Sk_chunk_t_dynamic,

@@ -35,6 +35,14 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
          input is height-sharded with the kv-heads dim padded to TILE_HEIGHT so the
          logical count can't be inferred from the tensor.
          ``num_kv_heads * block_size * head_dim`` must be preserved across views.
+         ``cache_position_modulo`` (optional, paged mode only) makes the kernel
+         compute ``update_idx %= cache_position_modulo`` before resolving the
+         page_table entry — i.e. treats the cache as a circular buffer of that
+         many tokens. Required when the cache is sized smaller than the model's
+         max sequence length (vLLM's ``SlidingWindowSpec`` allocation pattern);
+         without it, positions past the bounded capacity collapse onto block 0
+         and silently corrupt the cache. Must be a multiple of the effective
+         ``block_size`` and ≤ ``page_table.shape[1] * block_size``.
         )doc";
 
     ttnn::bind_function<"paged_update_cache", "ttnn.experimental.">(
@@ -52,7 +60,8 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
         nb::arg("mesh_coords").noconvert() = nb::none(),
         nb::arg("block_size") = nb::none(),
-        nb::arg("num_kv_heads") = nb::none());
+        nb::arg("num_kv_heads") = nb::none(),
+        nb::arg("cache_position_modulo") = nb::none());
 
     const auto* paged_fused_update_cache_doc =
         R"doc(

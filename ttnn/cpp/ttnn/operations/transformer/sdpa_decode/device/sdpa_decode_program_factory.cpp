@@ -50,6 +50,13 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const float scale =
         operation_attributes.scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1])));
     const uint32_t sliding_window_size = operation_attributes.sliding_window_size.value_or(0);
+    // capacity_t is in TILE rows (= cache_position_modulo / TILE_HEIGHT); 0 = unbounded.
+    // Validator enforces cache_position_modulo % effective_block_size == 0, so the
+    // tile-aligned divide is exact. Sets the kernel's compile-time wrap modulus on
+    // every page_table lookup so a bounded sliding-window cache can be indexed by
+    // absolute positions.
+    const uint32_t cache_position_modulo = operation_attributes.cache_position_modulo.value_or(0);
+    const uint32_t capacity_t = cache_position_modulo / TILE_HEIGHT;
     const bool share_cache = operation_attributes.share_cache.value_or(false);
 
     // V tensor: use K if MLA (V is subset of K), otherwise require explicit V
@@ -665,6 +672,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         static_cast<uint32_t>(q_locally_available),
         static_cast<uint32_t>(use_col_major_group_indexing),  // use_k_mcast
         Bmask,
+        capacity_t,
     };
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
