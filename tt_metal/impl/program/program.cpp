@@ -425,8 +425,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                 merged_common_rt_args.push_back(arg.value);
             }
             for (const auto& arg : kernel_descriptor.named_common_runtime_arg_arrays) {
-                merged_common_rt_args.insert(
-                    merged_common_rt_args.end(), arg.values.begin(), arg.values.end());
+                merged_common_rt_args.insert(merged_common_rt_args.end(), arg.values.begin(), arg.values.end());
             }
             SetCommonRuntimeArgs(*this, kernel_handle, merged_common_rt_args);
         } else {
@@ -438,7 +437,8 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
         auto validate_identifier = [](const std::string& id, const std::string& context) {
             TT_FATAL(
                 !id.empty() && (std::isalpha((unsigned char)id[0]) || id[0] == '_') &&
-                    std::all_of(id.begin(), id.end(), [](char c) { return std::isalnum((unsigned char)c) || c == '_'; }),
+                    std::all_of(
+                        id.begin(), id.end(), [](char c) { return std::isalnum((unsigned char)c) || c == '_'; }),
                 "Named arg {}: '{}' is not a valid C++ identifier",
                 context,
                 id);
@@ -493,8 +493,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
             // Per-core arrays: N contiguous slots each
             for (const auto& arg : kernel_descriptor.named_per_core_runtime_arg_arrays) {
                 auto [ns, field] = split_name(arg.name);
-                uint32_t len = arg.core_values.empty() ? 0
-                                                        : static_cast<uint32_t>(arg.core_values[0].second.size());
+                uint32_t len = arg.core_values.empty() ? 0 : static_cast<uint32_t>(arg.core_values[0].second.size());
                 rt_ns_map[ns].push_back({field, per_core_index, len, RuntimeArgDispatch::PER_CORE});
                 per_core_index += len;
             }
@@ -620,7 +619,9 @@ void ProgramImpl::set_dfb_alias(uint32_t primary_id, uint32_t secondary_id) {
         "Both DFBs must be created via add_dataflow_buffer before aliasing.",
         secondary_id,
         dataflow_buffers_.size());
-    TT_FATAL(primary_id != secondary_id, "set_dfb_alias: cannot alias a DFB with itself. Primary and secondary DFB IDs must be different");
+    TT_FATAL(
+        primary_id != secondary_id,
+        "set_dfb_alias: cannot alias a DFB with itself. Primary and secondary DFB IDs must be different");
 
     auto& primary_dfb = dataflow_buffers_[primary_id];
     auto& secondary_dfb = dataflow_buffers_[secondary_id];
@@ -635,7 +636,6 @@ void ProgramImpl::set_dfb_alias(uint32_t primary_id, uint32_t secondary_id) {
         "set_dfb_alias: secondary DFB id {} is already aliased to primary DFB id {}.",
         secondary_id,
         secondary_dfb->alias_primary_id.value());
-
 
     dataflow_buffers_[primary_id]->alias_secondary_ids.push_back(secondary_id);
     dataflow_buffers_[secondary_id]->alias_primary_id = primary_id;
@@ -1132,14 +1132,15 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                     kb->get_kernel_processor_type(0));
                 return idx_a < idx_b;
             });
-            kernel_groups_[programmable_core_type_index].push_back(std::make_shared<KernelGroup>(
-                *this,
-                programmable_core_type_index,
-                std::move(kernel_ids),
-                local_cb_mask,
-                min_remote_cb_start_index,
-                cores,
-                hal.get_dev_msgs_factory(hal.get_programmable_core_type(programmable_core_type_index))));
+            kernel_groups_[programmable_core_type_index].push_back(
+                std::make_shared<KernelGroup>(
+                    *this,
+                    programmable_core_type_index,
+                    std::move(kernel_ids),
+                    local_cb_mask,
+                    min_remote_cb_start_index,
+                    cores,
+                    hal.get_dev_msgs_factory(hal.get_programmable_core_type(programmable_core_type_index))));
             index++;
         }
         for (const auto& kg : kernel_groups_[programmable_core_type_index]) {
@@ -2255,8 +2256,9 @@ uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_cor
 bool detail::ProgramImpl::runs_on_noc_unicast_only_cores() {
     return (
         MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
-        not this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(
-                                        HalProgrammableCoreType::ACTIVE_ETH))
+        not this->get_kernel_groups(
+                    MetalContext::instance().hal().get_programmable_core_type_index(
+                        HalProgrammableCoreType::ACTIVE_ETH))
                 .empty());
 }
 
@@ -2381,11 +2383,12 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
         return this->get_kernels(index);
     };
 
-    detail::KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
-        return this->get_kernel_groups(index);
-    };
+    detail::KernelGroupsGetter kernel_groups_getter =
+        [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& { return this->get_kernel_groups(index); };
 
-    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
+    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& {
+        return this->semaphores();
+    };
 
     // Create a span with just this program
     std::array<ProgramImpl*, 1> programs_array = {this};
@@ -2436,12 +2439,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
-            index,
-            kernel_groups_getter(index),
-            dataflow_buffers,
-            state.offset,
-            state.dfb_offset,
-            state.dfb_size);
+            index, kernel_groups_getter(index), dataflow_buffers, state.offset, state.dfb_offset, state.dfb_size);
 
         // On WH/BH, DFBs reuse the CB firmware init path; set local_cb_mask to a proper DFB
         // slot bitmask so setup_local_cb_read_write_interfaces initialises every DFB slot.
