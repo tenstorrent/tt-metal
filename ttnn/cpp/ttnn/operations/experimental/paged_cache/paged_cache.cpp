@@ -74,12 +74,20 @@ ttnn::Tensor paged_fill_cache(
     uint32_t batch_idx,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
-    std::optional<uint32_t> block_size_override) {
+    std::optional<uint32_t> block_size_override,
+    std::optional<uint32_t> cache_position_modulo) {
     // Note: compute_kernel_config is not used by fill_cache operation
     (void)compute_kernel_config;
 
     return ttnn::prim::paged_fill_cache(
-        cache_tensor, input_tensor, page_table, batch_idx_tensor, batch_idx, mesh_coords, block_size_override);
+        cache_tensor,
+        input_tensor,
+        page_table,
+        batch_idx_tensor,
+        batch_idx,
+        mesh_coords,
+        block_size_override,
+        cache_position_modulo);
 }
 
 }  // namespace ttnn::experimental

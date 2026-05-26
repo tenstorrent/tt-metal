@@ -117,6 +117,12 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         ``head_dim`` is read from ``input_tensor.padded_shape[-1]``. ``block_size``
         defaults to ``cache_tensor.padded_shape[2]``; pass the kwarg to override it (see
         ``paged_update_cache`` for details). Per-block byte count must be preserved.
+        ``cache_position_modulo`` (optional) treats the cache as a circular buffer of
+        that many tokens: each tile write computes ``seq_tile_id %=
+        cache_position_modulo / TILE_HEIGHT`` before the page_table lookup. Lets
+        prefill writes longer than the bounded sliding-window capacity land correctly
+        (only the last ``cache_position_modulo`` tokens survive). Must be a multiple
+        of the effective ``block_size`` and ≤ ``page_table.shape[1] * block_size``.
         )doc";
 
     ttnn::bind_function<"paged_fill_cache", "ttnn.experimental.">(
@@ -131,7 +137,8 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         nb::arg("batch_idx") = 0,
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
         nb::arg("mesh_coords").noconvert() = nb::none(),
-        nb::arg("block_size") = nb::none());
+        nb::arg("block_size") = nb::none(),
+        nb::arg("cache_position_modulo") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::paged_cache::detail

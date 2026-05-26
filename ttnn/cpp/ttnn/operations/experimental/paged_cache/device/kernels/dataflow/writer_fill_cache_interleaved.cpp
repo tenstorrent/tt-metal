@@ -49,6 +49,7 @@ void kernel_main() {
     constexpr uint32_t batch_idx_stick_size = get_compile_time_arg_val(10);  // per-element size, e.g. 4 for uint32
     constexpr uint32_t batch_idx_num_elements = get_compile_time_arg_val(11);
     constexpr uint32_t num_blocks_per_batch = get_compile_time_arg_val(12);  // num_heads * input_seq_len_t
+    constexpr uint32_t capacity_t = get_compile_time_arg_val(13);
     constexpr bool batched_fill = batch_idx_num_elements > 1;
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -63,7 +64,7 @@ void kernel_main() {
         return;  // Early exit, no work done
     }
 
-    constexpr auto s0_args = TensorAccessorArgs<13>();
+    constexpr auto s0_args = TensorAccessorArgs<14>();
     constexpr auto page_table_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     constexpr auto batch_idx_tensor_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
 
@@ -136,6 +137,12 @@ void kernel_main() {
             cached_batch = batch_idx;
         }
 
+        // Bounded sliding-window cache: wrap the virtual tile index into the bounded
+        // capacity before the page_table lookup. capacity_t is a multiple of
+        // block_size_t (validated), so the wrap preserves intra-block layout.
+        if constexpr (capacity_t > 0) {
+            seq_tile_id %= capacity_t;
+        }
         uint32_t physical_tile_id =
             virtual_seq_tile_id_to_physical_tile_id<num_heads, block_size_t, Wt>(seq_tile_id, cur_head, page_table_ptr);
 

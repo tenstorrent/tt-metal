@@ -271,3 +271,69 @@ def test_paged_update_cache_modulo_must_be_multiple_of_block_size(device):
             page_table=page_table_tt,
             cache_position_modulo=block_size + 1,  # not a multiple of 32
         )
+
+
+# ── paged_fill_cache: long prefill with wrap survives the last cache_position_modulo tokens ──
+
+
+@pytest.mark.timeout(60)
+def test_paged_fill_cache_bounded_capacity_wrap(device):
+    """A prefill of length > cache_position_modulo, written with the kwarg set, must
+    leave the cache holding *exactly* the last cache_position_modulo tokens (each at
+    its wrapped slot ``pos % cache_position_modulo``). The redundant earlier writes
+    are correctly overwritten; the surviving region matches the torch reference at
+    every position.
+    """
+    torch.manual_seed(3)
+
+    num_kv_heads = 1
+    head_dim = 128
+    block_size = 32
+    sliding_window = 128
+    sliding_blocks = sliding_window // block_size
+    num_users = 1
+    # Prefill length crosses the sliding boundary by one full block, so the wrap
+    # actually overwrites earlier writes.
+    prefill_len = sliding_window + block_size
+
+    max_blocks_per_req = sliding_blocks * 4  # vLLM-style oversize page_table
+
+    # Physical cache holds max_blocks_per_req blocks; only the first sliding_blocks
+    # entries of the page_table are valid (mimicking vLLM SlidingWindowSpec).
+    cache_torch = torch.zeros(max_blocks_per_req, num_kv_heads, block_size, head_dim).bfloat16().float()
+    cache_tt = ttnn.Tensor(cache_torch, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    page_table = torch.zeros(num_users, max_blocks_per_req, dtype=torch.int32)
+    page_table[0, :sliding_blocks] = torch.arange(sliding_blocks, dtype=torch.int32)
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+    # Input: full prefill_len tokens of K. The op writes seq_tile_id %= capacity_t
+    # per tile, so each token p in [0, prefill_len) writes to slot p % sliding_window.
+    K_full = torch.randn(1, num_kv_heads, prefill_len, head_dim).bfloat16().float()
+    Kt = ttnn.from_torch(K_full, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+
+    ttnn.experimental.paged_fill_cache(
+        cache_tt,
+        Kt,
+        page_table_tt,
+        batch_idx=0,
+        cache_position_modulo=sliding_window,
+    )
+
+    # Read back and reconstruct logical positions [0, sliding_window) using page_table.
+    got = cache_tt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()  # [phys_blocks, kv, bs, d]
+    cache_view = torch.zeros(sliding_window, num_kv_heads, head_dim).bfloat16().float()
+    for vb in range(sliding_blocks):
+        phys = int(page_table[0, vb].item())
+        cache_view[vb * block_size : (vb + 1) * block_size] = (
+            got[phys, :, :, :].transpose(0, 1).squeeze(1).reshape(block_size, num_kv_heads, head_dim)
+        )
+
+    # Expected: for each slot s in [0, sliding_window), the value is the K at the
+    # largest absolute pos p < prefill_len with p % sliding_window == s.
+    ref = torch.zeros(sliding_window, num_kv_heads, head_dim).bfloat16().float()
+    for p in range(prefill_len):
+        ref[p % sliding_window] = K_full[0, :, p, :]
+
+    eq, msg = comp_pcc(ref, cache_view, pcc=0.99)
+    assert eq, f"Bounded fill_cache wrap mismatch: {msg}"
