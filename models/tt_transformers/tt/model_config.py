@@ -1043,6 +1043,31 @@ class ModelArgs:
                 "num_workers_per_link": 2,
                 "topology": ttnn.Topology.Linear,
             }
+            # Sampling-only overrides: applied regardless of Galaxy vs T3K.
+            # Keeps Galaxy-tuned link counts in model_specific_ccl_configs intact.
+            model_specific_sampling_overrides = {
+                "Qwen3-32B": {
+                    "allow_force_argmax": True,
+                    "num_links": 1,
+                    "chunks_per_sync": 10,
+                    "num_workers_per_link": 2,
+                    "topology": ttnn.Topology.Ring,
+                },
+                "Qwen2.5-32B": {
+                    "allow_force_argmax": True,
+                    "num_links": 1,
+                    "chunks_per_sync": 10,
+                    "num_workers_per_link": 2,
+                    "topology": ttnn.Topology.Ring,
+                },
+                "Qwen2.5-Coder-32B": {
+                    "allow_force_argmax": True,
+                    "num_links": 1,
+                    "chunks_per_sync": 10,
+                    "num_workers_per_link": 2,
+                    "topology": ttnn.Topology.Ring,
+                },
+            }
             model_specific_ccl_configs = {
                 "Llama-3.1-8B": {
                     "attn_ln_ag": {"num_links": 4, "chunks_per_sync": 10, "num_workers_per_link": 1},
@@ -1079,7 +1104,9 @@ class ModelArgs:
                 self.model_config["FFN_LN_AG_CONFIG"] = default_ln_ag
                 self.model_config["ATTN_AGMM_CONFIG"] = default_agmm
                 self.model_config["MLP_RS_CONFIG"] = default_mlp_rs
-                self.model_config["SAMPLING_AG_CONFIG"] = default_sampling_force_argmax
+                self.model_config["SAMPLING_AG_CONFIG"] = model_specific_sampling_overrides.get(
+                    self.base_model_name, default_sampling_force_argmax
+                )
 
             logger.info(f"Attention grid: {self.attn_input_grid}")
             logger.info(f"MLP grid: {self.mlp_core_grid}")
@@ -3567,11 +3594,11 @@ class ModelArgs:
             # Phi-3-mini uses "<|end|>" as EOS token
             if "phi-3-mini" in self.base_model_name.lower():
                 tokenizer.stop_tokens.append(tokenizer.encode("<|end|>")[0])
-            # Qwen models use ChatML format; <|im_start|> signals a new turn and should stop generation
-            if "qwen" in self.base_model_name.lower():
-                im_start_ids = tokenizer.encode("<|im_start|>", add_special_tokens=False)
-                if im_start_ids:
-                    tokenizer.stop_tokens.append(im_start_ids[0])
+            # # Qwen models use ChatML format; <|im_start|> signals a new turn and should stop generation
+            # if "qwen" in self.base_model_name.lower():
+            #     im_start_ids = tokenizer.encode("<|im_start|>", add_special_tokens=False)
+            #     if im_start_ids:
+            #         tokenizer.stop_tokens.append(im_start_ids[0])
         return tokenizer
 
     def create_processor(self):
