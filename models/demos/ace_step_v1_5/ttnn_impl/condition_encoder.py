@@ -221,7 +221,8 @@ class _TtAceStepTinyEncoder:
             sin_np, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=mem, mesh_mapper=mapper
         )
         self._rope_cache: dict[int, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
-        self._attn_bias_cache: dict[str, ttnn.Tensor] = {}
+        # Keyed by (full|sliding, seq_len): dummy S=1 precompute must not reuse for real lyric/timbre S.
+        self._attn_bias_cache: dict[tuple[str, int], ttnn.Tensor] = {}
 
     def _rope_tables_for_seq(self, seq_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Cached RoPE cos/sin views for sequence length *s* (avoid per-forward slice ops)."""
@@ -306,7 +307,7 @@ class _TtAceStepTinyEncoder:
         try:
             for layer, attn_type in zip(self.layers, self.layer_attention_types):
                 use_sliding = attn_type == "sliding_attention" and self.sliding_window is not None
-                cache_key = "sliding" if use_sliding else "full"
+                cache_key = ("sliding" if use_sliding else "full", s)
                 if cache_key not in bias_cache:
                     bias_np = _bidirectional_attn_bias_np(
                         mask_np,
@@ -372,12 +373,13 @@ class _TtAceStepTinyEncoder:
     def make_attn_bias_dev(self, attention_mask_01: np.ndarray, *, use_sliding: bool) -> ttnn.Tensor:
         """Host mask → device bias tile (call outside trace capture; refresh on CQ1 staging)."""
         mask_np = np.asarray(attention_mask_01, dtype=np.float32).reshape(int(attention_mask_01.shape[0]), -1)
+        s = int(mask_np.shape[1])
         bias_np = _bidirectional_attn_bias_np(
             mask_np,
             sliding_window=self.sliding_window if use_sliding else None,
         )
         mapper = ttnn.ReplicateTensorToMesh(self.device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
-        cache_key = "sliding" if use_sliding else "full"
+        cache_key = ("sliding" if use_sliding else "full", s)
         if cache_key not in self._attn_bias_cache:
             self._attn_bias_cache[cache_key] = ace_step_upload_f32_np_as_bf16_tile(
                 ttnn,
