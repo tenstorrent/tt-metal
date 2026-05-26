@@ -23,10 +23,6 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-# Silence noisy tt-metal warnings if any get triggered. Must be set before
-# any tt-metal / ttnn import.
-os.environ.setdefault("TT_LOGGER_LEVEL", "Error")
-
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[3]
 sys.path.insert(0, str(REPO_ROOT))
