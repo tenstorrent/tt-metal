@@ -99,10 +99,6 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         "Sparsity tensor must be ROW_MAJOR layout, got {}",
         sparsity.layout());
     TT_FATAL(
-        sparsity.logical_shape().rank() >= 1,
-        "Sparsity tensor must have rank >= 1, got {}",
-        sparsity.logical_shape().rank());
-    TT_FATAL(
         operation_attributes.is_input_a_sparse || operation_attributes.is_input_b_sparse,
         "sparse_matmul requires at least one of is_input_a_sparse or is_input_b_sparse to be true");
 
@@ -154,7 +150,9 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         b_shape_padded,
         in1_tile);
     TT_FATAL(
-        operation_attributes.nnz.value_or(1) > 0, "nnz ({}) must be greater than 0", operation_attributes.nnz.value());
+        operation_attributes.nnz.value_or(1) > 0,
+        "nnz ({}) must be greater than 0",
+        operation_attributes.nnz.value_or(1));
 
     // Check that nnz is less than or equal to the length of all batch dimensions
     uint32_t batch_length_A = 1;
@@ -194,7 +192,7 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         operation_attributes.nnz.value_or(1) <= batch_length,
         "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
-        operation_attributes.nnz,
+        operation_attributes.nnz.value_or(1),
         batch_length);
 
     // When nnz is supplied, the receiver and compute kernels loop exactly nnz times while the in0 sender

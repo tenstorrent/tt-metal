@@ -243,6 +243,39 @@ def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_s
     )
 
 
+@pytest.mark.parametrize(
+    "activation",
+    [
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDSIGMOID),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -1.0, 1.0),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU, 1.6732632, 1.0507009),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0),
+    ],
+)
+def test_linear_fused_activation_numerical_stability(device, activation):
+    """Each supported fused activation must produce finite outputs (no NaN, no Inf)."""
+    torch.manual_seed(0)
+    m, k, n = 64, 128, 64
+    in0 = torch.randn(1, 1, m, k, dtype=torch.bfloat16)
+    in1 = torch.randn(1, 1, k, n, dtype=torch.bfloat16)
+
+    in0_t = ttnn.from_torch(in0, layout=ttnn.TILE_LAYOUT, device=device)
+    in1_t = ttnn.from_torch(in1, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out = ttnn.matmul(in0_t, in1_t, activation=activation)
+    ttnn.synchronize_device(device)
+    out_torch = ttnn.to_torch(out).to(torch.float32)
+
+    assert not torch.isnan(out_torch).any(), f"{activation.op_type} produced NaN"
+    assert not torch.isinf(out_torch).any(), f"{activation.op_type} produced Inf"
+
+
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [32, 64])
 @pytest.mark.parametrize("k_size", [1024])
@@ -1064,6 +1097,27 @@ def test_linear_bias_broadcast_with_optional_shape(device, a_shape, b_shape, bia
                 assert result.shape == optional_shape
             else:
                 assert result.shape == expected.shape
+
+
+def test_linear_bias_rejected_on_multicore_reuse_program_config(device):
+    """Bias is not supported for MatmulMultiCoreReuseProgramConfig — validate-time check."""
+    torch.manual_seed(0)
+    m, k, n = 64, 64, 64
+    in0 = ttnn.from_torch(torch.randn(1, 1, m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    in1 = ttnn.from_torch(torch.randn(1, 1, k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch.randn(1, 1, 32, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=k // 32,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=m // 32,
+        per_core_N=n // 32,
+    )
+
+    with pytest.raises(RuntimeError, match="Bias is not supported for this matmul program config"):
+        ttnn.linear(in0, in1, bias=bias, program_config=program_config)
 
 
 @pytest.mark.parametrize("bias_rank", [0, 1, 2, 3, 4])

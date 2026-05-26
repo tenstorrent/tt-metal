@@ -623,3 +623,94 @@ def test_sparse_matmul_inputA_without_nnz(device, mkn, num_experts, num_batches,
             pcc_threshold=0.999,
             check_ulp=False,
         )
+
+
+def _make_sparse_inputs(device, b=1, s=4, m=32, k=128, n=512, num_experts=8, tile_h=32, tile_w=32):
+    torch.manual_seed(0)
+    in0 = ttnn.from_torch(
+        torch.randn((b, s, m, k), dtype=torch.bfloat16),
+        tile=ttnn.Tile((tile_h, 32)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    in1 = ttnn.from_torch(
+        torch.randn((1, num_experts, k, n), dtype=torch.bfloat16),
+        tile=ttnn.Tile((32, tile_w)),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    sparsity = ttnn.from_torch(
+        torch.ones((b, s, 1, num_experts), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    nnz = b * s * num_experts
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=1,
+        per_core_M=m // tile_h,
+        per_core_N=int(math.ceil(n / tile_w)) // 16,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    return in0, in1, sparsity, nnz, program_config, (m, k, n, num_experts, tile_h, tile_w)
+
+
+def test_sparse_matmul_requires_at_least_one_sparse_flag(device):
+    """At least one of is_input_a_sparse / is_input_b_sparse must be true."""
+    in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
+    _, _, _, _, tile_h, tile_w = dims
+
+    with pytest.raises(
+        RuntimeError,
+        match="sparse_matmul requires at least one of is_input_a_sparse or is_input_b_sparse to be true",
+    ):
+        ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=sparsity,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=pc,
+        )
+
+
+def test_sparse_matmul_volume_must_match_batch_length(device):
+    """sparsity logical_volume must equal product of all batch dimensions."""
+    in0, in1, _, nnz, pc, dims = _make_sparse_inputs(device)
+    _, _, _, num_experts, tile_h, tile_w = dims
+
+    wrong_sparsity = ttnn.from_torch(
+        torch.ones((1, 2, 1, num_experts), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    with pytest.raises(RuntimeError, match="sparsity logical_volume"):
+        ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=wrong_sparsity,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=pc,
+        )
