@@ -1581,6 +1581,11 @@ def _kv_pad_rotation_layout(kv_actual_isl, new_actual_isl, sp_factor, chunk_size
     pad_offset_in_chip = kv_actual_isl % chunk_size_local
     total_pad_in_old = max(0, sp_factor * chunk_size_local - kv_actual_isl)
 
+    # Per-chip Q row budget = chunk_size_local. Pad-fill rows on a chip
+    # count toward its budget (one Q row per token, regardless of whether
+    # its K write lands in OLD pad or NEW slab).
+    q_rows_per_chip = [0] * sp_factor
+
     new_token_destinations = []
     # Phase 1: fill OLD-slab pad cells in global-position order, which can
     # span multiple chips.
@@ -1590,21 +1595,28 @@ def _kv_pad_rotation_layout(kv_actual_isl, new_actual_isl, sp_factor, chunk_size
         chip = (pad_global_pos // chunk_size_local) % sp_factor
         cell = pad_global_pos % chunk_size_local
         new_token_destinations.append((i, chip, "OLD", cell))
+        q_rows_per_chip[chip] += 1
 
-    # Phase 2: remaining tokens go into NEW slabs, starting from chip 0,
-    # filling chunk_size_local cells per chip before moving on.
+    # Phase 2: remaining tokens go into NEW slabs in chip order, but each
+    # chip can only accept up to (chunk_size_local - pad_fill_rows_on_chip)
+    # more — so chips that received heavy pad-fill in Phase 1 contribute
+    # fewer (possibly zero) NEW-slab cells. This preserves the invariant
+    # that every chip contributes at most chunk_size_local Q rows per iter.
     remaining = new_actual_isl - fill_count
     token_idx = fill_count
-    chip = 0
-    cell = 0
-    while remaining > 0:
-        new_token_destinations.append((token_idx, chip, "NEW", cell))
-        token_idx += 1
-        remaining -= 1
-        cell += 1
-        if cell == chunk_size_local:
-            cell = 0
-            chip += 1  # next chip's NEW slab (chip can equal pad_chip — its NEW slab is a normal slab)
+    for chip in range(sp_factor):
+        if remaining == 0:
+            break
+        avail = chunk_size_local - q_rows_per_chip[chip]
+        take = min(avail, remaining)
+        for cell in range(take):
+            new_token_destinations.append((token_idx, chip, "NEW", cell))
+            q_rows_per_chip[chip] += 1
+            token_idx += 1
+            remaining -= 1
+    # If remaining > 0 here, the caller asked for more tokens than the iter
+    # can hold (new_actual_isl > sp_factor * chunk_size_local). We silently
+    # drop them; the test's assert(len == new_actual_isl) will catch it.
 
     return pad_chip, pad_offset_in_chip, total_pad_in_old, new_token_destinations
 
@@ -1614,17 +1626,53 @@ def _kv_pad_rotation_layout(kv_actual_isl, new_actual_isl, sp_factor, chunk_size
     [
         # Single-device pad: pad on dev 3 only (32 cells).
         (224, 64, 3, 32, 32),
+        # Single-device pad, exactly filled: no NEW writes at all (boundary case).
+        (224, 32, 3, 32, 32),
+        # Single-device pad + NEW span across dev 0 and dev 1.
+        (224, 128, 3, 32, 32),
         # Multi-device pad: devs 2 and 3 OLD slabs entirely pad; new fills both fully.
         (128, 128, 2, 0, 128),
         # Multi-device pad, partial fill: fills dev 2's pad fully, dev 3's pad partially.
         (128, 96, 2, 0, 128),
+        # Multi-device pad, full fill + extra NEW writes on dev 0.
+        (128, 160, 2, 0, 128),
+        # Pad spans 3 devices (dev 1, 2, 3); new fills only dev 1's pad portion.
+        (64, 64, 1, 0, 192),
+        # Pad spans 3 devices; new exactly fills all three.
+        (64, 192, 1, 0, 192),
         # Cold start: every OLD slab is pad; new fills first two devices.
         (0, 128, 0, 0, 256),
         # Clean boundary: kv ends on a chunk boundary, no OLD pad anywhere.
         # All new tokens go to NEW slabs starting from dev 0.
         (256, 64, 0, 0, 0),
+        # Full iter with pad: max valid new — exactly sp*chunk_size_local. Pad
+        # fill consumes pad_size_in_chip Q rows on dev 3; the rest of dev 3's
+        # budget plus full budgets of devs 0-2 are used by NEW slabs.
+        (224, 256, 3, 32, 32),
+        # Full iter, clean boundary: no OLD pad; all 256 new tokens go to NEW slabs.
+        (256, 256, 0, 0, 0),
+        # No new tokens at all: should be a no-op.
+        (224, 0, 3, 32, 32),
+        # Sub-tile-aligned cold case: pad in OLD slab is exactly one chunk_size_local
+        # short of full; new is exactly enough to fill just that. Tests Phase 1 only.
+        (192, 64, 3, 0, 64),
     ],
-    ids=["single_pad_dev3", "multi_pad_2_full", "multi_pad_2_partial", "cold_start", "no_old_pad"],
+    ids=[
+        "single_pad_dev3",
+        "single_pad_exact_fill",
+        "single_pad_then_cross_chip_new",
+        "multi_pad_2_full",
+        "multi_pad_2_partial",
+        "multi_pad_2_with_extra_new",
+        "pad_3_devices_partial",
+        "pad_3_devices_full",
+        "cold_start",
+        "no_old_pad",
+        "full_iter_with_pad",
+        "full_iter_no_pad",
+        "new_zero",
+        "single_full_slab_pad",
+    ],
 )
 def test_kv_pad_aware_rotation_torch_showcase(
     kv_actual_isl, new_actual_isl, expected_pad_chip, expected_pad_offset, expected_total_pad
