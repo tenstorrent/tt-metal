@@ -12,7 +12,6 @@
 #include "tensor_shape.h"
 
 using namespace ckernel;
-using namespace ckernel::pack;
 
 /**
  * @brief MOP configuration for pack untilize of contiguous tiles
