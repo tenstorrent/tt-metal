@@ -104,8 +104,8 @@ void kernel_main() {
                         copy_tile(cb_acc, i, i);
                     }
                 }
-                reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, cb_acc);
                 pack_reconfig_data_format(cb_acc);
+                reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, cb_acc);
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, i, 0, i);
                 }

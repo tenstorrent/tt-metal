@@ -25,8 +25,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
     if constexpr (!skip_addrmod_config) {
-        LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-            pack_src_format[output_id], pack_dst_format[output_id], face_r_dim));
+        LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
     }
 
     _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
@@ -47,8 +46,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
     std::uint32_t pack_tile_addr =
         get_output_tile_address<out_of_order_output, pack_mode>(output_id, output_tile_index);
 
-    LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-        pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output)));
+    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
 
     _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
 }
@@ -60,8 +58,7 @@ inline void llk_matmul_pack(
 
     static_assert(
         !((pack_mode == PackMode::Untilize) && out_of_order_output), "untilize out of order packing is not supported!");
-    LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-        pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output)));
+    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
     LLK_ASSERT(
         ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");

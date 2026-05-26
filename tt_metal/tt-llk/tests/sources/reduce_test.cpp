@@ -133,7 +133,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
         formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
-    _llk_pack_reduce_mask_config_<REDUCE_DIM>();
+    _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape.face_r_dim);
 
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
 
