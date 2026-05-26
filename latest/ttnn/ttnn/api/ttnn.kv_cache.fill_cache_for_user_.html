@@ -141,23 +141,29 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.kv_cache.fill_cache_for_user_">
-<span class="sig-prename descclassname"><span class="pre">ttnn.kv_cache.</span></span><span class="sig-name descname"><span class="pre">fill_cache_for_user_</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cache</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">batch_index</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.kv_cache.fill_cache_for_user_" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.kv_cache.</span></span><span class="sig-name descname"><span class="pre">fill_cache_for_user_</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cache</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">batch_index</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">update_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.kv_cache.fill_cache_for_user_" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Populates the <code class="xref py py-attr docutils literal notranslate"><span class="pre">cache</span></code> tensor in-place with values sourced from <code class="xref py py-attr docutils literal notranslate"><span class="pre">input</span></code> at <code class="xref py py-attr docutils literal notranslate"><span class="pre">batch_index</span></code>.</p>
+<p>Populates the <code class="xref py py-attr docutils literal notranslate"><span class="pre">cache</span></code> tensor in-place with values sourced from <code class="xref py py-attr docutils literal notranslate"><span class="pre">input</span></code> at <code class="xref py py-attr docutils literal notranslate"><span class="pre">batch_index</span></code>,
+optionally offset along the sequence dimension by <code class="xref py py-attr docutils literal notranslate"><span class="pre">update_idx</span></code> (tile-aligned).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
 <li><p><strong>cache</strong> (<em>ttnn.Tensor</em>) – the cache tensor to be written to.</p></li>
-<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor to be written to the cache.</p></li>
+<li><p><strong>input</strong> (<em>ttnn.Tensor</em>) – the input tensor to be written to the cache.</p></li>
 <li><p><strong>batch_index</strong> (<em>int</em>) – the index into the cache tensor.</p></li>
 </ul>
 </dd>
-<dt class="field-even">Returns<span class="colon">:</span>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
+<p><strong>update_idx</strong> (<em>int</em>) – seq-dim offset within the user slot, must be a multiple of TILE_HEIGHT. Default = 0.</p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
 <p><em>ttnn.Tensor</em> – the output tensor.</p>
 </dd>
 </dl>

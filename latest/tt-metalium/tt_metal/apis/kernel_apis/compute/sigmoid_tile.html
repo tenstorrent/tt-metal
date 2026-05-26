@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>sigmoid_tile &mdash; TT-Metalium  documentation</title>
+  <title>sigmoid_tile &mdash; TT-Metalium&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
@@ -41,7 +41,7 @@
 </a>
 
 <a href="../../../../index.html">
-    TT-Metalium
+    TT-Metalium&trade;
 </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
@@ -92,7 +92,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../../../../index.html">TT-Metalium</a>
+          <a href="../../../../index.html">TT-Metalium&trade;</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -126,8 +126,8 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_i_bEN7ckernel12sigmoid_tileEv8uint32_t">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">vec_mode</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">VectorMode</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">RC</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">fast_and_approx</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1ac373ff7488ca30d75d4521a7c46339af"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">sigmoid_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_i_bEN7ckernel12sigmoid_tileEv8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_10VectorMode_bEN7ckernel12sigmoid_tileEv8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">VectorMode</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">vec_mode</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">VectorMode</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">RC</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">fast_and_approx</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1ac373ff7488ca30d75d4521a7c46339af"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">sigmoid_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_10VectorMode_bEN7ckernel12sigmoid_tileEv8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Performs element-wise computation of sigmoid on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
