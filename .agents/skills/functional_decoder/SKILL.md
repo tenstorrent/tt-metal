@@ -13,6 +13,8 @@ The final tests must run without downloading model weights. Use real model weigh
 
 Target single-user prefill and decode by default. Multi-user throughput is a later optimization unless the user explicitly asks for it. For MoE models, the primary path should run the real gate/router and then compute only the experts selected by that gate, aiming to use `ttnn.sparse_matmul` so DRAM traffic and compute follow active experts rather than dense all-expert matmuls.
 
+Do not treat a near-threshold PCC miss as goal completion. A `fail` artifact is evidence for an attempted run, not success for the bringup goal, unless the user explicitly asked only for a diagnostic packet. For ordinary bringup, keep debugging until the decoder passes, the run is truly blocked by model access/hardware/tooling, or a repeated investigated failure has clear evidence and next steps.
+
 ## Required Reference Reads
 
 Before implementation, read these bundled references:
@@ -79,6 +81,18 @@ For MoE models, collect enough router and expert tensor statistics to synthesize
 - Treat host movement between prefill and decode as an explicit boundary. It may be used in a layer bringup test, but the decoder implementation should not depend on host interaction once layers are stacked into a full model.
 - For MoE, use the gate output to drive sparse expert execution. Prefer the GPT-OSS pattern in `models/demos/gpt_oss/tt/topk.py` plus `models/demos/gpt_oss/tt/experts/decode.py` and `models/demos/gpt_oss/tt/experts/prefill.py`: top-k router output feeds sparse expert matmuls instead of running every expert densely.
 - Keep separate gate PCC and expert PCC tests useful for debugging, but do not let them substitute for a full decoder PCC where the gate selects the active experts end-to-end as in a real model run.
+
+## Low-PCC Debug Ladder
+
+If full-decoder PCC misses the threshold, do not stop after recording the failure. Run a short, evidence-producing debug ladder before declaring failure:
+
+1. Split the decoder into component comparisons: input norm, QKV projection, RoPE, attention/SDPA output, output projection, shared MLP, router/gate, selected experts, expert reduction, post norms, residuals, and layer scales.
+2. Re-run the worst component with higher fidelity: `ttnn.bfloat16` or `ttnn.float32` where supported, `MathFidelity.HiFi4`, `fp32_dest_acc_en=True`, `math_approx_mode=False`, exact GELU/activation modes, non-approx softmax/exp settings, and higher-precision accumulation for matmul/linear/SDPA program configs.
+3. Check reference parity before blaming TTNN: HF dtype, activation variant, RoPE theta/scaling/partial rotation, attention scale, mask/window semantics, GQA/KV replication, K=V tying, RMSNorm epsilon/scale, router top-k ordering, and residual/layer-scale order.
+4. Minimize the failing case: shorter sequence, single token, one head, one active expert, dense equivalent for sparse expert math, or one layer-kind representative. Preserve the minimized command and PCC in debug notes.
+5. Prefer fixes that move the full decoder PCC, not only a component PCC. If a high-fidelity diagnostic passes but the production dtype path fails, record the delta and either keep the high-fidelity setting for functional correctness or justify the remaining optimized path separately.
+
+Only write a final `fail` artifact after this ladder has been attempted or is impossible, and include the best PCC, tested knobs, component-localization evidence, and concrete next debugging steps.
 
 ## Required Tests
 
