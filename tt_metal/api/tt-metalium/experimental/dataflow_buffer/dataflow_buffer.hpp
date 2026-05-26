@@ -49,7 +49,7 @@ struct DataflowBufferConfig {
     // By default, the producer and consumer sides share the same implicit sync setting
     // However, you can "flip" the behavior of the consumer side to create
     //  - explicit producer + implicit consumer
-    //  - implicit producer + explicit consumer)
+    //  - implicit producer + explicit consumer
     // This is rarely (if ever) useful, hence why it's a std::optional rather than plain bool.
     // The option exists primarily to simplify legality check coupling in Metal 2.0.
     std::optional<bool> override_consumer_implicit_sync = std::nullopt;

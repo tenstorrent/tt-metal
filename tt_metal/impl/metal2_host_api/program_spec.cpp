@@ -892,11 +892,12 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                         continue;
                     }
                     const auto& dm_config = std::get<DataMovementConfiguration>(ep.kernel->config_spec);
-                    bool lists_dfb = false;
-                    if (dm_config.gen2_data_movement_config.has_value()) {
-                        const auto& vec = dm_config.gen2_data_movement_config->disable_implicit_sync_for;
-                        lists_dfb = std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
+                    if (!dm_config.gen2_data_movement_config.has_value()) {
+                        // Gen1-only DM kernel — can't physically participate in Gen2 implicit sync; abstains.
+                        continue;
                     }
+                    const auto& vec = dm_config.gen2_data_movement_config->disable_implicit_sync_for;
+                    const bool lists_dfb = std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
                     if (canonical == nullptr) {
                         canonical = ep.kernel;
                         canonical_lists_dfb = lists_dfb;
@@ -904,15 +905,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     }
                     TT_FATAL(
                         lists_dfb == canonical_lists_dfb,
-                        "DFB '{}' has disagreeing disable_implicit_sync_for state on the {} side: "
-                        "kernel '{}' {} list the DFB, kernel '{}' {}. All DM {} kernels of a DFB "
-                        "must agree (the hardware programs a single mask per side).",
+                        "DFB '{}' has disagreeing disable_implicit_sync_for state on the {} side",
                         dfb_name,
-                        side_label,
-                        canonical->unique_id,
-                        canonical_lists_dfb ? "does" : "does not",
-                        ep.kernel->unique_id,
-                        lists_dfb ? "does" : "does not",
                         side_label);
                 }
             };
