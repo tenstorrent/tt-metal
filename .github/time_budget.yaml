@@ -183,7 +183,7 @@ models:
     bh_p300: 30
     bh_deskbox: 60
     bh_quietbox_2: 85
-    bh_llmbox: 40
+    bh_llmbox: 45
     bh_galaxy_perf: 78
   unit:
     wh_llmbox: 175
