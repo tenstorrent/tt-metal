@@ -24,6 +24,7 @@
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <board/board.hpp>
+#include <board/port_lookup.hpp>
 
 namespace tt::tt_metal {
 
@@ -537,19 +538,6 @@ bool is_bh_galaxy_rev_c(tt::umd::ClusterDescriptor& cluster_desc) {
     return revision_bits >= 3;
 }
 
-PortType resolve_port_type(const ASICDescriptor& asic_descriptor, uint8_t src_chan) {
-    try {
-        auto board = tt::scaleout_tools::create_board(asic_descriptor.board_type);
-        return board
-            .get_port_for_asic_channel(
-                tt::scaleout_tools::AsicChannel{*asic_descriptor.asic_location, tt::scaleout_tools::ChanId{src_chan}})
-            .port_type;
-    } catch (const std::runtime_error&) {
-        // Mock clusters and incomplete board maps may reference channels with no port mapping.
-        return PortType::UNKNOWN;
-    }
-}
-
 }  // namespace
 
 namespace discovery_impl {
@@ -591,7 +579,10 @@ PhysicalSystemDescriptor run_local_discovery(
             src_chan,
             dst_chan,
             is_local,
-            resolve_port_type(psd.get_asic_descriptors().at(src_asic), src_chan),
+            tt::scaleout_tools::resolve_port_type(
+                psd.get_asic_descriptors().at(src_asic).board_type,
+                *psd.get_asic_descriptors().at(src_asic).asic_location,
+                src_chan),
         };
     };
 

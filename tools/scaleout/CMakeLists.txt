@@ -46,6 +46,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
             board/board.hpp
+            board/port_lookup.hpp
             cabling_generator/cabling_generator.hpp
             connector/connector.hpp
             factory_system_descriptor/utils.hpp
