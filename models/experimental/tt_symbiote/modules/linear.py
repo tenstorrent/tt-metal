@@ -755,23 +755,23 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
 
     def move_weights_to_device_impl(self):
         weight_mapper = _tp_mesh_mapper(self.device, self.weight_dim)
-        gate_w_host = preprocess_linear_weight(
-            self._gate_weight_torch,
+        # Concatenate gate/up weights on the host (axis 0 of torch's
+        # ``[out, in]`` layout) before preprocessing. The previous flow ran
+        # one preprocess+to_device per half plus a device-side
+        # ``ttnn.concat`` ([1, 1, 1536, 8960] + [1, 1, 1536, 8960] →
+        # [1, 1, 1536, 17920], BFP4, 64 cores ≈ 227 μs per layer), which
+        # showed up as 8 ConcatDeviceOperation entries at the top of the
+        # decode trace (model-load only, but still ~1.8 ms of pure
+        # overhead on cold start). Fusing in torch space removes the
+        # on-device op outright.
+        fused_weight_torch = torch.cat([self._gate_weight_torch, self._up_weight_torch], dim=0)
+        fused_w_host = preprocess_linear_weight(
+            fused_weight_torch,
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
             weights_mesh_mapper=weight_mapper,
         )
-        up_w_host = preprocess_linear_weight(
-            self._up_weight_torch,
-            dtype=ttnn.bfloat4_b,
-            layout=ttnn.TILE_LAYOUT,
-            weights_mesh_mapper=weight_mapper,
-        )
-        gate_w = ttnn.to_device(gate_w_host, self.device)
-        up_w = ttnn.to_device(up_w_host, self.device)
-        self.tt_weight = ttnn.concat([gate_w, up_w], dim=-1)
-        ttnn.deallocate(gate_w)
-        ttnn.deallocate(up_w)
+        self.tt_weight = ttnn.to_device(fused_w_host, self.device)
 
         has_bias = self._gate_bias_torch is not None or self._up_bias_torch is not None
         if has_bias:
@@ -784,17 +784,11 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
                 else torch.zeros(intermediate, dtype=zeros_dtype)
             )
             u = self._up_bias_torch if self._up_bias_torch is not None else torch.zeros(intermediate, dtype=zeros_dtype)
-            gate_b_host = preprocess_linear_bias(
-                g, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, weights_mesh_mapper=bias_mapper
+            fused_bias_torch = torch.cat([g, u], dim=0)
+            fused_b_host = preprocess_linear_bias(
+                fused_bias_torch, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, weights_mesh_mapper=bias_mapper
             )
-            up_b_host = preprocess_linear_bias(
-                u, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, weights_mesh_mapper=bias_mapper
-            )
-            gate_b = ttnn.to_device(gate_b_host, self.device)
-            up_b = ttnn.to_device(up_b_host, self.device)
-            self.tt_bias = ttnn.concat([gate_b, up_b], dim=-1)
-            ttnn.deallocate(gate_b)
-            ttnn.deallocate(up_b)
+            self.tt_bias = ttnn.to_device(fused_b_host, self.device)
         else:
             self.tt_bias = None
 
