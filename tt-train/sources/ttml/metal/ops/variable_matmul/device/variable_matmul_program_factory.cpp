@@ -272,9 +272,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     // `use_offset` / `use_offset_in1` — when true, the dm kernel adds the row/K offset to
     // the per-tile address. Computed once and shared across all four dm kernel CTA lists
     // (in0 sender + in0 receiver, in1 sender + in1 receiver). Sender and receiver MUST
-    // agree on this flag — a mismatch makes one side read different runtime args than the
-    // other (the cause of bug 9a416f25a08, where the receiver was missing
-    // `input_and_weight_k_active`).
+    // agree on this flag — a mismatch makes one side read different runtime args than the other.
     const bool use_offset_in0 =
         operation_attributes.effective_M_tiles > 0 || parent_K_tiles_in0 > K_tiles || offset_in0_k;
     const bool use_offset_in1 = parent_K_tiles_in1 > K_tiles || offset_in1_k;
@@ -316,10 +314,6 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     in1_defines["Y_AXIS_CORES"] = std::to_string(grid_size.y);
 
     // ----- Kernel compile-time args -----
-    // Layout matches original minimal_matmul exactly (22 args for in0, 21 for in1) so TensorAccessor
-    // offsets remain correct. Indices 0, 1, 9 are unused by kernels (kept for arg layout compat).
-    // N_chunks=1, N_tiles_per_chunk=N_tiles (dummy values for stripped features).
-
     const bool in0_is_output_writer = !transpose_core_grid;
     const bool in1_is_output_writer = transpose_core_grid;
 

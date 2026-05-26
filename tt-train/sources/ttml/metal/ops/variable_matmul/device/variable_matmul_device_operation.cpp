@@ -181,11 +181,7 @@ VariableMatmulDeviceOperation::spec_return_value_t VariableMatmulDeviceOperation
     // With transpose_b, the weight is stored as [N, K] so N is at logical[-2].
     const uint32_t N = operation_attributes.transpose_b ? in1.logical_shape()[-2] : in1.logical_shape()[-1];
     // M dimension: use effective_M_tiles when provided (offset-read mode); otherwise derive
-    // from the input tensor's full M dim ([-1] if transpose_a, else [-2]).
-    // NB: the original code only set output_shape[-1] = N and inherited [-2] from in0 —
-    // that was a latent bug for transpose_a (output was sized [M_e, N] instead of [H, N]),
-    // hidden by the matmul kernel writing past the buffer end. Fixing this exposes the
-    // real DRAM cost of the larger gradient tensors in the moe-ffn backward.
+    // from the input tensor's matmul-M dim ([-1] if transpose_a, else [-2]).
     const uint32_t M_from_input = operation_attributes.transpose_a ? in0.logical_shape()[-1] : in0.logical_shape()[-2];
     const uint32_t M = (operation_attributes.effective_M_tiles > 0)
                            ? (operation_attributes.effective_M_tiles * tt::constants::TILE_HEIGHT)

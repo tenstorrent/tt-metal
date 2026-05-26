@@ -264,10 +264,8 @@ void kernel_main() {
              */
             defer_write = !((m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1)));
             defer_write = defer_write && !is_injector_core;
-            // When K_num_blocks == 0 (empty K-axis offset / empty expert), the deferred-write
-            // trigger inside the K-loop never fires, so previously-deferred blocks would never
-            // reach DRAM and the tiles keep allocator leftovers. Force every block to a direct
-            // write so the kernel-side zero-init in compute lands in the output tensor.
+            // K_num_blocks == 0 (empty expert): the in-K-loop deferred-write trigger never
+            // fires, so force direct writes to flush compute's zero-init to DRAM.
             if (K_num_blocks == 0U) {
                 defer_write = false;
             }
