@@ -300,7 +300,7 @@ void validate_matmul_sharded_operand_grids_within_program_compute_grid(
             if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
                 TT_FATAL(
                     program_config.allowed_worker_cores.has_value(),
-                    "allowed_worker_cores must be set before validation (normalize_program_config should have set it)");
+                    "allowed_worker_cores must be set before validation");
                 check_tensor_in_core_range_set(input_tensor_a, program_config.allowed_worker_cores.value());
                 check_tensor_in_core_range_set(input_tensor_b, program_config.allowed_worker_cores.value());
             }
