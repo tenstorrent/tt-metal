@@ -10,7 +10,7 @@ from models.common.utility_functions import (
     skip_for_wormhole_b0,
     skip_for_blackhole,
 )
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics

@@ -50,39 +50,36 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
         args.batch_idx_fallback < page_table_shape[0],
         "Batch idx must be within the page_table batch size");
 
-    // The program factory reads num_heads from input.padded_shape[1] and bakes it into
-    // the kernel's per-block stride, so input and cache must agree on num_heads
-    // independently of the per-block byte-count check below.
+    // Per-block element-count consistency. The program factory reads num_heads,
+    // block_size, and head_dim from the *input* tensor and computes the kernel's
+    // per-block stride as input_num_heads * effective_block_size * input_head_dim.
+    // For each new physical block in the cache buffer the kernel jumps by that
+    // stride, so it must equal the cache's actual per-block element count.
+    // Allowing input_num_heads != cache_num_heads (as long as the per-block
+    // element count is preserved) enables HMA cross-group tensor sharing for
+    // models with asymmetric num_kv_heads per layer type (e.g. Gemma4 26B-A4B
+    // with sliding kv=8 and full kv=2). Trivially holds for legacy callers
+    // with no override and matching shapes.
     const uint32_t cache_num_heads = cache_shape[1];
     const uint32_t input_num_heads = input_shape[1];
-    TT_FATAL(
-        input_num_heads == cache_num_heads,
-        "paged_fill_cache num_heads mismatch: input has {} heads but cache has {}.",
-        input_num_heads,
-        cache_num_heads);
-
-    // Per-block byte-count consistency. When the caller reinterprets the cache with a
-    // different (block_size, head_dim) view via block_size_override, the kernel's
-    // per-block element stride (num_kv_heads * block_size * head_dim) must be preserved.
-    // Trivially holds for legacy callers (no override, matching head dims).
     const uint32_t cache_block_size = cache_shape[2];
     const uint32_t cache_head_dim = cache_shape[3];
     const uint32_t input_head_dim = input_shape[3];
     const uint32_t effective_block_size = args.block_size_override.value_or(cache_block_size);
     const uint64_t cache_elems_per_block = static_cast<uint64_t>(cache_num_heads) * cache_block_size * cache_head_dim;
     const uint64_t view_elems_per_block =
-        static_cast<uint64_t>(cache_num_heads) * effective_block_size * input_head_dim;
+        static_cast<uint64_t>(input_num_heads) * effective_block_size * input_head_dim;
     TT_FATAL(
         view_elems_per_block == cache_elems_per_block,
         "paged_fill_cache geometry mismatch: cache has {} elems/block "
-        "(kv_heads={}, block_size={}, head_dim={}) but call view is {} "
+        "(kv_heads={}, block_size={}, head_dim={}) but input view is {} "
         "(kv_heads={}, block_size={}, head_dim={}).",
         cache_elems_per_block,
         cache_num_heads,
         cache_block_size,
         cache_head_dim,
         view_elems_per_block,
-        cache_num_heads,
+        input_num_heads,
         effective_block_size,
         input_head_dim);
     TT_FATAL(
