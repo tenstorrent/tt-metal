@@ -714,268 +714,82 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
 
-    // Q input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = q_tiles * q_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
-            .data_format = q_df,
-            .page_size = q_tile_size,
-        }}},
-    });
-    // K input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = k_tiles * k_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-            .data_format = k_df,
-            .page_size = k_tile_size,
-        }}},
-    });
-    // V input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = v_tiles * v_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
-            .data_format = v_df,
-            .page_size = v_tile_size,
-        }}},
-    });
+    uint32_t next_cb_index = 0;
+    const auto allocate_cb = [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat data_format) -> uint32_t {
+        const uint32_t cb_index = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = page_size_bytes * num_pages,
+            .core_ranges = core_grid_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_index),
+                .data_format = data_format,
+                .page_size = page_size_bytes,
+            }}},
+        });
+        return cb_index;
+    };
+    const auto allocate_tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) -> uint32_t {
+        return allocate_cb(tile_size, num_tiles, data_format);
+    };
+
+    const uint32_t cb_q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
+    const uint32_t cb_k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
+    const uint32_t cb_v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
 
     // Lightweight mask CB: holds neginf + optional causal diagonal + optional partial tiles.
     // Used for both causal (ring_iter 0) and padding (ring_iter > 0) masking.
-    if (needs_lightweight_mask) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = total_lightweight_mask_tiles * mask_tile_size,
-            .core_ranges = core_grid_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CB::c_in3),
-                .data_format = mask_df,
-                .page_size = mask_tile_size,
-            }}},
-        });
-    }
+    constexpr uint32_t inactive_cb = std::numeric_limits<uint32_t>::max();
+    const uint32_t cb_mask_in =
+        needs_lightweight_mask ? allocate_tile_cb(total_lightweight_mask_tiles, mask_tile_size, mask_df) : inactive_cb;
 
-    // scale input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = scale_tiles * scalar_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
-            .data_format = scalar_df,
-            .page_size = scalar_tile_size,
-        }}},
-    });
+    const uint32_t cb_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
+    const uint32_t cb_identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
+    const uint32_t cb_stats_in = allocate_tile_cb(statistics_tiles, im_tile_size, im_df);
+    const uint32_t cb_prev_out = allocate_tile_cb(out_im_tiles, out_tile_size, out_df);
+    const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
 
-    // identity scale input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = scale_tiles * scalar_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
-            .data_format = scalar_df,
-            .page_size = scalar_tile_size,
-        }}},
-    });
+    const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, im_tile_size, im_df);
+    const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
+    const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
+    const uint32_t cb_max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
 
-    // stats input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * im_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
-            .data_format = im_df,
-            .page_size = im_tile_size,
-        }}},
-    });
+    const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df);
+    const uint32_t cb_stats_out = allocate_tile_cb(statistics_tiles, im_tile_size, im_df);
 
-    // previous block output as input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = out_im_tiles * out_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_7),
-            .data_format = out_df,
-            .page_size = out_tile_size,
-        }}},
-    });
-
-    // column identity input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = scale_tiles * scalar_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_8),
-            .data_format = scalar_df,
-            .page_size = scalar_tile_size,
-        }}},
-    });
-
-    // Indices c_13-c_22 match main's #44925 program-size trim (kernels use the same slots);
-    // PR previously used c_24-c_31 which exceeded the Tensix kernel-config ringbuffer.
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = qk_tiles * im_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_13),
-            .data_format = im_df,
-            .page_size = im_tile_size,
-        }}},
-    });
-
-    // cb_out_im
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = out_im_tiles * im_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_14),
-            .data_format = im_df,
-            .page_size = im_tile_size,
-        }}},
-    });
-
-    // cb_out_accumulate_im
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = out_im_tiles * im_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_15),
-            .data_format = im_df,
-            .page_size = im_tile_size,
-        }}},
-    });
-
-    // cb_cur_max
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * stats_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_18),
-            .data_format = stats_df,
-            .page_size = stats_tile_size,
-        }}},
-    });
-
-    // cb_prev_max
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * stats_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_19),
-            .data_format = stats_df,
-            .page_size = stats_tile_size,
-        }}},
-    });
-
-    // cb_cur_sum
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * stats_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_20),
-            .data_format = stats_df,
-            .page_size = stats_tile_size,
-        }}},
-    });
-
-    // cb_prev_sum
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * stats_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_21),
-            .data_format = stats_df,
-            .page_size = stats_tile_size,
-        }}},
-    });
-
-    // cb_exp_max_diff
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * stats_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_22),
-            .data_format = stats_df,
-            .page_size = stats_tile_size,
-        }}},
-    });
-
-    // Output
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = out0_t * out_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
-            .data_format = out_df,
-            .page_size = out_tile_size,
-        }}},
-    });
-
-    // stats output
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * im_tile_size,
-        .core_ranges = core_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_17),
-            .data_format = im_df,
-            .page_size = im_tile_size,
-        }}},
-    });
-
-    // Streaming compute v2: 1-tile recip scratch CB (c_9) for normalize_row_streaming.
-    // c_4 is used by cb_scale_in in ring joint, so we use c_9 instead.
-    if (use_streaming_compute) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = 1 * im_tile_size,
-            .core_ranges = core_grid_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_9),
-                .data_format = im_df,
-                .page_size = im_tile_size,
-            }}},
-        });
-    }
+    // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
+    // cb_scale_in is live in ring joint, so streaming uses a dedicated scratch CB.
+    const uint32_t cb_recip_scratch = use_streaming_compute ? allocate_tile_cb(1, im_tile_size, im_df) : inactive_cb;
 
     // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
-    // cb_sum_out (c_10) = compute pushes sum for writer to save to DRAM.
-    // cb_sum_in (c_11) = writer pushes restored sum from DRAM for compute to read.
-    if (use_streaming_compute) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = statistics_tiles * stats_tile_size,
-            .core_ranges = core_grid_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_10),
-                .data_format = stats_df,
-                .page_size = stats_tile_size,
-            }}},
-        });
+    // cb_sum_out = compute pushes sum for writer to save to DRAM.
+    // cb_sum_in = writer pushes restored sum from DRAM for compute to read.
+    const uint32_t cb_sum_out =
+        use_streaming_compute ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : inactive_cb;
+    const uint32_t cb_sum_in =
+        use_streaming_compute ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : inactive_cb;
 
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = statistics_tiles * stats_tile_size,
-            .core_ranges = core_grid_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_11),
-                .data_format = stats_df,
-                .page_size = stats_tile_size,
-            }}},
-        });
+    // Signal CB: compute signals writer when last K-chunk starts.
+    // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.
+    constexpr uint32_t signal_page_size = 16;
+    const uint32_t cb_signal =
+        use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
 
-        // Signal CB (c_12): compute signals writer when last K-chunk starts.
-        // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.
-        constexpr uint32_t signal_page_size = 16;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = signal_page_size,
-            .core_ranges = core_grid_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_12),
-                .data_format = tt::DataFormat::UInt16,
-                .page_size = signal_page_size,
-            }}},
-        });
-    }
+    const std::vector<uint32_t> cb_compile_time_args = {
+        cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,    cb_identity_scale_in,
+        cb_stats_in, cb_prev_out, cb_col_identity, cb_recip_scratch, cb_sum_out,     cb_sum_in,
+        cb_signal,   cb_out,      cb_stats_out,    cb_qk_im,         cb_out_im_A,    cb_out_im_B,
+        cb_max_A,    cb_max_B,    cb_sum_A,        cb_sum_B,         cb_exp_max_diff};
+    const std::vector<uint32_t> reader_cb_compile_time_args = {cb_q_in, cb_k_in, cb_v_in};
+    reader_compile_time_args.insert(
+        reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
+    writer_compile_time_args.insert(
+        writer_compile_time_args.end(), cb_compile_time_args.begin(), cb_compile_time_args.end());
+    compute_compile_time_args.insert(
+        compute_compile_time_args.end(), cb_compile_time_args.begin(), cb_compile_time_args.end());
 
     auto* const q_buf = input_tensor_q.buffer();
     auto* const k_buf = input_tensor_k.buffer();

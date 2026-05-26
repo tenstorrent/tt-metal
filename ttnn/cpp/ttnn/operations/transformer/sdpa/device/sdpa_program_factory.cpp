@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_interleaved_cb_ids.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -616,8 +617,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         static_cast<uint32_t>(use_zigzag_balancing),   // arg 34
     };
 
-    TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
-
     std::map<std::string, std::string> defines_map;
     defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
     defines_map["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
@@ -667,243 +666,86 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
 
-    // Q input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = q_tiles * q_tile_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
-            .data_format = q_df,
-            .page_size = q_tile_size,
-        }}},
-    });
+    sdpa_cb::CBIds cb_ids;
+    uint32_t next_cb_index = 0;
+    const auto allocate_cb = [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat data_format) -> uint32_t {
+        const uint32_t cb_index = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = page_size_bytes * num_pages,
+            .core_ranges = core_grid,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_index),
+                .data_format = data_format,
+                .page_size = page_size_bytes,
+            }}},
+        });
+        return cb_index;
+    };
+    const auto allocate_tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) -> uint32_t {
+        return allocate_cb(tile_size, num_tiles, data_format);
+    };
 
-    // K input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = k_tiles * k_tile_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-            .data_format = k_df,
-            .page_size = k_tile_size,
-        }}},
-    });
+    cb_ids.q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
+    cb_ids.k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
+    cb_ids.v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
 
-    // V input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = v_tiles * v_tile_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
-            .data_format = v_df,
-            .page_size = v_tile_size,
-        }}},
-    });
-
-    // Only create mask buffer if it's going to be used
-    if (use_provided_mask or is_causal or use_padded_mask) {
+    const bool needs_mask_cb = use_provided_mask || is_causal || use_padded_mask || sliding_window_size.value_or(0) > 0;
+    // Only create mask buffer if it's going to be used.
+    if (needs_mask_cb) {
         // Lightweight mask: Float16_b, mask_tiles already computed (1 for padding, 2 for causal).
         // Legacy: full Sq×Sk double-buffered matrix in Bfp4_b.
         tt::DataFormat actual_mask_df = lightweight_mask ? tt::DataFormat::Float16_b : mask_df;
         uint32_t actual_mask_tile_size = tt::tile_size(actual_mask_df);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = mask_tiles * actual_mask_tile_size,
-            .core_ranges = core_grid,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
-                .data_format = actual_mask_df,
-                .page_size = actual_mask_tile_size,
-            }}},
-        });
+        cb_ids.mask_in = allocate_tile_cb(mask_tiles, actual_mask_tile_size, actual_mask_df);
     }
 
-    // identity scalar input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = scale_tiles * scalar_tile_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
-            .data_format = scalar_df,
-            .page_size = scalar_tile_size,
-        }}},
-    });
-
-    // identity column input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = scale_tiles * scalar_tile_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_7),
-            .data_format = scalar_df,
-            .page_size = scalar_tile_size,
-        }}},
-    });
+    cb_ids.identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
+    cb_ids.col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
 
     if (is_chunked) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = page_table_stick_size,
-            .core_ranges = core_grid,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
-                .data_format = page_table_df,
-                .page_size = page_table_stick_size,
-            }}},
-        });
+        cb_ids.page_table = allocate_cb(page_table_stick_size, 1, page_table_df);
     }
     if (flexible_chunked) {
         constexpr uint32_t chunk_start_idx_page_size = 32;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = chunk_start_idx_page_size,
-            .core_ranges = core_grid,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_8),
-                .data_format = tt::DataFormat::Int32,
-                .page_size = chunk_start_idx_page_size,
-            }}},
-        });
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = chunk_start_idx_page_size,
-            .core_ranges = core_grid,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_9),
-                .data_format = tt::DataFormat::Int32,
-                .page_size = chunk_start_idx_page_size,
-            }}},
-        });
+        cb_ids.chunk_start_idx_compute = allocate_cb(chunk_start_idx_page_size, 1, tt::DataFormat::Int32);
+        cb_ids.chunk_start_idx_writer = allocate_cb(chunk_start_idx_page_size, 1, tt::DataFormat::Int32);
     }
 
-    // Create attention sink buffer if provided
     if (use_attention_sink) {
         tt::DataFormat sink_df = tt::tt_metal::datatype_to_dataformat_converter(attention_sink.value().dtype());
         uint32_t sink_tile_size = tt::tile_size(sink_df);
-        // cb_attention_sink (CBIndex::c_4)
         log_debug(tt::LogOp, "attention_sink_tiles: {}", attention_sink_tiles);
         log_debug(tt::LogOp, "sink_tile_size: {}", sink_tile_size);
         log_debug(tt::LogOp, "sink_df: {}", sink_df);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = attention_sink_tiles * sink_tile_size,
-            .core_ranges = core_grid,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
-                .data_format = sink_df,
-                .page_size = sink_tile_size,
-            }}},
-        });
+        cb_ids.attention_sink = allocate_tile_cb(attention_sink_tiles, sink_tile_size, sink_df);
     }
 
-    // Streaming compute v2: 1-tile recip scratch CB (c_4) for normalize_row_streaming.
+    // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
     // No row buffers needed — cb_push_back_hold_wr_ptr writes directly to cb_qkt_im.
-    // Safe: gating excludes use_attention_sink (which also uses c_4).
     if (use_streaming_compute) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = 1 * im_tile_size,
-            .core_ranges = core_grid,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
-                .data_format = im_df,
-                .page_size = im_tile_size,
-            }}},
-        });
+        cb_ids.recip_scratch = allocate_tile_cb(1, im_tile_size, im_df);
     }
 
-    // cb_qk_im
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = qk_tiles * im_tile_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_24),
-            .data_format = im_df,
-            .page_size = im_tile_size,
-        }}},
-    });
+    cb_ids.qk_im = allocate_tile_cb(qk_tiles, im_tile_size, im_df);
+    cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
+    cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
+    cb_ids.max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.sum_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.sum_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
 
-    // cb_out_im
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = out_im_tiles * im_tile_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_25),
-            .data_format = im_df,
-            .page_size = im_tile_size,
-        }}},
-    });
-
-    // cb_out_accumulate_im
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = out_im_tiles * im_tile_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_26),
-            .data_format = im_df,
-            .page_size = im_tile_size,
-        }}},
-    });
-
-    // cb_cur_max
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * stats_tile_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_27),
-            .data_format = stats_df,
-            .page_size = stats_tile_size,
-        }}},
-    });
-
-    // cb_prev_max
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * stats_tile_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_28),
-            .data_format = stats_df,
-            .page_size = stats_tile_size,
-        }}},
-    });
-
-    // cb_cur_sum
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * stats_tile_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
-            .data_format = stats_df,
-            .page_size = stats_tile_size,
-        }}},
-    });
-
-    // cb_prev_sum
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * stats_tile_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_30),
-            .data_format = stats_df,
-            .page_size = stats_tile_size,
-        }}},
-    });
-
-    // cb_exp_max_diff
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * stats_tile_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_31),
-            .data_format = stats_df,
-            .page_size = stats_tile_size,
-        }}},
-    });
-
-    // Output
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = out0_t * out_tile_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
-            .data_format = out_df,
-            .page_size = out_tile_size,
-        }}},
-    });
+    const auto reader_cb_compile_time_args = cb_ids.reader_compile_time_args();
+    const auto writer_cb_compile_time_args = cb_ids.writer_compile_time_args();
+    const auto compute_cb_compile_time_args = cb_ids.compute_compile_time_args();
+    reader_compile_time_args.insert(
+        reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
+    writer_compile_time_args.insert(
+        writer_compile_time_args.end(), writer_cb_compile_time_args.begin(), writer_cb_compile_time_args.end());
+    compute_compile_time_args.insert(
+        compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
+    TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
     // Semaphores for KV chain forwarding (non-causal only).
     // IDs match the order they were assigned above: sender=0, receiver=1, valid=2.

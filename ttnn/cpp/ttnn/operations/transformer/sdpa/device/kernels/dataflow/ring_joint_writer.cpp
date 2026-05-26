@@ -359,22 +359,21 @@ void kernel_main() {
         false, /* wait_for_op_signal */
         argidx);
 
-    // TODO: CB indices below are hardcoded and duplicated from the program factory.
-    // They should be passed as compile-time args so the factory is the single source of truth.
     // The stats CB is aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm.
-    constexpr uint32_t cb_max_in = tt::CBIndex::c_6;  // deferred norm: DRAM → compute (running max)
-    constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;  // eager norm: DRAM → compute (LSE)
-    constexpr uint32_t cb_prev_out = tt::CBIndex::c_7;
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_max_out = tt::CBIndex::c_17;  // deferred norm: compute → DRAM (running max)
-    constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;  // eager norm: compute → DRAM (LSE)
-    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
-    constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
-    constexpr uint32_t cb_signal = tt::CBIndex::c_12;
-    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
-    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
-    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+    constexpr uint32_t cb_arg_offset = stats_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
+    constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 4);
+    constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
+    constexpr uint32_t cb_max_in = get_compile_time_arg_val(cb_arg_offset + 6);  // deferred norm: DRAM -> compute
+    constexpr uint32_t cb_lse_in = cb_max_in;                                    // eager norm: DRAM -> compute
+    constexpr uint32_t cb_prev_out = get_compile_time_arg_val(cb_arg_offset + 7);
+    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 8);
+    constexpr uint32_t cb_sum_out = get_compile_time_arg_val(cb_arg_offset + 10);
+    constexpr uint32_t cb_sum_in = get_compile_time_arg_val(cb_arg_offset + 11);
+    constexpr uint32_t cb_signal = get_compile_time_arg_val(cb_arg_offset + 12);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 13);
+    constexpr uint32_t cb_max_out = get_compile_time_arg_val(cb_arg_offset + 14);  // deferred norm: compute -> DRAM
+    constexpr uint32_t cb_lse_out = cb_max_out;                                    // eager norm: compute -> DRAM
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_max_in);

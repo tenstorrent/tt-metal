@@ -199,19 +199,20 @@ void kernel_main() {
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
 
-    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
-    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
-    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
-    constexpr uint32_t cb_id_page_table = tt::CBIndex::c_6;
-    constexpr uint32_t cb_id_chunk_start_idx_compute = tt::CBIndex::c_8;
-    constexpr uint32_t cb_id_chunk_start_idx_writer = tt::CBIndex::c_9;
+    constexpr uint32_t cb_arg_offset = chunk_start_idx_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
+    constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
+    constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
+    constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 4);
+    constexpr uint32_t cb_id_page_table = get_compile_time_arg_val(cb_arg_offset + 5);
+    constexpr uint32_t cb_id_chunk_start_idx_compute = get_compile_time_arg_val(cb_arg_offset + 6);
+    constexpr uint32_t cb_id_chunk_start_idx_writer = get_compile_time_arg_val(cb_arg_offset + 7);
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
-    constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
+    constexpr uint32_t mask_tile_bytes = use_provided_mask ? get_tile_size(cb_mask_in) : 0;
     constexpr uint32_t attention_sink_tile_bytes = use_attention_sink ? get_tile_size(cb_attention_sink) : 0;
 
     constexpr uint32_t q_heads_per_k = NQH / NKH;

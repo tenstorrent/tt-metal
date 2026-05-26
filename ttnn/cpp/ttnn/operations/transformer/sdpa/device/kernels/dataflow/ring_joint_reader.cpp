@@ -119,11 +119,13 @@ void kernel_main() {
             get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 6));
     }
 
-    // TODO: CB indices below are hardcoded and duplicated from the program factory.
-    // They should be passed as compile-time args so the factory is the single source of truth.
-    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
-    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
+    constexpr uint32_t head_chain_arg_count = 4;
+    constexpr uint32_t batch_chain_arg_count = k_uses_batch_chain ? 4 : 0;
+    constexpr uint32_t cb_arg_offset =
+        joint_v_args.next_compile_time_args_offset() + head_chain_arg_count + batch_chain_arg_count;
+    constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
+    constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);

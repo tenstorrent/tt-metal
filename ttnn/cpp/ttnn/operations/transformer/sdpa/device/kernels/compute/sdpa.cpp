@@ -71,26 +71,25 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
-    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
-    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
-    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
-    constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
-
-    constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
-    constexpr uint32_t cb_out_im_A = tt::CBIndex::c_25;
-    constexpr uint32_t cb_out_im_B = tt::CBIndex::c_26;
-    constexpr uint32_t cb_max_A = tt::CBIndex::c_27;
-    constexpr uint32_t cb_max_B = tt::CBIndex::c_28;
-    constexpr uint32_t cb_sum_A = tt::CBIndex::c_29;
-    constexpr uint32_t cb_sum_B = tt::CBIndex::c_30;
-    constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
-
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-
-    constexpr uint32_t cb_chunk_start_idx = tt::CBIndex::c_8;
+    constexpr uint32_t cb_arg_offset = 35;
+    constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
+    constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
+    constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
+    constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 4);
+    constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
+    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 6);
+    constexpr uint32_t cb_chunk_start_idx = get_compile_time_arg_val(cb_arg_offset + 7);
+    constexpr uint32_t cb_recip_scratch = get_compile_time_arg_val(cb_arg_offset + 8);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 9);
+    constexpr uint32_t cb_qk_im = get_compile_time_arg_val(cb_arg_offset + 10);
+    constexpr uint32_t cb_out_im_A = get_compile_time_arg_val(cb_arg_offset + 11);
+    constexpr uint32_t cb_out_im_B = get_compile_time_arg_val(cb_arg_offset + 12);
+    constexpr uint32_t cb_max_A = get_compile_time_arg_val(cb_arg_offset + 13);
+    constexpr uint32_t cb_max_B = get_compile_time_arg_val(cb_arg_offset + 14);
+    constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 15);
+    constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 16);
+    constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 17);
     uint32_t chunked_q_chunk_offset = 0;
     mm_init(cb_q_in, cb_k_in, cb_out);
 
@@ -109,8 +108,7 @@ void kernel_main() {
 
     if constexpr (use_streaming_compute) {
         // Streaming SDPA v2: direct cb_qkt_im writes via cb_push_back_hold_wr_ptr.
-        // No row buffers needed. c_4 used only as 1-tile recip scratch for normalization.
-        constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_4;
+        // No row buffers needed; a dedicated 1-tile CB is used as recip scratch.
 
         // Wait once for identity scale; v2 removes per-call waits inside reduce_c_row_group
         cb_wait_front(cb_identity_scale_in, 1);
