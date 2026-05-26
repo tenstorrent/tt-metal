@@ -7,6 +7,7 @@
 
 #include "api/compute/tilize.h"
 #include "api/compute/cb_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 // This is the go-to helper for all tilize usage in compute kernels.
