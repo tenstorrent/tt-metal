@@ -27,9 +27,9 @@ inline void _llk_math_eltwise_ternary_sfpu_init_()
 }
 
 /**
- * @brief Dispatches a ternary SFPU kernel over all faces of the current DEST section.
+ * @brief Dispatches a ternary SFPU kernel over faces selected by @p vector_mode.
  *
- * Sets the DEST section base to tile 0, calls @p sfpu_func once per face with the
+ * Sets the DEST section base to tile 0, calls @p sfpu_func once per selected face with the
  * supplied tile indices, advances the face pointer between calls, then signals
  * SFPU done.
  *
@@ -41,18 +41,56 @@ inline void _llk_math_eltwise_ternary_sfpu_init_()
  * @param dst_index_in1   DEST tile index for the second input operand (e.g. true_val).
  * @param dst_index_in2   DEST tile index for the third input operand (e.g. false_val).
  * @param dst_index_out   DEST tile index that receives the result.
+ * @param vector_mode     Faces to process: R (0-1), C (0,2), RC (all 4, default), or scalar (once).
  * @param args            Extra arguments forwarded to @p sfpu_func after the tile indices.
  */
 template <class F, class... ARGS>
 inline void _llk_math_eltwise_ternary_sfpu_params_(
-    F&& sfpu_func, std::uint32_t dst_index_in0, std::uint32_t dst_index_in1, std::uint32_t dst_index_in2, std::uint32_t dst_index_out, ARGS&&... args)
+    F&& sfpu_func,
+    std::uint32_t dst_index_in0,
+    std::uint32_t dst_index_in1,
+    std::uint32_t dst_index_in2,
+    std::uint32_t dst_index_out,
+    int vector_mode = static_cast<int>(VectorMode::RC),
+    ARGS&&... args)
 {
     _llk_math_sfpu_start_(0);
 
-    for (std::uint32_t face = 0; face < NUM_FACES; face++)
+    VectorMode mode = static_cast<VectorMode>(vector_mode);
+
+    if (mode == VectorMode::R)
+    {
+#pragma GCC unroll 0
+        for (int face = 0; face < 2; face++)
+        {
+            sfpu_func(dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, std::forward<ARGS>(args)...);
+            _llk_math_sfpu_inc_dst_face_addr_();
+        }
+        _llk_math_sfpu_inc_dst_face_addr_();
+        _llk_math_sfpu_inc_dst_face_addr_();
+    }
+    else if (mode == VectorMode::C)
+    {
+#pragma GCC unroll 0
+        for (int face = 0; face < 2; face++)
+        {
+            sfpu_func(dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, std::forward<ARGS>(args)...);
+            _llk_math_sfpu_inc_dst_face_addr_();
+            _llk_math_sfpu_inc_dst_face_addr_();
+        }
+    }
+    else if (mode == VectorMode::RC)
+    {
+#pragma GCC unroll 0
+        for (int face = 0; face < 4; face++)
+        {
+            sfpu_func(dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, std::forward<ARGS>(args)...);
+            _llk_math_sfpu_inc_dst_face_addr_();
+        }
+    }
+    else
     {
         sfpu_func(dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, std::forward<ARGS>(args)...);
-        _llk_math_sfpu_inc_dst_face_addr_();
     }
 
     _llk_math_sfpu_done_();

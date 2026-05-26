@@ -125,9 +125,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // to a known-empty lane mask before the first select op.
     _init_where_();
 
-    // Runs _calculate_where_ face-by-face: cond=tile 0, true_val=tile 1,
-    // false_val=tile 2, result written to tile 0.
-    _llk_math_eltwise_ternary_sfpu_params_(sfpu::_calculate_where_<false>, 0u, 1u, 2u, 0u);
+    // Runs _calculate_where_ over the faces selected by VECTOR_MODE: cond=tile 0,
+    // true_val=tile 1, false_val=tile 2, result written to tile 0. Faces outside
+    // the selected set keep whatever the producer wrote into Dest before SFPU ran
+    // (the cond tile, here), so the Python test asserts only on the processed faces.
+    _llk_math_eltwise_ternary_sfpu_params_(sfpu::_calculate_where_<false>, 0u, 1u, 2u, 0u, VECTOR_MODE);
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 }

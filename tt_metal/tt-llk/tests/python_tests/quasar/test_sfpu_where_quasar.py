@@ -11,6 +11,7 @@ from helpers.llk_params import (
     ImpliedMathFormat,
     MathOperation,
     UnpackerEngine,
+    VectorMode,
     format_dict,
 )
 from helpers.param_config import (
@@ -31,8 +32,29 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
+    VECTOR_MODE,
 )
 from helpers.utils import passed_test
+
+FACE_SIZE = 16 * 16
+
+# Map each VectorMode to the set of face indices the LLK dispatch processes.
+# Faces outside the set keep whatever the producer left in Dest (the cond tile
+# in this test), so the per-mode assertion is restricted to processed faces.
+_PROCESSED_FACES = {
+    VectorMode.None_: (0,),
+    VectorMode.R: (0, 1),
+    VectorMode.C: (0, 2),
+    VectorMode.RC: (0, 1, 2, 3),
+}
+
+
+def _processed_face_mask(vector_mode: VectorMode, num_faces: int) -> torch.Tensor:
+    """1-D bool mask selecting the elements of a flat tile that ``vector_mode`` writes."""
+    mask = torch.zeros(num_faces * FACE_SIZE, dtype=torch.bool)
+    for face in _PROCESSED_FACES[vector_mode]:
+        mask[face * FACE_SIZE : (face + 1) * FACE_SIZE] = True
+    return mask
 
 
 def _get_valid_formats_dest_acc():
@@ -83,19 +105,24 @@ def _is_unpack_to_dest(fmt: FormatConfig, dest_acc: DestAccumulation) -> bool:
         formats_dest_acc[0]
     ),
     test_case=["mixed", "all_ones", "all_zeros"],
+    vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
 )
-def test_sfpu_where_quasar(formats_dest_acc, implied_math_format, test_case):
+def test_sfpu_where_quasar(
+    formats_dest_acc, implied_math_format, test_case, vector_mode
+):
     """
     Test ternary `where(condition, true_val, false_val) -> output` on Quasar.
 
     The C++ test source packs 3 input tiles (condition, true_val, false_val)
     into `buffer_A`, datacopies them into DEST at tile indices 0, 1, 2, then
-    runs the SFPU `where` kernel face-by-face writing output to DEST tile 0.
-    PACK writes DEST tile 0 out to `buffer_Res`.
+    runs the SFPU `where` kernel over the faces selected by `vector_mode`,
+    writing output to DEST tile 0. PACK writes DEST tile 0 out to `buffer_Res`.
 
     Variants cover `mixed` / `all_ones` / `all_zeros` condition regimes — the
     last two pin the selector to a single branch so format issues on either
-    side show up in isolation.
+    side show up in isolation. `vector_mode` covers all four face-selection
+    modes; unprocessed faces are excluded from the golden assertion since
+    Dest retains the producer-written data there.
     """
     formats, dest_acc = formats_dest_acc
     input_dimensions = [32, 32]
@@ -152,6 +179,7 @@ def test_sfpu_where_quasar(formats_dest_acc, implied_math_format, test_case):
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
+            VECTOR_MODE(vector_mode),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
@@ -181,8 +209,9 @@ def test_sfpu_where_quasar(formats_dest_acc, implied_math_format, test_case):
     ), "Result tensor and golden tensor are not of the same length"
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format_out)
+    mask = _processed_face_mask(vector_mode, num_faces)
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor[mask], res_tensor[mask], formats.output_format
     ), "Assert against golden failed"
 
 
@@ -192,8 +221,9 @@ def test_sfpu_where_quasar(formats_dest_acc, implied_math_format, test_case):
     implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
         formats_dest_acc[0]
     ),
+    vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
 )
-def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format):
+def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mode):
     """
     Deterministic where test — alternating 0/1 condition pattern with
     known true/false scalars (2 and 11) for easy debugging.
@@ -236,6 +266,7 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format):
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
+            VECTOR_MODE(vector_mode),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
@@ -265,6 +296,7 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format):
     ), "Result tensor and golden tensor are not of the same length"
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format_out)
+    mask = _processed_face_mask(vector_mode, num_faces)
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor[mask], res_tensor[mask], formats.output_format
     ), "Assert against golden failed"
