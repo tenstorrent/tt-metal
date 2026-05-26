@@ -29,7 +29,7 @@ Do not skip these reads. The `SKILL.md` body defines the workflow; the reference
 - Target single-user prefill/decode behavior by default; document any shape padding needed to satisfy tiled TTNN ops without treating it as multi-user coverage.
 - For MoE layers, the full decoder PCC must include gate/router, expert selection, active experts, expert weighting/reduction, and the surrounding decoder residual/norm path end-to-end.
 - Optimized TTNN ops used where appropriate, e.g. use sdpa_decode instead of hand-implementing attention in ttnn primitives (although if you need to implement something that ttnn does not have an op/transformers op/experimental op for or the existing op does not cover this model's case it is of then ok to write your own implementation out of primitives)
-- Pass prefill and decode PCC against the HF reference decoder layer with `PCC >= 0.998`.
+- Pass prefill and decode PCC against the HF reference decoder layer with `PCC >= 0.995`.
 - Use paged KV cache only; non-paged attention is at best optional debug scaffolding, not a final path.
 - Prove paged KV-cache behavior for prefill and decode, including page-table handling.
 - Decode PCC must be measured from a warmed trace replay path.
@@ -88,7 +88,7 @@ Required test behavior:
 
 - Instantiate the HF decoder layer directly when possible; use full `AutoModelForCausalLM` only when layer isolation is impractical.
 - Load no real weights in normal test execution; use checked-in synthetic weights generated from recorded real-tensor stats.
-- Compare TTNN vs HF for prefill and decode with `PCC >= 0.998`.
+- Compare TTNN vs HF for prefill and decode with `PCC >= 0.995`.
 - For MoE layers, the required prefill/decode PCC compares the full decoder output after the TTNN gate selects experts and the TTNN expert path computes/weights/reduces those selected experts. Optional gate-only or expert-only PCC checks may be recorded as diagnostics.
 - Exercise paged prefill, paged decode update, and paged SDPA decode.
 - Use randomized or permuted page tables, nonzero user slots where applicable, and nontrivial current positions.

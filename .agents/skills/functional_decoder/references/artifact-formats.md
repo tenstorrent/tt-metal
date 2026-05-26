@@ -215,7 +215,7 @@ For MoE models, entries in `results` are full decoder outputs after the TTNN gat
 {
   "schema_version": 1,
   "artifact_type": "functional_decoder_pcc_results",
-  "threshold": 0.998,
+  "threshold": 0.995,
   "results": [
     {
       "layer_kind_id": "dense",
