@@ -23,6 +23,7 @@ from transformers.models.ministral3.modeling_ministral3 import (
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.devstral2_large.tests._devstral_weights import (
+    DEVSTRAL2_TEST_MAX_SEQ_LEN,
     require_attention_weights,
     require_text_config,
     replicated_tt_to_torch,
@@ -71,7 +72,7 @@ def test_attention_prefill_pcc_real_weights(mesh_device, seq_len):
     args = Devstral2Args.from_hf_config(
         text_cfg,
         mesh_shape=tuple(mesh_device.shape),
-        max_seq_len=max(512, seq_len),
+        max_seq_len=max(DEVSTRAL2_TEST_MAX_SEQ_LEN, seq_len),
     )
     tt_ccl = TT_CCL(mesh_device)
     rope = TtRotaryEmbedding(args, mesh_device, max_position_embeddings=args.max_seq_len)

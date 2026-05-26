@@ -11,7 +11,8 @@ Mirrors ``models/experimental/devstral2_small/demo/tt_demo_agent.py``:
   * chunked paged prefill (``kv_block_size`` tokens per dispatch), then
   * traced decode (default): one capture per generation, ``execute_trace`` for later
     tokens; persistent ``(token, current_pos)`` device buffers updated each step.
-  * optional ``--decode-trace-2cq``: CQ1 for input H2D, CQ0 for forward/trace replay.
+  * decode trace **2CQ** (default, ``DEVSTRAL2_DECODE_TRACE_2CQ=1``): CQ1 for input H2D,
+    CQ0 for forward/trace replay. Use ``--no-decode-trace-2cq`` or ``DEVSTRAL2_DECODE_TRACE_2CQ=0``.
 
 Sampling is CPU-side (argmax for greedy, multinomial otherwise) on the column-parallel
 ``lm_head`` output, because :class:`TtMinistral3ForCausalLM` already returns logits.
@@ -45,6 +46,7 @@ from transformers import AutoTokenizer
 import ttnn
 from models.experimental.devstral2_large.demo.decode_trace_2cq import (
     DecodeTrace2CQ,
+    decode_trace_2cq_enabled,
     signal_decode_step_done,
     stage_decode_inputs,
 )
@@ -602,7 +604,7 @@ class TTAgentConfig(ChatConfig):
     prefill_activations_dram: bool = False
     use_kv_cache: bool = True
     trace_decode: bool = True
-    trace_decode_2cq: bool = False
+    trace_decode_2cq: bool = True
     verbose_runtime: bool = False
 
 
@@ -741,7 +743,7 @@ def _resolve_agent_max_seq_len(tokenizer: Any, config: TTAgentConfig, mesh_devic
 def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
     """Open mesh, build TT model + tokenizer, allocate persistent decode buffers."""
     if config.trace_decode_2cq and not config.trace_decode:
-        raise ValueError("--decode-trace-2cq requires traced decode (do not pass --no-decode-trace).")
+        raise ValueError("2CQ decode requires traced decode (do not pass --no-decode-trace).")
 
     logger.info(f"Loading tokenizer for {config.model_id}...")
     tokenizer = AutoTokenizer.from_pretrained(config.model_id, trust_remote_code=True)
@@ -1442,7 +1444,7 @@ def parse_tt_args() -> TTAgentConfig:
     p.add_argument(
         "--max-seq-len",
         type=int,
-        default=4096,
+        default=32768,
         metavar="S",
         help="KV/RoPE cap (default: system + max-context + max-new + 256, rounded up to 512).",
     )
@@ -1471,9 +1473,9 @@ def parse_tt_args() -> TTAgentConfig:
         help="Disable traced decode (full model dispatch every token).",
     )
     p.add_argument(
-        "--decode-trace-2cq",
+        "--no-decode-trace-2cq",
         action="store_true",
-        help="Overlap decode input H2D (CQ1) with forward/trace (CQ0); requires traced decode.",
+        help="Disable 2CQ decode (single command queue; CQ0 does input H2D + trace).",
     )
     p.add_argument(
         "--verbose",
@@ -1502,7 +1504,7 @@ def parse_tt_args() -> TTAgentConfig:
         prefill_activations_dram=a.prefill_dram,
         use_kv_cache=not a.no_kv_cache,
         trace_decode=not a.no_decode_trace,
-        trace_decode_2cq=a.decode_trace_2cq,
+        trace_decode_2cq=decode_trace_2cq_enabled() and not a.no_decode_trace_2cq,
         verbose_runtime=a.verbose,
     )
 

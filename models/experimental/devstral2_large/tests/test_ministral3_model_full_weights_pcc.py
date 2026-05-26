@@ -29,6 +29,7 @@ from loguru import logger
 
 import ttnn
 from models.experimental.devstral2_large.tests._devstral_weights import (
+    DEVSTRAL2_TEST_MAX_SEQ_LEN,
     require_model_weights,
     require_text_config,
 )
@@ -134,7 +135,7 @@ def test_ministral3_model_full_weights_all_layers_decode_perf(mesh_device, batch
 
     fixtures = _setup_tt_full_model(
         mesh_device,
-        max_seq_len=max(512, decode_pos_start + num_decode_tokens),
+        max_seq_len=max(DEVSTRAL2_TEST_MAX_SEQ_LEN, decode_pos_start + num_decode_tokens),
     )
 
     torch.manual_seed(42)
