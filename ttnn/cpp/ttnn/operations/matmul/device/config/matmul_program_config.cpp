@@ -1160,10 +1160,10 @@ MatmulProgramConfig get_matmul_program_config(
         uint32_t in0_block_w = in0_shard_shape[1] / in0_tile.get_width();
 
         // MatmulMultiCoreReuseProgramConfig's factory does NOT emit TILE_PACK_ROW_MAJOR — its
-        // compute kernel packs in SubblockGrouped order. For sharded output the compute kernel
+        // compute kernel packs in SubblockMajor order. For sharded output the compute kernel
         // writes directly into the output shard (no writer-side reordering), so the on-chip
         // tile order must already equal row-major. Force subblock_w == per_core_N OR
-        // subblock_h == 1 to make SubblockGrouped degenerate to row-major. (1d/2d mcast
+        // subblock_h == 1 to make SubblockMajor degenerate to row-major. (1d/2d mcast
         // factories support tile_pack_row_major on the program-config side and can relax this;
         // wiring that into this factory is tracked as a matmul-helpers follow-up.)
         //

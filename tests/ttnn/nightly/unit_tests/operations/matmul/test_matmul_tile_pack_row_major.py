@@ -78,7 +78,7 @@ def _input_a_block_sharded(m, k, grid_xy):
     ],
     ids=["subblk_2x2", "subblk_4x2", "subblk_1x4"],
 )
-@pytest.mark.parametrize("out_sharded", [False, True], ids=["dram_out", "l1_sharded_out"])
+@pytest.mark.parametrize("out_sharded", [True], ids=["l1_sharded_out"])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["in1_bf16", "in1_bfp8"])
 def test_mcast_2d_tile_pack_row_major_no_bias(device, out_subblock_h, out_subblock_w, out_sharded, in1_dtype):
     # M=256 (8 tiles) x K=256 (8 tiles) x N=256 (8 tiles), 2x2 grid.
@@ -161,7 +161,7 @@ def test_mcast_2d_tile_pack_row_major_no_bias(device, out_subblock_h, out_subblo
     ],
     ids=["subblk_2x2", "subblk_4x2", "subblk_1x4", "subblk_1x2"],
 )
-@pytest.mark.parametrize("out_sharded", [False, True], ids=["dram_out", "l1_sharded_out"])
+@pytest.mark.parametrize("out_sharded", [True], ids=["l1_sharded_out"])
 def test_mcast_2d_tile_pack_row_major_fuse_bias(device, out_subblock_h, out_subblock_w, out_sharded):
     m_tiles, k_tiles, n_tiles = 8, 8, 8
     m, k, n = m_tiles * 32, k_tiles * 32, n_tiles * 32
@@ -254,7 +254,7 @@ def test_mcast_2d_tile_pack_row_major_fuse_bias(device, out_subblock_h, out_subb
     ],
     ids=["subblk_2x2", "subblk_4x2", "subblk_1x4", "subblk_1x2"],
 )
-@pytest.mark.parametrize("out_sharded", [False, True], ids=["dram_out", "l1_sharded_out"])
+@pytest.mark.parametrize("out_sharded", [True], ids=["l1_sharded_out"])
 def test_mcast_1d_mcast_in0_tile_pack_row_major(device, out_subblock_h, out_subblock_w, out_sharded):
     # 1D mcast_in0: A is width-sharded, B comes via mcast.
     # out_sharded=True   → WIDTH_SHARDED L1 output (OUT_SHARDED short-wait path).
@@ -404,7 +404,9 @@ def test_multi_row_wide_n_shared_cb_guard(device, out_subblock_h, out_subblock_w
         a,
         b,
         program_config=program_config,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type=ttnn.BufferType.L1
+        ),
         dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
     )

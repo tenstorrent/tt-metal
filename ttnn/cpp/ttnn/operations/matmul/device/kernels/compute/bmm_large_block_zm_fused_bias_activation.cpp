@@ -205,11 +205,11 @@ void kernel_main() {
 #endif
 
     // TILE_PACK_ROW_MAJOR: factory opts in to absolute-offset packing; writers read row-major.
-    constexpr OutputCbTileOrder output_layout =
+    constexpr OutputCBLayout output_layout =
 #ifdef TILE_PACK_ROW_MAJOR
-        OutputCbTileOrder::RowGrouped;
+        OutputCBLayout::TileRowMajor;
 #else
-        OutputCbTileOrder::SubblockGrouped;
+        OutputCBLayout::SubblockMajor;
 #endif
 
     // Last-block pack target. Interm covers two distinct downstream phases (FUSE_BIAS

@@ -7,6 +7,8 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <utility>
+#include <vector>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -71,6 +73,84 @@ struct SubblockChoice {
 };
 
 SubblockChoice determine_largest_subblock(const SubblockTuneInputs& inputs);
+
+// ---------------------------------------------------------------------------
+// Convenience tuning surface (mirrors the Python ttnn.matmul_auto_tune module
+// that was previously a re-implementation of this logic in pure Python — now
+// a thin re-export of the C++ functions below). Bound to Python via
+// matmul_nanobind.cpp so callers writing host-side program-config tuning code
+// hit a single source of truth instead of maintaining two implementations.
+// ---------------------------------------------------------------------------
+
+// DEST tile capacity for a single matmul subblock with the standard 32x32 tile.
+// Half-sync doubles capacity; fp32 dest acc halves it. WH and BH agree today.
+uint32_t dst_capacity_from_flags(bool fp32_dest_acc_en, bool dst_full_sync_en);
+
+// Returns all (h, w) subblock pairs legal for (per_core_M, per_core_N), sorted
+// by descending volume with fast-path (h==1 or w==1) preferred within ties.
+//
+// require_legacy_writer=true filters to subblock-major-writer-compatible pairs
+// (h == 1 OR w == per_core_N). Pass false when the caller is willing to opt
+// into tile_pack_row_major.
+std::vector<std::pair<uint32_t, uint32_t>> enumerate_subblock_options(
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    bool fp32_dest_acc_en,
+    bool dst_full_sync_en = true,
+    bool require_legacy_writer = false);
+
+// Convenience over enumerate_subblock_options: returns the first (= largest /
+// best-fast-path) legal pair, or {1, 1} if none. Equivalent to the head of
+// enumerate_subblock_options.
+std::pair<uint32_t, uint32_t> largest_subblock_from_flags(
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    bool fp32_dest_acc_en,
+    bool dst_full_sync_en = true,
+    bool require_legacy_writer = false);
+
+// True iff (h, w) requires tile_pack_row_major to compile (legacy
+// subblock-major writer rejects h > 1 AND w != per_core_N).
+inline bool needs_row_major_writer(uint32_t h, uint32_t w, uint32_t per_core_N) { return h > 1 && w != per_core_N; }
+
+// Per-core L1 footprint estimate for a matmul program_config. Returned struct
+// mirrors the Python helper's dict (out_buf / interm_buf / in0_buf / in1_buf
+// bytes + fits_wh / fits_bh booleans against the conservative L1 budgets).
+struct L1FootprintEstimate {
+    uint64_t estimated_bytes = 0;
+    uint64_t out_buf_bytes = 0;
+    uint64_t interm_buf_bytes = 0;
+    uint64_t in0_buf_bytes = 0;
+    uint64_t in1_buf_bytes = 0;
+    bool fits_wh = false;
+    bool fits_bh = false;
+    int64_t headroom_wh = 0;
+    int64_t headroom_bh = 0;
+};
+
+struct L1EstimateInputs {
+    uint32_t per_core_M = 0;
+    uint32_t per_core_N = 0;
+    uint32_t in0_block_w = 0;
+    // Optional: when true, helper sizes interm_buf same as out_buf.
+    bool fuse_bias = false;
+    // Set by upgrade_subblock when it flips tile_pack_row_major on; treated
+    // identically to fuse_bias for L1 sizing (interm_buf doubles output area).
+    bool tile_pack_row_major = false;
+    uint32_t in0_tile_bytes = 2048;
+    uint32_t in1_tile_bytes = 2048;
+    uint32_t out_tile_bytes = 2048;
+    // 0 means "same as out_tile_bytes" — typical when interm CB shares format.
+    uint32_t interm_tile_bytes = 0;
+    uint32_t num_buffered_blocks = 2;
+};
+
+// Conservative per-core L1 budget floors (after subtracting kernel binaries,
+// semaphores, etc.). Treat as floors rather than hard limits.
+constexpr uint32_t L1_BUDGET_BYTES_WORMHOLE = 1'400'000;
+constexpr uint32_t L1_BUDGET_BYTES_BLACKHOLE = 1'500'000;
+
+L1FootprintEstimate estimate_l1_footprint(const L1EstimateInputs& inputs);
 
 // ---------------------------------------------------------------------------
 // K-iteration tuning (in0_block_w)

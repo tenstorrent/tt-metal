@@ -491,15 +491,15 @@ void kernel_main() {
         In1OffsetFn in1_offset_fn{/*ring_idx=*/ring_idx};
 
         matmul_block<
-            in1_transpose_tile,                  // transpose
-            l1_acc,                              // packer_l1_acc
-            last_block_target,                   // last_block_target
-            OutputCbTileOrder::SubblockGrouped,  // layout
-            matmul_config::InitMode::None,       // init_mode
-            InputPolicy::WaitAndPopPerKBlock,    // in0_policy
-            in1_policy_const,                    // in1_policy
-            NoPostCompute,                       // PostComputeFn (math-thread; unused)
-            PreFn,                               // PreKBlockFn
+            in1_transpose_tile,                // transpose
+            l1_acc,                            // packer_l1_acc
+            last_block_target,                 // last_block_target
+            OutputCBLayout::SubblockMajor,     // layout
+            matmul_config::InitMode::None,     // init_mode
+            InputPolicy::WaitAndPopPerKBlock,  // in0_policy
+            in1_policy_const,                  // in1_policy
+            NoPostCompute,                     // PostComputeFn (math-thread; unused)
+            PreFn,                             // PreKBlockFn
             /*pin_interm_to_captured_base=*/false,
             PostFnRing,  // PostKBlockFn
             /*untilize_block_ct_dim=*/out_subblock_num_tiles,
@@ -523,7 +523,7 @@ void kernel_main() {
             NoPostCompute{},
             pre_fn,
             /*in1_per_core_w=*/in1_per_core_w,
-            /*out_row_width=*/0,  // unused on SubblockGrouped; defaults to in1_per_core_w
+            /*out_row_width=*/0,  // unused on SubblockMajor; defaults to in1_per_core_w
             post_fn,
             inner_dim_fn,
             in0_source_fn,

@@ -24,31 +24,30 @@ namespace compute_kernel_lib {
  * the writer's contract, not by in0_num_subblocks / in1_num_subblocks / subblock
  * dimensions.
  *
- * SubblockGrouped (default, legacy): tiles in the OUTPUT CB are grouped per
+ * SubblockMajor (default, legacy): tiles in the OUTPUT CB are grouped per
  *   subblock — subblock(0,0)'s tiles, then subblock(0,1)'s tiles, ..., then the
  *   next M-row-group's subblocks. Compute issues one sequential pack_tile_block per
  *   subblock at the natural fifo_wr_ptr position. Required by writer kernels that
  *   expect a subblock-ordered tile stream (multicast bmm writers, conv2d, conv3d).
  *
- * RowGrouped: tiles in the OUTPUT CB are grouped per tile-row — tile(0,0),
+ * TileRowMajor: tiles in the OUTPUT CB are grouped per tile-row — tile(0,0),
  *   tile(0,1), ..., tile(0, N-1), then tile(1,0), tile(1,1), ..., tile(1, N-1),
- *   etc. Compute issues per-row pack_tile_block calls with manipulated fifo_wr_ptr
- *   offsets to stitch each subblock's rows into the correct positions, and
- *   reserves/pushes per M-row-group. Decouples subblock choice from the writer-
- *   visible layout so factories can grow subblocks freely, and is the mode SDPA
- *   callers require for absolute-offset partial writes across K chunks.
+ *   etc. Compute issues per-tile absolute-offset pack_tile<true> calls into the
+ *   caller's row-group reserve, and reserves/pushes per M-row-group. Decouples
+ *   subblock choice from the writer-visible layout so factories can grow
+ *   subblocks freely, and is the mode SDPA callers require for absolute-offset
+ *   partial writes across K chunks.
  *
- *   NOTE: do NOT read RowGrouped as "ROW_MAJOR_LAYOUT" — the OUTPUT CB is still
- *   tile-format. The "row" in the name refers to the tile-granularity row in
- *   which tiles are grouped in the CB, not to a byte-level row-major tensor
- *   layout. (Earlier versions of this enum named this value "RowMajor", which
- *   collided with TT-Metal's TILE_LAYOUT vs ROW_MAJOR_LAYOUT terminology and
- *   confused readers; renamed to RowGrouped to remove the overlap.)
+ *   NOTE: do NOT read TileRowMajor as "ROW_MAJOR_LAYOUT" — the OUTPUT CB is still
+ *   tile-format. The "Tile" prefix in the name qualifies the "RowMajor" part:
+ *   tiles are grouped in tile-granularity rows in the CB, NOT bytes in a
+ *   row-major tensor layout. Read as "tile-row-major", not "tile + row-major
+ *   layout".
  *
  * When matmul_block feeds add_bias_bcast_rows, both must use the same
- * OutputCbTileOrder so the intermediate CB layout matches.
+ * OutputCBLayout so the intermediate CB layout matches.
  */
-enum class OutputCbTileOrder { SubblockGrouped, RowGrouped };
+enum class OutputCBLayout { SubblockMajor, TileRowMajor };
 
 /**
  * Where the last K-block packs and what post-op it gets, picked at compile time.
@@ -62,9 +61,9 @@ enum class OutputCbTileOrder { SubblockGrouped, RowGrouped };
  *                  DST data into row-major-byte output. Bracketed by per-subblock
  *                  pack_untilize_dest_init / pack_untilize_uninit so other ops can
  *                  resume their own packer config afterwards. Requires
- *                  layout == SubblockGrouped and a non-zero untilize_block_ct_dim
+ *                  layout == SubblockMajor and a non-zero untilize_block_ct_dim
  *                  template parameter equal to the per-call block_ct_dim. The
- *                  RowGrouped + untilize combination has no caller and isn't
+ *                  TileRowMajor + untilize combination has no caller and isn't
  *                  expressible via the strided fifo math; route through
  *                  Interm + reblock_and_untilize for that path instead.
  *
@@ -105,26 +104,23 @@ namespace matmul_config {
 /**
  * Init lifecycle for matmul_block.
  *
- * The helper owns matmul-state setup so callers don't have to pair every call site with a
- * matching mm_block_init. Mirrors the precedence set by reduce_helpers / binary_op_helpers:
- * the helper always issues a short init (never a Full / hw_configure-bearing init) and pairs
- * it with data-format reconfigs controlled by the `reconfig` template parameter.
+ * Controls whether the helper issues mm_block_init_short. INDEPENDENT of the
+ * data-format reconfig switch (see DataFormatReconfig below) — mirrors the
+ * tilize_helpers / reduce_helpers / binary_op_helpers pattern where init and
+ * reconfig fire on separate compile-time gates.
  *
  * Short  (default) Helper calls mm_block_init_short — only the matmul-specific
  *        llk_unpack_AB_matmul_init + llk_math_matmul_init, no hw_configure. This is
  *        the right mode for every mid-kernel call: it puts the unpacker and math
  *        back into matmul-block mode after an intervening op (tilize, untilize,
  *        reduce, eltwise) reconfigured them, without redoing the slow MMIO writes
- *        in unpack/math/pack hw_configure. The helper ALSO issues the data-format
- *        reconfigs requested by `reconfig` (default INPUT_AND_OUTPUT) immediately
- *        before the short init, so callers do not have to pair every call site with
- *        manual reconfig_data_format / pack_reconfig_data_format pairs.
+ *        in unpack/math/pack hw_configure.
  *
- * None   Helper skips init AND reconfig entirely. Use when the caller has already
- *        issued an explicit mm_block_init_short and any needed dataformat reconfigs
- *        before the helper call, or when chaining helper invocations whose previous
- *        call already configured matmul state. The `reconfig` template parameter
- *        is ignored on this path.
+ * None   Helper skips the mm_block_init_short. Use when the caller has already
+ *        issued an explicit mm_block_init_short before the helper call, or when
+ *        chaining helper invocations whose previous call already configured matmul
+ *        state. Independent of `reconfig` — pass reconfig=NONE separately if the
+ *        caller also handles dataformat reconfig externally.
  *
  * The previously-available `Full` mode (which called mm_block_init / hw_configure
  * from inside the helper) has been REMOVED. Full / hw_configure-bearing inits are
@@ -140,17 +136,18 @@ namespace matmul_config {
 enum class InitMode : uint8_t { Short, None };
 
 /**
- * Data-format reconfiguration mode paired with the helper's Short init.
+ * Data-format reconfiguration mode for the matmul_block helper.
  *
  * Controls whether the helper issues reconfig_data_format on the unpacker (INPUT side)
- * and pack_reconfig_data_format on the packer (OUTPUT side) immediately before
- * mm_block_init_short. Mirrors the pattern used by binary_op_helpers and
- * reduce_helpers_compute (NONE/INPUT/OUTPUT/INPUT_AND_OUTPUT).
+ * and pack_reconfig_data_format on the packer (OUTPUT side). INDEPENDENT of init_mode
+ * — fires on its own gate, mirroring the tilize_helpers / reduce_helpers /
+ * binary_op_helpers pattern (NONE/INPUT/OUTPUT/INPUT_AND_OUTPUT).
  *
  * NONE              Skip all reconfiguration. Use when reconfig is handled externally
- *                   (e.g., callers that hand-pair reconfig + init before invoking the
- *                   helper with init_mode=None) or when formats are known to match
- *                   the previous op.
+ *                   (e.g., SDPA wrappers, conv2d's per-K-block tilize PreKBlockFn,
+ *                   or callers that paired init_mode=None with their own explicit
+ *                   reconfig before invoking the helper) or when formats are known
+ *                   to match the previous op.
  * INPUT             Reconfigure unpacker only — reconfig_data_format(in1, in0). Use
  *                   when the unpacker srca/srcb config from the previous op differs
  *                   from in0/in1's format but the packer is already configured for
@@ -170,8 +167,6 @@ enum class InitMode : uint8_t { Short, None };
  * Unnecessary reconfigs cost cycles but never produce wrong results. INPUT_AND_OUTPUT
  * is the always-correct default; narrower modes are perf-tuning opt-ins for callers
  * that track dataformat usage across consecutive ops.
- *
- * This parameter is IGNORED when init_mode == None.
  */
 enum class DataFormatReconfig : uint8_t { NONE, INPUT, OUTPUT, INPUT_AND_OUTPUT };
 
@@ -368,10 +363,10 @@ struct NoIn1BaseOffset {
  * One helper serving both standard matmul (non-multicast bmm) and SDPA. Supports two
  * output-pack strategies selected at compile time via tile_order:
  *
- *   tile_order=SubblockGrouped (default): sequential pack_tile_block per subblock.
+ *   tile_order=SubblockMajor (default): sequential pack_tile_block per subblock.
  *     Output lands in subblock order. Required by multicast writers that expect
  *     subblock-order tile stream.
- *   tile_order=RowGrouped: absolute-offset pack_tile<true> at tile-row positions,
+ *   tile_order=TileRowMajor: absolute-offset pack_tile<true> at tile-row positions,
  *     reserve/push per M-row-group. Decouples subblock choice from the output-CB
  *     tile order so the factory can pick larger subblocks (the main SDPA perf path).
  *     Also the mode SDPA callers require for absolute-offset partial writes across
@@ -436,15 +431,15 @@ struct NoIn1BaseOffset {
  *   last_block_target LastBlockTarget: Out (default), OutWithRelu, or Interm.
  *                     See LastBlockTarget docstring for the three valid pack/RELU
  *                     combinations.
- *   tile_order        OutputCbTileOrder: SubblockGrouped (default) or RowGrouped (see above).
+ *   tile_order        OutputCBLayout: SubblockMajor (default) or TileRowMajor (see above).
  *                     Pick to match your writer kernel's expected tile read order —
- *                     SubblockGrouped if the writer reads tiles subblock-by-subblock
- *                     (multicast bmm, conv2d/3d), RowGrouped if the writer reads tiles
+ *                     SubblockMajor if the writer reads tiles subblock-by-subblock
+ *                     (multicast bmm, conv2d/3d), TileRowMajor if the writer reads tiles
  *                     in tile-row order (SDPA absolute-offset partial writes, matmul
  *                     factories that grow subblocks without breaking writer contracts).
  *                     The helper cannot infer this from MatmulBlockShape alone — the
  *                     choice is dictated by the writer's contract, not by subblock counts
- *                     or sizes. Note: RowGrouped's output CB is still tile-format;
+ *                     or sizes. Note: TileRowMajor's output CB is still tile-format;
  *                     do not confuse with TT-Metal's ROW_MAJOR_LAYOUT byte layout.
  *   init_mode         matmul_config::InitMode: Short (default) or None. Short fires
  *                     reconfig + mm_block_init_short inside the helper so most callers
@@ -453,8 +448,9 @@ struct NoIn1BaseOffset {
  *                     reconfig + init before invoking the helper. `Full` has been removed;
  *                     issue mm_block_init() exactly once at kernel boot instead.
  *   reconfig          matmul_config::DataFormatReconfig: INPUT_AND_OUTPUT (default), INPUT,
- *                     OUTPUT, or NONE. Selects which data-format reconfigs the helper issues
- *                     before its Short init. Ignored when init_mode=None.
+ *                     OUTPUT, or NONE. Selects which data-format reconfigs the helper issues.
+ *                     Independent of init_mode — pass NONE if the caller already handles
+ *                     reconfig externally (typically paired with init_mode=None).
  *   in0_policy        InputPolicy: WaitAndPopPerKBlock (default) or
  *                     WaitAndRetainOnLastBlock (caller reuses in0 across the next
  *                     iteration — SDPA reuses Q across K chunks). NoWaitNoPop is
@@ -512,7 +508,7 @@ struct NoIn1BaseOffset {
  *                     L1_ACC and pack with absolute-offset row-major (typical of
  *                     ring-aware all-gather variants where the matmul output feeds
  *                     a downstream bias/activation phase). Pair with
- *                     `last_block_target=Interm`, `OutputCbTileOrder::RowGrouped`,
+ *                     `last_block_target=Interm`, `OutputCBLayout::TileRowMajor`,
  *                     `packer_l1_acc=true`, and a `MatmulBlockShape` whose runtime
  *                     fields reflect the (possibly partial) M/N being processed
  *                     this invocation.
@@ -592,7 +588,7 @@ struct NoIn1BaseOffset {
  *                      (e.g. matmul_multicore_reuse_mcast_dram_sharded), otherwise the
  *                      helper will wait/pop wrong tile counts and deadlock.
  *   out_row_width      N-tiles per row in the OUTPUT CB layout (row stride for the
- *                      RowGrouped pack). Defaults to 0, meaning reuse in1_per_core_w. For most factories
+ *                      TileRowMajor pack). Defaults to 0, meaning reuse in1_per_core_w. For most factories
  *                      in1 read stride and output pack stride coincide. DRAM-sharded is
  *                      the exception: it reads in1 at per_core_N_in1_sender (unpadded shard
  *                      width) but packs output at per_core_N_compute (padded after subblock-
@@ -600,7 +596,7 @@ struct NoIn1BaseOffset {
  *
  * @example
  *   // Single-core matmul with defaults — no transpose, no L1 accumulation,
- *   // no activation fusion, SubblockGrouped pack, init_mode=Short (default).
+ *   // no activation fusion, SubblockMajor pack, init_mode=Short (default).
  *   // The kernel issues mm_block_init() ONCE at boot; the helper handles every
  *   // subsequent reconfig + short init internally. Valid for any (M, K, N)
  *   // whose K dimension fits in a single K-block (= all Kt tiles fit alongside
@@ -634,7 +630,7 @@ struct NoIn1BaseOffset {
  *   // Row-major output + packer-L1 accumulation across K, no fused bias.
  *   // Template order: transpose, packer_l1_acc, last_block_target, tile_order.
  *   // Buf is deduced from the buffer-object arguments.
- *   matmul_block<false, true, LastBlockTarget::Out, OutputCbTileOrder::RowGrouped>(
+ *   matmul_block<false, true, LastBlockTarget::Out, OutputCBLayout::TileRowMajor>(
  *       in0_buf, in1_buf, out_buf, interm_buf,
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             out_subblock_h, out_subblock_w,
@@ -647,7 +643,7 @@ struct NoIn1BaseOffset {
  *   // helper is invoked with init_mode=None.
  *   // Template slot order: transpose, packer_l1_acc, last_block_target, tile_order,
  *   // init_mode, in0_policy, in1_policy, PostComputeFn.
- *   matmul_block<transpose, false, LastBlockTarget::Out, OutputCbTileOrder::RowGrouped,
+ *   matmul_block<transpose, false, LastBlockTarget::Out, OutputCBLayout::TileRowMajor,
  *                matmul_config::InitMode::None,
  *                InputPolicy::WaitAndRetainOnLastBlock, InputPolicy::WaitAndPopPerKBlock,
  *                OptionalMaskPostCompute>(
@@ -688,7 +684,7 @@ struct NoIn1BaseOffset {
  *       }
  *   };
  *   // untilize_block_ct_dim=0 (template slot 12, no untilize on this path).
- *   matmul_block<transpose, l1_acc, LastBlockTarget::Out, OutputCbTileOrder::SubblockGrouped,
+ *   matmul_block<transpose, l1_acc, LastBlockTarget::Out, OutputCBLayout::SubblockMajor,
  *                matmul_config::InitMode::None,
  *                InputPolicy::WaitAndPopPerKBlock, InputPolicy::WaitAndPopPerKBlock,
  *                NoPostCompute, NoPreKBlock, false, NoPostKBlock,
@@ -709,7 +705,7 @@ struct NoIn1BaseOffset {
  *   // init_mode, in0_policy, in1_policy, PostComputeFn, PreKBlockFn,
  *   // pin_interm_to_captured_base, PostKBlockFn, untilize_block_ct_dim.
  *   matmul_block<in1_transpose_tile, l1_acc, LastBlockTarget::OutWithUntilize,
- *                OutputCbTileOrder::SubblockGrouped, matmul_config::InitMode::None,
+ *                OutputCBLayout::SubblockMajor, matmul_config::InitMode::None,
  *                InputPolicy::WaitAndPopPerKBlock, InputPolicy::WaitAndPopPerKBlock,
  *                NoPostCompute, RingPreKBlock, false,
  *                RingPostKBlock, out_subblock_num_tiles>(
@@ -730,7 +726,7 @@ struct NoIn1BaseOffset {
  *   // packer_l1_acc, last_block_target, tile_order, init_mode, in0_policy, in1_policy,
  *   // PostComputeFn, PreKBlockFn, pin_interm_to_captured_base.
  *   matmul_block<false, packer_l1_acc, LastBlockTarget::Interm,
- *                OutputCbTileOrder::SubblockGrouped, matmul_config::InitMode::None,
+ *                OutputCBLayout::SubblockMajor, matmul_config::InitMode::None,
  *                InputPolicy::WaitAndPopPerKBlock, InputPolicy::WaitAndPopPerKBlock,
  *                ConvSFPUPostCompute, ConvTilizePreKBlock,
  *                true>(  // pin_interm_to_captured_base
@@ -739,12 +735,30 @@ struct NoIn1BaseOffset {
  *                             out_subblock_h, out_subblock_w,
  *                             in0_block_w, in0_num_blocks_w),
  *       ConvSFPUPostCompute{}, conv_pre_k_block);
+ *
+ * ── Future perf followups ─────────────────────────────────────────────────
+ *
+ * Specialized-decode kloop variant (deferred). The pre-helper history had a
+ * dedicated kloop matmul specialized for decode shapes — M is mostly 1, the
+ * full in0 inner dim fits in L1, and the loop processes in1 in width chunks.
+ * That pattern differs from matmul_block's K-major inner loop (which reuses
+ * in0 across in1 width by holding a single in0 subblock while sweeping in1
+ * subblocks within a K-block): kloop holds the entire in0 resident in L1 and
+ * sweeps in1 width with no K-blocking pressure. matmul_block does not
+ * currently cover this — decode-shaped configs that could fit full inner-dim
+ * in0 and in1 in L1 (height-sharded with small M, large enough cores) pay
+ * the K-block reload cost unnecessarily. A future helper variant or a
+ * tile_order specialization that recognizes "full in0 inner-dim resident,
+ * sweep in1 width only" could close this gap. Documented as an opportunity,
+ * not scheduled — most decode workloads on this branch route through SDPA
+ * or dedicated decode kernels rather than this helper. (Per Sofija's PR
+ * review followup on the kloop removal.)
  */
 template <
     bool transpose = false,
     bool packer_l1_acc = false,
     LastBlockTarget last_block_target = LastBlockTarget::Out,
-    OutputCbTileOrder tile_order = OutputCbTileOrder::SubblockGrouped,
+    OutputCBLayout tile_order = OutputCBLayout::SubblockMajor,
     matmul_config::InitMode init_mode = matmul_config::InitMode::Short,
     InputPolicy in0_policy = InputPolicy::WaitAndPopPerKBlock,
     InputPolicy in1_policy = InputPolicy::WaitAndPopPerKBlock,
@@ -765,7 +779,7 @@ ALWI void matmul_block(
     Buf& in1_buf,
     Buf& out_buf,
     Buf& interm_buf,
-    MatmulBlockShape shape,
+    const MatmulBlockShape& shape,
     PostComputeFn post_compute = {},
     PreKBlockFn pre_k_block = {},
     uint32_t in1_per_core_w = 0,

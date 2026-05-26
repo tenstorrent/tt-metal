@@ -1288,7 +1288,7 @@ ALWI void matmul_blocks(
         transpose,
         /*packer_l1_acc=*/false,
         compute_kernel_lib::LastBlockTarget::Out,
-        compute_kernel_lib::OutputCbTileOrder::RowGrouped,
+        compute_kernel_lib::OutputCBLayout::TileRowMajor,
         compute_kernel_lib::matmul_config::InitMode::Short,
         compute_kernel_lib::InputPolicy::WaitAndRetainOnLastBlock,
         compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
@@ -1334,7 +1334,7 @@ void matmul_reduce(uint32_t in1_cb, uint32_t in_cb, uint32_t out_cb) {
         /*transpose=*/false,
         /*packer_l1_acc=*/false,
         compute_kernel_lib::LastBlockTarget::Out,
-        compute_kernel_lib::OutputCbTileOrder::SubblockGrouped,
+        compute_kernel_lib::OutputCBLayout::SubblockMajor,
         compute_kernel_lib::matmul_config::InitMode::Short,
         compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,        // consume in_cb (M tiles total)
         compute_kernel_lib::InputPolicy::WaitAndRetainOnLastBlock>(  // keep col-identity fronted

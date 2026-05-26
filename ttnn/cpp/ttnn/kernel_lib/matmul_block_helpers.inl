@@ -12,8 +12,8 @@
  * @brief Implementation of matmul_block helper function.
  *
  * Single pipeline handles both pack strategies:
- *   tile_order=SubblockGrouped → sequential pack_tile_block, per-subblock reserve/push
- *   tile_order=RowGrouped      → absolute-offset pack_tile<true>, per-row-group reserve/push
+ *   tile_order=SubblockMajor → sequential pack_tile_block, per-subblock reserve/push
+ *   tile_order=TileRowMajor      → absolute-offset pack_tile<true>, per-row-group reserve/push
  *
  * Both modes share K-loop, reload, L1_ACC management, and pre/post callbacks.
  * SKIP_COMPUTE (microbench define) elides the inner matmul LLK call only.
@@ -23,18 +23,15 @@ namespace compute_kernel_lib {
 
 /**
  * Pack a (h × w) DST sub-block to absolute row-major positions in the output CB.
- * Uses one pack_tile_block per row, manipulating fifo_wr_ptr (and the LLK packer's
- * running fifo_wr_tile_ptr) to stride between rows. h pack_tile_block calls instead
- * of h*w per-tile pack_tile<true> calls — order-of-magnitude fewer LLK pack
- * invocations on the row-major output path when w > 1. (For w == 1 it collapses
- * to one pack per tile, equivalent overhead to per-tile pack_tile<true>.)
- *
- * LLK detail: pack_tile_block writes each tile at fifo_wr_ptr + fifo_wr_tile_ptr,
- * then increments fifo_wr_tile_ptr by page_size. The running offset persists across
- * pack calls until cb_push_back resets it. Striding fifo_wr_ptr without also
- * resetting fifo_wr_tile_ptr would land tiles at the wrong address — so we reset
- * both per row, and restore both at the end so the caller's push_back advances
- * cleanly from the row-group base.
+ * One pack_tile<true>(dst_idx, cb, abs_tile_idx) call per tile — the LLK takes
+ * an absolute tile index into the caller's reserved region, so we don't have
+ * to touch fifo_wr_ptr / fifo_wr_tile_ptr at all. Earlier versions of this
+ * helper batched into h pack_tile_block calls with manual fifo_wr_ptr striding;
+ * llk_matmul_pack expands to a per-tile _llk_pack_ loop internally so the
+ * underlying packer call count was identical, and the per-call C++ savings
+ * (one ASSERT/get_output_id per row instead of per tile) didn't justify the
+ * dependency on LLK CB-interface internals. See PR #43676 review thread for
+ * the discussion.
  *
  * dst_start_idx     Start position in DST. Tiles DST[dst_start_idx..+h*w-1] are
  *                   packed in row-major order (DST iterates row-first within the
@@ -45,9 +42,6 @@ namespace compute_kernel_lib {
  *
  * PRECONDITION: caller has reserved at least h * row_stride tiles in pack_target_id
  * (one M-row-group). Caller is responsible for cb_push_back.
- *
- * The per-row wrap check handles the rare case where the row-group reserve crosses
- * the CB FIFO end-of-region boundary.
  */
 ALWI void pack_subblock_row_strided(
     uint32_t dst_start_idx,
@@ -56,45 +50,19 @@ ALWI void pack_subblock_row_strided(
     uint32_t row_stride,
     uint32_t h,
     uint32_t w) {
-    uint32_t base_wr = 0;
-    uint32_t page_size = 0;
-    uint32_t fifo_size_local = 0;
-    uint32_t fifo_limit_local = 0;
-    uint32_t base_tile_ptr = 0;
-    PACK({
-        auto& intf = get_local_cb_interface(pack_target_id);
-        base_wr = intf.fifo_wr_ptr;
-        page_size = intf.fifo_page_size;
-        fifo_size_local = intf.fifo_size;
-        fifo_limit_local = intf.fifo_limit;
-        base_tile_ptr = intf.fifo_wr_tile_ptr;
-    });
-
     for (uint32_t r = 0; r < h; r++) {
-        PACK({
-            auto& intf = get_local_cb_interface(pack_target_id);
-            uint32_t target = base_wr + (r * row_stride + col_base) * page_size;
-            if (target >= fifo_limit_local) {
-                target -= fifo_size_local;
-            }
-            intf.fifo_wr_ptr = target;
-            intf.fifo_wr_tile_ptr = 0;
-        });
-        pack_tile_block(dst_start_idx + r * w, pack_target_id, w);
+        const uint32_t row_base = r * row_stride + col_base;
+        for (uint32_t c = 0; c < w; c++) {
+            pack_tile<true>(dst_start_idx + r * w + c, pack_target_id, row_base + c);
+        }
     }
-
-    PACK({
-        auto& intf = get_local_cb_interface(pack_target_id);
-        intf.fifo_wr_ptr = base_wr;
-        intf.fifo_wr_tile_ptr = base_tile_ptr;
-    });
 }
 
 template <
     bool transpose,
     bool packer_l1_acc,
     LastBlockTarget last_block_target,
-    OutputCbTileOrder tile_order,
+    OutputCBLayout tile_order,
     matmul_config::InitMode init_mode,
     InputPolicy in0_policy,
     InputPolicy in1_policy,
@@ -115,7 +83,7 @@ ALWI void matmul_block(
     Buf& in1_buf,
     Buf& out_buf,
     Buf& interm_buf,
-    MatmulBlockShape shape,
+    const MatmulBlockShape& shape,
     PostComputeFn post_compute,
     PreKBlockFn pre_k_block,
     uint32_t in1_per_core_w,
@@ -125,20 +93,20 @@ ALWI void matmul_block(
     In0SourceFn in0_source_fn,
     In1BaseOffsetFn in1_base_offset_fn) {
 
-    // OutWithUntilize requires the SubblockGrouped pack path: pack_untilize_dest is
+    // OutWithUntilize requires the SubblockMajor pack path: pack_untilize_dest is
     // initialized for a fixed block_ct_dim and packs from DST starting at offset 0,
     // which doesn't compose with the row-major pack_subblock_row_strided
     // that manipulates fifo_wr_ptr per row. The Interm + reblock_and_untilize
     // path handles row-major untilize end-to-end via add_bias_bcast_rows /
     // reblock_and_untilize, so callers needing row-major untilize go that route.
     static_assert(
-        last_block_target != LastBlockTarget::OutWithUntilize || tile_order == OutputCbTileOrder::SubblockGrouped,
-        "OutWithUntilize requires tile_order == SubblockGrouped; route row-major untilize via Interm + reblock_and_untilize");
+        last_block_target != LastBlockTarget::OutWithUntilize || tile_order == OutputCBLayout::SubblockMajor,
+        "OutWithUntilize requires tile_order == SubblockMajor; route row-major untilize via Interm + reblock_and_untilize");
     // pack_untilize_dest_init's block_ct_dim is a compile-time template arg, so the
     // caller must supply it explicitly when opting into OutWithUntilize.
     static_assert(
         last_block_target != LastBlockTarget::OutWithUntilize || untilize_block_ct_dim > 0,
-        "OutWithUntilize requires untilize_block_ct_dim > 0 (= out_subblock_h * out_subblock_w)");
+        "OutWithUntilize requires untilize_block_ct_dim > 0 (= shape.out_subblock_h * shape.out_subblock_w)");
     // NoWaitNoPop is in1-only: cross-chip global-CB receivers and L1-sharded weight CBs
     // are in1-side patterns; in0 has no analogous external-management case.
     static_assert(
@@ -167,55 +135,57 @@ ALWI void matmul_block(
     const uint32_t out_cb_id = buf_id(out_buf);
     const uint32_t interm_cb_id = buf_id(interm_buf);
 
-    // Hoist shape fields into local names so the existing body reads unchanged.
-    const uint32_t in0_num_subblocks = shape.in0_num_subblocks;
-    const uint32_t in1_num_subblocks = shape.in1_num_subblocks;
-    const uint32_t out_subblock_h = shape.out_subblock_h;
-    const uint32_t out_subblock_w = shape.out_subblock_w;
-    const uint32_t block_w = shape.in0_block_w;
-    const uint32_t num_k_blocks = shape.num_k_blocks;
-    const uint32_t batch = shape.batch;
-    // 0 = no narrowing; nonzero = narrow the matmul FMA on the last in1 subblock.
-    // See MatmulBlockShape::last_in1_subblock_w_valid for the use case.
-    const uint32_t last_in1_subblock_w_valid = shape.last_in1_subblock_w_valid;
+    // Fail fast on shape / CB invariants before doing any init or pipeline work.
+    ASSERT(shape.in0_block_w > 0);
+    ASSERT(shape.in0_num_subblocks > 0);
+    ASSERT(shape.in1_num_subblocks > 0);
+    ASSERT(shape.num_k_blocks > 0);
+    ASSERT(shape.out_subblock_h > 0);
+    ASSERT(shape.out_subblock_w > 0);
+    ASSERT(shape.batch > 0);
+    ASSERT(in0_cb_id != out_cb_id);
+    ASSERT(in1_cb_id != out_cb_id);
+    ASSERT(shape.out_subblock_h * shape.out_subblock_w <= compute_kernel_lib::DEST_AUTO_LIMIT);
 
-    // Init dispatch: helper always issues a short init (never a Full / hw_configure-bearing
-    // init — those are caller's boot-time responsibility, runs once at the top of
-    // kernel_main). The Short path is paired with data-format reconfigs controlled by
-    // the `reconfig` template parameter, so callers don't have to hand-pair every call
-    // site with reconfig_data_format / pack_reconfig_data_format. The pack reconfig
-    // targets interm_cb_id to match the OLD mm_block_init's 3rd-arg behavior — the
-    // first non-last K-block spills there; the in-loop reconfig at the last block
-    // (gated on l1_acc / fp32 DEST) handles the final swap to out_cb_id. Both reconfig
-    // sides are compile-time gated via the DataFormatReconfig enum (NONE / INPUT /
-    // OUTPUT / INPUT_AND_OUTPUT), mirroring the precedence set by reduce_helpers and
-    // binary_op_helpers. ActivationInitHelper::init() is the caller's boot-time
-    // responsibility regardless of init_mode — the helper does not issue it.
+    // Data-format reconfig and init are two independent switches, mirroring the
+    // tilize_helpers / reduce_helpers / binary_op_helpers pattern. Each side fires
+    // on its own compile-time gate; callers that already issued an external reconfig
+    // (e.g. SDPA wrappers, conv2d's per-K-block tilize PreKBlockFn) pass
+    // reconfig=NONE; callers that already issued an external mm_block_init_short
+    // (e.g. the same wrappers) pass init_mode=None. The pack reconfig targets
+    // interm_cb_id to match the OLD mm_block_init's 3rd-arg behavior — the first
+    // non-last K-block spills there; the in-loop reconfig at the last block
+    // (gated on l1_acc / fp32 DEST) handles the final swap to out_cb_id. The init
+    // is always a short init (never a Full / hw_configure-bearing init — those
+    // are caller's boot-time responsibility at the very top of kernel_main).
+    // ActivationInitHelper::init() is the caller's boot-time responsibility
+    // regardless of either switch — the helper does not issue it.
+    if constexpr (
+        reconfig == matmul_config::DataFormatReconfig::INPUT ||
+        reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
+        // Matmul convention: srca takes in1, srcb takes in0 (verified against
+        // mm_block_init_short_with_dt at matmul.h:378 and the existing reload-time
+        // call in the K-loop below).
+        reconfig_data_format(in1_cb_id, in0_cb_id);
+    }
+    if constexpr (
+        reconfig == matmul_config::DataFormatReconfig::OUTPUT ||
+        reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
+        PACK((pack_reconfig_data_format(interm_cb_id)));
+    }
     if constexpr (init_mode == matmul_config::InitMode::Short) {
-        if constexpr (
-            reconfig == matmul_config::DataFormatReconfig::INPUT ||
-            reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
-            // Matmul convention: srca takes in1, srcb takes in0 (verified against
-            // mm_block_init_short_with_dt at matmul.h:378 and the existing reload-time
-            // call in the K-loop below).
-            reconfig_data_format(in1_cb_id, in0_cb_id);
-        }
-        if constexpr (
-            reconfig == matmul_config::DataFormatReconfig::OUTPUT ||
-            reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
-            PACK((pack_reconfig_data_format(interm_cb_id)));
-        }
-        mm_block_init_short(in0_cb_id, in1_cb_id, transpose, out_subblock_w, out_subblock_h, block_w);
+        mm_block_init_short(
+            in0_cb_id, in1_cb_id, transpose, shape.out_subblock_w, shape.out_subblock_h, shape.in0_block_w);
     }
 
-    const uint32_t out_num_tiles = out_subblock_h * out_subblock_w;
-    const uint32_t in0_subblock_num_tiles = out_subblock_h * block_w;
-    const uint32_t in0_block_num_tiles = in0_subblock_num_tiles * in0_num_subblocks;
+    const uint32_t out_num_tiles = shape.out_subblock_h * shape.out_subblock_w;
+    const uint32_t in0_subblock_num_tiles = shape.out_subblock_h * shape.in0_block_w;
+    const uint32_t in0_block_num_tiles = in0_subblock_num_tiles * shape.in0_num_subblocks;
     // in1_per_core_w: actual N-width of the in1 CB per K-block.
     // Derived from subblocks by default; callers with padded per_core_N_compute must
     // pass the real shard width (per_core_N_in1_sender) to avoid CB wait/pop mismatches.
     if (in1_per_core_w == 0) {
-        in1_per_core_w = out_subblock_w * in1_num_subblocks;
+        in1_per_core_w = shape.out_subblock_w * shape.in1_num_subblocks;
     }
     // out_row_width: N-tiles per row of the OUTPUT CB layout (row stride for row_major pack).
     // For most factories the in1 CB width and output pack width coincide, so we default to
@@ -224,21 +194,9 @@ ALWI void matmul_block(
     if (out_row_width == 0) {
         out_row_width = in1_per_core_w;
     }
-    const uint32_t in1_block_num_tiles = in1_per_core_w * block_w;
-    const uint32_t out_block_num_tiles = out_num_tiles * in0_num_subblocks * in1_num_subblocks;
-    const uint32_t row_group_tiles = out_subblock_h * out_row_width;
-
-    ASSERT(block_w > 0);
-    ASSERT(in0_num_subblocks > 0);
-    ASSERT(in1_num_subblocks > 0);
-    ASSERT(num_k_blocks > 0);
-    ASSERT(out_subblock_h > 0);
-    ASSERT(out_subblock_w > 0);
-    ASSERT(batch > 0);
-    ASSERT(in0_cb_id != out_cb_id);
-    ASSERT(in1_cb_id != out_cb_id);
-
-    ASSERT(out_num_tiles <= compute_kernel_lib::DEST_AUTO_LIMIT);
+    const uint32_t in1_block_num_tiles = in1_per_core_w * shape.in0_block_w;
+    const uint32_t out_block_num_tiles = out_num_tiles * shape.in0_num_subblocks * shape.in1_num_subblocks;
+    const uint32_t row_group_tiles = shape.out_subblock_h * out_row_width;
 
     // Capture interm_buf rd/wr ptrs once at entry. Used by the pin_interm_to_captured_base
     // path to keep interm_buf operating at a fixed L1 base across the K-loop, matching the
@@ -252,11 +210,11 @@ ALWI void matmul_block(
         PACK((interm_pin_wr_ptr = get_local_cb_interface(interm_cb_id).fifo_wr_ptr));
     }
 
-    for (uint32_t b = 0; b < batch; b++) {
+    for (uint32_t b = 0; b < shape.batch; b++) {
         bool enable_reload = false;
 
-        for (uint32_t block = 0; block < num_k_blocks; block++) {
-            const bool last_out = block == (num_k_blocks - 1);
+        for (uint32_t block = 0; block < shape.num_k_blocks; block++) {
+            const bool last_out = block == (shape.num_k_blocks - 1);
 
             if constexpr (pack_relu && !pack_last_to_interm) {
                 if (last_out) {
@@ -264,14 +222,14 @@ ALWI void matmul_block(
                 }
             }
 
-            pre_k_block(block, num_k_blocks, last_out);
+            pre_k_block(block, shape.num_k_blocks, last_out);
 
-            // Per-K-block inner-dim step count. Default no-op returns block_w so the
+            // Per-K-block inner-dim step count. Default no-op returns shape.in0_block_w so the
             // loop runs the full K-tile span; ring-aware callers override this to
-            // shrink the FMA loop on K-blocks whose unpadded width is < block_w.
-            // The LLK call's kt_dim arg below stays block_w — that's the in1 row
+            // shrink the FMA loop on K-blocks whose unpadded width is < shape.in0_block_w.
+            // The LLK call's kt_dim arg below stays shape.in0_block_w — that's the in1 row
             // stride in L1, not the FMA step count.
-            const uint32_t inner_steps = k_block_inner_dim(block, block_w);
+            const uint32_t inner_steps = k_block_inner_dim(block, shape.in0_block_w);
 
             // Per-K-block in0 source. Default no-op returns the bound in0_cb_id, so
             // active_in0_buf aliases in0_buf and behavior is unchanged. Ring-aware
@@ -311,7 +269,7 @@ ALWI void matmul_block(
             // factory layout). Single reserve here keeps all wait_front /
             // reserve_back increments identical across the K-loop, as the
             // CB-API contract requires. Skipped when caller owns pack lifecycle.
-            if constexpr (tile_order == OutputCbTileOrder::SubblockGrouped && !caller_owns_pack_target) {
+            if constexpr (tile_order == OutputCBLayout::SubblockMajor && !caller_owns_pack_target) {
                 if (block == 0 && !last_out) {
                     out_buf.reserve_back(out_block_num_tiles);
                 }
@@ -324,11 +282,11 @@ ALWI void matmul_block(
             // spill row-major too. Otherwise (software reload path, or !pack_last_to_interm
             // where the last block writes to out_buf), keep non-last subblock-major so the
             // per-subblock reload at the last K-block can read partials contiguously.
-            constexpr bool spill_row_grouped = (tile_order == OutputCbTileOrder::RowGrouped) && packer_l1_acc && pack_last_to_interm;
+            constexpr bool spill_row_grouped = (tile_order == OutputCBLayout::TileRowMajor) && packer_l1_acc && pack_last_to_interm;
 
             int in0_index_subblock_offset = 0;
-            for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                if constexpr (tile_order == OutputCbTileOrder::RowGrouped && !caller_owns_pack_target) {
+            for (uint32_t in0_subblock = 0; in0_subblock < shape.in0_num_subblocks; in0_subblock++) {
+                if constexpr (tile_order == OutputCBLayout::TileRowMajor && !caller_owns_pack_target) {
                     // Row-major path reserves per M-row-group (one row of all N-subblocks).
                     // Smaller than full-block reserve, so shared out/interm buffers don't deadlock.
                     if (last_out) {
@@ -339,18 +297,18 @@ ALWI void matmul_block(
                 }
 
                 int in1_index_subblock_offset = in1_base_offset;
-                for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                for (uint32_t in1_subblock = 0; in1_subblock < shape.in1_num_subblocks; in1_subblock++) {
                     tile_regs_acquire();
 
-                    // last_in1_subblock_w_valid narrowing: on the last in1 subblock, if the
+                    // shape.last_in1_subblock_w_valid narrowing: on the last in1 subblock, if the
                     // caller set the override, narrow the matmul FMA's ct_dim so the unpacker
                     // touches only the columns the reader actually pushed. The dst/pack region
                     // stays full-width; the writer drops padded output columns. Inert (==0)
                     // for non-DRAM-sharded callers.
                     const uint32_t effective_subblock_w =
-                        (last_in1_subblock_w_valid != 0 && in1_subblock == in1_num_subblocks - 1)
-                            ? last_in1_subblock_w_valid
-                            : out_subblock_w;
+                        (shape.last_in1_subblock_w_valid != 0 && in1_subblock == shape.in1_num_subblocks - 1)
+                            ? shape.last_in1_subblock_w_valid
+                            : shape.out_subblock_w;
 
                     if (enable_reload) {
                         copy_tile_to_dst_init_short_with_dt(in1_cb_id, interm_cb_id);
@@ -358,7 +316,7 @@ ALWI void matmul_block(
                         copy_block_matmul_partials(interm_cb_id, 0, 0, out_num_tiles);
                         interm_buf.pop_front(out_num_tiles);
                         mm_block_init_short_with_dt(
-                            in0_cb_id, in1_cb_id, interm_cb_id, transpose, out_subblock_w, out_subblock_h, block_w);
+                            in0_cb_id, in1_cb_id, interm_cb_id, transpose, shape.out_subblock_w, shape.out_subblock_h, shape.in0_block_w);
                     }
 
                     // Compute output sub-block via hardware block matmul.
@@ -380,8 +338,8 @@ ALWI void matmul_block(
                             dst_index,
                             transpose,
                             effective_subblock_w,
-                            out_subblock_h,
-                            block_w);
+                            shape.out_subblock_h,
+                            shape.in0_block_w);
 #else
                         (void)in0_index;
                         (void)in1_index;
@@ -406,7 +364,7 @@ ALWI void matmul_block(
                         }
 
                         tile_regs_commit();
-                        if constexpr (tile_order == OutputCbTileOrder::SubblockGrouped && !caller_owns_pack_target) {
+                        if constexpr (tile_order == OutputCBLayout::SubblockMajor && !caller_owns_pack_target) {
                             pack_target_buf.reserve_back(out_num_tiles);
                         }
                         // Pack-side sync: apply_activation_from_pack runs SFPU on the
@@ -437,16 +395,14 @@ ALWI void matmul_block(
                             }
                         }
 
-                        if constexpr (tile_order == OutputCbTileOrder::RowGrouped) {
-                            // Strided block-pack: one pack_tile_block per row instead of
-                            // h*w per-tile pack_tile<true> calls. For h=1 this collapses to
-                            // a single pack_tile_block at col_base offset (cheaper than
-                            // out-of-order absolute-offset packing). Row stride uses
-                            // out_row_width (padded output-pack width on DRAM-sharded;
-                            // equal to in1_per_core_w on most factories).
-                            const uint32_t col_base = in1_subblock * out_subblock_w;
+                        if constexpr (tile_order == OutputCBLayout::TileRowMajor) {
+                            // Absolute-offset per-tile pack into the caller's row-group
+                            // reserve. Row stride uses out_row_width (padded output-pack
+                            // width on DRAM-sharded; equal to in1_per_core_w on most
+                            // factories).
+                            const uint32_t col_base = in1_subblock * shape.out_subblock_w;
                             pack_subblock_row_strided(
-                                0, pack_target_id, col_base, out_row_width, out_subblock_h, out_subblock_w);
+                                0, pack_target_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
                         } else if constexpr (last_block_target == LastBlockTarget::OutWithUntilize) {
                             pack_untilize_dest<untilize_block_ct_dim>(pack_target_id);
                         } else {
@@ -457,7 +413,7 @@ ALWI void matmul_block(
                         if constexpr (last_block_target == LastBlockTarget::OutWithUntilize) {
                             pack_untilize_uninit(pack_target_id);
                         }
-                        if constexpr (tile_order == OutputCbTileOrder::SubblockGrouped && !caller_owns_pack_target) {
+                        if constexpr (tile_order == OutputCBLayout::SubblockMajor && !caller_owns_pack_target) {
                             pack_target_buf.push_back(out_num_tiles);
                         }
 
@@ -486,9 +442,9 @@ ALWI void matmul_block(
                         }
 
                         if constexpr (spill_row_grouped) {
-                            const uint32_t col_base = in1_subblock * out_subblock_w;
+                            const uint32_t col_base = in1_subblock * shape.out_subblock_w;
                             pack_subblock_row_strided(
-                                0, interm_cb_id, col_base, out_row_width, out_subblock_h, out_subblock_w);
+                                0, interm_cb_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
                         } else {
                             pack_tile_block(0, interm_cb_id, out_num_tiles);
                         }
@@ -498,10 +454,10 @@ ALWI void matmul_block(
                         }
                     }
 
-                    in1_index_subblock_offset += out_subblock_w;
+                    in1_index_subblock_offset += shape.out_subblock_w;
                 }
 
-                if constexpr (tile_order == OutputCbTileOrder::RowGrouped && !caller_owns_pack_target) {
+                if constexpr (tile_order == OutputCBLayout::TileRowMajor && !caller_owns_pack_target) {
                     if (last_out) {
                         pack_target_buf.push_back(row_group_tiles);
                     } else if constexpr (spill_row_grouped) {
@@ -521,7 +477,7 @@ ALWI void matmul_block(
                 const uint32_t drain_step = spill_row_grouped ? row_group_tiles : out_num_tiles;
                 if constexpr (pack_last_to_interm) {
                     if constexpr (!caller_owns_pack_target) {
-                        if (block < num_k_blocks - 1) {
+                        if (block < shape.num_k_blocks - 1) {
                             for (uint32_t s = 0; s < out_block_num_tiles; s += drain_step) {
                                 interm_buf.wait_front(drain_step);
                                 interm_buf.pop_front(drain_step);
@@ -531,19 +487,19 @@ ALWI void matmul_block(
                     enable_reload = false;
                 } else {
                     if constexpr (!caller_owns_pack_target) {
-                        if (num_k_blocks >= 2 && block < num_k_blocks - 2) {
+                        if (shape.num_k_blocks >= 2 && block < shape.num_k_blocks - 2) {
                             for (uint32_t s = 0; s < out_block_num_tiles; s += drain_step) {
                                 interm_buf.wait_front(drain_step);
                                 interm_buf.pop_front(drain_step);
                             }
                         }
                     }
-                    if (block == num_k_blocks - 2) {
+                    if (block == shape.num_k_blocks - 2) {
                         enable_reload = true;
                     }
                 }
             } else {
-                if (num_k_blocks > 1) {
+                if (shape.num_k_blocks > 1) {
                     enable_reload = true;
                 }
             }
@@ -562,22 +518,22 @@ ALWI void matmul_block(
             // packer_l1_acc tightens the wr/rd reset to block < num-2 in the !pack_last path,
             // matching the original kernel's L1_acc drain bound.
             if constexpr (pin_interm_to_captured_base) {
-                if (num_k_blocks > 1) {
+                if (shape.num_k_blocks > 1) {
                     if constexpr (pack_last_to_interm) {
-                        if (block < num_k_blocks - 1) {
+                        if (block < shape.num_k_blocks - 1) {
                             UNPACK((get_local_cb_interface(interm_cb_id).fifo_rd_ptr = interm_pin_rd_ptr));
                             PACK((get_local_cb_interface(interm_cb_id).fifo_wr_ptr = interm_pin_wr_ptr));
                         }
                     } else if constexpr (packer_l1_acc) {
-                        if (block < num_k_blocks - 2) {
+                        if (block < shape.num_k_blocks - 2) {
                             UNPACK((get_local_cb_interface(interm_cb_id).fifo_rd_ptr = interm_pin_rd_ptr));
                             PACK((get_local_cb_interface(interm_cb_id).fifo_wr_ptr = interm_pin_wr_ptr));
                         }
                     } else {
-                        if (block < num_k_blocks - 1) {
+                        if (block < shape.num_k_blocks - 1) {
                             UNPACK((get_local_cb_interface(interm_cb_id).fifo_rd_ptr = interm_pin_rd_ptr));
                         }
-                        if (block < num_k_blocks - 2) {
+                        if (block < shape.num_k_blocks - 2) {
                             PACK((get_local_cb_interface(interm_cb_id).fifo_wr_ptr = interm_pin_wr_ptr));
                         }
                     }
@@ -597,7 +553,7 @@ ALWI void matmul_block(
                 }
             }
             // in1_policy=WaitAndRetainOnLastBlock: conv3d reuses weights across multiple
-            // matmul invocations (each invocation has num_k_blocks=1, last_out is always
+            // matmul invocations (each invocation has shape.num_k_blocks=1, last_out is always
             // true on its only K-block, so the helper never pops). Intermediate K-blocks
             // within a multi-K-block invocation still pop.
             // in1_policy=NoWaitNoPop elides the pop entirely; the helper isn't managing
@@ -614,7 +570,7 @@ ALWI void matmul_block(
             // L1_ACC partial drain and after both input pop_front calls, so callers
             // can advance ring CB rd_ptrs (or other per-K-block bookkeeping) only
             // once the consumer has finished reading.
-            post_k_block(block, num_k_blocks, last_out);
+            post_k_block(block, shape.num_k_blocks, last_out);
         }
 
         // pin_interm_to_captured_base + pack_last_to_interm: the last K-block above advanced

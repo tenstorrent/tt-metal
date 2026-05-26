@@ -141,6 +141,16 @@ void validate_matmul_block_and_subblock_configuration(
                     std::is_same_v<
                         ProgramConfigType,
                         operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                    // tile_pack_row_major adds L1 footprint, a deadlock predicate, and pack-side
+                    // LLK overhead with no measured win on interleaved output. The auto-deducer
+                    // only sets it for sharded outputs (commit 73d03f855c7); reject explicit
+                    // callers that try to force it on the interleaved path. Addresses Sofija's
+                    // PR review concern that the interleaved escape hatch is unjustified.
+                    TT_FATAL(
+                        !(program_config.tile_pack_row_major && !attributes.output_mem_config.is_sharded()),
+                        "tile_pack_row_major=true is only supported with a sharded output "
+                        "memory config; interleaved output has no measured perf benefit and "
+                        "should use the default (tile_pack_row_major=false).");
                     TT_FATAL(program_config.out_block_h != 0, "out_block_h is 0, which is not valid");
                     TT_FATAL(program_config.out_block_w != 0, "out_block_w is 0, which is not valid");
                     TT_FATAL(
