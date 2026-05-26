@@ -392,10 +392,10 @@ jobs:
         run: |
           TT_CONFIG_RAW='${{ matrix.test-group.tt-config }}'
           if [ -n "$TT_CONFIG_RAW" ]; then
-            PLUGIN_CONFIG_RAW="$(jq -nc --argjson tt "$TT_CONFIG_RAW" '{tt: $tt}')"
-            PLUGIN_CONFIG=(--plugin-config "$PLUGIN_CONFIG_RAW")
+            ADDITIONAL_CONFIG_RAW="$(jq -nc --argjson tt "$TT_CONFIG_RAW" '{tt: $tt}')"
+            ADDITIONAL_CONFIG=(--additional-config "$ADDITIONAL_CONFIG_RAW")
           else
-            PLUGIN_CONFIG=()
+            ADDITIONAL_CONFIG=()
           fi
 
           if [ -n "${{ matrix.test-group.additional-server-args }}" ]; then
@@ -428,7 +428,7 @@ jobs:
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
-          VLLM_SERVER_ARGS+=("${PLUGIN_CONFIG[@]}")
+          VLLM_SERVER_ARGS+=("${ADDITIONAL_CONFIG[@]}")
 
           echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"
 
