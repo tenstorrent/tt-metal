@@ -1,19 +1,21 @@
 ---
 name: functional-decoder
-description: Bring up functional TTNN implementations of HuggingFace transformer decoder layers in tt-metal. Use when implementing each unique decoder-layer kind for an LLM, reading HF decoder architecture, targeting single-user prefill/decode, validating MoE gate-plus-active-expert behavior, generating synthetic weights from real tensor statistics, writing paged prefill/decode PCC pytests, proving KV-cache correctness, tracing warmed decode, profiling warmed prefill/decode with Tracy, and auditing for watcher-clean execution with no runtime torch or host fallback except explicit boundaries.
+description: Bring up functionally complete TTNN implementations of HuggingFace transformer decoder layers in tt-metal. Use when implementing each unique decoder-layer kind for an LLM, reading HF decoder architecture, targeting single-user prefill/decode, validating MoE gate-plus-active-expert behavior, generating synthetic weights from real tensor statistics, writing full-length or capacity-proven paged prefill/decode PCC pytests, proving KV-cache correctness, tracing warmed decode, profiling warmed prefill/decode with Tracy, and auditing for watcher-clean execution with no runtime torch or host fallback except explicit boundaries.
 ---
 
 # Functional Decoder Bringup
 
 ## Goal
 
-Build working TTNN code and pytests for each unique HuggingFace decoder-layer kind in a target model. This is not a planning-only skill: success means checked-in implementation, tests, and evidence.
+Build working TTNN code and pytests for each unique HuggingFace decoder-layer kind in a target model. "Functional" means functionally complete, not a smoke test: the decoder should have the semantics, cache behavior, sequence coverage, and evidence needed to roll it into a full model and use it as-is. This is not a planning-only skill: success means checked-in implementation, tests, and evidence.
 
 The final tests must run without downloading model weights. Use real model weights only to collect per-tensor statistics, then generate meaningful synthetic weights from those statistics for CI and local tests.
 
 Target single-user prefill and decode by default. Multi-user throughput is a later optimization unless the user explicitly asks for it. For MoE models, the primary path should run the real gate/router and then compute only the experts selected by that gate, aiming to use `ttnn.sparse_matmul` so DRAM traffic and compute follow active experts rather than dense all-expert matmuls.
 
 Do not treat a near-threshold PCC miss as goal completion. A `fail` artifact is evidence for an attempted run, not success for the bringup goal, unless the user explicitly asked only for a diagnostic packet. For ordinary bringup, keep debugging until the decoder passes, the run is truly blocked by model access/hardware/tooling, or a repeated investigated failure has clear evidence and next steps.
+
+Do not treat reduced sequence length as goal completion unless the reduction is forced by measured device capacity or explicitly approved by the user before the run. Convenience, "tractability", profiler runtime, watcher runtime, CI runtime, or a desire to finish a small proof are not valid reasons to skip the full sequence-length contract.
 
 ## Required Reference Reads
 
@@ -34,6 +36,8 @@ Do not skip these reads. The `SKILL.md` body defines the workflow; the reference
 - Pass prefill and decode PCC against the HF reference decoder layer with `PCC >= 0.995`.
 - Use paged KV cache only; non-paged attention is at best optional debug scaffolding, not a final path.
 - Prove paged KV-cache behavior for prefill and decode, including page-table handling.
+- Satisfy the sequence-length contract for every representative layer kind. Decode must test the full context length advertised by the reference model from a warmed trace replay path unless a measured device-capacity blocker prevents it. Prefill must test the full supported length unless L1/DRAM capacity prevents it.
+- If full sequence length is not tested, prove the blocker with a capacity probe command, log, failure signature or byte calculation, and the largest feasible tested length. A final `pass` manifest may not cite reduced length without this evidence or explicit user-approved reduced scope.
 - Decode PCC must be measured from a warmed trace replay path.
 - Report warmed per-layer prefill and decode latency with Tracy signposts and `tt-perf-report`.
 - Run a watcher-enabled correctness pass and require it to be watcher-clean, or include evidence for a specific false positive.
@@ -106,9 +110,9 @@ Required test behavior:
 - For MoE layers, the required prefill/decode PCC compares the full decoder output after the TTNN gate selects experts and the TTNN expert path computes/weights/reduces those selected experts. Optional gate-only or expert-only PCC checks may be recorded as diagnostics.
 - Exercise paged prefill, paged decode update, and paged SDPA decode.
 - Use randomized or permuted page tables, nonzero user slots where applicable, and nontrivial current positions.
-- Test decode at the full sequence length supported by the reference model unless KV-cache DRAM capacity prevents it.
-- Test prefill at the full supported length unless L1/DRAM capacity prevents it.
-- Explicitly report any max sequence reduction, with evidence for the hardware or memory limit.
+- Test decode at the full sequence length supported by the reference model unless KV-cache DRAM capacity prevents it. If it is prevented, run a capacity probe that attempts the full length or calculates an impossible allocation from actual model shapes and available device DRAM, then test the largest feasible length on the reserved hardware.
+- Test prefill at the full supported length unless L1/DRAM capacity prevents it. If it is prevented, provide the same capacity evidence and largest feasible tested length.
+- Explicitly report any max sequence reduction with command IDs, logs, failure signatures, and hardware/memory evidence. Do not use "tractability", profiling cost, watcher cost, runtime, or reduced synthetic sequence convenience as the reason for a passing reduced-length artifact.
 - Run the same deterministic input multiple times and assert identical TTNN outputs.
 - Gate the five-minute stress loop behind an opt-in marker or environment variable so regular CI stays focused.
 
@@ -170,7 +174,7 @@ models/demos/<model>/doc/functional_decoder/
 
 Do not save every debug attempt under `models/demos/<model>/doc/functional_decoder/`. Intermediate failing or exploratory runs belong in scratch space such as `generated/functional_decoder/debug/`, `/tmp`, or an uncommitted local artifact directory. Once the implementation is ready, rerun the final proof commands and copy only that golden set of logs, reports, and JSON summaries into `doc/functional_decoder/`.
 
-`commands.sh` and `manifest.json` should record the final proof commands, not the entire trial-and-error history. If a failed intermediate run exposed an important limitation, summarize it in `functional_decoder.md` or `fallback_audit.md` only when it explains a remaining limitation or a final design decision.
+`commands.sh` and `manifest.json` should record the final proof commands, not the entire trial-and-error history. Capacity probes that justify reduced sequence length are final proof commands, not discarded debug attempts; record their command IDs, logs, and failure signatures in `sequence_limits.json`. If a failed intermediate run exposed an important limitation, summarize it in `functional_decoder.md` or `fallback_audit.md` only when it explains a remaining limitation or a final design decision.
 
 Required files:
 
@@ -216,7 +220,7 @@ Required JSON contents:
 - `model_facts.json`: HF config fields, decoder-layer class names, attention/MLP/MoE/RoPE/cache facts, and source files inspected.
 - `layer_kinds.json`: one object per representative layer kind with layer kind id, representative layer index, reason it is unique, features, implementation files, pytest ids, expected max prefill length, and expected max decode context length.
 - `weight_stats.json`: one object per real tensor used to seed synthetic weights with layer kind id, layer index, tensor name, shape, dtype, mean, std, and deterministic synthetic seed.
-- `sequence_limits.json`: requested reference max lengths, tested max lengths, pass/fail, and evidence for any reduction caused by KV-cache DRAM, L1, or other device limits.
+- `sequence_limits.json`: requested reference max lengths, tested max lengths, pass/fail, command IDs, logs, and evidence for any reduction caused by KV-cache DRAM, L1, or other measured device limits. If any entry has `reduced: true`, it must prove the blocker with capacity evidence or name an explicit user-approved reduced scope; otherwise the manifest status must not be `pass`.
 - `results/pcc_results.json`: one full-decoder object per layer kind and mode with PCC, threshold, pass/fail, output shape, dtype, input seed, whether trace replay was used, and the command id from `commands.sh`. For MoE, this full-decoder object must include gate and selected experts end-to-end; optional gate-only or expert-only component PCCs are diagnostics.
 - `results/kv_cache_results.json`: cache shape, page-table shape, page-table seed, tested positions, tested user slots, comparison method, and pass/fail per layer kind.
 - `results/determinism_results.json`: repeated-run count, bytewise or numeric equality method, pass/fail, and any nondeterministic tensors.
@@ -233,7 +237,7 @@ Required JSON contents:
 - determinism result and optional stress result;
 - Tracy ops CSVs and `tt-perf-report` text/CSV for prefill and decode;
 - fallback audit showing no runtime torch/host fallback in the relevant prefill/decode paths;
-- any sequence-length reductions with hardware or memory evidence.
+- any sequence-length reductions with hardware or memory evidence, including the attempted full-length or capacity-probe command and why the largest tested length is the maximum feasible length on that hardware.
 
 ## Knowledge Base
 
