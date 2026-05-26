@@ -290,3 +290,123 @@
   reduce, and the Refinement-2 precision matrix all continue to pass
   on the unchanged shape matrix; no regression on prior cells. Full
   236 / 236 across `tests/ttnn/unit_tests/operations/softmax/`.
+
+## Refinement 4 — Non-tile-aligned shapes (W / H % 32 ≠ 0)
+- **Date**: 2026-05-26
+- **What was done**: Added `"w_non_aligned"` and `"h_non_aligned"` to
+  `SUPPORTED["alignment"]`. The kernel now handles tiles whose reduce-axis
+  logical size is not a multiple of 32 via the partial-scaler API.
+
+  Three coordinated edits:
+
+  1. **`softmax_program_descriptor.py`** — switched `Ht`/`Wt` from floor
+     division to ceil division so the storage tile count is correct for
+     non-aligned logical shapes (TILE_LAYOUT always tile-pads in L1; the
+     logical shape just stops counting earlier). Computed
+     `partial = reduce_dim_logical % 32` from the *reduce dim* (W for
+     `dim=-1`, H for `dim=-2`). When `partial > 0`, sized
+     `cb_max_scaler` and `cb_sum_scaler` to 2 tiles instead of 1, and
+     passed `partial` to the reader plus `has_partial` to the compute as
+     compile-time args.
+
+  2. **`softmax_reader.cpp`** — when `partial > 0`, invoked
+     `dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+     cb_*_scaler, pool_type, reduce_dim, partial>()` instead of the
+     single-tile `calculate_and_prepare_reduce_scaler` overload. This
+     emits a (full, partial) scaler tile pair into each scaler CB; the
+     partial tile zeros out padded positions on the reduce axis so they
+     contribute neutrally to MAX/SUM.
+
+  3. **`softmax_compute.cpp`** — defined a single
+     `constexpr auto partial_scaler = (has_partial != 0)
+        ? ckl::ReducePartialScaler::last_tile_at(1)
+        : ckl::ReducePartialScaler::none();`
+     and forwarded it to Pass 1 (`reduce<MAX>`) and Pass 2
+     (`accumulate_reduce_block<SUM>`). `accumulate_reduce_block` routes
+     the partial scaler only to the last block (and within that block,
+     `reduce<>` itself picks `last_tile_scaler_idx` for the last
+     reduce-dim iteration), so the partial-scaler tile is consumed
+     exactly once per strip — at the boundary between valid and padded
+     positions. Pass 3 (sub + mul) needs no partial-scaler handling
+     because the broadcast spread of `cb_max` and `cb_inv_sum` already
+     pins valid scalars into every output position; the padded slots
+     get arbitrary values that the user-side `to_layout` discards.
+
+  Crucially, *zero* kernel logic changed for the aligned path —
+  `ReducePartialScaler::none()` passes through unchanged when
+  `has_partial = 0`, and the scaler CB stays sized at 1 tile.
+
+  Verifier-note caveat about bf16 + non-aligned interaction: the cross
+  product passed cleanly without any tolerance widening. The bf16 spot
+  check (W non-aligned + H non-aligned × 4 bf16 precision modes) holds
+  PCC ≥ 0.98 (the lowest bf16 tier band). No EXCLUSIONS surfaced.
+
+- **SUPPORTED at Refinement 4**:
+  - `alignment` now `["tile_aligned", "w_non_aligned", "h_non_aligned"]`.
+  - Every other axis unchanged.
+- **EXCLUSIONS at Refinement 4**: unchanged (`[]`). The verifier note
+  flagged bf16 + non_tile_aligned_dim as the canonical candidate, but
+  empirical PCC holds under the existing tolerance bands.
+
+- **Accuracy achieved** (measured by
+  `tests/ttnn/unit_tests/operations/softmax/test_softmax_non_aligned.py`,
+  145 cases × multiple dtype/dim/numeric_stable/layout combos):
+  - fp32 + non-aligned (any axis pattern): PCC ≥ 0.999 with `atol < 5e-3`
+    even when the implicit tile padding is filled with garbage value 99.0
+    (a deliberate stress probe — if the partial scaler leaked, padded
+    positions would dominate the max and skew softmax massively).
+  - bf16 cross-product (4 precision modes × W/H non-aligned ×
+    {dim=-1, dim=-2}): PCC ≥ 0.98 on every cell, matching the
+    `bf16_hifi2_bf16acc` tier band in `helpers.TOLERANCES`.
+  - Sum-to-1 (valid region only): max deviation ≤ 2e-3 across all
+    non-aligned shapes tested.
+
+- **Golden test progress**: **1406 / 1406 cases passing** (was 806 / 806
+  supported-pass + 600 xfailed at the end of Refinement 3). The full
+  600-cell alignment xfail bucket now passes; `supported_fail = 0` and
+  `xfail = 0` (every previously-xfailed cell is in SUPPORTED). 6
+  regression tests pass.
+  "Done when" criterion met:
+  - `SUPPORTED["alignment"] == ["tile_aligned", "w_non_aligned", "h_non_aligned"]` ✓
+  - all 600 alignment-only-gap cells pass the golden suite under existing
+    TOLERANCES (no widening required) ✓
+
+- **Issues encountered**: None — the refinement landed first-attempt
+  green. The partial-scaler API (`calculate_and_prepare_partial_reduce_scalers`
+  + `ReducePartialScaler::last_tile_at(1)`) is a clean drop-in over
+  the aligned path; the only structural concern (Ht/Wt floor vs ceil
+  division for non-aligned logical shapes) was caught during the
+  program-descriptor edit, before any test run.
+
+  The verifier note observed that bf16 + non_tile_aligned_dim *could*
+  trigger ULP rounding that interacts with Refinement 2's tolerance
+  bands; the spot check showed no such interaction — every bf16 mode
+  passes the same band as the aligned case.
+
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/softmax/test_softmax_non_aligned.py`
+    — 145 cases across 9 groups:
+    1. W non-aligned + dim=-1 (reduce axis non-aligned; partial scaler
+       runs)
+    2. W non-aligned + dim=-2 (non-reduce axis non-aligned; no partial
+       scaler, just ceil-Ht/Wt)
+    3. H non-aligned + dim=-2 (REDUCE_COL partial scaler)
+    4. H non-aligned + dim=-1 (non-reduce axis non-aligned)
+    5. Both H and W non-aligned (tagger emits `w_non_aligned`; both dims
+       trigger partial scaler)
+    6. Rank-2 / rank-3 non-aligned (Refinement 3 entry-point composition)
+    7. Padding-mask leak check via `ttnn.fill_implicit_tile_padding(99.0)`
+    8. Sum-to-one on the valid region
+    9. bf16 × 4 modes × {W partial dim=-1, H partial dim=-2}
+
+- **Tests modified**:
+  - `tests/ttnn/unit_tests/operations/softmax/test_softmax.py`:
+    `test_softmax_rejects_non_tile_aligned_h` →
+    `test_softmax_accepts_non_tile_aligned_h`, and the W counterpart.
+    Both now positive acceptance tests with PCC ≥ 0.999.
+
+- **Tests preserved**: Phase-0 acceptance, precision baseline, wide-W
+  reduce, the precision matrix, and the layout/rank matrix all
+  continue to pass. Full 381 / 381 across
+  `tests/ttnn/unit_tests/operations/softmax/`. Full 1406 / 1406 across
+  `eval/golden_tests/softmax/`.

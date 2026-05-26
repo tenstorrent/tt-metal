@@ -143,7 +143,7 @@ xfail bucket).
 `{layout, rank}` passes the golden suite. EXCLUSIONS entries explicitly named
 for genuine structural mismatches that surface during implementation.
 
-### [ ] Refinement 4 — Non-tile-aligned shapes (W / H % 32 ≠ 0)
+### [x] Refinement 4 — Non-tile-aligned shapes (W / H % 32 ≠ 0)
 
 **Goal**: add `w_non_aligned` and `h_non_aligned` to `SUPPORTED["alignment"]`.
 Requires partial-scaler handling on the reader side (use
