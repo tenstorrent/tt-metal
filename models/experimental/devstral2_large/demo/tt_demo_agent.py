@@ -18,6 +18,8 @@ Sampling is CPU-side (argmax for greedy, multinomial otherwise) on the column-pa
 Run::
 
     python models/experimental/devstral2_large/demo/tt_demo_agent.py [--mesh-device T3K] [--num-layers 88]
+
+Use ``--verbose`` to print per-turn KV/prefill/decode-trace progress (off by default).
 """
 
 from __future__ import annotations
@@ -595,6 +597,13 @@ class TTAgentConfig(ChatConfig):
     prefill_activations_dram: bool = False
     use_kv_cache: bool = True
     trace_decode: bool = True
+    verbose_runtime: bool = False
+
+
+def _log_runtime_verbose(config: TTAgentConfig, msg: str, *args) -> None:
+    """Log KV/prefill/decode progress during chat when ``--verbose`` is set."""
+    if config.verbose_runtime:
+        logger.info(msg, *args)
 
 
 @dataclass
@@ -945,7 +954,10 @@ def _warm_system_kv_prefix(rt: TtAgentRuntime, config: TTAgentConfig) -> None:
     rt.kv_seq_len = system_len
     rt.cached_token_ids = system_ids[0].clone()
     rt.system_prefix_warmed = True
-    logger.info(f"KV session: prefilled static system prefix ({system_len} tokens, {num_chunks} chunk(s)).")
+    _log_runtime_verbose(
+        config,
+        f"KV session: prefilled static system prefix ({system_len} tokens, {num_chunks} chunk(s)).",
+    )
 
 
 def _sync_kv_cache_from_messages(rt: TtAgentRuntime, messages: List[Dict[str, str]]) -> None:
@@ -1071,7 +1083,10 @@ def _run_traced_decode_loop(
             ttnn.end_trace_capture(rt.mesh_device, rt.decode_trace_id, cq_id=0)
             ttnn.synchronize_device(rt.mesh_device)
             if max_extra_tokens > 1:
-                logger.info("Decode trace captured (replay for subsequent tokens this generation).")
+                _log_runtime_verbose(
+                    config,
+                    "Decode trace captured (replay for subsequent tokens this generation).",
+                )
         else:
             ttnn.execute_trace(rt.mesh_device, rt.decode_trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(rt.mesh_device)
@@ -1127,13 +1142,14 @@ def generate_assistant_text_tt(
     _ensure_prefill_chunk_dev(rt, block_size, pad_id)
     prefill_start = _resolve_incremental_prefill_start(rt, input_ids, prompt_len, block_size)
     if prefill_start > 0:
-        logger.info(
+        _log_runtime_verbose(
+            config,
             f"Incremental prefill: reusing {prefill_start} cached tokens, "
             f"prefilling {prompt_len - prefill_start} new "
-            f"({num_chunks - prefill_start // block_size} chunk(s))."
+            f"({num_chunks - prefill_start // block_size} chunk(s)).",
         )
     elif rt.cfg.use_kv_cache and rt.system_prefix_warmed:
-        logger.info(f"Full prompt prefill ({num_chunks} chunk(s)).")
+        _log_runtime_verbose(config, f"Full prompt prefill ({num_chunks} chunk(s)).")
 
     next_token = _chunked_prefill(
         rt,
@@ -1366,6 +1382,11 @@ def parse_tt_args() -> TTAgentConfig:
         action="store_true",
         help="Disable traced decode (full model dispatch every token).",
     )
+    p.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Log KV warm-up, incremental prefill, and decode-trace capture during chat (default: off).",
+    )
 
     a = p.parse_args()
 
@@ -1388,6 +1409,7 @@ def parse_tt_args() -> TTAgentConfig:
         prefill_activations_dram=a.prefill_dram,
         use_kv_cache=not a.no_kv_cache,
         trace_decode=not a.no_decode_trace,
+        verbose_runtime=a.verbose,
     )
 
 
