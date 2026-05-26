@@ -59,6 +59,22 @@ def BRINGUP_ROOT() -> Path:
     return Path(env) if env else REPO_ROOT
 
 
+def safe_relative_to_root(p) -> Path:
+    """Try BRINGUP_ROOT first, then REPO_ROOT; return absolute path on miss.
+
+    Use this in place of `path.relative_to(REPO_ROOT)` everywhere in the
+    planner's bring-up code paths. Handles the case where a path lives
+    inside an isolated worktree (BRINGUP_ROOT != REPO_ROOT).
+    """
+    p = Path(p)
+    for root in (BRINGUP_ROOT(), REPO_ROOT):
+        try:
+            return p.resolve().relative_to(Path(root).resolve())
+        except (ValueError, OSError):
+            continue
+    return p
+
+
 _FILE_KIND_PRIORITY = {
     "test_demo": 100,
     "demo_py": 80,

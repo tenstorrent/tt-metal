@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ..discovery import safe_relative_to_root
 
 import sys
 from pathlib import Path
@@ -54,7 +55,7 @@ def cmd_op_synth(args) -> int:
     no_resolve: List[str] = []
 
     print(f"\nOp-level bring-up plan for {args.model_id}")
-    print(f"  demo dir: {demo_dir.relative_to(REPO_ROOT)}")
+    print(f"  demo dir: {safe_relative_to_root(demo_dir)}")
     print(f"  targets:  {len(targets)} component(s)")
     print()
 
@@ -122,7 +123,7 @@ def cmd_op_synth(args) -> int:
     if args.emit_stub:
         print(f"\nWrote {len(written)} partial-stub file(s):")
         for name, path in written:
-            print(f"  {name:30s}  {path.relative_to(REPO_ROOT)}")
+            print(f"  {name:30s}  {safe_relative_to_root(path)}")
         if written:
             print(
                 "\nThese stubs have all op-REUSE/op-ADAPT weights pre-loaded "

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+
+from .discovery import safe_relative_to_root, BRINGUP_ROOT
 import ast
 import datetime as _dt
 import json
@@ -814,6 +816,10 @@ def synthesize_component(
     exclude_k: str = DEFAULT_TEMPLATE_PYTEST_EXCLUDE_K,
     fetch_upstream: bool = True,
 ) -> SynthResult:
+    if repo_root == REPO_ROOT:
+        from .discovery import BRINGUP_ROOT as _BRINGUP_ROOT
+
+        repo_root = _BRINGUP_ROOT()
     demo_dir = find_demo_dir(model_id, repo_root=repo_root)
     if demo_dir is None:
         raise LLMError(
@@ -863,15 +869,15 @@ def synthesize_component(
 
     result = SynthResult(
         component=component_name,
-        stub_path=str(stub_path.relative_to(repo_root)),
-        test_path=str(test_path.relative_to(repo_root)),
+        stub_path=str(safe_relative_to_root(stub_path)),
+        test_path=str(safe_relative_to_root(test_path)),
     )
 
     if stub_path.exists():
         backup_path = stub_path.with_suffix(".py.bak")
         if not backup_path.exists():
             shutil.copy2(stub_path, backup_path)
-        result.backup_path = str(backup_path.relative_to(repo_root))
+        result.backup_path = str(safe_relative_to_root(backup_path))
 
     if dry_run:
         system, user = build_prompts(
@@ -889,7 +895,7 @@ def synthesize_component(
             cfg=cfg,
             attempts=[(system, user, "(dry-run; LLM not called)", "(dry-run)")],
         )
-        result.audit_log = str(audit_path.relative_to(repo_root))
+        result.audit_log = str(safe_relative_to_root(audit_path))
         result.final_status = "dry-run"
         return result
 
@@ -959,7 +965,7 @@ def synthesize_component(
         cfg=cfg,
         attempts=audit_records,
     )
-    result.audit_log = str(audit_path.relative_to(repo_root))
+    result.audit_log = str(safe_relative_to_root(audit_path))
     result.final_status = result.attempts[-1].test_status if result.attempts else "no-call"
 
     if result.final_status == "passed":
@@ -993,6 +999,10 @@ def list_synth_targets(
     only: Optional[List[str]] = None,
     repo_root: Path = REPO_ROOT,
 ) -> SynthTargets:
+    if repo_root == REPO_ROOT:
+        from .discovery import BRINGUP_ROOT as _BRINGUP_ROOT
+
+        repo_root = _BRINGUP_ROOT()
     demo_dir = find_demo_dir(model_id, repo_root=repo_root)
     if demo_dir is None:
         raise LLMError(
@@ -1011,7 +1021,7 @@ def list_synth_targets(
     data = json.loads(status_path.read_text())
     components = data.get("components", [])
 
-    targets = SynthTargets(model_id=model_id, demo_dir=str(demo_dir.relative_to(repo_root)))
+    targets = SynthTargets(model_id=model_id, demo_dir=str(safe_relative_to_root(demo_dir)))
     requested = set(only) if only else None
 
     for comp in components:
@@ -1106,7 +1116,7 @@ def _collect_adapt_targets(
         out.append(
             (
                 comp["name"],
-                REPO_ROOT / sibling_tt,
+                BRINGUP_ROOT() / sibling_tt,
                 new_tt,
                 comp.get("sibling_shape") or {},
                 comp.get("new_shape") or {},
@@ -1405,6 +1415,10 @@ def emit_prompts(
     include_adapt: bool = True,
     include_demo: bool = True,
 ) -> List[Tuple[str, Path]]:
+    if repo_root == REPO_ROOT:
+        from .discovery import BRINGUP_ROOT as _BRINGUP_ROOT
+
+        repo_root = _BRINGUP_ROOT()
     targets = list_synth_targets(model_id=model_id, only=only, repo_root=repo_root)
 
     demo_dir = repo_root / targets.demo_dir
@@ -1440,7 +1454,7 @@ def emit_prompts(
                 candidate_paths=candidate_paths,
                 hf_reference=comp.get("hf_reference") or "",
                 error_message=str(exc),
-                stub_rel=str((demo_dir / "_stubs" / f"{safe}.py").relative_to(repo_root)),
+                stub_rel=str(safe_relative_to_root(demo_dir / "_stubs" / f"{safe}.py")),
             )
             out_path = out_dir / f"{safe}.prompt.md"
             out_path.write_text(doc)
@@ -1456,7 +1470,7 @@ def emit_prompts(
             new_shape=new_shape,
             sibling_example=sibling_example,
         )
-        stub_rel = (demo_dir / "_stubs" / f"{safe}.py").relative_to(repo_root)
+        stub_rel = safe_relative_to_root(demo_dir / "_stubs" / f"{safe}.py")
         doc = _format_prompt_doc(
             component_name=name,
             component_safe=safe,
@@ -1480,13 +1494,13 @@ def emit_prompts(
             except OSError:
                 continue
             target_in_responses = (
-                f"{(demo_dir / _BYO_RESPONSES_DIRNAME).relative_to(repo_root)}/{safe}{_ADAPT_RESPONSE_SUFFIX}"
+                f"{safe_relative_to_root(demo_dir / _BYO_RESPONSES_DIRNAME)}/{safe}{_ADAPT_RESPONSE_SUFFIX}"
             )
             doc = _render_adapt_prompt(
                 component_name=comp_name,
                 component_safe=safe,
                 model_id=model_id,
-                cloned_file_rel=str(new_tt_path.relative_to(repo_root)),
+                cloned_file_rel=str(safe_relative_to_root(new_tt_path)),
                 cloned_file_content=cloned_content,
                 sibling_shape=sib_shape,
                 new_shape=new_shape,
@@ -1504,12 +1518,12 @@ def emit_prompts(
         combined_shape: dict = {}
         for c in data.get("components", []):
             combined_shape.update(c.get("new_shape") or {})
-        target_in_responses = f"{(demo_dir / _BYO_RESPONSES_DIRNAME).relative_to(repo_root)}/{_DEMO_RESPONSE_NAME}"
+        target_in_responses = f"{safe_relative_to_root(demo_dir / _BYO_RESPONSES_DIRNAME)}/{_DEMO_RESPONSE_NAME}"
         doc = _render_demo_prompt(
             model_id=model_id,
             model_type=data.get("new_model_type", ""),
             category=category,
-            new_demo_dir_rel=str(demo_dir.relative_to(repo_root)),
+            new_demo_dir_rel=str(safe_relative_to_root(demo_dir)),
             target_file_in_responses=target_in_responses,
             new_components=new_components,
             adapt_components=adapt_components,
@@ -1557,6 +1571,10 @@ def build_handoff_master(
     only: Optional[List[str]] = None,
     fetch_upstream: bool = True,
 ) -> Optional[Path]:
+    if repo_root == REPO_ROOT:
+        from .discovery import BRINGUP_ROOT as _BRINGUP_ROOT
+
+        repo_root = _BRINGUP_ROOT()
     single_new_mode = bool(only) and len(only) == 1
     written = emit_prompts(
         model_id=model_id,
@@ -1577,7 +1595,7 @@ def build_handoff_master(
     out_dir = _handoff_dir(demo_dir)
     out_path = out_dir / f"{_handoff_safe_model_id(model_id)}__handoff.md"
 
-    responses_rel = (demo_dir / _BYO_RESPONSES_DIRNAME).relative_to(repo_root)
+    responses_rel = safe_relative_to_root(demo_dir / _BYO_RESPONSES_DIRNAME)
     apply_cmd = f"python -m scripts.tt_hw_planner bringup {model_id} --apply-all-responses"
 
     section_index: List[str] = []
@@ -1650,7 +1668,7 @@ def build_handoff_master(
         if not prompt_path.exists():
             sections.append(
                 f"## NEW `{name}`\n\n"
-                f"(prompt file missing at {prompt_path.relative_to(repo_root)}; "
+                f"(prompt file missing at {safe_relative_to_root(prompt_path)}; "
                 f"re-run `--emit-prompts`)\n\n---\n"
             )
             continue
@@ -1667,7 +1685,7 @@ def build_handoff_master(
         if not prompt_path.exists():
             sections.append(
                 f"## ADAPT `{comp_name}`\n\n"
-                f"(prompt file missing at {prompt_path.relative_to(repo_root)}; "
+                f"(prompt file missing at {safe_relative_to_root(prompt_path)}; "
                 f"re-run `--emit-prompts`)\n\n---\n"
             )
             continue
@@ -1693,6 +1711,10 @@ def apply_all_responses(
     model_id: str,
     repo_root: Path = REPO_ROOT,
 ) -> List["ApplyResponseResult"]:
+    if repo_root == REPO_ROOT:
+        from .discovery import BRINGUP_ROOT as _BRINGUP_ROOT
+
+        repo_root = _BRINGUP_ROOT()
     demo_dir = find_demo_dir(model_id, repo_root=repo_root)
     if demo_dir is None:
         raise LLMError(
@@ -1702,7 +1724,7 @@ def apply_all_responses(
     responses_dir = demo_dir / _BYO_RESPONSES_DIRNAME
     if not responses_dir.is_dir():
         raise LLMError(
-            f"No `{_BYO_RESPONSES_DIRNAME}/` folder at {responses_dir.relative_to(repo_root)}. "
+            f"No `{_BYO_RESPONSES_DIRNAME}/` folder at {safe_relative_to_root(responses_dir)}. "
             f"Run `--handoff-to-chat` first, then have the chat agent write "
             f"response files there."
         )
@@ -1831,12 +1853,12 @@ def _install_adapt_response(
         backup = destination.with_suffix(destination.suffix + ".bak")
         if not backup.exists():
             shutil.copy2(destination, backup)
-        backup_rel = str(backup.relative_to(repo_root))
+        backup_rel = str(safe_relative_to_root(backup))
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(_wrap_for_banner(body))
     return ApplyResponseResult(
         component=f"{component_name} (adapt)",
-        stub_path=str(destination.relative_to(repo_root)),
+        stub_path=str(safe_relative_to_root(destination)),
         backup_path=backup_rel,
         response_chars=len(raw),
         status="applied",
@@ -1877,15 +1899,15 @@ def _install_demo_response(
         backup = destination.with_suffix(".py.bak")
         if not backup.exists():
             shutil.copy2(destination, backup)
-        backup_rel = str(backup.relative_to(repo_root))
+        backup_rel = str(safe_relative_to_root(backup))
     destination.write_text(_wrap_for_banner(body))
     return ApplyResponseResult(
         component="demo (entry script)",
-        stub_path=str(destination.relative_to(repo_root)),
+        stub_path=str(safe_relative_to_root(destination)),
         backup_path=backup_rel,
         response_chars=len(raw),
         status="applied",
-        note=f"top-level demo installed at {destination.relative_to(repo_root)}",
+        note=f"top-level demo installed at {safe_relative_to_root(destination)}",
     )
 
 
@@ -1906,6 +1928,10 @@ def apply_response(
     response_path: Path,
     repo_root: Path = REPO_ROOT,
 ) -> ApplyResponseResult:
+    if repo_root == REPO_ROOT:
+        from .discovery import BRINGUP_ROOT as _BRINGUP_ROOT
+
+        repo_root = _BRINGUP_ROOT()
     demo_dir = find_demo_dir(model_id, repo_root=repo_root)
     if demo_dir is None:
         raise LLMError(
@@ -1970,14 +1996,14 @@ def apply_response(
         backup = stub_path.with_suffix(".py.bak")
         if not backup.exists():
             shutil.copy2(stub_path, backup)
-        backup_rel = str(backup.relative_to(repo_root))
+        backup_rel = str(safe_relative_to_root(backup))
 
     stub_path.parent.mkdir(parents=True, exist_ok=True)
     stub_path.write_text(_wrap_for_banner(body))
 
     return ApplyResponseResult(
         component=component_name,
-        stub_path=str(stub_path.relative_to(repo_root)),
+        stub_path=str(safe_relative_to_root(stub_path)),
         backup_path=backup_rel,
         response_chars=len(raw),
         status="applied",
@@ -1996,6 +2022,10 @@ def synthesize_all_new(
     only: Optional[List[str]] = None,
     fetch_upstream: bool = True,
 ) -> List[SynthResult]:
+    if repo_root == REPO_ROOT:
+        from .discovery import BRINGUP_ROOT as _BRINGUP_ROOT
+
+        repo_root = _BRINGUP_ROOT()
     demo_dir = find_demo_dir(model_id, repo_root=repo_root)
     if demo_dir is None:
         raise LLMError(

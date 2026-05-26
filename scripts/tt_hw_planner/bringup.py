@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .compatibility import CompatReport, Status, check_compatibility
-from .discovery import ModelDiscovery, discover_model
+from .discovery import ModelDiscovery, discover_model, safe_relative_to_root
 from .family_backends import FamilyBackend, pick_backend
 from .hardware import HARDWARE, find_box
 from .kernel_constraints import KernelReport, Severity, evaluate_kernels
@@ -17,9 +17,27 @@ from .verdict import FitRow, evaluate_all
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-MODEL_CONFIG_PATH = REPO_ROOT / "models" / "tt_transformers" / "tt" / "model_config.py"
-TRACE_REGION_PATH = REPO_ROOT / "models" / "tt_transformers" / "demo" / "trace_region_config.py"
 DEMO_TEST_PATH = "models/tt_transformers/demo/simple_text_demo.py"
+
+
+def _model_config_path() -> Path:
+    from .discovery import BRINGUP_ROOT
+
+    return BRINGUP_ROOT() / "models" / "tt_transformers" / "tt" / "model_config.py"
+
+
+def _trace_region_path() -> Path:
+    from .discovery import BRINGUP_ROOT
+
+    return BRINGUP_ROOT() / "models" / "tt_transformers" / "demo" / "trace_region_config.py"
+
+
+def __getattr__(name):
+    if name == "MODEL_CONFIG_PATH":
+        return _model_config_path()
+    if name == "TRACE_REGION_PATH":
+        return _trace_region_path()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _quote(s: str) -> str:
@@ -164,7 +182,7 @@ def _lookup_tuning(
 ) -> TuningCheck:
     entry = table.get(base_model_name, {})
     val = entry.get(mesh_device) if isinstance(entry, dict) else None
-    rel = str(file_path.relative_to(REPO_ROOT)) if file_path.exists() else str(file_path)
+    rel = str(safe_relative_to_root(file_path)) if file_path.exists() else str(file_path)
     if val is not None:
         return TuningCheck(table_name, rel, base_model_name, mesh_device, True, val, "")
     return TuningCheck(table_name, rel, base_model_name, mesh_device, False, None, fallback_when_missing)
@@ -329,7 +347,7 @@ def _build_scaffolded_stubs_invocation(
         try:
             return str(p.resolve().relative_to(_root.resolve()))
         except ValueError:
-            return str(p.relative_to(REPO_ROOT))
+            return str(safe_relative_to_root(p))
 
     rel_tests = [_safe_rel(p) for p in matched_tests]
     invocation = PytestInvocation(

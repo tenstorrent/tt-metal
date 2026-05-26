@@ -629,7 +629,7 @@ def _stub_import_path(demo_dir: Path, component_safe: str, repo_root: Path) -> s
             return ".".join(rel.with_suffix("").parts)
         except ValueError:
             continue
-    rel = full.relative_to(repo_root)
+    rel = safe_relative_to_root(full)
     return ".".join(rel.with_suffix("").parts)
 
 
@@ -838,6 +838,10 @@ def run_bringup_loop(
     overwrite_tests: bool = False,
     exclude_k: str = DEFAULT_TEMPLATE_PYTEST_EXCLUDE_K,
 ) -> BringupLoopResult:
+    if repo_root == REPO_ROOT:
+        from .discovery import BRINGUP_ROOT as _BRINGUP_ROOT
+
+        repo_root = _BRINGUP_ROOT()
     demo_dir = find_demo_dir(model_id, repo_root=repo_root)
     if demo_dir is None:
         raise FileNotFoundError(
@@ -863,7 +867,7 @@ def run_bringup_loop(
 
         action = StubAction(
             component=name,
-            stub_path=str(stub_rel.relative_to(repo_root)),
+            stub_path=str(safe_relative_to_root(stub_rel)),
             test_path="",
             hf_reference=hf_ref,
         )
@@ -883,7 +887,7 @@ def run_bringup_loop(
                 overwrite=force,
                 discovered_submodule_path=comp.get("submodule_path"),
             )
-            action.test_path = str(test_path.relative_to(repo_root))
+            action.test_path = str(safe_relative_to_root(test_path))
             action.test_generated = generated
             action.test_already_existed = already and not force
             if stub_graduated and existing_is_smoke:
@@ -920,7 +924,7 @@ def run_bringup_loop(
 
     return BringupLoopResult(
         model_id=model_id,
-        demo_dir=str(demo_dir.relative_to(repo_root)),
+        demo_dir=str(safe_relative_to_root(demo_dir)),
         actions=actions,
         counts_before=counts_before,
         counts_after=counts_after,
@@ -1327,6 +1331,10 @@ def autofill_stubs(
     torch wrapper, so the autofill phase still always produces a runnable
     stub for every NEW component.
     """
+    if repo_root == REPO_ROOT:
+        from .discovery import BRINGUP_ROOT as _BRINGUP_ROOT
+
+        repo_root = _BRINGUP_ROOT()
     demo_dir = find_demo_dir(model_id, repo_root=repo_root)
     if demo_dir is None:
         raise FileNotFoundError(
@@ -1514,6 +1522,8 @@ To run:
 """
 from __future__ import annotations
 
+
+from .discovery import safe_relative_to_root
 import importlib
 import inspect
 from pathlib import Path
@@ -1776,6 +1786,10 @@ def emit_runnable_demo(
       - `"emitted"`     — demo written successfully.
       - `"no-primary"`  — no eligible NEW component with captured inputs.
       - `"no-demo-dir"` — model not scaffolded yet."""
+    if repo_root == REPO_ROOT:
+        from .discovery import BRINGUP_ROOT as _BRINGUP_ROOT
+
+        repo_root = _BRINGUP_ROOT()
     demo_dir = find_demo_dir(model_id, repo_root=repo_root)
     if demo_dir is None:
         return None, "no-demo-dir"
@@ -1800,7 +1814,7 @@ def emit_runnable_demo(
     if not candidate_paths:
         candidate_paths = ["<UNKNOWN>"]
 
-    pytest_path = str((demo_dir / "demo.py").relative_to(repo_root)) + "::test_demo"
+    pytest_path = str(safe_relative_to_root(demo_dir / "demo.py")) + "::test_demo"
 
     body = _DEMO_TEMPLATE.format(
         model_id=model_id,
@@ -1846,6 +1860,10 @@ def next_task(
     component: Optional[str] = None,
     repo_root: Path = REPO_ROOT,
 ) -> Optional[NextTask]:
+    if repo_root == REPO_ROOT:
+        from .discovery import BRINGUP_ROOT as _BRINGUP_ROOT
+
+        repo_root = _BRINGUP_ROOT()
     demo_dir = find_demo_dir(model_id, repo_root=repo_root)
     if demo_dir is None:
         raise FileNotFoundError(
@@ -1871,12 +1889,12 @@ def next_task(
     safe = _safe_id(comp["name"])
     return NextTask(
         model_id=model_id,
-        demo_dir=str(demo_dir.relative_to(repo_root)),
+        demo_dir=str(safe_relative_to_root(demo_dir)),
         component=comp["name"],
         index=idx + 1,
         total=len(news),
-        stub_path=str((demo_dir / "_stubs" / f"{safe}.py").relative_to(repo_root)),
-        test_path=str((demo_dir / "tests" / "pcc" / f"test_{safe}.py").relative_to(repo_root)),
+        stub_path=str(safe_relative_to_root(demo_dir / "_stubs" / f"{safe}.py")),
+        test_path=str(safe_relative_to_root(demo_dir / "tests" / "pcc" / f"test_{safe}.py")),
         hf_reference=comp.get("hf_reference") or "",
         new_shape=comp.get("new_shape") or {},
         suggested_submodule_paths=COMPONENT_SUBMODULE_HINTS.get(comp["name"], []),

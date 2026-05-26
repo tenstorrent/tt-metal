@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ..discovery import safe_relative_to_root
 
 import sys
 from pathlib import Path
@@ -33,7 +34,7 @@ def cmd_capture_inputs(args) -> int:
         return 0
 
     print(f"\nCapture-and-replay inputs for {args.model_id}")
-    print(f"  demo dir:   {demo_dir.relative_to(REPO_ROOT)}")
+    print(f"  demo dir:   {safe_relative_to_root(demo_dir)}")
     print(f"  components: {len(comps)}  ({', '.join(comps)})")
     print()
 

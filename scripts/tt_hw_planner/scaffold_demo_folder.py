@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .discovery import safe_relative_to_root
+
 import re
 import unicodedata
 from pathlib import Path
@@ -336,9 +338,9 @@ def collect_demo_folder_changes(
                     new_hf_id=new_model_id,
                     is_demo_entry=_demo_entry_files(rel),
                 )
-                creates.append((target_rel, new_text.encode("utf-8"), src_path.relative_to(repo_root)))
+                creates.append((target_rel, new_text.encode("utf-8"), safe_relative_to_root(src_path)))
                 continue
 
-        creates.append((target_rel, src_path.read_bytes(), src_path.relative_to(repo_root)))
+        creates.append((target_rel, src_path.read_bytes(), safe_relative_to_root(src_path)))
 
     return creates, skipped, warnings

@@ -14,7 +14,7 @@ def _bringup_cwd() -> Path:
     env = os.environ.get("TT_HW_PLANNER_BRINGUP_CWD")
     if env:
         return Path(env)
-    from ..discovery import REPO_ROOT
+    from ..discovery import REPO_ROOT, safe_relative_to_root
 
     return REPO_ROOT
 
@@ -149,7 +149,7 @@ def _invoke_agent(
 
         log_fh = open(agent_log, "w", buffering=1)
         try:
-            display_log = agent_log.relative_to(REPO_ROOT)
+            display_log = safe_relative_to_root(agent_log)
         except Exception:
             display_log = agent_log
         print(f"  [auto:{provider}] stdout/stderr -> {display_log}")

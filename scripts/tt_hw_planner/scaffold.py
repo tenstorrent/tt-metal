@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional
 
-from .discovery import BRINGUP_ROOT
+from .discovery import BRINGUP_ROOT, safe_relative_to_root
 from .bringup import (
     MODEL_CONFIG_PATH,
     REPO_ROOT,
@@ -125,15 +125,15 @@ def _build_table_insert(file_path: Path, sibling_key: str, new_key: str) -> Opti
     diff_iter = difflib.unified_diff(
         src.splitlines(keepends=True),
         new_src.splitlines(keepends=True),
-        fromfile=f"a/{file_path.relative_to(REPO_ROOT)}",
-        tofile=f"b/{file_path.relative_to(REPO_ROOT)}",
+        fromfile=f"a/{safe_relative_to_root(file_path)}",
+        tofile=f"b/{safe_relative_to_root(file_path)}",
         n=3,
     )
     diff_text = "".join(diff_iter)
     added = sum(1 for ln in diff_text.splitlines() if ln.startswith("+") and not ln.startswith("+++"))
     return ScaffoldChange(
         kind="edit",
-        path=str(file_path.relative_to(REPO_ROOT)),
+        path=str(safe_relative_to_root(file_path)),
         diff=diff_text,
         new_content=new_src.encode(),
         added_lines=added,
@@ -255,16 +255,16 @@ def plan_scaffold(new_model_id: str) -> ScaffoldPlan:
         else:
             json_files = sorted(p for p in sibling_params_dir.iterdir() if p.is_file() and p.suffix == ".json")
             if not json_files:
-                skipped.append(f"sibling dir {sibling_params_dir.relative_to(REPO_ROOT)} contains no JSON files")
+                skipped.append(f"sibling dir {safe_relative_to_root(sibling_params_dir)} contains no JSON files")
             for src_file in json_files:
                 content = src_file.read_bytes()
-                rel_target = (new_params_dir / src_file.name).relative_to(REPO_ROOT)
+                rel_target = safe_relative_to_root(new_params_dir / src_file.name)
                 changes.append(
                     ScaffoldChange(
                         kind="create",
                         path=str(rel_target),
                         new_content=content,
-                        source=str(src_file.relative_to(REPO_ROOT)),
+                        source=str(safe_relative_to_root(src_file)),
                         added_lines=content.count(b"\n"),
                     )
                 )

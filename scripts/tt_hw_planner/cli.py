@@ -21,7 +21,7 @@ from .bringup import (
     render_script as render_bringup_script,
     render_text as render_bringup_text,
 )
-from .discovery import BRINGUP_ROOT
+from .discovery import BRINGUP_ROOT, safe_relative_to_root
 from .bringup_loop import (
     autofill_stubs,
     emit_runnable_demo,
@@ -558,7 +558,7 @@ def _list_component_pcc_tests(demo_dir: Path, *, only: Optional[List[str]] = Non
         if test_path.is_file():
             abs_path = test_path.resolve()
             try:
-                out.append(str(abs_path.relative_to(REPO_ROOT)))
+                out.append(str(safe_relative_to_root(abs_path)))
             except ValueError:
                 out.append(str(abs_path))
     return out
@@ -1479,7 +1479,7 @@ def _check_demo_environment_compat(
                 window = "\n".join(src.splitlines()[max(0, i - 3) : i + 4])
                 if "AutoModelForImageTextToText" not in window:
                     problems.append(
-                        f"{p.relative_to(REPO_ROOT)}:{i + 1} "
+                        f"{safe_relative_to_root(p)}:{i + 1} "
                         f"imports `AutoModelForVision2Seq` from "
                         f"transformers (removed in 5.x; renamed "
                         f"to `AutoModelForImageTextToText`). The "
@@ -2515,7 +2515,7 @@ def _try_auto_onboard_inline(
                 f"#   TT_HW_PLANNER_AUTO_ONBOARD_REQUIRE_REVIEW=0 python -m scripts.tt_hw_planner up ...\n"
             )
             proposal_path.write_text(header + "\n" + (proposal.backend_dataclass_source or ""))
-            rel = proposal_path.relative_to(REPO_ROOT) if proposal_path.is_absolute() else proposal_path
+            rel = safe_relative_to_root(proposal_path) if proposal_path.is_absolute() else proposal_path
             print(
                 f"  REVIEW REQUIRED: proposal written to `{rel}` but NOT applied. "
                 f"Run `python -m scripts.tt_hw_planner auto-onboard {model_id} --accept` "
@@ -3079,7 +3079,7 @@ def _test_file_from_classname(classname: str) -> Optional[str]:
     if not classname:
         return None
     path = classname.replace(".", "/") + ".py"
-    candidate = REPO_ROOT / path
+    candidate = BRINGUP_ROOT() / path
     return path if candidate.is_file() else None
 
 
@@ -3335,7 +3335,7 @@ def _scope_report_to_demo(report: Dict[str, object], demo_dir: Path) -> Dict[str
     if not isinstance(report, dict):
         return report
     try:
-        demo_rel = str(demo_dir.relative_to(REPO_ROOT))
+        demo_rel = str(safe_relative_to_root(demo_dir))
     except Exception:
         demo_rel = str(demo_dir)
     demo_rel = demo_rel.replace("\\", "/").rstrip("/") + "/"
@@ -4075,7 +4075,7 @@ def _format_escalated_edit_scope_block(
     ]
     for p in extra:
         try:
-            rel = p.relative_to(REPO_ROOT)
+            rel = safe_relative_to_root(p)
         except Exception:
             rel = p
         lines.append(f"    - {rel}")
@@ -4728,7 +4728,7 @@ def _write_attempt_log(
             stub_hash = ""
         entry = {
             "iter": iter_n,
-            "stub_path": str(stub_path.relative_to(REPO_ROOT)) if stub_path.is_absolute() else str(stub_path),
+            "stub_path": str(safe_relative_to_root(stub_path)) if stub_path.is_absolute() else str(stub_path),
             "stub_hash": stub_hash,
             "exemplar_used": exemplar_used or "(none)",
             "model_used": model_used,
@@ -5000,7 +5000,7 @@ def _read_test_source(demo_dir: Path, component_name: str, max_lines: int = 60) 
     if len(lines) > max_lines:
         text = "\n".join(lines[:max_lines]) + f"\n# ... ({len(lines) - max_lines} more lines elided)"
     try:
-        rel = test_path.relative_to(REPO_ROOT)
+        rel = safe_relative_to_root(test_path)
     except Exception:
         rel = test_path
     return f"  source: {rel}\n```python\n{text}\n```"
@@ -5265,7 +5265,7 @@ def _exemplar_block(component_name: str, kind: str = "") -> str:
     p = _find_exemplar(component_name, kind)
     if p is None:
         return "(no exemplar found — write the ttnn port from the torch reference below)"
-    rel = p.relative_to(REPO_ROOT) if p.is_absolute() else p
+    rel = safe_relative_to_root(p) if p.is_absolute() else p
     src = _read_file_excerpt(p, max_lines=120)
     if not src:
         return "(no exemplar found — write the ttnn port from the torch reference below)"
@@ -7061,7 +7061,7 @@ def _cmd_up_core(args) -> int:
             )
             for name, path in risky_native_stubs:
                 try:
-                    rel = path.relative_to(REPO_ROOT)
+                    rel = safe_relative_to_root(path)
                 except Exception:
                     rel = path
                 print(f"    - {name} ({rel})")
@@ -7072,7 +7072,7 @@ def _cmd_up_core(args) -> int:
             )
             for name, path in risky_native_stubs:
                 try:
-                    rel = path.relative_to(REPO_ROOT)
+                    rel = safe_relative_to_root(path)
                 except Exception:
                     rel = path
                 mtime = ""

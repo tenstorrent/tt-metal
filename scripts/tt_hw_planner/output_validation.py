@@ -1,3 +1,5 @@
+from .discovery import safe_relative_to_root
+
 """Real PCC gate for ``tt_hw_planner up --auto``.
 
 Background — the "false green" problem
@@ -555,7 +557,7 @@ def gather_backend_file_paths(
 
     lines: List[str] = [f"  ----- {backend_dir}/ files -----"]
     for f in files[:max_files]:
-        rel = f.relative_to(repo_root)
+        rel = safe_relative_to_root(f)
 
         desc = ""
         try:

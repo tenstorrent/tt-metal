@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ..discovery import safe_relative_to_root, BRINGUP_ROOT
 
 import argparse
 import json
@@ -597,7 +598,7 @@ def _run_auto_iterate_loop(
                     encoding="utf-8",
                 )
                 restored_from = (
-                    f"{last_good_path.relative_to(REPO_ROOT)} " f"(last graduated native — strongest signal)"
+                    f"{safe_relative_to_root(last_good_path)} " f"(last graduated native — strongest signal)"
                 )
             except Exception:
                 restored_from = None
@@ -613,7 +614,7 @@ def _run_auto_iterate_loop(
                     else ""
                 )
                 restored_from = (
-                    f"{best_native_path.relative_to(REPO_ROOT)} "
+                    f"{safe_relative_to_root(best_native_path)} "
                     f"(best in-session native{best_pcc_str} — "
                     f"better than .preiter_native and .bak)"
                 )
@@ -626,7 +627,7 @@ def _run_auto_iterate_loop(
                     encoding="utf-8",
                 )
                 restored_from = (
-                    f"{preiter_native_path.relative_to(REPO_ROOT)} "
+                    f"{safe_relative_to_root(preiter_native_path)} "
                     f"(pre-iter native — better than .bak torch wrapper)"
                 )
             except Exception:
@@ -634,7 +635,7 @@ def _run_auto_iterate_loop(
         if restored_from is None and bak_path.is_file():
             try:
                 stub_path.write_text(bak_path.read_text())
-                restored_from = str(bak_path.relative_to(REPO_ROOT))
+                restored_from = str(safe_relative_to_root(bak_path))
             except Exception:
                 restored_from = None
         if restored_from is None:
@@ -668,7 +669,7 @@ def _run_auto_iterate_loop(
                     print(
                         f"  cleared stale native snapshot for `{c}` "
                         f"(seed pytest shows it's currently failing): "
-                        f"{stale_snap.relative_to(REPO_ROOT)}"
+                        f"{safe_relative_to_root(stale_snap)}"
                     )
                 except Exception as exc:
                     print(
@@ -824,7 +825,7 @@ def _run_auto_iterate_loop(
     for comp in _preflight_native_components:
         tp = demo_dir / "tests" / "pcc" / f"test_{_safe_id(comp)}.py"
         if tp.is_file():
-            _preflight_test_files.append(str(tp.relative_to(REPO_ROOT)))
+            _preflight_test_files.append(str(safe_relative_to_root(tp)))
 
     if _preflight_test_files:
         banner(
@@ -833,7 +834,7 @@ def _run_auto_iterate_loop(
             f"classify BEFORE invoking the LLM (saves wasted iterations)"
         )
         for comp in _preflight_native_components:
-            print(f"  - {comp}  ({demo_dir.relative_to(REPO_ROOT)}/_stubs/{_safe_id(comp)}.py)")
+            print(f"  - {comp}  ({safe_relative_to_root(demo_dir)}/_stubs/{_safe_id(comp)}.py)")
         _preflight_rc = 0
         try:
             _preflight_rc = _run_focused_pytest(
@@ -884,7 +885,7 @@ def _run_auto_iterate_loop(
                 _record_failure_for_component(_pf_target, "HANG", None)
                 _pf_target_test = demo_dir / "tests" / "pcc" / f"test_{_safe_id(_pf_target)}.py"
                 try:
-                    last_failed_tests = [str(_pf_target_test.relative_to(REPO_ROOT))]
+                    last_failed_tests = [str(safe_relative_to_root(_pf_target_test))]
                 except Exception:
                     last_failed_tests = [str(_pf_target_test)]
                 _pf_budget_s = int(os.environ.get("TT_PLANNER_PYTEST_TIMEOUT_S", "600"))
@@ -1224,7 +1225,7 @@ def _run_auto_iterate_loop(
                         f"  These are likely test-scaffolder bugs (synthetic-input "
                         f"generator can't fabricate the multi-arg forward signature) "
                         f"or genuine HF-reference forward errors. Inspect:\n"
-                        f"    {demo_dir.relative_to(REPO_ROOT) if demo_dir.is_absolute() else demo_dir}/tests/pcc/",
+                        f"    {safe_relative_to_root(demo_dir) if demo_dir.is_absolute() else demo_dir}/tests/pcc/",
                         file=sys.stderr,
                     )
                     return 1
@@ -1247,7 +1248,7 @@ def _run_auto_iterate_loop(
                 for c in unverified_only:
                     test_rel = demo_dir / "tests" / "pcc" / f"test_{_safe_id(c)}.py"
                     try:
-                        test_rel = test_rel.relative_to(REPO_ROOT)
+                        test_rel = safe_relative_to_root(test_rel)
                     except Exception:
                         pass
                     print(f"      - {c}  (hand-fix `{test_rel}`)")
@@ -1349,7 +1350,7 @@ def _run_auto_iterate_loop(
         target_safe = _safe_id(iter_target_component)
         target_test_path = demo_dir / "tests" / "pcc" / f"test_{target_safe}.py"
         if target_test_path.is_file():
-            target_rel = str(target_test_path.relative_to(REPO_ROOT))
+            target_rel = str(safe_relative_to_root(target_test_path))
             last_failed_tests = [target_rel]
 
         _target_known_broken = iter_target_component in verified_fail or iter_target_component in _prev_iter_failed
@@ -1402,7 +1403,7 @@ def _run_auto_iterate_loop(
                 f"real native ttnn implementation that holds PCC >= 0.99."
             )
         if not last_failure_details:
-            stub_rel = (demo_dir / "_stubs" / f"{_safe_id(iter_target_component)}.py").relative_to(REPO_ROOT)
+            stub_rel = safe_relative_to_root(demo_dir / "_stubs" / f"{_safe_id(iter_target_component)}.py")
             last_failure_details = (
                 f"`{stub_rel}` either runs the HF reference module on host CPU "
                 f"or contains an LLM-generated wrapper that still imports "
@@ -1527,8 +1528,8 @@ def _run_auto_iterate_loop(
             safe = _safe_id(comp)
             stub_path = demo_dir / "_stubs" / f"{safe}.py"
             response_path = demo_dir / "_synth_responses" / f"{safe}.py"
-            stub_rel = stub_path.relative_to(REPO_ROOT) if stub_path.is_absolute() else stub_path
-            resp_rel = response_path.relative_to(REPO_ROOT) if response_path.is_absolute() else response_path
+            stub_rel = safe_relative_to_root(stub_path) if stub_path.is_absolute() else stub_path
+            resp_rel = safe_relative_to_root(response_path) if response_path.is_absolute() else response_path
             stub_src = _stub_source_excerpt(stub_path, max_lines=140)
             torch_ref = _torch_ref_summary(stub_path)
             failure_block = per_comp_failure.get(comp, "(no prior failure recorded for this component)")
@@ -1541,7 +1542,7 @@ def _run_auto_iterate_loop(
 
             exemplar_source = "(none)"
             if reuse_target and isinstance(reuse_target, str):
-                ex_path = REPO_ROOT / reuse_target
+                ex_path = BRINGUP_ROOT() / reuse_target
                 ex_src = _read_file_excerpt(ex_path, max_lines=140)
                 if ex_src:
                     exemplar = (
@@ -1554,7 +1555,7 @@ def _run_auto_iterate_loop(
                     found = _find_exemplar(comp, kind)
                     if found is not None:
                         try:
-                            exemplar_source = str(found.relative_to(REPO_ROOT))
+                            exemplar_source = str(safe_relative_to_root(found))
                         except Exception:
                             exemplar_source = str(found)
             else:
@@ -1562,7 +1563,7 @@ def _run_auto_iterate_loop(
                 found = _find_exemplar(comp, kind)
                 if found is not None:
                     try:
-                        exemplar_source = str(found.relative_to(REPO_ROOT))
+                        exemplar_source = str(safe_relative_to_root(found))
                     except Exception:
                         exemplar_source = str(found)
 
@@ -2123,7 +2124,7 @@ def _run_auto_iterate_loop(
                     "    - wrong --auto-model name for the installed agent CLI\n"
                     "    - CLI version mismatch with the flags this tool passes\n"
                     "  Investigate by re-running the same prompt manually:\n"
-                    f"    cat {demo_dir.relative_to(REPO_ROOT)}/_handoff/*__handoff.md | {agent_bin} -p --model {model}",
+                    f"    cat {safe_relative_to_root(demo_dir)}/_handoff/*__handoff.md | {agent_bin} -p --model {model}",
                     file=sys.stderr,
                 )
                 break
@@ -2535,7 +2536,7 @@ def _run_auto_iterate_loop(
                                 skip_reasons.append(reason)
             skip_reason_blob = "\n".join(f"    - {r}" for r in skip_reasons) or "    (no skip reason captured)"
             target_safe = _safe_id(iter_target_component)
-            target_test_rel = (demo_dir / "tests" / "pcc" / f"test_{target_safe}.py").relative_to(REPO_ROOT)
+            target_test_rel = safe_relative_to_root(demo_dir / "tests" / "pcc" / f"test_{target_safe}.py")
             print(
                 f"\n  AUTO-ITERATE {it}/{max_iters}: `{iter_target_component}` "
                 f"PCC test SKIPPED (test harness could not build inputs). "
@@ -2580,7 +2581,7 @@ def _run_auto_iterate_loop(
             for g in previously_graduated:
                 tp = demo_dir / "tests" / "pcc" / f"test_{_safe_id(g)}.py"
                 if tp.is_file():
-                    regression_test_files.append(str(tp.relative_to(REPO_ROOT)))
+                    regression_test_files.append(str(safe_relative_to_root(tp)))
             if regression_test_files:
                 banner(
                     f"AUTO-ITERATE {it}/{max_iters}: regression sweep on "
@@ -2632,7 +2633,7 @@ def _run_auto_iterate_loop(
                             )
                     if restored_names:
                         verify_tests = [
-                            str((demo_dir / "tests" / "pcc" / f"test_{_safe_id(r)}.py").relative_to(REPO_ROOT))
+                            str(safe_relative_to_root(demo_dir / "tests" / "pcc" / f"test_{_safe_id(r)}.py"))
                             for r in restored_names
                             if (demo_dir / "tests" / "pcc" / f"test_{_safe_id(r)}.py").is_file()
                         ]
@@ -2866,7 +2867,7 @@ def _run_auto_iterate_loop(
             if demo_ok:
                 _demo_dir = find_demo_dir(MODEL)
                 if _demo_dir is not None:
-                    _rel_demo = Path(_demo_dir).relative_to(REPO_ROOT) / "demo.py"
+                    _rel_demo = safe_relative_to_root(Path(_demo_dir)) / "demo.py"
                     print()
                     print(
                         f"  To run the model end-to-end on {BOX} at any time:\n" f"    pytest {_rel_demo}::test_demo -v"
@@ -3016,7 +3017,7 @@ def _run_auto_iterate_loop(
         if last_failed_components:
             log_root = demo_dir / "_attempts"
             print(
-                f"  per-component handoff logs written to: {log_root.relative_to(REPO_ROOT) if log_root.is_absolute() else log_root}"
+                f"  per-component handoff logs written to: {safe_relative_to_root(log_root) if log_root.is_absolute() else log_root}"
             )
 
         if (
@@ -3208,7 +3209,7 @@ def _run_auto_iterate_loop(
             for c in unverified_set:
                 test_rel = demo_dir / "tests" / "pcc" / f"test_{_safe_id(c)}.py"
                 try:
-                    test_rel = test_rel.relative_to(REPO_ROOT)
+                    test_rel = safe_relative_to_root(test_rel)
                 except Exception:
                     pass
                 print(f"      - {c}  (hand-fix `{test_rel}`)")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .discovery import safe_relative_to_root
+
 import json
 import re
 from dataclasses import asdict, dataclass, field
@@ -131,7 +133,7 @@ def _sibling_tt_file(backend: FamilyBackend, repo_root: Path, hint: str) -> Opti
             matches.append(p)
     if matches:
         matches.sort(key=lambda q: (len(q.parts), q.name))
-        return str(matches[0].relative_to(repo_root))
+        return str(safe_relative_to_root(matches[0]))
 
     demo_slug = Path(backend.demo_path).name.lower()
     slug_aliases = {demo_slug, demo_slug.replace("_", "")}
@@ -143,7 +145,7 @@ def _sibling_tt_file(backend: FamilyBackend, repo_root: Path, hint: str) -> Opti
             continue
         low = p.name.lower()
         if any(s and s in low for s in slug_aliases):
-            return str(p.relative_to(repo_root))
+            return str(safe_relative_to_root(p))
     return None
 
 
