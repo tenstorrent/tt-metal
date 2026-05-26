@@ -144,7 +144,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         content << "// No bindings for this kernel.\n";
     } else {
         if (!dfb_entries.empty()) {
-            content << "#include \"experimental/dataflow_buffer.h\"\n";
+            content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
         }
         if (!sem_entries.empty()) {
             content << "#include <cstdint>\n";
@@ -157,7 +157,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         if (!dfb_entries.empty()) {
             content << "namespace dfb {\n";
             for (const auto& [name, id] : dfb_entries) {
-                content << "constexpr experimental::DFBAccessor " << name << "{" << id << "};\n";
+                content << "constexpr DFBAccessor " << name << "{" << id << "};\n";
             }
             content << "}  // namespace dfb\n";
         }

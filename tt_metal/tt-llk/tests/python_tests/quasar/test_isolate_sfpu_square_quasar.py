@@ -76,7 +76,6 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=True,
     )
 
     # Both caps invert the squaring op so x² stays representable. For the input

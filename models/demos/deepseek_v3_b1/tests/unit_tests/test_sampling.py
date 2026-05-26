@@ -261,6 +261,11 @@ def test_sampling_argmax_single_device_101_cores(device, seed, final_core_idx):
     ids=["test_1", "test_2", "test_3", "test_4"],
 )
 @pytest.mark.requires_grid_size(101)
+# TODO(#43087): Root-cause this exact Blackhole 4x2 FABRIC_2D mesh setup failure and remove the temporary skip.
+# @pytest.mark.skip(
+#     reason="[SKIP REASON]: 4x2 FABRIC_2D mesh_device setup for test_sampling_argmax_mesh_4x2_axis_x hit Fabric Router "
+#     "Sync timeout after 10000 ms on Device 3 on Blackhole. Issue: #43087"
+# )
 def test_sampling_argmax_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_core_idx, forced_winner_device_idx):
     """
     Mesh extension test on 4x2 only:

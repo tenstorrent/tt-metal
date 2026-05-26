@@ -73,6 +73,8 @@ public:
 
 private:
     friend class experimental::HostBufferPinnedMemoryHelper;
+    void register_pinned_memory_cache_release_callback();
+
     MemoryPin pin_;
     ttsl::Span<std::byte> view_;
     const std::type_info* type_info_ = nullptr;
@@ -84,6 +86,7 @@ HostBuffer::HostBuffer(const std::shared_ptr<std::vector<T>>& data) : type_info_
     const size_t size_bytes = data->size() * sizeof(T);
     view_ = ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(data->data()), size_bytes);
     pin_ = MemoryPin(data);
+    register_pinned_memory_cache_release_callback();
 }
 
 template <typename T>
@@ -97,9 +100,10 @@ HostBuffer::HostBuffer(const std::vector<T>& data) :
 template <typename T>
 HostBuffer::HostBuffer(ttsl::Span<T> borrowed_data, MemoryPin pin) :
     pin_(std::move(pin)),
-    view_(
-        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(borrowed_data.data()), borrowed_data.size() * sizeof(T))),
-    type_info_(&typeid(T)) {}
+    view_(ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(borrowed_data.data()), borrowed_data.size() * sizeof(T))),
+    type_info_(&typeid(T)) {
+    register_pinned_memory_cache_release_callback();
+}
 
 template <typename T>
 ttsl::Span<T> HostBuffer::view_as() & {

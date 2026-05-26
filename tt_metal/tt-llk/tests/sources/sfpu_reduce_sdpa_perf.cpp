@@ -84,10 +84,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "ckernel_sfpu.h"
-#include "sfpu/ckernel_sfpu_reduce.h"
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "sfpu/ckernel_sfpu_reduce.h"
 
 using namespace ckernel;
 using namespace ckernel::sfpu;
@@ -107,11 +106,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         // Initialize datacopy from srcA to dest
-#ifdef ARCH_BLACKHOLE
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(4, formats.math);
-#else
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(4, formats.math);
-#endif
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<
+            DataCopyType::A2D,
+            is_fp32_dest_acc_en,
+            BroadcastType::NONE,
+            false /* is_int_fpu_en */,
+            PackMode::Default>(4 /* num_faces */, formats.math);
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
@@ -137,7 +137,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
+            _llk_math_eltwise_sfpu_start_(0);
             // For MATH_ISOLATE, we need to properly handle data valid flags
             // The unpack thread sets valid flags, and we need to clear them
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
@@ -148,14 +148,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // Run the SFPU reduce SDPA calculation
                     // This is the core computation we want to measure
 
-                    _calculate_reduce_<PoolType::MAX, REDUCE_COL, DataFormat::Float16_b>(1, block_height);
+                    _calculate_reduce_<PoolType::MAX, ReduceDim::REDUCE_COL, DataFormat::Float16_b>(1, block_height);
 
                     // Clear the valid flag for source A
                     TTI_CLEARDVALID(1, 0);
                 }
             }
 
-            _llk_math_eltwise_unary_sfpu_done_();
+            _llk_math_eltwise_sfpu_done_();
         }
         else
         {
@@ -180,13 +180,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
 
                     // Start SFPU operation
-                    _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
+                    _llk_math_eltwise_sfpu_start_(0);
 
                     // Call the SFPU SDPA reduce function
                     const std::uint32_t block_height = BLOCK_RT_DIM;
-                    _calculate_reduce_<PoolType::MAX, REDUCE_COL, DataFormat::Float16_b>(1, block_height);
+                    _calculate_reduce_<PoolType::MAX, ReduceDim::REDUCE_COL, DataFormat::Float16_b>(1, block_height);
 
-                    _llk_math_eltwise_unary_sfpu_done_();
+                    _llk_math_eltwise_sfpu_done_();
                     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
             }
@@ -200,7 +200,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "llk_lib_pack_wrappers.h"
-#include "llk_pack.h"
 #include "llk_pack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -216,20 +215,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         // Configure packer hardware
-#ifdef ARCH_BLACKHOLE
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
-#else
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
-#endif
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
 
-        _llk_pack_init_wrapper_<false, false>(formats.pack_dst);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
 
         // Initialize destination for packing
-#ifdef ARCH_BLACKHOLE
-        _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-#else
-        _llk_pack_dest_init_<DstSync::SyncHalf, false, false>();
-#endif
+        _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
         PROFILER_SYNC();
     }
     {
@@ -251,7 +242,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(
                             (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
-                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
+                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                            block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
                 }
             }
@@ -271,7 +263,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(
                             (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
-                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
+                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                            block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }

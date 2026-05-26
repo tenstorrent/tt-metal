@@ -4,11 +4,14 @@ print_usage() {
     echo "Usage: $0 [--image <image>] [--empty-entrypoint] [--print] [--print-only] [global-mpi-args] <executable> [args...]"
     echo "       $0 [--image <image>] [--empty-entrypoint] [--print] [--print-only] [global-mpi-args] <per-rank-specs> [: <per-rank-specs> ...]"
     echo
-    echo "  --image <image>       (Optional) Docker image to use"
-    echo "  --empty-entrypoint    (Optional) Pass --entrypoint=\"\" to docker run"
-    echo "  --volume <path>       (Optional) Extra host path to mount into the container (repeatable)"
-    echo "  --print               Print the command alongside execution"
-    echo "  --print-only          Print the command without executing it"
+    echo "  --image <image>           (Optional) Docker image to use"
+    echo "  --empty-entrypoint        (Optional) Pass --entrypoint=\"\" to docker run"
+    echo "  --volume <path>           (Optional) Extra host path to mount into the container (repeatable)"
+    echo "  --mpi-interface <iface>   (Optional) Network interface to pin MPI to (default: ens5f0np0)"
+    echo "                            Passed to --prtemca oob_tcp_if_include and --mca btl_tcp_if_include."
+    echo "                            Interface names vary by site; override on non-Markham clusters."
+    echo "  --print                   Print the command alongside execution"
+    echo "  --print-only              Print the command without executing it"
     echo "  [global-mpi-args]     Global MPI arguments applied to all ranks"
     echo "                        Examples: --host, --hostfile, --bind-to, --map-by, -np, etc."
     echo "  <executable> [args]   Executable and arguments (single mode)"
@@ -44,6 +47,9 @@ default() {
     local extra_volumes=""
     local print_flag=false
     local print_only=false
+    # Interface names differ between sites; default works on Markham,
+    # override elsewhere via --mpi-interface.
+    local mpi_interface="ens5f0np0"
 
     # Parse script-specific arguments first
     local script_args=()
@@ -78,6 +84,24 @@ default() {
                     exit 1
                 fi
                 extra_volumes="$extra_volumes -v ${vol}:${vol}"
+                shift
+                ;;
+            --mpi-interface)
+                if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                    echo "Error: --mpi-interface requires a non-empty interface name"
+                    print_usage
+                    exit 1
+                fi
+                mpi_interface="$2"
+                shift 2
+                ;;
+            --mpi-interface=*)
+                mpi_interface="${1#--mpi-interface=}"
+                if [[ -z "$mpi_interface" ]]; then
+                    echo "Error: --mpi-interface requires a non-empty interface name"
+                    print_usage
+                    exit 1
+                fi
                 shift
                 ;;
             --print)
@@ -200,7 +224,7 @@ default() {
     fi
 
     # Build the command for each rank group
-    local base_mpirun_args="--tag-output --mca plm_ssh_args \"-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR\" --mca btl_tcp_if_exclude docker0,lo,tailscale0"
+    local base_mpirun_args="--tag-output --prtemca oob_tcp_if_include $mpi_interface --mca plm_ssh_args \"-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR\" --mca btl_tcp_if_include $mpi_interface"
 
     # Add global MPI args to base
     if [[ ${#global_mpi_args[@]} -gt 0 ]]; then

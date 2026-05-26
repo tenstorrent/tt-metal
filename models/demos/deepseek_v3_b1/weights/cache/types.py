@@ -133,7 +133,7 @@ class CompressedTensorTarget:
     bspm_variant: BspmVariant = BspmVariant.B  # allocation variant letter
     bspm_budget: float = 3.5  # bits-per-element budget
     assignment_hash: str = ""  # sha256[:16] of assignment bytes; invalidates cache when allocation changes
-    transform_version: int = 4  # bumped: store DRAM-shuffled data on disk (faster load, same footprint)
+    transform_version: int = 5  # bumped: subblock_n>1 shuffle layout for down_proj
 
 
 @dataclass(frozen=True)

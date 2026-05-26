@@ -8,7 +8,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/sfpu_binary_bcast.h"
 #include "api/compute/tile_move_copy.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 // Compile-time parameters (set from host via defines):
 //   BCAST_DIM_VAL : 0 = COL,  1 = ROW              -> ckernel::BroadcastType
@@ -39,9 +39,9 @@ void kernel_main() {
     constexpr auto input_b_cb_id = tt::CBIndex::c_1;
     constexpr auto out_cb_id = tt::CBIndex::c_16;
 
-    experimental::CircularBuffer input_a_cb(input_a_cb_id);
-    experimental::CircularBuffer input_b_cb(input_b_cb_id);
-    experimental::CircularBuffer out_cb(out_cb_id);
+    CircularBuffer input_a_cb(input_a_cb_id);
+    CircularBuffer input_b_cb(input_b_cb_id);
+    CircularBuffer out_cb(out_cb_id);
 
     init_sfpu(input_a_cb_id, out_cb_id);
     sfpu_bcast_init<kBcastDim>();

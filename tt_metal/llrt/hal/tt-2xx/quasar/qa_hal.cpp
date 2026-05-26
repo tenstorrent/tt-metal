@@ -54,8 +54,17 @@ constexpr static std::uint32_t get_dram_profiler_size(
 #endif
 }
 
-constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
+// dispatch_s aggregates device_print buffers from all cores into this DRAM region:
+// [DRAM_ALIGNMENT bytes for {dram_write_ptr, dram_read_ptr}][1 MiB ring buffer payload].
+constexpr static std::uint32_t DRAM_DEVICE_PRINT_DISPATCH_PAYLOAD_SIZE = 1 << 20;  // 1 MiB
+constexpr static std::uint32_t DRAM_DEVICE_PRINT_DISPATCH_SIZE =
+    DRAM_ALIGNMENT + DRAM_DEVICE_PRINT_DISPATCH_PAYLOAD_SIZE;
+constexpr static std::uint32_t get_dram_device_print_dispatch_base(std::uint32_t dram_profiler_size) {
     return DRAM_PROFILER_BASE + dram_profiler_size;
+}
+
+constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
+    return get_dram_device_print_dispatch_base(dram_profiler_size) + DRAM_DEVICE_PRINT_DISPATCH_SIZE;
 }
 
 constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
@@ -113,7 +122,7 @@ public:
                     case 8:
                     case 12:
                         flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_TRISC0_FIRMWARE_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC0_FIRMWARE_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_FIRMWARE_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC0_GLOBAL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
@@ -123,7 +132,7 @@ public:
                     case 9:
                     case 13:
                         flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_TRISC1_FIRMWARE_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC1_FIRMWARE_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_FIRMWARE_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC1_GLOBAL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE / 2);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
@@ -133,7 +142,7 @@ public:
                     case 10:
                     case 14:
                         flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_TRISC2_FIRMWARE_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC2_FIRMWARE_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_FIRMWARE_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC2_GLOBAL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE / 2);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
@@ -143,7 +152,7 @@ public:
                     case 11:
                     case 15:
                         flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_TRISC3_FIRMWARE_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC3_FIRMWARE_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_FIRMWARE_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC3_GLOBAL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE);
                         flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
@@ -303,7 +312,6 @@ public:
             params.processor_class == HalProcessorClassType::DM ? "-mcpu=tt-qsr64-rocc " : "-mcpu=tt-qsr32-tensix ";
         cflags += "-fno-extern-tls-init ";
         cflags += "-ftls-model=local-exec ";
-        cflags += "-mno-tt-tensix-optimize-replay "; // Disable replay buffer optimization for quasar due to HW bug
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
@@ -388,6 +396,10 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_BASE;
     const std::uint32_t dram_profiler_size = get_dram_profiler_size(profiler_dram_bank_size_per_risc_bytes);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = dram_profiler_size;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DEVICE_PRINT_DISPATCH)] =
+        get_dram_device_print_dispatch_base(dram_profiler_size);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DEVICE_PRINT_DISPATCH)] =
+        DRAM_DEVICE_PRINT_DISPATCH_SIZE;
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
         get_dram_backed_command_queues_base(dram_profiler_size);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
@@ -441,9 +453,9 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
         return true;  // used to program start addr for eth FW TODO: add correct value
     };
 
-    this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ADDR(x, y, 0); };
+    this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
     this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
-        return NOC_MULTICAST_ADDR(x_start, y_start, x_end, y_end, 0);
+        return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
     };
     this->noc_mcast_addr_start_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_X(addr); };
     this->noc_mcast_addr_start_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_Y(addr); };

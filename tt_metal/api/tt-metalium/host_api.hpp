@@ -45,6 +45,7 @@ class Buffer;
 class GlobalSemaphore;
 class CoreRange;
 class CoreRangeSet;
+class MeshTensor;
 
 // ==================================================
 //                  HOST API: Device management
@@ -275,6 +276,7 @@ void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t 
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer);
 void UpdateDynamicCircularBufferAddress(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t address_offset);
+void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const MeshTensor& tensor);
 
 // clang-format off
 /**
@@ -292,6 +294,9 @@ void UpdateDynamicCircularBufferAddress(
 // clang-format on
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
+
+void UpdateDynamicCircularBufferAddressAndTotalSize(
+    Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size);
 
 // clang-format off
 /**

@@ -3,20 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
-import torch
-import ttnn
-from ttnn import ShardTensor2dMesh
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
 from functools import partial
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_model_traced_mesh_shape,
-    create_mesh_device,
-    mesh_tensor_to_torch,
-    get_mesh_composer,
-    reconcile_golden_to_actual,
-)
+
+import torch
+
+import ttnn
+from models.common.utility_functions import torch_random
 
 # Import V2 master config loader and standalone helpers for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import (
@@ -25,6 +17,16 @@ from tests.sweep_framework.master_config_loader_v2 import (
     parse_dtype,
     parse_layout,
 )
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    create_mesh_device,
+    get_mesh_composer,
+    get_model_traced_mesh_shape,
+    mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
+)
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from ttnn import ShardTensor2dMesh
 
 
 def _parse_shard_dims_from_placement(placements):
@@ -237,6 +239,32 @@ def run(
     op_kwargs = {}
     if mem_config is not None:
         op_kwargs["memory_config"] = mem_config
+
+    # Forward sub_core_grids when master had it (use __absent_keys__ guard).
+    absent_keys = kwargs.get("__absent_keys__")
+    has_absent_info = absent_keys is not None
+    absent_keys = set(absent_keys or [])
+    if has_absent_info and "sub_core_grids" not in absent_keys:
+        traced_scg = kwargs.get("sub_core_grids")
+        if traced_scg is not None and traced_scg != "__ABSENT__":
+            from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+            parsed_scg = parse_dict_value("sub_core_grids", traced_scg) if isinstance(traced_scg, dict) else traced_scg
+            op_kwargs["sub_core_grids"] = parsed_scg
+        else:
+            op_kwargs["sub_core_grids"] = None
+
+    # Restore tensor topology to match master trace
+    for i, tensor_spec in enumerate(arg0):
+        if isinstance(tensor_spec, dict) and i < len(ttnn_tensors):
+            tp = tensor_spec.get("tensor_placement")
+            if tp and is_mesh_device:
+                from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology
+
+                try:
+                    apply_tensor_placement_topology(ttnn_tensors[i], tp, actual_mesh)
+                except Exception:
+                    pass  # Intentionally ignored: topology application is best-effort, fallback to default
 
     output_tensor = ttnn.concat(ttnn_tensors, dim=dim_value, **op_kwargs)
     # Use arg0[0]'s tensor_placement to drive the mesh composer (all inputs share

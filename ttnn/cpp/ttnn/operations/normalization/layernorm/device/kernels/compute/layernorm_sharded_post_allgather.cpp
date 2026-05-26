@@ -10,7 +10,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // SPLIT REDUCE across Cores
@@ -76,19 +76,19 @@ void kernel_main() {
     constexpr uint32_t cb_var = tt::CBIndex::c_19;
     constexpr uint32_t cb_ex_sqr = tt::CBIndex::c_24;  // E[x]^2
 
-    experimental::CircularBuffer cb_in0_obj(cb_in0);
-    experimental::CircularBuffer cb_eps_obj(cb_eps);
-    experimental::CircularBuffer cb_scaler_global_obj(cb_scaler_global);
-    experimental::CircularBuffer cb_gamma_obj(cb_gamma);
-    experimental::CircularBuffer cb_beta_obj(cb_beta);
-    experimental::CircularBuffer cb_ex2_obj(cb_ex2);
-    experimental::CircularBuffer cb_stats_obj(cb_stats);
-    experimental::CircularBuffer cb_stats_reduced_obj(cb_stats_reduced);
-    experimental::CircularBuffer cb_ex_global_obj(cb_ex_global);
-    experimental::CircularBuffer cb_fusion_obj(cb_fusion);
-    experimental::CircularBuffer cb_out_obj(cb_out);
-    experimental::CircularBuffer cb_var_obj(cb_var);
-    experimental::CircularBuffer cb_ex_sqr_obj(cb_ex_sqr);
+    CircularBuffer cb_in0_obj(cb_in0);
+    CircularBuffer cb_eps_obj(cb_eps);
+    CircularBuffer cb_scaler_global_obj(cb_scaler_global);
+    CircularBuffer cb_gamma_obj(cb_gamma);
+    CircularBuffer cb_beta_obj(cb_beta);
+    CircularBuffer cb_ex2_obj(cb_ex2);
+    CircularBuffer cb_stats_obj(cb_stats);
+    CircularBuffer cb_stats_reduced_obj(cb_stats_reduced);
+    CircularBuffer cb_ex_global_obj(cb_ex_global);
+    CircularBuffer cb_fusion_obj(cb_fusion);
+    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_var_obj(cb_var);
+    CircularBuffer cb_ex_sqr_obj(cb_ex_sqr);
 
 #ifdef RMSNORM
     constexpr uint32_t init_in_cb = is_allgather_worker ? cb_stats : cb_in0;
@@ -102,7 +102,7 @@ void kernel_main() {
     constexpr uint32_t cb_xmm = tt::CBIndex::c_18;  // x minus mean
 #endif
     binary_op_init_common(init_in_cb, cb_scaler_global, init_out_cb);
-    experimental::CircularBuffer cb_xmm_obj(cb_xmm);
+    CircularBuffer cb_xmm_obj(cb_xmm);
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
@@ -113,9 +113,9 @@ void kernel_main() {
     int index = 0;
 
     constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_ex_sqr : cb_out;
-    experimental::CircularBuffer cb_im_obj(cb_im);
+    CircularBuffer cb_im_obj(cb_im);
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
-    experimental::CircularBuffer cb_outgamma_obj(cb_outgamma);
+    CircularBuffer cb_outgamma_obj(cb_outgamma);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {

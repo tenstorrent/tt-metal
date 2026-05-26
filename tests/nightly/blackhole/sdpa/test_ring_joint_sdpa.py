@@ -791,6 +791,345 @@ def run_ring_joint_sdpa(
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
+# ============================================================================
+# CHUNKED-PREFILL VALIDATION
+# ============================================================================
+CHUNKED_PREFILL_TOTAL_SEQ = 25 * 1024
+CHUNKED_PREFILL_CHUNK_SIZE = 5 * 1024
+CHUNKED_PREFILL_PCC_THRESHOLD = 0.99
+CHUNKED_PREFILL_SEED = 1234
+
+
+def run_ring_joint_sdpa_chunked(
+    mesh_config,
+    model: ModelConfig,
+    chunk_size: int = CHUNKED_PREFILL_CHUNK_SIZE,
+    total_seq: int = CHUNKED_PREFILL_TOTAL_SEQ,
+    pcc_threshold: float = CHUNKED_PREFILL_PCC_THRESHOLD,
+    q_chunk_size: int = None,
+    k_chunk_size: int = None,
+):
+    """
+    Validate ring joint SDPA chunked-prefill against a full-sequence torch oracle.
+
+    SUT: n_chunks calls; each call passes a short Q chunk at absolute positions
+    [i*c, (i+1)*c) against a K/V cache holding the first (i+1)*c rows.
+    """
+    torch.manual_seed(CHUNKED_PREFILL_SEED)
+
+    sp_size = mesh_config.sp_size
+    if sp_size < 2:
+        pytest.skip(f"Ring joint chunked prefill requires at least 2 devices in ring, got SP={sp_size}")
+
+    assert total_seq % sp_size == 0, f"total_seq {total_seq} must divide sp_size {sp_size}"
+    assert chunk_size % sp_size == 0, f"chunk_size {chunk_size} must divide sp_size {sp_size}"
+    assert total_seq % chunk_size == 0, f"total_seq {total_seq} must be a multiple of chunk_size {chunk_size}"
+
+    n_chunks = total_seq // chunk_size
+
+    if q_chunk_size is None:
+        q_chunk_size = model.q_chunk_sizes[0]
+    if k_chunk_size is None:
+        k_chunk_size = model.k_chunk_sizes[0]
+    nhq, nhk, nhv = model.nhq, model.nhk, model.nhv
+    d_q, d_k, d_v = model.d_q, model.d_k, model.d_v
+    q_dtype, kv_dtype = model.q_dtype, model.kv_dtype
+    is_balanced = False
+
+    b = BATCH_SIZE
+
+    use_ring = sp_size > 2
+    fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
+    topology = Topology.Ring if use_ring else Topology.Linear
+
+    ttnn.set_fabric_config(
+        fabric_config,
+        ttnn.FabricReliabilityMode.STRICT_INIT,
+        None,
+        ttnn.FabricTensixConfig.DISABLED,
+        ttnn.FabricUDMMode.DISABLED,
+        ttnn.FabricManagerMode.DEFAULT,
+    )
+
+    sp_axis = 1
+    tp_axis = 0
+    joint_seq_len = 0
+    num_links = 2
+
+    mesh_shape = ttnn.MeshShape(mesh_config.tp_size, sp_size)
+    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+
+    try:
+        sdpa_compute_grid = (mesh_config.sdpa_cols, mesh_config.grid_rows)
+        ccl_column = mesh_config.ccl_column
+        full_compute_grid = mesh_device.compute_with_storage_grid_size()
+
+        ccl_sub_device_crs = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
+        )
+        worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+        worker_sub_device_id = ttnn.SubDeviceId(0)
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
+        mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+
+        ccl_semaphore_handles = create_global_semaphores(mesh_device, ccl_sub_device_crs, 0)
+
+        joint_Q = torch.zeros((b, nhq, joint_seq_len, d_q), dtype=torch.bfloat16)
+        joint_K = torch.zeros((b, nhk, joint_seq_len, d_k), dtype=torch.bfloat16)
+        joint_V = torch.zeros((b, nhv, joint_seq_len, d_v), dtype=torch.bfloat16)
+
+        torch.manual_seed(CHUNKED_PREFILL_SEED)
+        Q_full = fa_rand(b, nhq, total_seq, d_q)
+        K_full = fa_rand(b, nhk, total_seq, d_k)
+        V_full = fa_rand(b, nhv, total_seq, d_v)
+        ref_full, _ = torch_joint_sdpa_reference(Q_full, K_full, V_full, joint_Q, joint_K, joint_V, is_causal=True)
+
+        sdpa_input_shard_dims = [None, None]
+        sdpa_input_shard_dims[sp_axis] = 2
+        if mesh_config.tp_size > 1:
+            sdpa_input_shard_dims[tp_axis] = 1
+
+        sdpa_k_shard_dims = [None, None]
+        sdpa_k_shard_dims[sp_axis] = 2
+        if mesh_config.tp_size > 1 and nhk != 1:
+            sdpa_k_shard_dims[tp_axis] = 1
+
+        sdpa_joint_shard_dims = [None, None]
+        if mesh_config.tp_size > 1:
+            sdpa_joint_shard_dims[tp_axis] = 1
+
+        sdpa_joint_k_shard_dims = [None, None]
+        if mesh_config.tp_size > 1 and nhk != 1:
+            sdpa_joint_k_shard_dims[tp_axis] = 1
+
+        persistent_k_shard_dims = [None, None]
+        if mesh_config.tp_size > 1 and nhk != 1:
+            persistent_k_shard_dims[tp_axis] = 1
+
+        kv_persistent_shard_dims = [None, None]
+        if mesh_config.tp_size > 1:
+            kv_persistent_shard_dims[tp_axis] = 1
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=sdpa_compute_grid,
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
+        )
+
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
+        main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
+
+        def upload_q(q_host):
+            return ttnn.from_torch(
+                q_host,
+                dtype=q_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
+                ),
+            )
+
+        def upload_k(k_host):
+            return ttnn.from_torch(
+                k_host,
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_k_shard_dims
+                ),
+            )
+
+        def upload_v(v_host):
+            return ttnn.from_torch(
+                v_host,
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
+                ),
+            )
+
+        tt_joint_Q = ttnn.from_torch(
+            joint_Q,
+            dtype=q_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_shard_dims
+            ),
+        )
+        tt_joint_K = ttnn.from_torch(
+            joint_K,
+            dtype=kv_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_k_shard_dims
+            ),
+        )
+        tt_joint_V = ttnn.from_torch(
+            joint_V,
+            dtype=kv_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_shard_dims
+            ),
+        )
+
+        def call_sdpa(tt_Q, tt_K, tt_V, logical_n, is_causal, p_buf_k, p_buf_v):
+            tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                tt_Q,
+                tt_K,
+                tt_V,
+                tt_joint_Q,
+                tt_joint_K,
+                tt_joint_V,
+                persistent_output_buffer_k=p_buf_k,
+                persistent_output_buffer_v=p_buf_v,
+                joint_strategy="rear",
+                logical_n=logical_n,
+                is_causal=is_causal,
+                is_balanced=is_balanced,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=ccl_semaphore_handles,
+                num_links=num_links,
+                cluster_axis=sp_axis,
+                mesh_device=mesh_device,
+                topology=topology,
+                subdevice_id=worker_sub_device_id,
+                ccl_core_grid_offset=(ccl_column, 0),
+                use_column_major_ccl=True,
+            )
+            return tt_out
+
+        def to_host(tt_out, expected_q_len):
+            out = ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.create_mesh_composer(
+                    mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim)
+                ),
+            )
+            return out[:, :, :expected_q_len, :]
+
+        logger.info(
+            f"Chunked prefill: model={model.name}, total_seq={total_seq}, "
+            f"sp_size={sp_size}, per-device Q seq_len={total_seq // sp_size}, "
+            f"q_chunk={q_chunk_size}, k_chunk={k_chunk_size}"
+        )
+
+        # Balanced K/V layout: device d's local slab c holds global rows
+        # [c*chunk_size + d*slab_rows, c*chunk_size + (d+1)*slab_rows). Cache grows one
+        # chunk per call → program cache forks one entry per chunk.
+        slab_rows = chunk_size // sp_size
+        assert chunk_size % sp_size == 0, f"chunk_size {chunk_size} not divisible by sp_size {sp_size}"
+        assert slab_rows % 32 == 0, f"slab_rows {slab_rows} not tile-aligned (TILE_HEIGHT=32)"
+
+        def to_balanced_growing(src_full, last_uploaded_chunk):
+            """Permute src_full into balanced per-device layout for the populated prefix
+            [0..last_uploaded_chunk]; returns length (last_uploaded_chunk + 1) * chunk_size.
+            """
+            n_populated = last_uploaded_chunk + 1
+            K_local_curr = n_populated * slab_rows
+            populated_len = n_populated * chunk_size
+            b_, nh_, _, d_ = src_full.shape
+            perm = torch.zeros(b_, nh_, populated_len, d_, dtype=src_full.dtype, device=src_full.device)
+            for dev in range(sp_size):
+                for c in range(n_populated):
+                    local_start = dev * K_local_curr + c * slab_rows
+                    global_start = c * chunk_size + dev * slab_rows
+                    perm[:, :, local_start : local_start + slab_rows, :] = src_full[
+                        :, :, global_start : global_start + slab_rows, :
+                    ]
+            return perm
+
+        # SUT: per-chunk calls with growing K/V cache + growing logical_n.
+        per_chunk_results = []
+        for i in range(n_chunks):
+            s, e = i * chunk_size, (i + 1) * chunk_size
+
+            K_balanced = to_balanced_growing(K_full, i)
+            V_balanced = to_balanced_growing(V_full, i)
+            Q_chunk = Q_full[:, :, s:e, :].contiguous()
+
+            tt_Q = upload_q(Q_chunk)
+            tt_K = upload_k(K_balanced)
+            tt_V = upload_v(V_balanced)
+
+            # AllGather output buffer sized to post-gather K/V: N_global == (i+1) * chunk_size.
+            persistent_output_buffer_k = ttnn.from_torch(
+                torch.zeros(b, nhk, e, d_k),
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_k_shard_dims
+                ),
+            )
+            persistent_output_buffer_v = ttnn.from_torch(
+                torch.zeros(b, nhv, e, d_v),
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_persistent_shard_dims
+                ),
+            )
+
+            try:
+                tt_out = call_sdpa(
+                    tt_Q,
+                    tt_K,
+                    tt_V,
+                    e,
+                    is_causal=True,
+                    p_buf_k=persistent_output_buffer_k,
+                    p_buf_v=persistent_output_buffer_v,
+                )
+            except Exception as exc:
+                pytest.fail(
+                    f"Chunked prefill SDPA call raised on chunk {i} "
+                    f"(Q rows [{s}, {e}), logical_n={e}): {type(exc).__name__}: {exc}"
+                )
+
+            out_i = to_host(tt_out, chunk_size)
+            expected_i = ref_full[:, :, s:e, :]
+
+            passed, pcc = comp_pcc(expected_i, out_i, pcc_threshold)
+            rmse = torch.sqrt(((expected_i - out_i) ** 2).mean()).item()
+            logger.info(
+                f"Chunk {i:2d} [{s:6d}, {e:6d}) logical_n={e}: PCC={pcc} RMSE={rmse:.6f} "
+                f"-> {'PASS' if passed else 'FAIL'}"
+            )
+            per_chunk_results.append((i, e, passed, pcc, rmse))
+
+        failures = [(i, e, pcc, rmse) for i, e, passed, pcc, rmse in per_chunk_results if not passed]
+        if failures:
+            details = "; ".join(
+                f"chunk {i} (logical_n={e}): PCC={pcc}, RMSE={rmse:.6f}" for i, e, pcc, rmse in failures
+            )
+            pytest.fail(f"Chunked prefill PCC failures (threshold={pcc_threshold}): {details}")
+
+    finally:
+        ttnn.close_mesh_device(mesh_device)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
 # Generate test parameters dynamically based on detected hardware for different models (WAN, MLA, VideGen...)
 TEST_CONFIGS, TEST_CONFIG_IDS = generate_test_configs(MESH_CONFIG, MODEL_CONFIGS)
 TEST_CONFIG_MODELS = list(MODEL_CONFIGS.keys())
@@ -1172,7 +1511,7 @@ RING_JOINT_PERF_CHECK_CONFIGS = [
     # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
     # 4-device ring (QuietBox)
     ("wan2_2_1xGLX", 288, 512, 4, 68.9),
-    ("mla_100k", 160, 320, 4, 58.4),
+    ("mla_100k", 160, 320, 4, 63.0),
 ]
 
 
@@ -1248,4 +1587,45 @@ def test_ring_joint_attention_perf_check(model_name, q_chunk_size, k_chunk_size,
     assert lower <= utilization <= upper, (
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
         f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
+    )
+
+
+# === TEST 6: CHUNKED-PREFILL ACCURACY ===
+CHUNKED_PREFILL_MODELS = [m for m in ("mla_100k",) if m in MODEL_CONFIGS]
+
+
+def _generate_chunked_configs():
+    configs = []
+    ids = []
+    for model_name in CHUNKED_PREFILL_MODELS:
+        model = MODEL_CONFIGS[model_name]
+        for q, k in product(model.q_chunk_sizes, model.k_chunk_sizes):
+            configs.append((model_name, q, k))
+            ids.append(f"{model_name}-q{q}-k{k}")
+    return configs, ids
+
+
+CHUNKED_CONFIGS, CHUNKED_CONFIG_IDS = _generate_chunked_configs()
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
+@pytest.mark.parametrize(
+    "model_name,q_chunk_size,k_chunk_size",
+    CHUNKED_CONFIGS,
+    ids=CHUNKED_CONFIG_IDS,
+)
+def test_ring_joint_attention_sdpa_chunked_accuracy(model_name, q_chunk_size, k_chunk_size, chunk_size):
+    """Validate ring joint SDPA chunked prefill against a full-sequence oracle."""
+    mesh_config = MESH_CONFIG
+
+    if model_name not in MODEL_CONFIGS:
+        pytest.skip(f"Model {model_name} not available for current mesh config")
+
+    run_ring_joint_sdpa_chunked(
+        mesh_config,
+        MODEL_CONFIGS[model_name],
+        chunk_size=chunk_size,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
     )

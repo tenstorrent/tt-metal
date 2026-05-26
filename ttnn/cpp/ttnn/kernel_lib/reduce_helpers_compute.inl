@@ -9,7 +9,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt-metalium/circular_buffer_constants.h"
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
@@ -102,7 +102,7 @@ template <
     typename AccumulateT,
     bool use_matmul = false>
 ALWI void reload_accumulator_if_needed(
-    ::experimental::CircularBuffer& accum_cb, uint32_t input_cb_id, uint32_t scaler_cb_id, const AccumulateT& accumulate) {
+    CircularBuffer& accum_cb, uint32_t input_cb_id, uint32_t scaler_cb_id, const AccumulateT& accumulate) {
     if constexpr (is_accumulate_v<AccumulateT>) {
         if (!accumulate.is_first()) {  // Reload on all iterations except first
             constexpr uint32_t onetile = 1;
@@ -213,10 +213,10 @@ ALWI void reduce(
 
     constexpr bool use_matmul = reduce_uses_matmul<reduce_type, reduce_dim>();
 
-    ::experimental::CircularBuffer input_cb(input_cb_id);
-    ::experimental::CircularBuffer scaler_cb(scaler_cb_id);
-    ::experimental::CircularBuffer output_cb(output_cb_id);
-    ::experimental::CircularBuffer accum_cb([&]() -> uint32_t {
+    CircularBuffer input_cb(input_cb_id);
+    CircularBuffer scaler_cb(scaler_cb_id);
+    CircularBuffer output_cb(output_cb_id);
+    CircularBuffer accum_cb([&]() -> uint32_t {
         if constexpr (enable_accumulation) { return accumulate.config.cb_accumulator; }
         else { return 0; }
     }());

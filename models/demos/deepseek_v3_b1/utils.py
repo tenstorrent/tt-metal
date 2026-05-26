@@ -25,6 +25,14 @@ def deinterleave_kv_cache(kv: torch.Tensor, device_chunk_size: int, num_devices:
     return kv.reshape(b, h, chunks_per_device, num_devices, device_chunk_size, d).transpose(2, 3).reshape(b, h, seq, d)
 
 
+def interleave_kv_cache(kv: torch.Tensor, device_chunk_size: int, num_devices: int) -> torch.Tensor:
+    """Inverse of deinterleave_kv_cache: device-major back to round-robin chunk-major."""
+    b, h, seq, d = kv.shape
+    num_chunks = seq // device_chunk_size
+    chunks_per_device = num_chunks // num_devices
+    return kv.reshape(b, h, num_devices, chunks_per_device, device_chunk_size, d).transpose(2, 3).reshape(b, h, seq, d)
+
+
 def float_to_bfloat16_packed(value):
     """Convert float to packed bfloat16 (two copies in uint32)"""
     # Convert float32 to bytes

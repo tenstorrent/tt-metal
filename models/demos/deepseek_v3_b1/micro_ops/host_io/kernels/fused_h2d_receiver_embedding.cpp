@@ -116,7 +116,8 @@ FORCE_INLINE void send_pages_over_socket(
         }
         socket_push_pages(sender_socket, 1);
     } else {
-        write_data_to_local_core_with_ack(sender_socket, l1_read_addr, dst_addr, embedding_page_size);
+        write_data_to_local_core_with_ack(
+            sender_socket, l1_read_addr, dst_addr, embedding_page_size + metadata_size_bytes);
     }
 }
 
