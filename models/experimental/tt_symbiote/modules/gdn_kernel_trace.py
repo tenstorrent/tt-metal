@@ -672,14 +672,28 @@ def gdn_recurrent_step_traced(
     # Step 2: alpha = exp(g) on device.
     alpha_local = ttnn.exp(g_local)
 
+    # TTLang kernels expect 2D tensors (tile-rank-2 addressing). The gathered
+    # q/k/v tensors come out of ttnn.gather as 4D [1, 1, H, D] and alpha/beta
+    # as 3D [1, 1, H]. Reshape to 2D so the kernel's `in_t[row, col]` indexing
+    # matches the tile rank.
+    n = mesh_device.get_num_devices()
+    h_per_dev = HEADS_PER_DEVICE_BY_MESH[n]
+    q_2d = ttnn.reshape(q_local, [h_per_dev, D_K])
+    k_2d = ttnn.reshape(k_local, [h_per_dev, D_K])
+    v_2d = ttnn.reshape(v_local, [h_per_dev, D_V_DIM])
+    alpha_2d = ttnn.reshape(alpha_local, [1, h_per_dev])
+    beta_2d = ttnn.reshape(beta_local, [1, h_per_dev])
+    # Reshape core_out to 2D for the unpack kernel, then reshape back.
+    core_out_2d = ttnn.reshape(core_out, [h_per_dev, D_V_DIM])
+
     # Step 3: pack into kernel input layout.
     # Q/K/V via the tt-lang pack kernel above (3 dispatches, same kernel binary).
-    pack_qkv_one(q_local, shift_matrix, q_pack, mesh_device)
-    pack_qkv_one(k_local, shift_matrix, k_pack, mesh_device)
-    pack_qkv_one(v_local, shift_matrix, v_pack, mesh_device)
+    pack_qkv_one(q_2d, shift_matrix, q_pack, mesh_device)
+    pack_qkv_one(k_2d, shift_matrix, k_pack, mesh_device)
+    pack_qkv_one(v_2d, shift_matrix, v_pack, mesh_device)
     pack_alpha_beta(
-        alpha_local,
-        beta_local,
+        alpha_2d,
+        beta_2d,
         alpha_pack,
         beta_pack,
         mesh_device,
@@ -688,11 +702,11 @@ def gdn_recurrent_step_traced(
     )
 
     # Step 4: existing GDN kernel dispatch.
-    n = mesh_device.get_num_devices()
     kernel_fn, _ = _KERNEL_BY_MESH[n]
     kernel_fn(state_in, q_pack, k_pack, v_pack, alpha_pack, beta_pack, state_out, out_buf)
 
     # Step 5: unpack kernel output to natural [1,1,H,D_V] layout.
-    unpack_gdn_to_natural_layout(out_buf, core_out, mesh_device, shift_matrix)
+    unpack_gdn_to_natural_layout(out_buf, core_out_2d, mesh_device, shift_matrix)
 
-    return core_out
+    # Reshape back to 4D for downstream all_gather (dim=2) compatibility.
+    return ttnn.reshape(core_out_2d, [1, 1, h_per_dev, D_V_DIM])

@@ -19,7 +19,7 @@ import torch.nn.functional as F
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule, tree_map
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig, trace_enabled
+from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig, trace_disabled
 from models.experimental.tt_symbiote.modules.attention import (
     TTNNPagedAttentionKVCache,
     PagedAttentionConfig,
@@ -1007,7 +1007,7 @@ class TTNNQwen3FullAttention(TTNNModule):
         return ttnn_output, None
 
 
-@trace_enabled
+@trace_disabled
 class TTNNQwen3LinearAttention(TTNNModule):
     """TTNN-accelerated Linear Attention (DeltaNet/Mamba-style) for Qwen3.5-35B-A3B.
 
@@ -1045,6 +1045,7 @@ class TTNNQwen3LinearAttention(TTNNModule):
         self.key_dim = None
         self.value_dim = None
         self.conv_kernel_size = None
+        self.conv_dim = None  # key_dim * 2 + value_dim
         self.layer_idx = None
 
         # TTNN linear projections
@@ -1087,6 +1088,11 @@ class TTNNQwen3LinearAttention(TTNNModule):
         # between cache_params.recurrent_states[layer_idx] and self._gdn_state_scratch.
         self._gdn_state_scratch = None
         self._gdn_out_buffer = None
+        # Tracks the cache_params identity that _gdn_conv_slots was last synced from.
+        # A new model.generate() creates a fresh cache_params; we must re-sync slots
+        # from cache_params.conv_states[layer_idx] (set by prefill) when this changes,
+        # otherwise Run 2+ decodes with Run 1's stale shift-register state -> gibberish.
+        self._gdn_conv_slots_cache_id = None
 
         # Pre-uploaded TTNN-resident decode-op weights/biases. Lazy-uploaded
         # on first kernel invocation so the default-off path doesn't pay the
@@ -1153,6 +1159,7 @@ class TTNNQwen3LinearAttention(TTNNModule):
         new_layer.key_dim = torch_layer.key_dim
         new_layer.value_dim = torch_layer.value_dim
         new_layer.conv_kernel_size = torch_layer.conv_kernel_size
+        new_layer.conv_dim = torch_layer.key_dim * 2 + torch_layer.value_dim
         new_layer.layer_idx = torch_layer.layer_idx
 
         # Choose linear layer classes based on distributed mode
@@ -1790,6 +1797,10 @@ class TTNNQwen3LinearAttention(TTNNModule):
             and self.head_k_dim == 128
             and self.head_v_dim == 128
         )
+        # DEBUG: bisect — force-disable TTNN-native pre/post ops while keeping the GDN kernel.
+        # Runs PyTorch conv1d_update / g_beta / gated_rms_norm and only the kernel itself on TTNN.
+        if os.environ.get("TT_QWEN_FORCE_CPU_DECODE_OPS", "0") == "1":
+            _use_ttnn_decode_path = False
         if _use_ttnn_decode_path:
             self._ensure_gdn_decode_weights()
 
@@ -1944,7 +1955,11 @@ class TTNNQwen3LinearAttention(TTNNModule):
                     ttnn_causal_conv1d_update_step,
                 )
 
-                if self._gdn_conv_slots is None:
+                # Re-sync slots from cache_params.conv_states when (a) first ever call
+                # or (b) the cache_params object changed (new model.generate -> new
+                # paged_kv_cache; prefill just wrote fresh conv_state we must consume).
+                cache_id = id(cache_params) if cache_params is not None else None
+                if self._gdn_conv_slots is None or self._gdn_conv_slots_cache_id != cache_id:
                     torch_conv_state = (
                         conv_state
                         if conv_state is not None
@@ -1954,6 +1969,7 @@ class TTNNQwen3LinearAttention(TTNNModule):
                         torch_conv_state.to(torch.bfloat16),
                         self.device,
                     )
+                    self._gdn_conv_slots_cache_id = cache_id
 
                 # Reshape [1, 1, conv_dim] -> [1, conv_dim] on device for the
                 # shift-register elementwise ops. Slots are mutated in place.
@@ -2087,7 +2103,9 @@ class TTNNQwen3LinearAttention(TTNNModule):
                     NUM_V_HEADS as _NUM_V_HEADS,
                 )
 
-                q_norm = F.normalize(query.float(), p=2, dim=-1, eps=1e-6).to(query.dtype)
+                # Match torch_recurrent_gated_delta_rule: l2-norm then `query * 1/sqrt(D_K)`.
+                q_scale = 1.0 / (query.shape[-1] ** 0.5)
+                q_norm = (F.normalize(query.float(), p=2, dim=-1, eps=1e-6) * q_scale).to(query.dtype)
                 k_norm = F.normalize(key.float(), p=2, dim=-1, eps=1e-6).to(key.dtype)
 
                 def _replicated(t):
@@ -2179,7 +2197,10 @@ class TTNNQwen3LinearAttention(TTNNModule):
 
                 # Kernel does NOT apply qk-l2norm internally; do it here so the
                 # behavior matches `use_qk_l2norm_in_kernel=True` in the PyTorch path.
-                q_norm = F.normalize(query.float(), p=2, dim=-1, eps=1e-6).to(query.dtype)
+                # Also apply the `query * 1/sqrt(D_K)` scaling that
+                # torch_recurrent_gated_delta_rule does unconditionally (modeling_qwen3_5_moe.py:337).
+                q_scale = 1.0 / (query.shape[-1] ** 0.5)
+                q_norm = (F.normalize(query.float(), p=2, dim=-1, eps=1e-6) * q_scale).to(query.dtype)
                 k_norm = F.normalize(key.float(), p=2, dim=-1, eps=1e-6).to(key.dtype)
 
                 # Lazy-allocate scratch state buffer and output buffer once per layer.

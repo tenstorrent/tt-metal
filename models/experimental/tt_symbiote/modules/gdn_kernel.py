@@ -70,7 +70,7 @@ def gdn_step_4head(state_in, q_in, k_in, v_in, alpha_in, beta_in, state_out, out
     ai = ttl.make_dataflow_buffer_like(alpha_in, shape=(1, 1), block_count=2)
     bi = ttl.make_dataflow_buffer_like(beta_in, shape=(1, 1), block_count=2)
 
-    so = ttl.make_dataflow_buffer_like(state_out, shape=(K_TILES, 1), block_count=3)
+    so = ttl.make_dataflow_buffer_like(state_out, shape=(K_TILES, 1), block_count=2)
     oo = ttl.make_dataflow_buffer_like(out, shape=(1, 1), block_count=2)
 
     alpha_bcast = ttl.make_dataflow_buffer_like(state_in, shape=(K_TILES, 1), block_count=2)
@@ -80,7 +80,7 @@ def gdn_step_4head(state_in, q_in, k_in, v_in, alpha_in, beta_in, state_out, out
     e_buf = ttl.make_dataflow_buffer_like(v_in, shape=(1, 1), block_count=2)
     dt_buf = ttl.make_dataflow_buffer_like(v_in, shape=(1, 1), block_count=2)
     outer_buf = ttl.make_dataflow_buffer_like(k_in, shape=(K_TILES, 1), block_count=2)
-    sn_local = ttl.make_dataflow_buffer_like(state_in, shape=(K_TILES, 1), block_count=2)
+    sn_local = ttl.make_dataflow_buffer_like(state_out, shape=(K_TILES, 1), block_count=2)
 
     @ttl.compute()
     def compute():
@@ -118,10 +118,8 @@ def gdn_step_4head(state_in, q_in, k_in, v_in, alpha_in, beta_in, state_out, out
             s_new = ss_val + b_blk * o_val
             with so.reserve() as sb:
                 sb.store(s_new)
-
-        with so.wait() as sn_src:
             with sn_local.reserve() as snl:
-                snl.store(sn_src)
+                snl.store(s_new)
 
         with sn_local.wait() as sn, qi.wait() as q:
             output = ttl.transpose(sn) @ q
@@ -193,7 +191,7 @@ def gdn_step_8head(state_in, q_in, k_in, v_in, alpha_in, beta_in, state_out, out
     ai = ttl.make_dataflow_buffer_like(alpha_in, shape=(1, 1), block_count=2)
     bi = ttl.make_dataflow_buffer_like(beta_in, shape=(1, 1), block_count=2)
 
-    so = ttl.make_dataflow_buffer_like(state_out, shape=(K_TILES, 1), block_count=3)
+    so = ttl.make_dataflow_buffer_like(state_out, shape=(K_TILES, 1), block_count=2)
     oo = ttl.make_dataflow_buffer_like(out, shape=(1, 1), block_count=2)
 
     alpha_bcast = ttl.make_dataflow_buffer_like(state_in, shape=(K_TILES, 1), block_count=2)
@@ -203,7 +201,7 @@ def gdn_step_8head(state_in, q_in, k_in, v_in, alpha_in, beta_in, state_out, out
     e_buf = ttl.make_dataflow_buffer_like(v_in, shape=(1, 1), block_count=2)
     dt_buf = ttl.make_dataflow_buffer_like(v_in, shape=(1, 1), block_count=2)
     outer_buf = ttl.make_dataflow_buffer_like(k_in, shape=(K_TILES, 1), block_count=2)
-    sn_local = ttl.make_dataflow_buffer_like(state_in, shape=(K_TILES, 1), block_count=2)
+    sn_local = ttl.make_dataflow_buffer_like(state_out, shape=(K_TILES, 1), block_count=2)
 
     @ttl.compute()
     def compute():
@@ -241,10 +239,8 @@ def gdn_step_8head(state_in, q_in, k_in, v_in, alpha_in, beta_in, state_out, out
             s_new = ss_val + b_blk * o_val
             with so.reserve() as sb:
                 sb.store(s_new)
-
-        with so.wait() as sn_src:
             with sn_local.reserve() as snl:
-                snl.store(sn_src)
+                snl.store(s_new)
 
         with sn_local.wait() as sn, qi.wait() as q:
             output = ttl.transpose(sn) @ q
