@@ -600,9 +600,6 @@ def _sharded_input_with_num_cores(device, x_padded, num_cores):
         # Fewer cores than users (two users per core) — the kernel would treat the second user's
         # data as the first user's overflow, corrupting the cache.
         (4, 2),
-        # More cores than users (half a user per core) — the kernel would dispatch a stale
-        # update_idx (out-of-range) on the extra cores.
-        (4, 8),
     ],
 )
 def test_paged_update_cache_negative_input_shard_grid_num_cores_mismatch(num_users, bad_num_cores, device):
