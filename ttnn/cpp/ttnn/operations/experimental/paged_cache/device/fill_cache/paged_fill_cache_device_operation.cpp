@@ -111,9 +111,18 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             tensor.dtype() == DataType::UINT32 || tensor.dtype() == DataType::INT32,
             "Batch idx tensor must be an integer type");
-        // The writer kernel reads the tensor as a single contiguous noc page;
-        // require ROW_MAJOR so that read covers the whole 1D buffer.
+        // The writer kernel reads the tensor as a single contiguous noc page
+        // via TensorAccessor::get_noc_addr(0). That only resolves correctly for
+        // a ROW_MAJOR, INTERLEAVED, DRAM-resident buffer; sharded or L1-resident
+        // tensors would have batch_idx values scattered across NoC locations
+        // the single read won't cover.
         TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Batch idx tensor must be in ROW_MAJOR layout");
+        TT_FATAL(
+            tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Batch idx tensor must have INTERLEAVED memory layout");
+        TT_FATAL(
+            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "Batch idx tensor must be DRAM-resident");
     }
 }
 

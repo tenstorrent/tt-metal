@@ -101,7 +101,7 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         cache_tensor shape: [max_num_blocks, 1, block_size, head_dim]
         input_tensor shape: [input_batch, num_heads, input_seq_len, head_dim]
         page_table shape: [batch_size, max_num_blocks_per_seq]
-        batch_idx_tensor (optional) shape: [input_batch], int32 or uint32 — one batch_idx per input batch row.
+        batch_idx_tensor (optional) shape: [input_batch], dtype int32 or uint32, ROW_MAJOR layout, INTERLEAVED DRAM — one batch_idx per input batch row.
         batch_idx (scalar, defaults to 0) is used if batch_idx_tensor is not provided; in that case input_batch must be 1.
         mesh_coords (optional) is a set of MeshCoordinate objects that specify the mesh coordinates to execute on.
 
