@@ -46,7 +46,11 @@ from scipy.io import wavfile
 
 import ttnn
 
-from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
+from models.experimental.voxtraltts.reference.voxtral_config import (
+    DEFAULT_VOXTRAL_MODEL,
+    DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN,
+    load_voxtral_config,
+)
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
 
 
@@ -62,7 +66,7 @@ class ModelArgs:
 
 @dataclass
 class TTArgs:
-    text_max_seq_len: int = 4096
+    text_max_seq_len: int = DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN
     text_dtype: str = "bfloat16"
     acoustic_dtype: str = "bfloat16"
     tokenizer_dtype: str = "bfloat16"
@@ -100,7 +104,7 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
     p.add_argument("--prompts", type=str, default=DataArgs.prompts_file)
     p.add_argument("--output-dir", type=str, default=DataArgs.output_dir)
     p.add_argument("--mode", type=str, choices=("text", "codes", "latents"), default="text")
-    p.add_argument("--text-max-seq-len", type=int, default=4096)
+    p.add_argument("--text-max-seq-len", type=int, default=DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN)
     p.add_argument("--max-speech-tokens", type=int, default=DataArgs.max_speech_tokens)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--warmup-iters", type=int, default=0)

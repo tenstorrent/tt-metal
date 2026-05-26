@@ -714,32 +714,16 @@ class VoxtralTTAudioTokenizer:
                 ttnn.deallocate(mel_rm)
             return out
 
-        chunks_flat: list[ttnn.Tensor] = []
-        pos = 0
-        while pos < t:
-            end = min(pos + CHUNK_ROWS, t)
-            ch_tile = ttnn.slice(mel_b1tc, [0, 0, pos, 0], [b, 1, end, c_mel])
-            ch_rm = ttnn.to_layout(
-                ch_tile,
-                ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            if ch_tile.is_allocated():
-                ttnn.deallocate(ch_tile)
-            rows = end - pos
-            ch_flat = ttnn.reshape(ch_rm, (b, 1, rows * c_mel))
-            if ch_rm is not ch_flat and ch_rm.is_allocated():
-                ttnn.deallocate(ch_rm)
-            chunks_flat.append(ch_flat)
-            pos = end
-
-        if len(chunks_flat) == 1:
-            return chunks_flat[0]
-        result = ttnn.concat(chunks_flat, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        for c in chunks_flat:
-            if c.is_allocated():
-                ttnn.deallocate(c)
-        return result
+        # Long mel: chunked ttnn.concat CB pages exceed P150 L1 (see demo --max-speech-tokens > ~250).
+        # Flatten on host (same as pretransform_decode_torch) then upload the waveform.
+        wav_host = self.pretransform_decode_torch(mel_b1tc)
+        return ttnn.from_torch(
+            wav_host.to(dtype=torch.bfloat16).contiguous(),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def pretransform_decode_torch(self, mel_b1tc: ttnn.Tensor) -> torch.Tensor:
         """``[B,1,T,C_mel]`` TT mel → ``[B,1,T*C_mel]`` float32 host tensor."""

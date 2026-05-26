@@ -22,7 +22,9 @@ from loguru import logger
 from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.cpu_reference import VoxtralCPUReference
 from models.experimental.voxtraltts.reference.voxtral_request import compose_speech_request
+from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN
 from models.experimental.voxtraltts.tests.common import resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_hf_matched_optimizations
 from models.experimental.voxtraltts.tt.voxtral_tts import ACOUSTIC_CFG_ALPHA_DEFAULT, VoxtralTTSPipeline
 from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
 
@@ -81,17 +83,16 @@ def test_ttnn_voxtral_tts_e2e_trial(device, reset_seeds, request):
     logger.info(f"  CPU codes shape={tuple(ref_codes.shape)} waveform samples={int(ref_wav.numel())}")
 
     try:
-        # Use the default optimizations (BFP8 weights + HIFI2 matmuls). Counterintuitively,
-        # this matches HF's BF16 inference behavior more closely than HIFI4 + BF16 weights:
-        # HF's MistralForCausalLM in bf16 mode uses BF16×BF16 → FP32-accum → BF16 ops,
-        # which has a precision pattern similar to HIFI2+fp32_accum. The FP32 RMSNorm patch
-        # in voxtral_tts.py (patch_text_model_fp32_rms_norms) explicitly aligns the one op
-        # HF promotes to FP32 (RMSNorm). HIFI4+BF16 over-corrects, making TT MORE precise
-        # than HF, which paradoxically causes them to diverge at boundary cases.
+        # hf_matched: BFP8 + HIFI2 matmuls (matches HF bf16 matmul precision), HIFI4_FP32
+        # for SDPA only (matches HF's softmax FP32 promotion with dst_full_sync_en=False).
+        # HIFI4_FP32 is a distinct config from HIFI4 — it forces the FP32 dest accumulator
+        # to flow into the next op without truncation. This is Llama-3.2-90B's ACCURACY
+        # mode setting. Vanilla HIFI4 (with packer_l1_acc=True) overshot HF before.
         pipe = VoxtralTTSPipeline.from_model_name(
             device,
             model_name_or_path=name,
-            text_max_seq_len=512,
+            text_max_seq_len=DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN,
+            text_optimizations=voxtral_text_hf_matched_optimizations,
         )
     except Exception as exc:
         pytest.skip(f"TT pipeline load failed: {exc}")

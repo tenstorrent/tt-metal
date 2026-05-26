@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_VOXTRAL_MODEL = "mistralai/Voxtral-4B-TTS-2603"
+# KV-cache / text-model allocation for TT pipeline (demo + E2E trial); not the HF max (65536).
+DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN = 512
 
 
 @dataclass(frozen=True)

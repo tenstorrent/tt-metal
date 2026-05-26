@@ -83,6 +83,46 @@ def voxtral_text_high_accuracy_optimizations(model_args):
 voxtral_text_logits_pcc_optimizations = voxtral_text_high_accuracy_optimizations
 
 
+def voxtral_text_hf_matched_optimizations(model_args):
+    """Defaults (BFP8 weights, HiFi2 matmuls) but HIFI4_FP32 ONLY for SDPA.
+
+    Motivation: HF's MistralModel attention softmax explicitly promotes to FP32
+    (``softmax(..., dtype=torch.float32).to(query.dtype)``) for numerical stability. The
+    default HiFi2 SDPA kernel does softmax at lower precision. The HIFI4 setting we already
+    tried was empirically WORSE because the regular ``compute_kernel_config_hifi4`` has
+    ``packer_l1_acc=True`` and the default math_approx_mode=False that pushes precision
+    further than HF's bf16-rounded result.
+
+    HIFI4_FP32 is a *different* config: it sets ``dst_full_sync_en=False`` which forces the
+    FP32 dest accumulator to flow into the next op without truncation. This is the explicit
+    "accuracy mode" setting used by Llama-3.2-90B's ACCURACY config (model_config.py:300).
+    It may match HF's FP32 softmax more closely than HIFI4 alone did.
+    """
+    opt = ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+                TensorGroup.WQKV: PrecisionSetting.BFP8,
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                TensorGroup.WO: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
+                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,
+                # HIFI4_FP32: HiFi4 fidelity + dst_full_sync_en=False — Llama's ACCURACY mode.
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4_FP32,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4_FP32,
+            },
+        }
+    )
+    return DecodersPrecision(model_args.n_layers, model_args.model_name, opt)
+
+
 def _load_safetensors_state_dict(model_name_or_path: str) -> dict[str, torch.Tensor]:
     model_path = Path(model_name_or_path)
     if model_path.is_dir():
