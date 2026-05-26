@@ -20,27 +20,6 @@ namespace compute_kernel_lib {
 // Fast Untilize Gate Helpers
 // =============================================================================
 
-template <uint32_t dfb_id>
-constexpr uint32_t dfb_l1_format() {
-#if defined(UCK_CHLKC_PACK)
-    return pack_dst_format[dfb_id];
-#else
-    return unpack_src_format[dfb_id];
-#endif
-}
-
-template <uint32_t dfb_id>
-constexpr bool dfb_has_32x32_tiles() {
-#if defined(UCK_CHLKC_PACK)
-    constexpr uint32_t tile_r_dim = pack_tile_r_dim[dfb_id];
-    constexpr uint32_t tile_c_dim = pack_tile_c_dim[dfb_id];
-#else
-    constexpr uint32_t tile_r_dim = unpack_tile_r_dim[dfb_id];
-    constexpr uint32_t tile_c_dim = unpack_tile_c_dim[dfb_id];
-#endif
-    return tile_r_dim == 32 && tile_c_dim == 32;
-}
-
 template <uint32_t input_dfb, uint32_t output_dfb>
 constexpr bool has_supported_fast_untilize_format() {
     constexpr auto input_format = dfb_l1_format<input_dfb>();

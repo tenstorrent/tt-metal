@@ -109,7 +109,7 @@ def make_fast_untilize_test_config(
 
 @parametrize(
     formats=fast_untilize_formats(),
-    dest_acc=lambda formats: fast_untilize_dest_acc_modes(formats),
+    dest_acc=fast_untilize_dest_acc_modes,
     dimensions=FAST_UNTILIZE_DIMS,
     dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
     stimulus_kind=["row_id", "random"],
@@ -206,7 +206,7 @@ def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
 
 @parametrize(
     formats=fast_untilize_formats(),
-    dest_acc=lambda formats: fast_untilize_dest_acc_modes(formats),
+    dest_acc=fast_untilize_dest_acc_modes,
     dimensions=FAST_UNTILIZE_DIMS,
     dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
     perf_run_type=[PerfRunType.L1_TO_L1, PerfRunType.PACK_ISOLATE],

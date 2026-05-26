@@ -35,7 +35,7 @@ def baseline_pack_untilize_block_ct_dim(ct_dim, dest_acc):
 @skip_for_quasar
 @parametrize(
     formats=fast_untilize_formats(),
-    dest_acc=lambda formats: fast_untilize_dest_acc_modes(formats),
+    dest_acc=fast_untilize_dest_acc_modes,
     rt_dim=FAST_UNTILIZE_RT_DIMS,
     ct_dim=FAST_UNTILIZE_CT_DIMS,
     loop_factor=[1, 4, 16],
