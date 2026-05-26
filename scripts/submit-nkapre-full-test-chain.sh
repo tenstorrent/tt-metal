@@ -18,8 +18,8 @@ if [[ "$host" == bh-glx-* ]]; then
     exit 1
 fi
 
-# Optional: wait for these jobs before starting the chain (comma-separated).
-WAIT_AFTER="${1:-11604}"
+# Optional: wait for these jobs before starting the chain (comma-separated). Use "" to start immediately.
+WAIT_AFTER="${1:-}"
 
 DEP="$WAIT_AFTER"
 submit() {
