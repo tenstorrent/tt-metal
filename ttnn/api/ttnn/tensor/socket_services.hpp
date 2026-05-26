@@ -28,6 +28,7 @@
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
+class MeshBuffer;
 }  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_metal {
@@ -114,6 +115,27 @@ public:
         // bypasses the sync block entirely via a `worker_sync_enabled = 0`
         // compile-time arg — no host-side allocations either.
         std::optional<CoreRange> worker_cores;
+
+        // Optional inline metadata multicast. When non-zero, every transfer
+        // (every `forward_to_tensor` call) ships an extra `metadata_size_bytes`
+        // worth of caller-defined bytes appended to the data stream. The
+        // service kernel multicasts those bytes to a fixed L1 address on every
+        // worker core in `worker_cores` (allocated by the service as an
+        // L1-sharded Buffer across the worker grid; address retrievable via
+        // `get_metadata_addr()`). The metadata multicast lands BEFORE the
+        // data_ready_sem flip, so when workers observe data_ready, both the
+        // backing tensor (DRAM) and the metadata (L1) are valid.
+        //
+        // Constraints (enforced at construction):
+        //   * metadata_size_bytes > 0 requires `worker_cores` to be set.
+        //   * metadata_size_bytes <= derived socket_page_size (single metadata
+        //     page on the wire; multi-page metadata is a future extension).
+        //
+        // Per-call: `forward_to_tensor`'s `metadata` arg size must equal
+        // `metadata_size_bytes` exactly when enabled, empty otherwise. The
+        // host transparently pads the metadata to socket_page_size before
+        // pushing — the caller never sees the padding.
+        uint32_t metadata_size_bytes = 0;
     };
 
     H2DStreamService(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Config cfg);
@@ -127,8 +149,11 @@ public:
     H2DStreamService& operator=(H2DStreamService&&) = delete;
 
     // Raw bytes path. `bytes` must equal `Config::global_spec.compute_packed_buffer_size_bytes()`.
-    // Stubbed for now.
-    void forward_to_tensor(ttsl::Span<const std::byte> bytes);
+    // `metadata` is required to be exactly `Config::metadata_size_bytes` bytes
+    // long when metadata is enabled, empty otherwise.
+    void forward_to_tensor(
+        ttsl::Span<const std::byte> bytes,
+        ttsl::Span<const std::byte> metadata = {});
 
     // Distributed host tensor path. `host_tensor` must:
     //   * be a host tensor (storage_type == HOST),
@@ -139,7 +164,10 @@ public:
     // Streams the per-coord shards through the sockets verbatim. Returns once
     // all bytes are in the socket FIFOs; the caller must `barrier()` (or
     // destruct the service) to know the kernels have drained them.
-    void forward_to_tensor(const Tensor& host_tensor);
+    // `metadata` follows the same per-call contract as the bytes overload.
+    void forward_to_tensor(
+        const Tensor& host_tensor,
+        ttsl::Span<const std::byte> metadata = {});
 
     // Block until every in-flight host->socket write has been ACKed by the
     // device-side kernel. Call before reading the backing tensor, before
@@ -178,6 +206,14 @@ public:
     // atomic-inc into; the caller converts logical -> physical via the mesh
     // device's `worker_core_from_logical_core` at workload setup time.
     CoreCoord get_service_core(const distributed::MeshCoordinate& coord) const;
+
+    // L1 address of the metadata destination on every worker core in
+    // `Config::worker_cores`. Same address across (device, worker core) by
+    // mesh-wide L1-sharded Buffer construction. Workers read their local
+    // copy; the service kernel multicasts the first `metadata_size_bytes`
+    // of the trailing metadata page here each transfer. TT_FATALs if
+    // `Config::metadata_size_bytes` was 0.
+    DeviceAddr get_metadata_addr() const;
 
 private:
     // Flip the termination semaphore from 0 to 1, kicking every persistent
@@ -226,6 +262,27 @@ private:
     std::optional<GlobalSemaphore> data_ready_sem_;
     std::map<distributed::MeshCoordinate, DeviceAddr> consumed_addrs_;
     uint32_t num_workers_ = 0;
+
+    // Metadata multicast state. Populated only when `cfg_.metadata_size_bytes > 0`.
+    //
+    // * `metadata_buffer_` — owning mesh-wide L1-sharded Buffer allocated
+    //   across `cfg_.worker_cores`. REPLICATED across the mesh (every device
+    //   gets its own backing allocation at the same L1 address) and
+    //   HEIGHT_SHARDED across the worker_cores CoreRangeSet (every worker
+    //   core gets one shard at the same in-core offset). Destruction
+    //   deallocates the L1 region.
+    // * `metadata_l1_addr_` — cached `metadata_buffer_->address()` so the
+    //   kernel CT args and multicast destination don't need to redereference
+    //   the Buffer per call. 0 when metadata is disabled.
+    std::shared_ptr<distributed::MeshBuffer> metadata_buffer_;
+    DeviceAddr metadata_l1_addr_ = 0;
+
+    // Per-service host scratch buffer for the trailing metadata page. Sized
+    // to socket_page_size_ at construction (when metadata is enabled), reused
+    // across every forward_to_tensor call: each call copies the caller's
+    // metadata into the head and pushes the whole page through every socket.
+    // Empty when metadata is disabled.
+    std::vector<std::byte> metadata_scratch_;
 
     // Persistent receiver workload — built and enqueued once in the ctor,
     // drained in the dtor after termination is signalled.

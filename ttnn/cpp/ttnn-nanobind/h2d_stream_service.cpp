@@ -11,6 +11,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
@@ -18,6 +19,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -48,7 +50,9 @@ void py_module_types(nb::module_& mod) {
                uint32_t scratch_cb_size_bytes,
                std::unique_ptr<ttnn::distributed::TensorToMesh> mapper,
                tt::tt_metal::BufferType socket_buffer_type,
-               tt::tt_metal::distributed::H2DMode socket_mode) {
+               tt::tt_metal::distributed::H2DMode socket_mode,
+               std::optional<CoreRange> worker_cores,
+               uint32_t metadata_size_bytes) {
                 tt::tt_metal::H2DStreamService::Config cfg{
                     .global_spec = global_spec,
                     .mapper = std::move(mapper),
@@ -56,6 +60,8 @@ void py_module_types(nb::module_& mod) {
                     .fifo_size_bytes = fifo_size_bytes,
                     .scratch_cb_size_bytes = scratch_cb_size_bytes,
                     .socket_mode = socket_mode,
+                    .worker_cores = worker_cores,
+                    .metadata_size_bytes = metadata_size_bytes,
                 };
                 new (self) tt::tt_metal::H2DStreamService(mesh_device, std::move(cfg));
             },
@@ -66,6 +72,8 @@ void py_module_types(nb::module_& mod) {
             nb::arg("mapper").none() = nb::none(),
             nb::arg("socket_buffer_type") = tt::tt_metal::BufferType::L1,
             nb::arg("socket_mode") = tt::tt_metal::distributed::H2DMode::DEVICE_PULL,
+            nb::arg("worker_cores").none() = nb::none(),
+            nb::arg("metadata_size_bytes") = 0u,
             R"doc(
                 Construct a persistent H2DStreamService on the given mesh.
 
@@ -99,6 +107,22 @@ void py_module_types(nb::module_& mod) {
                         socket's device-side FIFO buffer (L1 or DRAM). Default: L1.
                     socket_mode (H2DMode, optional): Transfer mode (HOST_PUSH or
                         DEVICE_PULL). Default: DEVICE_PULL.
+                    worker_cores (CoreRange, optional): When set, after every
+                        transfer the persistent receiver kernel multicasts a
+                        data-ready inc to a GlobalSemaphore on every worker core
+                        in this CoreRange and then waits for one ack per worker
+                        before proceeding. Caller's worker kernel reads the sem
+                        at `get_data_ready_sem_addr()` and atomic-incs the
+                        counter at `get_consumed_counter_addr(coord)`. If None
+                        (the default), the kernel skips the handshake entirely.
+                    metadata_size_bytes (int, optional): When non-zero, every
+                        forward_to_tensor call must include exactly this many
+                        bytes of trailing metadata; the service kernel multi-
+                        casts them to a fixed L1 address on every worker core
+                        in `worker_cores` (retrievable via `get_metadata_addr()`).
+                        Requires `worker_cores` to be set; must be <= the
+                        derived socket page size (TT_FATAL'd at construction).
+                        Default: 0 (metadata path disabled).
             )doc")
         .def(
             "forward_to_tensor",
@@ -107,10 +131,19 @@ void py_module_types(nb::module_& mod) {
             // its per-shard spec must equal get_per_shard_spec()). Returns once the
             // bytes are in the socket FIFOs; call barrier() to wait for the device
             // to drain them.
-            [](tt::tt_metal::H2DStreamService& self, const tt::tt_metal::Tensor& host_tensor) {
-                self.forward_to_tensor(host_tensor);
+            //
+            // `metadata` must be exactly `metadata_size_bytes` bytes long when the
+            // service was constructed with metadata enabled; empty otherwise. An
+            // empty bytes object always satisfies the disabled case.
+            [](tt::tt_metal::H2DStreamService& self,
+               const tt::tt_metal::Tensor& host_tensor,
+               nb::bytes metadata) {
+                auto meta_span = ttsl::Span<const std::byte>(
+                    reinterpret_cast<const std::byte*>(metadata.c_str()), metadata.size());
+                self.forward_to_tensor(host_tensor, meta_span);
             },
             nb::arg("host_tensor"),
+            nb::arg("metadata") = nb::bytes("", 0),
             R"doc(
                 Stream a pre-distributed host tensor's per-coord shards through the
                 sockets.
@@ -120,6 +153,11 @@ void py_module_types(nb::module_& mod) {
                         distributed by a mapper matching the one passed at
                         construction. `host_tensor.tensor_spec()` must equal
                         `get_per_shard_spec()`.
+                    metadata (bytes, optional): Inline metadata payload appended
+                        to this transfer. Length must equal
+                        `metadata_size_bytes` passed at construction; pass an
+                        empty bytes object when metadata was not enabled.
+                        Default: empty bytes.
             )doc")
         .def(
             "forward_to_tensor_bytes",
@@ -128,12 +166,16 @@ void py_module_types(nb::module_& mod) {
             // total nbytes must equal global_spec.compute_packed_buffer_size_bytes().
             // ROW_MAJOR-only constraint is enforced inside the C++ service.
             [](tt::tt_metal::H2DStreamService& self,
-               const nb::ndarray<nb::c_contig, nb::device::cpu>& data) {
+               const nb::ndarray<nb::c_contig, nb::device::cpu>& data,
+               nb::bytes metadata) {
                 auto bytes = ttsl::Span<const std::byte>(
                     reinterpret_cast<const std::byte*>(data.data()), data.nbytes());
-                self.forward_to_tensor(bytes);
+                auto meta_span = ttsl::Span<const std::byte>(
+                    reinterpret_cast<const std::byte*>(metadata.c_str()), metadata.size());
+                self.forward_to_tensor(bytes, meta_span);
             },
             nb::arg("data"),
+            nb::arg("metadata") = nb::bytes("", 0),
             R"doc(
                 Stream a contiguous CPU ndarray as the un-sharded global tensor. The
                 service distributes internally via its owned mapper.
@@ -145,6 +187,11 @@ void py_module_types(nb::module_& mod) {
                         dtype is irrelevant — the array is reinterpreted as raw
                         bytes matching `global_spec`'s layout. Only the global
                         spec's ROW_MAJOR layout is supported on this path today.
+                    metadata (bytes, optional): Inline metadata payload appended
+                        to this transfer. Length must equal
+                        `metadata_size_bytes` passed at construction; pass an
+                        empty bytes object when metadata was not enabled.
+                        Default: empty bytes.
             )doc")
         .def(
             "barrier",
@@ -183,6 +230,85 @@ void py_module_types(nb::module_& mod) {
 
                 Returns:
                     List[H2DSocket]: One socket per participating coord.
+            )doc")
+        .def(
+            "get_data_ready_sem_addr",
+            &tt::tt_metal::H2DStreamService::get_data_ready_sem_addr,
+            R"doc(
+                L1 address of the data-ready GlobalSemaphore on every worker core
+                in `worker_cores`. Same value across (device, worker core) by
+                mesh-wide GlobalSemaphore construction. Workers poll their local
+                copy here; the service kernel multicasts an atomic-inc after
+                every transfer.
+
+                Raises:
+                    RuntimeError: If the service was constructed without
+                        `worker_cores`.
+
+                Returns:
+                    int: The L1 address.
+            )doc")
+        .def(
+            "get_consumed_counter_addr",
+            &tt::tt_metal::H2DStreamService::get_consumed_counter_addr,
+            nb::arg("coord"),
+            R"doc(
+                L1 address of the per-coord consumed-counter on this coord's
+                service core. Workers send NoC atomic-incs here (one per
+                consumed iteration); the service kernel polls it locally to know
+                when all workers have acknowledged the iteration.
+
+                Args:
+                    coord (MeshCoordinate): The mesh coordinate whose service-core
+                        L1 address to look up.
+
+                Raises:
+                    RuntimeError: If the service was constructed without
+                        `worker_cores`, or `coord` does not participate.
+
+                Returns:
+                    int: The L1 address on the service core for this coord.
+            )doc")
+        .def(
+            "get_service_core",
+            &tt::tt_metal::H2DStreamService::get_service_core,
+            nb::arg("coord"),
+            R"doc(
+                Logical CoreCoord of the service core on this coord's device.
+                Combine with `get_consumed_counter_addr` to build the NoC
+                destination workers atomic-inc into; the caller converts
+                logical -> physical via the mesh device's
+                `worker_core_from_logical_core` at workload setup time.
+
+                Args:
+                    coord (MeshCoordinate): The mesh coordinate whose service
+                        core to look up.
+
+                Raises:
+                    RuntimeError: If the coord does not participate in this
+                        service.
+
+                Returns:
+                    CoreCoord: The logical service-core coordinate on that device.
+            )doc")
+        .def(
+            "get_metadata_addr",
+            &tt::tt_metal::H2DStreamService::get_metadata_addr,
+            R"doc(
+                L1 address of the metadata destination on every worker core in
+                `worker_cores`. Same address across (device, worker core) by
+                mesh-wide L1-sharded Buffer construction. The service kernel
+                multicasts the first `metadata_size_bytes` of every transfer's
+                trailing metadata page here, BEFORE flipping the data-ready
+                semaphore (so workers observing data-ready see consistent
+                DRAM + L1 state).
+
+                Raises:
+                    RuntimeError: If the service was constructed with
+                        `metadata_size_bytes = 0`.
+
+                Returns:
+                    int: The L1 address.
             )doc");
 }
 

@@ -5,6 +5,7 @@
 #include "tensor/socket_services.hpp"
 
 #include <algorithm>
+#include <cstring>
 
 #include <tt_stl/assert.hpp>
 
@@ -13,13 +14,16 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/internal/service/service_core_manager.hpp>
 #include <tt-metalium/memory_pin.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "tensor/tensor_ops.hpp"
@@ -155,6 +159,16 @@ struct WorkerSyncArgs {
     uint32_t num_workers = 0;             // mcast destination count + sync arithmetic target
 };
 
+// Metadata multicast CT-arg block. Populated when Config::metadata_size_bytes > 0;
+// all fields zero when disabled (the kernel's `if constexpr (metadata_enabled)`
+// gate skips the block entirely). Reuses the worker-sync multicast bbox at
+// kernel runtime — the bbox isn't duplicated in CT args.
+struct MetadataArgs {
+    bool enabled = false;
+    uint32_t metadata_size_bytes = 0;     // user-specified size; <= socket_page_size
+    uint32_t metadata_l1_addr = 0;        // worker-grid L1 (mesh-wide L1-sharded Buffer)
+};
+
 // Builds the single-core persistent H2D program for one socket / device buffer.
 //
 // CT-arg layout (must stay in sync with persistent_h2d_receiver.cpp):
@@ -174,7 +188,10 @@ struct WorkerSyncArgs {
 //   [13] worker_mcast_noc_x_end
 //   [14] worker_mcast_noc_y_end
 //   [15] num_workers
-//   [16..] TensorAccessorArgs
+//   [16] metadata_enabled                 (uint32 0/1)
+//   [17] metadata_size_bytes              (uint32, un-padded user size)
+//   [18] metadata_l1_addr                 (uint32, worker-grid L1)
+//   [19..] TensorAccessorArgs
 Program build_persistent_h2d_program(
     const Buffer& device_buffer,
     const CoreCoord& recv_core,
@@ -183,7 +200,8 @@ Program build_persistent_h2d_program(
     const ChunkPlan& plan,
     uint32_t tensor_page_size,
     DataType dtype,
-    const WorkerSyncArgs& worker_sync) {
+    const WorkerSyncArgs& worker_sync,
+    const MetadataArgs& metadata) {
     auto program = CreateProgram();
 
     constexpr tt::CBIndex scratch_cb_index = tt::CBIndex::c_0;
@@ -214,6 +232,11 @@ Program build_persistent_h2d_program(
         worker_sync.mcast_noc_x_end,
         worker_sync.mcast_noc_y_end,
         worker_sync.num_workers,
+        // Metadata block (indices 16..18). All zero when disabled; the
+        // kernel's `if constexpr (metadata_enabled)` guards every use.
+        static_cast<uint32_t>(metadata.enabled ? 1u : 0u),
+        metadata.metadata_size_bytes,
+        metadata.metadata_l1_addr,
     };
     ct_args.insert(ct_args.end(), tensor_accessor_compile_args.begin(), tensor_accessor_compile_args.end());
 
@@ -238,6 +261,15 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     TT_FATAL(mesh_device_ != nullptr, "H2DStreamService: mesh_device must not be null");
     TT_FATAL(cfg_.fifo_size_bytes > 0, "H2DStreamService: fifo_size_bytes must be > 0");
     TT_FATAL(cfg_.scratch_cb_size_bytes > 0, "H2DStreamService: scratch_cb_size_bytes must be > 0");
+    // Metadata multicast is only meaningful when there are workers to multicast
+    // to. We do NOT check `metadata_size_bytes <= socket_page_size_` here —
+    // socket_page_size_ isn't derived until B6 (after the chunk plan runs).
+    // That bound is asserted in B6 once the plan is known.
+    TT_FATAL(
+        cfg_.metadata_size_bytes == 0 || cfg_.worker_cores.has_value(),
+        "H2DStreamService: metadata_size_bytes={} requires Config::worker_cores to be set "
+        "(no workers to multicast metadata to)",
+        cfg_.metadata_size_bytes);
 
     // --- B2: take ownership of the mapper (defaulting to replicate-on-all if
     //         the caller didn't supply one), then derive per-shard spec &
@@ -312,6 +344,19 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     socket_page_size_ = plan.socket_page_size;
     num_socket_pages_ = plan.num_socket_pages;
 
+    // Now that socket_page_size_ is known, enforce the single-metadata-page
+    // constraint. The metadata travels as exactly one trailing socket page
+    // after the N tensor pages; the kernel only multicasts the first
+    // `metadata_size_bytes` of that page. Multi-page metadata would need a
+    // wider scratch CB and a per-page multicast loop — out of scope here.
+    TT_FATAL(
+        cfg_.metadata_size_bytes <= socket_page_size_,
+        "H2DStreamService: metadata_size_bytes={} exceeds derived socket_page_size={} "
+        "(single-metadata-page constraint). Either reduce metadata or increase "
+        "scratch_cb_size_bytes / per-shard page size.",
+        cfg_.metadata_size_bytes,
+        socket_page_size_);
+
     // --- B6: configure each socket's page size --------------------------------
     // The kernel calls set_receiver_socket_page_size on its side too; the host
     // side needs it for H2DSocket::write() byte arithmetic.
@@ -368,6 +413,53 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         }
     }
 
+    // --- B7.6: optional metadata multicast allocation --------------------------
+    // When cfg_.metadata_size_bytes > 0 we allocate a mesh-wide L1-sharded
+    // Buffer across cfg_.worker_cores. The buffer is REPLICATED across the
+    // mesh (every device gets its own allocation at the same L1 address) and
+    // HEIGHT_SHARDED across the worker_cores CoreRangeSet so every worker
+    // core ends up with one shard at the same in-core L1 offset.
+    //
+    // The shard size is `metadata_size_bytes` rounded up to L1 alignment —
+    // the user-facing API treats metadata as an arbitrary-size blob, but
+    // the L1 allocator's page_size must be aligned. The kernel still only
+    // multicasts the un-padded `metadata_size_bytes` so the worker reads
+    // exactly what the caller provided.
+    if (cfg_.metadata_size_bytes > 0) {
+        const uint32_t l1_align = hal::get_l1_alignment();
+        const DeviceAddr aligned_shard_size =
+            tt::align(static_cast<DeviceAddr>(cfg_.metadata_size_bytes), static_cast<DeviceAddr>(l1_align));
+
+        const CoreRangeSet shard_grid(cfg_.worker_cores.value());
+
+        // Mirrors the L1-sharded allocation pattern in
+        // tt_metal/distributed/h2d_socket.cpp: shard shape / page shape are
+        // {1, 1} logical units and the actual per-core byte size is carried
+        // by `page_size`. `tensor2d_shape_in_pages = {num_workers, 1}` puts
+        // one shard on every worker core in row-major order.
+        distributed::DeviceLocalBufferConfig device_local = {
+            .page_size = aligned_shard_size,
+            .buffer_type = BufferType::L1,
+            .sharding_args = BufferShardingArgs(
+                ShardSpecBuffer(shard_grid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_workers_, 1}),
+                TensorMemoryLayout::HEIGHT_SHARDED),
+            .bottom_up = std::nullopt,
+            .sub_device_id = std::nullopt,
+        };
+        distributed::MeshBufferConfig mesh_config = distributed::ReplicatedBufferConfig{
+            .size = aligned_shard_size * static_cast<DeviceAddr>(num_workers_),
+        };
+
+        metadata_buffer_ = distributed::MeshBuffer::create(mesh_config, device_local, mesh_device_.get());
+        metadata_l1_addr_ = metadata_buffer_->address();
+
+        // Per-service host scratch for the trailing metadata page. Sized to
+        // socket_page_size_ (the on-the-wire page size) and zero-initialised
+        // so the trailing padding bytes are deterministic across calls — only
+        // the leading metadata_size_bytes are overwritten per call.
+        metadata_scratch_.assign(socket_page_size_, std::byte{0});
+    }
+
     // --- B8: build one persistent program per socket, bundle into a workload --
     for (auto& s : sockets_) {
         const auto core = s->get_active_cores()[0];
@@ -394,6 +486,16 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
             worker_sync.num_workers = num_workers_;
         }
 
+        // Per-coord metadata args. Populated only when cfg.metadata_size_bytes
+        // is set; the L1 destination address is shared across the mesh
+        // (REPLICATED MeshBuffer) so it's uniform across coords.
+        MetadataArgs metadata;
+        if (cfg_.metadata_size_bytes > 0) {
+            metadata.enabled = true;
+            metadata.metadata_size_bytes = cfg_.metadata_size_bytes;
+            metadata.metadata_l1_addr = static_cast<uint32_t>(metadata_l1_addr_);
+        }
+
         auto program = build_persistent_h2d_program(
             *dbuf,
             core.core_coord,
@@ -402,7 +504,8 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
             plan,
             tensor_page_size,
             device_tensor_.dtype(),
-            worker_sync);
+            worker_sync,
+            metadata);
         workload_.add_program(distributed::MeshCoordinateRange(core.device_coord), std::move(program));
     }
 
@@ -551,7 +654,16 @@ CoreCoord H2DStreamService::get_service_core(const distributed::MeshCoordinate& 
     return it->second;
 }
 
-void H2DStreamService::forward_to_tensor(ttsl::Span<const std::byte> bytes) {
+DeviceAddr H2DStreamService::get_metadata_addr() const {
+    TT_FATAL(
+        cfg_.metadata_size_bytes > 0,
+        "H2DStreamService::get_metadata_addr: metadata multicast was not configured "
+        "(Config::metadata_size_bytes is 0).");
+    return metadata_l1_addr_;
+}
+
+void H2DStreamService::forward_to_tensor(
+    ttsl::Span<const std::byte> bytes, ttsl::Span<const std::byte> metadata) {
     // --- S1: validate -----------------------------------------------------------
     // Bytes must equal the packed size of one full global tensor; partial transfers
     // aren't supported because the persistent kernel's chunk count is baked into
@@ -562,6 +674,15 @@ void H2DStreamService::forward_to_tensor(ttsl::Span<const std::byte> bytes) {
         "H2DStreamService::forward_to_tensor: span size {} B does not match global_spec packed size {} B",
         bytes.size(),
         expected);
+
+    // Metadata must match the size baked into Config at construction. Padding
+    // to the trailing socket page is service-internal; the caller never sees it.
+    TT_FATAL(
+        metadata.size() == cfg_.metadata_size_bytes,
+        "H2DStreamService::forward_to_tensor: metadata span size {} B does not match "
+        "Config::metadata_size_bytes={} (must be exact match, including 0 when metadata is disabled)",
+        metadata.size(),
+        cfg_.metadata_size_bytes);
 
     // ROW_MAJOR + default MemoryConfig is the only combination where the
     // borrowed-data wrap and the mapper's zero-copy fast path both stay engaged.
@@ -590,15 +711,22 @@ void H2DStreamService::forward_to_tensor(ttsl::Span<const std::byte> bytes) {
     // `device_tensor_.tensor_spec()`; since `distributed` came from the same
     // mapper that produced the backing tensor's per-shard spec at construction,
     // this should hold by construction.
-    forward_to_tensor(distributed);
+    forward_to_tensor(distributed, metadata);
 }
 
-void H2DStreamService::forward_to_tensor(const Tensor& host_tensor) {
+void H2DStreamService::forward_to_tensor(
+    const Tensor& host_tensor, ttsl::Span<const std::byte> metadata) {
     // --- W1: input validation -------------------------------------------------
     TT_FATAL(
         host_tensor.storage_type() == StorageType::HOST,
         "H2DStreamService::forward_to_tensor: expected host tensor, got storage_type={}",
         host_tensor.storage_type());
+    TT_FATAL(
+        metadata.size() == cfg_.metadata_size_bytes,
+        "H2DStreamService::forward_to_tensor: metadata span size {} B does not match "
+        "Config::metadata_size_bytes={} (must be exact match, including 0 when metadata is disabled)",
+        metadata.size(),
+        cfg_.metadata_size_bytes);
 
     const auto& host_mesh_tensor = host_tensor.host_storage().host_tensor();
     TT_FATAL(
@@ -666,6 +794,22 @@ void H2DStreamService::forward_to_tensor(const Tensor& host_tensor) {
         const size_t offset = static_cast<size_t>(i) * socket_page_size_;
         for (size_t s = 0; s < sockets_.size(); ++s) {
             sockets_[s]->write(bases[s] + offset, /*num_pages=*/1);
+        }
+    }
+
+    // --- W4: optional trailing metadata page ----------------------------------
+    // When metadata is enabled, every transfer carries one extra socket page
+    // after the N tensor pages. Copy the caller's metadata into the head of
+    // the scratch (the trailing padding stays zero from construction) and push
+    // the whole page through each socket. The kernel reads this page, multi-
+    // casts the first `metadata_size_bytes` to every worker, and pops.
+    //
+    // Same bytes go to every device — the L1 destination address is uniform
+    // across the mesh by REPLICATED MeshBuffer construction.
+    if (cfg_.metadata_size_bytes > 0) {
+        std::memcpy(metadata_scratch_.data(), metadata.data(), metadata.size());
+        for (auto& s : sockets_) {
+            s->write(metadata_scratch_.data(), /*num_pages=*/1);
         }
     }
 }
