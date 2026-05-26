@@ -2247,16 +2247,14 @@ def test_partial_cpu_block_convergence_filters_capped_out_components() -> None:
     fn_idx = src.find("def _run_auto_iterate_loop")
     fn_slice = src[fn_idx : fn_idx + 200000]
 
-    live_idx = fn_slice.find("_live_partial_cpu = (")
-    assert live_idx > 0, "_live_partial_cpu construction must exist"
-    live_block = fn_slice[live_idx : live_idx + 300]
-    assert "set(permanently_skipped)" in live_block, (
-        "`_live_partial_cpu` must subtract `permanently_skipped` so "
+    set_idx = fn_slice.find("partial_cpu_set = ")
+    assert set_idx > 0, "partial_cpu_set construction must exist"
+    set_block = fn_slice[set_idx : set_idx + 300]
+    assert "set(permanently_skipped)" in set_block, (
+        "`partial_cpu_set` must subtract `permanently_skipped` so "
         "cap'd-out partial-CPU components don't keep the loop alive"
     )
-    assert (
-        "_partial_cpu_components(MODEL)" in live_block
-    ), "`_live_partial_cpu` must derive from `_partial_cpu_components`"
+    assert "set(partial_cpu_pool)" in set_block, "`partial_cpu_set` must derive from `partial_cpu_pool`"
 
 
 def test_convergence_msg_describes_partial_cpu_when_allowed() -> None:
@@ -2379,7 +2377,7 @@ def test_iterate_loop_partial_cpu_set_respects_flag() -> None:
     src = _planner_source()
     fn_idx = src.find("def _run_auto_iterate_loop")
     fn_slice = src[fn_idx : fn_idx + 200000]
-    pool_idx = fn_slice.find("partial_cpu_pool: List[str] = (")
+    pool_idx = fn_slice.find("partial_cpu_pool: List[str] = ")
     assert pool_idx > 0, "partial_cpu_pool definition must exist"
     block = fn_slice[pool_idx : pool_idx + 400]
     assert "allow_partial_cpu" in block, "partial_cpu_pool must be gated on the allow_partial_cpu flag"
@@ -2498,10 +2496,9 @@ def test_preflight_no_hardware_bail_block_exists() -> None:
 
     src = _planner_source()
 
-    bail_idx = src.find("# PRE-FLIGHT NO-HARDWARE BAIL")
-    assert bail_idx > 0, "pre-flight no-hardware bail block must exist with its " "canonical comment header"
+    bail_idx = src.find("_no_hw_msg = _detect_no_hardware_failure(")
+    assert bail_idx > 0, "pre-flight no-hardware bail block must exist"
     bail_block = src[bail_idx : bail_idx + 2000]
-    assert "_detect_no_hardware_failure" in bail_block, "bail block must call the detector"
     assert "_format_no_hardware_diagnostic_banner" in bail_block, "bail block must print the actionable banner"
     assert "return 2" in bail_block, (
         "bail block must return exit code 2 (configuration error) "

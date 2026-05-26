@@ -6242,6 +6242,7 @@ def _cmd_up_isolated(args) -> int:
         if rc == 0:
             print(f"  [isolation] success — capturing LLM deltas as overlay for {args.model_id}")
             captured = 0
+            capture_ok = False
             try:
                 proc = subprocess.run(
                     ["git", "diff", "--name-only"],
@@ -6250,6 +6251,8 @@ def _cmd_up_isolated(args) -> int:
                     text=True,
                     check=False,
                 )
+                if proc.returncode != 0:
+                    raise RuntimeError(f"git diff --name-only failed: {proc.stderr.strip()}")
                 changed = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
                 for f in changed:
                     diff_proc = subprocess.run(
@@ -6264,10 +6267,25 @@ def _cmd_up_isolated(args) -> int:
                     rec = store_patch(args.model_id, f, diff_proc.stdout, source="captured_from_bringup")
                     if rec:
                         captured += 1
+                capture_ok = True
             except Exception as exc:
                 print(f"  [isolation] capture failed: {type(exc).__name__}: {exc}", file=sys.stderr)
-            print(f"  [isolation] captured {captured} LLM delta(s); destroying worktree")
-            _wt_destroy(session)
+            if capture_ok:
+                print(f"  [isolation] captured {captured} LLM delta(s); destroying worktree")
+                try:
+                    _wt_destroy(session)
+                except Exception as exc:
+                    print(
+                        f"  [isolation] WARN worktree destroy failed: {type(exc).__name__}: {exc}. "
+                        f"Run `git worktree remove --force {session.path}` to clean up.",
+                        file=sys.stderr,
+                    )
+            else:
+                print(
+                    f"  [isolation] partial-capture failure — preserving worktree at {session.path} so deltas aren't lost. "
+                    f"Inspect overlays/{args.model_id.replace('/', '_')}/ for what was captured before the failure.",
+                    file=sys.stderr,
+                )
         else:
             print(f"  [isolation] bring-up rc={rc}; worktree preserved at:")
             print(f"     {session.path}")

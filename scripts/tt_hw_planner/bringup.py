@@ -773,7 +773,9 @@ def render_text(plan: BringupPlan) -> str:
     for k, v in plan.invocation.env.items():
         out.append(f'    export {k}="{v}"')
     out.append("")
-    out.append(f"    cd {REPO_ROOT}")
+    from .discovery import BRINGUP_ROOT
+
+    out.append(f"    cd {BRINGUP_ROOT()}")
     out.append("    " + _format_argv(plan.invocation.argv(), indent=8))
     out.append("")
     out.append(sep)
@@ -802,7 +804,9 @@ def render_script(plan: BringupPlan) -> str:
     for k, v in inv.env.items():
         lines.append(f'export {k}="{v}"')
     lines.append("")
-    lines.append(f"cd {REPO_ROOT}")
+    from .discovery import BRINGUP_ROOT
+
+    lines.append(f"cd {BRINGUP_ROOT()}")
     lines.append(_format_argv(inv.argv(), indent=4))
     lines.append("")
     return "\n".join(lines)
