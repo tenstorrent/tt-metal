@@ -188,8 +188,8 @@ void kernel_main() {
         cb_scaler_global_obj.wait_front(1);
         reconfig_data_format_srca(cb_x2, cb_ex_external2);
         reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
-        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_ex_external2, cb_scaler_global, cb_reduction_out);
         pack_reconfig_data_format(cb_reduction_out);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_ex_external2, cb_scaler_global, cb_reduction_out);
         CircularBuffer(cb_reduction_out)
             .reserve_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
 

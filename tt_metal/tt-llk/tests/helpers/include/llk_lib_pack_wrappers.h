@@ -184,14 +184,14 @@ inline void _llk_pack_reconfig_data_format_wrapper_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t face_r_dim                 = FACE_R_DIM,
-    const std::uint32_t tile_c_dim                 = TILE_C_DIM,
-    const std::uint32_t num_faces                  = 4,
-    const bool partial_face                        = false,
-    [[maybe_unused]] const bool narrow_tile        = false,
-    [[maybe_unused]] const std::uint32_t num_tiles = 1)
+    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM,
+    const std::uint32_t tile_c_dim                  = TILE_C_DIM,
+    const std::uint32_t num_faces                   = 4,
+    const bool partial_face                         = false,
+    [[maybe_unused]] const bool narrow_tile         = false,
+    [[maybe_unused]] const std::uint32_t num_tiles  = 1)
 {
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face);
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
 }
 
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>

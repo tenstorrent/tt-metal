@@ -75,7 +75,7 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, uint32_t 
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>(icb)));
 #endif
-    PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>()));
+    PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(ocb)));
 }
 
 // clang-format off

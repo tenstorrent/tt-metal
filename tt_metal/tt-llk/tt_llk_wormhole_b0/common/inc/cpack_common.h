@@ -558,6 +558,11 @@ inline void reconfigure_exp_threshold(const std::uint32_t pack_dst_format)
     cfg_reg_rmw_tensix<THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 3, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
 }
 
+// Forward declaration: defined later in this file. Needed here so that the non-dependent call
+// inside `reconfig_packer_data_format`'s LLK_ASSERT is found via unqualified lookup at
+// the template's first-phase name lookup (ADL cannot find it from a std::uint32_t argument).
+__attribute__((noinline)) bool is_pack_reads_per_xy_plane(const std::uint32_t expected, const std::uint32_t nop_count = 10);
+
 template <bool is_fp32_dest_acc_en>
 inline void reconfig_packer_data_format(
     const std::uint32_t pack_src_format,
@@ -588,18 +593,10 @@ inline void reconfig_packer_data_format(
     TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 2 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
     TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 2 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
 
-    // Some initialization methods modify this configuration register, so need to set it again
-    // Number of reads per face used for resetting tile position generator for edge masks
-    pack_counters_u pack_counters;
-    pack_counters.val                       = 0;
-    pack_counters.f.pack_reads_per_xy_plane = face_r_dim;
-    TT_SETDMAREG(0, LOWER_HALFWORD(pack_counters.val), 0, LO_16(p_gpr_pack::TMP0));
-    TT_SETDMAREG(0, UPPER_HALFWORD(pack_counters.val), 0, HI_16(p_gpr_pack::TMP0));
-
-    for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
-    {
-        TT_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i); // disable auto last generation
-    }
+    LLK_ASSERT(
+        is_pack_reads_per_xy_plane(1),
+        "reconfig_packer_data_format: pack_reads_per_xy_plane counter must be 1 before packer reconfig (invariant violated; reduce mask should have been "
+        "cleared via _llk_pack_reduce_mask_clear_). Please uncomment DEVICE_PRINT #2111 for debugging.");
 
     dest_rd_ctrl_u dest_rd_ctrl;
     dest_rd_ctrl.val = 0;
@@ -730,8 +727,8 @@ inline void configure_pack(
     // PACK_COUNTERS_SEC0_pack_yz_transposed = cfg_reg_array[3][23 +: 1];
     pack_counters_u pack_counters;
     pack_counters.val                       = 0;
-    pack_counters.f.pack_reads_per_xy_plane = face_r_dim; // Number of reads per face
-                                                          // Used for resetting tile position generator for edge masks
+    pack_counters.f.pack_reads_per_xy_plane =
+        1; // Default 1 — makes non-reduce operations agnostic to this counter; reduce sets it via _llk_pack_reduce_mask_config_
     for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
     {
         cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i] = pack_counters.val; // disable auto last generation
@@ -1000,25 +997,21 @@ inline std::array<pack_counters_t, NUM_PACKERS> read_pack_counters()
     return counters_vec;
 }
 
-enum class PackerProgramType
-{
-    ProgramByTile,
-    ProgramByFace,
-};
-
 /**
- * Validates that all packers' config and counters match the expected formats and face dimension.
+ * Validates that all packers' config matches the expected formats.
  * On mismatch, issues DEVICE_PRINT (when enabled) and LLK_ASSERT. Typically invoked via
- * `LLK_ASSERT_BLOCK(are_packers_configured_correctly<...>(...))` in llk_pack_tile_api.h.
+ * `LLK_ASSERT_BLOCK(are_packers_configured_correctly(...))` in llk_pack_tile_api.h.
+ *
+ * The pack_reads_per_xy_plane counter is validated separately via is_pack_reads_per_xy_plane
+ * (invoked at reconfig time), since its expected value depends on whether a reduce mask is
+ * currently programmed, not on the per-pack call site.
  *
  * @param pack_src_format   Expected input data format for all packers
  * @param pack_dst_format   Expected output data format for all packers
- * @param face_r_dim        Expected face row dimension (pack_reads_per_xy_plane) (default FACE_R_DIM)
  * @param nop_count         Number of nop operations to ensure configuration writes complete (default 10)
  */
-template <PackerProgramType program_type = PackerProgramType::ProgramByTile>
 __attribute__((noinline)) void are_packers_configured_correctly(
-    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t nop_count = 10)
+    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t nop_count = 10)
 {
     // Ensure configuration writes complete before subsequent operations
     tensix_sync();
@@ -1065,25 +1058,46 @@ __attribute__((noinline)) void are_packers_configured_correctly(
                 "are_packers_configured_correctly: pack_dst_format mismatch. Uncomment DEVICE_PRINT #2102 to inspect "
                 "packer index and expected/actual.");
         }
+    }
+}
 
-        if constexpr (program_type == PackerProgramType::ProgramByFace)
+/**
+ * Validates that all packers' pack_reads_per_xy_plane counter matches the expected value.
+ * Intended to be called from reconfig paths to assert the invariant: between non-reduce
+ * operations the counter is 1; the reduce layer owns transitions to FACE_R_DIM via
+ * `_llk_pack_reduce_mask_config_` and back to 1 via `_llk_pack_reduce_mask_clear_`.
+ *
+ * @param expected   Expected value of pack_reads_per_xy_plane
+ * @param nop_count  Number of nop operations to ensure configuration writes complete (default 10)
+ * @return true if all packers' counters match expected, false otherwise.
+ */
+__attribute__((noinline)) bool is_pack_reads_per_xy_plane(const std::uint32_t expected, const std::uint32_t nop_count)
+{
+    // Ensure configuration writes complete before reading back
+    tensix_sync();
+    for (std::uint32_t i = 0; i < nop_count; i++)
+    {
+        asm volatile("nop");
+    }
+
+    const std::array<pack_counters_t, NUM_PACKERS> counters_vec = read_pack_counters();
+    for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
+    {
+        if (counters_vec[i].pack_reads_per_xy_plane != expected)
         {
-            pack_counters_u counters = {.val = 0};
-            counters.val             = cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i];
-            if (counters.f.pack_reads_per_xy_plane != face_r_dim)
-            {
-                // DEVICE_PRINT(
-                // "#2103 are_packers_configured_correctly: packer {} pack_reads_per_xy_plane mismatch. expected: {}, actual: {}\n",
-                // i,
-                // face_r_dim,
-                // counters.f.pack_reads_per_xy_plane);
-                LLK_ASSERT(
-                    (counters.f.pack_reads_per_xy_plane == face_r_dim),
-                    "are_packers_configured_correctly: pack_reads_per_xy_plane / face_r_dim mismatch. Uncomment "
-                    "DEVICE_PRINT #2103 to inspect packer index and expected/actual.");
-            }
+            // Debug: print which packer mismatched and dump all per-packer counter values.
+            // DEVICE_PRINT(
+            //     "#2111 is_pack_reads_per_xy_plane: mismatch on packer {} (expected={}) actual [P0={} P1={} P2={} P3={}]\n",
+            //     i,
+            //     expected,
+            //     counters_vec[0].pack_reads_per_xy_plane,
+            //     counters_vec[1].pack_reads_per_xy_plane,
+            //     counters_vec[2].pack_reads_per_xy_plane,
+            //     counters_vec[3].pack_reads_per_xy_plane);
+            return false;
         }
     }
+    return true;
 }
 
 } // namespace ckernel::packer

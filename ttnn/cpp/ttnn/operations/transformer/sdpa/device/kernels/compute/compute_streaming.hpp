@@ -297,7 +297,7 @@ void reduce_c_row_group(
         cb_wait_front(in0_cb, cumulative_input_tiles);
     }
 
-    reduce_block_max_row_init_runtime(reduce_cols, respect_trigger);
+    reduce_block_max_row_init_runtime(out_cb, reduce_cols, respect_trigger);
     for (uint32_t i = 0; i < group_size; i++) {
         const uint32_t input_tile_start = (row_start + i) * row_stride;
         reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger);

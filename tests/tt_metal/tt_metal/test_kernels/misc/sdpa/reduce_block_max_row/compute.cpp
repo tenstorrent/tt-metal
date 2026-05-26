@@ -46,7 +46,7 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < rows; i++) {
         acquire_dst();
-        reduce_block_max_row_init<cols>();
+        reduce_block_max_row_init<cols>(out_max_cb);
         reduce_block_max_row<cols>(qk_im_cb, scale_cb, i * cols, reduce_dst_idx);
         reduce_block_max_row_uninit(qk_im_cb);
 

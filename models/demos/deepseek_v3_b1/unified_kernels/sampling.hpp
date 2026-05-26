@@ -169,7 +169,7 @@ ALWI void sampling_reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, 
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, math_fidelity>(icb)));
 #endif
-    PACK((llk_pack_reduce_mask_config<reduce_dim, ckernel::PackMode::Default>()));
+    PACK((llk_pack_reduce_mask_config<reduce_dim, ckernel::PackMode::Default>(ocb)));
 }
 
 template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation, MathFidelity math_fidelity>
@@ -223,6 +223,9 @@ template <
     uint32_t cols>
 void softmax_reduce_c() {
     reconfig_data_format(in0_cb, scale_cb);
+    // Reconfigure packer for out_cb BEFORE the reduce mask is programmed by
+    // sampling_reduce_init.
+    pack_reconfig_data_format(out_cb);
     sampling_reduce_init<pool_type, reduce_dim, false, MathFidelity::HiFi4>(in0_cb, scale_cb, out_cb);
     const uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
@@ -235,7 +238,6 @@ void softmax_reduce_c() {
                 in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
         }
         cb_reserve_back(out_cb, 1);
-        pack_reconfig_data_format(out_cb);
         pack_tile(reduce_dst_idx, out_cb);
         cb_push_back(out_cb, 1);
         release_dst();
