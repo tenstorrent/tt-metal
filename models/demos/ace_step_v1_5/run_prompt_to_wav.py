@@ -475,7 +475,7 @@ def main() -> None:
 
     from models.demos.ace_step_v1_5.official_lm_preprocess import configure_acestep_logging
 
-    configure_acestep_logging(level="INFO", show_ttnn_tensor_cache=False)
+    configure_acestep_logging(level="INFO")
 
     _require_torchaudio()
     use_ttnn_5hz_lm = not bool(args.pytorch_lm)
@@ -1441,7 +1441,8 @@ def main() -> None:
                         _trace_loop_kw["encoder_attention_mask_b1qk"] = mask_tt
                     _trace_result = run_ttnn_denoise_loop(**_trace_loop_kw)
             finally:
-                trace_state.release(dev)
+                if trace_state is not None:
+                    trace_state.release(dev)
 
             # ``run_ttnn_denoise_loop`` deallocated ``enc_tt_pipe`` / ``ctx_tt_pipe`` on exit;
             # mark them consumed so the bottom-of-block cleanup does not double-free.
