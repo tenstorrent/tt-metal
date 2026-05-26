@@ -22,6 +22,7 @@ from tracy import signpost
     [True, False],
     ids=["with_print", "without_print"],
 )
+@pytest.mark.usefixtures("tracy_profile")
 def test_dummy_op_on_dispatch_subdevice(device, debug_print_global_semaphore):
     grid = device.compute_with_storage_grid_size()
     grid_x, grid_y = grid.x, grid.y

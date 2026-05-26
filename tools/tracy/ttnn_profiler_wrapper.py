@@ -8,11 +8,15 @@ from functools import wraps
 
 def decorator(f, name):
     @wraps(f)
-    # Just wrapping C++ calls with a python side wrapper is enough
-    # This will let them be picked up by the python settrace
     def tt_lib_wrapper(*args, **kwargs):
         local_name = name
-        return f(*args, **kwargs)
+        import ttnn
+
+        ttnn.start_tracy_zone("ttnn_profiler_wrapper.py", f"python::{name}", 0)
+        try:
+            return f(*args, **kwargs)
+        finally:
+            ttnn.stop_tracy_zone(f"python::{name}")
 
     # Allow inspection code such as in ttnn/ttnn/ttl/tensor/__init__.py to
     # detect that this is a wrapped C function and treat it appropriately
