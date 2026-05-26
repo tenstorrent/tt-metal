@@ -742,10 +742,6 @@ struct FlashMLADecode {
                 cb_wait_front(cb_mask, 1);
             }
             cb_wait_front(cb_q_in, q_chunk_tiles);
-            // PATCH (#43563 debug): hash cb_q_in once per flash_mla call.
-            // Compare iter-0 vs iter-1 outputs — if identical, Q is the same;
-            // divergence must be downstream (in flash_mla / K cache / etc).
-            hash_cb(cb_q_in, q_chunk_tiles, 0x10);
             cb_reserve_back(sdpa_output_cb, vDHt);
             cb_reserve_back(sdpa_ms_cb, Sq_chunk_t);
             tile_regs_acquire();
@@ -776,19 +772,6 @@ struct FlashMLADecode {
                     !sdpa_output_is_final && last_chunk,
                     mask_last_chunk && last_chunk);
             }
-            // PROBE B (#43563 debug): pack mm2 (P*V accumulator at tile 0)
-            // to cb_out_in (unused in 1-chunk test path: num_cores_to_wait=0),
-            // hash with scalar hash_cb, then pop. Tests whether mm2 contents
-            // at end of chunk loop are bit-identical between iter-0 and iter-1
-            // on the same core. If hash differs → MM2 (or upstream ops feeding mm1)
-            // are bank-asymmetric on identical inputs. If hash matches → bug is
-            // downstream in the tail (compute_sdpa_recip + final pack).
-            // Uses cb_out_in because it has matching format (stats_df 8x32) so
-            // no PACK re-init needed.
-            pack_block_contiguous(mm2_dst_tile_offset, cb_out_in, 1);
-            cb_push_back(cb_out_in, 1);
-            hash_cb(cb_out_in, 1, 0x40);
-            cb_pop_front(cb_out_in, 1);
             if (!sdpa_output_is_final) {
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
                 pack_block_contiguous(max_dst_tile_offset, sdpa_ms_cb, 1);
@@ -803,11 +786,26 @@ struct FlashMLADecode {
                 PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));
             }
             cb_push_back(sdpa_output_cb, out_chunk_tiles);
-            // PATCH (#43563 debug): hash flash_mla's output CB right after the
-            // pack loop. Inputs are confirmed identical between iter-0 and iter-1
-            // (Attempt 18); a divergence here would localize the bug to the
-            // tile_regs_acquire→release block above and let us bisect within.
-            hash_cb(sdpa_output_cb, out_chunk_tiles, 0x30);
+            // DEBUG #43563: dump final SDPA output to cb_out_in for cross-iter
+            // L1 byte diff. cb_out_in's persistent write pointer naturally
+            // separates consecutive calls into disjoint regions:
+            //   iter-0 -> tiles [0, out_chunk_tiles)
+            //   iter-1 -> tiles [out_chunk_tiles, 2*out_chunk_tiles)
+            // Host reads cb_out_in's L1 base from a target core after the run
+            // and diffs the two halves byte-for-byte. No pop_front anywhere
+            // (host owns consumption). Re-init the packer MOP for cb_out_in
+            // (different output CB id; format happens to match sdpa_output_cb
+            // but we re-init defensively per the LLK guidance), then restore
+            // for sdpa_output_cb (no further packs in this function, but be
+            // hygienic). SAFE ONLY at pos=127 (num_cores_to_wait==0 ->
+            // sdpa_tail does not consume cb_out_in); at multi-chunk this
+            // races with sdpa_tail's consumer and will hang or corrupt.
+            pack_block_contiguous_init(cb_out_in);
+            for (uint32_t i = 0; i < out_chunk_tiles; i += output_granularity) {
+                pack_block_contiguous(mm2_dst_tile_offset + i, cb_out_in, output_granularity);
+            }
+            cb_push_back(cb_out_in, out_chunk_tiles);
+            pack_block_contiguous_init(sdpa_output_cb);
             tile_regs_commit();
             tile_regs_wait();
             tile_regs_release();

@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBl
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
+from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
@@ -1051,6 +1052,125 @@ def test_decoder_mlp(
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
     ttnn.synchronize_device(submesh)
+
+    # ========================================================================
+    # DEBUG #43563: compare iter-0 vs iter-1 SDPA per-core output byte-for-byte.
+    # The flash_mla.hpp debug patch re-packs the final SDPA output into cb_out_in
+    # at the end of each flash_mla call (see flash_mla.hpp:789-805). cb_out_in is
+    # bound to `sdpa_out_interm_buffer` at offset 0 with total_size = 48 tiles
+    # (see attention_block/op.py:2611). On consecutive iter-0/iter-1 calls the CB's
+    # internal write pointer advances by out_chunk_tiles (16) each time, so:
+    #   tiles  0..15  -> iter-0 SDPA output
+    #   tiles 16..31  -> iter-1 SDPA output
+    # We to_torch the buffer (host gets un-tilized row-major view), decode tile-by-
+    # tile, and diff iter-0 vs iter-1 per SDPA worker core.
+    # Layout: shard is (40 rows, 544 cols) per core in TILE_LAYOUT, tile = (8, 32),
+    # so tile_cols_per_shard = 17. A tile at L1 tile-index `i` occupies torch view
+    # rows [tile_row*8, tile_row*8+8), cols [tile_col*32, tile_col*32+32) where
+    # tile_row = i // 17, tile_col = i % 17. Note iter-1 straddles tile-row 0/1.
+    # NOTE: only valid at position_id=127 (num_cores_to_wait == 0, cb_out_in unused
+    # by sdpa_tail). At multi-chunk this section will see iter-1 data clobbered.
+    try:
+        sdpa_interm_torch = ttnn.to_torch(
+            d["sdpa_out_interm_buffer"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+        )
+        # Shape: (num_devices * num_cores_per_dev * 40, 544) bf16
+        shard_h, shard_w, tile_h, tile_w = 40, 544, 8, 32
+        tile_cols_per_shard = shard_w // tile_w  # 17
+        num_tiles_per_iter = 16
+        num_devices_total = mesh_rows * mesh_cols
+        num_cores_per_dev = device_grid_size.x * device_grid_size.y
+        rows_per_dev = num_cores_per_dev * shard_h
+
+        # Restrict the diff to cores where flash_mla actually runs (mla_core_grid).
+        # sdpa_out_interm_buffer is allocated on the FULL device grid (130 cores per
+        # device), but cb_out_in is only written by our debug pack on flash_mla's
+        # cores. On other cores the L1 at offset [0, 24576) is contested by other
+        # CBs (matmul_input_cb, matmul_output_cb, ...) so naive diffing produces
+        # massive false positives. Reproduce op.py's mla_all_cores computation here.
+        flash_mla_program_config = FlashMLADecode.ProgramConfig()
+        optimized_mla_grid = flash_mla_program_config.grid
+        mla_core_coords = set()
+        for s_block_idx in range(optimized_mla_grid.NUM_BLOCKS):
+            for coord in optimized_mla_grid.get_cores(s_block_idx):
+                mla_core_coords.add(tuple(coord))
+        logger.info(f"DEBUG #43563: filtering diff to {len(mla_core_coords)} mla_core_grid cores per device")
+
+        def get_tile(shard, idx):
+            tr, tc = idx // tile_cols_per_shard, idx % tile_cols_per_shard
+            return shard[tr * tile_h : (tr + 1) * tile_h, tc * tile_w : (tc + 1) * tile_w]
+
+        any_diverged = []
+        for dev_idx in range(num_devices_total):
+            dev_block = sdpa_interm_torch[dev_idx * rows_per_dev : (dev_idx + 1) * rows_per_dev, :]
+            for core_idx in range(num_cores_per_dev):
+                cy, cx = divmod(core_idx, device_grid_size.x)
+                if (cx, cy) not in mla_core_coords:
+                    continue
+                shard = dev_block[core_idx * shard_h : (core_idx + 1) * shard_h, :]
+                iter0 = torch.stack([get_tile(shard, i) for i in range(num_tiles_per_iter)], dim=0)  # (16, 8, 32)
+                if torch.all(iter0 == 0):
+                    continue
+                iter1 = torch.stack([get_tile(shard, num_tiles_per_iter + i) for i in range(num_tiles_per_iter)], dim=0)
+                eq_mask = iter0 == iter1
+                if eq_mask.all():
+                    continue  # iter-0 and iter-1 bit-identical on this core
+                # Per-tile divergence summary
+                diff_tiles = (~eq_mask).any(dim=(-1, -2))  # (16,) bool
+                num_diff_tiles = int(diff_tiles.sum().item())
+                f0 = iter0.to(torch.float32)
+                f1 = iter1.to(torch.float32)
+                abs_delta = (f0 - f1).abs()
+                max_abs = float(abs_delta.max().item())
+                num_diff_elems = int((~eq_mask).sum().item())
+                total_elems = eq_mask.numel()
+                any_diverged.append((dev_idx, cx, cy, num_diff_tiles, num_diff_elems, total_elems, max_abs))
+
+        if not any_diverged:
+            logger.info("DEBUG #43563: iter-0 and iter-1 SDPA outputs are bit-identical on every active core.")
+        else:
+            logger.info(f"DEBUG #43563: {len(any_diverged)} cores show iter-0 != iter-1 in SDPA output.")
+            logger.info(
+                "DEBUG #43563: per-core diff (dev | x,y | diff_tiles/16 | diff_elems/total | max_abs_bf16_delta)"
+            )
+            for dev_idx, cx, cy, ntiles, nelems, total, max_abs in any_diverged[:32]:
+                logger.info(
+                    f"  dev={dev_idx} core=({cx},{cy}) tiles={ntiles}/16 elems={nelems}/{total} max_delta={max_abs:.6g}"
+                )
+
+            # Detailed per-element view for the first diverging core.
+            dev_idx, cx, cy, *_ = any_diverged[0]
+            logger.info(f"DEBUG #43563: detailed per-tile byte/elem diff for dev={dev_idx} core=({cx},{cy})")
+            dev_block = sdpa_interm_torch[dev_idx * rows_per_dev : (dev_idx + 1) * rows_per_dev, :]
+            core_lin = cy * device_grid_size.x + cx
+            shard = dev_block[core_lin * shard_h : (core_lin + 1) * shard_h, :]
+            iter0 = torch.stack([get_tile(shard, i) for i in range(num_tiles_per_iter)], dim=0)
+            iter1 = torch.stack([get_tile(shard, num_tiles_per_iter + i) for i in range(num_tiles_per_iter)], dim=0)
+            # Byte-diff map: one 'X' per differing tile, '.' per matching tile.
+            map_chars = []
+            for t in range(num_tiles_per_iter):
+                map_chars.append("X" if (iter0[t] != iter1[t]).any() else ".")
+            logger.info(f"  tile_diff_map (16 tiles): {''.join(map_chars)}")
+            # Per-element view of first differing tile.
+            for t in range(num_tiles_per_iter):
+                if (iter0[t] != iter1[t]).any():
+                    diff_idx = torch.nonzero(iter0[t] != iter1[t], as_tuple=False)
+                    logger.info(f"  first diverging tile = {t}, {diff_idx.shape[0]}/256 elements differ; first 8:")
+                    raw_view0 = iter0[t].contiguous().view(torch.int16)  # (8, 32) raw bf16 bits
+                    raw_view1 = iter1[t].contiguous().view(torch.int16)
+                    for k in range(min(8, diff_idx.shape[0])):
+                        r, c = int(diff_idx[k, 0]), int(diff_idx[k, 1])
+                        v0 = iter0[t, r, c].to(torch.float32).item()
+                        v1 = iter1[t, r, c].to(torch.float32).item()
+                        h0 = int(raw_view0[r, c].item()) & 0xFFFF
+                        h1 = int(raw_view1[r, c].item()) & 0xFFFF
+                        logger.info(
+                            f"    [r={r:2d},c={c:2d}] iter0={v0:+.6e} (0x{h0:04x}) "
+                            f"iter1={v1:+.6e} (0x{h1:04x}) delta={v1 - v0:+.6e}"
+                        )
+                    break
+    except Exception as e:
+        logger.warning(f"DEBUG #43563: cross-iter L1 diff failed: {e!r}")
 
     # ========================================================================
     # Extract decoder MLP output from reduce root
