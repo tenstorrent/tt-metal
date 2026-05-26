@@ -9,7 +9,6 @@
 #include "../../../unified_kernels/termination.hpp"
 
 void kernel_main() {
-    DPRINT << "Starting d2h sender kernel" << ENDL();
     DEVICE_PRINT("Starting d2h sender kernel\n");
     // Get this value from MeshSocket struct on host
     constexpr uint32_t send_socket_config_addr = get_compile_time_arg_val(0);
@@ -85,7 +84,6 @@ void kernel_main() {
             if (!deepseek_b1_ops::socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
                 break;
             }
-            DPRINT << "D2H sender: Page available in receiver socket, sending data to host\n";
             uint32_t read_addr = receiver_socket.read_ptr;
             noc_async_wide_write_any_len_with_state(
                 NOC_INDEX,
@@ -107,7 +105,6 @@ void kernel_main() {
                 socket_notify_sender(receiver_socket);
             }
         }
-        DPRINT << "D2H sender: Data sent to host, updating sender socket state\n";
         socket_push_pages(sender_socket, 1);
         socket_notify_receiver(sender_socket);
         invalidate_l1_cache();
@@ -122,5 +119,4 @@ void kernel_main() {
     if constexpr (use_fabric) {
         upstream_fabric_connection.close();
     }
-    DPRINT << "D2H sender kernel terminating\n";
 }

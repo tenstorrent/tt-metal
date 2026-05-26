@@ -119,11 +119,8 @@ struct Forward {
     private:
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
-            DPRINT << "start of forward writer kernel\n";
             if constexpr (IsWorkerCore && CTArgs::is_entry_column) {
-                DPRINT << "IS WORKER CORE AND ENTRY COLUMN\n";
 #if defined(ENABLE_SOCKET_READER)
-                DPRINT << "ENABLE_SOCKET_READER\n";
                 static_assert(noc_mode == DM_DYNAMIC_NOC);
                 SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                 set_receiver_socket_page_size(recv, args.socket_page_size);
@@ -138,19 +135,14 @@ struct Forward {
                 socket_pop_pages(recv, args.socket_num_pages);
                 socket_notify_sender(recv, 1 - noc_index);
                 update_socket_config(recv);
-                DPRINT << "Finished socket read and updated socket config\n";
 #else
-                DPRINT << "Socket reader disabled\n";
                 cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                 cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-                DPRINT << "Reserved and pushed to CB without socket read (socket reader disabled)\n";
 #endif
             }
 
 #elif defined(COMPILE_FOR_NCRISC)
-            DPRINT << "start of forward reader kernel";
             if constexpr (IsWorkerCore && CTArgs::is_entry_column) {
-                DPRINT << "IS WORKER CORE AND ENTRY COLUMN\n";
                 cb_wait_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                 const uint32_t src = get_read_ptr(CTArgs::cb0_id);
                 constexpr uint32_t tensor_size_bytes = CTArgs::tensor_page_size * CTArgs::num_pages_to_read;
@@ -159,7 +151,6 @@ struct Forward {
                 noc_async_write(src, dst, tensor_size_bytes);
                 noc_async_write_barrier();
                 if constexpr (CTArgs::enable_cross_column) {
-                    DPRINT << "Setting up cross-column fabric send\n";
                     PacketHeaderPool::reset();
 
                     size_t fabric_arg_idx = args.fabric_arg_offset;
@@ -198,17 +189,13 @@ struct Forward {
                     }
                     sender.close();
                     noc_async_full_barrier();
-                    DPRINT << "Finished cross-column fabric send\n";
                 }
                 cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-                DPRINT << "Finished popping from CB\n";
             } else if constexpr (IsWorkerCore && !CTArgs::is_entry_column) {
-                DPRINT << "IS WORKER CORE AND NON-ENTRY COLUMN\n";
                 volatile tt_l1_ptr uint32_t* sem =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.cross_col_sem_addr);
                 noc_semaphore_wait_min(sem, CTArgs::num_fabric_packets);
                 unified_kernels::semaphore_dec(sem, CTArgs::num_fabric_packets);
-                DPRINT << "Finished waiting on cross-column semaphore, now proceeding with normal execution\n";
             }
 
 #elif defined(COMPILE_FOR_TRISC)

@@ -216,7 +216,6 @@ class DecoderBlock:
         cb_id_manager = CircularBufferIdManager()
         mla_cb_id_context = cb_id_manager.create_context()
         moe_cb_id_context = cb_id_manager.create_context()
-        print("DecoderBlock.get_program_context: Created circular buffer contexts for attention and MoE")
         full_device_grid, metadata_addr, decoder_cbs, decoder_per_device_contexts = AttentionBlock.get_program_context(
             input_tensor_mesh,
             gamma_tensor,
@@ -261,9 +260,6 @@ class DecoderBlock:
             upstream_socket=upstream_socket,
             fabric_config=fabric_config,
             broadcast_topology_override=broadcast_topology_override,
-        )
-        print(
-            "DecoderBlock.get_program_context: Obtained program context from AttentionBlock, now building MoE context and merging"
         )
         moe = MoeOp(
             shared_residual_mcast_src_tensor,
@@ -313,34 +309,21 @@ class DecoderBlock:
             reduce_exit_column=reduce_exit_column,
             forward_dest_tensor=input_tensor_mesh,
         )
-        print(
-            "DecoderBlock.get_program_context: Built MoeOp context, now building descriptors and merging with AttentionBlock context"
-        )
 
         moe._build_descriptors()
         moe_ctx = moe.ctx
-        print(
-            "DecoderBlock.get_program_context: Built MoeOp descriptors, now preparing IO tensors and merging program descriptors"
-        )
 
         if moe_ctx.routed_ctx.enable_forward and hasattr(moe_ctx.routed_ctx, "bcast_pkt_cb_descriptor"):
             fwd_cb_desc = moe_ctx.routed_ctx.bcast_pkt_cb_descriptor
             fwd_cb_addr = ttnn.get_cb_address(fwd_cb_desc)
             decoder_cbs.append(fwd_cb_desc)
-            print(
-                f"DecoderBlock.get_program_context: Appended Forward staging CB descriptor "
-                f"(cb={moe_ctx.routed_ctx.bcast_pkt_cb}, addr=0x{fwd_cb_addr:x}) "
-                f"to decoder_cbs so MLA reconfig configures it before Forward runs"
-            )
 
         io_tensors = []
         cb_metadata = record_cb_metadata(decoder_cbs)
         reconfig_tensor = build_cb_reconfig_tensor(cb_metadata, full_device_grid, input_tensor_mesh.device())
         io_tensors.append(reconfig_tensor)
         cbs_list = cb_id_manager.build_dummy_cb_descriptors(full_device_grid)
-        print(
-            "DecoderBlock.get_program_context: Built circular buffer reconfiguration tensor and dummy CB descriptors, now preparing named compile-time args and IO tensors for unified kernel descriptor"
-        )
+
         additional_named_compile_time_args = [
             ("mla_reconfig_cb_config_l1_addr", reconfig_tensor.buffer_address()),
             ("num_iterations", num_iterations),
@@ -362,7 +345,6 @@ class DecoderBlock:
             attention_block_output_tensor,
         ]
         io_tensors += moe.io_tensors
-        print("DecoderBlock.get_program_context: Added MoeOp IO tensors, now preparing unified kernel descriptors")
 
         def _patch_named_compile_time_args(named_args, overrides):
             """Replace selected named compile-time args while preserving order."""
@@ -387,9 +369,6 @@ class DecoderBlock:
             row = mesh_coord[0]
             col = mesh_coord[1]
             chip_id = row * moe_ctx.mesh_cols + col
-            print(
-                f"DecoderBlock.get_program_context: Setting up program descriptor for mesh coordinate {mesh_coord} (chip_id {chip_id})"
-            )
 
             # ── MoE per-device setup ──
             moe._setup_per_device_args(chip_id, num_iterations, reduce_root_coord, mesh_coord, row, col)
@@ -420,15 +399,6 @@ class DecoderBlock:
 
             if moe_per_core_brisc:
                 attn_bases = {attn_brisc_prefix_len_by_core.get((c.x, c.y), 0) for c, _ in moe_per_core_brisc}
-                print(
-                    f"[DECODER MERGE DEBUG] attn_brisc_prefix_len_by_core for MoE cores: "
-                    f"{ {(c.x,c.y): attn_brisc_prefix_len_by_core.get((c.x,c.y), 0) for c, _ in moe_per_core_brisc} }"
-                )
-                print(f"[DECODER MERGE DEBUG] attn_bases set: {attn_bases}")
-                for c, args in moe_per_core_brisc:
-                    print(
-                        f"[DECODER MERGE DEBUG] MoE BRISC per-core ({c.x},{c.y}): len={len(args)}, args={[hex(v) if isinstance(v, int) and v > 255 else v for v in args[:6]]}"
-                    )
                 assert (
                     len(attn_bases) == 1
                 ), f"All reduce cores must have the same attn per-core arg count, got: {attn_bases}"
@@ -448,9 +418,7 @@ class DecoderBlock:
             my_defines = moe.kernel_defines
             if ctx["device_kernel_defines"] is not None:
                 my_defines = ctx["device_kernel_defines"] + moe.kernel_defines
-            print(
-                f"DecoderBlock.get_program_context: Final compile-time defines for mesh coordinate {mesh_coord}: {my_defines}"
-            )
+
             unified_kernel = UnifiedKernelDescriptor(
                 kernel_source="models/demos/deepseek_v3_b1/fused_ops/decoder_block/kernels/decoder_block_kernel.cpp",
                 core_ranges=full_device_grid,
@@ -504,16 +472,6 @@ class DecoderBlock:
                 fc_cores = set()
                 for c2fc in moe.ctx.reduce_params.get("column_to_fabric_core", {}).values():
                     fc_cores.add((c2fc.x, c2fc.y))
-                for c, args in merged_brisc:
-                    if (c.x, c.y) in fc_cores:
-                        print(
-                            f"[DECODER MERGE DEBUG] FINAL merged BRISC for FC ({c.x},{c.y}): {[hex(v) if isinstance(v, int) and v > 255 else v for v in args]}"
-                        )
-                for c, args in merged_ncrisc:
-                    if (c.x, c.y) in fc_cores:
-                        print(
-                            f"[DECODER MERGE DEBUG] FINAL merged NCRISC for FC ({c.x},{c.y}): {[hex(v) if isinstance(v, int) and v > 255 else v for v in args]}"
-                        )
 
             kernel_result = unified_kernel.get_kernel_descriptors()
             program = ttnn.ProgramDescriptor(
@@ -522,9 +480,7 @@ class DecoderBlock:
                 semaphores=ctx["semaphore_list"] + moe.device_sem_descs,
             )
             broadcast_worker_core = ctx["broadcast_worker_core"]
-            print(
-                f"DecoderBlock.get_program_context: Setting up broadcast fabric connection for mesh coordinate {mesh_coord}, worker core {broadcast_worker_core}, skip_ccl={skip_ccl}, moe_ctx.enable_forward={moe_ctx.enable_forward}"
-            )
+
             if not skip_ccl and not moe_ctx.enable_forward:
                 bcast_cfg = ctx["bcast_config"]
                 bcast_writer_group = kernel_result.get_group_by_arg("is_input_core", 1)
@@ -538,9 +494,7 @@ class DecoderBlock:
                 program.kernels[writer_kernel_idx].runtime_args[broadcast_worker_core.x][
                     broadcast_worker_core.y
                 ] = list(bcast_writer_args) + list(writer_rt_args_ref)
-            print(
-                f"DecoderBlock.get_program_context: Finished setting up broadcast fabric connection for mesh coordinate {mesh_coord}, now setting up SDPA runtime args and fabric connections if needed"
-            )
+
             # ==================================================================
             # SDPA runtime args and fabric connection setup
             # ==================================================================
@@ -601,9 +555,7 @@ class DecoderBlock:
                         _extend_runtime_args(
                             program.kernels[group.ncrisc_kernel_index].runtime_args, sdpa_forwarder_ncrisc_rt_args, crs
                         )
-            print(
-                f"DecoderBlock.get_program_context: Finished setting up SDPA runtime args and fabric connections for mesh coordinate {mesh_coord}, now setting up CCL runtime args and fabric connections if needed"
-            )
+
             if ctx["ccl"]:
                 ccl = ctx["ccl"]
                 ccl_sender_core = ctx["ccl_sender_core"]
@@ -648,17 +600,12 @@ class DecoderBlock:
                     gather_core.x
                 ][gather_core.y]
                 ccl_receiver_ncrisc_rt.extend(ccl["receiver_ncrisc_common_rt_args"])
-                print(
-                    f"DecoderBlock.get_program_context: Set CCL receiver NCRISC runtime args for mesh coordinate {mesh_coord}, gather core {gather_core}"
-                )
 
             # MoE fabric connections (reduce-to-all, broadcast, forward)
             moe._setup_fabric_connections(mesh_coord, row, col, reduce_root_coord, kernel_result, program)
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
             per_device_programs.append((mesh_coord, program))
-            print(
-                f"DecoderBlock.get_program_context: Finished setting up program descriptor for mesh coordinate {mesh_coord}"
-            )
+
         return io_tensors, mesh_program_descriptor, attention_block_output_tensor, per_device_programs
 
     @staticmethod
@@ -674,49 +621,12 @@ class DecoderBlock:
         Returns:
             Tuple of (moe_result, attention_block_output_tensor).
         """
-        import sys
         import time
 
         t0 = time.perf_counter()
-        print(f"[{t0:.3f}] DecoderBlock.execute: Starting, {len(io_tensors)} IO tensors", flush=True)
 
         # Log IO tensor details
-        for i, t in enumerate(io_tensors):
-            try:
-                dev = t.device() if hasattr(t, "device") else "N/A"
-                shape = t.shape if hasattr(t, "shape") else "N/A"
-                print(
-                    f"[{time.perf_counter():.3f}] DecoderBlock.execute: io_tensor[{i}] shape={shape} device={dev}",
-                    flush=True,
-                )
-            except Exception as e:
-                print(f"[{time.perf_counter():.3f}] DecoderBlock.execute: io_tensor[{i}] error={e}", flush=True)
-
-        # Log mesh_program_descriptor info
-        print(
-            f"[{time.perf_counter():.3f}] DecoderBlock.execute: mesh_program_descriptor type={type(mesh_program_descriptor)}",
-            flush=True,
-        )
-        try:
-            # Try to get number of entries
-            print(
-                f"[{time.perf_counter():.3f}] DecoderBlock.execute: mesh_program_descriptor entries={len(mesh_program_descriptor.mesh_programs) if hasattr(mesh_program_descriptor, 'mesh_programs') else 'unknown'}",
-                flush=True,
-            )
-        except Exception as e:
-            print(
-                f"[{time.perf_counter():.3f}] DecoderBlock.execute: mesh_program_descriptor inspection error={e}",
-                flush=True,
-            )
-
-        print(f"[{time.perf_counter():.3f}] DecoderBlock.execute: calling ttnn.generic_op NOW...", flush=True)
-        sys.stdout.flush()
-        sys.stderr.flush()
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
-        print(
-            f"[{time.perf_counter():.3f}] DecoderBlock.execute: ttnn.generic_op returned after {time.perf_counter()-t0:.3f}s",
-            flush=True,
-        )
         return result, attention_block_output_tensor
 
     @staticmethod
