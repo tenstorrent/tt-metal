@@ -342,7 +342,6 @@ def test_attention_paged_decode_via_harness(layer_type, mesh_device, reset_seeds
         num_devices=num_devices,
     )
     k_cache_tt, v_cache_tt = kv_per_layer[layer_idx]
-    li = layout.per_layer[layer_idx]
     # Per-block element-count invariant under HMA cross-group sharing:
     # input_kv * eff_bs * input_hd == cache_kv * cache_bs * cache_hd
     # → eff_bs = cache_kv * cache_bs * cache_hd // (input_kv * input_hd)
@@ -440,7 +439,7 @@ def test_kv_shared_alias_round_trip(mesh_device, reset_seeds):
     """
     hf_config = TestFactory.create_hf_config()
     try:
-        sliding_idx = find_layer_idx(hf_config, "sliding_attention")
+        find_layer_idx(hf_config, "sliding_attention")
     except ValueError:
         pytest.skip("No sliding layer in this model")
 

@@ -176,8 +176,6 @@ class Gemma4VllmLayout:
         def kv_per_dev(num_kv_heads: int) -> int:
             return 1 if num_kv_heads < num_devices else num_kv_heads // min(num_devices, num_kv_heads)
 
-        sliding_kv_per_dev = kv_per_dev(sliding_kv) // 1 if sliding_kv < tp else sliding_kv // tp
-        full_kv_per_dev = kv_per_dev(full_kv) // 1 if full_kv < tp else full_kv // tp
         # Match the plugin's exact formula (``_kv_cache_shape``):
         # ``num_kv_heads // min(num_devices, num_kv_heads)`` — single-device
         # passes through unchanged, multi-device shards by ``num_devices``.

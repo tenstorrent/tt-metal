@@ -166,7 +166,22 @@ def effective_block_size(k_cache, head_dim: int, num_kv_heads: int) -> int:
     unconditionally keeps the paged_{fill,update}_cache and
     paged_scaled_dot_product_attention_decode call sites symmetric.
     """
+    if num_kv_heads <= 0:
+        raise ValueError(f"num_kv_heads must be > 0, got {num_kv_heads}")
+    if head_dim <= 0:
+        raise ValueError(f"head_dim must be > 0, got {head_dim}")
+
     cache_num_heads = k_cache.padded_shape[1]
     cache_block_size = k_cache.padded_shape[2]
     cache_head_dim = k_cache.padded_shape[-1]
-    return (cache_num_heads * cache_block_size * cache_head_dim) // (num_kv_heads * head_dim)
+
+    numerator = cache_num_heads * cache_block_size * cache_head_dim
+    denominator = num_kv_heads * head_dim
+    if numerator % denominator != 0:
+        raise ValueError(
+            "KV-cache layout is incompatible with the requested layer view: "
+            f"({cache_num_heads} * {cache_block_size} * {cache_head_dim}) is not exactly divisible by "
+            f"({num_kv_heads} * {head_dim})"
+        )
+
+    return numerator // denominator
