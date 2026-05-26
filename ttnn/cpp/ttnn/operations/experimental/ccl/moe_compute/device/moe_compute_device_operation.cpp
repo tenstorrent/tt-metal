@@ -425,10 +425,14 @@ std::vector<ttnn::Tensor> moe_compute(
 
     const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
 
-    // Resolve BH ring size (WH always uses 12; BH supports {8, 12, 16}, default 12 or env TT_MOE_BH_N).
-    const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE)
-                                ? ttnn::experimental::prim::resolve_bh_ring_size(bh_ring_size)
-                                : 12u;
+    // BH ring size: default 12; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
+    // Validate at the API boundary for a clear "moe_compute:" error; get_cores() re-validates
+    // before kernel build as a structural invariant.
+    const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size.value_or(12u) : 12u;
+    TT_FATAL(
+        ring_n == 8 || ring_n == 12 || ring_n == 16,
+        "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)",
+        ring_n);
 
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
     if (!compute_only) {

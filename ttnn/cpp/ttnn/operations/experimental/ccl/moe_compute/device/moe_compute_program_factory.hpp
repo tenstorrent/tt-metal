@@ -87,15 +87,4 @@ std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores);
 
-// BH ring size resolver. Resolution order:
-//   1. If `explicit_value` is provided, validate ({8, 12, 16}) and return; fatal on invalid.
-//   2. Else if env var TT_MOE_BH_N is set, validate and return; fatal on invalid.
-//   3. Else return the default (12).
-// Used by the op kwarg path (per-call, with explicit override) and by get_moe_combine_cores
-// (env-only). WH always uses N=12 and ignores this resolver entirely.
-uint32_t resolve_bh_ring_size(std::optional<uint32_t> explicit_value);
-
-// Env-var-only convenience wrapper. Equivalent to `resolve_bh_ring_size(std::nullopt)`.
-uint32_t get_bh_ring_size();
-
 }  // namespace ttnn::experimental::prim
