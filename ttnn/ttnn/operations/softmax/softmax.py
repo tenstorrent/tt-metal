@@ -76,11 +76,20 @@ def tag_alignment(inputs, axes):
     - "w_non_aligned"  if W is not tile-aligned (regardless of H).
     - "h_non_aligned"  if W is aligned but H is not.
 
+    Refinement 3 hardening: rank-1 (or rank-0) inputs have no -2 axis, so the
+    tagger would IndexError before the SUPPORTED["rank"] check could reject
+    them. The hardened tagger treats a missing H axis as "tile_aligned"
+    (H defaults to 1, which is trivially "non-aligned" in the H sense but
+    we keep the rank-out-of-SUPPORTED check as the authoritative gate);
+    validate() will still raise on rank=1 because 1 ∉ SUPPORTED["rank"].
+
     This matches the contract described in feature_spec.py.
     """
     shape = inputs[0]
-    h = shape[-2]
-    w = shape[-1]
+    # Defensive fall-back: ranks < 2 don't have an H axis; we still emit a
+    # tag so validate() can reach the rank-check below without IndexError.
+    h = shape[-2] if len(shape) >= 2 else 1
+    w = shape[-1] if len(shape) >= 1 else 1
     if w % 32 != 0:
         return "w_non_aligned"
     if h % 32 != 0:

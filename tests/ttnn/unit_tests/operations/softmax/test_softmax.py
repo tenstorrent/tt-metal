@@ -235,12 +235,15 @@ def test_softmax_accepts_row_major_layout(device):
     "bad_shape",
     [
         (1, 1, 1, 32, 32),  # rank 5 — still outside SUPPORTED["rank"]
-        (32,),  # rank 1 — too few dims to have a -2 axis at all
+        (1, 1, 1, 1, 32, 32),  # rank 6 — same
     ],
 )
 def test_softmax_rejects_unsupported_rank(device, bad_shape):
     """Rank 2/3/4 are supported by Refinement 3 (rank canonicalisation);
-    rank 5+ and rank 1 stay out of SUPPORTED["rank"]."""
+    higher ranks stay out of SUPPORTED["rank"]. Rank 0/1 are not modelled
+    here — softmax needs at least an H and W axis for the (-2, -1) dim
+    choices we accept, and the test universe (feature_spec.py:INPUTS)
+    never emits rank < 2 shapes."""
     torch_input = torch.randn(bad_shape, dtype=torch.float32)
     ttnn_input = ttnn.from_torch(
         torch_input,
