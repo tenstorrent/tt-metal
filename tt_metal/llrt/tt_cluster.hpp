@@ -88,10 +88,7 @@ public:
 
     std::set<ChipId> all_pci_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
 
-    umd::ClusterDescriptor* get_cluster_desc() const {
-        TT_FATAL(this->driver_ != nullptr, "UMD driver is not initialized.");
-        return this->driver_->get_cluster_description();
-    }
+    umd::ClusterDescriptor* get_cluster_desc() const;
 
     const std::unique_ptr<tt::umd::Cluster>& get_driver() const;
     tt::umd::Cluster& get_driver_mut() const;
