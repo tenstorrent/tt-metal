@@ -858,11 +858,11 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         }
 
         // Build variant args: positions [1] and [2] are buffer addresses
-        std::vector<std::variant<uint32_t, Buffer*>> in1_writer_args(
+        std::vector<std::variant<uint32_t, std::reference_wrapper<const tt::tt_metal::MeshTensor>>> in1_writer_args(
             mm_in1_sender_writer_args.begin(), mm_in1_sender_writer_args.end());
-        in1_writer_args[1] = in1_tensor.mesh_buffer().get_reference_buffer();
+        in1_writer_args[1] = in1_tensor;
         if (bias.has_value()) {
-            in1_writer_args[2] = bias->mesh_buffer().get_reference_buffer();
+            in1_writer_args[2] = *bias;
         }
         in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_writer_args);
         TT_FATAL(
@@ -1003,8 +1003,6 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
 
     const auto& output_mesh = output.mesh_tensor();
-    TT_FATAL(
-        output_mesh.mesh_buffer().get_reference_buffer() != nullptr, "Output buffer should be allocated on device!");
 
     return reuse_dram_sharded_optimized_helpers::create_program_dram_sharded_descriptor(
         device,
