@@ -246,10 +246,10 @@ _DISPATCH_PERF_PARAMS = [
 ]
 _COMBINE_PERF_PARAMS = [
     _perf_param(
-        "combine", "test_prefill_combine.py", "test_ttnn_combine", "linear", 2, 4_121_973, "CombineDeviceOperation"
+        "combine", "test_prefill_combine.py", "test_ttnn_combine", "linear", 2, 3_538_087, "CombineDeviceOperation"
     ),
     _perf_param(
-        "combine", "test_prefill_combine.py", "test_ttnn_combine", "ring", 2, 2_769_700, "CombineDeviceOperation"
+        "combine", "test_prefill_combine.py", "test_ttnn_combine", "ring", 2, 2_290_921, "CombineDeviceOperation"
     ),
 ]
 
@@ -279,10 +279,10 @@ _COMBINE_PERF_PARAMS_FULL = [
         "combine", "test_prefill_combine.py", "test_ttnn_combine", topo, nlinks, expected, "CombineDeviceOperation"
     )
     for topo, nlinks, expected in [
-        ("linear", 1, 5_767_986),
-        ("linear", 2, 4_136_638),
-        ("ring", 1, 4_968_952),
-        ("ring", 2, 2_769_700),
+        ("linear", 1, 4_893_014),
+        ("linear", 2, 3_552_410),
+        ("ring", 1, 2_837_530),
+        ("ring", 2, 2_298_073),
     ]
 ] + [
     _perf_param(
