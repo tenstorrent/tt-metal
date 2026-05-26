@@ -179,7 +179,11 @@ def run_ring_joint_sdpa(
                     dtype=kv_dtype,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     cache_file_name=cache_path / f"persistent_v_buffer_{i}" if cache_path else None,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=kv_shard_dims),
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        submesh,
+                        mesh_shape=tuple(submesh.shape),
+                        dims=kv_shard_dims if nhv != 1 else persistent_k_output_shard_dims,
+                    ),
                 ),
             ]
             for i in range(n_iters)
@@ -187,8 +191,8 @@ def run_ring_joint_sdpa(
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_compute_grid,
-        q_chunk_size=q_chunk_size,
-        k_chunk_size=k_chunk_size,
+        q_chunk_size=32,
+        k_chunk_size=32,
         exp_approx_mode=False,
     )
 
@@ -296,7 +300,11 @@ def run_ring_joint_sdpa(
             device=submesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_path / "padded_V" if cache_path else None,
-            mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                submesh,
+                mesh_shape=tuple(submesh.shape),
+                dims=sdpa_joint_shard_dims if nhv != 1 else sdpa_k_input_shard_dims,
+            ),
         )
 
     # Always convert joint tensors to ttnn (including dummy tensors)
@@ -325,7 +333,9 @@ def run_ring_joint_sdpa(
         dtype=kv_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims)
+        if nhv != 1
+        else joint_k_mesh_mapper,
     )
     tt_out_list = []
 
@@ -471,9 +481,9 @@ def run_ring_joint_sdpa(
     ids=["seq128k", "seq100k"],
 )
 @pytest.mark.parametrize(
-    "b, nhq_v, nhk, head_dim_q_k, head_dim_v",
+    "b, nhq, nhv, nhk, head_dim_q_k, head_dim_v",
     [
-        (1, 128, 1, 576, 128),
+        (1, 128, 1, 1, 576, 512),
     ],
 )
 @pytest.mark.parametrize("n_iters", [1, 3], ids=["single_run", "determinism_check"])
@@ -517,7 +527,8 @@ def run_ring_joint_sdpa(
 def test_mla_sdpa(
     mesh_device,
     b,
-    nhq_v,
+    nhq,
+    nhv,
     nhk,
     head_dim_q_k,
     head_dim_v,
@@ -546,7 +557,9 @@ def test_mla_sdpa(
     submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
 
     seq_len = (seq_len // production_shape[0]) * rp_factor
-    nhq_v = (nhq_v // production_shape[1]) * up_factor
+    nhq = (nhq // production_shape[1]) * up_factor
+    if nhv != 1:
+        nhv = nhq
     padded_seq_len = get_padded_vision_seq_len(seq_len, mesh_device_shape[rp_axis])
 
     logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
@@ -559,9 +572,9 @@ def test_mla_sdpa(
     run_ring_joint_sdpa(
         submesh,
         b,
-        nhq_v,
+        nhq,
         nhk,
-        nhq_v,
+        nhv,
         seq_len,
         padded_seq_len,
         joint_seq_len,

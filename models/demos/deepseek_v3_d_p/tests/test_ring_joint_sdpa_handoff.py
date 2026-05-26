@@ -464,7 +464,7 @@ def test_nd_sharded_kv_cache_as_k(mesh_device, device_params, v_memory_layout):
 # ===========================================================================
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2)], ids=["2x2"], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4)], ids=["2x2", "2x4"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],

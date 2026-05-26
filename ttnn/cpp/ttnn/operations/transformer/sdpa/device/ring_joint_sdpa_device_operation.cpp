@@ -327,7 +327,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         k_shape[2],
         v_shape[2]);
 
-    TT_FATAL(NQH == NVH, "Q num_heads must be equal to V num_heads. Got Q: {}, V: {}", NQH, NVH);
+    TT_FATAL(NQH % NVH == 0, "Q num_heads must be divisible by V num_heads (GQA). Got Q: {}, V: {}", NQH, NVH);
     TT_FATAL(NKH == NVH || NKH == 1, "K num_heads must be equal to V num_heads or 1. Got K: {}, V: {}", NKH, NVH);
 
     // Validate chunk sizes if program config is provided

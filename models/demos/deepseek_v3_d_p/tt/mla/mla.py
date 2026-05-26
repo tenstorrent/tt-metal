@@ -359,6 +359,15 @@ class ttMLA:
             ),
         )
 
+        self.joint_v_lora = ttnn.from_torch(
+            torch.zeros(1, 1, 0, self.kv_lora_rank),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
         # Load weights to TT device
         weights = self._convert_and_cache_weights(
             state_dict,
@@ -744,41 +753,27 @@ class ttMLA:
 
             local_offset = chunk_start_global // self.sp_factor
             populated_local = chunk_end_global // self.sp_factor
+            seq_max_local = kvpe_cache.shape[2]
+            seq_max_global = seq_max_local * self.sp_factor
             kvpe_dim = self.kv_lora_rank + self.qk_rope_head_dim
             ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_batch_idx, update_idx=local_offset)
 
-            # Per-device K populated prefix from the cache slot. Slicing into
-            # interleaved DRAM also flattens away the ND_SHARDED cache layout.
-            tt_k_populated = ttnn.slice(
+            # V = kv_lora (1 head, kv_lora_rank) — head-dim slice of kvpe_cache.
+            # Full seq retained so K.seq == V.seq (op validation requires it).
+            # wkv_b2 is applied to the compact attn_out after attention.
+            tt_v_lora = ttnn.slice(
                 kvpe_cache,
-                [cache_batch_idx, 0, 0, 0],
-                [cache_batch_idx + 1, 1, populated_local, kvpe_dim],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-            # Expand V latent for the whole populated prefix: slice off the
-            # kv-lora cols, run wkv_b2.
-            tt_kv_lora_populated = ttnn.slice(
-                tt_k_populated,
                 [0, 0, 0, 0],
-                [1, 1, populated_local, self.kv_lora_rank],
+                [kvpe_cache.shape[0], 1, seq_max_local, self.kv_lora_rank],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            tt_v_populated = ttnn.linear(
-                tt_kv_lora_populated,
-                self.wkv_b2_weight,
-                compute_kernel_config=self.default_compute_kernel_config,
-                **self._get_mm_kwargs("wkv_b2", populated_local),
-            )
 
-            # Persistent AG buffers must match N_global = populated_local * sp
-            # exactly (op validates N_global == N_local_kv * ring_size). The
-            # __init__ buffers are sized to max_seq, so allocate per-chunk.
+            # Persistent AG buffers sized to full per-device K/V seq (the AG
+            # gathers seq_max_local * sp_factor since K = full cache).
             persistent_k_shard_dims = [None, None]
             persistent_v_shard_dims = [None, None]
-            persistent_v_shard_dims[self.tp_axis] = 1
             persistent_k_buf = ttnn.from_torch(
-                torch.zeros(1, 1, chunk_end_global, kvpe_dim),
+                torch.zeros(1, 1, seq_max_global, kvpe_dim),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat8_b,
@@ -788,7 +783,7 @@ class ttMLA:
                 ),
             )
             persistent_v_buf = ttnn.from_torch(
-                torch.zeros(1, self.num_heads, chunk_end_global, self.v_head_dim),
+                torch.zeros(1, 1, seq_max_global, self.kv_lora_rank),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat8_b,
@@ -800,16 +795,21 @@ class ttMLA:
 
             attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 tt_q,
-                tt_k_populated,
-                tt_v_populated,
+                kvpe_cache,
+                tt_v_lora,
                 self.joint_q,
                 self.joint_kv,
-                self.joint_v,
+                self.joint_v_lora,
                 persistent_output_buffer_k=persistent_k_buf,
                 persistent_output_buffer_v=persistent_v_buf,
                 joint_strategy="rear",
                 logical_n=chunk_end_global,
-                program_config=self._get_sdpa_program_config(seq_len_local),
+                program_config=ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
+                    q_chunk_size=32,
+                    k_chunk_size=32,
+                    exp_approx_mode=False,
+                ),
                 compute_kernel_config=self.default_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
@@ -823,6 +823,14 @@ class ttMLA:
                 is_causal=True,
                 scale=self.scale,
                 is_balanced=self.is_balanced,
+                cache_batch_idx=cache_batch_idx,
+            )
+
+            attn_out = ttnn.linear(
+                attn_out,
+                self.wkv_b2_weight,
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)

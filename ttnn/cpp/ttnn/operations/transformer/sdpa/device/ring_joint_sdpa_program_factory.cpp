@@ -172,6 +172,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     const uint32_t B = q_shape[0];
     const uint32_t NH = q_shape[1];
     const uint32_t NHK = k_shape[1];
+    const uint32_t NHV = v_shape[1];
     const uint32_t DH = q_shape[3];
     const uint32_t q_local_padded_N = q_shape[2];
     const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len();
@@ -236,6 +237,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "B: {}", B);
     log_debug(tt::LogOp, "NH: {}", NH);
     log_debug(tt::LogOp, "NHK: {}", NHK);
+    log_debug(tt::LogOp, "NHV: {}", NHV);
     log_debug(tt::LogOp, "L: {}", L);
     log_debug(tt::LogOp, "DH: {}", DH);
     log_debug(tt::LogOp, "vDH: {}", vDH);
@@ -504,6 +506,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         num_active_cores,
         chunk_size_t,
         static_cast<uint32_t>(indexed_kv_cache),
+        NHV,
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -562,12 +565,17 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     // K chain selection: batch chain when NHK == 1 (MLA mode), else head chain
     // Computed early to gate resource allocation
     const bool k_uses_batch_chain = (NHK == 1);
+    const bool v_uses_batch_chain = (NHV == 1);
 
     const auto head_sems = ChainSemaphores::create(desc, core_grid_set);  // head chain (V, optionally K)
     // Only create batch semaphores for MLA mode (NHK == 1)
     std::optional<ChainSemaphores> batch_sems;
     if (k_uses_batch_chain) {
         batch_sems = ChainSemaphores::create(desc, core_grid_set);  // batch chain (K in MLA mode)
+    }
+    std::optional<ChainSemaphores> v_batch_sems;
+    if (v_uses_batch_chain) {
+        v_batch_sems = ChainSemaphores::create(desc, core_grid_set);
     }
 
     // Append semaphore ids to reader compile-time args (must match reader kernel expectations)
@@ -578,6 +586,10 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     if (k_uses_batch_chain) {
         batch_sems->append_to_compile_args(reader_compile_time_args);
         reader_compile_time_args.push_back(0);  // batch_mcast_enabled placeholder (patched after chain construction)
+    }
+    if (v_uses_batch_chain) {
+        v_batch_sems->append_to_compile_args(reader_compile_time_args);
+        reader_compile_time_args.push_back(0);  // v_batch_mcast_enabled placeholder (always 0 for now)
     }
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -1063,8 +1075,10 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     };
 
     std::vector<CoreWork> core_work(num_cores);
-    std::vector<ChainConfig> head_chain_configs(num_cores);   // V chain (head-level), optionally K in non-MLA
-    std::vector<ChainConfig> batch_chain_configs(num_cores);  // K chain (batch-level) in MLA mode
+    std::vector<ChainConfig> head_chain_configs(num_cores);     // V chain (head-level), optionally K in non-MLA
+    std::vector<ChainConfig> batch_chain_configs(num_cores);    // K chain (batch-level) in MLA mode
+    std::vector<ChainConfig> v_batch_chain_configs(num_cores);  // V chain (batch-level) when NHV == 1
+    std::vector<uint32_t> v_chain_max_q(num_cores, 0);          // per-core loop-padding count for V batch chain
     const uint32_t total_heads = B * NH;
     std::vector<std::vector<HeadSegmentRef>> head_segments(total_heads);
 
@@ -1425,6 +1439,39 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         }
     }
 
+    // Build batch chains (V chain): one per batch when NHV == 1 (MLA absorption mode).
+    // Same topology as K batch chain — V is also shared across all heads when NHV == 1.
+    if (NHV == 1) {
+        std::map<uint32_t, std::vector<uint32_t>> batch_to_cores;
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            if (core_work[i].global_q_count == 0) {
+                continue;
+            }
+            for (const auto& hw : core_work[i].head_work) {
+                batch_to_cores[hw.batch].push_back(i);
+                break;
+            }
+        }
+
+        for (auto& [batch, core_indices] : batch_to_cores) {
+            std::sort(core_indices.begin(), core_indices.end(), [&](uint32_t a, uint32_t b) {
+                const auto& pa = core_work[a].physical_core;
+                const auto& pb = core_work[b].physical_core;
+                return (pa.y < pb.y) || (pa.y == pb.y && pa.x < pb.x);
+            });
+
+            std::vector<ChainSegment> chain_segs;
+            chain_segs.reserve(core_indices.size());
+            for (uint32_t ci : core_indices) {
+                chain_segs.emplace_back(ci, core_work[ci].global_q_count);
+                v_chain_max_q[ci] = core_work[ci].global_q_count;
+            }
+            if (build_linear_chain(chain_segs, batch, 0, v_batch_chain_configs, core_work)) {
+                log_debug(tt::LogOp, "V unicast chain for batch {}: {} cores", batch, chain_segs.size());
+            }
+        }
+    }
+
     // K multicast pass: one mcast chain per logical row. Each chain's injector is
     // the greedy max-work core in its row, picked under a FIFO-windowed physical-
     // column exclusion (window size grid_size.x - 1): successive chains always land
@@ -1551,7 +1598,12 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         reader_compile_time_args[sem_args_offset + 7] = k_mcast_enabled ? 1 : 0;
     }
 
-    log_info(tt::LogOp, "V chain mode: head ({})", head_mcast_enabled ? "mcast" : "unicast");
+    // V batch chain mcast: not enabled in this implementation (unicast only)
+    if (v_uses_batch_chain) {
+        log_info(tt::LogOp, "V chain mode: batch (unicast)");
+    } else {
+        log_info(tt::LogOp, "V chain mode: head ({})", head_mcast_enabled ? "mcast" : "unicast");
+    }
     if (k_uses_batch_chain) {
         log_info(
             tt::LogOp,
@@ -1630,6 +1682,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         // Append chain runtime args for store-and-forward
         const auto& head_chain = head_chain_configs.at(i);
         const auto& batch_chain = batch_chain_configs.at(i);
+        const auto& v_batch_chain_cfg = v_batch_chain_configs.at(i);
 
         log_debug(
             tt::LogOp,
@@ -1659,6 +1712,14 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
             batch_chain.append_to_args(batch_chain_args);
             reader_args.append(batch_chain_args);
             reader_args.push_back(k_chain_max_q[i]);  // For K mcast loop padding (per-chain)
+        }
+
+        // V batch chain args (when NHV == 1)
+        if (v_uses_batch_chain) {
+            std::vector<uint32_t> v_batch_chain_args;
+            v_batch_chain_cfg.append_to_args(v_batch_chain_args);
+            reader_args.append(v_batch_chain_args);
+            reader_args.push_back(v_chain_max_q[i]);
         }
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
