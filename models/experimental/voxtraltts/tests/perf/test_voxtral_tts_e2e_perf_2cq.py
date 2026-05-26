@@ -299,12 +299,12 @@ def _load_cpu_reference_or_skip(model_name: str) -> VoxtralCPUReference:
 
 
 def _capture_e2e_golden(pipe: VoxtralTTSPipeline, *, num_steps: int) -> _E2EGoldenRef:
-    """One clean ``pipe.forward`` on a fresh pipeline; CPU-ref waveform decode for PCC baseline."""
+    """One clean ``forward_device_resident`` on a fresh pipeline; CPU-ref waveform decode for PCC baseline."""
     from models.experimental.voxtraltts.reference.audio_tokenizer_ops import audio_tokenizer_decode_reference
 
     _load_cpu_reference_or_skip(pipe.model_name_or_path)
 
-    out = pipe.forward(
+    out = pipe.forward_device_resident(
         text=_DEMO_TEXT,
         voice=_DEMO_VOICE,
         max_tokens=num_steps,
@@ -331,7 +331,7 @@ def _assert_non_trace_e2e_pcc(device: ttnn.Device, golden: _E2EGoldenRef) -> Non
     """Post-pipeline correctness gate on a fresh pipeline (KV not polluted by perf capture/loop)."""
     pipe = _load_pipeline_or_skip(device)
     try:
-        tt_out = pipe.forward(
+        tt_out = pipe.forward_device_resident(
             text=_DEMO_TEXT,
             voice=_DEMO_VOICE,
             max_tokens=_GENERATE_MAX_TOKENS,
@@ -452,7 +452,7 @@ def _make_voxtral_forward_fn(
 ) -> Callable[[ttnn.Tensor], ttnn.Tensor]:
     def forward(_device_input: ttnn.Tensor) -> ttnn.Tensor:
         del _device_input
-        out = pipe.forward(
+        out = pipe.forward_device_resident(
             text=_DEMO_TEXT,
             voice=_DEMO_VOICE,
             max_tokens=_GENERATE_MAX_TOKENS,
@@ -460,9 +460,9 @@ def _make_voxtral_forward_fn(
             fixed_step_count=fixed_step_count,
             include_waveform_decode=include_waveform_decode,
         )
-        assert out.codes_b37t.shape[2] > 0, "pipeline forward produced no acoustic frames"
+        assert out.codes_b37t.shape[2] > 0, "pipeline forward_device_resident produced no acoustic frames"
         if include_waveform_decode:
-            assert torch.isfinite(out.waveform).all(), "pipeline forward produced non-finite waveform"
+            assert torch.isfinite(out.waveform).all(), "pipeline forward_device_resident produced non-finite waveform"
         dim = pipe.text.inner.args.dim
         return ttnn.from_torch(
             torch.zeros((1, 1, 1, dim), dtype=torch.bfloat16),
