@@ -18,6 +18,7 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 
 class SubBcastColCustomUnpacker(Unpacker):
     loop: FusedLoop = LoopBlockRow()
+    per_block_init = True
 
     def get_headers(self) -> List[str]:
         return [

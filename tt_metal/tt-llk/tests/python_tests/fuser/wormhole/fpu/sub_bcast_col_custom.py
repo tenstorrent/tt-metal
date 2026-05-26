@@ -16,6 +16,7 @@ from .eltwise import EltwiseFpu
 
 class SubBcastColCustomFpu(EltwiseFpu):
     loop: FusedLoop = LoopBlockRow()
+    per_block_init = True
 
     def __init__(self):
         super().__init__(MathOperation.Elwsub)

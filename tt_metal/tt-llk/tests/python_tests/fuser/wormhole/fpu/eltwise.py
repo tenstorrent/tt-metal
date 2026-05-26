@@ -95,7 +95,7 @@ class EltwiseFpu(Fpu):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
+        dest_sync = operation.dest_sync.cpp_enum_value
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         op = self.operation.cpp_enum_value
@@ -108,7 +108,7 @@ class EltwiseFpu(Fpu):
         clear_fp32_dst_acc = compute_unit.clear_fp32_dst_acc.cpp_enum_value
 
         return (
-            f"_llk_math_eltwise_binary_<{op}, {broadcast_type}, dest_sync{stage},\n"
+            f"_llk_math_eltwise_binary_<{op}, {broadcast_type}, {dest_sync},\n"
             f"{dest_acc}, {math_fidelity}, {reuse_dest}>"
             f"(ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}}, {block.tile_id_block}, {clear_fp32_dst_acc});\n"
         )

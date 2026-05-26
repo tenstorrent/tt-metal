@@ -33,6 +33,27 @@ class GlobalConfig:
     loop_factor: int = 16
     sentinel: FuserSentinel = field(default_factory=FuserSentinel)
 
+    @property
+    def skip_unpack_init(self) -> bool:
+        return self.perf_run_type in (PerfRunType.PACK_ISOLATE, PerfRunType.MATH_ISOLATE)
+
+    @property
+    def skip_math_init(self) -> bool:
+        return self.perf_run_type in (
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.PACK_ISOLATE,
+            PerfRunType.L1_CONGESTION,
+        )
+
+    @property
+    def skip_sync(self) -> bool:
+        return self.perf_run_type in (
+            PerfRunType.MATH_ISOLATE,
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.PACK_ISOLATE,
+            PerfRunType.L1_CONGESTION,
+        )
+
 
 class FuserConfig(TestConfig):
     pipeline: List[FusedOperation]

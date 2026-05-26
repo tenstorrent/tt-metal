@@ -16,6 +16,8 @@ from fuser.fuser_config import GlobalConfig
 class ReduceBlockMaxUnpacker(Unpacker):
     loop: FusedLoop = LoopTileByTile()
 
+    per_block_init = True
+
     def init(
         self,
         operation: FusedOperation,

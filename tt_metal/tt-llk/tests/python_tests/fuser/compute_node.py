@@ -18,7 +18,6 @@ from helpers.llk_params import (
     EltwiseBinaryReuseDestType,
     EnforceFP32Accumulation,
     MathFidelity,
-    PerfRunType,
     Transpose,
     UnpackToDest,
 )
@@ -88,7 +87,26 @@ class ComputeNode:
         if self.src_a is None and self.src_b is None:
             return
 
-    def unpack(
+    def unpack_reconfig(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+    ):
+        if self.unpacker is None or config.skip_unpack_init:
+            return ""
+        return config.sentinel.configure_unpack(config, operation, self)
+
+    def unpack_init(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        block: BlockData,
+    ):
+        if self.unpacker is None or config.skip_unpack_init:
+            return ""
+        return self.unpacker.init(operation, config, self, block)
+
+    def unpack_run(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
@@ -96,80 +114,68 @@ class ComputeNode:
     ):
         if self.unpacker is None:
             return ""
+        return self.unpacker.loop.unpack_loop(operation, config, self, block)
 
-        code = ""
-        skip_init = config.perf_run_type in (
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-        )
-        if not skip_init:
-            code += config.sentinel.configure_unpack(config, operation, self)
-            code += self.unpacker.init(operation, config, self, block)
-
-        code += self.unpacker.loop.unpack_loop(operation, config, self, block)
-        if not skip_init:
-            code += self.unpacker.uninit(operation, config, self, block)
-
-        return code
-
-    def fpu_calculate(
+    def unpack_uninit(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
         block: BlockData,
     ):
-        if self.fpu is None:
+        if self.unpacker is None or config.skip_unpack_init:
             return ""
+        return self.unpacker.uninit(operation, config, self, block)
 
-        code = ""
-        skip_init = config.perf_run_type in (
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        )
-        if not skip_init:
-            code += config.sentinel.configure_math(config, operation, self)
-            code += self.fpu.init(operation, config, self, block)
+    def math_reconfig(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+    ):
+        if config.skip_math_init or self.fpu is None:
+            return ""
+        return config.sentinel.configure_math(config, operation, self)
 
-        code += self.fpu.loop.math_loop(operation, config, self, block)
-        if not skip_init:
-            code += self.fpu.uninit(operation, config, self, block)
-
-        return code
-
-    def sfpu_calculate(
+    def math_init(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
         block: BlockData,
     ):
-        if self.sfpu is None:
+        if config.skip_math_init:
             return ""
-
-        if config.perf_run_type in (
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ):
-            return ""
-
-        code = self.sfpu.init(operation, config, self, block)
-        code += self.sfpu.calculate(operation, config, self, block)
-        code += self.sfpu.uninit(operation, config, self, block)
-        return code
-
-    def math_calculate(
-        self,
-        operation: "FusedOperation",
-        config: "GlobalConfig",
-        block: BlockData,
-    ) -> str:
         if self.fpu is not None:
-            return self.fpu_calculate(operation, config, block)
+            return self.fpu.init(operation, config, self, block)
         elif self.sfpu is not None:
-            return self.sfpu_calculate(operation, config, block)
-        else:
-            raise ValueError("fpu and sfpu are not defined")
+            return self.sfpu.init(operation, config, self, block)
+        return ""
+
+    def math_run(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        block: BlockData,
+    ):
+        if self.fpu is not None:
+            return self.fpu.loop.math_loop(operation, config, self, block)
+        elif self.sfpu is not None:
+            if config.skip_math_init:
+                return ""
+            return self.sfpu.calculate(operation, config, self, block)
+        return ""
+
+    def math_uninit(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        block: BlockData,
+    ):
+        if config.skip_math_init:
+            return ""
+        if self.fpu is not None:
+            return self.fpu.uninit(operation, config, self, block)
+        elif self.sfpu is not None:
+            return self.sfpu.uninit(operation, config, self, block)
+        return ""
 
     def golden(
         self,

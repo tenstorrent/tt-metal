@@ -100,14 +100,14 @@ class UnarySfpu(Sfpu):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
+        dest_sync = operation.dest_sync.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         approx_mode = self.approx_mode.cpp_enum_value
         op = f"SfpuType::{self.operation.cpp_enum_value}"
 
         return (
             f"test_utils::call_unary_sfpu_operation<"
-            f"dest_sync{stage}, {dest_acc}, "
+            f"{dest_sync}, {dest_acc}, "
             f"{op}, {approx_mode}, {dest_acc}, {self.iterations}"
             f">({self.dest_idx}, {config.sentinel.math_format}, {self.fill_const_value});\n"
         )

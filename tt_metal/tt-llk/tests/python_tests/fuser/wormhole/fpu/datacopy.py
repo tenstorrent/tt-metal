@@ -89,14 +89,14 @@ class DatacopyFpu(Fpu):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
+        dest_sync = operation.dest_sync.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         data_copy_type = f"DataCopyType::{compute_unit.data_copy_type.name}"
 
         code = (
-            f"    _llk_math_eltwise_unary_datacopy_<{data_copy_type}, dest_sync{stage}, {dest_acc}, {broadcast_type}, {unpack_to_dest}>(\n"
+            f"    _llk_math_eltwise_unary_datacopy_<{data_copy_type}, {dest_sync}, {dest_acc}, {broadcast_type}, {unpack_to_dest}>(\n"
             f"        {block.tile_id_block}, {config.sentinel.math_format}, {config.sentinel.math_format}\n"
             f"    );\n"
         )

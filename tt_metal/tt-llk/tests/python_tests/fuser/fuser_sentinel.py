@@ -243,7 +243,7 @@ class FuserSentinel:
     ) -> str:
         """Emit unpack reconfig calls when formats change between compute nodes.
 
-        Called per node from ComputeNode.unpack() inside the tile loop. Compares
+        Called per node from ComputeNode.unpack_configure() inside the tile loop. Compares
         the node's inferred formats against the currently configured state and emits
         _llk_unpack_reconfig_data_format_src{a,b}_impl_ only for channels that changed.
         """
@@ -326,7 +326,7 @@ class FuserSentinel:
     ) -> str:
         """Emit math reconfig when the math format changes between compute nodes.
 
-        Called per node from ComputeNode.fpu_calculate() inside the tile loop.
+        Called per node from ComputeNode.math_configure() inside the tile loop.
         """
         if compute_node.src_a is None:
             return ""

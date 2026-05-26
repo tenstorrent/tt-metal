@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
 
-from helpers.llk_params import GoldenType, PerfRunType
+from helpers.llk_params import GoldenType
 
 from .block_data import BlockData
 from .compute_node import ComputeNode
@@ -48,6 +48,23 @@ class ComputePipeline:
                 math_units.append(operation.sfpu)
 
         return math_units
+
+    def _all_same_operand_formats(self, ops: List[ComputeNode]) -> bool:
+        if len(ops) <= 1:
+            return True
+        first = ops[0]
+        for cu in ops[1:]:
+            if (cu.src_a is not None) != (first.src_a is not None):
+                return False
+            if (cu.src_b is not None) != (first.src_b is not None):
+                return False
+            if cu.src_a is not None and first.src_a is not None:
+                if cu.src_a.data_format != first.src_a.data_format:
+                    return False
+            if cu.src_b is not None and first.src_b is not None:
+                if cu.src_b.data_format != first.src_b.data_format:
+                    return False
+        return True
 
     def _batch_loop(
         self, operation: "FusedOperation", config: "GlobalConfig", body_fn
@@ -117,6 +134,33 @@ class ComputePipeline:
 
         return code
 
+    def _zone(
+        self, config: "GlobalConfig", name: str, body: str
+    ) -> str:
+        if not config.profiler_enabled:
+            return body
+        code = "{\n"
+        code += f'ZONE_SCOPED("{name}")\n'
+        code += body
+        code += "PROFILER_SYNC();\n"
+        code += "}\n"
+        return code
+
+    def _zone_loop(
+        self, config: "GlobalConfig", name: str, body: str
+    ) -> str:
+        if not config.profiler_enabled:
+            return body
+        code = "{\n"
+        code += f'ZONE_SCOPED("{name}")\n'
+        code += f"for(int loop = 0; loop < {config.loop_factor}; loop++)\n"
+        code += "{\n"
+        code += body
+        code += "}\n"
+        code += "PROFILER_SYNC();\n"
+        code += "}\n"
+        return code
+
     def unpacker_sync_with_packer(
         self,
         operation: "FusedOperation",
@@ -131,142 +175,121 @@ class ComputePipeline:
         return ""
 
     def unpack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
-        code = ""
+        unpack_ops = [cu for cu in self.operations if cu.unpacker is not None]
+        hoist = len(unpack_ops) == 1
+        hoist_reconfig = hoist or self._all_same_operand_formats(unpack_ops)
 
-        if config.profiler_enabled:
-            code += "{\n"
-            code += 'ZONE_SCOPED("INIT")\n'
-
-        code += config.sentinel.hw_configure_unpack(config, operation)
-
-        if config.profiler_enabled:
-            code += "PROFILER_SYNC();\n"
-            code += "}\n"
-            code += "{\n"
-            code += 'ZONE_SCOPED("TILE_LOOP")\n'
+        init_code = config.sentinel.hw_configure_unpack(config, operation)
+        if hoist_reconfig and unpack_ops:
+            init_code += unpack_ops[0].unpack_reconfig(operation, config)
+        if hoist and not unpack_ops[0].unpacker.per_block_init:
+            init_code += unpack_ops[0].unpack_init(operation, config, None)
+        code = self._zone(config, "INIT", init_code)
 
         code += self.unpacker_sync_with_packer(operation, config)
 
-        if config.profiler_enabled:
-            code += f"for(int loop = 0; loop < {config.loop_factor}; loop++)\n"
-            code += "{\n"
-
         def batch_body(block: BlockData):
             body = ""
-            for compute_unit in self.operations:
-                body += compute_unit.unpack(operation, config, block)
+            for cu in self.operations:
+                hoisted = hoist and cu.unpacker is not None and not cu.unpacker.per_block_init
+                if not hoist_reconfig and cu.unpacker is not None:
+                    body += cu.unpack_reconfig(operation, config)
+                if not hoisted:
+                    body += cu.unpack_init(operation, config, block)
+                body += cu.unpack_run(operation, config, block)
+                if not hoisted:
+                    body += cu.unpack_uninit(operation, config, block)
             return body
 
-        code += self._batch_loop(operation, config, batch_body)
+        code += self._zone_loop(
+            config, "TILE_LOOP", self._batch_loop(operation, config, batch_body)
+        )
 
-        if config.profiler_enabled:
-            code += "}\n"
-            code += "PROFILER_SYNC();\n"
-            code += "}\n"
-            code += "{\n"
-            code += 'ZONE_SCOPED("INIT")\n'
-            code += "PROFILER_SYNC();\n"
-            code += "}\n"
+        uninit_code = ""
+        if hoist and not unpack_ops[0].unpacker.per_block_init:
+            uninit_code += unpack_ops[0].unpack_uninit(operation, config, None)
+        code += self._zone(config, "INIT", uninit_code)
 
         return code
 
     def _math_wait_for_dest(
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
-        if config.perf_run_type in (
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ):
+        if config.skip_sync:
             return ""
-
-        return f"_llk_math_wait_for_dest_available_<dest_sync{operation.stage_id}>();\n"
+        dest_sync = operation.dest_sync.cpp_enum_value
+        return f"_llk_math_wait_for_dest_available_<{dest_sync}>();\n"
 
     def _math_dest_section_done(
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
-        if config.perf_run_type in (
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ):
+        if config.skip_sync:
             return ""
-
+        dest_sync = operation.dest_sync.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_math_dest_section_done_<dest_sync{operation.stage_id}, {dest_acc}>();\n"
+        return f"_llk_math_dest_section_done_<{dest_sync}, {dest_acc}>();\n"
+
+    def _math_pack_sync_init(
+        self, operation: "FusedOperation", config: "GlobalConfig"
+    ) -> str:
+        dest_sync = operation.dest_sync.cpp_enum_value
+        dest_acc = config.dest_acc.cpp_enum_value
+        return f"_llk_math_pack_sync_init_<{dest_sync}, {dest_acc}>();\n"
 
     def _math_constants(
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
-        stage = operation.stage_id
-        dest_sync = operation.dest_sync.cpp_enum_value
-
-        code = f"// Operation {stage}: Math Setup\n"
-        code += f"constexpr DstSync dest_sync{stage} = {dest_sync};\n"
-
-        return code
+        return f"// Operation {operation.stage_id}: Math Setup\n"
 
     def math_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         code = self._math_constants(operation, config)
+        fpu_ops = [cu for cu in self.operations if cu.fpu is not None]
+        hoist = len(fpu_ops) == 1
+        hoist_reconfig = hoist or self._all_same_operand_formats(fpu_ops)
 
-        if config.profiler_enabled:
-            code += "{\n"
-            code += 'ZONE_SCOPED("INIT")\n'
-
-        code += config.sentinel.hw_configure_math(config, operation)
-
-        stage = operation.stage_id
-        dest_acc = config.dest_acc.cpp_enum_value
-        code += f"_llk_math_pack_sync_init_<dest_sync{stage}, {dest_acc}>();\n"
-
-        if config.profiler_enabled:
-            code += "PROFILER_SYNC();\n"
-            code += "}\n"
-            code += "{\n"
-            code += 'ZONE_SCOPED("TILE_LOOP")\n'
-            code += f"for(int loop = 0; loop < {config.loop_factor}; loop++)\n"
-            code += "{\n"
+        init_code = config.sentinel.hw_configure_math(config, operation)
+        init_code += self._math_pack_sync_init(operation, config)
+        if hoist_reconfig and fpu_ops:
+            init_code += fpu_ops[0].math_reconfig(operation, config)
+        if hoist and not fpu_ops[0].fpu.per_block_init:
+            init_code += fpu_ops[0].math_init(operation, config, None)
+        code += self._zone(config, "INIT", init_code)
 
         def batch_body(block: BlockData):
             body = self._math_wait_for_dest(operation, config)
-            for compute_unit in self.operations:
-                body += compute_unit.math_calculate(operation, config, block)
+            for cu in self.operations:
+                hoisted = hoist and cu.fpu is not None and not cu.fpu.per_block_init
+                if not hoist_reconfig and cu.fpu is not None:
+                    body += cu.math_reconfig(operation, config)
+                if not hoisted:
+                    body += cu.math_init(operation, config, block)
+                body += cu.math_run(operation, config, block)
+                if not hoisted:
+                    body += cu.math_uninit(operation, config, block)
             body += self._math_dest_section_done(operation, config)
             return body
 
-        code += self._batch_loop(operation, config, batch_body)
+        code += self._zone_loop(
+            config, "TILE_LOOP", self._batch_loop(operation, config, batch_body)
+        )
 
-        if config.profiler_enabled:
-            code += "}\n"
-            code += "PROFILER_SYNC();\n"
-            code += "}\n"
+        uninit_code = ""
+        if hoist and not fpu_ops[0].fpu.per_block_init:
+            uninit_code += fpu_ops[0].math_uninit(operation, config, None)
+        code += self._zone(config, "INIT", uninit_code)
 
         return code
 
     def _packer_wait_for_math(self, config: "GlobalConfig") -> str:
-        if config.perf_run_type in (
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ):
+        if config.skip_sync:
             return ""
-
         return "_llk_packer_wait_for_math_done_();\n"
 
     def _packer_dest_section_done(
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
-        if config.perf_run_type in (
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ):
+        if config.skip_sync:
             return ""
-
         dest_sync = operation.dest_sync.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         return f"_llk_pack_dest_section_done_<{dest_sync}, {dest_acc}>();\n"
@@ -309,56 +332,48 @@ class ComputePipeline:
 
         return code
 
+    def _all_same_pack_formats(self) -> bool:
+        if len(self.pack_nodes) <= 1:
+            return True
+        first_fmt = self.pack_nodes[0].output.data_format
+        return all(pn.output.data_format == first_fmt for pn in self.pack_nodes[1:])
+
     def pack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         code = self._pack_constants(operation, config)
+        hoist = len(self.pack_nodes) == 1
+        hoist_reconfig = hoist or self._all_same_pack_formats()
 
-        if config.profiler_enabled:
-            code += "{\n"
-            code += 'ZONE_SCOPED("INIT")\n'
-
-        code += config.sentinel.hw_configure_pack(config, operation, self.pack_nodes)
-        code += self._pack_dest_init(operation, config)
-        code += self._pack_reduce_mask_config(operation)
-
-        if len(self.pack_nodes) == 1:
-            code += self.pack_nodes[0].configure(operation, config, None)
-
-        if config.profiler_enabled:
-            code += "PROFILER_SYNC();\n"
-            code += "}\n"
-            code += "{\n"
-            code += 'ZONE_SCOPED("TILE_LOOP")\n'
-
-        if config.profiler_enabled:
-            code += f"for(int loop = 0; loop < {config.loop_factor}; loop++)\n"
-            code += "{\n"
+        init_code = config.sentinel.hw_configure_pack(config, operation, self.pack_nodes)
+        init_code += self._pack_dest_init(operation, config)
+        init_code += self._pack_reduce_mask_config(operation)
+        if hoist_reconfig:
+            init_code += self.pack_nodes[0].reconfig(operation, config)
+        if hoist:
+            init_code += self.pack_nodes[0].configure(operation, config, None)
+        code += self._zone(config, "INIT", init_code)
 
         def batch_body(block: BlockData):
             body = self._packer_wait_for_math(config)
             for pack_node in self.pack_nodes:
-                if len(self.pack_nodes) > 1:
+                if not hoist_reconfig:
+                    body += pack_node.reconfig(operation, config)
+                if not hoist:
                     body += pack_node.configure(operation, config, block)
                 body += pack_node.pack_loop(operation, config, block)
+                if not hoist:
+                    body += pack_node.uninit(operation, config)
             body += self._packer_dest_section_done(operation, config)
             return body
 
-        code += self._batch_loop(operation, config, batch_body)
+        code += self._zone_loop(
+            config, "TILE_LOOP", self._batch_loop(operation, config, batch_body)
+        )
 
-        if config.profiler_enabled:
-            code += "}\n"
-            code += "PROFILER_SYNC();\n"
-            code += "}\n"
-            code += "{\n"
-            code += 'ZONE_SCOPED("INIT")\n'
-
-        code += self.packer_sync_with_unpacker(operation, config)
-        for pack_node in self.pack_nodes:
-            code += pack_node.uninit(operation, config)
-        code += self._pack_reduce_mask_clear(operation)
-
-        if config.profiler_enabled:
-            code += "PROFILER_SYNC();\n"
-            code += "}\n"
+        uninit_code = self.packer_sync_with_unpacker(operation, config)
+        if hoist:
+            uninit_code += self.pack_nodes[0].uninit(operation, config)
+        uninit_code += self._pack_reduce_mask_clear(operation)
+        code += self._zone(config, "INIT", uninit_code)
 
         return code
 

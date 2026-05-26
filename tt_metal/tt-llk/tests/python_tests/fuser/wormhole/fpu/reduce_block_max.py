@@ -19,6 +19,8 @@ class ReduceBlockMaxFpu(Fpu):
     loop: FusedLoop = LoopBlockRow()
     reduce_dim: ReduceDimension = ReduceDimension.Row
 
+    per_block_init = True
+
     def init(
         self,
         operation: FusedOperation,

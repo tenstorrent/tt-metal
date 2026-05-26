@@ -52,14 +52,20 @@ class PackNode:
         l1_acc = self.pack_l1_accumulation.cpp_enum_value
         return f"_llk_pack_reconfig_l1_acc_({l1_acc});\n"
 
+    def reconfig(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+    ) -> str:
+        return config.sentinel.configure_pack(config, operation, self)
+
     def configure(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
         block: BlockData,
     ) -> str:
-        code = config.sentinel.configure_pack(config, operation, self)
-        code += self.packer.init(self, operation, config, block)
+        code = self.packer.init(self, operation, config, block)
         code += self._relu_config(config)
         code += self._l1_accumulation_config()
         return code

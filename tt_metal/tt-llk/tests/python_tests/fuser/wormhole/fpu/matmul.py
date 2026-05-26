@@ -16,6 +16,7 @@ from helpers.golden_generators import MatmulGolden, get_golden_generator
 
 class MatmulFpu(Fpu):
     loop: FusedLoop = LoopBlock()
+    per_block_init = True
 
     def get_headers(self) -> List[str]:
         return [
