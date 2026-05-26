@@ -1106,6 +1106,8 @@ class TestHasWriterFlag:
             )
             assert ("volatile tt_l1_ptr uint32_t* writer_done;" in result) == expect_writer
             assert "volatile tt_l1_ptr uint32_t* compute_done;" in result
+            assert "#define WATCHER_DISABLE_CB_OWNERSHIP" in result
+            assert result.index("#define WATCHER_DISABLE_CB_OWNERSHIP") < result.index("#include")
 
 
 class TestCoordinatorOnlySource:
@@ -1153,6 +1155,8 @@ class TestCoordinatorOnlySource:
         )
         assert '#include "dataflow_api.h"' in source
         assert "#include <array>" in source
+        assert "#define WATCHER_DISABLE_CB_OWNERSHIP" in source
+        assert source.index("#define WATCHER_DISABLE_CB_OWNERSHIP") < source.index("#include")
 
 
 # ---------------------------------------------------------------------------

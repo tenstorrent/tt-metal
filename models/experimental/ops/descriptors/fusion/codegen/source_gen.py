@@ -38,6 +38,11 @@ from models.experimental.ops.descriptors.fusion.codegen.args import (
 _SECTION_SEP = "// " + "=" * 76
 _PROFILER_INCLUDE = '#include "tools/profiler/kernel_profiler.hpp"'
 _ARRAY_INCLUDE = "#include <array>"
+_DISABLE_CB_OWNERSHIP_DEFINE = [
+    "#ifndef WATCHER_DISABLE_CB_OWNERSHIP",
+    "#define WATCHER_DISABLE_CB_OWNERSHIP",
+    "#endif",
+]
 
 
 def _spdx_header() -> List[str]:
@@ -404,6 +409,7 @@ def _generate_fused_source(
         parts = line.strip().split(None, 2)
         if len(parts) >= 2:
             file_scope_define_names.add(parts[1])
+    lines.extend(_DISABLE_CB_OWNERSHIP_DEFINE)
     lines.append("")
     lines.extend(includes)
     lines.append(_PROFILER_INCLUDE)
@@ -566,6 +572,7 @@ def _generate_coordinator_only_source(
         "",
         "// Auto-generated barrier-only coordinator kernel",
         "",
+        *_DISABLE_CB_OWNERSHIP_DEFINE,
         '#include "dataflow_api.h"',
         _PROFILER_INCLUDE,
         _ARRAY_INCLUDE,

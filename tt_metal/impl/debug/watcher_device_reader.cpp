@@ -285,6 +285,7 @@ private:
     void DumpTileCountersBypass() const;
     void DumpTileCountersWithRemapper() const;
     void DumpStackUsage() const;
+    void DumpCbOwnership() const;
     void LogRunningKernels() const;
     const std::string& GetKernelName(uint32_t processor_index) const;
     void ValidateKernelIDs() const;
@@ -618,6 +619,13 @@ void WatcherDeviceReader::Core::Dump() const {
 
         if (is_eth_core && !rtoptions.watcher_eth_link_status_disabled()) {
             DumpEthLinkStatus();
+        }
+
+        // CB ownership / multi-consumer detection. Tensix-only — the
+        // device-side instrumentation excludes eth/dram and the cb_ownership
+        // mailbox is wiped to zero by BRISC, so non-Tensix bytes stay zero.
+        if (!rtoptions.watcher_cb_ownership_disabled() && !is_eth_core && !is_dram_core) {
+            DumpCbOwnership();
         }
     }
 
@@ -1261,6 +1269,104 @@ void WatcherDeviceReader::Core::DumpStackUsage() const {
                 slot = {virtual_coord_, static_cast<uint16_t>(usage.min_free() - 1), usage.watcher_kernel_id()};
             }
         }
+    }
+}
+
+void WatcherDeviceReader::Core::DumpCbOwnership() const {
+    auto cb_ownership = mbox_data_.watcher().cb_ownership();
+    const auto& hal = reader_.env.get_hal();
+    auto num_risc = hal.get_num_risc_processors(programmable_core_type_);
+    std::string error_msg;  // first detected anti-pattern; we throw with this after the loop
+    auto popcount = [](uint8_t m) {
+        uint32_t c = 0;
+        for (; m; m &= (m - 1)) {
+            ++c;
+        }
+        return c;
+    };
+
+    auto producer_bitmap = cb_ownership.producer_bitmap();
+    auto consumer_bitmap = cb_ownership.consumer_bitmap();
+    auto popper_bitmap = cb_ownership.popper_bitmap();
+
+    uint32_t num_cbs = hal.get_arch_num_circular_buffers();
+    uint32_t bytes_per_risc = (NUM_CIRCULAR_BUFFERS + 7) / 8;
+
+    auto risc_touched = [&](auto& bitmap, uint32_t r, uint32_t cb_id) -> bool {
+        uint32_t byte_idx = r * bytes_per_risc + (cb_id >> 3);
+        uint8_t bit = static_cast<uint8_t>(1u << (cb_id & 0x7));
+        return (bitmap[byte_idx] & bit) != 0;
+    };
+
+    for (uint32_t cb_id = 0; cb_id < num_cbs; ++cb_id) {
+        uint8_t producer_mask = 0;
+        uint8_t consumer_mask = 0;
+        uint8_t popper_mask = 0;
+        for (uint32_t r = 0; r < num_risc; ++r) {
+            if (risc_touched(producer_bitmap, r, cb_id)) {
+                producer_mask |= (1u << r);
+            }
+            if (risc_touched(consumer_bitmap, r, cb_id)) {
+                consumer_mask |= (1u << r);
+            }
+            if (risc_touched(popper_bitmap, r, cb_id)) {
+                popper_mask |= (1u << r);
+            }
+        }
+
+        if (producer_mask == 0 && consumer_mask == 0) {
+            continue;
+        }
+
+        uint32_t n_producers = popcount(producer_mask);
+        uint32_t n_consumers = popcount(consumer_mask);
+
+        // Producer-only ownership is currently advisory. Several legal
+        // data-movement paths hand off CB production across DM RISCs, while
+        // the c_8/#44366 deadlock signature is the mixed consumer discipline
+        // checked below.
+        if (n_producers > 1) {
+            log_debug(
+                tt::LogMetal,
+                "{}: Watcher: CB c_{} on core {} had {} producers (mask 0x{:02x}).",
+                core_str_,
+                cb_id,
+                virtual_coord_.str(),
+                n_producers,
+                producer_mask);
+        }
+
+        // Multi-consumer is only dangerous when at least one consumer pops and
+        // at least one other consumer waits without popping. Split-reader
+        // patterns (e.g. conv2d halo gather: BRISC and NCRISC both wait_front +
+        // pop_front, processing disjoint portions of the shard via direct
+        // addressing) are legitimate. Broadcast/read-only CBs where nobody pops
+        // are also safe. The c_8/#44366 bug is the mixed case where one
+        // consumer waits but never pops, deadlocking when another consumer pops
+        // the only token first.
+        uint8_t popping_consumers = consumer_mask & popper_mask;
+        uint8_t wait_only_consumers = consumer_mask & ~popper_mask;
+        if (n_consumers > 1 && popping_consumers && wait_only_consumers) {
+            std::string msg = fmt::format(
+                "Watcher: CB c_{} on core {} had {} consumers (mask 0x{:02x}), "
+                "but RISC(s) mask 0x{:02x} called cb_wait_front without "
+                "cb_pop_front. Deadlocks if the popper consumes the only token "
+                "first (see GH #44366).",
+                cb_id,
+                virtual_coord_.str(),
+                n_consumers,
+                consumer_mask,
+                wait_only_consumers);
+            log_warning(tt::LogMetal, "{}: {}", core_str_, msg);
+            if (error_msg.empty()) {
+                error_msg = msg;
+            }
+        }
+    }
+
+    if (!error_msg.empty()) {
+        reader_.watcher_server.set_exception_message(fmt::format("{}: {}", core_str_, error_msg));
+        TT_THROW("{}: {}", core_str_, error_msg);
     }
 }
 

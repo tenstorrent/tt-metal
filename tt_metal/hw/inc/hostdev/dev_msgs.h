@@ -30,6 +30,7 @@
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
 #include "hostdev/device_print_common.h"
+#include "tt-metalium/circular_buffer_constants.h"
 
 #ifdef HAL_BUILD
 // HAL will include this file for different arch/cores, resulting in conflicting definitions that
@@ -303,6 +304,40 @@ struct debug_stack_usage_t {
     uint8_t pad[12];  // CODEGEN:skip
 };
 
+// Tracks which RISCs touched each CB. Bit-packed to fit the mailbox budget
+// (~120B vs. 1KB for the byte-array layout). Layout:
+//
+//   producer_bitmap is logically [MaxProcessorsPerCoreType][CB_BITMAP_BYTES],
+//   flattened to 1-d so codegen accepts it. RISC r owns the contiguous slice
+//   producer_bitmap[r*BYTES_PER_RISC .. (r+1)*BYTES_PER_RISC). Within that
+//   slice, bit (cb_id % 8) of byte (cb_id / 8) marks CB cb_id as touched.
+//
+// Race analysis:
+//   - Cross-RISC: each RISC writes only its own slice → disjoint memory →
+//     no race.
+//   - Within-RISC: writes are sequential on a single hart → no race.
+//   - Reset: BRISC zeros the whole struct before releasing NCRISC/TRISCs.
+//
+// Host OR-reduces the per-RISC consumer/popper slices into masks and flags
+// mixed consumer wait-without-pop patterns. Producer storage is retained in
+// the ABI but producer recording is currently disabled.
+//
+// Size is hardcoded to 40 bytes per category = 5 RISCs × ((64 CBs + 7) / 8)
+// for two reasons:
+//   - codegen doesn't accept array-size expressions, only single identifiers.
+//   - file-scope arch-dependent constants leak into the host's arch-
+//     independent namespace, which would break the multi-arch HAL build.
+// Trade-off: WH device only uses 32 CBs (20 bytes worth), the remaining 20
+// bytes per category are wasted on WH. Acceptable to keep host/device
+// layouts consistent and the codegen rules satisfied.
+// Quasar is out of scope (24 RISCs would need >40B); the device-side
+// instrumentation is gated on !defined(ARCH_QUASAR).
+struct debug_cb_ownership_msg_t {
+    volatile uint8_t producer_bitmap[40];
+    volatile uint8_t consumer_bitmap[40];
+    volatile uint8_t popper_bitmap[40];
+};
+
 struct debug_eth_link_t {
     volatile uint8_t link_down;
 };
@@ -327,6 +362,7 @@ struct watcher_msg_t {
     struct debug_stack_usage_t stack_usage;
     struct debug_insert_delays_msg_t debug_insert_delays;
     struct debug_ring_buf_msg_t debug_ring_buf;
+    struct debug_cb_ownership_msg_t cb_ownership;
 };
 
 #ifndef CODEGEN

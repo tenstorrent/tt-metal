@@ -752,6 +752,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     compute_defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     compute_defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     compute_defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
+    compute_defines["WATCHER_ENABLE_CB_OWNERSHIP_RECORDING"] = "1";
 
     if (Sk_chunk_t > 0) {
         auto add_granularity = [&](const char* name, uint32_t value) {
@@ -781,6 +782,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = core_grid;
     reader_desc.compile_time_args = std::move(reader_compile_time_args_common);
+    reader_desc.defines = {{"WATCHER_ENABLE_CB_OWNERSHIP_RECORDING", "1"}};
     reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer_desc;
@@ -788,6 +790,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = std::move(writer_compile_time_args_common);
+    writer_desc.defines = {{"WATCHER_ENABLE_CB_OWNERSHIP_RECORDING", "1"}};
     writer_desc.config = WriterConfigDescriptor{};
 
     KernelDescriptor compute_desc;

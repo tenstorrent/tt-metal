@@ -32,6 +32,7 @@
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
 #include "api/debug/device_print.h"
+#include "api/debug/cb_ownership.h"
 #include "internal/debug/stack_usage.h"
 #include "api/debug/checkpoint.h"
 
@@ -437,6 +438,11 @@ int main() {
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
             uint32_t enables = launch_msg_address->kernel_config.enables;
+            // Wipe CB-ownership masks before releasing subordinates. Other RISCs
+            // haven't accessed the masks yet (NCRISC IRAM load is fine — kernel
+            // code hasn't run), so a single-writer wipe here is race-free and
+            // gives per-launch granularity for the watcher reader.
+            WATCHER_CB_OWNERSHIP_RESET();
             // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
             if (enables &
                 (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
