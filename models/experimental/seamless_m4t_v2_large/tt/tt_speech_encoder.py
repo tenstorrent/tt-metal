@@ -38,6 +38,17 @@ _MIN_BLOCK_LN_TOKEN_ROWS = 32
 # Long mel (> ``MATMUL_1D_SEQ_THRESHOLD``) uses chunked 1D matmuls to avoid 2D multicast L1 overflow.
 _LONG_SEQ_LINEAR_CHUNK_ROWS = TILE
 _LONG_SEQ_LINEAR_DRAM_ROWS = 256
+# Above this mel-frame count the residual/hidden state in the conformer layer is kept in DRAM
+# rather than L1. The empirical threshold is where the per-layer L1 footprint (sharded LN +
+# height-sharded depthwise conv + transient activations) stops leaving room for kernel circular
+# buffers on Blackhole (failure mode: ``Statically allocated circular buffers ... clash with L1
+# buffers``). The demo's 22 s chain audio ≈ 1100 frames; pushing past needs the DRAM path.
+_LONG_AUDIO_RES_DRAM_THRESHOLD = 1024
+# A relative-position table at ``seq_len`` is ``seq * head_dim * seq * 2 B`` bf16. With 24
+# conformer layers each holding its own (distinct ``distance_weight`` per layer), caching every
+# table at long audio overflows DRAM (seq=2125 → ~578 MB each). Above this size cap the table
+# is built per attention call and deallocated by the caller after use.
+_MAX_CACHED_REL_POS_TABLE_BYTES = 32 * 1024 * 1024  # 32 MB
 
 
 def _drain_device_profiler(device: ttnn.Device, *, trace_no_profiler: bool) -> None:
@@ -520,6 +531,27 @@ class TTSeamlessM4Tv2SpeechEncoder:
     ) -> ttnn.Tensor:
         ch = self.hidden_size if channel_size is None else channel_size
         n_tiles = ch // 32
+        # Long-audio: bypass the sharded LN path. The block-sharded LN keeps ~150 KB/core of
+        # persistent L1 across the rest of the conformer layer, which collides with conv1d
+        # kernel CB allocations at seq > _LONG_AUDIO_RES_DRAM_THRESHOLD (Blackhole L1 is 1.5 MB).
+        # Plain ``ttnn.layer_norm`` runs on DRAM and adds no persistent L1 pressure.
+        if use_sharded and seq_len > _LONG_AUDIO_RES_DRAM_THRESHOLD:
+            x_in = x
+            if ttnn.is_sharded(x):
+                x_in = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+            elif x.memory_config().buffer_type != ttnn.BufferType.DRAM:
+                x_in = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            normed = ttnn.layer_norm(
+                x_in,
+                weight=weight,
+                bias=bias,
+                epsilon=eps,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self._layernorm_compute_cfg,
+            )
+            if x_in is not x:
+                ttnn.deallocate(x_in)
+            return normed
         if use_sharded and n_tiles >= 4:
             token_rows = batch * seq_len
             if not input_sharded and token_rows < _MIN_BLOCK_LN_TOKEN_ROWS:
@@ -1093,6 +1125,11 @@ class TTSeamlessM4Tv2SpeechEncoder:
             ttnn.deallocate(emb)
             emb = emb_scaled
 
+        # Very long audio: a single table is hundreds of MB (seq=2125, head_dim=64 → ~578 MB).
+        # Caching 24 of them across conformer layers blows DRAM. Skip the cache here so the caller
+        # treats the result as a one-shot tensor and deallocates after each layer's attention.
+        if table_bytes > _MAX_CACHED_REL_POS_TABLE_BYTES:
+            return emb
         self._rel_pos_tab_cache[tab_key] = emb
         return emb
 
@@ -1197,6 +1234,10 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 right_max=int(attn_module.right_max_position_embeddings),
                 scale=1.0,
             )
+            # Long-audio: ``_relative_embedding_table`` returns an uncached table at this seq.
+            # Deallocate after the BMM so the next layer's table fits in DRAM.
+            head_dim_local = self.hidden_size // self.speech_encoder_attention_heads
+            uncached_pos_bmm = seq_len * seq_len * head_dim_local * 2 > _MAX_CACHED_REL_POS_TABLE_BYTES
             rel_logits = self._relative_logits_bmm(
                 q,
                 pos_bmm,
@@ -1206,6 +1247,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 memory_config=scores_mc,
                 compute_kernel_config=self._linear_compute_cfg,
             )
+            if uncached_pos_bmm:
+                ttnn.deallocate(pos_bmm)
             ttnn.deallocate(q)
             scores = ttnn.add(scores, rel_logits, memory_config=scores_mc)
             ttnn.deallocate(rel_logits)
@@ -1560,9 +1603,12 @@ class TTSeamlessM4Tv2SpeechEncoder:
     ) -> Tuple[ttnn.Tensor, bool]:
         hsz = self.hidden_size
         token_m = batch * seq_len
+        # Long-audio path: residual / hidden state lives in DRAM so kernel CBs always fit in L1.
+        # Without this, conv1d / matmul kernels at seq ≳ 1100 clash with persistent L1 buffers.
+        res_mc = ttnn.DRAM_MEMORY_CONFIG if seq_len > _LONG_AUDIO_RES_DRAM_THRESHOLD else ttnn.L1_MEMORY_CONFIG
 
         if input_sharded:
-            res = ttnn.sharded_to_interleaved(hidden, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+            res = ttnn.sharded_to_interleaved(hidden, res_mc, output_dtype=ttnn.bfloat16)
         else:
             res = hidden
         h = self._layer_norm(
@@ -1584,7 +1630,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         )
         ttnn.deallocate(h)
         # Stage 13a: 0.5 scale folded into output_dense weights at preprocessing time.
-        hidden = ttnn.add(res, ff, memory_config=ttnn.L1_MEMORY_CONFIG)
+        hidden = ttnn.add(res, ff, memory_config=res_mc)
         ttnn.deallocate(ff)
         ttnn.deallocate(res)
 
@@ -1606,7 +1652,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             use_relative=True,
         )
         ttnn.deallocate(h)
-        hidden = ttnn.add(res, attn, memory_config=ttnn.L1_MEMORY_CONFIG)
+        hidden = ttnn.add(res, attn, memory_config=res_mc)
         ttnn.deallocate(attn)
         ttnn.deallocate(res)
 
@@ -1620,7 +1666,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             hidden_size=hsz,
             prebuilt_dw_left_pad=prebuilt_dw_left_pad,
         )
-        hidden = ttnn.add(res, conv, memory_config=ttnn.L1_MEMORY_CONFIG)
+        hidden = ttnn.add(res, conv, memory_config=res_mc)
         ttnn.deallocate(conv)
         ttnn.deallocate(res)
 
@@ -1643,7 +1689,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         )
         ttnn.deallocate(h)
         # Stage 13a: 0.5 scale folded into output_dense weights at preprocessing time.
-        hidden = ttnn.add(res, ff2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        hidden = ttnn.add(res, ff2, memory_config=res_mc)
         ttnn.deallocate(ff2)
         ttnn.deallocate(res)
 
@@ -1944,8 +1990,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
 
         im = p.intermediate_ffn
         # Stage 13a: 0.5 scale folded into intermediate_ffn output_dense weights.
+        long_audio_add_mc = ttnn.DRAM_MEMORY_CONFIG if seq > _LONG_AUDIO_RES_DRAM_THRESHOLD else ttnn.L1_MEMORY_CONFIG
         exp = self._relu_ffn(h, im, batch=batch, seq_len=seq)
-        h = ttnn.add(h, exp, memory_config=ttnn.L1_MEMORY_CONFIG)
+        h = ttnn.add(h, exp, memory_config=long_audio_add_mc)
         ttnn.deallocate(exp)
 
         if self.has_adapter:
