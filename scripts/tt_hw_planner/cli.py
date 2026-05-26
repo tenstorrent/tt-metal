@@ -6196,8 +6196,9 @@ def _cmd_up_isolated(args) -> int:
     print(f"  [isolation] worktree: {session.path}")
 
     with using_repo(session.path):
-        n_shared, _ = apply_for("_shared")
-        n_model, _ = apply_for(args.model_id)
+        n_shared, shared_files = apply_for("_shared")
+        n_model, model_files = apply_for(args.model_id)
+    pre_applied_files = set(shared_files) | set(model_files)
     if n_shared or n_model:
         print(f"  [isolation] applied {n_shared} _shared + {n_model} model overlay(s)")
 
@@ -6231,8 +6232,14 @@ def _cmd_up_isolated(args) -> int:
                     check=False,
                 )
                 changed = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+                new_edits = [f for f in changed if f not in pre_applied_files]
+                skipped = sorted(set(changed) & pre_applied_files)
+                if skipped:
+                    print(
+                        f"  [isolation] skipping {len(skipped)} file(s) already covered by applied overlays (not LLM discoveries)"
+                    )
                 with using_repo(session.path):
-                    for f in changed:
+                    for f in new_edits:
                         rec = capture(args.model_id, f)
                         if rec:
                             captured += 1
