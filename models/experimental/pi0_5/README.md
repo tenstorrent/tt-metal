@@ -387,20 +387,24 @@ If your checkpoint uses different names, add a rename pass in `Pi0_5WeightLoader
 ## Dtype mapping
 
 Per-stage map of weight / output / compute-config dtypes in the pi0.5 TTNN
-pipeline. The `Transitioned?` column flags ops that were moved from
-`bfloat16` to `bfloat8_b` during the bf8 conversion work. Two commits
-contributed (both on `sdawle/dvartanians/pi0.5_openpi_upstream`):
+pipeline. The `Source commit` column flags ops that were touched by the
+bf8 conversion work and reflects the current state — not the full history.
+Three commits contributed (all on `sdawle/dvartanians/pi0.5_openpi_upstream`):
 
 - `8ef91d7fe60` — pi0.5 TTNN: bf8_b for SigLIP attention weights, VLM
-  expert QKV, and expert o_proj/MLP outputs.
+  expert QKV, and (initially) expert o_proj/MLP outputs.
 - `c0876acc212` — pi0.5 TTNN: bf8_b for SigLIP patch conv output and
-  the four pi0.5 suffix linear outputs.
+  (initially) the four pi0.5 suffix linear outputs.
+- `df531eeb9d6` — pi0.5 TTNN: SigLIP biases bf16 → bf8_b; revert the
+  session-flipped activation outputs (Gemma o_proj/MLP, suffix linears,
+  SigLIP patch conv) back to bf16 after the LIBERO 800-episode sweep
+  showed a 1-2 pp regression. Weights stay bf8_b.
 
 See `models/experimental/pi0_5/tt/{ttnn_siglip,ttnn_paligemma,ttnn_gemma,ttnn_suffix,ttnn_pi0_5_model}.py` for the live code.
 
 ### Inputs (`ttnn_pi0_5_model.py`)
 
-| Tensor | Dtype | Transitioned? |
+| Tensor | Dtype | Source commit |
 |---|---|---|
 | Images / state / x_t (initial noise) | `bfloat16` | |
 | Lang tokens | `uint32` | |
@@ -408,69 +412,88 @@ See `models/experimental/pi0_5/tt/{ttnn_siglip,ttnn_paligemma,ttnn_gemma,ttnn_su
 
 ### SigLIP encoder — `ttnn_siglip.py` · 27 layers
 
-| Op | Weight | Output | Transitioned? |
+| Op | Weight | Output | Source commit |
 |---|---|---|---|
 | Patch conv weight | `bfloat16` | — | |
-| Patch conv output | — | `bfloat8_b` | `c0876acc212` (line 326) |
+| Patch conv output | — | `bfloat16` | `df531eeb9d6` (reverted from bf8_b at line 326) |
 | Attention QKV (fused) weight | `bfloat8_b` | — | `8ef91d7fe60` (lines 410/413/416) |
 | Attention QKV output | — | `bfloat8_b` | |
+| Attention QKV biases (bq/bk/bv) | `bfloat8_b` | — | `df531eeb9d6` (lines 427-429) |
 | Attention `out_proj` weight | `bfloat8_b` | — | `8ef91d7fe60` (line 438) |
 | Attention `out_proj` output | — | `bfloat8_b` | |
+| Attention `out_proj` bias (`bo`) | `bfloat8_b` | — | `df531eeb9d6` (line 445) |
 | MLP `fc1` / `fc2` weight | `bfloat8_b` | `bfloat8_b` | |
-| Attention / MLP biases | `bfloat16` | — | |
+| MLP `fc1` / `fc2` bias | `bfloat8_b` | — | `df531eeb9d6` (lines 785, 805) |
 | Compute kernel | HiFi2, `fp32_dest_acc_en=True`, `packer_l1_acc=True` | | |
 
 ### PaliGemma VLM prefill — Gemma-2B · 18 blocks · w=2048
 
-| Op | Weight | Output | Transitioned? |
+| Op | Weight | Output | Source commit |
 |---|---|---|---|
 | `embed_tokens` / RMSNorm / RoPE cos+sin | `bfloat16` | — | |
 | QKV fused | `bfloat8_b` | `bfloat8_b` | |
+| QKV / attention biases | `bfloat16` | — | (not flipped; only SigLIP biases were) |
 | KV cache | `bfloat16` | — | intentional (hot-read path) |
-| `o_proj` | `bfloat8_b` | `bfloat8_b` | `8ef91d7fe60` (lines 617/626; shared `GemmaAttentionTTNN`) |
-| MLP gate/up/down | `bfloat8_b` | `bfloat8_b` | `8ef91d7fe60` (line 818; shared `GemmaMLPTTNN`) |
+| `o_proj` | `bfloat8_b` | `bfloat16` | weight `8ef91d7fe60`; output reverted by `df531eeb9d6` |
+| MLP gate/up/down | `bfloat8_b` | `bfloat16` | weight `8ef91d7fe60` (shared `GemmaMLPTTNN.to_ttnn`); output reverted by `df531eeb9d6` |
 | Compute kernel | HiFi2, `fp32_dest_acc_en=False`, `packer_l1_acc=True` | | |
 
 ### Action expert with adaRMS — Gemma-300M · 18 blocks · w=1024
 
-| Op | Weight | Output | Transitioned? |
+| Op | Weight | Output | Source commit |
 |---|---|---|---|
 | QKV fused | `bfloat8_b` | `bfloat8_b` | `8ef91d7fe60` (ttnn_paligemma.py lines 262/268/274) |
-| `o_proj` | `bfloat8_b` | `bfloat8_b` | `8ef91d7fe60` (shared with VLM) |
-| MLP gate/up/down | `bfloat8_b` | `bfloat8_b` | `8ef91d7fe60` (shared with VLM) |
+| `o_proj` | `bfloat8_b` | `bfloat16` | shared `GemmaAttentionTTNN`; output reverted by `df531eeb9d6` |
+| MLP gate/up/down | `bfloat8_b` | `bfloat16` | shared `GemmaMLPTTNN`; output reverted by `df531eeb9d6` |
 | adaRMS modulation (precomputed scale/shift/gate per step,layer) | `bfloat16` | `bfloat16` | |
 | Sharded RMSNorm compute kernel | HiFi2, `fp32_dest_acc_en=False`, `packer_l1_acc=True` (DST budget) | | |
 
 ### Suffix embedding — `ttnn_suffix.py`
 
-| Op | Weight | Output | Transitioned? |
+| Op | Weight | Output | Source commit |
 |---|---|---|---|
-| `action_in_proj` | `bfloat8_b` | `bfloat8_b` | `c0876acc212` (output dtype) |
-| `time_mlp_in` | `bfloat8_b` | `bfloat8_b` | `c0876acc212` (output dtype) |
-| `time_mlp_out` | `bfloat8_b` | `bfloat8_b` | `c0876acc212` (output dtype) |
-| `action_out_proj` | `bfloat8_b` | `bfloat8_b` | `c0876acc212` (output dtype) |
+| `action_in_proj` | `bfloat8_b` | `bfloat16` (implicit) | output reverted by `df531eeb9d6` |
+| `time_mlp_in` | `bfloat8_b` | `bfloat16` (implicit) | output reverted by `df531eeb9d6` |
+| `time_mlp_out` | `bfloat8_b` | `bfloat16` (implicit) | output reverted by `df531eeb9d6` |
+| `action_out_proj` | `bfloat8_b` | `bfloat16` (implicit) | output reverted by `df531eeb9d6` |
 | sincos(t) | — | `float32` on device → cast to `bfloat16` | |
 | `adarms_cond` (final) | — | `bfloat16` | |
 
 ### Denoise loop — `ttnn_pi0_5_model.py::sample_actions`
 
-| Item | Dtype | Transitioned? |
+| Item | Dtype | Source commit |
 |---|---|---|
 | In-loop activations / x_t | `bfloat16` | (intentionally fragile to bf8 — opt-in fp32 via `PI0_DENOISE_FP32=1`) |
 | `dt` | Python float (velocity scaled via `ttnn.mul(velocity, dt)`) | |
 
 ### Output
 
-| Step | Dtype | Transitioned? |
+| Step | Dtype | Source commit |
 |---|---|---|
 | Final x_t | `bfloat16` | |
 | Sliced to logical `action_horizon` → `ttnn.to_torch` | host tensor | |
+
+### LIBERO success rate (upstream pi05_libero, 400 episodes per N, replan=5)
+
+Tracking changes across the bf8 conversion effort, against the user's
+pre-bf8 baseline (388 episodes / suite × 4 suites = 800 total):
+
+| Stage | N=10 | N=5 | Combined |
+|---|---|---|---|
+| Pre-bf8 baseline | 394/400 (98.5%) | 394/400 (98.5%) | 788/800 (98.5%) |
+| `8ef91d7fe60` + `c0876acc212` (all weights + outputs bf8) | 390/400 (97.5%) | 387/400 (96.75%) | 777/800 (97.13%) |
+| `df531eeb9d6` (current — weights+biases bf8, session outputs reverted) | 389/400 (97.25%) | 387/400 (96.75%) | 776/800 (97.0%) |
+
+`libero_10` task 8 is the recurring loss (4/10 at N=10, 6/10 at N=5 in
+the current config) — it has the longest horizon and frequently hits the
+env step cap.
 
 ### Notes
 
 - The previous `Expert QKV bf16 / VLM QKV bf8_b` and `SigLIP attn bf16 weights / MLP bf8_b weights` asymmetries are gone — both are now uniformly `bfloat8_b` after `8ef91d7fe60`.
 - KV cache remains `bfloat16` intentionally; it is read on every expert step and the precision was preserved as a hot-path concession.
 - `fp32_dest_acc_en` is `True` for SigLIP / SDPA and `False` for Gemma matmuls + sharded LN. The sharded LN needs the DST budget for the 8×2 sharding.
+- Only the **SigLIP** biases were flipped to `bfloat8_b` in `df531eeb9d6`; PaliGemma / Gemma biases (`ttnn_paligemma.py:230/310/592/636`) remain `bfloat16`.
 - More bf8 is not strictly better — see the LIBERO regression discussion in `[[pi0_5 accuracy levers]]`. Always re-run a LIBERO sweep before committing dtype flips, not just PCC.
 
 ---
