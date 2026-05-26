@@ -125,14 +125,16 @@ void validate_connectivity(
     log_output_rank0("Factory System Descriptor Validation Complete");
 }
 
-// Helper function to process ethernet connections for a given operation
+// Helper function to process ethernet connections for a given operation.
+// `operation` is invoked once per matching ethernet connection, so take it by const ref
+// (forwarding-then-calling in a loop would risk use-after-move on iterations past the first).
 template <typename Operation>
 void process_ethernet_connections(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id,
     const tt::Cluster& cluster,
     const tt::umd::ClusterDescriptor& cluster_desc,
-    Operation&& operation) {
+    const Operation& operation) {
     const auto& asic_topology = physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name());
     for (const auto& [asic_id, asic_connections] : asic_topology) {
         for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
@@ -146,8 +148,7 @@ void process_ethernet_connections(
 
             if (both_mmio || both_non_mmio) {
                 for (const auto& eth_connection : eth_connections) {
-                    std::forward<Operation>(operation)(
-                        src_chip_id, get_eth_core_coord(cluster, src_chip_id, eth_connection.src_chan));
+                    operation(src_chip_id, get_eth_core_coord(cluster, src_chip_id, eth_connection.src_chan));
                 }
             }
         }
