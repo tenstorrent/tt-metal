@@ -108,6 +108,163 @@ def _forward_e2e_debug(msg: str) -> None:
         print(f"[test_acoustic_forward_e2e_matches_reference] {msg}")
 
 
+def _decode_e2e_debug(msg: str) -> None:
+    if os.environ.get("VOXTRAL_ACOUSTIC_DECODE_E2E_DEBUG", "").lower() in ("1", "true", "yes", "on"):
+        print(f"[test_acoustic_decode] {msg}")
+
+
+def _reference_decode_one_frame_continuous(
+    ref: FlowMatchingAudioTransformerRef,
+    llm_hidden: torch.Tensor,
+    cfg_alpha: torch.Tensor,
+    *,
+    noise_seed: int,
+) -> tuple[torch.Tensor, list[torch.Tensor]]:
+    """CPU Euler FM decode; returns final scaled codes (pre-round) and per-step sampled states."""
+    bsz = llm_hidden.shape[0]
+    torch.manual_seed(noise_seed)
+    x_0 = torch.randn(bsz, ref.model_args.n_acoustic_codebook, device=llm_hidden.device, dtype=llm_hidden.dtype)
+    x_0 = ref._noise_scale * x_0
+
+    timesteps = ref._timesteps.to(dtype=llm_hidden.dtype, device=llm_hidden.device)
+    llm_hidden_zero = torch.zeros_like(llm_hidden)
+    ca = cfg_alpha.to(dtype=llm_hidden.dtype, device=llm_hidden.device)
+    if ca.dim() == 0:
+        cfg_alpha_b = ca.reshape(1, 1).expand(bsz, 1)
+    elif ca.dim() == 1:
+        cfg_alpha_b = ca.unsqueeze(1)
+    else:
+        cfg_alpha_b = ca
+    cfg_scalar = float(cfg_alpha_b.flatten()[0].item())
+
+    sampled = x_0
+    step_states: list[torch.Tensor] = []
+    for i in range(len(timesteps) - 1):
+        t = timesteps[i]
+        dt = timesteps[i + 1] - timesteps[i]
+        t_emb = ref.time_embedding(t.view(-1, 1).repeat(bsz, 1)).to(llm_hidden.dtype)
+
+        x_batched = torch.cat([sampled, sampled], dim=0)
+        llm_batched = torch.cat([llm_hidden, llm_hidden_zero], dim=0)
+        t_emb_batched = torch.cat([t_emb, t_emb], dim=0)
+
+        v_all = ref._predict_velocity(x_t=x_batched, llm_output=llm_batched, t_emb=t_emb_batched)
+        v_t = cfg_scalar * v_all[:bsz] + (1.0 - cfg_scalar) * v_all[bsz:]
+        sampled = sampled + v_t * dt
+        step_states.append(sampled.clone().float())
+
+    sampled_clamped = torch.clamp(sampled, -1, 1).float()
+    scaled = ((sampled_clamped + 1) / 2) * (ref.acoustic_embeddings_levels - 1)
+    return scaled, step_states
+
+
+def _tt_decode_one_frame_continuous(
+    tt_model: VoxtralTTAcousticModel,
+    llm_hidden: torch.Tensor,
+    cfg_alpha: torch.Tensor,
+    *,
+    noise_seed: int,
+) -> tuple[torch.Tensor, list[torch.Tensor]]:
+    """TT Euler FM decode; returns final scaled values (pre-round) and per-step sampled states."""
+    bsz = llm_hidden.shape[0]
+    device = llm_hidden.device
+    dtype = llm_hidden.dtype
+
+    torch.manual_seed(noise_seed)
+    x_0 = torch.randn(bsz, tt_model.n_acoustic_out, device=device, dtype=dtype)
+
+    timesteps = tt_model._timesteps_cpu
+    sampled_tt = ttnn.from_torch(
+        x_0.to(torch.bfloat16).unsqueeze(1),
+        device=tt_model.mesh_device,
+        dtype=tt_model.dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_llm = ttnn.from_torch(
+        llm_hidden.to(torch.bfloat16).unsqueeze(1),
+        device=tt_model.mesh_device,
+        dtype=tt_model.dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_llm_zero = ttnn.zeros_like(tt_llm)
+    tt_llm_batched = ttnn.concat([tt_llm, tt_llm_zero], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(tt_llm)
+    ttnn.deallocate(tt_llm_zero)
+
+    ca = cfg_alpha.to(dtype=dtype, device=device)
+    if ca.dim() == 0:
+        cfg_a = ca.reshape(1, 1).expand(bsz, 1)
+    elif ca.dim() == 1:
+        cfg_a = ca.unsqueeze(1)
+    else:
+        cfg_a = ca
+    cfg_scalar = float(cfg_a.flatten()[0].item())
+
+    step_states: list[torch.Tensor] = []
+    for i in range(len(timesteps) - 1):
+        t_val = float(timesteps[i].item())
+        dt_val = float((timesteps[i + 1] - timesteps[i]).item())
+
+        te = tt_model._time_embedding_tt(t_val, bsz)
+        x_batched = ttnn.concat([sampled_tt, sampled_tt], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        te_batched = ttnn.concat([te, te], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(te)
+        v_tt = tt_model._predict_velocity_impl(
+            None,
+            None,
+            None,
+            _tt_xt=x_batched,
+            _tt_te=te_batched,
+            _tt_llm=tt_llm_batched,
+            return_debug=False,
+        )
+
+        v_shape = tuple(v_tt.shape)
+        v_cond = ttnn.slice(v_tt, [0, 0, 0, 0], [bsz, v_shape[1], v_shape[2], v_shape[3]])
+        v_uncond = ttnn.slice(v_tt, [bsz, 0, 0, 0], [2 * bsz, v_shape[1], v_shape[2], v_shape[3]])
+        ttnn.deallocate(v_tt)
+        v_cond_scaled = ttnn.multiply(v_cond, cfg_scalar, dtype=tt_model.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(v_cond)
+        v_uncond_scaled = ttnn.multiply(
+            v_uncond, 1.0 - cfg_scalar, dtype=tt_model.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(v_uncond)
+        v_t_tt = ttnn.add(v_cond_scaled, v_uncond_scaled, dtype=tt_model.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(v_cond_scaled)
+        ttnn.deallocate(v_uncond_scaled)
+
+        v_t_3d = ttnn.reshape(v_t_tt, (bsz, 1, tt_model.n_acoustic_out))
+        ttnn.deallocate(v_t_tt)
+        v_scaled = ttnn.multiply(v_t_3d, dt_val, dtype=tt_model.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(v_t_3d)
+        new_sampled = ttnn.add(sampled_tt, v_scaled, dtype=tt_model.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(sampled_tt)
+        ttnn.deallocate(v_scaled)
+        sampled_tt = new_sampled
+        step_states.append(ttnn.to_torch(sampled_tt).float().reshape(bsz, -1))
+
+    ttnn.deallocate(tt_llm_batched)
+
+    clamped_tt = ttnn.clip(sampled_tt, min=-1.0, max=1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(sampled_tt)
+    plus_one_tt = ttnn.add(clamped_tt, 1.0, dtype=tt_model.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(clamped_tt)
+    halved_tt = ttnn.multiply(plus_one_tt, 0.5, dtype=tt_model.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(plus_one_tt)
+    scaled_tt = ttnn.multiply(
+        halved_tt,
+        float(tt_model._acoustic_embeddings_levels - 1),
+        dtype=tt_model.dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn.deallocate(halved_tt)
+    scaled_host = ttnn.to_torch(scaled_tt).float().reshape(bsz, -1)
+    ttnn.deallocate(scaled_tt)
+    return scaled_host, step_states
+
+
 def _ordered_debug_keys(keys: list[str]) -> list[str]:
     """Pipeline order for PCC rows so the first ``LOW`` matches the first diverging stage."""
     keys_set = set(keys)
@@ -239,7 +396,13 @@ def test_acoustic_semantic_logits_pcc(mesh_device, reset_seeds):
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 @torch.no_grad()
 def test_acoustic_forward_e2e_matches_reference(mesh_device, reset_seeds):
-    """``forward()`` integration: synced RNG; semantic exact; acoustic codes >= 88% match."""
+    """``forward()`` integration: synced RNG; semantic exact; acoustic codes per-frame >= 0.88.
+
+    Discrete code agreement is lower than per-op PCC because 8-step BF16 Euler drift can flip
+    ``round()`` at codebook boundaries even when continuous sampled state PCC stays >= 0.99.
+    See ``test_acoustic_decode_euler_stepwise_pcc`` and
+    ``test_acoustic_forward_code_match_mean_over_seeds`` for stepwise / statistical checks.
+    """
     model_name_or_path = resolve_voxtral_model_name_or_skip()
     try:
         ref, cfg = _load_reference_model(model_name_or_path)
@@ -289,6 +452,159 @@ def test_acoustic_forward_e2e_matches_reference(mesh_device, reset_seeds):
                 f"First differing flat indices (batch,col): {bad_idx[:16].tolist()}"
                 + (" ..." if bad_idx.shape[0] > 16 else "")
             )
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+@torch.no_grad()
+def test_acoustic_decode_euler_stepwise_pcc(mesh_device, reset_seeds):
+    """Each Euler step sampled state and final pre-round scaled values: PCC >= 0.99 vs CPU."""
+    model_name_or_path = resolve_voxtral_model_name_or_skip()
+    try:
+        ref, cfg = _load_reference_model(model_name_or_path)
+        tt_model = _load_tt(mesh_device, model_name_or_path)
+    except Exception as exc:  # pragma: no cover
+        pytest.skip(f"Acoustic load failed: {exc}")
+
+    torch.manual_seed(42)
+    d_llm = cfg.audio_model_args.acoustic_transformer_args.input_dim
+    llm_h = torch.randn(1, d_llm, dtype=torch.bfloat16)
+    cfg_alpha = torch.tensor(0.73, dtype=torch.bfloat16)
+    noise_seed = 12345
+
+    ref_scaled, ref_steps = _reference_decode_one_frame_continuous(ref, llm_h, cfg_alpha, noise_seed=noise_seed)
+    tt_scaled, tt_steps = _tt_decode_one_frame_continuous(tt_model, llm_h, cfg_alpha, noise_seed=noise_seed)
+
+    lines: list[str] = []
+    for i, (ref_s, tt_s) in enumerate(zip(ref_steps, tt_steps)):
+        ok_i, pcc_i = comp_pcc(ref_s, tt_s, pcc=0.99)
+        max_d = float((ref_s - tt_s).abs().max().item())
+        lines.append(f"  euler step {i + 1}: PCC={float(pcc_i):.6f} max_diff={max_d:.6f}")
+        _decode_e2e_debug(lines[-1])
+        assert (
+            ok_i
+        ), f"Euler step {i + 1} sampled-state PCC failed: PCC={float(pcc_i):.6f} (required >= 0.99).\n" + "\n".join(
+            lines
+        )
+
+    ok_final, pcc_final = comp_pcc(ref_scaled, tt_scaled, pcc=0.99)
+    max_final = float((ref_scaled - tt_scaled).abs().max().item())
+    final_line = f"  pre-round scaled: PCC={float(pcc_final):.6f} max_diff={max_final:.6f}"
+    lines.append(final_line)
+    _decode_e2e_debug(final_line)
+
+    ref_codes = ref_scaled.round().long()
+    tt_codes = tt_scaled.round().long()
+    code_match = float((ref_codes == tt_codes).float().mean().item())
+    n_flip = int((ref_codes != tt_codes).sum().item())
+    flip_line = f"  discrete codes (torch.round): match={code_match:.4f} flips={n_flip}/{ref_codes.numel()}"
+    lines.append(flip_line)
+    _decode_e2e_debug(flip_line)
+
+    assert (
+        ok_final
+    ), f"Pre-round scaled acoustic PCC failed: PCC={float(pcc_final):.6f} (required >= 0.99).\n" + "\n".join(lines)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+@torch.no_grad()
+def test_acoustic_forward_code_match_mean_over_seeds(mesh_device, reset_seeds):
+    """Synced FM noise; mean acoustic+semantic code match >= 0.95 over hidden seeds (min >= 0.88)."""
+    model_name_or_path = resolve_voxtral_model_name_or_skip()
+    try:
+        ref, cfg = _load_reference_model(model_name_or_path)
+        tt_model = _load_tt(mesh_device, model_name_or_path)
+    except Exception as exc:  # pragma: no cover
+        pytest.skip(f"Acoustic load failed: {exc}")
+
+    d_llm = cfg.audio_model_args.acoustic_transformer_args.input_dim
+    cfg_alpha = torch.tensor(0.73, dtype=torch.bfloat16)
+    noise_seed = 999
+    n_trials = 20
+    matches: list[float] = []
+
+    for hidden_seed in range(n_trials):
+        torch.manual_seed(hidden_seed)
+        llm_h = torch.randn(1, d_llm, dtype=torch.bfloat16)
+        torch.manual_seed(noise_seed)
+        ref_out = ref.forward(llm_h, cfg_alpha)
+        torch.manual_seed(noise_seed)
+        tt_out = tt_model.forward(llm_h, cfg_alpha)
+        matches.append(float((ref_out == tt_out).float().mean().item()))
+
+    mean_match = sum(matches) / len(matches)
+    min_match = min(matches)
+    _decode_e2e_debug(
+        f"forward code match over {n_trials} hidden seeds (noise_seed={noise_seed}): "
+        f"mean={mean_match:.4f} min={min_match:.4f} max={max(matches):.4f}"
+    )
+
+    assert mean_match >= 0.95, (
+        f"Mean forward code match {mean_match:.4f} < 0.95 over {n_trials} trials "
+        f"(noise_seed={noise_seed}); per-trial={matches}"
+    )
+    assert min_match >= 0.88, (
+        f"Min forward code match {min_match:.4f} < 0.88 over {n_trials} trials; "
+        "BF16 Euler + discrete round can flip codes near boundaries on unlucky frames."
+    )
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+@torch.no_grad()
+def test_acoustic_trace_path_matches_host_forward(mesh_device, reset_seeds):
+    """``forward_acoustic_trace_codes`` agrees with ``forward()`` when noise/hidden are shared."""
+    model_name_or_path = resolve_voxtral_model_name_or_skip()
+    try:
+        ref, cfg = _load_reference_model(model_name_or_path)
+        tt_model = _load_tt(mesh_device, model_name_or_path)
+    except Exception as exc:  # pragma: no cover
+        pytest.skip(f"Acoustic load failed: {exc}")
+
+    torch.manual_seed(7)
+    d_llm = cfg.audio_model_args.acoustic_transformer_args.input_dim
+    llm_h = torch.randn(1, d_llm, dtype=torch.bfloat16)
+    cfg_alpha = torch.tensor(0.73, dtype=torch.bfloat16)
+    cfg_scalar = float(cfg_alpha.item())
+
+    torch.manual_seed(555)
+    host_out = tt_model.forward(llm_h, cfg_alpha)
+
+    torch.manual_seed(555)
+    noise = torch.randn(1, tt_model.n_acoustic_out, dtype=torch.bfloat16)
+    llm_tt = ttnn.from_torch(
+        llm_h.unsqueeze(1),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    noise_tt = ttnn.from_torch(
+        noise.unsqueeze(1),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    trace_tt = tt_model.forward_acoustic_trace_codes(llm_tt, noise_tt, cfg_scalar)
+    trace_out = ttnn.to_torch(trace_tt).long().reshape(1, -1)
+    ttnn.deallocate(llm_tt)
+    ttnn.deallocate(noise_tt)
+    ttnn.deallocate(trace_tt)
+
+    match_frac = float((host_out == trace_out).float().mean().item())
+    _decode_e2e_debug(f"trace vs host forward match={match_frac:.4f}")
+    assert match_frac >= 0.88, (
+        f"Trace acoustic path match {match_frac:.4f} < 0.88 vs host forward(); "
+        f"host={host_out.tolist()} trace={trace_out.tolist()}"
+    )
+
+    torch.manual_seed(555)
+    ref_out = ref.forward(llm_h, cfg_alpha)
+    ref_match = float((host_out == ref_out).float().mean().item())
+    _decode_e2e_debug(f"host forward vs CPU ref match={ref_match:.4f}")
+    assert ref_match >= 0.88, f"Host forward vs CPU ref match {ref_match:.4f} < 0.88"
 
 
 @pytest.mark.timeout(3600)

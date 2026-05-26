@@ -30,6 +30,7 @@ from models.experimental.voxtraltts.reference.voxtral_request import (
     get_instruct_tokenizer,
     load_mistral_tokenizer,
 )
+from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
 
 _ACOUSTIC_CFG_ALPHA = 1.2
 
@@ -314,7 +315,8 @@ class VoxtralCPUReference:
         generated_codes = []
 
         cfg_alpha = torch.tensor(self._acoustic_cfg_alpha, device=hidden.device, dtype=hidden.dtype)
-        for _ in range(max_tokens):
+        for step_idx in range(max_tokens):
+            torch.manual_seed(acoustic_fm_noise_seed(seed, step_idx))
             if tt_acoustic is not None:
                 hc = hidden.detach().to(dtype=torch.bfloat16)
                 ca = cfg_alpha.to(device=hc.device, dtype=hc.dtype)

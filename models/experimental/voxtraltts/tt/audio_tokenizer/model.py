@@ -695,12 +695,51 @@ class VoxtralTTAudioTokenizer:
         return out
 
     def pretransform_decode_tt(self, mel_b1tc: ttnn.Tensor) -> ttnn.Tensor:
-        """``[B,1,T,C_mel]`` → ``[B,1,T*C_mel]`` waveform on device (reshape only, no weights)."""
+        """``[B,1,T,C_mel]`` → ``[B,1,T*C_mel]`` waveform on device (chunked for P150 L1)."""
         if len(mel_b1tc.shape) != 4 or int(mel_b1tc.shape[1]) != 1:
             raise ValueError(f"Expected [B,1,T,C_mel] mel, got {tuple(mel_b1tc.shape)}")
         b, _, t, c_mel = (int(mel_b1tc.shape[i]) for i in range(4))
-        mel_rm = ttnn.to_layout(mel_b1tc, ttnn.ROW_MAJOR_LAYOUT)
-        return ttnn.reshape(mel_rm, (b, 1, t * c_mel))
+
+        TILE_H = 32
+        CHUNK_ROWS = 256
+
+        if t <= CHUNK_ROWS:
+            mel_rm = ttnn.to_layout(
+                mel_b1tc,
+                ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            out = ttnn.reshape(mel_rm, (b, 1, t * c_mel))
+            if mel_rm is not out and mel_rm.is_allocated():
+                ttnn.deallocate(mel_rm)
+            return out
+
+        chunks_flat: list[ttnn.Tensor] = []
+        pos = 0
+        while pos < t:
+            end = min(pos + CHUNK_ROWS, t)
+            ch_tile = ttnn.slice(mel_b1tc, [0, 0, pos, 0], [b, 1, end, c_mel])
+            ch_rm = ttnn.to_layout(
+                ch_tile,
+                ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if ch_tile.is_allocated():
+                ttnn.deallocate(ch_tile)
+            rows = end - pos
+            ch_flat = ttnn.reshape(ch_rm, (b, 1, rows * c_mel))
+            if ch_rm is not ch_flat and ch_rm.is_allocated():
+                ttnn.deallocate(ch_rm)
+            chunks_flat.append(ch_flat)
+            pos = end
+
+        if len(chunks_flat) == 1:
+            return chunks_flat[0]
+        result = ttnn.concat(chunks_flat, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for c in chunks_flat:
+            if c.is_allocated():
+                ttnn.deallocate(c)
+        return result
 
     def pretransform_decode_torch(self, mel_b1tc: ttnn.Tensor) -> torch.Tensor:
         """``[B,1,T,C_mel]`` TT mel → ``[B,1,T*C_mel]`` float32 host tensor."""

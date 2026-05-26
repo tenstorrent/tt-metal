@@ -526,10 +526,9 @@ class VoxtralTTAcousticModel:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(halved_tt)
-        rounded_tt = ttnn.round(scaled_tt, decimals=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        scaled_host = ttnn.to_torch(scaled_tt).float().reshape(bsz, -1)
         ttnn.deallocate(scaled_tt)
-        output_codes = ttnn.to_torch(rounded_tt).long().reshape(bsz, -1)
-        ttnn.deallocate(rounded_tt)
+        output_codes = scaled_host.round().long()
         output_codes[~should_decode] = self._empty_audio_token_id
         offset = len(AudioSpecialTokens.all_special_tokens())
         return output_codes + offset
@@ -608,7 +607,16 @@ class VoxtralTTAcousticModel:
         return ttnn.round(scaled_tt, decimals=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def forward_semantic_trace(self, llm_hidden_tt: ttnn.Tensor) -> ttnn.Tensor:
-        """Trace-safe semantic head only (linear + masked argmax). No host I/O; does not touch inputs."""
+        """Trace-safe semantic head: linear (bf16) → fp32-promoted argmax (matches CPU).
+
+        Matches the CPU reference's exact path (cpu_flow_matching_acoustic.py:368-375):
+        bf16 linear → cast to fp32 → apply mask in fp32 → argmax in fp32. Without this,
+        boundary cases where top-1 and top-2 logits are within bf16 noise pick different
+        semantic tokens between CPU and TT, and the divergence amplifies through the AR loop.
+
+        This is the same precision-promotion pattern :meth:`forward` already uses (see lines
+        703-708); without it, ``forward_acoustic_trace_codes`` would diverge from ``forward``.
+        """
         sem_tt = ttnn.linear(
             llm_hidden_tt,
             self.w_semantic,
@@ -616,10 +624,21 @@ class VoxtralTTAcousticModel:
             memory_config=self._matmul_act_mem_config,
             compute_kernel_config=self._compute_kernel_config,
         )
-        sem_masked = ttnn.add(sem_tt, self._sem_mask_tt, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Download bf16 logits, promote to fp32 on host, apply mask in fp32, argmax in fp32.
+        # This matches CPU's path exactly (no bf16 mask addition that could perturb close ties).
+        sem_logits = ttnn.to_torch(sem_tt).float()
         ttnn.deallocate(sem_tt)
-        semantic_code_tt = ttnn.argmax(sem_masked, dim=2, keepdim=True)
-        ttnn.deallocate(sem_masked)
+        sem_logits[..., self._empty_audio_token_id] = float("-inf")
+        sem_logits[..., self._tail_mask_start :] = float("-inf")
+        sem_code_host = sem_logits.argmax(dim=-1, keepdim=True).to(torch.int32).contiguous()
+        # Upload semantic code back as TT tensor; _decode_one_frame_tt consumes [B, 1, 1] uint32 RM.
+        semantic_code_tt = ttnn.from_torch(
+            sem_code_host,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         return semantic_code_tt
 
     def forward_acoustic_trace_codes(
@@ -687,13 +706,12 @@ class VoxtralTTAcousticModel:
         )
         ttnn.deallocate(tt_llm)
 
-        sem_masked = ttnn.add(sem_tt, self._sem_mask_tt, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Match CPU reference: float logits + mask before argmax (BF16 argmax can flip near ties).
+        sem_logits = ttnn.to_torch(sem_tt).float()
         ttnn.deallocate(sem_tt)
-
-        semantic_code_tt = ttnn.argmax(sem_masked, dim=2, keepdim=True)
-        ttnn.deallocate(sem_masked)
-        semantic_code = ttnn.to_torch(semantic_code_tt).long().reshape(bsz, 1)
-        ttnn.deallocate(semantic_code_tt)
+        sem_logits[:, :, self._empty_audio_token_id] = float("-inf")
+        sem_logits[:, :, self._tail_mask_start :] = float("-inf")
+        semantic_code = sem_logits.argmax(dim=-1, keepdim=True).long().reshape(bsz, 1)
 
         acoustic_codes = self._decode_one_frame(semantic_code.squeeze(1), llm_hidden, cfg_alpha)
 

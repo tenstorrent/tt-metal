@@ -4,16 +4,16 @@
 """Voxtral TTS demo — **fully on TT, zero reference model**.
 
 All neural-network forward passes (text, acoustic, audio tokenizer decode) run on the
-Tenstorrent device via ``VoxtralTTSPipeline.forward()``.  The only CPU work is:
+Tenstorrent device via ``VoxtralTTSPipeline.forward_device_resident()``.  The only CPU work is:
 
 - Mistral-common **tokenization** (equivalent to ``AutoTokenizer.encode()``)
 - Voice-embedding file load (a single ``torch.load`` of a small ``.pt`` file)
-- MM codebook embedding lookup + sum (tiny pure-PyTorch op, not a Transformer layer)
+- Per-step acoustic **code** accumulation for EOA / output (tiny host tensors)
 
 Modes
 -----
 ``text`` (default)
-    ``text`` + ``voice`` in JSON → ``pipe.forward()`` → ``.wav``
+    ``text`` + ``voice`` in JSON → ``pipe.forward_device_resident()`` → ``.wav``
 
 ``codes``
     Pre-computed ``[1,37,T]`` codes tensor → ``pipe.decode_waveform_from_codes_tt()``
@@ -203,9 +203,9 @@ def run_text_mode(
     sample_rate: int,
     out_path: Path,
 ) -> None:
-    """Full TT TTS: text → acoustic codes → waveform. Logs TTFT and throughput."""
+    """Full TT TTS (device-resident AR loop): text → acoustic codes → waveform."""
     t0 = perf_counter()
-    out = pipe.forward(text=text, voice=voice, max_tokens=max_tokens, seed=seed)
+    out = pipe.forward_device_resident(text=text, voice=voice, max_tokens=max_tokens, seed=seed)
     wav = out.waveform
     t1 = perf_counter()
     total_s = t1 - t0
@@ -324,7 +324,7 @@ def run_demo(args: DemoArgs) -> None:
 
                     if is_warmup:
                         # Short warmup — only 4 acoustic frames
-                        pipe.forward(text=text, voice=voice, max_tokens=4, seed=args.data.seed)
+                        pipe.forward_device_resident(text=text, voice=voice, max_tokens=4, seed=args.data.seed)
                         continue
 
                     run_text_mode(

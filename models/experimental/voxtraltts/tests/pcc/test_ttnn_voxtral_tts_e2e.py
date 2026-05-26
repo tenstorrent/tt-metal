@@ -67,6 +67,47 @@ def _cpu_text_decode_step(
     return hidden, outputs.past_key_values
 
 
+def _tt_text_decode_step_device_resident(
+    pipe: VoxtralTTSPipeline,
+    *,
+    audio_codes_b37: torch.Tensor,
+    current_pos: int,
+) -> torch.Tensor:
+    """MM embed + ``decode_step_from_embeds_tt``; host hidden slice for staged PCC (matches resident loop)."""
+    dim = pipe.text.inner.args.dim
+    mm_embed_tt = pipe._audio_codes_to_mm_embed_tt(audio_codes_b37)
+
+    dummy_token = torch.zeros(1, dtype=torch.int64)
+    current_pos_t = torch.tensor([current_pos], dtype=torch.int64)
+    _, current_pos_tt, rope_idxs, page_table = pipe.text.prepare_inputs_decode(dummy_token, current_pos_t)
+    rot_mats_global = pipe.text.inner.rope_setup.get_rot_mats(rope_idxs)
+    rot_mats_local = (
+        pipe.text.inner.rope_local_setup.get_rot_mats(rope_idxs)
+        if hasattr(pipe.text.inner, "rope_local_setup")
+        else None
+    )
+
+    next_hidden_tt = pipe.text.decode_step_from_embeds_tt(
+        mm_embed_tt,
+        current_pos_tt,
+        rot_mats_global,
+        rot_mats_local,
+        page_table,
+    )
+    if mm_embed_tt.is_allocated():
+        ttnn.deallocate(mm_embed_tt)
+
+    host = pipe.text.inner.concat_host_output(next_hidden_tt)
+    ttnn.deallocate(next_hidden_tt)
+    hidden = host[0, 0, 0, :dim].to(dtype=torch.bfloat16).float()
+
+    for _t in (current_pos_tt, page_table):
+        if _t is not None and hasattr(_t, "is_allocated") and _t.is_allocated():
+            ttnn.deallocate(_t)
+
+    return hidden
+
+
 def _compare_acoustic_codes(
     pipe: VoxtralTTSPipeline,
     cpu: VoxtralCPUReference,
@@ -117,7 +158,7 @@ def test_ttnn_voxtral_tts_e2e_pcc(device, reset_seeds, request):
         pytest.skip(f"CPU reference load failed: {exc}")
 
     _log_stage_header("0. FULL PIPELINE FORWARD SMOKE")
-    tt_full = pipe.forward(text=_DEMO_TEXT, voice=_DEMO_VOICE, max_tokens=generate_steps, seed=0)
+    tt_full = pipe.forward_device_resident(text=_DEMO_TEXT, voice=_DEMO_VOICE, max_tokens=generate_steps, seed=0)
     ref_full_wav, ref_full_codes = cpu.generate(
         text=_DEMO_TEXT,
         voice=_DEMO_VOICE,
@@ -130,7 +171,8 @@ def test_ttnn_voxtral_tts_e2e_pcc(device, reset_seeds, request):
     assert torch.isfinite(ref_full_wav).all(), "CPU reference produced non-finite waveform samples"
     logger.info(f"  CPU full codes shape={tuple(ref_full_codes.shape)} waveform samples={int(ref_full_wav.numel())}")
     logger.info(
-        f"  TT forward codes shape={tuple(tt_full.codes_b37t.shape)} " f"waveform shape={tuple(tt_full.waveform.shape)}"
+        f"  TT forward_device_resident codes shape={tuple(tt_full.codes_b37t.shape)} "
+        f"waveform shape={tuple(tt_full.waveform.shape)}"
     )
 
     speech_request = compose_speech_request(_DEMO_TEXT, name, voice=_DEMO_VOICE, ref_audio=None)
@@ -153,7 +195,7 @@ def test_ttnn_voxtral_tts_e2e_pcc(device, reset_seeds, request):
     _log_pcc("prefill hidden", float(msg), PREFILL_HIDDEN_PCC)
     assert ok, f"prefill hidden PCC failed: {msg}"
 
-    _log_stage_header("2. AUTOREGRESSIVE TEXT + ACOUSTIC LOOP")
+    _log_stage_header("2. AUTOREGRESSIVE TEXT + ACOUSTIC LOOP (device-resident text decode)")
     cfg_alpha = torch.tensor(cpu._acoustic_cfg_alpha, device=cpu_hidden.device, dtype=cpu.dtype)
     current_pos = len(prompt_ids)
     stacked_codes: list[torch.Tensor] = []
@@ -180,8 +222,7 @@ def test_ttnn_voxtral_tts_e2e_pcc(device, reset_seeds, request):
             break
 
         cpu_hidden, cpu_pkv = _cpu_text_decode_step(cpu, audio_codes_b37=tt_codes, past_key_values=cpu_pkv)
-        mm_embed = pipe._audio_codes_to_mm_embed(tt_codes)
-        tt_hidden = pipe.text.decode_step_from_embeds(mm_embed, current_pos).float()
+        tt_hidden = _tt_text_decode_step_device_resident(pipe, audio_codes_b37=tt_codes, current_pos=current_pos)
 
         ok, msg = comp_pcc(cpu_hidden.float(), tt_hidden, pcc=TEXT_DECODE_STEP_PCC)
         _log_pcc(f"text hidden step={step} pos={current_pos}", float(msg), TEXT_DECODE_STEP_PCC)
