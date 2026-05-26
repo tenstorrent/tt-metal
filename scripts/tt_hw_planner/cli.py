@@ -8494,6 +8494,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     poe.add_argument(
         "--hunks-matching", default=None, help="Only extract hunks whose body matches this regex (e.g. 'gemma3')."
     )
+    poe.add_argument(
+        "--intended-for-production",
+        action="store_true",
+        help="Mark the overlay as a production-PR candidate (metadata only; does not change apply behavior). Use for generalized fixes you plan to upstream later.",
+    )
     poe.set_defaults(func=cmd_overlay_extract)
 
     from .commands.commit_tool import cmd_commit_tool

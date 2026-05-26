@@ -1,0 +1,38 @@
+{
+  "models/common/llama_models.py": {
+    "captured_ts": 1779817744.429359,
+    "classification": "shared",
+    "intended_for_production": true,
+    "line_count": 18,
+    "patch_file": "models__common__llama_models.py.patch",
+    "sha256": "e94142de626dfce452638f785662a9053219eef25390187211dfd132c66d2ea9",
+    "source": "extracted_from_working_tree"
+  },
+  "models/tt_transformers/tt/common.py": {
+    "captured_ts": 1779817744.4357293,
+    "classification": "shared",
+    "intended_for_production": true,
+    "line_count": 80,
+    "patch_file": "models__tt_transformers__tt__common.py.patch",
+    "sha256": "955065a15663c2d06c8455cb2690410d4878b018642bb5562756068dbf0405f0",
+    "source": "extracted_from_working_tree"
+  },
+  "models/tt_transformers/tt/model_config.py": {
+    "captured_ts": 1779817744.448737,
+    "classification": "shared",
+    "intended_for_production": true,
+    "line_count": 373,
+    "patch_file": "models__tt_transformers__tt__model_config.py.patch",
+    "sha256": "eef6b313abe8e3c8788df04bb7514a6c6d2c272d43724c6aa4e5a3d66e688b62",
+    "source": "extracted_from_working_tree"
+  },
+  "models/tt_transformers/tt/rope.py": {
+    "captured_ts": 1779817744.4415712,
+    "classification": "shared",
+    "intended_for_production": true,
+    "line_count": 19,
+    "patch_file": "models__tt_transformers__tt__rope.py.patch",
+    "sha256": "a59b4e3d95609833a1854e18f1309d54a1b5e903c525f285d32bbea8b5eff166",
+    "source": "extracted_from_working_tree"
+  }
+}

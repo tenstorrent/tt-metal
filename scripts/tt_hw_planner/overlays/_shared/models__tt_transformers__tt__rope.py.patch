@@ -1,0 +1,19 @@
+diff --git a/models/tt_transformers/tt/rope.py b/models/tt_transformers/tt/rope.py
+index 274c40af5d5..d093fd632e1 100644
+--- a/models/tt_transformers/tt/rope.py
++++ b/models/tt_transformers/tt/rope.py
+@@ -893,6 +893,14 @@ class RotarySetup(LightweightModule):
+         assert position_idxs.shape == (1, batch), "Position idxs must be a [1, batch] tensor"
+         assert torch.min(position_idxs) >= 0, "Position idxs must be non-negative"
+ 
++        # Clamp to cos/sin cache bounds. Without this, a position >= cache size
++        # (e.g. for sliding-window/local rope where the per-layer effective
++        # position range can differ from max_seq_len) silently wraps via
++        # ttnn.embedding and produces garbage rotations, causing the model to
++        # output a coherent prefix and then collapse into repetition.
++        cache_len = self.cos_matrix.shape[-2]
++        position_idxs = torch.clamp(position_idxs, max=cache_len - 1)
++
+         # Add padding if needed
+         pad_size = nearest_32(batch) - batch
+         position_idxs = torch.nn.functional.pad(position_idxs, (0, pad_size), "constant", 0)

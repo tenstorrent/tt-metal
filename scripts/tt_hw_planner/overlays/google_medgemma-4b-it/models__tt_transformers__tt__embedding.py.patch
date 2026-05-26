@@ -1,0 +1,22 @@
+diff --git a/models/tt_transformers/tt/embedding.py b/models/tt_transformers/tt/embedding.py
+index 005b172d057..79d5e96b315 100644
+--- a/models/tt_transformers/tt/embedding.py
++++ b/models/tt_transformers/tt/embedding.py
+@@ -39,7 +39,16 @@ class Embedding(LightweightModule):
+ class ScaledEmbedding(Embedding):
+     def __init__(self, mesh_device, args, weight_cache_path, state_dict, dtype, embed_scale: float = 1.0):
+         super().__init__(mesh_device, args, weight_cache_path, state_dict, dtype)
+-        self.embed_scale = embed_scale
++        # HF Gemma3 rounds the embedding scale to bfloat16 BEFORE multiplying
++        # (see Gemma3TextModel.forward: `normalizer = torch.tensor(hidden_size**0.5,
++        # dtype=hidden_states.dtype)`). Passing the raw fp64 Python scalar to
++        # ttnn.multiply produces a slightly higher-precision scale than HF uses,
++        # which causes per-token logit drift that accumulates into a divergent
++        # paraphrase after ~11 coherent tokens, then a repetition collapse.
++        # Match HF by pre-rounding the scale through bfloat16 here.
++        import torch as _torch
++
++        self.embed_scale = float(_torch.tensor(embed_scale, dtype=_torch.bfloat16).item())
+ 
+     def forward(self, x: ttnn.Tensor, memory_config=None) -> ttnn.Tensor:
+         e = ttnn.embedding(x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)

@@ -11,7 +11,8 @@ def _log(msg: str) -> None:
 _INSTALLED = False
 
 
-_APPLIED_OVERLAYS_MODEL: str = ""
+SHARED_SCOPE: str = "_shared"
+_APPLIED_OVERLAYS_SCOPES: list = []
 
 
 def install_all() -> None:
@@ -26,37 +27,40 @@ def install_all() -> None:
 
 
 def _apply_overlays_for_active_model() -> None:
-    global _APPLIED_OVERLAYS_MODEL
-    model_id = os.environ.get("TT_HW_PLANNER_OVERLAY_MODEL", "")
-    if not model_id:
-        return
+    global _APPLIED_OVERLAYS_SCOPES
     try:
         from .overlay_manager import apply_for
     except Exception as exc:
         _log(f"overlay_manager import failed; overlays skipped: {type(exc).__name__}: {exc}")
         return
-    n, files = apply_for(model_id)
-    if n:
-        _APPLIED_OVERLAYS_MODEL = model_id
-        _log(f"applied {n} overlay(s) for {model_id}:")
-        for f in files:
-            _log(f"  + {f}")
-    else:
-        _log(f"no overlays applied for {model_id}")
+
+    scopes = [SHARED_SCOPE]
+    model_id = os.environ.get("TT_HW_PLANNER_OVERLAY_MODEL", "")
+    if model_id:
+        scopes.append(model_id)
+
+    for scope in scopes:
+        n, files = apply_for(scope)
+        if n:
+            _APPLIED_OVERLAYS_SCOPES.append(scope)
+            _log(f"applied {n} overlay(s) for scope={scope}:")
+            for f in files:
+                _log(f"  + {f}")
 
 
 def pytest_unconfigure(config) -> None:
-    global _APPLIED_OVERLAYS_MODEL
-    if not _APPLIED_OVERLAYS_MODEL:
+    global _APPLIED_OVERLAYS_SCOPES
+    if not _APPLIED_OVERLAYS_SCOPES:
         return
     try:
         from .overlay_manager import revert_for
     except Exception:
         return
-    n, _ = revert_for(_APPLIED_OVERLAYS_MODEL)
-    if n:
-        _log(f"reverted {n} overlay(s) for {_APPLIED_OVERLAYS_MODEL}")
-    _APPLIED_OVERLAYS_MODEL = ""
+    for scope in reversed(_APPLIED_OVERLAYS_SCOPES):
+        n, _ = revert_for(scope)
+        if n:
+            _log(f"reverted {n} overlay(s) for scope={scope}")
+    _APPLIED_OVERLAYS_SCOPES = []
 
 
 def _install_lightweight_module_probe() -> None:

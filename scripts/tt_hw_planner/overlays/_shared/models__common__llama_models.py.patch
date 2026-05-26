@@ -1,0 +1,18 @@
+diff --git a/models/common/llama_models.py b/models/common/llama_models.py
+index 8ac0643a745..a01dcc4ff7c 100644
+--- a/models/common/llama_models.py
++++ b/models/common/llama_models.py
+@@ -9,7 +9,12 @@ from typing import Dict, List, Optional, Union
+ import torch
+ from PIL import Image
+ from pydantic import BaseModel, validator
+-from transformers import AutoModelForVision2Seq, AutoProcessor, pipeline
++from transformers import AutoProcessor, pipeline
++
++try:
++    from transformers import AutoModelForVision2Seq
++except ImportError:
++    from transformers import AutoModelForImageTextToText as AutoModelForVision2Seq
+ 
+ 
+ class Role(Enum):

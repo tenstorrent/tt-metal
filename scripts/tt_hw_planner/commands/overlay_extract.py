@@ -10,6 +10,7 @@ def cmd_overlay_extract(args) -> int:
             args.model_id,
             rel_path,
             hunks_matching=getattr(args, "hunks_matching", None),
+            intended_for_production=getattr(args, "intended_for_production", False),
         )
         prefix = "  ok " if ok else "  fail"
         print(f"{prefix} {rel_path}: {msg}")

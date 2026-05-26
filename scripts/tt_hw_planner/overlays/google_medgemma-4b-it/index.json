@@ -1,0 +1,42 @@
+{
+  "models/demos/multimodal/gemma3/tt/load_checkpoints.py": {
+    "captured_ts": 1779817337.5947316,
+    "classification": "shared",
+    "line_count": 59,
+    "patch_file": "models__demos__multimodal__gemma3__tt__load_checkpoints.py.patch",
+    "sha256": "33e0d5331a0707aba6aac24ddc62b4f5ee4381eefd653830b2af0d60dd0e8369",
+    "source": "extracted_from_working_tree"
+  },
+  "models/demos/multimodal/gemma3/tt/model_config.py": {
+    "captured_ts": 1779817337.6002264,
+    "classification": "shared",
+    "line_count": 59,
+    "patch_file": "models__demos__multimodal__gemma3__tt__model_config.py.patch",
+    "sha256": "337fc56a0eedb56dd7478c645353ff5362d5549ce5d9621d74b732a20d468a15",
+    "source": "extracted_from_working_tree"
+  },
+  "models/tt_transformers/tt/decoder.py": {
+    "captured_ts": 1779817337.5772972,
+    "classification": "shared",
+    "line_count": 41,
+    "patch_file": "models__tt_transformers__tt__decoder.py.patch",
+    "sha256": "f43f2425ac5f83c1d200a3b35ee6f168e552b5d0c26cba0d4ee8fe348ea102eb",
+    "source": "extracted_from_working_tree"
+  },
+  "models/tt_transformers/tt/embedding.py": {
+    "captured_ts": 1779817337.582935,
+    "classification": "shared",
+    "line_count": 22,
+    "patch_file": "models__tt_transformers__tt__embedding.py.patch",
+    "sha256": "89da32532c678ff5c557220203085159364f690c8bd6c36dbc99bcf66f9fc37b",
+    "source": "extracted_from_working_tree"
+  },
+  "models/tt_transformers/tt/load_checkpoints.py": {
+    "captured_ts": 1779817337.5889676,
+    "classification": "shared",
+    "line_count": 19,
+    "patch_file": "models__tt_transformers__tt__load_checkpoints.py.patch",
+    "sha256": "30d3bb7e75855c94a64dbac439bf82109f97658ec79a89aa790d1fa29e004c99",
+    "source": "extracted_from_working_tree"
+  }
+}

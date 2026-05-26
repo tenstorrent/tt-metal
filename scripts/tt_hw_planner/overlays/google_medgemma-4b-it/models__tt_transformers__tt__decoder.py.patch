@@ -1,0 +1,41 @@
+diff --git a/models/tt_transformers/tt/decoder.py b/models/tt_transformers/tt/decoder.py
+index 9083b355817..7022fc064d1 100644
+--- a/models/tt_transformers/tt/decoder.py
++++ b/models/tt_transformers/tt/decoder.py
+@@ -281,7 +281,14 @@ class TransformerBlock(LightweightModule):
+             if mode == "prefill":
+                 x.deallocate(True)
+         else:
+-            hidden_states = attn_out
++            if getattr(self.args, "post_attn_norm_after_residual", False):
++                # Non-standard: norm applied to (residual + attn_out)
++                hidden_states = ttnn.add(
++                    residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
++                )
++            else:
++                # Gemma3 / Gemma2 / default: ff_norm applied to attn_out before residual add
++                hidden_states = attn_out
+ 
+         ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
+         hidden_states = self.ff_norm(hidden_states, mode, norm_config=ff_norm_config)
+@@ -296,10 +303,16 @@ class TransformerBlock(LightweightModule):
+                     cluster_axis=1,
+                 )
+ 
+-            hidden_states = ttnn.add(
+-                residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
+-            )
+-            residual = hidden_states
++            if getattr(self.args, "post_attn_norm_after_residual", False):
++                # Gemma3: residual for FFN block = ff_norm(x + attn_out); convert to skip_mem_cfg
++                hidden_states = ttnn.to_memory_config(hidden_states, skip_mem_cfg)
++                residual = hidden_states
++            else:
++                # Gemma2: residual for FFN block = x + ff_norm(attn_out)
++                hidden_states = ttnn.add(
++                    residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
++                )
++                residual = hidden_states
+             pre_ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
+             hidden_states = self.pre_ff_norm(hidden_states, mode, norm_config=pre_ff_norm_config)
+ 

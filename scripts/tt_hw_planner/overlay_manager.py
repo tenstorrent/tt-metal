@@ -301,6 +301,7 @@ def extract_from_working_tree(
     rel_path: str,
     *,
     hunks_matching: Optional[str] = None,
+    intended_for_production: bool = False,
 ) -> Tuple[bool, str]:
     diff = _git_diff_file(rel_path)
     if not diff.strip():
@@ -311,7 +312,12 @@ def extract_from_working_tree(
         if not diff.strip():
             return False, f"no hunks matched /{hunks_matching}/ in {rel_path}"
 
-    rec = _store_extracted(model_id, rel_path, diff)
+    rec = _store_extracted(
+        model_id,
+        rel_path,
+        diff,
+        intended_for_production=intended_for_production,
+    )
     rc_rev, err = _git_apply(diff, reverse=True)
     if rc_rev != 0:
         return False, (
@@ -324,7 +330,13 @@ def extract_from_working_tree(
     )
 
 
-def _store_extracted(model_id: str, rel_path: str, diff: str) -> OverlayRecord:
+def _store_extracted(
+    model_id: str,
+    rel_path: str,
+    diff: str,
+    *,
+    intended_for_production: bool = False,
+) -> OverlayRecord:
     md = _model_dir(model_id)
     md.mkdir(parents=True, exist_ok=True)
     patch_file = md / _patch_filename(rel_path)
@@ -338,6 +350,7 @@ def _store_extracted(model_id: str, rel_path: str, diff: str) -> OverlayRecord:
         "line_count": diff.count("\n"),
         "classification": classify_path(rel_path),
         "source": "extracted_from_working_tree",
+        "intended_for_production": intended_for_production,
     }
     _save_index(model_id, idx)
     return OverlayRecord(

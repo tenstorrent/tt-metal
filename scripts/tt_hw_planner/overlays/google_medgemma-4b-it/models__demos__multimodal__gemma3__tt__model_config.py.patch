@@ -1,0 +1,59 @@
+diff --git a/models/demos/multimodal/gemma3/tt/model_config.py b/models/demos/multimodal/gemma3/tt/model_config.py
+index d11ca052bb5..c6019478e17 100644
+--- a/models/demos/multimodal/gemma3/tt/model_config.py
++++ b/models/demos/multimodal/gemma3/tt/model_config.py
+@@ -16,7 +16,12 @@ from models.tt_transformers.tt.common import (
+     calculate_prefill_warmup_seq_lens,
+     cap_seq_lens_to_max_prefill_chunk_size,
+ )
+-from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
++from models.tt_transformers.tt.load_checkpoints import (
++    convert_hf_to_meta,
++    convert_meta_to_hf,
++    standardize_hf_keys,
++    standardize_hf_keys_multimodal,
++)
+ from models.tt_transformers.tt.model_config import (
+     HfAttentionWrapper,
+     HfDecoderWrapper,
+@@ -287,6 +292,24 @@ class ModelArgs(TTModelArgs):
+         else:
+             return []
+ 
++    def weight_cache_path(self, dtype):
++        # Use a versioned subdirectory so that any stale q/k-norm or embed
++        # tensors cached before the reverse_permute_1d + standardize_hf_keys
++        # fixes (2026-05-24) are never silently reused.  ttnn.as_tensor reads
++        # from cache when the file exists, bypassing the Python conversion
++        # entirely, so a stale file (e.g. identity q_norm written before the
++        # key-routing fix) will persist across runs until the path changes.
++        import ttnn as _ttnn
++
++        if self.instruct:
++            _subdir = {
++                _ttnn.bfloat16: "tensor_cache_instruct_bf16_v2",
++                _ttnn.bfloat8_b: "tensor_cache_instruct_bfp8_v2",
++            }[dtype]
++        else:
++            _subdir = {_ttnn.bfloat16: "tensor_cache_bf16_v2", _ttnn.bfloat8_b: "tensor_cache_bfp8_v2"}[dtype]
++        return self.model_cache_path / _subdir
++
+     def _set_model_specific_params(self):
+         self.rms_norm_add_unit_offset = True
+         self.embed_scale = self.dim**0.5
+@@ -463,6 +486,15 @@ class ModelArgs(TTModelArgs):
+             state_dict = model.state_dict()
+ 
+         if self.is_multimodal:
++            # Normalize HF Gemma3ForConditionalGeneration prefixes (e.g. strip the outer
++            # `language_model.` wrapper) so that `map_vision_hf_to_meta_keys_split_to_submodels`
++            # routes text-model weights into `text_state_dict`. Without this, keys like
++            # `language_model.model.layers.N.self_attn.q_norm.weight` match none of the
++            # prefix branches, fall through to `other_state_dict`, never get renamed to
++            # `layers.N.attention.q_norm.weight`, and Attention.__init__ silently sets
++            # q_norm/k_norm to identity — producing a coherent prefix followed by
++            # repetition collapse during decode.
++            state_dict = standardize_hf_keys_multimodal(state_dict)
+             state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
+         else:
+             state_dict = standardize_hf_keys(state_dict)

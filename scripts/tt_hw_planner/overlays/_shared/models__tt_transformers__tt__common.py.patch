@@ -1,0 +1,80 @@
+diff --git a/models/tt_transformers/tt/common.py b/models/tt_transformers/tt/common.py
+index 6c4883a4b79..7cd0f0023d3 100644
+--- a/models/tt_transformers/tt/common.py
++++ b/models/tt_transformers/tt/common.py
+@@ -133,6 +133,14 @@ class RopeScalingPhi3(RopeScaling):
+ def rope_scaling_model_factory(
+     rope_scaling_params: dict, original_max_context_len: Optional[int] = None
+ ) -> RopeScaling:
++    # Gemma3/MedGemma nested format: {"full_attention": {...}, "sliding_attention": {...}}
++    # Use the full-attention sub-config as the canonical RoPE spec.
++    if (
++        "full_attention" in rope_scaling_params
++        and "rope_type" not in rope_scaling_params
++        and "type" not in rope_scaling_params
++    ):
++        rope_scaling_params = rope_scaling_params["full_attention"]
+     rope_scaling_type = rope_scaling_params.get("rope_type") or rope_scaling_params.get("type")
+     if rope_scaling_type == RopeScalingType.LINEAR:
+         return RopeScalingLinear(**rope_scaling_params)
+@@ -283,7 +291,11 @@ def preprocess_inputs_prefill(
+     # Pad each prompt to the maximum length among all prompts.
+     # To avoid issues, we keep track of the decoding position to decode correctly the user's prompt
+     for i, encoded in enumerate(encoded_prompts):
+-        # Initial prefill tensors full of pad tokens
++        # 2026-05-23 transformers-5.x compat: belt-and-suspenders.
++        # `encode_prompt_hf` already normalizes its return, but other
++        # tokenizer call sites may slip through with BatchEncoding
++        # or tokenizers.Encoding objects.
++        encoded = _normalize_token_result_to_list(encoded)
+         input_tokens_prefill_i = torch.full((1, max_prompt_len), 0, dtype=torch.int32)
+         input_tokens_prefill_i[0, : len(encoded[:])] = torch.tensor(encoded[:]).to(input_tokens_prefill_i)
+         input_tokens_prefill.append(input_tokens_prefill_i)
+@@ -300,17 +312,44 @@ def preprocess_inputs_prefill(
+     )
+ 
+ 
++def _normalize_token_result_to_list(result):
++    """2026-05-23 transformers-5.x compat helper.
++
++    `apply_chat_template(tokenize=True)` in transformers 5.x with the
++    new `TokenizersBackend` returns a `BatchEncoding` (dict-like with
++    `.input_ids`), NOT a flat `List[int]` like 4.x. Older code paths
++    that do `torch.tensor(encoded[:])` then crash with
++    `RuntimeError: Could not infer dtype of tokenizers.Encoding`.
++
++    Normalize the return type so every caller gets a flat
++    `List[int]` regardless of transformers version / tokenizer
++    backend. Handles three cases:
++      * BatchEncoding (transformers 5.x TokenizersBackend) -> .input_ids
++      * tokenizers.Encoding (raw Rust object)               -> .ids
++      * List[int] (transformers 4.x)                        -> identity
++    """
++    if hasattr(result, "input_ids"):
++        return list(result.input_ids)
++    if hasattr(result, "ids"):
++        return list(result.ids)
++    return result
++
++
+ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
+-    """See https://huggingface.co/docs/transformers/main/en/chat_templating"""
++    """See https://huggingface.co/docs/transformers/main/en/chat_templating
++
++    2026-05-23 transformers-5.x compat: see
++    `_normalize_token_result_to_list`."""
+     chat = []
+     if isinstance(prompt_text, str):
+         if system_prompt_text:
+             chat.append({"role": "system", "content": system_prompt_text})
+         if prompt_text:
+             chat.append({"role": "user", "content": prompt_text})
+-        return tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
++        result = tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
+     else:
+-        return tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
++        result = tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
++    return _normalize_token_result_to_list(result)
+ 
+ 
+ def compute_llama3_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
