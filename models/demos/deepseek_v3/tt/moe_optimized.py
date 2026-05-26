@@ -25,7 +25,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MulConfig,
     ReduceScatterAsyncMinimalConfig,
     RepeatConfig,
-    SelectiveReduceCombineConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, is_ring_fabric
 from models.demos.deepseek_v3.utils.run_config import (
@@ -138,6 +137,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         config = {
             "expert_mapping_tensor": expert_mapping_tensor,
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
+            "moe_gate": MoEGate.create_shared_state(hf_config, mesh_device),
         }
 
         # TODO: #42722 - preallocated tensors for all_to_all_dispatch_metadata
@@ -194,7 +194,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         fabric_config: ttnn.FabricConfig,
         mode: str,
         batch_size_per_row: int,
-        topk_fallback: bool = False,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Build operator configuration for decode or prefill."""
 
@@ -219,7 +218,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             "hidden_size": hf_config.hidden_size,
             "num_experts_per_tok": hf_config.num_experts_per_tok,
             "num_dispatch_devices": mesh_device.shape[0],
-            "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
+            "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode),
             "all_to_all_dispatch_output_memory_config": memory_config,
             "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
@@ -288,17 +287,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             output_height_shard_dim=4,
             output_width_shard_dim=4,
             cluster_axis=0,
-        )
-        config["quad_ring_selective_reduce_combine"] = SelectiveReduceCombineConfig(
-            hidden_size=hf_config.hidden_size,
-            batch_size=batch,
-            seq_size=seq_len,
-            select_experts_k=hf_config.num_experts_per_tok,
-            experts=hf_config.n_routed_experts,
-            cluster_axis=0,
-            token_parallel_core_dim=4,
-            data_parallel_core_dim=4,
-            worker_cores=ttnn.experimental.get_moe_combine_cores(mesh_device),
             mux_core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(4, 7))}),
         )
         config["quad_ring_deepseek_moe_post_combine_tilize_config"] = DeepseekMoEPostCombineTilizeConfig(
@@ -317,7 +305,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
         batch_size_per_row: int,
-        topk_fallback: bool = False,
     ) -> ModelDecodeConfig:
         return cls.model_config(
             hf_config,
@@ -325,7 +312,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             fabric_config,
             "decode",
             batch_size_per_row=batch_size_per_row,
-            topk_fallback=topk_fallback,
         )
 
     @classmethod
@@ -334,7 +320,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
-        topk_fallback: bool = False,
     ) -> ModelPrefillConfig:
         return cls.model_config(
             hf_config,
@@ -342,7 +327,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             fabric_config,
             "prefill",
             batch_size_per_row=USERS_PER_ROW,
-            topk_fallback=topk_fallback,
         )
 
     @classmethod
@@ -460,9 +444,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
         )
 
-        ttnn.deallocate(topk_experts_indices)
-        ttnn.deallocate(topk_experts_weights)
-
         topk_experts_indices_rm = ttnn.permute(
             topk_experts_indices_rm, (2, 0, 1, 3), memory_config=ttnn.L1_MEMORY_CONFIG
         )
@@ -509,7 +490,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         )
 
         ttnn.deallocate(topk_experts_indices)
-        ttnn.deallocate(topk_experts_weights)
 
         # NOTE: store in DRAM while chunking, as moe_compute requires just about all of L1
         topk_experts_indices_rm = ttnn.permute(
@@ -637,13 +617,14 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         ttnn.deallocate(topk_experts_indices_rm_sharded)
         ttnn.deallocate(topk_experts_weights_rm_sharded)
 
-        # NOTE: we are actively working on fusing moe_compute and selective_reduce_combine
+        # NOTE: can't deallocate dispatch output tensors as they are preallocated and reused across layers
         (
-            compute_output_token_counts,
-            compute_output_dense_expert_activation,
-            compute_ouput_dense_e_t,
-            _,  # tile layout output of selective tilize (same buffer as output)
+            _,
+            _,
+            _,
             compute_output,
+            _,
+            combine_output,  # same buffer as preallocated_combine_output
         ) = ttnn.experimental.moe_compute(
             dispatch_output_sparse_buffer,
             dispatch_output_expert_indices,
@@ -651,25 +632,12 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             cfg["expert_mapping_tensor"],
             cfg["moe_experts"]["quad_ring_w0_w1_experts"]["input_tensor_b"],
             cfg["moe_experts"]["quad_ring_w2_experts"]["input_tensor_b"],
+            optional_output_tensor=preallocated_combine_output,
             layer_id=0,  # each layer is composed of distinct tensors, as apposed to all layers fused together
             **cfg["quad_ring_moe_compute"],
         )
 
-        # NOTE: can't deallocate dispatch output tensors as they are preallocated and reused across layers
-
-        combine_output = ttnn.experimental.selective_reduce_combine(
-            compute_output,
-            compute_output_dense_expert_activation,
-            compute_ouput_dense_e_t,
-            compute_output_token_counts,
-            output_tensor=preallocated_combine_output,
-            **ccl.populate_selective_reduce_combine_args(cfg["quad_ring_selective_reduce_combine"]),
-        )
-
         ttnn.deallocate(compute_output)
-        ttnn.deallocate(compute_output_dense_expert_activation)
-        ttnn.deallocate(compute_ouput_dense_e_t)
-        ttnn.deallocate(compute_output_token_counts)
 
         combine_output = ttnn.unsqueeze(combine_output, dim=1)
 
@@ -712,7 +680,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         rs_kwargs = {
             "dim": rs_cfg["dim"],
             "cluster_axis": rs_cfg.get("cluster_axis"),
-            "subdevice_id": rs_cfg.get("subdevice_id"),
+            # "subdevice_id": rs_cfg.get("subdevice_id"),
             "memory_config": rs_cfg.get("memory_config"),
             "intermediate_memory_config": rs_cfg.get("intermediate_memory_config"),
             "num_links": rs_cfg.get("num_links"),

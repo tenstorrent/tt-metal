@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
@@ -122,6 +122,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             "expert_mapping_tensors": expert_mapping_tensors,
             "remap_topk_mask": remap_topk_mask,
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
+            "moe_gate": MoEGate.create_shared_state(hf_config, mesh_device),
         }
 
     @classmethod
@@ -160,7 +161,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         fabric_config: ttnn.FabricConfig,
         mode: str,
         batch_size_per_row: int,
-        topk_fallback: bool = False,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Generate decode configuration for this module.
 
@@ -201,7 +201,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
-                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
+                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode),
                 "all_to_all_dispatch_output_memory_config": memory_config,
                 "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
                 "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
@@ -252,7 +252,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
-                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
+                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode),
                 "all_to_all_dispatch_output_memory_config": memory_config,
                 "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
                 "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
@@ -285,7 +285,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
         batch_size_per_row: int,
-        topk_fallback: bool = False,
     ) -> ModelDecodeConfig:
         return cls.model_config(
             hf_config,
@@ -293,7 +292,6 @@ class MoE(SharedStateAddOn, AbstractModule):
             fabric_config,
             "decode",
             batch_size_per_row=batch_size_per_row,
-            topk_fallback=topk_fallback,
         )
 
     @classmethod
@@ -302,7 +300,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
-        topk_fallback: bool = False,
     ) -> ModelPrefillConfig:
         return cls.model_config(
             hf_config,
@@ -310,7 +307,6 @@ class MoE(SharedStateAddOn, AbstractModule):
             fabric_config,
             "prefill",
             batch_size_per_row=USERS_PER_ROW,
-            topk_fallback=topk_fallback,
         )
 
     @classmethod
@@ -429,7 +425,6 @@ class MoE(SharedStateAddOn, AbstractModule):
                 [1, 1, token_end, cfg["num_experts_per_tok"]],
             )
             topk_weights_chunk_rm = ttnn.to_layout(topk_weights_chunk, ttnn.ROW_MAJOR_LAYOUT)
-            ttnn.deallocate(topk_weights_chunk)
             topk_weights_chunk_rm = ttnn.repeat(topk_weights_chunk_rm, **cfg["topk_weights_repeat"])
             topk_weights_chunk_rm = ttnn.permute(topk_weights_chunk_rm, (3, 1, 2, 0))
             topk_weights_chunk = ttnn.to_layout(topk_weights_chunk_rm, ttnn.TILE_LAYOUT)
@@ -551,7 +546,10 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def forward_prefill(
-        cls, x: ttnn.Tensor, cfg: RunPrefillConfig, handle_tensor_parallel: bool = False
+        cls,
+        x: ttnn.Tensor,
+        cfg: RunPrefillConfig,
+        handle_tensor_parallel: bool = False,
     ) -> ttnn.Tensor:
         # Handle all_gather if tensor parallel is enabled
         if handle_tensor_parallel:
@@ -569,7 +567,12 @@ class MoE(SharedStateAddOn, AbstractModule):
         return output
 
     @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig, handle_tensor_parallel: bool = False) -> ttnn.Tensor:
+    def forward_decode(
+        cls,
+        x: ttnn.Tensor,
+        cfg: RunDecodeConfig,
+        handle_tensor_parallel: bool = False,
+    ) -> ttnn.Tensor:
         # Handle all_gather if tensor parallel is enabled
         if handle_tensor_parallel:
             x = cls._fwd_all_gather(x, cfg)

@@ -32,7 +32,7 @@ default_mpi_tcp_interface() {
     for n in /sys/class/net/*; do
         n="${n##*/}"
         case "${n}" in
-            lo | docker* | br-* | veth* | tailscale*) continue ;;
+            lo | docker* | br-* | veth* | tailscale* | cali*) continue ;;
         esac
         state="$(cat "/sys/class/net/${n}/operstate" 2>/dev/null || true)"
         if [[ "${state}" == "up" ]]; then
@@ -281,7 +281,11 @@ resolve_deepseekv3_cache() {
 }
 
 resolve_deepseekv3_model() {
-    local default_model="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
+    local default_model="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked"
+    local local_quad_ring_model="/data/deepseek/DeepSeek-R1-0528-dequantized-stacked-quad-ring"
+    if [[ -z "${DEEPSEEK_V3_HF_MODEL_OVERRIDE:-}" && -z "${DEEPSEEK_V3_HF_MODEL:-}" && ! -d "${default_model}" && -d "${local_quad_ring_model}" ]]; then
+        default_model="${local_quad_ring_model}"
+    fi
     local model_path="${DEEPSEEK_V3_HF_MODEL_OVERRIDE:-${DEEPSEEK_V3_HF_MODEL:-${default_model}}}"
 
     if [[ ! -d "${model_path}" ]]; then
@@ -292,6 +296,29 @@ resolve_deepseekv3_model() {
 
     export DEEPSEEK_V3_HF_MODEL="${model_path}"
     echo "Using DeepSeek V3 model: ${DEEPSEEK_V3_HF_MODEL}"
+}
+
+maybe_use_quad_ring_prepared_model() {
+    local ds_quad_torus="${DS_QUAD_USE_TORUS_MODE:-1}"
+    ds_quad_torus="${ds_quad_torus,,}"
+    case "${ds_quad_torus}" in
+        ""|1|true|yes|on) ;;
+        *) return 0 ;;
+    esac
+
+    local model_path="${DEEPSEEK_V3_HF_MODEL:-}"
+    if [[ -z "${model_path}" ]]; then
+        return 0
+    fi
+    if [[ "${model_path}" == *-quad-ring ]]; then
+        return 0
+    fi
+
+    local quad_ring_candidate="${model_path}-quad-ring"
+    if [[ -d "${quad_ring_candidate}" ]]; then
+        export DEEPSEEK_V3_HF_MODEL="${quad_ring_candidate}"
+        echo "Using quad-ring prepared DeepSeek model: ${DEEPSEEK_V3_HF_MODEL}"
+    fi
 }
 
 setup_dual_galaxy_env() {
@@ -368,10 +395,12 @@ setup_quad_galaxy_env() {
             exit 1
             ;;
     esac
+
+    maybe_use_quad_ring_prepared_model
 }
 
 # Compute pytest --timeout value.
-# When DEEPSEEK_V3_CACHE_OVERRIDE is set (cache recalculation), add 6 hours.
+# When DEEPSEEK_V3_CACHE_OVERRIDE is set (custom DeepSeek cache dir), add 6 hours.
 _demo_timeout() {
     local base_timeout=$1
     local cache_extra=21600  # 6 hours
@@ -597,6 +626,24 @@ run_quad_teacher_forced_test() {
     fi
 }
 
+run_quad_test_model_long_prefill_single_galaxy_test() {
+    fail=0
+    setup_quad_galaxy_env
+    local timeout=$(_demo_timeout 1250)
+    local selector="mode_prefill"
+    local junit_path="$(_test_run_summary_junit_path test_model_long_prefill_single_galaxy_quad)"
+    local junit_flag="--junitxml=${junit_path}"
+
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=32768 pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/tests/test_model.py -k '$selector' 2>&1 | tee generated/artifacts/quad_test_model_long_prefill_single_galaxy_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    fail+=$((fail + ec))
+    _test_run_summary_append_junit_rows "test_model_long_prefill_single_galaxy_quad" "${junit_path}" "${ec}"
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
 ###############################################################################
 # Demo tests (full)
 ###############################################################################
@@ -674,6 +721,40 @@ run_quad_demo_stress_test() {
 }
 
 ###############################################################################
+# AIME24 eval tests
+###############################################################################
+
+run_quad_aime_fast_test() {
+    setup_quad_galaxy_env
+    local timeout=$(_demo_timeout 3600)
+    local junit_path="$(_test_run_summary_junit_path aime_fast_quad)"
+    local junit_flag="--junitxml=${junit_path}"
+
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_demo_aime.py -k 'quad_aime_fast' 2>&1 | tee generated/artifacts/quad_aime_fast_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    _test_run_summary_append_junit_rows "aime_fast_quad" "${junit_path}" "${ec}"
+
+    if [[ $ec -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+run_quad_aime_full_test() {
+    setup_quad_galaxy_env
+    local timeout=$(_demo_timeout 10800)
+    local junit_path="$(_test_run_summary_junit_path aime_full_quad)"
+    local junit_flag="--junitxml=${junit_path}"
+
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_demo_aime.py -k 'quad_aime_full' 2>&1 | tee generated/artifacts/quad_aime_full_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    _test_run_summary_append_junit_rows "aime_full_quad" "${junit_path}" "${ec}"
+
+    if [[ $ec -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+###############################################################################
 # Composite runners
 ###############################################################################
 
@@ -699,10 +780,9 @@ run_all_needed_local_tests() {
     local saved_upr_mode="${DEEPSEEK_DEMO_UPR_MODE:-}"
     export DEEPSEEK_DEMO_UPR_MODE="all"
 
-    run_dual_teacher_forced_test
-    run_dual_demo_test
-    run_dual_demo_stress_test
     run_quad_teacher_forced_test
+    run_quad_test_model_long_prefill_single_galaxy_test
+    run_quad_aime_fast_test
     run_quad_demo_test
     run_quad_demo_stress_test
 
@@ -901,6 +981,15 @@ main() {
         "quad_demo_stress")
             run_quad_demo_stress_test
             ;;
+        "quad_aime_fast")
+            run_quad_aime_fast_test
+            ;;
+        "quad_aime_full")
+            run_quad_aime_full_test
+            ;;
+        "quad_test_model_long_prefill")
+            run_quad_test_model_long_prefill_single_galaxy_test
+            ;;
         "dual_deepseekv3_integration_tests")
             run_dual_deepseekv3_integration_tests
             ;;
@@ -915,10 +1004,10 @@ main() {
             ;;
         *)
             echo "Unknown test function: $test_function" 1>&2
-            echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, dual_demo_mtp, quad_demo, quad_demo_mtp, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all_needed_local_tests, all" 1>&2
+            echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, dual_demo_mtp, quad_demo, quad_demo_mtp, dual_demo_stress, quad_demo_stress, quad_aime_fast, quad_aime_full, quad_test_model_long_prefill, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all_needed_local_tests, all" 1>&2
             echo "Optional second argument: UPR mode (all|32|8)" 1>&2
             echo "Optional flags: --no-torus  --model-path <path>  --cache-path <path>" 1>&2
-            echo "Example: $0 quad_demo 32 --no-torus --model-path /data/deepseek/DeepSeek-R1-0528-dequantized --cache-path /data/deepseek/DeepSeek-R1-0528-Cache/CI" 1>&2
+            echo "Example: $0 quad_demo 32 --no-torus --model-path /data/deepseek/DeepSeek-R1-0528-dequantized-stacked --cache-path /data/deepseek/DeepSeek-R1-0528-Cache/CI" 1>&2
             exit 1
             ;;
     esac

@@ -3,16 +3,17 @@
 
 import json
 import os
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
 import pytest
 
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json, run_demo
-from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
+from models.demos.deepseek_v3.utils.test_utils import create_prompt_of_length, system_name_to_mesh_shape
 
 MODEL_PATH = Path(
-    os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized")
+    os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked")
 )
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
 
@@ -46,6 +47,23 @@ def _assert_no_garbage_tokens(results: dict) -> None:
         pytest.fail("Garbage tokens detected during demo:\n" + "\n".join(failures))
 
 
+def _is_primary_artifact_writer() -> bool:
+    for rank_env in ("TT_MESH_HOST_RANK", "OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK"):
+        rank_value = os.getenv(rank_env)
+        if rank_value is None:
+            continue
+        try:
+            return int(rank_value) == 0
+        except ValueError:
+            return False
+    return True
+
+
+def _timestamped_artifact_stem(artifact_name: str) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{artifact_name}_{timestamp}"
+
+
 def _demo_case(
     *,
     max_prompts: int,
@@ -61,6 +79,8 @@ def _demo_case(
     expect_full_length: bool,
     case_id: str,
     marks=None,
+    max_seq_len: int | None = None,
+    target_prompt_tokens: int | None = None,
 ):
     return pytest.param(
         {
@@ -75,6 +95,8 @@ def _demo_case(
             "profile_decode": profile_decode,
             "stop_at_eos": stop_at_eos,
             "expect_full_length": expect_full_length,
+            "max_seq_len": max_seq_len,
+            "target_prompt_tokens": target_prompt_tokens,
         },
         id=case_id,
         marks=marks,
@@ -264,14 +286,83 @@ def _demo_case(
             case_id="profile_decode",
             marks=pytest.mark.timeout(1800),
         ),
+        _demo_case(
+            max_prompts=1,
+            max_users_per_row=8,
+            repeat_batches=1,
+            max_new_tokens=32,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=False,
+            artifact_name="quad_long_ctx_16k_ds1_results",
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="quad_long_ctx_16k",
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(9400)],
+            max_seq_len=16 * 1024,
+            target_prompt_tokens=16 * 1024 - 256,
+        ),
+        _demo_case(
+            max_prompts=1,
+            max_users_per_row=8,
+            repeat_batches=1,
+            max_new_tokens=32,
+            override_num_layers=None,
+            enable_trace=False,
+            sample_on_device=False,
+            artifact_name="quad_long_ctx_32k_ds1_results",
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="quad_long_ctx_32k",
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(9400)],
+            max_seq_len=32 * 1024,
+            target_prompt_tokens=32 * 1024 - 256,
+        ),
+        _demo_case(
+            max_prompts=1,
+            max_users_per_row=8,
+            repeat_batches=1,
+            max_new_tokens=32,
+            override_num_layers=None,
+            enable_trace=False,
+            sample_on_device=False,
+            artifact_name="quad_long_ctx_64k_ds1_results",
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="quad_long_ctx_64k",
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(9400)],
+            max_seq_len=64 * 1024,
+            target_prompt_tokens=64 * 1024 - 256,
+        ),
+        _demo_case(
+            max_prompts=1,
+            max_users_per_row=8,
+            repeat_batches=1,
+            max_new_tokens=32,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=True,
+            artifact_name="quad_long_ctx_128k_ds1_results",
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="quad_long_ctx_128k",
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(18000)],
+            max_seq_len=128 * 1024,
+            target_prompt_tokens=128 * 1024 - 256,
+        ),
     ],
 )
 def test_demo(case: dict, force_recalculate_weight_config: bool):
-    # Path to the external JSON file containing prompts
-    json_path = "models/demos/deepseek_v3/demo/test_prompts.json"
-
-    # Load prompts from JSON file
-    prompts = load_prompts_from_json(json_path, max_prompts=case["max_prompts"])
+    # Long-context cases generate a synthetic prompt; all others load from JSON.
+    if case["target_prompt_tokens"] is not None:
+        prompts = [create_prompt_of_length(case["target_prompt_tokens"], MODEL_PATH)] * case["max_prompts"]
+    else:
+        json_path = "models/demos/deepseek_v3/demo/test_prompts.json"
+        prompts = load_prompts_from_json(json_path, max_prompts=case["max_prompts"])
 
     # Run demo
     run_kwargs = dict(
@@ -292,6 +383,8 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
         run_kwargs["override_num_layers"] = case["override_num_layers"]
     if case["stop_at_eos"] is not None:
         run_kwargs["stop_at_eos"] = case["stop_at_eos"]
+    if case["max_seq_len"] is not None:
+        run_kwargs["max_seq_len"] = case["max_seq_len"]
 
     results = run_demo(**run_kwargs)
 
@@ -310,16 +403,17 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
     else:
         assert all(length <= case["max_new_tokens"] for length in generated_lengths)
 
-    # Save results to JSON for artifact upload (QUAD tests only)
-    if case["artifact_name"] is not None:
+    # Save artifact from host rank 0 only to avoid multi-host write races.
+    if case["artifact_name"] is not None and _is_primary_artifact_writer():
         artifact_dir = Path("generated/artifacts")
         artifact_dir.mkdir(parents=True, exist_ok=True)
-        output_file = artifact_dir / f"{case['artifact_name']}.json"
+        output_file = artifact_dir / f"{_timestamped_artifact_stem(case['artifact_name'])}.json"
 
         output_data = {
-            "prompts": prompts,
+            "prompts": prompts if prompts else [],
             "generations": [],
             "statistics": results.get("statistics", {}),
+            "model_params": results.get("model_params", {}),
         }
 
         for i, gen_result in enumerate(results["generations"]):

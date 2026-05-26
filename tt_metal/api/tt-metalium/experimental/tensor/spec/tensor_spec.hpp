@@ -9,6 +9,13 @@
 
 namespace tt::tt_metal {
 
+// Validates that a tensor's physical shape fits within the shard grid for sharded memory layouts.
+// Checks that the number of shards required along each dimension does not exceed the available
+// cores/grid size, and that non-sharded dimensions match exactly (e.g. width for height-sharded,
+// height for width-sharded). Only applies to legacy (non-nd) shard specs.
+// Returns true if valid, false otherwise.
+bool can_shape_fits_shard_grid(const TensorLayout& tensor_layout, const Shape& logical_shape);
+
 class TensorSpec final {
 public:
     TensorSpec(tt::tt_metal::Shape logical_shape, TensorLayout tensor_layout);

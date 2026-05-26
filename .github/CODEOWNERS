@@ -451,4 +451,4 @@ tech_reports/LLMs/vLLM_integration.md @skhorasganiTT @viktorpusTT @tenstorrent/c
 models/experimental/yunet @tvardhineniTT @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 
 # ds-rc1 release-candidate gate. Keep this final so PRs targeting ds-rc1 require one of these owners.
-* @kpaigwar @yalrawwashTT
+* @kpaigwar @yalrawwashTT @pprajapatiTT
