@@ -223,8 +223,9 @@ void kernel_main() {
     // Retain a copy
     //-------------------------------------------------------------------------
     // Retain this copy for final scores (raw scores)
+    // Host config pins fp32_dest_acc_en=false for this kernel, so DST is in Float16_b layout.
     copy_dest_values_init();
-    copy_dest_values(0, 1);
+    copy_dest_values<DataFormat::Float16_b>(0, 1);
 
     //-------------------------------------------------------------------------
     // Add bias

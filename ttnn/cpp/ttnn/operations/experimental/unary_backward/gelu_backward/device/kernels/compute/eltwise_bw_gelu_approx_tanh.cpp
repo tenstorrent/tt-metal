@@ -19,6 +19,10 @@
 #define M_SQRT2 1.41421356237309504880f    /* sqrt(2) */
 #define M_2_SQRTPI 1.12837916709551257390f /* 2/sqrt(pi) */
 
+// DST register format follows the host-side fp32_dest_acc_en setting (Float32 when enabled,
+// Float16_b otherwise). DST_ACCUM_MODE is injected by JIT codegen.
+constexpr DataFormat copy_format = DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b;
+
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
@@ -66,7 +70,7 @@ void kernel_main() {
         // tile[1] = tanh(sqrt(2/π) * (x + 0.044715 * x^3))
         tanh_tile_init();
         tanh_tile(1);
-        copy_dest_values(1, 4);  // save tanh to tile[4]
+        copy_dest_values<copy_format>(1, 4);  // save tanh to tile[4]
 
         // CDF term: tile[1] = 0.5 * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
         fill_tile(3, 1.0f);
@@ -78,7 +82,7 @@ void kernel_main() {
         square_tile(4);
         fill_tile(3, 1.0f);
         sub_binary_tile(3, 4, 3);
-        copy_dest_values(3, 4);
+        copy_dest_values<copy_format>(3, 4);
 
         // tile[2] = (1 + 0.134145 * x**2)
         fill_tile(3, kKappa * 3.0f);
@@ -93,7 +97,7 @@ void kernel_main() {
         mul_binary_tile(2, 3, 2);
 
         // tile[2] = x * pdf term
-        copy_dest_values(5, 3);
+        copy_dest_values<copy_format>(5, 3);
         mul_binary_tile(2, 3, 2);
 
         // result: tile[1] = grad * (cdf_term + x * pdf_term)
