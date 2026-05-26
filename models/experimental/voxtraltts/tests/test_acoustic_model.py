@@ -13,6 +13,7 @@ import torch
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.cpu_flow_matching_acoustic import (
+    AudioSpecialTokens,
     FlowMatchingAudioTransformerRef,
     build_audio_model_args_from_voxtral_config,
 )
@@ -356,7 +357,7 @@ def test_acoustic_predict_velocity_pcc(mesh_device, reset_seeds):
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 @torch.no_grad()
 def test_acoustic_semantic_logits_pcc(mesh_device, reset_seeds):
-    """``semantic_codebook_output`` matches TT linear (Pearson >= 0.99)."""
+    """TT semantic linear: global + ref-top-k + watch {855,6114,6286} vs CPU reference."""
     model_name_or_path = resolve_voxtral_model_name_or_skip()
     try:
         ref, cfg = _load_reference_model(model_name_or_path)
@@ -371,6 +372,9 @@ def test_acoustic_semantic_logits_pcc(mesh_device, reset_seeds):
 
     w_dtype = ref.semantic_codebook_output.weight.dtype
     ref_logits = ref.semantic_codebook_output(llm_h.to(dtype=w_dtype)).float()
+    ref_logits[:, ref._empty_audio_token_id] = float("-inf")
+    tail = len(AudioSpecialTokens.all_special_tokens()) + ref.model_args.semantic_codebook_size
+    ref_logits[:, tail:] = float("-inf")
 
     tt_llm = ttnn.from_torch(
         llm_h.unsqueeze(1),
@@ -379,17 +383,45 @@ def test_acoustic_semantic_logits_pcc(mesh_device, reset_seeds):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    sem_tt = ttnn.linear(tt_llm, tt_model.w_semantic, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(tt_llm)
-    tt_logits = ttnn.to_torch(sem_tt).float().reshape(bsz, -1)
-    ttnn.deallocate(sem_tt)
 
-    tt_aligned = _align_to_ref_shape(ref_logits, tt_logits)
-    passing, pcc_val = comp_pcc(ref_logits, tt_aligned, pcc=0.99)
+    # Diagnostic: old TT path (bf16 matmul output) — shows why near-tie tops drift.
+    tt_logits_bf16_out = tt_model._semantic_logits_tt(tt_llm, output_dtype=ttnn.bfloat16, input_fp32=False)
+    tt_logits_bf16_out = _align_to_ref_shape(ref_logits, tt_logits_bf16_out)
+
+    tt_logits = tt_model._semantic_logits_tt(tt_llm)
+    ttnn.deallocate(tt_llm)
+    tt_logits = _align_to_ref_shape(ref_logits, tt_logits)
+
+    passing, pcc_val = comp_pcc(ref_logits, tt_logits, pcc=0.99)
     assert passing, (
         f"Semantic logits PCC failed: PCC={float(pcc_val):.6f} (required >= 0.99). "
         f"ref.shape={tuple(ref_logits.shape)} tt.shape={tuple(tt_logits.shape)}."
     )
+    assert torch.equal(ref_logits.argmax(dim=-1), tt_logits.argmax(dim=-1)), (
+        f"Semantic argmax mismatch: ref={ref_logits.argmax(dim=-1).tolist()} " f"tt={tt_logits.argmax(dim=-1).tolist()}"
+    )
+
+    watch = (855, 6114, 6286)
+    watch_ok = [i for i in watch if i < ref_logits.shape[-1]]
+    if watch_ok:
+        ref_watch = ref_logits[:, watch_ok]
+        tt_watch = tt_logits[:, watch_ok]
+        tt_bf16_watch = tt_logits_bf16_out[:, watch_ok]
+        watch_pass, watch_pcc = comp_pcc(ref_watch, tt_watch, pcc=0.999)
+        watch_max_diff = float((tt_watch - ref_watch).abs().max().item())
+        bf16_watch_max_diff = float((tt_bf16_watch - ref_watch).abs().max().item())
+        assert watch_pass, (
+            f"Watch-index logits PCC failed at {watch_ok}: PCC={float(watch_pcc):.6f} "
+            f"max|Δ|={watch_max_diff:.4f} (bf16-out max|Δ|={bf16_watch_max_diff:.4f}) "
+            f"ref={ref_watch.tolist()} tt={tt_watch.tolist()}"
+        )
+
+    top_k = min(10, ref_logits.shape[-1])
+    ref_top_idx = torch.topk(ref_logits[0], k=top_k).indices
+    ref_topk = ref_logits[:, ref_top_idx]
+    tt_topk = tt_logits[:, ref_top_idx]
+    topk_pass, topk_pcc = comp_pcc(ref_topk, tt_topk, pcc=0.999)
+    assert topk_pass, f"Ref-top-{top_k} logits PCC failed: PCC={float(topk_pcc):.6f} " f"idx={ref_top_idx.tolist()}"
 
 
 @pytest.mark.timeout(3600)

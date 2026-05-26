@@ -1,12 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Voxtral TTS end-to-end trial: exactly one CPU forward and one TT forward.
+"""Production E2E PCC log: one CPU generate + one TT forward (no debug forward).
 
-Runs ``cpu.generate()`` once and ``forward_device_resident()`` once on the same
-``text`` / ``voice`` / ``max_tokens`` / ``seed``. Pass/fail is final waveform PCC.
-
-For per-step code match and aggregate stats, see logged ``PER-STEP CODE MATCH`` section.
-For continuous per-stage PCC (``return_debug=True``), use ``log_voxtral_staged_pcc_report``.
+Same compute path as ``test_ttnn_trial.py``. Logs per-step code match, aggregate
+stats, and waveform PCC; always passes unless a forward fails.
 """
 from __future__ import annotations
 
@@ -23,14 +20,7 @@ from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXT
 from models.experimental.voxtraltts.tests.common import log_per_step_code_match, resolve_voxtral_model_name_or_skip
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
-FINAL_WAVEFORM_PCC = 0.99
+WAVEFORM_PCC_TARGET = 0.99
 
 _DEMO_TEXT = (
     "Voxtral is a four billion parameter open weight text to speech model "
@@ -52,8 +42,8 @@ def _log_pcc(label: str, pcc_value: float, target: float) -> None:
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("device_params", [{}], indirect=True)
-def test_ttnn_voxtral_tts_e2e_trial(device, reset_seeds, request):
-    """One CPU ``generate()`` + one TT ``forward_device_resident()``; assert waveform PCC."""
+def test_ttnn_voxtral_tts_staged_pcc(device, reset_seeds, request):
+    """One CPU ``generate()`` + one TT ``forward_device_resident()`` (production path)."""
     generate_steps = 8
     name = resolve_voxtral_model_name_or_skip()
 
@@ -80,7 +70,7 @@ def test_ttnn_voxtral_tts_e2e_trial(device, reset_seeds, request):
     request.addfinalizer(_cleanup_pipe)
 
     logger.info("=" * 70)
-    logger.info("CPU REFERENCE FORWARD (single generate)")
+    logger.info("CPU FORWARD (single generate, production path)")
     logger.info("=" * 70)
     ref_wav, ref_codes = cpu.generate(
         text=_DEMO_TEXT,
@@ -90,54 +80,37 @@ def test_ttnn_voxtral_tts_e2e_trial(device, reset_seeds, request):
         return_tokenizer_codes=True,
     )
     assert torch.isfinite(ref_wav).all(), "CPU reference produced non-finite waveform samples"
-    logger.info(f"  CPU codes shape={tuple(ref_codes.shape)} waveform samples={int(ref_wav.numel())}")
 
     logger.info("=" * 70)
-    logger.info("TT FORWARD (single forward_device_resident)")
+    logger.info("TT FORWARD (single forward_device_resident, production path)")
     logger.info("=" * 70)
-    if use_signpost:
-        signpost(header="start")
-    tt_out = pipe.forward_device_resident(text=_DEMO_TEXT, voice=_DEMO_VOICE, max_tokens=generate_steps, seed=0)
-    ttnn.synchronize_device(device)
-    if use_signpost:
-        signpost(header="stop")
-
-    tt_wav = tt_out.waveform
-    tt_codes = tt_out.codes_b37t
-    assert torch.isfinite(tt_wav).all(), "TT forward produced non-finite waveform samples"
-    assert tt_codes.dim() == 3 and tuple(tt_codes.shape[:2]) == (1, 37)
-    logger.info(
-        f"  TT codes shape={tuple(tt_codes.shape)} waveform shape={tuple(tt_wav.shape)} "
-        f"hit_end_audio={tt_out.hit_end_audio}"
+    tt_out = pipe.forward_device_resident(
+        text=_DEMO_TEXT,
+        voice=_DEMO_VOICE,
+        max_tokens=generate_steps,
+        seed=0,
     )
+    ttnn.synchronize_device(device)
+    assert torch.isfinite(tt_out.waveform).all(), "TT forward produced non-finite waveform samples"
 
-    logger.info("=" * 70)
-    logger.info("FINAL WAVEFORM PCC")
-    logger.info("=" * 70)
-    n_frames = min(int(tt_codes.shape[2]), int(ref_codes.shape[2]))
-    assert n_frames > 0, "no frames produced by one of the pipelines"
-    tt_codes_aligned = tt_codes[:, :, :n_frames]
+    n_frames = min(int(tt_out.codes_b37t.shape[2]), int(ref_codes.shape[2]))
+    tt_codes = tt_out.codes_b37t[:, :, :n_frames]
     ref_codes_aligned = ref_codes[:, :, :n_frames]
 
-    log_per_step_code_match(ref_codes_aligned, tt_codes_aligned)
+    log_per_step_code_match(ref_codes_aligned, tt_codes)
 
-    sem_matches = int((tt_codes_aligned[:, 0] == ref_codes_aligned[:, 0]).sum().item())
-    sem_total = int(tt_codes_aligned[:, 0].numel())
-    ac_matches = int((tt_codes_aligned[:, 1:] == ref_codes_aligned[:, 1:]).sum().item())
-    ac_total = int(tt_codes_aligned[:, 1:].numel())
+    sem_matches = int((tt_codes[:, 0] == ref_codes_aligned[:, 0]).sum().item())
+    sem_total = int(tt_codes[:, 0].numel())
+    ac_matches = int((tt_codes[:, 1:] == ref_codes_aligned[:, 1:]).sum().item())
+    ac_total = int(tt_codes[:, 1:].numel())
     logger.info(f"  semantic-code match: {sem_matches / sem_total:.4f}  ({sem_matches}/{sem_total})")
-    logger.info(f"  acoustic-code match: {ac_matches / ac_total:.4f}  ({ac_matches}/{ac_total})  (informational)")
-
-    _, codes_pcc = comp_pcc(ref_codes_aligned.float(), tt_codes_aligned.float(), pcc=FINAL_WAVEFORM_PCC)
-    logger.info(f"  codes PCC={float(codes_pcc):.4f}  (informational)")
+    logger.info(f"  acoustic-code match: {ac_matches / ac_total:.4f}  ({ac_matches}/{ac_total})")
 
     ref_flat = ref_wav.reshape(-1).float()
-    tt_flat = tt_wav.reshape(-1).float()
+    tt_flat = tt_out.waveform.reshape(-1).float()
     n_wav = min(int(ref_flat.numel()), int(tt_flat.numel()))
-    assert n_wav > 0, "no waveform samples produced by one of the pipelines"
-    ok_wav, wav_pcc = comp_pcc(ref_flat[:n_wav], tt_flat[:n_wav], pcc=FINAL_WAVEFORM_PCC)
-    _log_pcc("waveform", float(wav_pcc), FINAL_WAVEFORM_PCC)
-    assert ok_wav, f"final waveform PCC failed: {wav_pcc}  (samples={n_wav})"
+    _, wav_pcc = comp_pcc(ref_flat[:n_wav], tt_flat[:n_wav], pcc=WAVEFORM_PCC_TARGET)
+    _log_pcc("waveform", float(wav_pcc), WAVEFORM_PCC_TARGET)
 
     ttnn.synchronize_device(device)
     pipe.cleanup_all()
