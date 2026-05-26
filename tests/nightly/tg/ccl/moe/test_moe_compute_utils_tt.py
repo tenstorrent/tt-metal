@@ -2,13 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Parity tests for the ttnn-tensor port of ``moe_compute_utils``.
+"""Parity tests for the C++ ttnn-tensor port of ``moe_compute_utils``.
 
-Each test runs both the torch reference (``ttnn._experimental.moe_compute_utils``)
-and the ttnn-tensor port (``ttnn._experimental.moe_compute_utils_tt``) on the
-same inputs and checks for byte-exact output parity. Inputs are sharded across
-the TG mesh on the experts dim (dim 1) so the tests exercise the actual
-multi-device sharded path the ttnn helpers are designed for.
+Each test runs the torch reference (``ttnn._experimental.moe_compute_utils``)
+and the C++ ttnn-tensor port (``ttnn.experimental.<fn>``) on the same inputs
+and checks for byte-exact output parity. Inputs are sharded across the TG
+mesh on the experts dim (dim 1) so the tests exercise the actual multi-device
+sharded path the ttnn helpers are designed for.
 """
 
 import os
@@ -24,13 +24,6 @@ from ttnn.experimental.moe_compute_utils import (
     prepare_w0_w1_tensor_with_bias as torch_prepare_w0_w1_with_bias,
     prepare_w2_tensor_for_moe_compute as torch_prepare_w2,
     prepare_w2_tensor_with_bias as torch_prepare_w2_with_bias,
-)
-from ttnn.experimental.moe_compute_utils_tt import (
-    add_shared_expert_weights as tt_add_shared_expert_weights,
-    prepare_w0_w1_tensor_for_moe_compute as tt_prepare_w0_w1,
-    prepare_w0_w1_tensor_with_bias as tt_prepare_w0_w1_with_bias,
-    prepare_w2_tensor_for_moe_compute as tt_prepare_w2,
-    prepare_w2_tensor_with_bias as tt_prepare_w2_with_bias,
 )
 
 MESH_GRAPH_DESC_1x16 = (
@@ -179,7 +172,7 @@ def _torch_prepare_w2_with_bias_per_device_stacked(
 @pytest.mark.parametrize("hidden_size, N", DIM_PARAMS)
 @pytest.mark.parametrize("num_layers, experts_per_device", [(1, 2)])
 @torch.no_grad()
-def test_prepare_w0_w1_tensor_tt_parity(mesh_device, mesh_shape, hidden_size, N, num_layers, experts_per_device):
+def test_prepare_w0_w1_tensor_parity(mesh_device, mesh_shape, hidden_size, N, num_layers, experts_per_device):
     torch.manual_seed(2003)
     num_devices = mesh_shape[0] * mesh_shape[1]
     E_total = experts_per_device * num_devices
@@ -195,8 +188,10 @@ def test_prepare_w0_w1_tensor_tt_parity(mesh_device, mesh_shape, hidden_size, N,
 
     tt_w0 = _shard_to_mesh(torch_w0, mesh_device, dim=1)
     tt_w1 = _shard_to_mesh(torch_w1, mesh_device, dim=1)
-    tt_out = tt_prepare_w0_w1(tt_w0, tt_w1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map)
-    # Output local shape: (num_cores, L, E_per_dev, groups, Kp, 4*TILE) — E is at dim 2 post-permute.
+    tt_out = ttnn.experimental.prepare_w0_w1_tensor_for_moe_compute(
+        tt_w0, tt_w1, L=num_layers, E=experts_per_device, K=hidden_size, N=N, shard_map=w0_w1_shard_map
+    )
+    ttnn.synchronize_device(mesh_device)
     tt_pulled = _concat_from_mesh(tt_out, mesh_device, dim=2)
 
     assert tt_pulled.shape == torch_ref.shape, f"shape mismatch: {tt_pulled.shape} vs {torch_ref.shape}"
@@ -213,12 +208,11 @@ def test_prepare_w0_w1_tensor_tt_parity(mesh_device, mesh_shape, hidden_size, N,
 @pytest.mark.parametrize("hidden_size, N", DIM_PARAMS)
 @pytest.mark.parametrize("num_layers, experts_per_device", [(1, 2)])
 @torch.no_grad()
-def test_prepare_w2_tensor_tt_parity(mesh_device, mesh_shape, hidden_size, N, num_layers, experts_per_device):
+def test_prepare_w2_tensor_parity(mesh_device, mesh_shape, hidden_size, N, num_layers, experts_per_device):
     torch.manual_seed(2003)
     num_devices = mesh_shape[0] * mesh_shape[1]
     E_total = experts_per_device * num_devices
 
-    # W2 input shape: (L, E, intermediate, hidden) = (L, E_total, N, hidden_size).
     torch_w2 = torch.randn(num_layers, E_total, N, hidden_size, dtype=torch.bfloat16)
 
     w0_w1_shard_map, w2_shard_map, _ = get_weight_core_shard_maps(mesh_device, hidden_size, N)
@@ -228,8 +222,17 @@ def test_prepare_w2_tensor_tt_parity(mesh_device, mesh_shape, hidden_size, N, nu
     )
 
     tt_w2 = _shard_to_mesh(torch_w2, mesh_device, dim=1)
-    tt_out = tt_prepare_w2(tt_w2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map)
-    # Output local shape: (num_cores, L, E_per_dev, w2_groups, N_padded, 4*TILE) — E at dim 2.
+    tt_out = ttnn.experimental.prepare_w2_tensor_for_moe_compute(
+        tt_w2,
+        L=num_layers,
+        E=experts_per_device,
+        N=N,
+        K=hidden_size,
+        w2_shard_map=w2_shard_map,
+        w0_w1_shard_map=w0_w1_shard_map,
+    )
+    ttnn.synchronize_device(mesh_device)
+
     tt_pulled = _concat_from_mesh(tt_out, mesh_device, dim=2)
 
     assert tt_pulled.shape == torch_ref.shape, f"shape mismatch: {tt_pulled.shape} vs {torch_ref.shape}"
@@ -246,9 +249,7 @@ def test_prepare_w2_tensor_tt_parity(mesh_device, mesh_shape, hidden_size, N, nu
 @pytest.mark.parametrize("hidden_size, N", DIM_PARAMS)
 @pytest.mark.parametrize("num_layers, experts_per_device", [(1, 2)])
 @torch.no_grad()
-def test_prepare_w0_w1_tensor_with_bias_tt_parity(
-    mesh_device, mesh_shape, hidden_size, N, num_layers, experts_per_device
-):
+def test_prepare_w0_w1_tensor_with_bias_parity(mesh_device, mesh_shape, hidden_size, N, num_layers, experts_per_device):
     torch.manual_seed(2003)
     num_devices = mesh_shape[0] * mesh_shape[1]
     E_total = experts_per_device * num_devices
@@ -277,17 +278,19 @@ def test_prepare_w0_w1_tensor_with_bias_tt_parity(
     tt_w1 = _shard_to_mesh(torch_w1, mesh_device, dim=1)
     tt_b0 = _shard_to_mesh(torch_b0, mesh_device, dim=1)
     tt_b1 = _shard_to_mesh(torch_b1, mesh_device, dim=1)
-    tt_out = tt_prepare_w0_w1_with_bias(
+    tt_out = ttnn.experimental.prepare_w0_w1_tensor_with_bias(
         tt_w0,
         tt_w1,
         tt_b0,
         tt_b1,
-        num_layers,
-        experts_per_device,
-        hidden_size,
-        N,
-        w0_w1_shard_map,
+        L=num_layers,
+        E=experts_per_device,
+        K=hidden_size,
+        N=N,
+        shard_map=w0_w1_shard_map,
     )
+    ttnn.synchronize_device(mesh_device)
+
     tt_pulled = _concat_from_mesh(tt_out, mesh_device, dim=2)
 
     assert tt_pulled.shape == torch_ref.shape, f"shape mismatch: {tt_pulled.shape} vs {torch_ref.shape}"
@@ -304,7 +307,7 @@ def test_prepare_w0_w1_tensor_with_bias_tt_parity(
 @pytest.mark.parametrize("hidden_size, N", DIM_PARAMS)
 @pytest.mark.parametrize("num_layers, experts_per_device", [(1, 2)])
 @torch.no_grad()
-def test_prepare_w2_tensor_with_bias_tt_parity(mesh_device, mesh_shape, hidden_size, N, num_layers, experts_per_device):
+def test_prepare_w2_tensor_with_bias_parity(mesh_device, mesh_shape, hidden_size, N, num_layers, experts_per_device):
     torch.manual_seed(2003)
     num_devices = mesh_shape[0] * mesh_shape[1]
     E_total = experts_per_device * num_devices
@@ -328,16 +331,17 @@ def test_prepare_w2_tensor_with_bias_tt_parity(mesh_device, mesh_shape, hidden_s
 
     tt_w2 = _shard_to_mesh(torch_w2, mesh_device, dim=1)
     tt_b2 = _shard_to_mesh(torch_b2, mesh_device, dim=1)
-    tt_out = tt_prepare_w2_with_bias(
+    tt_out = ttnn.experimental.prepare_w2_tensor_with_bias(
         tt_w2,
         tt_b2,
-        num_layers,
-        experts_per_device,
-        N,
-        hidden_size,
-        w2_shard_map,
-        w0_w1_shard_map,
+        L=num_layers,
+        E=experts_per_device,
+        N=N,
+        K=hidden_size,
+        w2_shard_map=w2_shard_map,
+        w0_w1_shard_map=w0_w1_shard_map,
     )
+    ttnn.synchronize_device(mesh_device)
     tt_pulled = _concat_from_mesh(tt_out, mesh_device, dim=2)
 
     assert tt_pulled.shape == torch_ref.shape, f"shape mismatch: {tt_pulled.shape} vs {torch_ref.shape}"
@@ -402,7 +406,7 @@ def _build_shared_test_setup(num_layers, num_devices, hidden_size, N, E_total):
 @pytest.mark.parametrize("hidden_size, N", DIM_PARAMS)
 @pytest.mark.parametrize("num_layers, experts_per_device", [(1, 2)])
 @torch.no_grad()
-def test_add_shared_expert_weights_tt_parity(mesh_device, mesh_shape, hidden_size, N, num_layers, experts_per_device):
+def test_add_shared_expert_weights_parity(mesh_device, mesh_shape, hidden_size, N, num_layers, experts_per_device):
     torch.manual_seed(2003)
     num_devices = mesh_shape[0] * mesh_shape[1]
     E_total = experts_per_device * num_devices
@@ -421,7 +425,6 @@ def test_add_shared_expert_weights_tt_parity(mesh_device, mesh_shape, hidden_siz
         shared_w2_arranged,
     ) = _build_shared_test_setup(num_layers, num_devices, hidden_size, N, E_total)
 
-    # Reference: torch helper with the dict + mapping API.
     torch_ref_w0, torch_ref_w1, torch_ref_w2 = torch_add_shared_expert_weights(
         routed_w0,
         routed_w1,
@@ -433,7 +436,6 @@ def test_add_shared_expert_weights_tt_parity(mesh_device, mesh_shape, hidden_siz
         num_devices,
     )
 
-    # ttnn: shard routed and pre-arranged shared on dim 1, run helper, concat on dim 1.
     tt_routed_w0 = _shard_to_mesh(routed_w0, mesh_device, dim=1)
     tt_routed_w1 = _shard_to_mesh(routed_w1, mesh_device, dim=1)
     tt_routed_w2 = _shard_to_mesh(routed_w2, mesh_device, dim=1)
@@ -441,7 +443,7 @@ def test_add_shared_expert_weights_tt_parity(mesh_device, mesh_shape, hidden_siz
     tt_shared_w1 = _shard_to_mesh(shared_w1_arranged, mesh_device, dim=1)
     tt_shared_w2 = _shard_to_mesh(shared_w2_arranged, mesh_device, dim=1)
 
-    tt_out_w0, tt_out_w1, tt_out_w2 = tt_add_shared_expert_weights(
+    tt_out_w0, tt_out_w1, tt_out_w2 = ttnn.experimental.add_shared_expert_weights(
         tt_routed_w0,
         tt_routed_w1,
         tt_routed_w2,
@@ -449,6 +451,7 @@ def test_add_shared_expert_weights_tt_parity(mesh_device, mesh_shape, hidden_siz
         tt_shared_w1,
         tt_shared_w2,
     )
+    ttnn.synchronize_device(mesh_device)
 
     tt_pulled_w0 = _concat_from_mesh(tt_out_w0, mesh_device, dim=1)
     tt_pulled_w1 = _concat_from_mesh(tt_out_w1, mesh_device, dim=1)

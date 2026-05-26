@@ -7,9 +7,13 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/tuple.h>
+#include <nanobind/stl/vector.h>
 
 #include "moe_compute_nanobind.hpp"
 #include "moe_compute.hpp"
+#include "moe_compute_utils.hpp"
 #include "device/kernels/moe_ring_common.h"
 #include "device/hostdevcommon/config.hpp"
 
@@ -154,5 +158,110 @@ This matches the `all_worker_cores_bounding_box` used by the tilize kernel's per
             nb::arg("combine_data_parallel_cores"),
             nb::arg("hidden_size"),
             nb::arg("bh_ring_size") = 12));
+}
+
+void bind_moe_compute_utils(nb::module_& mod) {
+    ttnn::bind_function<"add_shared_expert_weights", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Append per-device shared experts after routed experts along the experts dim.
+
+        Inputs are multi-device tensors sharded on dim 1 (experts). Each device's
+        routed shard holds its assigned routed experts; each device's shared shard
+        holds its assigned shared experts, already in the correct slot order.
+        Callers own the device → shared-expert mapping and produce the
+        pre-arranged ``shared_w*`` tensors.
+
+        Returns ``(output_w0, output_w1, output_w2)``, each the result of
+        concatenating routed + shared along dim 1.
+        )doc",
+        &ttnn::experimental::add_shared_expert_weights,
+        nb::arg("routed_w0").noconvert(),
+        nb::arg("routed_w1").noconvert(),
+        nb::arg("routed_w2").noconvert(),
+        nb::arg("shared_w0").noconvert(),
+        nb::arg("shared_w1").noconvert(),
+        nb::arg("shared_w2").noconvert());
+
+    ttnn::bind_function<"prepare_w0_w1_tensor_for_moe_compute", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Pack W0/W1 into the interleaved, padded, per-core layout the MoE kernel
+        reads. See ``ttnn.experimental.moe_compute_utils`` for the layout
+        contract. Output local shape:
+        ``(num_cores, L, E, groups_per_core, K_padded, 4*TILE_SIZE)``.
+        )doc",
+        &ttnn::experimental::prepare_w0_w1_tensor_for_moe_compute,
+        nb::arg("tt_w0").noconvert(),
+        nb::arg("tt_w1").noconvert(),
+        nb::kw_only(),
+        nb::arg("L"),
+        nb::arg("E"),
+        nb::arg("K"),
+        nb::arg("N"),
+        nb::arg("shard_map"));
+
+    ttnn::bind_function<"prepare_w2_tensor_for_moe_compute", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Pack W2 into the ring-rotated per-core layout the MoE kernel reads.
+        Output local shape:
+        ``(num_cores, L, E, w2_groups_per_core, N_padded, 4*TILE_SIZE)``.
+
+        ``w2_shard_map`` is a list of ``(last_group_tiles, last_group_pad_tiles)``
+        pairs, one per ring position.
+        )doc",
+        &ttnn::experimental::prepare_w2_tensor_for_moe_compute,
+        nb::arg("tt_w2").noconvert(),
+        nb::kw_only(),
+        nb::arg("L"),
+        nb::arg("E"),
+        nb::arg("N"),
+        nb::arg("K"),
+        nb::arg("w2_shard_map"),
+        nb::arg("w0_w1_shard_map"));
+
+    ttnn::bind_function<"prepare_w0_w1_tensor_with_bias", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Bias-aware W0/W1 packer. Concatenates kernel-format bias tiles after
+        weight tiles along K, then delegates to
+        ``prepare_w0_w1_tensor_for_moe_compute``.
+
+        Bias inputs are PyTorch-format ``(L, E, N)``; they get expanded to a
+        ``(L, E, TILE_SIZE, N)`` tile with only row 0 populated before concat.
+        )doc",
+        &ttnn::experimental::prepare_w0_w1_tensor_with_bias,
+        nb::arg("tt_w0").noconvert(),
+        nb::arg("tt_w1").noconvert(),
+        nb::arg("tt_b0").noconvert(),
+        nb::arg("tt_b1").noconvert(),
+        nb::kw_only(),
+        nb::arg("L"),
+        nb::arg("E"),
+        nb::arg("K"),
+        nb::arg("N"),
+        nb::arg("shard_map"));
+
+    ttnn::bind_function<"prepare_w2_tensor_with_bias", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Bias-aware W2 packer. Weight tiles get ring-rotated as usual; the bias
+        tile row is column-sharded and concatenated along N **without**
+        rotation, then N is padded to a multiple of BLOCK_TILES_H tiles.
+
+        Bias input is PyTorch-format ``(L, E, K)``; it gets expanded to a
+        ``(L, E, TILE_SIZE, K)`` tile with only row 0 populated.
+        )doc",
+        &ttnn::experimental::prepare_w2_tensor_with_bias,
+        nb::arg("tt_w2").noconvert(),
+        nb::arg("tt_b2").noconvert(),
+        nb::kw_only(),
+        nb::arg("L"),
+        nb::arg("E"),
+        nb::arg("N"),
+        nb::arg("K"),
+        nb::arg("w2_shard_map"),
+        nb::arg("w0_w1_shard_map"));
 }
 }  // namespace ttnn::operations::experimental::ccl
