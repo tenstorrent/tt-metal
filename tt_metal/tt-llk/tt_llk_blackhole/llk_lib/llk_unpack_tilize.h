@@ -555,9 +555,9 @@ inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format)
     TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG2_Out_data_format_ADDR32);
     // GPR preloaded with  16 | (16 << 16)}
     TTI_WRCFG(p_gpr_unpack::FACE_DIM_16x16, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
-    // Restore canonical srcA Y-stride. _llk_unpack_tilizeA_B_init_ mutates it to a per-op value
-    // (SCALE_DATUM_SIZE(unpack_dst_format, FACE_C_DIM)); restore to the baseline programmed by
-    // configure_unpack_AB so this op does not leak state to the next op. See tt-llk#1015.
+    // Restore canonical srcA Y-stride. _llk_unpack_tilizeA_B_init_ mutates it to a per-op
+    // value (SCALE_DATUM_SIZE(unpack_dst_format, FACE_C_DIM)); restoring the baseline
+    // programmed by configure_unpack_AB keeps this op from leaking Y-stride to the next op.
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
         canonical_unpA_y_stride(unpack_dst_format, face_r_dim));
     TTI_NOP;

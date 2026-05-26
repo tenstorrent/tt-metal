@@ -396,9 +396,10 @@ inline void _llk_unpack_bcastA_B_init_()
 
 inline void _llk_unpack_bcastA_B_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
-    // Restore canonical srcA Y-stride established by configure_unpack_AB. _llk_unpack_bcastA_B_init_
-    // mutates Y-stride to the bcast-specific value (32); the restore here is order-independent
-    // because the canonical value is derivable from format + face_r_dim. See tt-llk#1015.
+    // Restore canonical srcA Y-stride established by configure_unpack_AB.
+    // _llk_unpack_bcastA_B_init_ mutates Y-stride to the bcast-specific value (32); the
+    // restore here is order-independent because the canonical value is derivable from
+    // format + face_r_dim, so we do not need to snapshot the previous register value.
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(canonical_unpA_y_stride(unpack_dst_format, face_r_dim));
     TT_SETADCXX(p_setadc::UNP_AB, face_r_dim * FACE_C_DIM - 1, 0x0);
 }

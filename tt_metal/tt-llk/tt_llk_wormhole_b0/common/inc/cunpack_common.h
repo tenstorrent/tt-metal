@@ -232,7 +232,7 @@ inline constexpr std::uint32_t canonical_unpA_x_stride(const std::uint32_t unpac
 //
 // This is the value programmed by configure_unpack_AB and the srca data-format reconfig,
 // so it serves as the documented baseline that operations which mutate Y-stride
-// (untilize, bcastA_B) restore on uninit. See tt-llk#1015.
+// (e.g. bcastA_B) must restore on uninit.
 inline constexpr std::uint32_t canonical_unpA_y_stride(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim)
 {
     return FACE_C_DIM * face_r_dim * canonical_unpA_x_stride(unpack_dst_format);
@@ -780,9 +780,9 @@ inline void configure_unpack_AB(
         (0 << UNP1_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT) |
         (unpB_ch1_z_stride << UNP1_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT); // Z and W(not used) stride for dest address (ch1)
 
-    // Canonical Y-stride for srcA (ch1). Programmed here so per-op inits that mutate Y-stride
-    // (untilize, bcastA_B) can deterministically restore this baseline on uninit instead of
-    // snapshotting the previous value. See tt-llk#1015.
+    // Establish the canonical Y-stride baseline for srcA (ch1) here, so per-op inits that
+    // mutate Y-stride (e.g. bcastA_B) can deterministically restore this baseline on uninit
+    // rather than snapshotting the previous register value into a GPR.
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
         canonical_unpA_y_stride(unpA_dst_format, unpA_face_r_dim));
 
