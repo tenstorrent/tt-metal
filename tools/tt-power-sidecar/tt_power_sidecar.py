@@ -98,7 +98,7 @@ def _discover_sysfs_devices_inner() -> dict[int, Path]:
             device_link = (hwmon_dir / "device").resolve()
             sort_key = device_link.name  # e.g. "0000:03:00.0"
         except (OSError, ValueError):
-            pass
+            pass  # device symlink absent or unresolvable; fall back to hwmon dir name sort key
 
         devices_raw.append((sort_key, power_file))
 
@@ -196,7 +196,7 @@ def _discover_pyluwen_devices(timeout_s: float = 10) -> dict[int, Any]:
                 if local:
                     result[idx] = chip
         except Exception:
-            pass
+            pass  # detect_chips() failed (pyluwen unavailable or ARC unresponsive); _detect returns empty result
 
     t = threading.Thread(target=_detect, daemon=True)
     t.start()
@@ -244,7 +244,7 @@ def _read_pyluwen_power_w(chip: Any) -> float | None:
             if hasattr(telemetry, "tdc") and hasattr(telemetry, "vcore"):
                 return float(telemetry.tdc & 0xFFFF) * float(telemetry.vcore) / 1000.0
     except Exception:
-        pass
+        pass  # Blackhole telemetry read failed; caller treats None as a dropped sample
 
     return None
 
