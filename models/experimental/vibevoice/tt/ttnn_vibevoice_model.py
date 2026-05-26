@@ -73,6 +73,7 @@ class TTVibeVoiceModel:
         self._device = device
         self._speech_scaling_factor = speech_scaling_factor
         self._speech_bias_factor = speech_bias_factor
+        self._cpu_acoustic_decoder = None
 
     @classmethod
     def from_checkpoint(
@@ -152,6 +153,14 @@ class TTVibeVoiceModel:
         self._speech_scaling_factor = scaling_factor
         self._speech_bias_factor = bias_factor
 
+    def set_cpu_acoustic_decoder(self, decoder) -> None:
+        """Set a CPU reference acoustic decoder for streaming-correct final audio.
+
+        When provided, accumulated latent frames are decoded in one batch on CPU
+        (full causal context), matching the reference streaming acoustic cache.
+        """
+        self._cpu_acoustic_decoder = decoder
+
     def _make_generator(
         self,
         tokenizer,
@@ -179,6 +188,7 @@ class TTVibeVoiceModel:
             speech_scaling_factor=self._speech_scaling_factor,
             speech_bias_factor=self._speech_bias_factor,
             acoustic_fix_std=self._config.acoustic_tokenizer.fix_std,
+            cpu_acoustic_decoder=self._cpu_acoustic_decoder,
         )
 
     def generate(

@@ -153,8 +153,14 @@ class TTVibeVoiceGenerator:
             self.valid_token_ids.append(bos_token_id)
 
     def _audio_row_to_tt(self, wav_1d: torch.Tensor) -> ttnn.Tensor:
-        """1D waveform [T] → [1, 1, 1, T] on device."""
-        audio = wav_1d.to(torch.bfloat16).view(1, 1, 1, -1)
+        """1D waveform [T] → [1, 1, T, 1] NHWC on device.
+
+        Uploads in NHWC format so the semantic tokenizer encoder can use it
+        directly without a device-side reshape.  The reshape [1,1,1,T]→[1,1,T,1]
+        fails on device when T is large (e.g. full voice clips ~220k samples).
+        """
+        T = wav_1d.numel()
+        audio = wav_1d.to(torch.bfloat16).view(1, 1, T, 1)
         return ttnn.as_tensor(
             audio,
             device=self.device,
@@ -168,8 +174,11 @@ class TTVibeVoiceGenerator:
         audio_tt = self._audio_row_to_tt(wav_1d)
         lat_tt = self.acoustic_tok.encode(audio_tt)
         lat = ttnn.to_torch(lat_tt).to(torch.float32).squeeze(0).squeeze(0)  # [T_enc, D]
+        print(f"[DEBUG TT] _encode_acoustic_latents: lat shape={lat.shape}, fix_std={self.acoustic_fix_std}")
         if self.acoustic_fix_std:
-            lat = lat + self.acoustic_fix_std * torch.randn_like(lat)
+            noise = torch.randn_like(lat)
+            print(f"[DEBUG TT] fix_std noise first5={noise.reshape(-1)[:5].tolist()}, total={noise.numel()}")
+            lat = lat + self.acoustic_fix_std * noise
         return lat
 
     def _compute_scale_bias(self, latents_list: List[torch.Tensor], speech_masks: torch.Tensor):
@@ -218,7 +227,7 @@ class TTVibeVoiceGenerator:
                 conn_torch = conn_torch.squeeze(0).squeeze(0)
             else:
                 conn_torch = conn_torch.squeeze(0)
-            conn_torch = conn_torch[:, :n, :]
+            conn_torch = conn_torch[:n, :]
             speech_embeds_parts.append(conn_torch)
 
         return torch.cat(speech_embeds_parts, dim=0)
@@ -255,10 +264,10 @@ class TTVibeVoiceGenerator:
         latent_size: int = 64,
         rng: Optional[torch.Generator] = None,
     ) -> ttnn.Tensor:
-        # Draw 2×latent_size values to match reference's torch.randn(2, vae_dim)
-        # (reference cats pos+neg into batch=2, draws one noise per batch entry,
-        # then uses speech[:1]).  This keeps our global RNG state aligned.
-        noise_2x = torch.randn(2, 1, 1, latent_size, dtype=torch.bfloat16, generator=rng)
+        # Draw 2×latent_size values to match reference's torch.randn(2, vae_dim) batch;
+        # use float32 then cast — torch.randn(dtype=bfloat16) draws DIFFERENT values
+        # than float32 from the same seed, which breaks RNG alignment with the reference.
+        noise_2x = torch.randn(2, 1, 1, latent_size, dtype=torch.float32, generator=rng).to(torch.bfloat16)
         noise = noise_2x[:1]
         initial_latent = ttnn.as_tensor(
             noise,
@@ -412,7 +421,14 @@ class TTVibeVoiceGenerator:
                 speech_latent = self._run_speech_diffusion(cond_pos, cond_neg, latent_size=64, rng=rng)
 
                 # Accumulate unscaled latent frame for batch decode later.
-                speech_latent_frames.append(ttnn.to_torch(speech_latent).to(torch.float32))
+                lat_torch = ttnn.to_torch(speech_latent).to(torch.float32)
+                if len(speech_latent_frames) == 0:
+                    _cpos = ttnn.to_torch(cond_pos).to(torch.float32).reshape(-1)
+                    _cneg = ttnn.to_torch(cond_neg).to(torch.float32).reshape(-1)
+                    print(f"[DEBUG TT frame0] cond_pos norm={_cpos.norm():.4f} first5={_cpos[:5].tolist()}")
+                    print(f"[DEBUG TT frame0] cond_neg norm={_cneg.norm():.4f} first5={_cneg[:5].tolist()}")
+                    print(f"[DEBUG TT frame0] raw latent first5={lat_torch.reshape(-1)[:5].tolist()}")
+                speech_latent_frames.append(lat_torch)
 
                 pending_embeds = self._post_diffusion_embeds(speech_latent)
 
@@ -446,10 +462,39 @@ class TTVibeVoiceGenerator:
             latents_unscaled = (latents_cpu / scale - bias).to(torch.float32)
 
             if self.cpu_acoustic_decoder is not None:
-                # CPU reference decoder: correct streaming via full causal context.
-                with torch.no_grad():
-                    audio_cpu = self.cpu_acoustic_decoder.decode(latents_unscaled)
-                speech_waveform = audio_cpu.to(torch.float32).reshape(-1)
+                # CPU reference decoder: streaming frame-by-frame decode with cache
+                # so the causal-conv decoder sees the real previous-frame left context
+                # (same as the reference streaming acoustic cache).
+                # Non-streaming (all-at-once) uses zero left-padding and gives
+                # different results for frames 2+ vs the reference.
+                try:
+                    from vibevoice.modular.modular_vibevoice_tokenizer import (
+                        VibeVoiceTokenizerStreamingCache,
+                    )
+
+                    acoustic_cache = VibeVoiceTokenizerStreamingCache()
+                except ImportError:
+                    acoustic_cache = None
+
+                decoder_device = next(self.cpu_acoustic_decoder.parameters()).device
+                sample_idx = torch.tensor([0], dtype=torch.long)
+
+                audio_chunks = []
+                n_frames = latents_unscaled.shape[1]
+                for fi in range(n_frames):
+                    frame = latents_unscaled[:, fi : fi + 1, :]  # [1, 1, D]
+                    with torch.no_grad():
+                        if acoustic_cache is not None:
+                            chunk = self.cpu_acoustic_decoder.decode(
+                                frame.to(decoder_device),
+                                cache=acoustic_cache,
+                                sample_indices=sample_idx.to(decoder_device),
+                                use_cache=True,
+                            )
+                        else:
+                            chunk = self.cpu_acoustic_decoder.decode(frame.to(decoder_device))
+                    audio_chunks.append(chunk.to(torch.float32).cpu())
+                speech_waveform = torch.cat(audio_chunks, dim=-1).reshape(-1)
             else:
                 # Fallback: TT device decode (may fail for large n_frames).
                 lat_tt = ttnn.as_tensor(

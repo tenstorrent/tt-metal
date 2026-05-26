@@ -528,10 +528,18 @@ class TTSemanticTokenizer:
                     If provided, PCC between TTNN output and golden is printed.
         """
         B = audio.shape[0]
-        T = audio.shape[-1]
 
-        # [B, 1, 1, T] → [B, 1, T, 1] NHWC for TTConv1d
-        x = ttnn.reshape(audio, [B, 1, T, 1])
+        # Accept [B, 1, 1, T] raw-audio format OR [B, 1, T, 1] NHWC.
+        # The raw-format reshape [B,1,1,T]→[B,1,T,1] fails on device when T is
+        # very large (e.g. full voice clips ~220k samples).  Uploading audio
+        # directly in NHWC via _audio_row_to_tt avoids the reshape entirely.
+        if audio.shape[2] == 1 and audio.shape[3] > 1:
+            # Raw audio [B, 1, 1, T] — reshape to NHWC for TTConv1d
+            T = audio.shape[3]
+            x = ttnn.reshape(audio, [B, 1, T, 1])
+        else:
+            # Already [B, 1, T, 1] NHWC
+            x = audio
         if x.dtype != ttnn.bfloat16:
             x = ttnn.typecast(x, ttnn.bfloat16)
 
