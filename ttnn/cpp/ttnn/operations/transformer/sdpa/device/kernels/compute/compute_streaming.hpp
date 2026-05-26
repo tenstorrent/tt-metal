@@ -932,7 +932,7 @@ static void sdpa_inner_loop_step(
         q_wait_tiles += q_subblock_num_tiles;
     }
 
-    sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * KT_stride);
+    cb_pop_front(cb_kt_in, DHt * KT_stride);
 
     // Q is no longer needed after Phase 1. On the last K chunk, pop early so the
     // reader can start fetching the next Q chunk during Phase 2.
@@ -1095,8 +1095,8 @@ static void sdpa_inner_loop_step(
                         prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
                 }
             }
-            sdpa_cb_pop_front_out_of_line(cb_exp_max_diff, sbh);
-            sdpa_cb_pop_front_out_of_line(prev.out, sbh * vDHt);
+            cb_pop_front(cb_exp_max_diff, sbh);
+            cb_pop_front(prev.out, sbh * vDHt);
             PACK((llk_pack_reconfig_l1_acc(0)));
         };
 
@@ -1254,8 +1254,8 @@ static void sdpa_inner_loop_step(
 
         // All rows pushed individually — no bulk push needed.
 
-        sdpa_cb_pop_front_out_of_line(cb_v_in, KT_stride * vDHt);
-        sdpa_cb_pop_front_out_of_line(cb_qkt_im, Sq_chunk_t * KT_stride);
+        cb_pop_front(cb_v_in, KT_stride * vDHt);
+        cb_pop_front(cb_qkt_im, Sq_chunk_t * KT_stride);
     }
 }
 
