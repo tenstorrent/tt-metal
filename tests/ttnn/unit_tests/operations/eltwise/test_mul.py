@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
 
@@ -97,7 +97,7 @@ def test_multiply_int32_with_scalar(device, input_a, scalar):
     output = scalar * input_tensor_a
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_equal(torch_output_tensor, output)
 
 
 #  #14840: use DRAM config

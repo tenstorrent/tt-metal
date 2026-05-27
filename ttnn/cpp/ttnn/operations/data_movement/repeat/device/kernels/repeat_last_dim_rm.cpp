@@ -8,10 +8,10 @@ Function reads from RM and writes to RM repeating the last dimension
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 using namespace tt::data_movement::common;
 
@@ -57,9 +57,9 @@ void kernel_main() {
     const auto s = TensorAccessor(src_args, src_addr);
     const auto d = TensorAccessor(dst_args, dst_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb0(cb_id_in0);
-    experimental::CircularBuffer cb1(cb_id_in1);
+    Noc noc;
+    CircularBuffer cb0(cb_id_in0);
+    CircularBuffer cb1(cb_id_in1);
 
     // Get scratchpads guaranteed to be allocated until the function terminates
     cb0.reserve_back(1);
@@ -88,10 +88,10 @@ void kernel_main() {
         uint32_t data_location =
             input_buffer + (src_noc_addr & r_offset_to_use);  // Guaranteed to be aligned for our read
 
-        experimental::CoreLocalMem<uint32_t> dst_mem(data_location);
+        CoreLocalMem<uint32_t> dst_mem(data_location);
         // Use TensorAccessor directly to avoid address truncation
         // Template parameter preserves one-packet fast path for page-sized transfers
-        noc.async_read<experimental::Noc::TxnIdMode::DISABLED, original_page_size_bytes>(
+        noc.async_read<Noc::TxnIdMode::DISABLED, original_page_size_bytes>(
             s, dst_mem, original_page_size_bytes, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = 0});
         cur_page_size = original_page_size_bytes;
         noc.async_read_barrier();
@@ -123,12 +123,12 @@ void kernel_main() {
                                     ? cur_page_size
                                     : (dest_page_size_bytes - num_written);
 
-            experimental::CoreLocalMem<uint32_t> src_mem(data_location);
+            CoreLocalMem<uint32_t> src_mem(data_location);
             // Use TensorAccessor directly to avoid address truncation
             // Template parameter preserves one-packet fast path for writes up to max_write_size
             noc.async_write<
-                experimental::Noc::TxnIdMode::DISABLED,
-                experimental::Noc::ResponseMode::NON_POSTED,
+                Noc::TxnIdMode::DISABLED,
+                Noc::ResponseMode::NON_POSTED,
                 max_write_size>(
                 src_mem,
                 d,

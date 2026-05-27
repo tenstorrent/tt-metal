@@ -17,7 +17,7 @@ void kernel_main() {
     uint32_t num_pages = get_arg_val<uint32_t>(0);
 
     TensorAccessor accessor(ta::input_tensor);
-    experimental::DataflowBuffer buf(dfb::input_dfb);
+    DataflowBuffer buf(dfb::input_dfb);
     uint32_t entry_size = buf.get_entry_size();
 
     for (uint32_t page_id = 0; page_id < num_pages; page_id++) {

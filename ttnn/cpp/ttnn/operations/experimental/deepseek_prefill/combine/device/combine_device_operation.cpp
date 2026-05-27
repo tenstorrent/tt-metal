@@ -62,10 +62,21 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
         !operation_attributes.output_mem_config.is_sharded(),
         "Output memory config must be interleaved (L1 or DRAM), not sharded");
 
-    // FP8 output is only supported on Blackhole
+
+    // FP8 output is only supported on Blackhole, and only when the dispatched buffer is TILE.
+    // The BF16 -> FP8 conversion happens in the packer when the untilize compute kernel writes
+    // tiles into the untilize CB (which inherits the output tensor's Fp8_e4m3 DataFormat).
+    // The ROW_MAJOR path has no untilize stage, so the reader would forward unconverted BF16
+    // bytes through FP8-sized output pages, producing corrupt output (local writes) or
+    // overrunning the output-sized writer CB (non-local writes).
     if (operation_attributes.use_fp8_combine) {
         auto arch = tensor_args.dispatched_buffer.device()->arch();
         TT_FATAL(arch == tt::ARCH::BLACKHOLE, "use_fp8_combine=true requires Blackhole hardware (got arch {})", arch);
+        TT_FATAL(
+            tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::TILE,
+            "use_fp8_combine=true requires TILE-layout dispatched buffer; only the TILE path "
+            "retargets the untilize CB to Fp8_e4m3 (got layout {})",
+            tensor_args.dispatched_buffer.layout());
     }
 
     // Validate tensor shapes are compatible

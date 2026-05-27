@@ -8,9 +8,9 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 
 void kernel_main() {
     // in0 mcast args
@@ -34,10 +34,10 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::Semaphore<> sender_sem(get_compile_time_arg_val(4));
-    experimental::Semaphore<> receiver_sem(get_compile_time_arg_val(5));
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    Semaphore<> sender_sem(get_compile_time_arg_val(4));
+    Semaphore<> receiver_sem(get_compile_time_arg_val(5));
 
     volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_receiver_semaphore_addr);

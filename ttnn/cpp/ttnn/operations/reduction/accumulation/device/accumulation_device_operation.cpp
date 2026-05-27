@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "accumulation_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include <enchantum/enchantum.hpp>
@@ -10,6 +11,7 @@
 
 namespace ttnn::prim {
 
+using namespace tt::tt_metal;
 void AccumulationDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor{tensor_args.input_tensor};
@@ -53,6 +55,21 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
         "ttnn accumulation operations (cumprod, cumsum) require the memory layout of the input tensor to be "
         "interleaved. Instead, it is {}.",
         enchantum::to_string(input_tensor.memory_config().memory_layout()));
+    ReduceOpDeviceGridValidationOptions acc_grid_opts;
+    acc_grid_opts.shard_grid_contained_in_device_grid = &out_memory_config;
+    acc_grid_opts.memory_config_label = "output";
+    validate_reduce_op_tensor(
+        input_tensor, "Accumulation", "output", &acc_grid_opts, compute_output_specs(attributes, tensor_args));
+    if (optional_out.has_value()) {
+        validate_reduce_op_tensor(optional_out.value(), "Accumulation", "preallocated_output");
+    }
+
+    {
+        const int32_t logical_rank = input_tensor.logical_shape().rank();
+        const int32_t acc_dim = attributes.dim;
+        TT_FATAL(
+            acc_dim < logical_rank, "Accumulation dim {} must be less than logical rank {}", acc_dim, logical_rank);
+    }
 }
 
 AccumulationDeviceOperation::spec_return_value_t AccumulationDeviceOperation::compute_output_specs(

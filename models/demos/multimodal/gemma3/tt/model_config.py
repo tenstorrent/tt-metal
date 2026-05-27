@@ -2,21 +2,39 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import gc
 import os
 
 import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.multimodal.gemma3.tt.load_checkpoints import convert_vision_hf_to_meta, convert_vision_meta_to_hf
-from models.tt_transformers.tt.common import calculate_prefill_warmup_seq_lens, cap_seq_lens_to_max_prefill_chunk_size
+from models.tt_transformers.tt.common import (
+    Mode,
+    calculate_prefill_warmup_seq_lens,
+    cap_seq_lens_to_max_prefill_chunk_size,
+)
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
-from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
+from models.tt_transformers.tt.model_config import (
+    HfAttentionWrapper,
+    HfDecoderWrapper,
+    HfModelWrapper,
+    MathFidelitySetting,
+)
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
+from models.tt_transformers.tt.model_config import ModelOptimizations, OpGroup
+from models.tt_transformers.tt.prefetcher import Prefetcher
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
+
+# SDPA decode k_chunk when force_fixed_decode_k_chunk is True (paged text path; see text_demo).
+_GEMMA3_SDPA_DECODE_K_CHUNK_DEFAULT = 256
+# Under program trace, use the smallest valid k_chunk (pow2, multiple of 32) to reduce L1 vs static CB limits.
+_GEMMA3_SDPA_DECODE_K_CHUNK_PROGRAM_TRACE = 32
 
 
 class ModelArgs(TTModelArgs):
@@ -56,6 +74,7 @@ class ModelArgs(TTModelArgs):
         max_seq_len=1024 * 128,
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
+        enable_program_trace: bool = False,
     ):
         # Resolve HF_MODEL to a local snapshot path before super().__init__() so that
         # all HF calls (AutoConfig, tokenizer, weights) skip the refs/main lookup,
@@ -67,6 +86,11 @@ class ModelArgs(TTModelArgs):
             if snapshot:
                 logger.info(f"[Gemma3] Resolved HF model '{hf_model}' to snapshot: {snapshot}")
                 os.environ["HF_MODEL"] = str(snapshot)
+        self._enable_program_trace = enable_program_trace
+        # Trace path needs fixed k_chunk and flags before super().__init__: base __init__ may consult attention config.
+        if enable_program_trace:
+            self.force_fixed_decode_k_chunk = True
+            self._gemma3_sdpa_decode_k_chunk_override = _GEMMA3_SDPA_DECODE_K_CHUNK_PROGRAM_TRACE
 
         super().__init__(
             mesh_device,
@@ -78,9 +102,57 @@ class ModelArgs(TTModelArgs):
             cache_hf=cache_hf,
         )
 
+        # For Gemma3 we still need a real tokenizer even when using dummy_weights,
+        # because prompt encoding relies on HF chat templates, not on checkpoint weights.
+        if dummy_weights and self.tokenizer is None:
+            self.tokenizer = self.create_tokenizer()
+
         self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
         self.padded_vocab_size = 262400
+        # Raise the per-device cap so on-device sampling is enabled for Gemma3's 131200-wide shard.
+        self.device_sampling_max_per_device_vocab = 192 * 1024
+
+        if enable_program_trace:
+            self._relax_attention_ops_for_program_trace()
+
+        # HiFi2 NA fixes single-device decode token drift. It increases SDPA decode L1 usage and can
+        # overlap Metal's static circular-buffer region used for program tracing (or multi-device
+        # layouts), causing TT_THROW in validate_circular_buffer_region. Skip in those cases.
+        if not enable_program_trace:
+            self._force_sdpa_decode_hifi2_na()
+
+    def _relax_attention_ops_for_program_trace(self):
+        """Lower L1 for prefill+decode attention under program tracing (minimal_matmul / SDPA / linear)."""
+        trace_groups = (
+            OpGroup.LI_QKV_PREFILL,
+            OpGroup.LI_O_PREFILL,
+            OpGroup.SDPA_PREFILL,
+            OpGroup.LI_QKV_DECODE,
+            OpGroup.LI_O_DECODE,
+            OpGroup.SDPA_DECODE,
+        )
+        for decoder_id, conf in list(self.optimizations.decoder_optimizations.items()):
+            tensor_precision = {k: v for k, v in conf.tensor_dtype_settings.items() if v is not None}
+            op_fidelity = dict(conf.op_fidelity_settings)
+            for grp in trace_groups:
+                if grp in op_fidelity:
+                    op_fidelity[grp] = MathFidelitySetting.HIFI2_FP16
+            fixed_conf = ModelOptimizations({"TensorPrecision": tensor_precision, "OpFidelity": op_fidelity})
+            fixed_conf.__name__ = getattr(conf, "__name__", fixed_conf.__name__)
+            self.optimizations.set_decoder_conf(decoder_id, fixed_conf)
+        self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
+
+    def _force_sdpa_decode_hifi2_na(self):
+        """Gemma3 decode SDPA requires no-accumulation HiFi2 for correctness (single-device)."""
+        for decoder_id, conf in list(self.optimizations.decoder_optimizations.items()):
+            tensor_precision = {key: value for key, value in conf.tensor_dtype_settings.items() if value is not None}
+            op_fidelity = dict(conf.op_fidelity_settings)
+            op_fidelity[OpGroup.SDPA_DECODE] = MathFidelitySetting.HIFI2_NA
+            fixed_conf = ModelOptimizations({"TensorPrecision": tensor_precision, "OpFidelity": op_fidelity})
+            fixed_conf.__name__ = getattr(conf, "__name__", fixed_conf.__name__)
+            self.optimizations.set_decoder_conf(decoder_id, fixed_conf)
+        self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
 
     @staticmethod
     def _resolve_hf_snapshot(hf_model_name):
@@ -101,6 +173,58 @@ class ModelArgs(TTModelArgs):
             if os.path.isdir(os.path.join(snapshots_dir, s))
         ]
         return max(snaps, key=os.path.getmtime) if snaps else None
+
+    def get_max_prefill_chunk_size(self):
+        model_overrides = {
+            "gemma-3-4b": {"P150": 128},
+            "medgemma-4b": {"P150": 128},
+            "gemma-3-27b": {"P150": 128},
+            "medgemma-27b": {"P150": 128},
+        }
+        model_name = self.base_model_name
+        device_name = self.device_name
+        if model_name in model_overrides and device_name in model_overrides[model_name]:
+            return model_overrides[model_name][device_name] * 1024
+        return super().get_max_prefill_chunk_size()
+
+    def get_attn_qkv_program_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
+        """Smaller MinimalMatmul blocks for traced long prefill (default 8³ overflows static CB vs L1)."""
+        if self._enable_program_trace and mode == Mode.PREFILL and seq_len > 128:
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=4,
+                K_block_size=4,
+                N_block_size=4,
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8),
+            )
+        return super().get_attn_qkv_program_config(mode, seq_len, prefetcher)
+
+    def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
+        force_fixed_k_chunk = getattr(self, "force_fixed_decode_k_chunk", False)
+        if not force_fixed_k_chunk:
+            return super().get_attn_sdpa_decode_program_config(prefetcher)
+
+        override = getattr(self, "_gemma3_sdpa_decode_k_chunk_override", None)
+        k_chunk_tokens = _GEMMA3_SDPA_DECODE_K_CHUNK_DEFAULT if override is None else int(override)
+        if prefetcher is not None:
+            sdpa_grid_size = (8, 8)
+            start_core = ttnn.CoreCoord(1, 0)
+            num_sdpa_cores = sdpa_grid_size[0] * sdpa_grid_size[1]
+            return ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=sdpa_grid_size,
+                sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                    start_core, num_sdpa_cores, prefetcher.all_worker_cores_range_set, row_wise=True
+                ),
+                exp_approx_mode=False,
+                q_chunk_size=0,
+                k_chunk_size=k_chunk_tokens,
+            )
+
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=k_chunk_tokens,
+        )
 
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len
@@ -137,6 +261,7 @@ class ModelArgs(TTModelArgs):
             "N300": [],
             "T3K": [],
             "TG": [],
+            "P150": [],
         }
 
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
@@ -222,10 +347,9 @@ class ModelArgs(TTModelArgs):
 
         from transformers import AutoConfig
 
-        if self.dummy_weights:
-            raise NotImplementedError("Dummy weights not supported for gemma models for now.")
-        else:
-            self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
+        # For dummy_weights we still load only the small HF config,
+        # but we avoid loading checkpoint weights.
+        self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
 
         if "text_config" in self.hf_config or "vision_config" in self.hf_config:
             self._set_params_from_dict(self.hf_config)
@@ -261,21 +385,76 @@ class ModelArgs(TTModelArgs):
 
         return text_prefix + layer_prefix + module_map[module_name]
 
+    def _gemma_dummy_hf_model(self):
+        """Build Gemma3 from HF config only (random init), matching tt_transformers ModelArgs dummy_weights flow.
+
+        Uses from_config + layer truncation + bfloat16 to avoid fp32 OOM on host when allocating the full model.
+        """
+        from transformers import AutoConfig, Gemma3ForConditionalGeneration
+
+        logger.info("Gemma3 ModelArgs: building HF dummy model from config (dummy_weights=True)")
+
+        config = AutoConfig.from_pretrained(self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf)
+        if hasattr(config, "text_config") and config.text_config is not None:
+            config.text_config.num_layers = self.n_layers
+            config.text_config.num_hidden_layers = self.n_layers
+        else:
+            if hasattr(config, "num_layers"):
+                config.num_layers = self.n_layers
+            if hasattr(config, "num_hidden_layers"):
+                config.num_hidden_layers = self.n_layers
+
+        model_cls = Gemma3ForConditionalGeneration
+        from_config_exc = None
+        try:
+            try:
+                model = model_cls.from_config(
+                    config, torch_dtype=torch.bfloat16, trust_remote_code=self.trust_remote_code_hf
+                )
+            except TypeError:
+                try:
+                    model = model_cls.from_config(config, torch_dtype=torch.bfloat16)
+                except TypeError:
+                    try:
+                        model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                    except TypeError:
+                        model = model_cls.from_config(config)
+        except Exception as exc:
+            from_config_exc = exc
+            logger.info("Error loading dummy Gemma3 using .from_config. Error: {}", exc)
+            if hasattr(model_cls, "_from_config"):
+                try:
+                    try:
+                        model = model_cls._from_config(
+                            config, torch_dtype=torch.bfloat16, trust_remote_code=self.trust_remote_code_hf
+                        )
+                    except TypeError:
+                        model = model_cls._from_config(config, torch_dtype=torch.bfloat16)
+                except Exception as fallback_exc:
+                    logger.info("Error loading dummy Gemma3 using ._from_config. Error: {}", fallback_exc)
+                    if from_config_exc is not None:
+                        raise fallback_exc from from_config_exc
+                    raise
+            else:
+                raise
+
+        gc.collect()
+        return model
+
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
+        from transformers import Gemma3ForConditionalGeneration
+
         if self.dummy_weights:
-            from transformers import AutoModelForCausalLM
-
-            raise NotImplementedError("Dummy weights not supported for gemma models for now.")
+            logger.info("Gemma3 ModelArgs: using dummy_weights path; NOT loading checkpoints from HF_MODEL")
+            model = self._gemma_dummy_hf_model()
+            state_dict = model.state_dict()
+            del model
+            gc.collect()
         else:
-            from transformers import AutoModelForCausalLM
-
-            model = AutoModelForCausalLM.from_pretrained(
+            model = Gemma3ForConditionalGeneration.from_pretrained(
                 self.CKPT_DIR,
-                torch_dtype="auto"
-                # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                # unnecessary cast.
+                torch_dtype="auto",
             )
             if self.cache_hf_flag:
                 self.cached_hf_model = model
@@ -339,13 +518,11 @@ class ModelArgs(TTModelArgs):
         return layer
 
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
-        pass
+        from transformers import Gemma3ForConditionalGeneration
 
         if self.dummy_weights and not load_checkpoint:
-            raise NotImplementedError("Dummy weights not supported for gemma models for now.")
+            model = self._gemma_dummy_hf_model()
         else:
-            from transformers import Gemma3ForConditionalGeneration
-
             model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
         if wrap:
             wrapper = HfModelWrapper(model, self.head_dim)

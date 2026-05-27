@@ -97,7 +97,18 @@ struct RealtimeProfilerEligibility {
 };
 
 // Consolidated eligibility check; logs the reason for disabling and returns
-// {enabled=false} on failure. Checks (in order):
+// {enabled=false} on failure.
+//
+// Evaluates against the device's owning context (passed in as `context_id`) rather than
+// bare MetalContext::instance(): the latter would route through the inline non-default
+// fallback in instance() and pick whichever context happens to populate the global
+// lookup first. In silicon-first coexistence (#38445), that fallback returns the silicon
+// DEFAULT_CONTEXT_ID even when `device` is a mock device, falsely enabling the profiler
+// on mock and SEGV'ing in LaunchProgram. See #39849.
+//
+// Checks (in order):
+//   0. Target is not mock or emulated (extends #43968's Mock-only short-circuit to also
+//      cover Emule; D2HSocket requires a real PCIe hugepage in either case).
 //   1. Device is MMIO-capable (D2H sockets need a PCIe-connected sender core).
 //   2. D2H socket memory-allocation path is supported (64-bit PCIe addressing requires IOMMU).
 //   3. Fabric tensix datamover (MUX / UDM) is disabled (it competes for the same dispatch pool).
@@ -105,12 +116,26 @@ struct RealtimeProfilerEligibility {
 //   5. Reserved coordinate lives inside the logical TENSIX grid.
 //   6. Kernels are not nullified (DEBUG_NULL_KERNELS / TT_METAL_NULL_KERNELS).
 //   7. Reserved profiler core's L1 bank fits the ring + socket-config layout.
-RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* device) {
+RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* device, ContextId context_id) {
     auto device_id = device->id();
-    auto& metal = MetalContext::instance();
+    auto& metal = MetalContext::instance(context_id);
     const auto& hal = metal.hal();
     const auto& cluster = metal.get_cluster();
     auto& dispatch_core_manager = metal.get_dispatch_core_manager();
+
+    // Subsumes the Mock-only short-circuit added in #43968: is_mock_or_emulated() also
+    // catches Emule, and is the canonical accessor used throughout metal_context.cpp /
+    // device.cpp. D2HSocket::init_host_buffer_hugepage dereferences a real PCIe hugepage
+    // and faults on either target, so gate here before any per-device profiler state is
+    // constructed.
+    if (cluster.is_mock_or_emulated()) {
+        log_debug(
+            tt::LogMetal,
+            "Real-time profiler disabled on device {}: target is mock or emulated; D2H sockets "
+            "require a real PCIe hugepage that is not present in mock/emulated flows.",
+            device_id);
+        return {};
+    }
 
     if (!device->is_mmio_capable()) {
         log_debug(
@@ -286,16 +311,18 @@ RealtimeProfilerManager::DeviceState::DeviceState(DeviceState&& o) noexcept :
     sync_host_ts_addr(o.sync_host_ts_addr),
     sync_response_received(o.sync_response_received.load(std::memory_order_relaxed)),
     sync_host_time_before(o.sync_host_time_before),
-    last_finish_sync_at(o.last_finish_sync_at) {}
+    last_finish_sync_at(o.last_finish_sync_at),
+    pending_first_unthrottled_finish_sync(o.pending_first_unthrottled_finish_sync) {}
 
-RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevice>& mesh_device) {
+RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevice>& mesh_device) :
+    context_id_(mesh_device->impl().get_context_id()) {
     // HAL offsets are the same for all devices (same arch).
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance(context_id_).hal();
     const auto& factory = hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
     // realtime_profiler_msg_t lives in a dispatch-core-local L1 region assigned by
     // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG (only reachable on dispatch cores
     // and the reserved RT-profiler tensix).
-    const auto& dispatch_mem_map = MetalContext::instance().dispatch_mem_map();
+    const auto& dispatch_mem_map = MetalContext::instance(context_id_).dispatch_mem_map();
     const uint32_t realtime_profiler_base_addr =
         dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG);
     // RealtimeProfilerCoreL1 (ring + D2H socket sender config) sits past the dispatch
@@ -322,7 +349,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         realtime_profiler_msgs::realtime_profiler_msg_t::Field::sync_host_timestamp);
     uint32_t profiler_msg_config_field_addr = realtime_profiler_base_addr + config_buffer_addr_offset;
 
-    auto& dispatch_core_manager = MetalContext::instance().get_dispatch_core_manager();
+    auto& dispatch_core_manager = MetalContext::instance(context_id_).get_dispatch_core_manager();
     const std::string realtime_profiler_kernel_path = "tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp";
     const std::string realtime_profiler_push_kernel_path =
         "tt_metal/impl/dispatch/kernels/cq_realtime_profiler_push.cpp";
@@ -335,9 +362,9 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         IDevice* device = mesh_device->get_device(coord);
         auto device_id = device->id();
 
-        auto eligibility = evaluate_realtime_profiler_eligibility(device);
+        auto eligibility = evaluate_realtime_profiler_eligibility(device, context_id_);
         if (!eligibility.enabled) {
-            MetalContext::instance().device_manager()->mark_rt_profiler_device_init_complete(device_id);
+            MetalContext::instance(context_id_).device_manager()->mark_rt_profiler_device_init_complete(device_id);
             continue;
         }
         CoreCoord realtime_profiler_core = eligibility.core;
@@ -389,7 +416,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 "profiler on this device.",
                 device_id,
                 e.what());
-            MetalContext::instance().device_manager()->mark_rt_profiler_device_init_complete(device_id);
+            MetalContext::instance(context_id_).device_manager()->mark_rt_profiler_device_init_complete(device_id);
             continue;
         }
 
@@ -457,8 +484,8 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         uint32_t pcie_noc_y = 0;
         bool need_pcie_noc_defines = false;
         {
-            const auto& cluster = MetalContext::instance().get_cluster();
-            auto arch = MetalContext::instance().hal().get_arch();
+            const auto& cluster = MetalContext::instance(context_id_).get_cluster();
+            auto arch = MetalContext::instance(context_id_).hal().get_arch();
             if (arch == tt::ARCH::WORMHOLE_B0) {
                 ChipId mmio_device_id = cluster.get_associated_mmio_device(device_id);
                 const auto& soc = cluster.get_soc_desc(mmio_device_id);
@@ -567,7 +594,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 config_buffer_addr);
         }
 
-        MetalContext::instance().device_manager()->mark_rt_profiler_device_init_complete(device_id);
+        MetalContext::instance(context_id_).device_manager()->mark_rt_profiler_device_init_complete(device_id);
         devices_.push_back(std::move(dev_state));
     }
 
@@ -582,7 +609,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         tt::NotifyProgramRealtimeProfilerActivated(dev_state.chip_id);
     }
 
-    auto& cluster = MetalContext::instance().get_cluster();
+    auto& cluster = MetalContext::instance(context_id_).get_cluster();
     const auto init_throttle_now = std::chrono::steady_clock::now();
     std::vector<bool> skip_init_sync_check(devices_.size(), false);
     std::vector<size_t> init_run_sync_indices;
@@ -736,6 +763,10 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         }
     });
 
+    for (auto& dev_state : devices_) {
+        dev_state.pending_first_unthrottled_finish_sync = true;
+    }
+
     // Background receiver thread that polls all device sockets round-robin.
     stop_.store(false);
     receiver_thread_ = std::thread([this]() {
@@ -752,7 +783,9 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 return false;
             }
 
-            ZoneScopedN("ProcessPage");
+            // TODO: Uncomment this and apply a debug verbosity level when
+            // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
+            // ZoneScopedN("ProcessPage");
             dev_state.socket->read(page_buf.data(), 1);
             uint32_t* read_ptr = page_buf.data();
 
@@ -776,7 +809,9 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             // Skip records with id==0 (non-GO dispatch commands like SET_NUM_WORKER_SEMS):
             // they have no valid program and may carry stale end timestamps.
             if (start_id != 0) {
-                ZoneScopedN("InvokeCallbacks");
+                // TODO: Uncomment this and apply a debug verbosity level when
+                // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
+                // ZoneScopedN("InvokeCallbacks");
                 tt::ProgramRealtimeRecord record;
                 record.program_id = start_id;
                 record.start_timestamp = start_time;
@@ -801,7 +836,9 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 continue;
             }
 
-            ZoneScopedN("PollLoop");
+            // TODO: Uncomment this and apply a debug verbosity level when
+            // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
+            // ZoneScopedN("PollLoop");
             bool any_data = false;
 
             for (auto& dev_state : devices_) {
@@ -819,14 +856,18 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             }
 
             if (!any_data) {
-                ZoneScopedN("Idle");
+                // TODO: Uncomment this and apply a debug verbosity level when
+                // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
+                // ZoneScopedN("Idle");
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
         }
 
         // Drain in-flight PCIe pages until all sockets stay empty for several rounds.
         {
-            ZoneScopedN("DrainShutdown");
+            // TODO: Uncomment this and apply a debug verbosity level when
+            // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
+            // ZoneScopedN("DrainShutdown");
             constexpr uint32_t kDrainQuietRounds = 10;
             uint64_t drain_pages = 0;
             uint32_t quiet_rounds = 0;
@@ -907,7 +948,7 @@ void RealtimeProfilerManager::shutdown() {
 }
 
 void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samples) {
-    auto& cluster = MetalContext::instance().get_cluster();
+    auto& cluster = MetalContext::instance(context_id_).get_cluster();
     int64_t host_start_time = rt_profiler_host_ticks();
 
     struct SyncSample {
@@ -1093,8 +1134,9 @@ void RealtimeProfilerManager::trigger_sync_check() {
     device_indices_to_sync.reserve(devices_.size());
     for (size_t i = 0; i < devices_.size(); i++) {
         const auto& dev_state = devices_[i];
-        if (!dev_state.last_finish_sync_at.has_value() ||
-            throttle_now - *dev_state.last_finish_sync_at >= kRtProfilerMinSyncInterval) {
+        const bool interval_elapsed = !dev_state.last_finish_sync_at.has_value() ||
+                                      throttle_now - *dev_state.last_finish_sync_at >= kRtProfilerMinSyncInterval;
+        if (interval_elapsed || dev_state.pending_first_unthrottled_finish_sync) {
             device_indices_to_sync.push_back(i);
         }
     }
@@ -1195,6 +1237,7 @@ void RealtimeProfilerManager::trigger_sync_check() {
                     dev_state.chip_id, dev_state.sync_host_time_before, device_time, dev_state.sync_frequency);
                 tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
                 dev_state.last_finish_sync_at = std::chrono::steady_clock::now();
+                dev_state.pending_first_unthrottled_finish_sync = false;
                 got_sync = true;
             } else {
                 uint64_t start_time = (static_cast<uint64_t>(rp[0]) << 32) | rp[1];

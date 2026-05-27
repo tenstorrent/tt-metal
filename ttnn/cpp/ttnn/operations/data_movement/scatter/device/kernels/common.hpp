@@ -5,8 +5,8 @@
 
 #pragma once
 
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
 constexpr uint32_t ONE_PAGE = 1;
 
@@ -124,7 +124,7 @@ FORCE_INLINE void load_to_cb(
     const uint32_t& offset_bytes,
     const uint32_t& chunk_size_bytes,
     const uint32_t& stick_id) {
-    experimental::CircularBuffer cb_exp(cb);
+    CircularBuffer cb_exp(cb);
     cb_exp.reserve_back(ONE_PAGE);
     const uint64_t source_noc_address = get_noc_addr(stick_id, addr_gtor);
     const uint32_t l1_write_address = cb_exp.get_write_ptr();
@@ -144,7 +144,7 @@ FORCE_INLINE void write_to_output(
     const uint32_t& offset_bytes,
     const uint32_t& chunk_size_bytes,
     const uint32_t& stick_id) {
-    experimental::CircularBuffer cb_exp(cb);
+    CircularBuffer cb_exp(cb);
     cb_exp.wait_front(ONE_PAGE);
     const uint64_t destination_noc_address = get_noc_addr(stick_id, addr_gtor);
     const uint32_t l1_read_address = cb_exp.get_read_ptr();

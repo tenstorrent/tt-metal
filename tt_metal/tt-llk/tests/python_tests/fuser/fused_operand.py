@@ -7,7 +7,11 @@ from typing import List, Optional, Tuple
 
 import torch
 from helpers.llk_params import DataFormat, PartialFace, format_dict, format_tile_sizes
-from helpers.stimuli_generator import generate_random_face
+from helpers.stimuli_generator import (
+    StimuliSpec,
+    default_spec_for_format,
+    generate_face,
+)
 from helpers.tile_constants import (
     DEFAULT_TILE_C_DIM,
     DEFAULT_TILE_R_DIM,
@@ -71,14 +75,16 @@ class Operand:
         faces_needed = self.tile_count * self.tile_shape.total_num_faces()
         faces_data = []
 
+        if self.const_value is not None:
+            spec = StimuliSpec.constant(self.const_value)
+        else:
+            spec = default_spec_for_format(self.data_format)
+
         for _ in range(faces_needed):
-            face = generate_random_face(
+            face = generate_face(
+                spec=spec,
                 stimuli_format=self.data_format,
-                const_value=self.const_value,
-                const_face=self.const_value is not None,
-                sfpu=self.sfpu,
                 face_r_dim=self.tile_shape.face_r_dim,
-                negative_values=False,
             )
             faces_data.extend(face.tolist())
 
@@ -157,11 +163,15 @@ class Operand:
         tile_elements = self.tile_shape.total_tile_size()
         tile_size = self.data_format.num_bytes_per_tile(tile_elements)
 
-        buffer = tilize_block(
-            self.raw_data,
-            dimensions=self.dimensions,
-            stimuli_format=self.data_format,
-        ).flatten()
+        buffer = (
+            tilize_block(
+                self.raw_data,
+                dimensions=self.dimensions,
+                stimuli_format=self.data_format,
+            ).flatten()
+            if self.is_input()
+            else torch.zeros(self.dimensions).flatten()
+        )
 
         packed_tiles = []
 
@@ -295,6 +305,10 @@ class OperandRegistry:
         """Write all input operands to L1 memory."""
 
         for operand in self.get_all_inputs():
+            for addr, packed_data in operand.pack_for_l1():
+                write_to_device(location, addr, packed_data)
+
+        for operand in self.get_all_outputs():
             for addr, packed_data in operand.pack_for_l1():
                 write_to_device(location, addr, packed_data)
 

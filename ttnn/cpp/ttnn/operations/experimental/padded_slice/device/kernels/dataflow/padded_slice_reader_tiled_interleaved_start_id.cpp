@@ -33,7 +33,7 @@ void kernel_main() {
     const auto s0 = TensorAccessor(src_args, src_addr);
     const uint32_t extra_tiles_per_row = num_tiles_per_row - num_tiles_per_row_this_core;
 
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB cb_in0(cb_id_in0);
 
 #ifdef DEBUG

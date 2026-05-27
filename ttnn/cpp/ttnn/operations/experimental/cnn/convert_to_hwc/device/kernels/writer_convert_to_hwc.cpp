@@ -8,7 +8,7 @@
 constexpr uint32_t TILE_SIZE = 32;
 
 template <uint32_t StickSize, uint32_t PaddedStickSize, uint32_t NumSticks>
-FORCE_INLINE void copy_padded_sticks(experimental::Noc noc, uint32_t l1_read_addr, uint32_t& l1_write_addr) {
+FORCE_INLINE void copy_padded_sticks(Noc noc, uint32_t l1_read_addr, uint32_t& l1_write_addr) {
     experimental::set_read_state<StickSize>(noc, l1_read_addr);
     for (uint32_t row = 0; row < NumSticks; row++) {
         experimental::read_with_state(noc, l1_write_addr, l1_read_addr);
@@ -45,7 +45,7 @@ void kernel_main() {
     constexpr uint32_t tile_size_stick_bytes = TILE_SIZE * element_size_bytes;
     constexpr uint32_t initial_l1_write_addr_offset = initial_l1_write_stick_offset * channel_size;
 
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB cb_in_obj(cb_in);
     experimental::CB cb_in_batch_obj(cb_in_batch);
     experimental::CB cb_in_transpose_obj(cb_in_transpose);
@@ -72,13 +72,13 @@ void kernel_main() {
                 // dst_offset_bytes is already relative to block buffer start (includes channel * block_size + column)
                 if constexpr (is_input_in_dram) {
                     // DRAM bank-id path stays on legacy noc_async_read: get_noc_addr_from_bank_id returns a packed
-                    // uint64_t NOC address, and experimental::Noc::async_read does not expose a clean way to
+                    // uint64_t NOC address, and Noc::async_read does not expose a clean way to
                     // decompose it back into UnicastEndpoint {noc_x, noc_y, addr} fields.
                     const uint64_t src_addr_base = get_noc_addr_from_bank_id<true>(bank_id, dram_base_read_addr);
                     const uint32_t dst_addr = cb_in_batch_obj.get_write_ptr() + dst_offset_bytes;
                     noc_async_read(src_addr_base + src_offset_bytes, dst_addr, transfer_size_bytes);
                 } else {
-                    experimental::UnicastEndpoint src_ep;
+                    UnicastEndpoint src_ep;
                     noc.async_read(
                         src_ep,
                         cb_in_batch_obj,

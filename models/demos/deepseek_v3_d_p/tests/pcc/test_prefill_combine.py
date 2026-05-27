@@ -47,7 +47,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
         pytest.param(128, 7 * 1024, 16, 4, 4, True, id="pcc"),
-        pytest.param(3200, 7168, 64, 2, 2, False, id="perf_no_pcc"),
+        pytest.param(3200, 7168, 64, 2, 8, False, id="perf_no_pcc"),
     ],
 )
 @pytest.mark.parametrize(
@@ -268,7 +268,7 @@ def test_ttnn_combine(
         cluster_axis=sp_axis,
         num_links=num_links,
         topology=topology,
-        init_zeros=True,
+        init_zeros=False,
         fp8_output=use_fp8_output,
     )
 
@@ -289,8 +289,8 @@ def test_ttnn_combine(
 
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)
     if use_fp8_output:
-        # Device returns a torch.float8_e4m3fn tensor directly via dlpack (DataType::FP8_E4M3
-        # → dlpack code Float8_E4M3FN). Widen to bfloat16 for validation, since
+        # ttnn.to_torch returns a torch.float8_e4m3fn tensor for FP8_E4M3 device tensors
+        # (see ttnn/ttnn/operations/core.py). Widen to bfloat16 for validation, since
         # validate_combine_output expects a regular float dtype.
         assert (
             tt_output_torch.dtype == torch.float8_e4m3fn

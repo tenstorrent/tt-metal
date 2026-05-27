@@ -6,11 +6,6 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"
-#include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_interleaved.hpp"
-#include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_sharded.hpp"
-#include "ttnn/operations/pool/upsample/device/upsample_nearest_float_program_factory.hpp"
-#include "upsample/device/upsample_device_operation_types.hpp"
 
 #include <cmath>
 

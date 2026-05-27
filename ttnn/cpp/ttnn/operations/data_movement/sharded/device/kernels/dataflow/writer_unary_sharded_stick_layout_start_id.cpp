@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
@@ -32,7 +32,7 @@ void kernel_main() {
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(6));
     experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
 
-    experimental::CircularBuffer cb_out(cb_id_out0);
+    CircularBuffer cb_out(cb_id_out0);
 
     uint32_t stick_id = start_id;
     cb_out.wait_front(block_height);

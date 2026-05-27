@@ -37,7 +37,7 @@ inline void _calculate_sigmoid_sfp_rows_()
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0, 0); // store from lreg[0] into dest register
 }
 
-inline void _calculate_sigmoid_(const int iterations)
+inline void _calculate_sigmoid_(const int iterations = SFPU_ITERATIONS)
 {
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)

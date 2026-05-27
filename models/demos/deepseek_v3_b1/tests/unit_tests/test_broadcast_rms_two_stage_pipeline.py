@@ -45,6 +45,12 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
 @pytest.mark.parametrize("vocab_size, embedding_dim", [(64, 7168)])
 @pytest.mark.parametrize("token_id", [0])
 @pytest.mark.parametrize("epsilon", [1e-6])
+# TODO(#43073): Root-cause this exact Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for "
+    "test_broadcast_rms_two_stage_pipeline[blackhole-1e-06-0-64-7168-device_params0-mesh_device0] hit Fabric Router "
+    "Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43073"
+)
 def test_broadcast_rms_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, token_id, epsilon, device_params):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")

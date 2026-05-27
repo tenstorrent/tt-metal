@@ -5,10 +5,10 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
 #if FUSED_SCALE_MASK
@@ -22,8 +22,8 @@ void kernel_main() {
 
     const auto addr_mask = TensorAccessor(mask_args, mask_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_attn_obj(cb_attn);
+    Noc noc;
+    CircularBuffer cb_attn_obj(cb_attn);
 
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
     const uint32_t pre_scale = get_arg_val<uint32_t>(0);
@@ -47,7 +47,7 @@ void kernel_main() {
         noc.async_read_barrier();
         uint32_t src_addr = cb_attn_obj.get_write_ptr() + write_offset + mask_read_tile_face_bytes;
         noc.async_read(
-            experimental::UnicastEndpoint{},
+            UnicastEndpoint{},
             cb_attn_obj,
             mask_read_tile_face_bytes,
             {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = src_addr},

@@ -69,6 +69,10 @@ def matmul(
         fp32 = getattr(compute_kernel_config, "fp32_dest_acc_en", False) if compute_kernel_config else False
         program_config = _default_program_config(input_a, input_b, transpose_a, transpose_b, core_range_set, fp32)
 
+    # allowed_worker_cores is required to be set by the ttnn.matmul API.
+    if getattr(program_config, "allowed_worker_cores", "missing") is None:
+        program_config.allowed_worker_cores = core_range_set
+
     # Use create_matmul_attributes to finalize params (computes bcast_batch, output_dtype, etc.)
     base_params = ttnn.MatmulParams()
     base_params.program_config = program_config

@@ -1043,6 +1043,23 @@ MatmulProgramConfig get_program_config(
                     program_config.per_core_N % program_config.out_subblock_w == 0,
                     "per_core_N must be divisible by out_subblock_w!");
             }
+            if constexpr (requires { program_config.allowed_worker_cores; }) {
+                if (program_config.allowed_worker_cores.has_value()) {
+                    const auto& awc = program_config.allowed_worker_cores.value();
+                    TT_FATAL(awc.num_cores() > 0, "allowed_worker_cores must be non-empty!");
+                    auto bbox = awc.bounding_box();
+                    TT_FATAL(
+                        awc.num_cores() == bbox.size(),
+                        "allowed_worker_cores must form a dense rectangle (got {} cores in a {} bounding box)",
+                        awc.num_cores(),
+                        bbox);
+                    auto device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+                    CoreRangeSet device_cores({CoreRange({0, 0}, {device_grid.x - 1, device_grid.y - 1})});
+                    TT_FATAL(
+                        device_cores.contains(awc),
+                        "allowed_worker_cores must be a subset of the device compute grid!");
+                }
+            }
         },
         config);
     return config;

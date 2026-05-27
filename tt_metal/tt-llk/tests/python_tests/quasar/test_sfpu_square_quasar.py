@@ -197,7 +197,6 @@ def test_sfpu_square_quasar(formats_dest_acc_sync_implied_math_input_dims):
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=True,
     )
 
     # Prepare inputs with safe ranges for squaring operation
