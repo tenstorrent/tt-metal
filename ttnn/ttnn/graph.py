@@ -224,7 +224,10 @@ def begin_graph_capture(run_mode=None):
         import ttnn
 
         _python_io_data = []
-        _comparison_records_data = _new_comparison_records_data()
+        # Preserve comparison records across per-op capture sessions (comparison mode
+        # without enable_graph_report). Only initialize once per test run.
+        if not _comparison_records_data:
+            _comparison_records_data = _new_comparison_records_data()
         _python_io_recording_enabled = True
         _configure_python_stack_traces_for_outer_graph_capture(ttnn)
 
@@ -431,6 +434,46 @@ def _write_comparison_records_sidecar(report_path):
     sidecar_path = report_path.with_suffix(COMPARISON_RECORDS_SIDECAR_SUFFIX)
     with open(sidecar_path, "w") as f:
         json.dump(_comparison_records_data, f)
+
+
+def flush_comparison_records_to_db(report_dir):
+    """Write accumulated comparison-mode records into report_dir/db.sqlite.
+
+    Used when enable_comparison_mode is on without a full graph report import
+    (enable_graph_report=false). PCC still runs during the model; this persists
+    local/global_tensor_comparison_records for the visualizer.
+    """
+    global _comparison_records_data
+
+    if not has_comparison_records():
+        return
+
+    import sqlite3
+
+    from ttnn.graph_report import (
+        COMPARISON_RECORDS_FALLBACK_NAME,
+        create_database_schema,
+        import_tensor_comparison_records,
+        save_database_schema_version,
+    )
+
+    report_dir = pathlib.Path(report_dir)
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    sidecar_path = report_dir / COMPARISON_RECORDS_FALLBACK_NAME
+    with open(sidecar_path, "w") as f:
+        json.dump(_comparison_records_data, f)
+
+    conn = sqlite3.connect(report_dir / "db.sqlite")
+    cursor = conn.cursor()
+    try:
+        create_database_schema(cursor)
+        save_database_schema_version(cursor)
+        import_tensor_comparison_records(cursor, _comparison_records_data)
+        conn.commit()
+    finally:
+        conn.close()
+        _comparison_records_data = _new_comparison_records_data()
 
 
 @contextlib.contextmanager
