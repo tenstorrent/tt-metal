@@ -1,6 +1,6 @@
 # CI Disable Work — Status Log
 
-Last updated: **2026-05-27T12:30 UTC** (session: Classified #45110 and #45112 as verified-pass (both verification runs succeeded). Rebased both onto main aa2de19b. Created new PR #45306 for (T3K) T3000 unit tests (15+ consecutive failures). Issue #45305 opened. 0 dispatches.)
+Last updated: **2026-05-27T13:20 UTC** (session: PR #45306 (T3K unit tests): added multiprocess disable (test_tt_fabric T3K 2x2 SIGABRT — issue #45305), rebased onto main de985e8a, dispatched first verification run 26513061621 on verify/ci-disable-t3000-unit-tests-20260527; build in progress. 1 dispatch.)
 
 ---
 
@@ -24,7 +24,7 @@ Last updated: **2026-05-27T12:30 UTC** (session: Classified #45110 and #45112 as
 | [#45110](https://github.com/tenstorrent/tt-metal/pull/45110) | `Blackhole post-commit tests` | `verified-pass` | [26508063374](https://github.com/tenstorrent/tt-metal/actions/runs/26508063374) **success** | Yes | Rebased onto main `aa2de19b`; verification passed; awaiting human review |
 | [#45112](https://github.com/tenstorrent/tt-metal/pull/45112) | `(Blackhole) e2e tests` | `verified-pass` | [26508072188](https://github.com/tenstorrent/tt-metal/actions/runs/26508072188) **success** | Yes | Rebased onto main `aa2de19b`; verification passed; awaiting human review |
 | [#45114](https://github.com/tenstorrent/tt-metal/pull/45114) | `(Blackhole) Demo tests` | `out-of-scope` | — | N/A | **Disable REMOVED 2026-05-27**: test fixed on main since May 26. PR should be closed. |
-| [#45306](https://github.com/tenstorrent/tt-metal/pull/45306) | `(T3K) T3000 unit tests` | `batch-committed` | — | No (not yet dispatched) | New PR 2026-05-27; issue #45305; 15+ consecutive failures; gtest_filter disables applied |
+| [#45306](https://github.com/tenstorrent/tt-metal/pull/45306) | `(T3K) T3000 unit tests` | `verifying` | [26513061621](https://github.com/tenstorrent/tt-metal/actions/runs/26513061621) in progress | No (verifying) | Verification dispatched 2026-05-27 13:09 UTC; build in progress; 3 disables: DPrint/Watcher (t3k_ttmetal), DistributedTensorOp/Matmul (t3k_ttnn), test_tt_fabric T3K 2x2 (multiprocess) |
 | [#44860](https://github.com/tenstorrent/tt-metal/pull/44860) | `tt-metal-l2-tests` | `out-of-scope` | — | N/A | Separate agent |
 
 ---
@@ -33,6 +33,7 @@ Last updated: **2026-05-27T12:30 UTC** (session: Classified #45110 and #45112 as
 
 | Run | Pipeline | Branch | Started | Status | Notes |
 |-----|----------|--------|---------|--------|-------|
+| [26513061621](https://github.com/tenstorrent/tt-metal/actions/runs/26513061621) | `(T3K) T3000 unit tests` | `verify/ci-disable-t3000-unit-tests-20260527` | 2026-05-27 13:09 UTC | **in progress** (building) | PR #45306 first verify; pruned to 3 failing jobs; fresh build |
 
 **Policy:** Concurrent runs across PRs are allowed; each automation session may dispatch at most three new runs.
 
@@ -105,7 +106,7 @@ Last updated: **2026-05-27T12:30 UTC** (session: Classified #45110 and #45112 as
 | Workflow file | `blackhole-post-commit.yaml` |
 | Lifecycle stage | `verified-pass` |
 | Last rebase | 2026-05-27 12:10 UTC — merged onto `main` @ `aa2de19bd3548be5f000f34353f62455e54e4498` via update_pull_request_branch |
-| Last revalidation | 2026-05-27 12:00 UTC — run 26508063374 success; all BH multi-card fast unit tests pass |
+| Last revalidation | 2026-05-27 13:00 UTC — run 26507885931 (SHA `fe07cd11`) still shows same 3 failures |
 | Verification run | [26508063374](https://github.com/tenstorrent/tt-metal/actions/runs/26508063374) — **success** (2026-05-27 11:20–12:05 UTC) |
 | Readiness | **Yes** (verification passed; awaiting human review) |
 
@@ -130,7 +131,7 @@ Last updated: **2026-05-27T12:30 UTC** (session: Classified #45110 and #45112 as
 | Workflow file | `blackhole-e2e-tests.yaml` |
 | Lifecycle stage | `verified-pass` |
 | Last rebase | 2026-05-27 12:10 UTC — merged onto `main` @ `aa2de19bd3548be5f000f34353f62455e54e4498` via update_pull_request_branch |
-| Last revalidation | 2026-05-27 12:00 UTC — run 26508072188 success; all ccl nightly tests pass across all BH platforms |
+| Last revalidation | 2026-05-27 13:00 UTC — run 26507885931 (SHA `fe07cd11`) still shows same 3 failures |
 | Verification run | [26508072188](https://github.com/tenstorrent/tt-metal/actions/runs/26508072188) — **success** (2026-05-27 11:21–12:02 UTC) |
 | Readiness | **Yes** (verification passed; awaiting human review) |
 
@@ -171,11 +172,11 @@ Last updated: **2026-05-27T12:30 UTC** (session: Classified #45110 and #45112 as
 | Timeout issue | none |
 | Branch | `ci/disable-failing-tests-t3000-unit-tests-20260527` |
 | Workflow file | `t3000-unit-tests.yaml` |
-| Lifecycle stage | `batch-committed` |
-| Last rebase | N/A (new PR, branched from main `aa2de19bd3548be5f000f34353f62455e54e4498`) |
-| Last revalidation | 2026-05-27 12:00 UTC — runs 26507885931/26502247809/26492864186 all confirm same failures |
-| Verification run | none yet |
-| Readiness | **No** (batch committed, awaiting verification dispatch) |
+| Lifecycle stage | `verifying` |
+| Last rebase | 2026-05-27 13:15 UTC — rebased onto main `de985e8a3de` (Fix kernel-build warnings) |
+| Last revalidation | 2026-05-27 13:00 UTC — run 26507885931 (SHA `fe07cd11`) still shows same 3 failures |
+| Verification run | [26513061621](https://github.com/tenstorrent/tt-metal/actions/runs/26513061621) — **in progress** (dispatched 2026-05-27 13:09 UTC; fresh build) |
+| Readiness | **No** (verifying) |
 
 **Disabled tests (via gtest_filter):**
 
@@ -227,7 +228,7 @@ Last updated: **2026-05-27T12:30 UTC** (session: Classified #45110 and #45112 as
 | PR #45110 infra-inconclusive (×3) | **Resolved** | Fresh-build verification 26508063374 succeeded → verified-pass |
 | PR #45112 first verification | **Resolved** | Fresh-build verification 26508072188 succeeded → verified-pass |
 | `t3k_tt_metal_multiprocess_tests` crashes | **Investigating** | SIGABRT in MPI tests; harder to identify specific test IDs. Deferred for next session. Need to isolate which `tt-run` invocation causes the crash. |
-| New disable PR #45306 | **Pending verification** | batch-committed; first verification dispatch needed next session |
+| PR #45306 verification | **In progress** | Verification run [26513061621](https://github.com/tenstorrent/tt-metal/actions/runs/26513061621) dispatched 2026-05-27 13:09 UTC; fresh build; 3 pruned jobs |
 | PR #44938 needs human review/merge | **Watch** | verified-pass, undrafted |
 | PR #45108 needs human undraft + review | **Watch** | verified-pass, draft |
 | PR #45110 needs human undraft + review | **Watch** | verified-pass, draft |
@@ -236,6 +237,8 @@ Last updated: **2026-05-27T12:30 UTC** (session: Classified #45110 and #45112 as
 ---
 
 ## Recent Activity
+
+- `2026-05-27 ~13:20 UTC` — SESSION: **PR #45306 (T3K unit tests) — multiprocess disable added, rebased, verification dispatched.** Focus PRs: #45306 (batch-committed with no verify → carve-out). Actions: (1) Added multiprocess test disable to PR #45306 initial batch: commented out `tt-run test_tt_fabric T3K 2x2` invocation in `run_t3000_unit_tests.sh` (SIGABRT: TT_FATAL Physical chip id not found for eth coord; 5+ consecutive runs on main). (2) Rebased PR #45306 branch onto main `de985e8a3de` (Fix kernel-build warnings). (3) Dispatched first verification run [26513061621](https://github.com/tenstorrent/tt-metal/actions/runs/26513061621) on branch `verify/ci-disable-t3000-unit-tests-20260527` (pruned to 3 jobs: t3k_ttmetal, t3k_ttnn, t3k_tt_metal_multiprocess; fresh build path — no SHA-matching source run at de985e8a). Build in progress at session end. Focus slots 2+3: investigated candidates — `runtime-unit-tests.yaml` (job-level timeouts, policy says out of scope); `vllm-nightly-tests.yaml` (3+ consecutive non-Galaxy failures for WH-T3K/BH-DB Llama sampling tests, needs deeper log investigation for specific test names); `models-t1-e2e-tests.yaml` (Galaxy SKUs only). 1 dispatch this session.
 
 - `2026-05-27 ~12:30 UTC` — SESSION: **Both BH verification runs completed success.** Focus PRs: #45110 (verifying→verified-pass, carve-out), #45112 (verifying→verified-pass, carve-out), #45306 (new, batch-committed). Key findings: (1) PR #45110 verification [26508063374](https://github.com/tenstorrent/tt-metal/actions/runs/26508063374) succeeded — all blackhole-multi-card-fast-unit-tests across P300-viommu, BH-LLMBox, BH-LoudBox → success. Classified verified-pass. (2) PR #45112 verification [26508072188](https://github.com/tenstorrent/tt-metal/actions/runs/26508072188) succeeded — all ccl nightly tests across all BH e2e platforms → success. Classified verified-pass. (3) Both PRs rebased onto main `aa2de19bd3548be5f000f34353f62455e54e4498`. (4) New workflow `(T3K) T3000 unit tests` identified with 15+ consecutive failures. Issue [#45305](https://github.com/tenstorrent/tt-metal/issues/45305) created. PR [#45306](https://github.com/tenstorrent/tt-metal/pull/45306) created with gtest_filter disables for `t3k_ttmetal_tests` (6 DPrint/Watcher tests) and `t3k_ttnn_tests` (7 DistributedTensorOpIf/MatmulOpIf tests). 0 dispatches this session.
 - `2026-05-27 ~11:30 UTC` — SESSION: **BH paralysis loop broken.** Focus PRs: #45110 (verification-inconclusive, carve-out), #45112 (batch-committed-no-verify, carve-out), #45114 (batch-committed-no-verify, carve-out). Key findings: (1) BH post-commit/e2e/demo build steps succeed on main even when test jobs fail; fresh-build dispatch is valid. (2) PR [#45114](https://github.com/tenstorrent/tt-metal/pull/45114) disable REMOVED — `test_demo_text` fixed on main since May 26; commit `b841c358e48`. (3) PR [#45110](https://github.com/tenstorrent/tt-metal/pull/45110): rebased onto `fe07cd111531`; fresh-build verification dispatched [26508063374](https://github.com/tenstorrent/tt-metal/actions/runs/26508063374); build-artifact SUCCESS. (4) PR [#45112](https://github.com/tenstorrent/tt-metal/pull/45112): rebased onto `fe07cd111531`; first verification dispatched [26508072188](https://github.com/tenstorrent/tt-metal/actions/runs/26508072188); build-artifact SUCCESS. 2 dispatches this session.
