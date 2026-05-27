@@ -109,9 +109,14 @@ class MLP(LightweightModule):
         if self.prefetcher is not None:
 
             def register_weights():
-                self.prefetcher.insert_tensor(self.w1)
-                self.prefetcher.insert_tensor(self.w3)
-                self.prefetcher.insert_tensor(self.w2)
+                # Compute decode-mode 1D mcast program configs so the DRAM-core
+                # prefetcher (DramCorePrefetcher) can size its global circular
+                # buffer from per_core_N. Worker-core Prefetcher ignores the kwarg.
+                pc_ff1_3 = self.args.get_mlp_ff1_3_prg_config(Mode.DECODE, 1, self.prefetcher)
+                pc_ff2 = self.args.get_mlp_ff2_prg_config(Mode.DECODE, 1, self.prefetcher)
+                self.prefetcher.insert_tensor(self.w1, program_config=pc_ff1_3)
+                self.prefetcher.insert_tensor(self.w3, program_config=pc_ff1_3)
+                self.prefetcher.insert_tensor(self.w2, program_config=pc_ff2)
 
             self.prefetcher.register_callback(register_weights)
 

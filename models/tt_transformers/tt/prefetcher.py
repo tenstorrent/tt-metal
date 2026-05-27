@@ -63,6 +63,33 @@ def generate_sender_receiver_mapping(num_receivers_per_sender: int = 8) -> dict:
     return mapping
 
 
+def make_prefetcher(
+    mesh_device: ttnn.MeshDevice,
+    num_tensors: int,
+    num_layers: int,
+    num_receiver_cores: Optional[int] = None,
+):
+    """Select the prefetcher backend.
+
+    Returns a ``DramCorePrefetcher`` when ``TT_METAL_USE_DRAM_CORE_PREFETCHER=1`` AND
+    Blackhole AND DRAM programmable cores are enabled. Otherwise returns the original
+    worker-core ``Prefetcher``.
+
+    Both classes expose the same public surface so callers in MLP / attention / model
+    code don't need to branch on which backend is in use.
+    """
+    use_dram_core = (
+        os.getenv("TT_METAL_USE_DRAM_CORE_PREFETCHER", "0") == "1"
+        and is_blackhole()
+        and os.getenv("TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES", "0") == "1"
+    )
+    if use_dram_core:
+        from models.tt_transformers.tt.dram_core_prefetcher import DramCorePrefetcher
+
+        return DramCorePrefetcher(mesh_device, num_tensors, num_layers, num_receiver_cores=num_receiver_cores)
+    return Prefetcher(mesh_device, num_tensors, num_layers, num_receiver_cores=num_receiver_cores)
+
+
 def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 16) -> bool:
     """
     Check if model can use DRAM prefetcher: CB pages <= 65535, L1 size fits, kv_heads % num_devices == 0.
