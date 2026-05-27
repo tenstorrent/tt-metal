@@ -111,8 +111,8 @@ void kernel_main() {
             // Chain emits per-call (fold elides after first iter). -> Input + Output.
             // Lifecycles: cb_in/cb_inb Bulk + Block, cb_x OutBulk + Block.
             for (auto block : generic::blocks(Wt, blk)) {
-                compute_kernel_lib::eltwise_chain<blk>(
-                    block.full_block_size(),
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
                     compute_kernel_lib::BinaryFpu<
                         cb_in,
                         cb_inb,
@@ -210,8 +210,8 @@ void kernel_main() {
         // Lifecycles: cb_x Bulk + Block, cb_ex CallerManaged + Scalar, cb_xmm OutBulk + Block.
         cb_ex_obj.wait_front(onetile);  // pre-wait, never popped inside chain
         for (auto block : generic::blocks(Wt, blk)) {
-            compute_kernel_lib::eltwise_chain<blk>(
-                block.full_block_size(),
+            compute_kernel_lib::eltwise_chain(
+                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
                 compute_kernel_lib::BinaryFpu<
                     cb_x,
                     cb_ex,
@@ -281,8 +281,8 @@ void kernel_main() {
             //   Reconfig: explicit reconfig_data_format(cb_xmm, cb_ex2pe) +
             //     mul_bcast_cols_init_short -> Input. Explicit pack_reconfig
             //     selects cb_out or cb_fusion at compile time -> Output.
-            compute_kernel_lib::eltwise_chain<blk>(
-                block.full_block_size(),
+            compute_kernel_lib::eltwise_chain(
+                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
                 compute_kernel_lib::BinaryFpu<
                     cb_xmm,
                     cb_ex2pe,
@@ -310,8 +310,8 @@ void kernel_main() {
                 // Bulk wait+pop per block. cb_gamma: cumulative wait, never popped ->
                 // HeldBulk + Block + TileBaseRuntime(block.start()).
                 constexpr uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
-                compute_kernel_lib::eltwise_chain<blk>(
-                    block.full_block_size(),
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
                     compute_kernel_lib::BinaryFpu<
                         cb_fusion,
                         cb_gamma,
@@ -336,8 +336,8 @@ void kernel_main() {
             if constexpr (do_beta) {
                 // Stage 3: cb_out = cb_fusion + cb_beta (row bcast).
                 // Same lifecycle pattern as Stage 2 with gamma -> beta.
-                compute_kernel_lib::eltwise_chain<blk>(
-                    block.full_block_size(),
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
                     compute_kernel_lib::BinaryFpu<
                         cb_fusion,
                         cb_beta,

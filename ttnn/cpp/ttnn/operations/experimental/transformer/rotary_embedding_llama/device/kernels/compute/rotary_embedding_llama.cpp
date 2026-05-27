@@ -93,8 +93,8 @@ void kernel_main() {
                 //   No explicit pack_reconfig (relies on sin_interm_cb format == out_cb's
                 //   from startup) -> PackTileReconfig::None.
 #if RELOAD_IMPL == 0
-                compute_kernel_lib::eltwise_chain<Wt>(
-                    Wt,
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
                     compute_kernel_lib::BinaryFpu<
                         rotated_in_interm_cb,
                         sin_cb,
@@ -116,8 +116,8 @@ void kernel_main() {
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::PackTileReconfig::None>{});
 #else
-                compute_kernel_lib::eltwise_chain<Wt>(
-                    Wt,
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
                     compute_kernel_lib::BinaryFpu<
                         rotated_in_interm_cb,
                         sin_cb,
@@ -139,8 +139,8 @@ void kernel_main() {
 
                 // cos_interim = x * cos  — same pattern as sin_interim.
 #if RELOAD_IMPL == 0
-                compute_kernel_lib::eltwise_chain<Wt>(
-                    Wt,
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
                     compute_kernel_lib::BinaryFpu<
                         in_cb,
                         cos_cb,
@@ -162,8 +162,8 @@ void kernel_main() {
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::PackTileReconfig::None>{});
 #else
-                compute_kernel_lib::eltwise_chain<Wt>(
-                    Wt,
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
                     compute_kernel_lib::BinaryFpu<
                         in_cb,
                         cos_cb,
@@ -186,8 +186,8 @@ void kernel_main() {
                 // out = cos_interim + sin_interim
                 // Both operands Bulk + Block (Wt tiles, popped at end), out_cb OutBulk + Block.
                 // Reconfig: add_tiles_init reconfigs srca/srcb -> Input. No pack_reconfig -> None.
-                compute_kernel_lib::eltwise_chain<Wt>(
-                    Wt,
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
                     compute_kernel_lib::BinaryFpu<
                         cos_interm_cb,
                         sin_interm_cb,

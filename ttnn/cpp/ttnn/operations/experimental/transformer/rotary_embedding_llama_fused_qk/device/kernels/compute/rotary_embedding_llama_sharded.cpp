@@ -104,8 +104,8 @@ void kernel_main() {
         // cb_pop_front (line 92, 103) and cb_push_back (102) stay on raw LLK.
         // Reconfig: mul_bcast_rows_init_short reconfigs srca/srcb -> Input.
         // No pack_reconfig -> None.
-        compute_kernel_lib::eltwise_chain<Wt>(
-            Wt,
+        compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
             compute_kernel_lib::BinaryFpu<
                 rotated_in_interm_cb,
                 sin_cb,

@@ -153,8 +153,8 @@ void kernel_main() {
         // process all tiles in one DEST window — matches the original's `for (auto i : block.local())`
         // inside one ACQ/REL.
         for (auto block : generic::blocks(Wt, block_size)) {
-            compute_kernel_lib::eltwise_chain<block_size>(
-                block.full_block_size(),
+            compute_kernel_lib::eltwise_chain(
+                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/block_size),
                 compute_kernel_lib::BinaryFpu<
                     cb_in,
                     cb_inb,
@@ -212,8 +212,8 @@ void kernel_main() {
         //     cover the same capacity progressively. All reserves are capacity-checks;
         //     since the producer/consumer balance is unchanged, behavior is identical.
         for (auto block : generic::blocks(Wt, block_size)) {
-            compute_kernel_lib::eltwise_chain<block_size>(
-                block.full_block_size(),
+            compute_kernel_lib::eltwise_chain(
+                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/block_size),
                 compute_kernel_lib::BinaryFpu<
                     cb_x,
                     cb_ex,
@@ -271,8 +271,8 @@ void kernel_main() {
          * preserves the padded-junk-pack semantics for the non-RMSNORM path.
          */
         for (auto block : generic::blocks(Wt, block_size)) {
-            compute_kernel_lib::eltwise_chain<block_size>(
-                block.full_block_size(),
+            compute_kernel_lib::eltwise_chain(
+                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/block_size),
                 compute_kernel_lib::BinaryFpu<
                     cb_xmm,
                     cb_xmm,

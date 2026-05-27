@@ -1329,6 +1329,13 @@ struct chain_lane_width<EltwiseChain<Es...>>
 template <class Chain>
 inline constexpr uint32_t chain_lane_width_v = chain_lane_width<Chain>::value;
 
+// chain_max_block_v — largest block_size that fits in DEST for this chain, given its
+// lane-width fold. Caller-facing compile-time constant: pass any value <= this to
+// the runtime `block_size` arg on `eltwise_chain`. Caller can `static_assert` their
+// chosen block against this value to recover the build-time DEST overflow signal.
+template <class Chain>
+inline constexpr uint32_t chain_max_block_v = DEST_AUTO_LIMIT / chain_lane_width_v<Chain>;
+
 // chain_supports_block — N-element fold. True when every CB-reader element uses a
 // policy that stages a multi-tile DEST window (Upfront / Cumulative / NoWaitNoPop).
 // Streaming policies (WaitAndPop / WaitNoPop / NoWaitPop) consume ONE tile per iter
@@ -1377,21 +1384,6 @@ struct elem_has_index_mode : std::false_type {};
 template <class E>
 struct elem_has_index_mode<E, std::void_t<decltype(E::index_mode)>> : std::true_type {};
 
-constexpr bool is_2d_only_kind(OperandKind k) noexcept {
-    return k == OperandKind::Row || k == OperandKind::Col;
-}
-
-template <class E>
-constexpr bool element_uses_2d_only_kind() {
-    bool bad = false;
-    if constexpr (elem_has_a_index_mode<E>::value) bad = bad || is_2d_only_kind(E::a_index_mode);
-    if constexpr (elem_has_b_index_mode<E>::value) bad = bad || is_2d_only_kind(E::b_index_mode);
-    if constexpr (elem_has_index_mode<E>::value)   bad = bad || is_2d_only_kind(E::index_mode);
-    return bad;
-}
-
-template <class... Es>
-constexpr bool chain_uses_2d_only_kind_impl_v = (element_uses_2d_only_kind<Es>() || ...);
 }  // namespace detail
 
 template <class Chain>
@@ -1400,16 +1392,6 @@ struct chain_supports_block;
 template <class... Es>
 struct chain_supports_block<EltwiseChain<Es...>>
     : std::bool_constant<detail::chain_supports_block_impl_v<Es...>> {};
-
-template <class Chain>
-struct chain_uses_2d_only_kind;
-
-template <class... Es>
-struct chain_uses_2d_only_kind<EltwiseChain<Es...>>
-    : std::bool_constant<detail::chain_uses_2d_only_kind_impl_v<Es...>> {};
-
-template <class Chain>
-inline constexpr bool chain_uses_2d_only_kind_v = chain_uses_2d_only_kind<Chain>::value;
 
 template <class Chain>
 inline constexpr bool chain_supports_block_v = chain_supports_block<Chain>::value;
@@ -1470,8 +1452,11 @@ constexpr bool reader_pair_collide() {
         constexpr uint32_t a1 = cb_b_of<A>();
         constexpr uint32_t b0 = cb_a_of<B>();
         constexpr uint32_t b1 = cb_b_of<B>();
-        return (a0 != 0 && (a0 == b0 || a0 == b1)) ||
-               (a1 != 0 && (a1 == b0 || a1 == b1));
+        // a0 / b0 are always real (both A and B are CB readers above), so the
+        // kNoCb guard there is defensive. a1 / b1 can be kNoCb when the reader
+        // is unary — the guard prevents kNoCb == kNoCb registering as a collision.
+        return (a0 != kNoCb && (a0 == b0 || a0 == b1)) ||
+               (a1 != kNoCb && (a1 == b0 || a1 == b1));
     }
 }
 
@@ -2084,84 +2069,13 @@ ALWI void hoist_compute_init(std::index_sequence<Is...>, Es&... elts) {
 //     immediately before that stage's chain call).
 // =============================================================================
 
-template <uint32_t BlockSize, class... Es>
-ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
-    using Chain = EltwiseChain<Es...>;
-
-    // ---- Compile-time invariant checks ----
-    static_assert(!chain_has_duplicate_upfront_cbs_v<Chain>,
-                  "eltwise_chain: two CB-reader elements share a CB on upfront-wait policy. "
-                  "Each upfront-wait CB must appear in exactly one element.");
-    static_assert(!chain_pack_writes_collide_v<Chain>,
-                  "eltwise_chain: two PackTile elements collide on (cb, dst_slot). "
-                  "Pack writes must target distinct (cb, dst) tuples.");
-    static_assert(!chain_uses_2d_only_kind_v<Chain>,
-                  "eltwise_chain (1D): Row / Col OperandKind has no meaning without Ht/Wt "
-                  "context — pick Block (walk) or Scalar (broadcast), or switch to the 2D "
-                  "`eltwise_chain(EltwiseShape, ...)` overload.");
-
-    // Per-cohort hoist decisions, both compile-time. The dispatcher picks the
-    // most aggressive safe emission shape — math-MOP init can be hoisted at
-    // boot even when SFPU isn't uniform; the SFPU side then re-inits per tile.
-    constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
-    constexpr bool hoist_sfpu = chain_hoist_sfpu_v<Chain>;
-
-    // ---- Block size (item 2 of eltwise_helper_proposal.md) ----
-    //
-    // Caller picks BlockSize at compile time. Each outer iter processes BlockSize
-    // tiles in BlockSize DEST lanes (lane j at slot dst_slot + j * chain_lane_width).
-    // BlockSize == 1 reproduces the per-tile shape. BlockSize > 1 requires every
-    // CB-reader policy to stage a multi-tile window (see chain_supports_block_v).
-    static_assert(BlockSize >= 1, "eltwise_chain: BlockSize must be >= 1");
-    constexpr uint32_t chain_lane_w = chain_lane_width_v<Chain>;
-    static_assert(BlockSize * chain_lane_w <= DEST_AUTO_LIMIT,
-                  "eltwise_chain: BlockSize * chain_lane_width exceeds DEST_AUTO_LIMIT. "
-                  "Reduce BlockSize or shrink the chain's DEST footprint.");
-    static_assert(BlockSize == 1 || chain_supports_block_v<Chain>,
-                  "eltwise_chain<BlockSize>1>: streaming CB-reader policy (WaitAndPop / "
-                  "WaitNoPop / NoWaitPop) consumes one tile per iter — incompatible with "
-                  "BlockSize > 1. Switch the reader to WaitUpfrontPopAtEnd, "
-                  "CumulativeWaitPopAtEnd, or NoWaitNoPop, or call eltwise_chain<1>.");
-    constexpr uint32_t block_size = BlockSize;
-
-    using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
-
-    // ---- Pack-cohort boot init — always hoisted; PACK is disjoint from compute cohorts ----
-    detail::pack_init_for_each<Es...>(IdxSeq{});
-
-    // ---- Compute-cohort boot init — filtered by per-cohort hoist flags ----
-    detail::hoist_compute_init<hoist_math, hoist_sfpu>(IdxSeq{}, elts...);
-
-    // Outer loop processes `block_size` tiles per iter. Runtime tail handles the case
-    // where `n_tiles % block_size != 0`: the last iter's inner block size clamps to
-    // `n_tiles - i_outer * block_size`.
-    for (uint32_t i_outer = 0; i_outer * block_size < n_tiles; ++i_outer) {
-        const uint32_t base_tile = i_outer * block_size;
-        const uint32_t inner_count =
-            (base_tile + block_size <= n_tiles) ? block_size : (n_tiles - base_tile);
-        tile_regs_acquire();
-        detail::apply_compute_phase</*EmitMathInit=*/!hoist_math, /*EmitSfpuInit=*/!hoist_sfpu>(
-            IdxSeq{}, i_outer, base_tile, inner_count, chain_lane_w, n_tiles, elts...);
-        tile_regs_commit();
-        tile_regs_wait();
-        detail::apply_pack_phase(IdxSeq{}, i_outer, base_tile, inner_count, chain_lane_w, n_tiles, elts...);
-        tile_regs_release();
-    }
-
-    // End-of-chain upfront-policy lifecycle (policy-gated no-op for non-upfront elts).
-    (detail::elem_pop_upfront_end(elts, n_tiles), ...);
-    (detail::elem_push_at_end(elts, n_tiles), ...);
-}
-
 // =============================================================================
-// 11b. 2D eltwise_chain — (Ht, Wt) walk with per-element broadcast indexing
+// 11b. eltwise_chain — unified (Ht, Wt) walk with per-element broadcast indexing
 //
-// Walks an (Ht, Wt) tile grid. Inner loop blocks W (BlockSize tiles per inner
-// iter). Per-element index mode picks the tile index for each CB-reader:
-// BlockIter → flat (ht*Wt + wt), RowBcast → wt, ColBcast → ht, FirstTile → 0.
-//
-// The 1D `eltwise_chain(n_tiles, ...)` overload is preserved verbatim above —
-// no `ht * Wt` multiplication in its hot path. Use 1D unless you need broadcast.
+// Walks an (Ht, Wt) tile grid (Ht=1 expresses the 1D case). Inner loop blocks W
+// (block_size tiles per inner iter). Per-element index mode picks the tile index
+// for each CB-reader: BlockIter → flat (ht*Wt + wt), RowBcast → wt, ColBcast → ht,
+// FirstTile → 0.
 // =============================================================================
 
 namespace detail {
@@ -2298,27 +2212,34 @@ ALWI void elem_push_at_end_2d(const E& e, uint32_t Ht, uint32_t Wt) {
 
 }  // namespace detail
 
-template <uint32_t BlockSize, class... Es>
+template <class... Es>
 ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
 
-    // ---- Compile-time invariant checks (same as 1D) ----
+    // ---- Compile-time invariant checks ----
     static_assert(!chain_has_duplicate_upfront_cbs_v<Chain>,
-                  "eltwise_chain(2D): two CB-reader elements share a CB on upfront-wait policy.");
+                  "eltwise_chain: two CB-reader elements share a CB on upfront-wait policy.");
     static_assert(!chain_pack_writes_collide_v<Chain>,
-                  "eltwise_chain(2D): two PackTile elements collide on (cb, dst_slot).");
+                  "eltwise_chain: two PackTile elements collide on (cb, dst_slot).");
 
-    // Per-cohort hoist decisions — see 1D entry point for rationale.
+    // Per-cohort hoist decisions. The dispatcher picks the most aggressive safe
+    // emission shape — math-MOP init can be hoisted at boot even when SFPU isn't
+    // uniform; the SFPU side then re-inits per tile.
     constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
     constexpr bool hoist_sfpu = chain_hoist_sfpu_v<Chain>;
 
-    static_assert(BlockSize >= 1, "eltwise_chain(2D): BlockSize must be >= 1");
+    // Block size lives on the shape. DEST footprint (block_size * chain_lane_width)
+    // is the caller's responsibility — query chain_max_block_v<Chain> for the max
+    // safe value and static_assert at the call site to recover the build-time check.
     constexpr uint32_t chain_lane_w = chain_lane_width_v<Chain>;
-    static_assert(BlockSize * chain_lane_w <= DEST_AUTO_LIMIT,
-                  "eltwise_chain(2D): BlockSize * chain_lane_width exceeds DEST_AUTO_LIMIT.");
-    static_assert(BlockSize == 1 || chain_supports_block_v<Chain>,
-                  "eltwise_chain<2D, BlockSize>1>: streaming CB-reader policy incompatible.");
-    constexpr uint32_t block_size = BlockSize;
+    uint32_t block_size = shape.block_size;
+    // Streaming CB-reader chains can't multi-tile their DEST window (WaitAndPop /
+    // WaitNoPop / NoWaitPop consume one tile per iter). Force block_size to 1 in that
+    // case — compile-time gated, so the override path emits no code when the chain
+    // supports block-mode.
+    if constexpr (!chain_supports_block_v<Chain>) {
+        block_size = 1;
+    }
 
     using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
 
@@ -2359,25 +2280,13 @@ ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
 }
 
 // =============================================================================
-// 12. eltwise_chain_with_init — deduced wrapper (U4)
-//
-// Single-stage convenience that derives (cb_a, cb_b, cb_out) at compile time
-// from the chain element pack and emits compute_kernel_hw_startup before the
-// chain. Multi-stage kernels (different PACK output CB per stage) MUST keep the
-// explicit per-stage compute_kernel_hw_startup pattern.
+// 12. cb_a_of / cb_b_of / pack_cb_of — single-element CB id deducers used by the
+// collision-detection static_asserts (chain_has_duplicate_upfront_cbs_v,
+// chain_pack_writes_collide_v). Caller-side hw_startup is the caller's
+// responsibility — there is no deduced wrapper.
 // =============================================================================
 
 namespace detail {
-
-// `first_*_cb<Es...>()`: pack-fold deducers for the boot's three CBs.
-//
-// CB ID `0` is a legitimate CB index (`tt::CBIndex::c_0`). We can't use 0 as a
-// sentinel for "not found". Instead the deducers walk Es left-to-right and return
-// the CB from the first matching element (CB-reader / CB-binary / CB-pack); the
-// caller's `static_assert` uses a separate "is found" predicate that walks the
-// same predicate set.
-//
-// Implemented as recursive pack peel.
 
 template <class E>
 constexpr uint32_t cb_a_of() {
@@ -2386,7 +2295,7 @@ constexpr uint32_t cb_a_of() {
                       "CbReader element must declare 'static constexpr uint32_t cb_a_id()'");
         return E::cb_a_id();
     } else {
-        return 0u;
+        return kNoCb;
     }
 }
 
@@ -2397,7 +2306,7 @@ constexpr uint32_t cb_b_of() {
                       "Binary CbReader element must declare 'static constexpr uint32_t cb_b_id()'");
         return E::cb_b_id();
     } else {
-        return 0u;
+        return kNoCb;
     }
 }
 
@@ -2408,96 +2317,10 @@ constexpr uint32_t pack_cb_of() {
                       "CbWriter element must declare 'static constexpr uint32_t pack_cb_id()'");
         return E::pack_cb_id();
     } else {
-        return 0u;
+        return kNoCb;
     }
 }
 
-// Has-any-* predicates so the caller can static_assert presence without false
-// positives on CB index 0.
-template <class... Es>
-inline constexpr bool has_any_cb_reader_v = ((is_cb_reader_op_v<Es>) || ...);
-
-template <class... Es>
-inline constexpr bool has_any_pack_tile_v = ((is_pack_tile_op_v<Es>) || ...);
-
-// First CB on side X, walking Es left-to-right and returning the first element
-// of the matching kind. Returns 0 only if no matching element exists (caller is
-// expected to gate via the has_any_* predicates above).
-
-template <class... Es>
-constexpr uint32_t first_cb_a_impl() {
-    uint32_t result = 0;
-    bool found = false;
-    auto step = [&](bool is_reader, uint32_t cb) {
-        if (!found && is_reader) { result = cb; found = true; }
-    };
-    (step(is_cb_reader_op_v<Es>, cb_a_of<Es>()), ...);
-    return result;
-}
-
-template <class... Es>
-constexpr uint32_t first_cb_b_impl() {
-    uint32_t result = 0;
-    bool found = false;
-    auto step = [&](bool is_bin, uint32_t cb) {
-        if (!found && is_bin) { result = cb; found = true; }
-    };
-    (step(is_binary_fpu_op_v<Es> || is_dest_reuse_binary_op_v<Es>, cb_b_of<Es>()), ...);
-    return result;
-}
-
-template <class... Es>
-constexpr uint32_t first_pack_cb_impl() {
-    uint32_t result = 0;
-    bool found = false;
-    auto step = [&](bool is_pack, uint32_t cb) {
-        if (!found && is_pack) { result = cb; found = true; }
-    };
-    (step(is_pack_tile_op_v<Es>, pack_cb_of<Es>()), ...);
-    return result;
-}
-
-// Detect "has any binary FPU element" — used to decide cb_b vs falling back to cb_a.
-template <class... Es>
-inline constexpr bool has_any_binary_v = ((is_binary_fpu_op_v<Es> || is_dest_reuse_binary_op_v<Es>) || ...);
-
-template <class... Es>
-constexpr uint32_t first_cb_a()    { return first_cb_a_impl<Es...>(); }
-
-template <class... Es>
-constexpr uint32_t first_cb_b()    { return first_cb_b_impl<Es...>(); }
-
-template <class... Es>
-constexpr uint32_t first_pack_cb() { return first_pack_cb_impl<Es...>(); }
-
 }  // namespace detail
-
-template <uint32_t BlockSize, class... Es>
-ALWI void eltwise_chain_with_init(uint32_t n_tiles, Es... elts) {
-    static_assert(detail::has_any_pack_tile_v<Es...>,
-                  "eltwise_chain_with_init: chain has no PackTile element. Multi-stage kernels "
-                  "must use explicit per-stage compute_kernel_hw_startup, not this wrapper.");
-
-    constexpr uint32_t cb_out = detail::first_pack_cb<Es...>();
-    constexpr uint32_t cb_a   = detail::has_any_cb_reader_v<Es...> ? detail::first_cb_a<Es...>() : cb_out;
-    constexpr uint32_t cb_b   = detail::has_any_binary_v<Es...> ? detail::first_cb_b<Es...>() : cb_a;
-
-    compute_kernel_hw_startup(cb_a, cb_b, cb_out);
-    eltwise_chain<BlockSize>(n_tiles, elts...);
-}
-
-// 2D variant of the deduced wrapper.
-template <uint32_t BlockSize, class... Es>
-ALWI void eltwise_chain_with_init(EltwiseShape shape, Es... elts) {
-    static_assert(detail::has_any_pack_tile_v<Es...>,
-                  "eltwise_chain_with_init(2D): chain has no PackTile element.");
-
-    constexpr uint32_t cb_out = detail::first_pack_cb<Es...>();
-    constexpr uint32_t cb_a   = detail::has_any_cb_reader_v<Es...> ? detail::first_cb_a<Es...>() : cb_out;
-    constexpr uint32_t cb_b   = detail::has_any_binary_v<Es...> ? detail::first_cb_b<Es...>() : cb_a;
-
-    compute_kernel_hw_startup(cb_a, cb_b, cb_out);
-    eltwise_chain<BlockSize>(shape, elts...);
-}
 
 }  // namespace compute_kernel_lib

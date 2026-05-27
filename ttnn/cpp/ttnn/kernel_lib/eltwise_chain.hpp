@@ -322,26 +322,54 @@ template <class T>
 inline constexpr bool is_math_mop_op_v = is_copy_tile_op_v<T> || is_fpu_kind_op_v<T>;
 
 // =============================================================================
+// 1a-bis. CB id sentinel
+// =============================================================================
+
+/// "Not a CB" sentinel for compile-time CB-id queries (`cb_a_of`, `cb_b_of`,
+/// `pack_cb_of`). CB indices are `tt::CBIndex` (uint8_t, 0..31 in practice), so
+/// `uint32_t` max is guaranteed not to collide with any real CB id. Used by the
+/// collision-detection predicates to skip elements that don't carry a CB on the
+/// queried slot, without confusing "absent" with "cb_id == 0" (which is a valid
+/// `tt::CBIndex::c_0`).
+inline constexpr uint32_t kNoCb = 0xFFFFFFFFu;
+
+// =============================================================================
 // 1b. 2D shape — (Ht, Wt) tile grid for the 2D chain overload
 // =============================================================================
 
-/// Tile grid for the 2D `eltwise_chain` overload. Rows × cols, both in tiles.
-/// 1D code paths keep the legacy `eltwise_chain(n_tiles, ...)` overload — pass
-/// `EltwiseShape::of(Ht, Wt)` here when you need row/col/scalar broadcast indexing
-/// inside the chain (normalization-style kernels: subtract per-row mean, multiply
-/// by per-channel gamma, …).
+/// Iteration shape for `eltwise_chain`. Carries both the tile grid (Ht × Wt, both in
+/// tiles) and the per-outer-iter `block_size`. Ht=1 expresses the 1D case (no row
+/// axis, plain linear walk); broadcast indexing modes (`Row`/`Col`) degenerate for
+/// 1D usage but remain well-defined.
 ///
-/// Factory aliases mirror `binary_op_helpers`' `BinaryInputBlockShape` (which is
-/// preferred where the kernel already uses the binary helper alone). Both structs
-/// are layout-compatible and used interchangeably for the 2D walk.
+/// Factories cover the common construction paths:
+///   - `EltwiseShape::tiles(n)`           — 1D, block_size = 1
+///   - `EltwiseShape::tiles(n, blk)`      — 1D + block
+///   - `EltwiseShape::grid(H, W)`         — 2D, block_size = 1
+///   - `EltwiseShape::grid(H, W, blk)`    — 2D + block
+///
+/// Implicit conversion from `uint32_t` produces `tiles(n_tiles)` so bare callers
+/// (`eltwise_chain(n_tiles, ...)`) keep working without churn.
+///
+/// `of/row/col/single` aliases mirror `binary_op_helpers`' `BinaryInputBlockShape`
+/// and are preserved for callers that already use them.
 struct EltwiseShape {
     uint32_t Ht;
     uint32_t Wt;
+    uint32_t block_size;
 
-    static constexpr EltwiseShape of(uint32_t r, uint32_t c) { return {r, c}; }
-    static constexpr EltwiseShape row(uint32_t c) { return {1, c}; }
-    static constexpr EltwiseShape col(uint32_t r) { return {r, 1}; }
-    static constexpr EltwiseShape single() { return {1, 1}; }
+    constexpr EltwiseShape(uint32_t H, uint32_t W, uint32_t blk = 1) : Ht(H), Wt(W), block_size(blk) {}
+
+    // Implicit so `eltwise_chain(n_tiles, ...)` resolves via uint32_t -> EltwiseShape.
+    constexpr EltwiseShape(uint32_t n_tiles) : Ht(1), Wt(n_tiles), block_size(1) {}
+
+    static constexpr EltwiseShape tiles(uint32_t n, uint32_t blk = 1) { return {1, n, blk}; }
+    static constexpr EltwiseShape grid(uint32_t H, uint32_t W, uint32_t blk = 1) { return {H, W, blk}; }
+
+    static constexpr EltwiseShape of(uint32_t r, uint32_t c) { return {r, c, 1}; }
+    static constexpr EltwiseShape row(uint32_t c) { return {1, c, 1}; }
+    static constexpr EltwiseShape col(uint32_t r) { return {r, 1, 1}; }
+    static constexpr EltwiseShape single() { return {1, 1, 1}; }
 };
 
 // =============================================================================
@@ -669,15 +697,20 @@ constexpr uint32_t to_u32(Dst s) noexcept { return static_cast<uint32_t>(s); }
 enum class Approx : bool { Exact = false, Fast = true };
 enum class Legacy : bool { Off = false, On = true };
 
-/// Auto-block size (item 2 of eltwise_helper_proposal.md). Chain-wide template
-/// parameter on `eltwise_chain<BlockSize, ...>`. Caller picks the per-outer-iter
-/// block size at compile time. The chain runs `BlockSize` DEST lanes per outer iter
-/// (each lane offsets DEST slot by `j * chain_lane_width`). Default `BlockSize = 1`
-/// reproduces the per-tile shape. Static asserts validate:
-///   - `BlockSize * chain_lane_width <= DEST_AUTO_LIMIT`  (slot reach)
-///   - `BlockSize == 1 || chain_supports_block_v<Chain>`  (policy compat)
-/// Callers needing the "auto" max BlockSize can pass `DEST_AUTO_LIMIT / chain_lane_width`
-/// directly — typically `DEST_AUTO_LIMIT` when every element has `lane_width == 1`.
+/// Block size. Runtime arg on `eltwise_chain(n_tiles, block_size, ...)`. Each outer
+/// iter processes `block_size` tiles in `block_size` DEST lanes (lane j at slot
+/// dst_slot + j * chain_lane_width). `block_size == 1` reproduces the per-tile shape;
+/// an implicit-block overload defaults to 1 for callers that don't pass it.
+///
+/// Caller responsibilities (no runtime check fires inside the chain):
+///   - DEST footprint: `block_size * chain_lane_width <= DEST_AUTO_LIMIT`. Query
+///     `chain_max_block_v<Chain>` for the maximum legal value and static_assert at
+///     the call site if a build-time check is desired.
+///   - Policy compat: streaming CB-reader chains (WaitAndPop / WaitNoPop / NoWaitPop)
+///     consume one tile per iter — incompatible with `block_size > 1`. The chain
+///     silently clamps `block_size` to 1 via `if constexpr (!chain_supports_block_v<Chain>)`
+///     when the chain type doesn't support block-mode, so an explicit value > 1 is
+///     just ignored for those chains.
 
 // =============================================================================
 // 4. Policy enums — CB lifecycle, indexing, reconfig, broadcast
@@ -1099,7 +1132,14 @@ inline constexpr bool chain_hoist_sfpu_v = chain_hoist_sfpu<Chain>::value;
 //   grep -nE 'init_common|compute_kernel_hw_startup|mm_init|reduce_init' eltwise_{chain.hpp,chain.inl,block.hpp}
 // Result: header `#include` only; zero call sites in helper bodies.
 
-/// Run the chain over `n_tiles` iterations.
+/// Run the chain over an (Ht, Wt) tile grid with optional per-outer-iter block size.
+///
+/// One entry point covers both 1D and 2D walks via `EltwiseShape`:
+///   - `EltwiseShape::tiles(n)`        — 1D, Ht=1, block_size=1
+///   - `EltwiseShape::tiles(n, blk)`   — 1D, Ht=1, block_size=blk
+///   - `EltwiseShape::grid(H, W)`      — 2D, block_size=1
+///   - `EltwiseShape::grid(H, W, blk)` — 2D, block_size=blk
+///   - bare `uint32_t n_tiles`         — implicit conversion to `EltwiseShape::tiles(n)`
 ///
 /// Compile-time validation:
 ///   - illegal `(Policy × IndexMode)` cells static_assert.
@@ -1109,55 +1149,21 @@ inline constexpr bool chain_hoist_sfpu_v = chain_hoist_sfpu<Chain>::value;
 ///
 /// Block-mode auto-detection: if any element in `Es...` exposes `is_upfront == true`,
 /// the helper takes the upfront-block path (wait N upfront, loop, pop N at end).
-template <uint32_t BlockSize = 1, class... Es>
-ALWI void eltwise_chain(uint32_t n_tiles, Es... elts);
-
-/// Run the chain over `n_tiles` iterations, plus emit `compute_kernel_hw_startup`
-/// at chain entry with CBs deduced from the chain element pack.
+/// Streaming CB-reader chains silently clamp `block_size` to 1 via `if constexpr` —
+/// query `chain_supports_block_v<Chain>` and `chain_max_block_v<Chain>` at the call
+/// site if you want a build-time check on the block choice.
 ///
-/// Single-stage convenience: deduces (cb_a, cb_b, cb_out) by walking `Es...`:
-///   - `cb_a` ← first element with `is_cb_reader_op_v` and `cb_a_id() != 0`
-///   - `cb_b` ← first element with `is_binary_fpu_op_v` and `cb_b_id() != 0`,
-///              else `cb_a` (unary chains)
-///   - `cb_out` ← first element with `is_pack_tile_op_v` and `pack_cb_id() != 0`
-/// then calls `compute_kernel_hw_startup(cb_a, cb_b, cb_out)` and `eltwise_chain(...)`.
-///
-/// **Multi-stage caveat (D5).** Use this only for single-stage kernels. Multi-stage
-/// kernels (different PACK output CB per stage) MUST keep explicit per-stage
-/// `compute_kernel_hw_startup` calls — `eltwise_chain_with_init` would emit it once
-/// with stage-1 CBs and stage 2's PACK would target the wrong CB.
-template <uint32_t BlockSize = 1, class... Es>
-ALWI void eltwise_chain_with_init(uint32_t n_tiles, Es... elts);
-
-/// 2D variant — runs the chain over an (Ht, Wt) tile grid.
-///
-/// Inner loop blocks W (BlockSize tiles per inner iter). Each CB-reader element
-/// uses its `OperandKind` to derive the per-iter CB tile index from `(ht, wt)`,
-/// composed with the element's `TileBase` offset (default `TileBaseNone` = 0):
-///
-///   tile_id = tile_base_value + kind_derived(ht, wt)
-///
+/// Index-mode semantics:
 ///   - `BlockIter` → `ht * Wt + wt`     (window = Ht*Wt)
 ///   - `RowBcast`  → `wt`                (window = Wt)
 ///   - `ColBcast`  → `ht`                (window = Ht)
 ///   - `FirstTile` → 0                   (window = 1)
 ///
-/// **Constraint**: `RowBcast`/`ColBcast` require non-streaming CB policy (Upfront,
-/// Cumulative, NoWait* / WaitNoPop / NoWaitPop) — caller stages broadcast operand
-/// tiles before the chain starts. Same rule `binary_op_helpers` enforces for ROW /
-/// SCALAR. The static_assert fires per-element at the chain call site.
-///
-/// **Equivalence with 1D**: `eltwise_chain(EltwiseShape::of(1, n), …)` is
-/// semantically equivalent to `eltwise_chain(n, …)` for chains that use only
-/// `FirstTile` / `BlockIter`. The 1D overload skips the outer `ht` loop so it
-/// avoids the `ht * Wt` multiplication in the per-tile path; prefer 1D when no
-/// broadcast axis is in play.
-template <uint32_t BlockSize = 1, class... Es>
+/// `RowBcast`/`ColBcast` require non-streaming CB policy (Upfront, Cumulative,
+/// NoWait* / WaitNoPop / NoWaitPop) — caller stages broadcast operand tiles before
+/// the chain starts.
+template <class... Es>
 ALWI void eltwise_chain(EltwiseShape shape, Es... elts);
-
-/// 2D variant of the deduced wrapper. Same single-stage caveat as the 1D version.
-template <uint32_t BlockSize = 1, class... Es>
-ALWI void eltwise_chain_with_init(EltwiseShape shape, Es... elts);
 
 }  // namespace compute_kernel_lib
 

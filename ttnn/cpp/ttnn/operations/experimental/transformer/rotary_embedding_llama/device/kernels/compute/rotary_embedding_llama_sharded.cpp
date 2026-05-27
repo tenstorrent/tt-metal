@@ -70,8 +70,8 @@ void kernel_main() {
         // sin_interim = rotated * sin (bcast ROW).
         // rotated Bulk + Block; sin HeldBulk + Block (pre-waited line 42, popped at 106).
         // sin_interm OutBulk + Block. Reconfig Input + None (no explicit pack_reconfig).
-        compute_kernel_lib::eltwise_chain<Wt>(
-            Wt,
+        compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
             compute_kernel_lib::BinaryFpu<
                 rotated_in_interm_cb,
                 sin_cb,
@@ -91,8 +91,8 @@ void kernel_main() {
                 compute_kernel_lib::PackTileReconfig::None>{});
 
         // cos_interim = x * cos (bcast ROW). Same pattern as sin_interim.
-        compute_kernel_lib::eltwise_chain<Wt>(
-            Wt,
+        compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
             compute_kernel_lib::BinaryFpu<
                 in_cb,
                 cos_cb,
@@ -112,8 +112,8 @@ void kernel_main() {
                 compute_kernel_lib::PackTileReconfig::None>{});
 
         // out = cos_interim + sin_interim. Both Bulk + Block, out_cb OutBulk + Block.
-        compute_kernel_lib::eltwise_chain<Wt>(
-            Wt,
+        compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
             compute_kernel_lib::BinaryFpu<
                 cos_interm_cb,
                 sin_interm_cb,

@@ -119,8 +119,8 @@ void kernel_main() {
          * x * 1/sqrt(stdev)
          */
         cb_wait_front(cb_recip_sqrt_var, 1);
-        compute_kernel_lib::eltwise_chain<blk>(
-            Wt,
+        compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/blk),
             compute_kernel_lib::BinaryFpu<
                 cb_norm_x_input,
                 cb_recip_sqrt_var,
@@ -145,8 +145,8 @@ void kernel_main() {
              * x_normed * gamma   (cb_gamma walks Block — index = 0..Wt-1)
              */
             cb_wait_front(cb_gamma, Wt);  // gamma is reused across NCHt — wait once per row
-            compute_kernel_lib::eltwise_chain<blk>(
-                Wt,
+            compute_kernel_lib::eltwise_chain(
+                compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/blk),
                 compute_kernel_lib::BinaryFpu<
                     cb_x_normed,
                     cb_gamma,
@@ -170,8 +170,8 @@ void kernel_main() {
                  * (x_normed * gamma) + beta   (cb_beta walks Block — 0..Wt-1)
                  */
                 cb_wait_front(cb_beta, Wt);
-                compute_kernel_lib::eltwise_chain<blk>(
-                    Wt,
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/blk),
                     compute_kernel_lib::BinaryFpu<
                         cb_times_gamma_out,
                         cb_beta,

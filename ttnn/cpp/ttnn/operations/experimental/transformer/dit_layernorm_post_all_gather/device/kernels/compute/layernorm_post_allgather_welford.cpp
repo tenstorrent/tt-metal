@@ -109,8 +109,8 @@ void kernel_main() {
             // Reconfig: explicit reconfig_data_format + sub_bcast_cols_init_short ->
             // BinaryDataFormatReconfig::Input. pack_reconfig_data_format ->
             // PackTileReconfig::Output.
-            compute_kernel_lib::eltwise_chain<block_size>(
-                block_size,
+            compute_kernel_lib::eltwise_chain(
+                compute_kernel_lib::EltwiseShape::tiles(block_size, /*block_size=*/block_size),
                 compute_kernel_lib::BinaryFpu<
                     cb_inp,
                     cb_stats_reduced,
@@ -193,8 +193,8 @@ void kernel_main() {
             // PackTileReconfig::Output.
             if constexpr (do_beta) {
                 cb_wait_front(cb_beta, col_tile + block_size);
-                compute_kernel_lib::eltwise_chain<block_size>(
-                    block_size,
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(block_size, /*block_size=*/block_size),
                     compute_kernel_lib::BinaryFpu<
                         cb_intermediate,
                         cb_beta,
