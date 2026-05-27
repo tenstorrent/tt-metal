@@ -16,24 +16,57 @@ Reference: LTX-2/packages/ltx-pipelines/ + Wan pipeline_wan.py
 
 from __future__ import annotations
 
+import glob
+import hashlib
+import json
 import math
 import os
-from typing import TYPE_CHECKING
+import sys
+import time
+from dataclasses import dataclass, field
+from fractions import Fraction
+from typing import TYPE_CHECKING, Callable
 
 import torch
+from huggingface_hub import hf_hub_download, snapshot_download
 from loguru import logger
+from safetensors import safe_open
+from safetensors.torch import load_file
+from transformers import AutoTokenizer
 
 import ttnn
 
+from ...encoders.gemma.embeddings_connector import EmbeddingsConnector, _rms_norm
 from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
+from ...encoders.gemma.model_gemma import GemmaConfig, GemmaEncoder
 from ...models.transformers.ltx.ltx_transformer import LTXTransformerModel
-from ...parallel.config import DiTParallelConfig, ParallelFactor, VaeHWParallelConfig
+from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
+from ...models.vae.vae_ltx import LTXVideoDecoder, LTXVideoDecoderTorch
+from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
+from ...utils.conv3d import conv3d_blocking_hash
+from ...utils.lora import LoraSpec, fuse_loras_into
+from ...utils.ltx import (
+    AudioLatentShape,
+    VideoLatentShape,
+    VideoPixelShape,
+    audio_get_patch_grid_bounds,
+    get_pixel_coords,
+    video_get_patch_grid_bounds,
+)
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 if TYPE_CHECKING:
     pass
+
+
+@dataclass
+class TransformerState:
+    model: LTXTransformerModel
+    cache_name: str
+    lora_specs: list[LoraSpec] = field(default_factory=list)
+    state_dict_provider: Callable[[], dict[str, torch.Tensor]] | None = None
 
 
 # =============================================================================
@@ -136,17 +169,15 @@ class LTXPipeline:
     LTX-2 text-to-video generation pipeline.
 
     Usage:
-        pipeline = LTXPipeline(mesh_device, parallel_config, ccl_manager)
-        pipeline.load_transformer(checkpoint_or_state_dict)
-        pipeline.load_text_encoder(gemma_checkpoint)
-
-        output = pipeline(
-            prompt="A cat playing piano",
+        pipeline = LTXPipeline.create_pipeline(
+            mesh_device,
+            checkpoint_name="Lightricks/LTX-2.3:ltx-2.3-22b-dev.safetensors",
+            gemma_path="google/gemma-3-12b-it-qat-q4_0-unquantized",
             num_frames=33,
             height=480,
             width=832,
-            num_inference_steps=30,
         )
+        output = pipeline(prompt="A cat playing piano", num_frames=33, height=480, width=832)
     """
 
     def __init__(
@@ -155,26 +186,30 @@ class LTXPipeline:
         parallel_config: DiTParallelConfig,
         ccl_manager: CCLManager,
         *,
+        checkpoint_name: str | None = None,
+        gemma_path: str | None = None,
         vae_parallel_config: VaeHWParallelConfig | None = None,
-        # Transformer config
         num_attention_heads: int = 32,
         attention_head_dim: int = 128,
         in_channels: int = 128,
         out_channels: int = 128,
         num_layers: int = 48,
         cross_attention_dim: int = 4096,
-        # Mode: "video" or "av"
         mode: str = "video",
-        # RoPE config
         positional_embedding_theta: float = 10000.0,
         positional_embedding_max_pos: list[int] | None = None,
         timestep_scale_multiplier: float = 1000.0,
+        is_fsdp: bool = False,
+        dynamic_load: bool = False,
+        num_frames: int = 0,
+        height: int = 0,
+        width: int = 0,
+        run_warmup: bool = False,
+        extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
     ):
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
-        # VAE H/W shard config. Defaults to mirroring transformer's tp/sp axes:
-        # H gets the tp_axis, W gets the sp_axis (matches Wan's role assignment).
         if vae_parallel_config is None:
             vae_parallel_config = VaeHWParallelConfig(
                 height_parallel=parallel_config.tensor_parallel,
@@ -194,45 +229,43 @@ class LTXPipeline:
         self.positional_embedding_max_pos = positional_embedding_max_pos or [20, 2048, 2048]
         self.timestep_scale_multiplier = timestep_scale_multiplier
 
-        self.is_fsdp: bool = False
-        self.dynamic_load: bool = False
-        self.transformer: LTXTransformerModel | None = None
+        self.is_fsdp = is_fsdp
+        self.dynamic_load = dynamic_load
+        self._init_num_frames = num_frames
+        self._init_height = height
+        self._init_width = width
+
         self.text_encoder: GemmaTokenizerEncoderPair | None = None
-        self.gemma_encoder = None  # TTNN Gemma encoder (device)
+        self.gemma_encoder = None
         self.gemma_tokenizer = None
-        self.video_connector = None  # EmbeddingsConnector for video
-        self.audio_connector = None  # EmbeddingsConnector for audio
-        self.vae_decoder = None  # LTXVideoDecoder or LTXVideoDecoderTorch
+        self.video_connector = None
+        self.audio_connector = None
 
-        # Cached device tensors (computed once, reused across steps)
-        self._cached_rope_cos: ttnn.Tensor | None = None
-        self._cached_rope_sin: ttnn.Tensor | None = None
-        # trans_mat not needed: using SPLIT RoPE (not interleaved)
-        self._cached_prompt: ttnn.Tensor | None = None
-        self._cached_negative_prompt: ttnn.Tensor | None = None
+        self.checkpoint_name: str | None = (
+            LTXPipeline._resolve_checkpoint_file(checkpoint_name) if checkpoint_name else None
+        )
+        self.gemma_path: str | None = LTXPipeline._resolve_gemma_dir(gemma_path) if gemma_path else None
 
-        # Checkpoint identifiers (Wan-style). Set by create_pipeline; consumed by the
-        # _prepare_* methods (transformer, vae, connectors) and the reference encode
-        # helpers. Either a local path or a HuggingFace repo string; auto-resolved on use.
-        self.checkpoint_name: str | None = None
-        self.gemma_path: str | None = None
+        # ``self.transformer`` always points at the active variant. Production paths
+        # set it via ``_prepare_transformer(idx)``; the random-weights test path
+        # (``load_transformer(state_dict)``) sets it directly.
+        self.transformer: LTXTransformerModel | None = None
+        self.transformer_states: list[TransformerState] = []
+        self.vae_decoder = None
 
-        # Optional LoRA specs fused into the transformer state dict on next
-        # ``_prepare_transformer`` call. Empty by default — distilled-LoRA stage-2
-        # pipelines (see ``LTXAVTwoStagesPipeline``) toggle these between stages.
-        # The cache key is suffixed when non-empty so LoRA-fused and base weights
-        # do not alias in ``TT_DIT_CACHE_DIR``.
-        from ...utils.lora import LoraSpec  # local import to avoid circulars
-
-        self._lora_specs: list[LoraSpec] = []
+        if self.checkpoint_name is not None:
+            self._load_config_from_checkpoint()
+            self._instantiate_modules(extra_transformer_variants or [])
+            self._register_coresident_exclusions()
+            self._prime_caches()
+            if run_warmup and num_frames > 0 and height > 0 and width > 0:
+                self.warmup_buffers(num_frames=num_frames, height=height, width=width)
 
     @staticmethod
     def _resolve_checkpoint_file(checkpoint: str, default_filename: str = "ltx-2.3-22b-dev.safetensors") -> str:
         """Resolve a checkpoint reference to a local file path.ß"""
         if os.path.exists(checkpoint):
             return checkpoint
-        from huggingface_hub import hf_hub_download
-
         if ":" in checkpoint:
             repo_id, filename = checkpoint.split(":", 1)
         else:
@@ -248,8 +281,6 @@ class LTXPipeline:
         """
         if os.path.isdir(gemma):
             return gemma
-        from huggingface_hub import snapshot_download
-
         logger.info(f"Resolving HuggingFace Gemma repo {gemma} (auto-download if missing)")
         return snapshot_download(repo_id=gemma)
 
@@ -267,11 +298,17 @@ class LTXPipeline:
         is_fsdp: bool | None = None,
         mode: str = "av",
         pipeline_class: type["LTXPipeline"] | None = None,
+        run_warmup: bool = False,
+        num_frames: int = 0,
+        height: int = 0,
+        width: int = 0,
+        **extra_pipeline_kwargs,
     ) -> "LTXPipeline":
-        """Factory method matching Wan's create_pipeline pattern.
+        """Auto-configure mesh-shape defaults and forward into ``__init__``.
 
-        Auto-configures parallel settings from mesh shape. `checkpoint_name` and `gemma_path`
-        accept either local paths or HuggingFace repo strings (auto-downloaded on first use).
+        ``checkpoint_name`` / ``gemma_path`` accept local paths or HuggingFace
+        repo strings (auto-downloaded on first use). Subclass-specific kwargs
+        (e.g. ``distilled_lora_path``) flow through ``extra_pipeline_kwargs``.
         """
         mesh_shape = tuple(mesh_device.shape)
         device_configs: dict[tuple[int, int], dict] = {}
@@ -280,9 +317,6 @@ class LTXPipeline:
                 "sp_axis": 1,
                 "tp_axis": 0,
                 "num_links": 2,
-                # DIAGNOSTIC: was True in merge 87c799a7c54 to match Wan BH 2x4 pattern, but
-                # produced 11s/step + noise output (race symptom). Reverted to False to
-                # isolate whether dynamic_load is the cause.
                 "dynamic_load": True,
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
@@ -334,8 +368,7 @@ class LTXPipeline:
             sequence_parallel=ParallelFactor(factor=mesh_shape[sp_axis], mesh_axis=sp_axis),
             tensor_parallel=ParallelFactor(factor=mesh_shape[tp_axis], mesh_axis=tp_axis),
         )
-        # VAE shards H on the tp axis, W on the sp axis — same role mapping as Wan.
-        # For bh_2x4sp1tp0 (mesh 2x4, tp=axis 0, sp=axis 1): h_factor=2, w_factor=4.
+        # VAE shards H on tp axis, W on sp axis (mirrors Wan role assignment).
         vae_parallel_config = VaeHWParallelConfig(
             height_parallel=ParallelFactor(factor=mesh_shape[tp_axis], mesh_axis=tp_axis),
             width_parallel=ParallelFactor(factor=mesh_shape[sp_axis], mesh_axis=sp_axis),
@@ -343,30 +376,28 @@ class LTXPipeline:
         ccl_manager = CCLManager(mesh_device, topology=topology)
 
         pipeline_cls = pipeline_class or LTXPipeline
-        pipeline = pipeline_cls(
+        if run_warmup and not (num_frames > 0 and height > 0 and width > 0):
+            logger.warning(f"run_warmup=True but invalid shape ({num_frames=}, {height=}, {width=}); skipping warmup")
+
+        return pipeline_cls(
             mesh_device=mesh_device,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             vae_parallel_config=vae_parallel_config,
             mode=mode,
+            checkpoint_name=checkpoint_name,
+            gemma_path=gemma_path,
+            is_fsdp=is_fsdp,
+            dynamic_load=dynamic_load,
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            run_warmup=run_warmup,
+            **extra_pipeline_kwargs,
         )
-        pipeline.is_fsdp = is_fsdp
-        pipeline.dynamic_load = dynamic_load
-
-        if checkpoint_name is not None:
-            pipeline.checkpoint_name = LTXPipeline._resolve_checkpoint_file(checkpoint_name)
-            pipeline._load_config_from_checkpoint()
-        if gemma_path is not None:
-            pipeline.gemma_path = LTXPipeline._resolve_gemma_dir(gemma_path)
-
-        return pipeline
 
     def _load_config_from_checkpoint(self) -> None:
         """Parse the safetensors header to detect model variant + VAE config. No tensor loads."""
-        import json
-
-        from safetensors import safe_open
-
         assert self.checkpoint_name is not None
         checkpoint_path = self.checkpoint_name
 
@@ -381,14 +412,6 @@ class LTXPipeline:
             self._has_gate = any("to_gate_logits" in k for k in keys)
         logger.info(f"Detected: has_gate={self._has_gate}, cross_attention_adaln={self._cross_attention_adaln}")
 
-        has_connectors = any(
-            k.startswith("text_embedding_projection.")
-            or k.startswith("model.diffusion_model.video_embeddings_connector.")
-            for k in keys
-        )
-        if has_connectors:
-            self._connector_checkpoint_path = checkpoint_path
-
         # VAE config from JSON metadata header.
         with open(checkpoint_path, "rb") as f:
             header_size = int.from_bytes(f.read(8), "little")
@@ -401,85 +424,30 @@ class LTXPipeline:
         if self._vae_decoder_blocks:
             logger.info(f"VAE config: {len(self._vae_decoder_blocks)} blocks, causal={self._vae_causal}")
 
-    def _transformer_state_dict(self) -> dict[str, torch.Tensor]:
-        """Lazy state dict provider for the transformer. Invoked only on cache miss.
-
-        Mirrors Wan's `lambda: state.torch_model.state_dict()` but for safetensors —
-        Wan keeps the torch model in host RAM; LTX reads the safetensors on demand.
-        When ``self._lora_specs`` is non-empty the resulting state dict is fused
-        with those LoRAs before being returned (mirrors the reference
-        ``DiffusionStage(loras=...)`` builder path).
-        """
-        from safetensors.torch import load_file
-
-        logger.info(f"Transformer cache miss — loading safetensors: {self.checkpoint_name}")
-        raw = load_file(self.checkpoint_name)
+    @staticmethod
+    def _build_transformer_state_dict(checkpoint_path: str, lora_specs: list[LoraSpec]) -> dict[str, torch.Tensor]:
+        """Load + LoRA-fuse the transformer state dict from safetensors. Only
+        invoked on cache miss by ``cache_module.load_model``."""
+        logger.info(f"Transformer cache miss — loading safetensors: {checkpoint_path}")
+        raw = load_file(checkpoint_path)
         prefix = "model.diffusion_model."
         sd = {k[len(prefix) :]: v for k, v in raw.items() if k.startswith(prefix)}
-        if self._lora_specs:
-            from ...utils.lora import fuse_loras_into
-
-            sd = fuse_loras_into(sd, self._lora_specs)
+        if lora_specs:
+            sd = fuse_loras_into(sd, lora_specs)
         return sd
 
-    def _transformer_cache_name(self) -> str:
-        """Cache key for ``cache_module.load_model``. Append a LoRA tag so the
-        base and LoRA-fused weights do not collide in ``TT_DIT_CACHE_DIR``.
-        """
-        base = os.path.basename(self.checkpoint_name).removesuffix(".safetensors")
-        if not self._lora_specs:
+    @staticmethod
+    def _build_transformer_cache_name(checkpoint_path: str, lora_specs: list[LoraSpec]) -> str:
+        """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and
+        base weights don't alias in ``TT_DIT_CACHE_DIR``."""
+        base = os.path.basename(checkpoint_path).removesuffix(".safetensors")
+        if not lora_specs:
             return base
-        tag = "+".join(
-            f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in self._lora_specs
-        )
+        tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
         return f"{base}.lora-{tag}"
 
-    def _prepare_transformer(self) -> None:
-        """Push transformer weights onto the mesh. Cached when `TT_DIT_CACHE_DIR` is set.
-
-        Mirrors Wan's `_prepare_transformer`. Construction flags + Module instantiation
-        happen once in `create_pipeline` via `_load_config_from_checkpoint`; this method
-        only handles weight transfer.
-        """
-        if self.transformer is None:
-            self.transformer = LTXTransformerModel(
-                num_attention_heads=self.num_attention_heads,
-                attention_head_dim=self.attention_head_dim,
-                in_channels=self.in_channels,
-                out_channels=self.out_channels,
-                num_layers=self.num_layers,
-                cross_attention_dim=self.cross_attention_dim,
-                mesh_device=self.mesh_device,
-                ccl_manager=self.ccl_manager,
-                parallel_config=self.parallel_config,
-                has_audio=self.mode == "av",
-                apply_gated_attention=self._has_gate,
-                cross_attention_adaln=self._cross_attention_adaln,
-            )
-        cache_module.load_model(
-            self.transformer,
-            model_name=self._transformer_cache_name(),
-            subfolder="transformer",
-            parallel_config=self.parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            is_fsdp=self.is_fsdp,
-            get_torch_state_dict=self._transformer_state_dict,
-        )
-        logger.info(f"Loaded LTX transformer ({self.mode} mode) with {self.num_layers} layers")
-
-    def load_transformer(self, state_dict: dict[str, torch.Tensor]) -> None:
-        """Direct state-dict load (used by tests with random weights, no caching).
-
-        For the cache-aware production path, use `_prepare_transformer` instead.
-        Auto-detects model variant flags from the state dict.
-        """
-        has_gate = any("to_gate_logits" in k for k in state_dict)
-        # 9-output (22B): adaln_single.linear.weight has shape (9*dim, dim).
-        # 6-output (19B distilled): shape (6*dim, dim).
-        adaln_weight = state_dict.get("adaln_single.linear.weight")
-        cross_attention_adaln = True if adaln_weight is None else adaln_weight.shape[0] > 6 * self.inner_dim
-
-        self.transformer = LTXTransformerModel(
+    def _new_transformer(self) -> LTXTransformerModel:
+        return LTXTransformerModel(
             num_attention_heads=self.num_attention_heads,
             attention_head_dim=self.attention_head_dim,
             in_channels=self.in_channels,
@@ -490,9 +458,97 @@ class LTXPipeline:
             ccl_manager=self.ccl_manager,
             parallel_config=self.parallel_config,
             has_audio=self.mode == "av",
-            apply_gated_attention=has_gate,
-            cross_attention_adaln=cross_attention_adaln,
+            apply_gated_attention=self._has_gate,
+            cross_attention_adaln=self._cross_attention_adaln,
         )
+
+    def _instantiate_modules(self, extra_variants: list[tuple[str, list[LoraSpec]]]) -> None:
+        """Build every TT Module the pipeline will use. No DRAM weights yet —
+        ``_prime_caches`` (next) attaches them."""
+        self.transformer = self._new_transformer()
+        self.transformer_states.append(
+            TransformerState(
+                model=self.transformer,
+                cache_name=self._build_transformer_cache_name(self.checkpoint_name, []),
+                state_dict_provider=lambda: self._build_transformer_state_dict(self.checkpoint_name, []),
+            )
+        )
+        for tag, lora_specs in extra_variants:
+            specs = list(lora_specs)
+            self.transformer_states.append(
+                TransformerState(
+                    model=self._new_transformer(),
+                    cache_name=self._build_transformer_cache_name(self.checkpoint_name, specs),
+                    lora_specs=specs,
+                    state_dict_provider=lambda s=specs: self._build_transformer_state_dict(self.checkpoint_name, s),
+                )
+            )
+            logger.info(f"Registered transformer variant {tag} with {len(specs)} LoRA(s)")
+
+        if self._vae_decoder_blocks:
+            self.vae_decoder = LTXVideoDecoder(
+                decoder_blocks=self._vae_decoder_blocks,
+                causal=self._vae_causal,
+                base_channels=self._vae_base_channels,
+                mesh_device=self.mesh_device,
+                parallel_config=self.vae_parallel_config,
+                ccl_manager=self.ccl_manager,
+                num_frames=self._init_num_frames or None,
+                height=self._init_height or None,
+                width=self._init_width or None,
+            )
+
+    def _register_coresident_exclusions(self) -> None:
+        """All transformer variants exclude each other AND the VAE. LTX-22B +
+        LTX-VAE don't both fit on BH LB (~multi-GB contiguous DRAM per chip
+        for the VAE decode alone), so VAE must evict the active transformer
+        before decode — matches the explicit ``self.transformer = None;
+        gc.collect()`` pattern from the pre-refactor pipelines. Unlike Wan
+        (Wan-VAE is small enough to coexist on BH), LTX needs the eviction
+        on both WH and BH."""
+        if not self.dynamic_load:
+            return
+        models = [s.model for s in self.transformer_states]
+        for i, m in enumerate(models):
+            peers = [p for j, p in enumerate(models) if j != i]
+            if peers:
+                m.register_coresident_exclusions(*peers)
+
+        if self.vae_decoder is not None:
+            for m in models:
+                m.register_coresident_exclusions(self.vae_decoder)
+            self.vae_decoder.register_coresident_exclusions(*models)
+
+    def _prime_caches(self) -> None:
+        """Load every module in reverse use order so variant 0 is resident in
+        DRAM after ``__init__`` (matches Wan's reverse-use-order priming)."""
+        for idx in range(len(self.transformer_states) - 1, 0, -1):
+            self._prepare_transformer(idx)
+        if self.vae_decoder is not None:
+            self._prepare_vae()
+        self._prepare_transformer(0)
+
+    def _prepare_transformer(self, idx: int = 0) -> None:
+        state = self.transformer_states[idx]
+        cache_module.load_model(
+            state.model,
+            model_name=state.cache_name,
+            subfolder="transformer",
+            parallel_config=self.parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            is_fsdp=self.is_fsdp,
+            get_torch_state_dict=state.state_dict_provider,
+        )
+        self.transformer = state.model
+
+    def load_transformer(self, state_dict: dict[str, torch.Tensor]) -> None:
+        """Direct state-dict load for tests with random weights (no caching)."""
+        self._has_gate = any("to_gate_logits" in k for k in state_dict)
+        # 9-output (22B): adaln_single.linear.weight has shape (9*dim, dim).
+        # 6-output (19B distilled): shape (6*dim, dim).
+        adaln_weight = state_dict.get("adaln_single.linear.weight")
+        self._cross_attention_adaln = True if adaln_weight is None else adaln_weight.shape[0] > 6 * self.inner_dim
+        self.transformer = self._new_transformer()
         self.transformer.load_torch_state_dict(state_dict)
         logger.info(f"Loaded LTX transformer ({self.mode} mode) with {self.num_layers} layers")
 
@@ -528,13 +584,6 @@ class LTXPipeline:
             hidden_layer_index: Which layer's hidden states to extract (-1 = last)
             sequence_length: Max token sequence length
         """
-        import glob
-
-        from transformers import AutoTokenizer
-
-        from ...encoders.gemma.model_gemma import GemmaConfig, GemmaEncoder
-        from ...parallel.config import EncoderParallelConfig
-
         config = GemmaConfig(
             num_hidden_layers=num_layers,
             hidden_layer_index=hidden_layer_index,
@@ -549,9 +598,6 @@ class LTXPipeline:
         enc_ccl = CCLManager(self.mesh_device, topology=ttnn.Topology.Linear)
 
         self.gemma_encoder = GemmaEncoder(config, self.mesh_device, enc_ccl, enc_parallel)
-
-        # Load weights
-        from safetensors.torch import load_file
 
         weight_files = sorted(glob.glob(f"{gemma_path}/model-*.safetensors"))
         if not weight_files:
@@ -594,9 +640,6 @@ class LTXPipeline:
         - model.diffusion_model.video_embeddings_connector.* → video connector blocks + norm
         - model.diffusion_model.audio_embeddings_connector.* → audio connector blocks + norm
         """
-        from ...encoders.gemma.embeddings_connector import EmbeddingsConnector
-        from ...parallel.config import EncoderParallelConfig
-
         input_dim = gemma_hidden_size * gemma_num_layers
 
         # Use same TP as DiT transformer
@@ -822,8 +865,6 @@ class LTXPipeline:
                     # Compute 1D RoPE for connector blocks (matching reference Embeddings1DConnector).
                     # Uses reference precompute_freqs_cis directly since 1D grid format differs from
                     # our video/audio 4D grid convention.
-                    import sys
-
                     sys.path.insert(0, "LTX-2/packages/ltx-core/src")
                     from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
                     from ltx_core.model.transformer.rope import generate_freq_grid_pytorch
@@ -852,9 +893,6 @@ class LTXPipeline:
                     )
                     for block in connector.transformer_1d_blocks:
                         tt_x = block(tt_x, rope_cos=rope_cos, rope_sin=rope_sin)
-
-                    # Final parameter-free RMS norm
-                    from ...encoders.gemma.embeddings_connector import _rms_norm
 
                     tt_x = _rms_norm(tt_x)
                     result = ttnn.to_torch(ttnn.get_device_tensors(tt_x)[0]).float()
@@ -888,8 +926,6 @@ class LTXPipeline:
         assert self.checkpoint_name is not None, "checkpoint_name must be set before encode_prompts_reference"
         assert self.gemma_path is not None, "gemma_path must be set before encode_prompts_reference"
         try:
-            import sys
-
             sys.path.insert(0, "LTX-2/packages/ltx-core/src")
             sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
             torch.cuda.synchronize = lambda *a, **kw: None  # No CUDA on TT host
@@ -899,9 +935,6 @@ class LTXPipeline:
                 "encode_prompts_reference() requires the LTX-2 reference package. "
                 "Use load_text_encoder() + __call__() for standalone text encoding."
             ) from e
-
-        # Check embedding cache to skip expensive Gemma encoding
-        import hashlib
 
         cache_dir = os.environ.get("TT_DIT_CACHE_DIR") or os.path.expanduser("~/.cache/tt-dit")
         embed_cache_dir = os.path.join(cache_dir, "ltx-embeddings")
@@ -946,8 +979,6 @@ class LTXPipeline:
             use_ttnn: If True, use TTNN decoder; if False, use torch-only wrapper
         """
         if use_ttnn:
-            from ...models.vae.vae_ltx import LTXVideoDecoder
-
             self.vae_decoder = LTXVideoDecoder(
                 decoder_blocks=decoder_blocks,
                 in_channels=self.in_channels,
@@ -961,48 +992,20 @@ class LTXPipeline:
             self.vae_decoder.load_torch_state_dict(state_dict)
             logger.info("Loaded TTNN VAE decoder")
         else:
-            from ...models.vae.vae_ltx import LTXVideoDecoderTorch
-
             self.vae_decoder = LTXVideoDecoderTorch.from_config(
                 decoder_blocks, in_channels=self.in_channels, patch_size=patch_size, base_channels=base_channels
             )
             self.vae_decoder.load_state_dict(state_dict)
             logger.info("Loaded torch-only VAE decoder")
 
-    def _prepare_vae(
-        self,
-        *,
-        num_frames: int | None = None,
-        height: int | None = None,
-        width: int | None = None,
-    ) -> None:
-        """Push VAE decoder onto the mesh. Cached when `TT_DIT_CACHE_DIR` is set.
-
-        Pass ``num_frames``, ``height``, ``width`` so the decoder can pre-compute
-        per-layer ConvDims and pick exact-match blockings from ``_BLOCKINGS``.
-        Omit them to fall back to channel-only blocking lookup.
-        """
-        if not self._vae_decoder_blocks:
+    def _prepare_vae(self) -> None:
+        """Push VAE decoder weights onto the mesh. Module was constructed in
+        ``__init__``; blocking-hash subfolder forces re-load when conv3d
+        ``C_in_block`` changes (mirrors Wan)."""
+        if self.vae_decoder is None:
             return
 
-        from ...models.vae.vae_ltx import LTXVideoDecoder
-        from ...utils.conv3d import conv3d_blocking_hash
-
-        self.vae_decoder = LTXVideoDecoder(
-            decoder_blocks=self._vae_decoder_blocks,
-            causal=self._vae_causal,
-            base_channels=self._vae_base_channels,
-            mesh_device=self.mesh_device,
-            parallel_config=self.vae_parallel_config,
-            ccl_manager=self.ccl_manager,
-            num_frames=num_frames,
-            height=height,
-            width=width,
-        )
-
         def _vae_state_provider() -> dict[str, torch.Tensor]:
-            from safetensors.torch import load_file
-
             logger.info(f"VAE cache miss — loading safetensors: {self._vae_checkpoint_path}")
             raw = load_file(self._vae_checkpoint_path)
             vae_state = {}
@@ -1015,35 +1018,17 @@ class LTXPipeline:
                         vae_state[short_key] = v
             return vae_state
 
-        if self.checkpoint_name is not None:
-            # Blocking-hash subfolder mirrors Wan: when conv3d C_in_block changes
-            # (e.g. blockings refined from a sweep), prepare_conv3d_weights re-runs
-            # automatically rather than silently loading mis-shaped weights.
-            blocking_key = conv3d_blocking_hash(self.vae_decoder)
-            subfolder = f"vae_{blocking_key}" if blocking_key else "vae"
-            cache_module.load_model(
-                self.vae_decoder,
-                model_name=os.path.basename(self.checkpoint_name).removesuffix(".safetensors"),
-                subfolder=subfolder,
-                parallel_config=self.parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                get_torch_state_dict=_vae_state_provider,
-            )
-        else:
-            self.vae_decoder.load_torch_state_dict(_vae_state_provider())
-
+        blocking_key = conv3d_blocking_hash(self.vae_decoder)
+        subfolder = f"vae_{blocking_key}" if blocking_key else "vae"
+        cache_module.load_model(
+            self.vae_decoder,
+            model_name=os.path.basename(self.checkpoint_name).removesuffix(".safetensors"),
+            subfolder=subfolder,
+            parallel_config=self.parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=_vae_state_provider,
+        )
         logger.info(f"Loaded TTNN VAE decoder ({len(self._vae_decoder_blocks)} blocks)")
-
-    def _prepare_connectors(self) -> None:
-        """Load embeddings connectors. Call after Gemma encoder is loaded."""
-        if not hasattr(self, "_connector_checkpoint_path"):
-            logger.warning("No connector checkpoint path saved — skipping connector loading")
-            return
-        from safetensors.torch import load_file
-
-        raw = load_file(self._connector_checkpoint_path)
-        self.load_embeddings_connectors(raw)
-        del raw
 
     def decode_latents(self, latent: torch.Tensor, latent_frames: int, latent_h: int, latent_w: int) -> torch.Tensor:
         """Decode latent tensor to video pixels.
@@ -1064,12 +1049,21 @@ class LTXPipeline:
         latent_spatial = latent.reshape(B, latent_frames, latent_h, latent_w, self.in_channels)
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
-        from ...models.vae.vae_ltx import LTXVideoDecoder
-
         if isinstance(self.vae_decoder, LTXVideoDecoder):
             return self.vae_decoder(latent_spatial)
         else:
             return self.vae_decoder.decode(latent_spatial)
+
+    def _warmup_decode(self, num_frames: int, height: int, width: int) -> None:
+        """Load VAE + JIT-compile decode kernels with a zero dummy latent at
+        the target shape. No-op if no VAE is configured."""
+        if self.vae_decoder is None:
+            return
+        latent_frames = (num_frames - 1) // 8 + 1
+        latent_h, latent_w = height // 32, width // 32
+        dummy = torch.zeros(1, latent_frames * latent_h * latent_w, self.in_channels)
+        self._prepare_vae()
+        self.decode_latents(dummy, latent_frames, latent_h, latent_w)
 
     def _prepare_rope(
         self, num_frames: int, latent_height: int, latent_width: int, fps: float = 24.0
@@ -1079,15 +1073,10 @@ class LTXPipeline:
         Uses the official LTX-2 VideoLatentPatchifier for positions, matching the reference
         pipeline's precompute_freqs_cis with SPLIT rotation. No trans_mat needed.
         """
-        from ...models.transformers.ltx.rope_ltx import precompute_freqs_cis
-        from ...utils.ltx import VideoLatentShape, get_pixel_coords, video_get_patch_grid_bounds
-
         v_shape = VideoLatentShape(batch=1, channels=128, frames=num_frames, height=latent_height, width=latent_width)
         v_coords = video_get_patch_grid_bounds(v_shape)
         v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
         v_positions[:, 0, ...] = v_positions[:, 0, ...] / fps
-
-        from ...models.transformers.ltx.rope_ltx import LTXRopeType
 
         # NOTE: positions MUST stay fp32 (was .bfloat16() - introduced catastrophic phase error in
         # high-frequency RoPE channels: 1700x worse than fp32, completely randomizing cos/sin in the
@@ -1113,10 +1102,6 @@ class LTXPipeline:
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
         tt_cos = bf16_tensor_2dshard(cos_freq, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
         tt_sin = bf16_tensor_2dshard(sin_freq, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-
-        self._cached_rope_cos = tt_cos
-        self._cached_rope_sin = tt_sin
-
         return tt_cos, tt_sin
 
     def _prepare_prompt(self, prompt_embeds: torch.Tensor) -> ttnn.Tensor:
@@ -1141,6 +1126,33 @@ class LTXPipeline:
                 prompt = prompt[..., : self.cross_attention_dim]
         tt_prompt = bf16_tensor(prompt, device=self.mesh_device)
         return tt_prompt
+
+    def warmup_buffers(
+        self,
+        *,
+        num_frames: int,
+        height: int,
+        width: int,
+        num_inference_steps: int = 2,
+    ) -> None:
+        """Run 2 steps through the real ``__call__`` to compile every device
+        program at the target shape. Subclasses override for multi-stage flows."""
+        if self.mode != "video":
+            raise NotImplementedError(
+                f"warmup_buffers needs mode='video' here (got '{self.mode}'); " "subclasses override for AV"
+            )
+        t0 = time.time()
+        logger.info(f"warmup (video): {num_frames}f@{height}x{width}, {num_inference_steps} steps")
+        self(
+            prompt="warmup",
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=1.0,
+            seed=0,
+        )
+        logger.info(f"warmup (video) done in {time.time() - t0:.1f}s")
 
     def __call__(
         self,
@@ -1314,10 +1326,6 @@ class LTXPipeline:
 
     def _prepare_audio_rope(self, audio_N: int, audio_N_real: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Compute audio RoPE using AudioPatchifier time-in-seconds positions with SPLIT rotation."""
-
-        from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
-        from ...utils.ltx import AudioLatentShape, audio_get_patch_grid_bounds
-
         a_shape = AudioLatentShape(batch=1, channels=8, frames=audio_N_real, mel_bins=16)
         a_positions = audio_get_patch_grid_bounds(a_shape).float()  # (1, 1, N, 2)
 
@@ -1375,15 +1383,6 @@ class LTXPipeline:
             (v_k_cos, v_k_sin)         — video K in V→A cross-attn (TP-only; K side after AllGather).
             (a_k_cos, a_k_sin)         — audio K in A→V cross-attn (TP-only; K side after AllGather).
         """
-        from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
-        from ...utils.ltx import (
-            AudioLatentShape,
-            VideoLatentShape,
-            audio_get_patch_grid_bounds,
-            get_pixel_coords,
-            video_get_patch_grid_bounds,
-        )
-
         v_shape = VideoLatentShape(
             batch=1, channels=128, frames=latent_frames, height=latent_height, width=latent_width
         )
@@ -1629,8 +1628,6 @@ class LTXPipeline:
         and ``noise_scale = sigmas[0]`` to renoise. Set all guidance scales to
         their neutral values (``cfg=1.0, stg=0.0, mod=1.0, ge_gamma=0.0``).
         """
-        from ...utils.ltx import AudioLatentShape, VideoPixelShape
-
         B = 1
         latent_frames = (num_frames - 1) // 8 + 1
         latent_h, latent_w = height // 32, width // 32
@@ -1867,162 +1864,6 @@ class LTXPipeline:
         )
         return video_lat[:, :video_N_real, :], audio_lat[:, :audio_N_real, :]
 
-    def _prepare_audio_decoder(self) -> None:
-        """Lazily build the on-device audio decoder chain (mel-VAE + vocoder + BWE).
-
-        Reads weights from ``self.checkpoint_name`` (the LTX-2.3 safetensors).
-        Caches the chain on ``self.tt_audio_decoder`` / ``self.tt_audio_vocoder_bwe``.
-        """
-        if getattr(self, "tt_audio_vocoder_bwe", None) is not None:
-            return
-
-        from safetensors import safe_open
-
-        from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoder
-        from ...models.audio_vae.bwe_ltx import LTXMelSTFT, LTXVocoderWithBWE
-        from ...models.audio_vae.vocoder_ltx import LTXVocoder
-
-        logger.info(f"Loading on-device audio decoder weights from {self.checkpoint_name}")
-
-        # Pull only audio-related keys to avoid materializing the full 22B transformer.
-        def _extract_prefix(prefix: str) -> dict:
-            sub = {}
-            with safe_open(self.checkpoint_name, framework="pt") as f:
-                for k in f.keys():
-                    if k.startswith(prefix):
-                        sub[k[len(prefix) :]] = f.get_tensor(k)
-            return sub
-
-        # ---- LTXAudioDecoder (mel-VAE) ----
-        audio_dec_state = _extract_prefix("audio_vae.decoder.")
-        # per_channel_statistics lives under audio_vae.per_channel_statistics
-        with safe_open(self.checkpoint_name, framework="pt") as f:
-            audio_dec_state["per_channel_statistics.mean-of-means"] = f.get_tensor(
-                "audio_vae.per_channel_statistics.mean-of-means"
-            )
-            audio_dec_state["per_channel_statistics.std-of-means"] = f.get_tensor(
-                "audio_vae.per_channel_statistics.std-of-means"
-            )
-
-        self.tt_audio_decoder = LTXAudioDecoder(
-            ch=128,
-            out_ch=2,
-            ch_mult=(1, 2, 4),
-            num_res_blocks=2,
-            attn_resolutions=(),
-            resolution=256,
-            z_channels=8,
-            mid_block_add_attention=False,
-            sample_rate=16000,
-            mel_hop_length=160,
-            is_causal=True,
-            mel_bins=64,
-            mesh_device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-        )
-        self.tt_audio_decoder.load_torch_state_dict(audio_dec_state, strict=False)
-
-        # ---- main LTXVocoder (16 kHz, total upsample 160) ----
-        voc_state = _extract_prefix("vocoder.vocoder.")
-        main_vocoder = LTXVocoder(
-            upsample_initial_channel=1536,
-            resblock="AMP1",
-            upsample_rates=[5, 2, 2, 2, 2, 2],
-            upsample_kernel_sizes=[11, 4, 4, 4, 4, 4],
-            resblock_kernel_sizes=[3, 7, 11],
-            resblock_dilation_sizes=[[1, 3, 5], [1, 3, 5], [1, 3, 5]],
-            activation="snakebeta",
-            use_tanh_at_final=False,
-            apply_final_activation=True,
-            use_bias_at_final=False,
-            in_channels=128,
-            out_channels=2,
-            mesh_device=self.mesh_device,
-        )
-        main_vocoder.load_torch_state_dict(voc_state, strict=False)
-
-        # ---- BWE generator (48 kHz, total upsample 240, apply_final_activation=False) ----
-        bwe_state = _extract_prefix("vocoder.bwe_generator.")
-        bwe_vocoder = LTXVocoder(
-            upsample_initial_channel=512,
-            resblock="AMP1",
-            upsample_rates=[6, 5, 2, 2, 2],
-            upsample_kernel_sizes=[12, 11, 4, 4, 4],
-            resblock_kernel_sizes=[3, 7, 11],
-            resblock_dilation_sizes=[[1, 3, 5], [1, 3, 5], [1, 3, 5]],
-            activation="snakebeta",
-            use_tanh_at_final=False,
-            apply_final_activation=False,  # BWE generator outputs unclamped residual
-            use_bias_at_final=False,
-            in_channels=128,
-            out_channels=2,
-            mesh_device=self.mesh_device,
-        )
-        bwe_vocoder.load_torch_state_dict(bwe_state, strict=False)
-
-        # ---- MelSTFT ----
-        melstft_state = _extract_prefix("vocoder.mel_stft.")
-        melstft = LTXMelSTFT(
-            filter_length=512,
-            hop_length=80,
-            win_length=512,
-            n_mel_channels=64,
-            mesh_device=self.mesh_device,
-        )
-        melstft.load_torch_state_dict(melstft_state, strict=False)
-
-        # ---- VocoderWithBWE wrapper ----
-        self.tt_audio_vocoder_bwe = LTXVocoderWithBWE(
-            vocoder=main_vocoder,
-            bwe_generator=bwe_vocoder,
-            mel_stft=melstft,
-            input_sampling_rate=16000,
-            output_sampling_rate=48000,
-            hop_length=80,
-            mesh_device=self.mesh_device,
-        )
-        logger.info("On-device audio decoder ready")
-
-    def decode_audio_device(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0):
-        """On-device counterpart to ``decode_audio_reference``.
-
-        Replaces the host-torch ``AudioDecoder`` + ``VocoderWithBWE`` chain with
-        ``LTXAudioDecoder`` (mel-VAE) → ``LTXVocoderWithBWE`` running on the mesh.
-        Falls back to the reference decoder on any exception so the pipeline
-        never silently produces garbage.
-        """
-        try:
-            from ltx_core.types import Audio
-        except ImportError:
-            import sys
-
-            sys.path.insert(0, "LTX-2/packages/ltx-core/src")
-            sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
-            from ltx_core.types import Audio
-
-        try:
-            self._prepare_audio_decoder()
-            audio_N = audio_latent.shape[1]
-            audio_spatial = audio_latent.reshape(1, audio_N, 8, 16).permute(0, 2, 1, 3).float().contiguous()
-            mel_features = self.tt_audio_decoder(audio_spatial)
-            waveform = self.tt_audio_vocoder_bwe(mel_features)
-            sampling_rate = 48000
-
-            video_duration = num_frames / fps
-            target_samples = int(video_duration * sampling_rate)
-            if waveform.shape[-1] > target_samples:
-                waveform = waveform[..., :target_samples]
-
-            audio_obj = Audio(waveform=waveform.squeeze(0).float(), sampling_rate=sampling_rate)
-            logger.info(
-                f"Audio decoded (on-device): {audio_obj.waveform.shape} "
-                f"({audio_obj.waveform.shape[-1] / audio_obj.sampling_rate:.2f}s @ {sampling_rate}Hz)"
-            )
-            return audio_obj
-        except Exception as e:
-            logger.warning(f"On-device audio decode failed: {e}; falling back to reference")
-            return self.decode_audio_reference(audio_latent, num_frames, fps=fps)
-
     def decode_audio_reference(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0):
         """Decode audio latent using reference audio VAE + vocoder (CPU torch).
 
@@ -2036,8 +1877,6 @@ class LTXPipeline:
         """
         assert self.checkpoint_name is not None, "checkpoint_name must be set before decode_audio_reference"
         try:
-            import sys
-
             sys.path.insert(0, "LTX-2/packages/ltx-core/src")
             sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
             torch.cuda.synchronize = lambda *a, **kw: None
@@ -2103,8 +1942,6 @@ class LTXPipeline:
             fps: frame rate
             audio: object with .waveform (torch.Tensor) and .sampling_rate (int), or None
         """
-        from fractions import Fraction
-
         import av
 
         # Convert to (F, H, W, C) uint8

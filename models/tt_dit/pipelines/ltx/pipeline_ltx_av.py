@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 
-import gc
 import os
+import sys
 import time
 from typing import TYPE_CHECKING
 
@@ -34,6 +34,43 @@ class LTXAVPipeline(LTXPipeline):
         kwargs.setdefault("mode", "av")
         kwargs["pipeline_class"] = LTXAVPipeline
         return LTXPipeline.create_pipeline(mesh_device, **kwargs)
+
+    def warmup_buffers(
+        self,
+        *,
+        num_frames: int,
+        height: int,
+        width: int,
+        num_inference_steps: int = 2,
+    ) -> None:
+        """Compile every device program full-guidance ``call_av`` will exercise
+        (4 transformer passes/step: cond/uncond/ptb/iso) plus VAE decode.
+        ``ge_gamma=0`` skips the GE branch (pure host math)."""
+        t0 = time.time()
+        logger.info(f"warmup (AV): {num_frames}f@{height}x{width}, {num_inference_steps} steps")
+
+        results = self.encode_prompts_reference(["warmup", "warmup"])
+        v_p = results[0].video_encoding.float()
+        a_p = results[0].audio_encoding.float()
+        v_n = results[1].video_encoding.float()
+        a_n = results[1].audio_encoding.float()
+
+        self.call_av(
+            video_prompt_embeds=v_p,
+            audio_prompt_embeds=a_p,
+            neg_video_prompt_embeds=v_n,
+            neg_audio_prompt_embeds=a_n,
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            num_inference_steps=num_inference_steps,
+            seed=0,
+            ge_gamma=0.0,
+        )
+
+        self._warmup_decode(num_frames, height, width)
+        self._prepare_transformer(0)
+        logger.info(f"warmup (AV) done in {time.time() - t0:.1f}s")
 
     def generate(
         self,
@@ -62,8 +99,6 @@ class LTXAVPipeline(LTXPipeline):
             # Official LTX gradient-estimation sampling; enable on BH by default for quality.
             ge_gamma = 2.0 if ttnn.device.is_blackhole() else 0.0
             logger.info(f"ge_gamma={ge_gamma} (arch default)")
-
-        import sys
 
         sys.path.insert(0, "LTX-2/packages/ltx-core/src")
         sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
@@ -97,8 +132,7 @@ class LTXAVPipeline(LTXPipeline):
         neg_v = results[1].video_encoding.float()
         neg_a = results[1].audio_encoding.float()
 
-        self._prepare_transformer()
-        gc.collect()
+        self._prepare_transformer(0)
 
         t0 = time.time()
         video_latent, audio_latent = self.call_av(
@@ -124,13 +158,8 @@ class LTXAVPipeline(LTXPipeline):
         denoise_time = time.time() - t0
         logger.info(f"Denoising: {denoise_time:.1f}s ({denoise_time / num_inference_steps:.1f}s/step)")
 
-        # Free 22B DiT before VAE load/decode (BH LB cannot hold both; VAE decode
-        # alone needs multi-GB contiguous DRAM per device).
-        self.transformer = None
-        gc.collect()
-
         t0 = time.time()
-        self._prepare_vae(num_frames=num_frames, height=height, width=width)
+        self._prepare_vae()
         logger.info(f"VAE loaded in {time.time() - t0:.0f}s")
 
         latent_frames = (num_frames - 1) // 8 + 1
