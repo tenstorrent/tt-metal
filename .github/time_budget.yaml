@@ -117,7 +117,8 @@ scaleout:
     wh_llmbox: 185
     wh_galaxy: 100
     bh_galaxy: 60
-    bh_sp1: 90
+    bh_spsg: 20 # single galaxy
+    bh_sp1: 50
     bh_sp4: 50
     bh_deskbox: 80
     bh_llmbox: 80

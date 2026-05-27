@@ -218,7 +218,7 @@ skus:
       - pipeline-perf
       - in-service
 
-  bh_sp_single_galaxy:
+  bh_spsg:
     runs_on:
       - exabox-multihost-with-nfs
     allocation:
