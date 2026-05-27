@@ -40,12 +40,12 @@ class TestedBank:
 @dataclass
 class TestedChips:
     bdf: str
-    errored_banks: dict[str, TestedBank]
+    banks: dict[str, TestedBank]
 
     def to_dict(self):
         return {
             "bdf": self.bdf,
-            "errored_banks": {i: self.errored_banks[i].to_dict() for i in self.errored_banks},
+            "banks": {i: self.banks[i].to_dict() for i in self.banks},
         }
 
 
@@ -240,7 +240,7 @@ def parse_evs(evs: list[Event], bdfs: dict[str, str]) -> Iterator[TestRun]:
         elif e.typ == EventType.BANKERROR:
             ensure_chip(e.extra)
             b = TestedBank(e.extra["checked_bytes"], e.extra["write_err"], e.extra["read_err"])
-            chips[e.extra["dev_id"]].errored_banks[e.extra["bank"]] = b
+            chips[e.extra["dev_id"]].banks[e.extra["bank"]] = b
             print(chips)
 
     yield from runs
