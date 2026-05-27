@@ -191,6 +191,9 @@ MESH_DEVICE_PARAMETRIZE_E2E_2CQ_TRACE = (
 # T2U PCC with Metal trace replay (2 CQ + trace region; same params as E2E trace).
 MESH_DEVICE_PARAMETRIZE_T2U_TRACE = MESH_DEVICE_PARAMETRIZE_E2E_2CQ_TRACE
 
+# Vocoder PCC with Metal trace replay (2 CQ + trace region; same params as E2E trace).
+MESH_DEVICE_PARAMETRIZE_VOCODER_TRACE = MESH_DEVICE_PARAMETRIZE_E2E_2CQ_TRACE
+
 MESH_DEVICE_PARAMETRIZE_E2E_2CQ_GENERATE = (
     "mesh_device,device_params",
     [
