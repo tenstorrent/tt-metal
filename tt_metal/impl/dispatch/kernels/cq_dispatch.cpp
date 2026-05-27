@@ -426,13 +426,10 @@ void relay_to_next_cb(uintptr_t data_ptr, uint64_t wlength) {
             dispatch_h_cb_writer.acquire_pages(1);
 
             uint32_t xfer_size;
-            bool not_end_of_cmd;
             if (length > dispatch_cb_page_size) {
                 xfer_size = dispatch_cb_page_size;
-                not_end_of_cmd = true;
             } else {
                 xfer_size = length;
-                not_end_of_cmd = false;
             }
             length -= xfer_size;
 
