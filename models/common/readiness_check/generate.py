@@ -72,6 +72,10 @@ def _load_book_text() -> str:
     with bz2.open(book_file, "rt", encoding="utf-8") as f:
         return f.read()
 
+    if not os.path.exists(book_file):
+        raise FileNotFoundError(
+            f"Book text not found at {book_file}. " "Expected models/tt_transformers/tests/tale-of-two-cities.txt.bz2"
+        )
 
 def _load_aime24_prompt(prompts_file: Path, prompt_index: int) -> str:
     """Load one AIME24 prompt from DeepSeek's curated teacher-forcing prompt set."""
