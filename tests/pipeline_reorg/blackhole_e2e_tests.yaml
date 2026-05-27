@@ -263,7 +263,7 @@
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 90
+      timeout: 75
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
@@ -305,7 +305,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short
   skus:
     bh_llmbox:
-      timeout: 45
+      timeout: 30
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
@@ -319,6 +319,6 @@
   cmd: pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "linear-4 or ring-4 or 2x2 or 1x4"
   skus:
     bh_llmbox:
-      timeout: 45
+      timeout: 30
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models

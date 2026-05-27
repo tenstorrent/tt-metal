@@ -129,7 +129,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short
   skus:
     wh_llmbox:
-      timeout: 45
+      timeout: 30
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: shield
   model-name: deepseek_prefill
@@ -142,7 +142,7 @@
   cmd: pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(linear-8 or ring-8 or 4x2 or 2x4) and not 32x4 and not 8x4"
   skus:
     wh_llmbox:
-      timeout: 45
+      timeout: 30
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: shield
   model-name: deepseek_prefill
