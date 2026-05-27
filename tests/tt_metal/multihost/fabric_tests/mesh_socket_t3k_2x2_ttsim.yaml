@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# Shrunk version of mesh_socket_t3k_2x2.yaml for tt-sim simulation.
+# Cuts iterations, transactions, and data-size so the simulator can run
+# a single representative socket end-to-end without timing out.
+
+physical_mesh:
+   mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto"
+   eth_coord_mapping: [
+    [[0, 0, 0, 0, 0], [0, 1, 0, 0, 0], [0, 0, 1, 0, 0], [0, 1, 1, 0, 0]],
+    [[0, 2, 0, 0, 0], [0, 3, 0, 0, 0], [0, 2, 1, 0, 0], [0, 3, 1, 0, 0]]
+    ]
+
+fabric_config:
+  topology: Mesh
+
+tests:
+  - name: "all_to_all_smoke"
+    num_iterations: 1
+    memory_config:
+      fifo_size: 1024
+      page_size: 256
+      data_size: 256
+      num_transactions: 1
+    pattern_expansions:
+      - type: "all_to_all_device_unicast"
+        core_coord: [0, 0]
