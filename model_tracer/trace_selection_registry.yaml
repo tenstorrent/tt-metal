@@ -45,7 +45,15 @@ targets:
         - gpt_oss
         - wan2_2
         - deepseek_v3
-      trace: [9, 15, 13]
+        - qwen3-32b_3
+        - llama3_70b_galaxy
+        - sd35
+        - flux1
+        - motif
+        - qwenimage
+        - mochi
+        - sentence_bert
+      trace: [9, 13, 15, 16, 23, 26, 27, 29, 30, 31, 33]
 
   model_traced:
     - model:
