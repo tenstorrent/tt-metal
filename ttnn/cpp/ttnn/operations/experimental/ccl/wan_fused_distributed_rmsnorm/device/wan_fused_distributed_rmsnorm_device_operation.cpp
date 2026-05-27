@@ -76,19 +76,50 @@ WanFusedDistributedRmsnormDeviceOperation::compute_output_specs(
     const auto& input = tensor_args.input;
     const auto& logical = input.logical_shape();
 
+    std::vector<TensorSpec> specs;
+    specs.reserve(2);
+
     // Post-allgather output reshapes to [1, num_heads_per_device, N, H/num_heads_per_device].
     ttnn::Shape output_shape({1u, args.num_heads_per_device, logical[2], logical[3] / args.num_heads_per_device});
-
     const auto out_dtype = args.dtype.value_or(input.dtype());
+    specs.emplace_back(output_shape, TensorLayout(out_dtype, PageConfig(Layout::TILE), args.output_mem_config));
 
-    return TensorSpec(output_shape, TensorLayout(out_dtype, PageConfig(Layout::TILE), args.output_mem_config));
+    // Persistent stats DRAM scratch for the MUX writer path (Phase 9
+    // packed-page layout). Each page holds one chunk's worth of post-reduce
+    // stats in row-major form: TILE_HEIGHT * window_size fp32 values =
+    // TILE_HEIGHT * window_size * 4 bytes per page. There are total_pages =
+    // ring_size * num_chunks_per_device pages — independent of num_workers
+    // by design, so the caller need not know the worker count.
+    //
+    // We expose the buffer as a ROW_MAJOR fp32 tensor of shape
+    // [1, 1, total_pages, TILE_HEIGHT * window_size]; ttnn defaults each
+    // row to one accessor page, so TensorAccessor page_idx maps 1:1 to the
+    // packed-page index the writer/reader address.
+    //
+    // Allocated as a regular device tensor so the framework's
+    // create_device_tensor places it as a mesh-coherent MeshBuffer — every
+    // chip gets the same DRAM address, which the fabric mcast relies on.
+    const auto sizing = compute_sizing(args, input);
+    if (sizing.use_mux) {
+        ttnn::Shape stats_shape({1u, 1u, sizing.total_pages, TILE_HEIGHT * sizing.window_size});
+        MemoryConfig stats_mem{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+        specs.emplace_back(stats_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), stats_mem));
+    }
+
+    return specs;
 }
 
 WanFusedDistributedRmsnormDeviceOperation::tensor_return_value_t
 WanFusedDistributedRmsnormDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto spec = compute_output_specs(args, tensor_args);
-    return create_device_tensor(spec, tensor_args.input.device());
+    auto specs = compute_output_specs(args, tensor_args);
+    std::vector<Tensor> tensors;
+    tensors.reserve(specs.size());
+    auto* mesh_device = tensor_args.input.device();
+    for (const auto& spec : specs) {
+        tensors.push_back(create_device_tensor(spec, mesh_device));
+    }
+    return tensors;
 }
 
 ttsl::hash::hash_t WanFusedDistributedRmsnormDeviceOperation::compute_program_hash(
@@ -115,8 +146,7 @@ ttsl::hash::hash_t WanFusedDistributedRmsnormDeviceOperation::compute_program_ha
 
 namespace ttnn::prim {
 
-ttnn::experimental::prim::WanFusedDistributedRmsnormDeviceOperation::tensor_return_value_t
-wan_fused_distributed_rmsnorm(
+Tensor wan_fused_distributed_rmsnorm(
     const Tensor& input_tensor,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -166,7 +196,9 @@ wan_fused_distributed_rmsnorm(
         .rope_sin = rope_sin,
         .persistent_output_buffer = persistent_output_buffer};
 
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    auto outputs = ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    // outputs[0] = rmsnorm output, outputs[1] (if present) = stats DRAM scratch.
+    return outputs[0];
 }
 
 }  // namespace ttnn::prim
