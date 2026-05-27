@@ -4,7 +4,7 @@ import math
 import os
 import traceback
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import Any, List, Optional, Sequence
 
 import numpy as np
 
@@ -113,10 +113,11 @@ from .math_perf_env import (
     ace_step_binary_kwargs,
     ace_step_dense_linear_program_config,
     ace_step_dit_attn_linear_program_config,
+    ace_step_dit_fused_qwkv_linear_program_config,
     ace_step_dit_fused_wkv_linear_program_config,
     ace_step_dit_linear_l1_memory_config,
     ace_step_dit_mlp_down_proj_linear_program_config,
-    ace_step_dit_mlp_gate_up_linear_program_config,
+    ace_step_dit_mlp_fused_gate_up_linear_program_config,
     ace_step_dit_prefers_dram_activations,
     ace_step_dit_rms_norm_kwargs,
     ace_step_dit_weight_dtype,
@@ -132,8 +133,10 @@ from .math_perf_env import (
     ace_step_nlp_concat_heads,
     ace_step_permute_kwargs,
     ace_step_reshape_kwargs,
+    ace_step_safe_deallocate,
     ace_step_sdpa_activation_kwargs,
     ace_step_sdpa_mask_memory_config,
+    ace_step_split_qkv_heads_bhsd,
 )
 
 
@@ -292,12 +295,11 @@ class TtTimestepEmbedding:
         temb = ttnn.silu(temb, memory_config=_l1) if hasattr(ttnn, "silu") else ttnn.gelu(temb, memory_config=_l1)
         temb = ttnn.linear(temb, self.w2, bias=self.b2, transpose_b=True, memory_config=_l1)
 
-        # time_proj(act2(temb)) -> [1,1,1,6*D] -> reshape to [1,6,1,D] then [1,6,D]
+        # time_proj(act2(temb)) -> [1,1,1,6*D] -> [1,6,D] (single reshape, not 6,1,D then 6,D)
         h = ttnn.silu(temb, memory_config=_l1) if hasattr(ttnn, "silu") else ttnn.gelu(temb, memory_config=_l1)
         tp = ttnn.linear(h, self.wt, bias=self.bt, transpose_b=True, memory_config=_l1)
         d = self.time_embed_dim
         _sr = ace_step_reshape_kwargs(ttnn)
-        tp = ttnn.reshape(tp, (1, 6, 1, d), **_sr)
         tp = ttnn.reshape(tp, (1, 6, d), **_sr)
         temb = ttnn.reshape(temb, (1, d), **_sr)
         if _l1 is not None:
@@ -357,7 +359,6 @@ class TtTimestepEmbedding:
         tp = ttnn.linear(h, self.wt, bias=self.bt, transpose_b=True, memory_config=_l1)
         d = self.time_embed_dim
         _sr = ace_step_reshape_kwargs(ttnn)
-        tp = ttnn.reshape(tp, (1, 6, 1, d), **_sr)
         tp = ttnn.reshape(tp, (1, 6, d), **_sr)
         temb = ttnn.reshape(temb, (1, d), **_sr)
         # Keep t_freq allocated only for the duration of this call.
@@ -654,9 +655,9 @@ class TtAceStepAttentionSDPA:
                 mesh_mapper=mapper,
             )
 
+        wq_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.q_proj.weight"))
         self.wq, self.bq = as_w("q_proj"), as_b("q_proj")
-        # Build a fused KV projection to guarantee K and V have identical (logical and padded) sequence length.
-        # Some TTNN builds can produce mismatched seq lengths when running separate K and V linears.
+        # Fused KV projection: identical K/V sequence length + one DRAM read of activations.
         wk_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.k_proj.weight"))
         wv_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.v_proj.weight"))
         wkv_host = np.concatenate([wk_host, wv_host], axis=0)
@@ -668,9 +669,20 @@ class TtAceStepAttentionSDPA:
             memory_config=mem,
             mesh_mapper=mapper,
         )
+        # Self-attn: fuse Q+WKV into one matmul (cross-attn keeps separate Q / WKV inputs).
+        w_qwkv_host = np.concatenate([wq_host, wkv_host], axis=0)
+        self.w_qwkv = ttnn.as_tensor(
+            w_qwkv_host,
+            device=mesh_device,
+            dtype=w_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem,
+            mesh_mapper=mapper,
+        )
 
         bk_host = state_dict.get(f"{base_address}.k_proj.bias", None)
         bv_host = state_dict.get(f"{base_address}.v_proj.bias", None)
+        bq_host = state_dict.get(f"{base_address}.q_proj.bias", None)
         if bk_host is not None and bv_host is not None:
             bk_np = _to_numpy_host_array(bk_host)
             bv_np = _to_numpy_host_array(bv_host)
@@ -685,6 +697,20 @@ class TtAceStepAttentionSDPA:
             )
         else:
             self.bkv = None
+        if bq_host is not None and self.bkv is not None:
+            bq_np = _to_numpy_host_array(bq_host).reshape(-1)
+            bkv_flat = _to_numpy_host_array(bkv_host).reshape(-1)
+            b_qwkv_host = np.concatenate([bq_np, bkv_flat], axis=0).reshape(1, 1, 1, -1)
+            self.b_qwkv = ttnn.as_tensor(
+                b_qwkv_host,
+                device=mesh_device,
+                dtype=w_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=mem,
+                mesh_mapper=mapper,
+            )
+        else:
+            self.b_qwkv = None
 
         self.wo, self.bo = as_w("o_proj"), as_b("o_proj")
 
@@ -714,6 +740,7 @@ class TtAceStepAttentionSDPA:
         self._linear_out_l1 = linear_output_l1_memory_config
         self._fused_kv_dim = int(self.n_kv * self.d_head) * 2
         self._wkv_pc_cache: dict = {}
+        self._qwkv_pc_cache: dict = {}
         # Per-call mask uploads (additive tail/pad masks) used to rebuild the same NumPy zeros tensor
         # and call ttnn.as_tensor on every forward, every layer, every step. Cache them by shape so
         # they stay device-resident across denoise steps and become trace+2CQ friendly.
@@ -804,6 +831,30 @@ class TtAceStepAttentionSDPA:
         kw["memory_config"] = ace_step_linear_kwargs_memory_config(pc, linear_out_l1=self._linear_out_l1, dram=_dram)
         return kw
 
+    def _qwkv_linear_kwargs(self, *, batch_size: int, seq_len: int, in_dim: int) -> dict:
+        """LoFi + L1 program config for fused self-attn ``q`` + ``wkv``."""
+        kw: dict = {}
+        if self._linear_ck is not None:
+            kw["compute_kernel_config"] = self._linear_ck
+        key = (int(batch_size), int(seq_len), int(in_dim))
+        pc = self._qwkv_pc_cache.get(key)
+        if pc is None:
+            pc = ace_step_dit_fused_qwkv_linear_program_config(
+                self.mesh_device,
+                seq_len=int(seq_len),
+                in_dim=int(in_dim),
+                hidden_size=self.d_model,
+                fused_kv_dim=self._fused_kv_dim,
+                batch_size=int(batch_size),
+            )
+            if pc is not None:
+                self._qwkv_pc_cache[key] = pc
+        if pc is not None:
+            kw["program_config"] = pc
+        _dram = getattr(self.ttnn, "DRAM_MEMORY_CONFIG", None)
+        kw["memory_config"] = ace_step_linear_kwargs_memory_config(pc, linear_out_l1=self._linear_out_l1, dram=_dram)
+        return kw
+
     def _wkv_linear_kwargs(self, *, batch_size: int, seq_len: int, in_dim: int) -> dict:
         """LoFi + L1 + wide-N program config for fused ``wkv`` (256×2048×2048 family)."""
         kw: dict = {}
@@ -850,19 +901,27 @@ class TtAceStepAttentionSDPA:
         b_x = int(x.shape[0])
         s_q = int(x.shape[2])
         d_in = int(x.shape[-1])
-        lin_q = self._linear_kwargs(
-            batch_size=b_x,
-            seq_len=s_q,
-            in_dim=d_in,
-            out_dim=self.d_model,
-        )
-        x_q = ace_step_matmul_activation(ttnn, x, lin_q, l1_fn=self._l1_activation, dram_mc=_dram_mc)
-        q = ttnn.linear(x_q, self.wq, bias=self.bq, transpose_b=True, **lin_q)
         if encoder_hidden_states is None:
-            lin_kv = self._wkv_linear_kwargs(batch_size=b_x, seq_len=s_q, in_dim=d_in)
-            x_kv = ace_step_matmul_activation(ttnn, x, lin_kv, l1_fn=self._l1_activation, dram_mc=_dram_mc)
-            kv = ttnn.linear(x_kv, self.wkv, bias=self.bkv, transpose_b=True, **lin_kv)
+            lin_qwkv = self._qwkv_linear_kwargs(batch_size=b_x, seq_len=s_q, in_dim=d_in)
+            x_qwkv = ace_step_matmul_activation(ttnn, x, lin_qwkv, l1_fn=self._l1_activation, dram_mc=_dram_mc)
+            qwkv = ttnn.linear(x_qwkv, self.w_qwkv, bias=self.b_qwkv, transpose_b=True, **lin_qwkv)
+            d_q = int(self.d_model)
+            kv_end = d_q + int(self._fused_kv_dim)
+            s_lin = int(qwkv.shape[2])
+            q = ttnn.slice(qwkv, (0, 0, 0, 0), (b_x, 1, s_lin, d_q))
+            kv = ttnn.slice(qwkv, (0, 0, 0, d_q), (b_x, 1, s_lin, kv_end))
+            ace_step_safe_deallocate(ttnn, qwkv)
+            q = self._l1_activation(q)
+            kv = self._l1_activation(kv)
         else:
+            lin_q = self._linear_kwargs(
+                batch_size=b_x,
+                seq_len=s_q,
+                in_dim=d_in,
+                out_dim=self.d_model,
+            )
+            x_q = ace_step_matmul_activation(ttnn, x, lin_q, l1_fn=self._l1_activation, dram_mc=_dram_mc)
+            q = ttnn.linear(x_q, self.wq, bias=self.bq, transpose_b=True, **lin_q)
             enc = ace_step_ensure_tile_layout(ttnn, encoder_hidden_states)
             b_enc = int(enc.shape[0])
             s_enc = int(enc.shape[2])
@@ -883,21 +942,6 @@ class TtAceStepAttentionSDPA:
                 flush=True,
             )
             _ace_step_log_ttnn_tensor(f"{debug_prefix}q_after_linear_B1SD", q, ttnn=ttnn)
-
-        # Split fused KV: kv is [B,1,S,2*(n_kv*Dh)]
-        kv_dim = int(self.n_kv * Dh)
-        assert (
-            int(kv.shape[3]) == 2 * kv_dim
-        ), f"KV shape mismatch: last dim {int(kv.shape[3])} != 2*kv_dim={2 * kv_dim}"
-        k = ttnn.slice(kv, (0, 0, 0, 0), (B, 1, int(kv.shape[2]), kv_dim))
-        v = ttnn.slice(kv, (0, 0, 0, kv_dim), (B, 1, int(kv.shape[2]), 2 * kv_dim))
-        k = self._l1_activation(k)
-        v = self._l1_activation(v)
-        if hasattr(ttnn, "deallocate"):
-            try:
-                ttnn.deallocate(kv)
-            except Exception:
-                pass
 
         def _seq_len_padded(x) -> int:
             # SDPA validation uses padded shapes. Prefer padded_shape() when available.
@@ -954,34 +998,30 @@ class TtAceStepAttentionSDPA:
 
         is_self_attn = encoder_hidden_states is None
 
+        _head_mc = None if use_dram_activations else self._act_l1
+        q, k, v = ace_step_split_qkv_heads_bhsd(
+            ttnn,
+            q,
+            kv,
+            num_heads=H,
+            num_kv_heads=self.n_kv,
+            l1_mc=_head_mc,
+        )
+
         # Safety: TTNN SDPA requires K/V to have the same logical and padded sequence length.
-        # Some builds can produce mismatched seq lengths between K and V.
         S_k_raw = max(_seq_len_logical(k), _seq_len_padded(k))
         S_v_raw = max(_seq_len_logical(v), _seq_len_padded(v))
         if S_k_raw != S_v_raw:
             target = _ceil_tile(max(S_k_raw, S_v_raw))
+            k = _pad_seq_dim2_bh_sd(k, target)
+            v = _pad_seq_dim2_bh_sd(v, target)
 
-            k = _pad_seq_to_rank4(k, target)
-            v = _pad_seq_to_rank4(v, target)
-
-        # Q: [B,1,S,H*Dh] -> [B,S,H,Dh] -> [B,H,S,Dh]
-        # 4-D reshape+permute avoids 5-D intermediate tensors and uses the faster (0,2,1,3) transpose.
-        q = ttnn.reshape(q, (B, S, H, Dh), **_sr)
-        q = ttnn.permute(q, (0, 2, 1, 3), **_pk)
-        if _trace:
-            _ace_step_log_ttnn_tensor(f"{debug_prefix}q_after_reshape_BHSD", q, ttnn=ttnn)
-
-        if debug is not None and debug.get("enabled", False):
-            debug[f"{debug_prefix}q_lin"] = q
-
-        # K/V use num_key_value_heads; we expand to num_attention_heads by repeat if needed.
         S_k = int(k.shape[2])
         kv_h = self.n_kv
-        k = ttnn.reshape(k, (B, S_k, kv_h, Dh), **_sr)
-        v = ttnn.reshape(v, (B, S_k, kv_h, Dh), **_sr)
-        k = ttnn.permute(k, (0, 2, 1, 3), **_pk)
-        v = ttnn.permute(v, (0, 2, 1, 3), **_pk)
+        if _trace:
+            _ace_step_log_ttnn_tensor(f"{debug_prefix}q_after_reshape_BHSD", q, ttnn=ttnn)
         if debug is not None and debug.get("enabled", False):
+            debug[f"{debug_prefix}q_lin"] = q
             debug[f"{debug_prefix}k_lin"] = k
             debug[f"{debug_prefix}v_lin"] = v
 
@@ -990,25 +1030,61 @@ class TtAceStepAttentionSDPA:
             if H % kv_h != 0:
                 raise ValueError(f"num_attention_heads {H} not divisible by num_key_value_heads {kv_h}")
             rep = H // kv_h
-            # HF GQA semantics are `repeat_interleave` on the kv-head dimension:
-            # kv0 -> q0,q1 ; kv1 -> q2,q3 ; ...
-            if hasattr(ttnn, "repeat_interleave"):
-                k = ttnn.repeat_interleave(k, rep, dim=1)
-                v = ttnn.repeat_interleave(v, rep, dim=1)
-            else:
-                # Fallback: concat each head `rep` times (interleaved).
-                ks = []
-                vs = []
-                for hi in range(int(kv_h)):
-                    k_h = ttnn.slice(k, (0, hi, 0, 0), (B, hi + 1, S_k, Dh))
-                    v_h = ttnn.slice(v, (0, hi, 0, 0), (B, hi + 1, S_k, Dh))
-                    for _ in range(int(rep)):
-                        ks.append(k_h)
-                        vs.append(v_h)
-                _concat_mc = self._act_l1
-                _ckw = {"memory_config": _concat_mc} if _concat_mc is not None else {}
-                k = ttnn.concat(ks, dim=1, **_ckw) if hasattr(ttnn, "concat") else ttnn.concatenate(ks, dim=1, **_ckw)
-                v = ttnn.concat(vs, dim=1, **_ckw) if hasattr(ttnn, "concat") else ttnn.concatenate(vs, dim=1, **_ckw)
+            # HF GQA semantics: kv0 -> q0,q1 ; kv1 -> q2,q3 ; ...
+            #
+            # ttnn.repeat_interleave and the old concat-based fallback both route through DRAM:
+            # repeat_interleave calls ttnn::concat / ttnn::to_layout without memory_config, so
+            # they default to DRAM.  The final to_layout(TILE) emits
+            # ``TilizeDeviceOperation (in0:dram_interleaved)`` (~10 μs × 96 = ~960 μs = 2.08 %
+            # of device time), followed by a ``CopyDeviceOperation (in0:dram_interleaved)``
+            # from the _l1_activation() call.
+            #
+            # Fix: replicate the same unsqueeze→concat→reshape→tilize sequence but pass
+            # memory_config=L1 at every step.  ROW_MAJOR L1 inputs bypass the
+            # build_untilize_rm_retilize_concat path inside ttnn.concat and go straight to
+            # concat_impl with output_memory_config=L1 → ROW_MAJOR L1 output.  The final
+            # to_layout(TILE, memory_config=L1) then reads from L1, emitting
+            # ``TilizeDeviceOperation (in0:l1_interleaved)`` and eliminating the subsequent
+            # CopyDeviceOperation entirely (result is already L1 TILE).
+            _gqa_l1 = self._act_l1 or getattr(ttnn, "L1_MEMORY_CONFIG", None)
+            _l1_kw = {"memory_config": _gqa_l1} if _gqa_l1 is not None else {}
+            _rm_layout = getattr(ttnn, "ROW_MAJOR_LAYOUT", None)
+            _tile_layout = getattr(ttnn, "TILE_LAYOUT", None)
+
+            def _gqa_expand_l1(x: Any) -> Any:
+                """Repeat-interleave x along head dim (dim=1) × rep, keeping all intermediates in L1.
+
+                Equivalent to ``ttnn.repeat_interleave(x, rep, dim=1)`` but avoids the DRAM
+                round-trip caused by the internal concat/to_layout calls in
+                ``ttnn::repeat_interleave`` (which have no memory_config → default DRAM).
+
+                Shape: [B, kv_h, S, Dh] TILE L1  →  [B, H, S, Dh] TILE L1
+                """
+                b_, kv_, s_, dh_ = (int(x.shape[0]), int(x.shape[1]), int(x.shape[2]), int(x.shape[3]))
+                # 1. Untilize to L1 ROW_MAJOR (memory_config=L1 → UntilizeDeviceOperation writes to L1)
+                xrm = (
+                    ttnn.to_layout(x, _rm_layout, **_l1_kw)
+                    if _rm_layout is not None
+                    else ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                )
+                # 2. Unsqueeze: [B, kv_h, S, Dh] → [B, kv_h, 1, S, Dh]  (view, inherits L1)
+                xus = ttnn.unsqueeze(xrm, 2)
+                # 3. Concat rep copies along dim=2 → [B, kv_h, rep, S, Dh].
+                #    ROW_MAJOR L1 inputs bypass build_untilize_rm_retilize_concat; concat_impl
+                #    writes to L1 when memory_config=L1 is passed (unlike the default DRAM).
+                _concat_fn = getattr(ttnn, "concat", None) or ttnn.concatenate
+                xrep = _concat_fn([xus] * rep, dim=2, **_l1_kw)
+                # 4. Reshape [B, kv_h, rep, S, Dh] → [B, kv_h*rep, S, Dh] = [B, H, S, Dh]
+                xflat = ttnn.reshape(xrep, (b_, kv_ * rep, s_, dh_), **ace_step_reshape_kwargs(ttnn))
+                # 5. Tilize from L1 ROW_MAJOR → L1 TILE  (TilizeDeviceOperation in0:l1_interleaved)
+                return (
+                    ttnn.to_layout(xflat, _tile_layout, **_l1_kw)
+                    if _tile_layout is not None
+                    else ttnn.to_layout(xflat, ttnn.TILE_LAYOUT)
+                )
+
+            k = _gqa_expand_l1(k)
+            v = _gqa_expand_l1(v)
 
         q = self._l1_activation(q)
         k = self._l1_activation(k)
@@ -1174,7 +1250,7 @@ class TtAceStepAttentionSDPA:
                 f"S_ctx={S_ctx} S_q_expected={S} slice_back={S_ctx != S}",
                 flush=True,
             )
-        # [B,H,S_ctx,Dh] -> [B,1,S_ctx,H*Dh] via fused nlp_concat_heads (single kernel vs permute+reshape)
+        # [B,H,S_ctx,Dh] -> [B,1,S_ctx,H*Dh] (nlp_concat_heads by default)
         ctx = ace_step_nlp_concat_heads(ttnn, ctx, l1_mc=_concat_mc)
         if S_ctx != S:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (B, 1, S, H * Dh))
@@ -1234,8 +1310,17 @@ class TtQwen3MLP:
                 mesh_mapper=mapper,
             )
 
-        self.w_gate = as_w("gate_proj")
-        self.w_up = as_w("up_proj")
+        w_gate_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.gate_proj.weight"))
+        w_up_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.up_proj.weight"))
+        w_gate_up_host = np.concatenate([w_gate_host, w_up_host], axis=0)
+        self.w_gate_up = ttnn.as_tensor(
+            w_gate_up_host,
+            device=mesh_device,
+            dtype=w_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem,
+            mesh_mapper=mapper,
+        )
         self.w_down = as_w("down_proj")
 
         self.hidden_size = int(hidden_size)
@@ -1244,7 +1329,7 @@ class TtQwen3MLP:
         self._linear_ck = linear_compute_kernel_config
         self._act_l1 = activation_l1_memory_config
         self._linear_out_l1 = linear_output_l1_memory_config
-        self._gate_up_pc_cache: dict = {}
+        self._fused_gate_up_pc_cache: dict = {}
         self._down_pc_cache: dict = {}
 
     def _l1_activation(self, t):
@@ -1252,15 +1337,15 @@ class TtQwen3MLP:
             return t
         return self.ttnn.to_memory_config(t, self._act_l1)
 
-    def _gate_up_linear_kwargs(self, *, batch_size: int, seq_len: int) -> dict:
-        """LoFi + L1 + wide-N program config for ``gate_proj`` / ``up_proj`` (256×3072×3072)."""
+    def _fused_gate_up_linear_kwargs(self, *, batch_size: int, seq_len: int) -> dict:
+        """LoFi + L1 program config for fused ``gate_proj`` + ``up_proj`` (one matmul)."""
         kw: dict = {}
         if self._linear_ck is not None:
             kw["compute_kernel_config"] = self._linear_ck
         key = (int(batch_size), int(seq_len))
-        pc = self._gate_up_pc_cache.get(key)
+        pc = self._fused_gate_up_pc_cache.get(key)
         if pc is None:
-            pc = ace_step_dit_mlp_gate_up_linear_program_config(
+            pc = ace_step_dit_mlp_fused_gate_up_linear_program_config(
                 self.mesh_device,
                 seq_len=int(seq_len),
                 hidden_size=self.hidden_size,
@@ -1268,7 +1353,7 @@ class TtQwen3MLP:
                 batch_size=int(batch_size),
             )
             if pc is not None:
-                self._gate_up_pc_cache[key] = pc
+                self._fused_gate_up_pc_cache[key] = pc
         if pc is not None:
             kw["program_config"] = pc
         _dram = getattr(self.ttnn, "DRAM_MEMORY_CONFIG", None)
@@ -1304,11 +1389,14 @@ class TtQwen3MLP:
         b_x = int(x.shape[0])
         s = int(x.shape[2])
         _dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-        lin_gu = self._gate_up_linear_kwargs(batch_size=b_x, seq_len=s)
+        lin_gu = self._fused_gate_up_linear_kwargs(batch_size=b_x, seq_len=s)
         _use_l1 = "program_config" in lin_gu
         x_lin = ace_step_matmul_activation(ttnn, x, lin_gu, l1_fn=self._l1_activation, dram_mc=_dram_mc)
-        gate = ttnn.linear(x_lin, self.w_gate, bias=None, transpose_b=True, **lin_gu)
-        up = ttnn.linear(x_lin, self.w_up, bias=None, transpose_b=True, **lin_gu)
+        gate_up = ttnn.linear(x_lin, self.w_gate_up, bias=None, transpose_b=True, **lin_gu)
+        i_sz = int(self.intermediate_size)
+        gate = ttnn.slice(gate_up, (0, 0, 0, 0), (b_x, 1, s, i_sz))
+        up = ttnn.slice(gate_up, (0, 0, 0, i_sz), (b_x, 1, s, 2 * i_sz))
+        ace_step_safe_deallocate(ttnn, gate_up)
         if debug is not None and debug.get("enabled", False):
             debug[f"{debug_prefix}gate_lin"] = gate
             debug[f"{debug_prefix}up_lin"] = up

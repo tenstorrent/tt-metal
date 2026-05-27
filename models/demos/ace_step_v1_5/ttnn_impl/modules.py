@@ -263,7 +263,7 @@ class MultiHeadSelfAttentionTTNN:
         ttnn.deallocate(probs)
         ttnn.deallocate(v)
 
-        # [B,H,S,Dh] -> [B,1,S,H*Dh] via fused nlp_concat_heads (single kernel vs permute+reshape)
+        # [B,H,S,Dh] -> [B,1,S,H*Dh] (permute + reshape view)
         ctx = ace_step_nlp_concat_heads(ttnn, ctx)
         out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True)
         ttnn.deallocate(ctx)
@@ -360,7 +360,7 @@ class MultiHeadSelfAttentionSDPATTNN:
 
         if self._sdpa_pad > 0:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (B, H, S, Dh))
-        # [B,H,S,Dh] -> [B,1,S,H*Dh] via fused nlp_concat_heads (single kernel vs permute+reshape)
+        # [B,H,S,Dh] -> [B,1,S,H*Dh] (permute + reshape view)
         ctx = ace_step_nlp_concat_heads(ttnn, ctx)
         out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True)
         ttnn.deallocate(ctx)
