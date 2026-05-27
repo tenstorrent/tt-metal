@@ -83,6 +83,11 @@ _DTYPE_BYTES_FROM_NAME = {"bfloat16": 2, "bfloat8_b": 1088 / 1024.0}
 # Same set of shapes as test_prefetcher_BH_bench.py::LLAMA_SHAPES. Kept duplicated rather
 # than imported to keep this file self-contained; if you add a row here add it there too.
 LLAMA_SHAPES = [
+    # Llama-3.1-8B @ 1 dev: K-row-major lands on M>1 (one K-row > ring_half);
+    # receiver-contiguous's advertised win is on these shapes.
+    pytest.param("8B_FF1_1d", dict(K=4096, N=14336, dtype="bfloat8_b", recv_per_bank=8), id="8B_FF1_1d"),
+    pytest.param("8B_QKV_1d", dict(K=4096, N=12288, dtype="bfloat8_b", recv_per_bank=8), id="8B_QKV_1d"),
+    pytest.param("8B_WO_1d", dict(K=4096, N=4096, dtype="bfloat8_b", recv_per_bank=8), id="8B_WO_1d"),
     # Llama-3.2-1B @ 1 dev
     pytest.param("1B_QKV", dict(K=2048, N=3072, dtype="bfloat8_b", recv_per_bank=8), id="1B_QKV"),
     pytest.param("1B_WO", dict(K=2048, N=2048, dtype="bfloat8_b", recv_per_bank=8), id="1B_WO"),
