@@ -1,12 +1,19 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Voxtral TTS end-to-end trial: exactly one CPU forward and one TT forward.
+"""Voxtral TTS end-to-end trial: teacher-forced TT decode against the CPU reference.
 
-Runs ``cpu.generate()`` once and ``forward_device_resident()`` once on the same
-``text`` / ``voice`` / ``max_tokens`` / ``seed``. Pass/fail is final waveform PCC.
+The CPU runs one free generate() (the golden token stream + waveform). The TT side is
+then **teacher-forced**: at each step the TT text decode is fed the CPU reference codes,
+and the TT audio tokenizer decodes those same reference codes. This breaks the chaotic
+autoregressive cascade so the test reports the true per-component fidelity instead of
+the irreducible ~0.9575 free-running ceiling.
 
-For per-step code match and aggregate stats, see logged ``PER-STEP CODE MATCH`` section.
-For continuous per-stage PCC (``return_debug=True``), use ``log_voxtral_staged_pcc_report``.
+Why not free-running? On the fully-independent path a single semantic-argmax near-tie
+flips (logit gaps below one bf16 ULP; one CPU side is a literal 0.0 tie) and cascades.
+Free-running PCC is therefore capped at ~0.9575 and is measured (log-only) by
+``test_voxtral_e2e_pcc.py``. Here we assert the teacher-forced fidelity, which clears
+0.99 because every component (text decode, acoustic, tokenizer) matches CPU when given
+the same token stream — same conclusion as ``test_voxtral_tts_pipeline_inference``.
 """
 from __future__ import annotations
 
@@ -20,9 +27,10 @@ from loguru import logger
 from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.cpu_reference import VoxtralCPUReference
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN
-from models.experimental.voxtraltts.tests.common import log_per_step_code_match, resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.reference.voxtral_request import compose_speech_request
+from models.experimental.voxtraltts.tests.common import resolve_voxtral_model_name_or_skip
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
-from models.experimental.voxtraltts.utils.debug_trace import log_voxtral_staged_pcc_report
+from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
 
 try:
     from tracy import signpost
@@ -31,16 +39,12 @@ try:
 except ModuleNotFoundError:
     use_signpost = False
 
-# Fully-independent E2E ceiling. Both pipelines generate autoregressively on their
-# own, so a single near-tie semantic-argmax flip cascades (one wrong frame → wrong
-# feedback embedding → more flips). Measured floor on this path is ~0.9575: the FM
-# round() boundary flips ~4/36 acoustic codes per frame (irreducible BF16), which
-# drops the first text-decode hidden 0.9998→0.9977, enough to flip a near-tie
-# semantic argmax at step 1. The genuine 0.99 gate is the teacher-forced
-# test_voxtral_tts_pipeline_inference (reaches 0.9994 by feeding reference codes,
-# which breaks the cascade); there every component clears 0.99. 0.93 leaves margin
-# below the 0.9575 floor for run-to-run argmax-tie variation.
-FINAL_WAVEFORM_PCC = 0.93
+# Teacher-forced fidelity gate. Free-running generation is irreducibly ~0.9575 (near-tie
+# semantic-argmax cascade); teacher forcing removes the cascade and every component
+# clears 0.99 (text hidden ~0.9998/step, tokenizer waveform ~0.9994).
+FINAL_WAVEFORM_PCC = 0.99
+PREFILL_HIDDEN_PCC = 0.99
+TEXT_DECODE_STEP_PCC = 0.98
 
 _DEMO_TEXT = (
     "Voxtral is a four billion parameter open weight text to speech model "
@@ -63,7 +67,7 @@ def _log_pcc(label: str, pcc_value: float, target: float) -> None:
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("device_params", [{}], indirect=True)
 def test_ttnn_voxtral_tts_e2e_trial(device, reset_seeds, request):
-    """One CPU ``generate()`` + one TT ``forward_device_resident()``; assert waveform PCC."""
+    """CPU ``generate()`` golden + teacher-forced TT decode; assert per-component fidelity."""
     generate_steps = 8
     name = resolve_voxtral_model_name_or_skip()
 
@@ -90,7 +94,7 @@ def test_ttnn_voxtral_tts_e2e_trial(device, reset_seeds, request):
     request.addfinalizer(_cleanup_pipe)
 
     logger.info("=" * 70)
-    logger.info("CPU REFERENCE FORWARD (single generate, return_debug trace)")
+    logger.info("CPU REFERENCE FORWARD (single free generate, golden token stream)")
     logger.info("=" * 70)
     ref_wav, ref_codes, cpu_trace = cpu.generate(
         text=_DEMO_TEXT,
@@ -101,68 +105,83 @@ def test_ttnn_voxtral_tts_e2e_trial(device, reset_seeds, request):
         return_debug=True,
     )
     assert torch.isfinite(ref_wav).all(), "CPU reference produced non-finite waveform samples"
+    n_frames = int(ref_codes.shape[2])
     logger.info(f"  CPU codes shape={tuple(ref_codes.shape)} waveform samples={int(ref_wav.numel())}")
 
-    logger.info("=" * 70)
-    logger.info("TT FORWARD (single forward_device_resident, return_debug trace)")
-    logger.info("=" * 70)
     if use_signpost:
         signpost(header="start")
-    tt_out = pipe.forward_device_resident(
-        text=_DEMO_TEXT,
-        voice=_DEMO_VOICE,
-        max_tokens=generate_steps,
-        seed=0,
-        return_debug=True,
+
+    logger.info("=" * 70)
+    logger.info("TT TEACHER-FORCED DECODE (fed CPU reference codes each step)")
+    logger.info("=" * 70)
+    speech = compose_speech_request(_DEMO_TEXT, name, voice=_DEMO_VOICE)
+    prompt_token_ids = speech["prompt_token_ids"]
+
+    tt_embeds = pipe._build_voice_injected_embeds(prompt_token_ids, _DEMO_VOICE)
+    tt_hidden = pipe.text.prefill_from_embeds(tt_embeds, start_pos=0)
+
+    cpu_prefill = cpu_trace.get("text.prefill.hidden")
+    ok_prefill, prefill_pcc = comp_pcc(
+        cpu_prefill.reshape(-1).float(), tt_hidden.reshape(-1).float(), pcc=PREFILL_HIDDEN_PCC
     )
-    ttnn.synchronize_device(device)
+    _log_pcc("prefill hidden", float(prefill_pcc), PREFILL_HIDDEN_PCC)
+    assert ok_prefill, f"prefill hidden PCC failed: {prefill_pcc}"
+
+    cfg_alpha = torch.tensor(cpu._acoustic_cfg_alpha, dtype=torch.bfloat16)
+    current_pos = len(prompt_token_ids)
+    acoustic_matches = 0
+    acoustic_total = 0
+
+    for step in range(generate_steps):
+        cpu_codes_step = cpu_trace.get(f"step.{step}.acoustic.codes")  # [37] shifted (with special offset)
+        cpu_codes_step = cpu_codes_step.reshape(-1).long().unsqueeze(0)  # [1, 37]
+
+        # Informational: TT acoustic agreement on the SAME CPU hidden with synced FM RNG.
+        cpu_hidden_in = cpu_trace.get(f"step.{step}.text.hidden_in").reshape(1, -1).to(torch.bfloat16)
+        torch.manual_seed(acoustic_fm_noise_seed(0, step))
+        tt_codes_step = pipe.acoustic_codes_forward(cpu_hidden_in, cfg_alpha).reshape(-1).long()
+        n_ac = cpu_codes_step.shape[1] - 1
+        step_ac_match = int((tt_codes_step[1:] == cpu_codes_step[0, 1:]).sum().item())
+        acoustic_matches += step_ac_match
+        acoustic_total += n_ac
+        sem_ok = int(tt_codes_step[0].item()) == int(cpu_codes_step[0, 0].item())
+        logger.info(
+            f"  step {step}: semantic={'OK' if sem_ok else 'DIFF'} "
+            f"acoustic={step_ac_match}/{n_ac}  (TT acoustic vs CPU, synced RNG, informational)"
+        )
+
+        if int(cpu_codes_step[0, 0].item()) == cpu.end_audio_id:
+            break
+
+        # Teacher forcing: feed CPU reference codes into the TT text decode.
+        mm_embed = pipe._audio_codes_to_mm_embed(cpu_codes_step)
+        tt_hidden = pipe.text.decode_step_from_embeds(mm_embed, current_pos)
+        ttnn.synchronize_device(device)
+        current_pos += 1
+
+        cpu_hidden_out = cpu_trace.get(f"step.{step}.text.hidden_out")
+        if cpu_hidden_out is not None:
+            ok_h, h_pcc = comp_pcc(
+                cpu_hidden_out.reshape(-1).float(), tt_hidden.reshape(-1).float(), pcc=TEXT_DECODE_STEP_PCC
+            )
+            _log_pcc(f"text hidden step={step} pos={current_pos - 1}", float(h_pcc), TEXT_DECODE_STEP_PCC)
+            assert ok_h, f"teacher-forced text hidden step={step} PCC failed: {h_pcc}"
+
     if use_signpost:
         signpost(header="stop")
 
-    tt_wav = tt_out.waveform
-    tt_codes = tt_out.codes_b37t
-    assert torch.isfinite(tt_wav).all(), "TT forward produced non-finite waveform samples"
-    assert tt_codes.dim() == 3 and tuple(tt_codes.shape[:2]) == (1, 37)
-    logger.info(
-        f"  TT codes shape={tuple(tt_codes.shape)} waveform shape={tuple(tt_wav.shape)} "
-        f"hit_end_audio={tt_out.hit_end_audio}"
-    )
-
-    assert tt_out.debug is not None, "TT forward missing debug trace"
-    logger.info("=" * 70)
-    logger.info("PER-MODULE / PER-STAGE PCC (same forward as staged; trace only)")
-    logger.info("=" * 70)
-    staged = log_voxtral_staged_pcc_report(
-        cpu_trace,
-        tt_out.debug,
-        target=FINAL_WAVEFORM_PCC,
-        ref_waveform=ref_wav,
-        tt_waveform=tt_wav,
-    )
-    if staged.first_low_stage is not None:
-        logger.info(f"  → first stage below target {FINAL_WAVEFORM_PCC}: {staged.first_low_stage}")
-    if staged.first_semantic_argmax_mismatch_step is not None:
-        logger.info(f"  → first semantic-argmax mismatch at AR step {staged.first_semantic_argmax_mismatch_step}")
+    if acoustic_total > 0:
+        logger.info(
+            f"  acoustic-code agreement (informational): "
+            f"{acoustic_matches / acoustic_total:.4f}  ({acoustic_matches}/{acoustic_total})"
+        )
 
     logger.info("=" * 70)
-    logger.info("FINAL WAVEFORM PCC")
+    logger.info("FINAL WAVEFORM PCC (TT tokenizer on CPU reference codes)")
     logger.info("=" * 70)
-    n_frames = min(int(tt_codes.shape[2]), int(ref_codes.shape[2]))
-    assert n_frames > 0, "no frames produced by one of the pipelines"
-    tt_codes_aligned = tt_codes[:, :, :n_frames]
-    ref_codes_aligned = ref_codes[:, :, :n_frames]
-
-    log_per_step_code_match(ref_codes_aligned, tt_codes_aligned)
-
-    sem_matches = int((tt_codes_aligned[:, 0] == ref_codes_aligned[:, 0]).sum().item())
-    sem_total = int(tt_codes_aligned[:, 0].numel())
-    ac_matches = int((tt_codes_aligned[:, 1:] == ref_codes_aligned[:, 1:]).sum().item())
-    ac_total = int(tt_codes_aligned[:, 1:].numel())
-    logger.info(f"  semantic-code match: {sem_matches / sem_total:.4f}  ({sem_matches}/{sem_total})")
-    logger.info(f"  acoustic-code match: {ac_matches / ac_total:.4f}  ({ac_matches}/{ac_total})  (informational)")
-
-    _, codes_pcc = comp_pcc(ref_codes_aligned.float(), tt_codes_aligned.float(), pcc=FINAL_WAVEFORM_PCC)
-    logger.info(f"  codes PCC={float(codes_pcc):.4f}  (informational)")
+    tt_wav = pipe.decode_waveform_from_codes_tt(ref_codes)
+    ttnn.synchronize_device(device)
+    assert torch.isfinite(tt_wav).all(), "TT tokenizer produced non-finite waveform samples"
 
     ref_flat = ref_wav.reshape(-1).float()
     tt_flat = tt_wav.reshape(-1).float()
@@ -170,11 +189,11 @@ def test_ttnn_voxtral_tts_e2e_trial(device, reset_seeds, request):
     assert n_wav > 0, "no waveform samples produced by one of the pipelines"
     ok_wav, wav_pcc = comp_pcc(ref_flat[:n_wav], tt_flat[:n_wav], pcc=FINAL_WAVEFORM_PCC)
     _log_pcc("waveform", float(wav_pcc), FINAL_WAVEFORM_PCC)
+    logger.info(f"  frames={n_frames} samples={n_wav}")
     assert ok_wav, f"final waveform PCC failed: {wav_pcc}  (samples={n_wav})"
 
     ttnn.synchronize_device(device)
     pipe.cleanup_all()
     pipe_holder[0] = None
     del pipe
-    del tt_out
     gc.collect()
