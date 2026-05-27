@@ -119,6 +119,12 @@ def test_pipeline_av_two_stages(
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
+    num_frames = int(os.environ.get("NUM_FRAMES", "121"))
+    height = int(os.environ.get("HEIGHT", "512"))
+    width = int(os.environ.get("WIDTH", "768"))
+    num_inference_steps = int(os.environ.get("NUM_INFERENCE_STEPS", "30"))
+
+    run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
     pipeline = LTXAVTwoStagesPipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=ckpt,
@@ -129,16 +135,17 @@ def test_pipeline_av_two_stages(
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
+        distilled_lora_path=distilled_lora,
+        run_warmup=run_warmup,
+        num_frames=num_frames,
+        height=height,
+        width=width,
     )
 
     prompt = os.environ.get(
         "PROMPT",
         ("a cat playing piano"),
     )
-    num_frames = int(os.environ.get("NUM_FRAMES", "121"))
-    height = int(os.environ.get("HEIGHT", "512"))
-    width = int(os.environ.get("WIDTH", "768"))
-    num_inference_steps = int(os.environ.get("NUM_INFERENCE_STEPS", "30"))
 
     def run(*, prompt, number, seed):
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_two_stages_{width}x{height}_{number}.mp4")
@@ -153,7 +160,6 @@ def test_pipeline_av_two_stages(
             prompt,
             output_path=output_filename,
             upsampler_path=upsampler,
-            distilled_lora_path=distilled_lora,
             num_frames=num_frames,
             height=height,
             width=width,

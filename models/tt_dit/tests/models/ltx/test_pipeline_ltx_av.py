@@ -102,6 +102,8 @@ def test_pipeline_inference(
     num_frames = int(os.environ.get("NUM_FRAMES", "121"))
     num_inference_steps = int(os.environ.get("NUM_STEPS", "30"))
 
+    run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
+
     pipeline = LTXAVPipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=ckpt,
@@ -112,6 +114,10 @@ def test_pipeline_inference(
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
+        run_warmup=run_warmup,
+        num_frames=num_frames,
+        height=height,
+        width=width,
     )
 
     prompt = os.environ.get(
