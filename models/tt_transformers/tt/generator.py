@@ -1250,7 +1250,23 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # Apply slot remap from condense before advancing seeds.
                 if slot_remap is not None:
                     sm_bs = sampling_module.seed_manager.max_batch_size
-                    rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
+                    # vLLM gathered-DP sends compact per-rank remaps using the
+                    # scheduler batch size, which can be smaller than the
+                    # physical sampling slot count (for example B=8, sm_bs=32).
+                    # The seed manager owns physical local slots, so expand a
+                    # compact rank remap to identity-padded sm_bs before
+                    # applying it.
+                    local_slots = sum(
+                        len(chunk.temperature) if isinstance(chunk.temperature, list) else sm_bs
+                        for chunk in model_chunks
+                    )
+                    remap = torch.as_tensor(slot_remap, dtype=torch.int32)
+                    if remap.numel() == self.data_parallel * local_slots:
+                        rank_remap = torch.arange(sm_bs, dtype=torch.int32)
+                        start_slot = i * local_slots
+                        rank_remap[:local_slots] = remap[start_slot : start_slot + local_slots]
+                    else:
+                        rank_remap = remap[i * sm_bs : (i + 1) * sm_bs]
                     sampling_module.seed_manager.apply_slot_remap(rank_remap)
                 sampling_module.seed_manager.get_new_values()
 
