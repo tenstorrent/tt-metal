@@ -291,6 +291,9 @@ void validate_matmul_reuse_sharded_output_block_divisibility(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
+                // Mirror the shard_spec priority in MatmulMultiCoreReuseOptimizedProgramFactory::create_descriptor:
+                // when in0 is L1-sharded its shard grid becomes the kernel grid; in1's grid is only consulted when
+                // in0 is not sharded. num_output_blocks must divide evenly across that grid or the factory fatals.
                 const Tensor* sharded = nullptr;
                 if (input_tensor_a.is_sharded() && input_tensor_a.memory_config().buffer_type() != BufferType::DRAM) {
                     sharded = &input_tensor_a;
