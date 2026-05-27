@@ -221,9 +221,10 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
     tgt_speech_other = "spa"  # task 4: speech in hin → speech in spa
     tgt_asr = "hin"  # task 5: transcribe the hin audio in hin
 
-    text_inputs = processor(text=src_text, src_lang=src_lang, return_tensors="pt")
-    input_ids = text_inputs["input_ids"]
-    input_text_attn = text_inputs["attention_mask"]
+    # SeamlessM4T v2 emits EOS at sentence/short-utterance boundaries (training distribution),
+    # so multi-paragraph inputs get truncated regardless of ``max_new_tokens``. Text tasks
+    # (T2TT, T2ST) chunk the source by paragraph and join the outputs.
+    paragraphs = [p.strip() for p in src_text.split("\n\n") if p.strip()]
 
     # Optional KV-decode Metal trace (needs trace_region_size in device params; slow per position).
     use_decode_trace = False
@@ -289,17 +290,22 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         # =========================================================================
         _print_header(1, "Text-to-Text Translation", "T2TT", "eng", tgt_translate)
         print(f"  Input text  ({src_lang}): {src_text}")
-        t2tt_out = tt_model.generate(
-            input_ids=torch_ids_to_ttnn(device, input_ids),
-            attention_mask=torch_ids_to_ttnn(device, input_text_attn),
-            generate_speech=False,
-            tgt_lang=tgt_translate,
-            **gen_common,
-        )
-        if not isinstance(t2tt_out, TTSeamlessM4Tv2GreedySearchOutput):
-            raise TypeError(f"T2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(t2tt_out)}")
-        print(f"  Output text ({tgt_translate}): {_decode(tokenizer, t2tt_out.sequences)}")
-        ttnn.deallocate(t2tt_out.sequences)
+        chunk_outputs: list[str] = []
+        for para in paragraphs:
+            para_inputs = processor(text=para, src_lang=src_lang, return_tensors="pt")
+            t2tt_out = tt_model.generate(
+                input_ids=torch_ids_to_ttnn(device, para_inputs["input_ids"]),
+                attention_mask=torch_ids_to_ttnn(device, para_inputs["attention_mask"]),
+                generate_speech=False,
+                tgt_lang=tgt_translate,
+                **gen_common,
+            )
+            if not isinstance(t2tt_out, TTSeamlessM4Tv2GreedySearchOutput):
+                raise TypeError(f"T2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(t2tt_out)}")
+            chunk_outputs.append(_decode(tokenizer, t2tt_out.sequences))
+            ttnn.deallocate(t2tt_out.sequences)
+        joined = "\n\n".join(chunk_outputs)
+        print(f"  Output text ({tgt_translate}): {joined}")
 
         # T2TT compiles many text-decoder programs; clear before T2ST so vocoder conv1d fits in L1.
         tt_model.clear_runtime_program_cache()
@@ -308,27 +314,42 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         # =========================================================================
         # 2. T2ST — Text-to-Speech Translation (English text → Hindi speech)
         # =========================================================================
+        # Same EOS truncation as T2TT — chunk by paragraph and concatenate waveforms.
         _print_header(2, "Text-to-Speech Translation", "T2ST", "eng", tgt_translate)
         print(f"  Input text  ({src_lang}): {src_text}")
-        t2st_out = tt_model.generate(
-            input_ids=torch_ids_to_ttnn(device, input_ids),
-            attention_mask=torch_ids_to_ttnn(device, input_text_attn),
-            generate_speech=True,
-            return_intermediate_token_ids=True,
-            tgt_lang=tgt_translate,
-            speaker_id=0,
-            **gen_common,
-        )
-        if not isinstance(t2st_out, TTSeamlessM4Tv2GenerationOutput):
-            raise TypeError(f"T2ST expected TTSeamlessM4Tv2GenerationOutput, got {type(t2st_out)}")
-        print(f"  Intermediate text ({tgt_translate}): {_decode(tokenizer, t2st_out.sequences)}")
-        hindi_wav_np = _waveform_to_mono_fp32(t2st_out.waveform, t2st_out.waveform_lengths)
-        _save_wav(T2ST_WAV, hindi_wav_np, sample_rate=sample_rate)
         t2u_pad = int(t2u_cfg.pad_token_id)
-        n_units = _valid_unit_frames(t2st_out.unit_sequences, pad_id=t2u_pad)
+        # 0.4s of silence between paragraphs for natural pacing in the joined audio.
+        inter_para_silence = np.zeros(int(sample_rate * 0.4), dtype=np.float32)
+        chunk_texts: list[str] = []
+        chunk_wavs: list[np.ndarray] = []
+        total_text_tokens = 0
+        total_unit_frames = 0
+        for idx, para in enumerate(paragraphs):
+            para_inputs = processor(text=para, src_lang=src_lang, return_tensors="pt")
+            t2st_out = tt_model.generate(
+                input_ids=torch_ids_to_ttnn(device, para_inputs["input_ids"]),
+                attention_mask=torch_ids_to_ttnn(device, para_inputs["attention_mask"]),
+                generate_speech=True,
+                return_intermediate_token_ids=True,
+                tgt_lang=tgt_translate,
+                speaker_id=0,
+                **gen_common,
+            )
+            if not isinstance(t2st_out, TTSeamlessM4Tv2GenerationOutput):
+                raise TypeError(f"T2ST expected TTSeamlessM4Tv2GenerationOutput, got {type(t2st_out)}")
+            chunk_texts.append(_decode(tokenizer, t2st_out.sequences))
+            chunk_wavs.append(_waveform_to_mono_fp32(t2st_out.waveform, t2st_out.waveform_lengths))
+            if idx < len(paragraphs) - 1:
+                chunk_wavs.append(inter_para_silence)
+            total_text_tokens += _tt_row_length(t2st_out.sequences)
+            total_unit_frames += _valid_unit_frames(t2st_out.unit_sequences, pad_id=t2u_pad)
+        intermediate_joined = "\n\n".join(chunk_texts)
+        print(f"  Intermediate text ({tgt_translate}): {intermediate_joined}")
+        hindi_wav_np = np.concatenate(chunk_wavs) if chunk_wavs else np.zeros(0, dtype=np.float32)
+        _save_wav(T2ST_WAV, hindi_wav_np, sample_rate=sample_rate)
         print(
-            f"  T2ST stats: text_tokens={_tt_row_length(t2st_out.sequences)}, "
-            f"unit_frames={n_units}, "
+            f"  T2ST stats: text_tokens={total_text_tokens}, "
+            f"unit_frames={total_unit_frames}, "
             f"audio={hindi_wav_np.size} samples ({hindi_wav_np.size / sample_rate:.2f}s)"
         )
         print(f"  Saved to: {T2ST_WAV}")
