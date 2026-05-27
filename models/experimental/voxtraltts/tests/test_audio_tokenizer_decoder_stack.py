@@ -14,6 +14,9 @@ from models.experimental.voxtraltts.tt.audio_tokenizer.model import (
     extract_audio_tokenizer_state_dict,
 )
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
+from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
+    voxtral_audio_tokenizer_high_accuracy_optimizations,
+)
 
 
 def _latent_ncl_to_tt_b1tc(device, latent_ncl_bf16: torch.Tensor) -> ttnn.Tensor:
@@ -49,7 +52,12 @@ def test_audio_tokenizer_decode_full_forward_stack_pcc(device, reset_seeds, time
     cfg = load_voxtral_config(model_name).audio_tokenizer_args
     sd = extract_audio_tokenizer_state_dict(full)
     try:
-        tok = VoxtralTTAudioTokenizer(device, state_dict=sd, tokenizer_cfg=cfg)
+        tok = VoxtralTTAudioTokenizer(
+            device,
+            state_dict=sd,
+            tokenizer_cfg=cfg,
+            optimizations=voxtral_audio_tokenizer_high_accuracy_optimizations(),
+        )
     except Exception as exc:
         pytest.skip(f"Unable to build VoxtralTTAudioTokenizer: {exc}")
 
