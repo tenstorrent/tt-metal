@@ -1556,16 +1556,16 @@ def _run_auto_iterate_loop(
                     )
                     exemplar_source = reuse_target
                 else:
-                    exemplar = _exemplar_block(comp, kind)
-                    found = _find_exemplar(comp, kind)
+                    exemplar = _exemplar_block(comp, kind, demo_dir=demo_dir)
+                    found = _find_exemplar(comp, kind, demo_dir=demo_dir)
                     if found is not None:
                         try:
                             exemplar_source = str(safe_relative_to_root(found))
                         except Exception:
                             exemplar_source = str(found)
             else:
-                exemplar = _exemplar_block(comp, kind)
-                found = _find_exemplar(comp, kind)
+                exemplar = _exemplar_block(comp, kind, demo_dir=demo_dir)
+                found = _find_exemplar(comp, kind, demo_dir=demo_dir)
                 if found is not None:
                     try:
                         exemplar_source = str(safe_relative_to_root(found))

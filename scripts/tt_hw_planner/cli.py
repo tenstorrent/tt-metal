@@ -5222,12 +5222,23 @@ def _exemplar_role_for(name: str, kind: str) -> Optional[str]:
     return None
 
 
-def _find_exemplar(component_name: str, kind: str = "") -> Optional[Path]:
-    base = BRINGUP_ROOT() / "models" / "demos"
-    if not base.is_dir():
-        return None
+def _find_exemplar(component_name: str, kind: str = "", *, demo_dir: Optional[Path] = None) -> Optional[Path]:
     role = _exemplar_role_for(component_name, kind)
     if role is None:
+        return None
+
+    if demo_dir is not None:
+        stubs_dir = demo_dir / "_stubs"
+        if stubs_dir.is_dir():
+            for snap in sorted(stubs_dir.glob("*.py.last_good_native")):
+                sibling_name = snap.name[: -len(".py.last_good_native")]
+                if sibling_name == _safe_id(component_name):
+                    continue
+                if _exemplar_role_for(sibling_name, "") == role:
+                    return snap
+
+    base = BRINGUP_ROOT() / "models" / "demos"
+    if not base.is_dir():
         return None
     hint_words = next((hints for r, hints in _EXEMPLAR_ROLE_HINTS if r == role), ())
     tt_dirs = {"tt", "ttnn"}
@@ -5261,8 +5272,8 @@ def _find_exemplar(component_name: str, kind: str = "") -> Optional[Path]:
     return scored[0][2]
 
 
-def _exemplar_block(component_name: str, kind: str = "") -> str:
-    p = _find_exemplar(component_name, kind)
+def _exemplar_block(component_name: str, kind: str = "", *, demo_dir: Optional[Path] = None) -> str:
+    p = _find_exemplar(component_name, kind, demo_dir=demo_dir)
     if p is None:
         return "(no exemplar found — write the ttnn port from the torch reference below)"
     rel = safe_relative_to_root(p) if p.is_absolute() else p
