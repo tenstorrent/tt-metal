@@ -128,9 +128,17 @@ def test_pipeline_av_fast(
             "shallow depth of field, warm color grade emphasizing skin tones."
         ),
     )
-    num_frames = int(os.environ.get("NUM_FRAMES", "121"))
-    height = int(os.environ.get("HEIGHT", "512"))
-    width = int(os.environ.get("WIDTH", "768"))
+    # Stage-2 output target: 1080p @ 24fps, ~6s. Constraints from the pipeline:
+    #   - height/width must be divisible by 64 (asserted at the top of generate(),
+    #     so half-res stage-1 is divisible by 32 for the VAE).
+    #     1920 is already % 64; 1080 is not → round up to 1088 (next multiple of 64).
+    #     If you need exactly 1080 lines, post-crop the 8 extra rows.
+    #   - num_frames must satisfy (num_frames - 1) % 8 == 0 so the VAE decoder maps
+    #     latent_frames → num_frames frames exactly. 144 (== 6s × 24fps) doesn't
+    #     satisfy this; 145 does (19 latent frames → 145 decoded frames ≈ 6.04s).
+    num_frames = int(os.environ.get("NUM_FRAMES", "145"))
+    height = int(os.environ.get("HEIGHT", "1088"))
+    width = int(os.environ.get("WIDTH", "1920"))
 
     def run(*, prompt, number, seed):
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")

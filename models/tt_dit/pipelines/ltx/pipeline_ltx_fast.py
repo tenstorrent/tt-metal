@@ -48,13 +48,20 @@ class LTXFastPipeline(LTXAVPipeline):
         B = 1
         latent_frames = (num_frames - 1) // 8 + 1
         latent_h, latent_w = height // 32, width // 32
-        video_N = latent_frames * latent_h * latent_w
+        video_N_real = latent_frames * latent_h * latent_w
+        # SP padding: round video seq dim up to TILE_SIZE * sp_factor so ring SDPA's
+        # N_local % TILE_HEIGHT and N_global == N_local * ring_size checks pass.
+        video_N = self._video_sp_pad_len(video_N_real)
 
         vps = VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
         als = AudioLatentShape.from_video_pixel_shape(vps)
         audio_N_real = als.frames
         sp_factor = self.parallel_config.sequence_parallel.factor
         audio_N = ((audio_N_real + 32 * sp_factor - 1) // (32 * sp_factor)) * (32 * sp_factor)
+
+        logger.info(
+            f"  shapes: vN={video_N}(real={video_N_real}), aN={audio_N}(real={audio_N_real}) " f"[sp={sp_factor}]"
+        )
 
         v_cos, v_sin = self._prepare_rope(latent_frames, latent_h, latent_w)
         a_cos, a_sin = self._prepare_audio_rope(audio_N, audio_N_real)
@@ -71,21 +78,34 @@ class LTXFastPipeline(LTXAVPipeline):
             a_xpe_sin_full,
         ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
         tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
+        tt_v_pad_mask_sp, tt_v_pad_mask_full = self._prepare_video_masks(video_N, video_N_real)
 
         tt_vp = self._prepare_prompt(v_embeds)
         tt_ap = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
 
         sigmas = torch.tensor(sigma_values, dtype=torch.float32)
 
+        # ----- Video latent init (always end up with shape (B, video_N, C)) -----
         if initial_video_latent is not None:
-            video_lat = initial_video_latent.float()
+            # Stage-2 path: upsampled latent comes in at (B, video_N_real, C).
+            video_lat_real = initial_video_latent.float()
+            assert video_lat_real.shape[1] == video_N_real, (
+                f"initial_video_latent seq dim {video_lat_real.shape[1]} != " f"video_N_real {video_N_real}"
+            )
             torch.manual_seed(seed)
-            noise_v = torch.randn_like(video_lat)
-            video_lat = video_lat * (1 - sigmas[0]) + noise_v * sigmas[0]
+            noise_v = torch.randn_like(video_lat_real)
+            video_lat_real = video_lat_real * (1 - sigmas[0]) + noise_v * sigmas[0]
         else:
             torch.manual_seed(seed)
-            video_lat = torch.randn(B, video_N, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
+            video_lat_real = torch.randn(B, video_N_real, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
 
+        if video_N > video_N_real:
+            video_lat = torch.zeros(B, video_N, self.in_channels)
+            video_lat[:, :video_N_real, :] = video_lat_real
+        else:
+            video_lat = video_lat_real
+
+        # ----- Audio latent init (unchanged: already padded to audio_N) -----
         if initial_audio_latent is not None:
             audio_lat = torch.zeros(B, audio_N, self.in_channels)
             audio_lat[:, :audio_N_real, :] = initial_audio_latent[:, :audio_N_real, :].float()
@@ -94,7 +114,9 @@ class LTXFastPipeline(LTXAVPipeline):
             audio_lat = audio_lat * (1 - sigmas[0]) + noise_a * sigmas[0]
         else:
             torch.manual_seed(seed)
-            _ = torch.randn(B, video_N, self.in_channels, dtype=torch.bfloat16)
+            # Consume the same number of RNG draws the previous (video_N-sized) randn
+            # consumed, so the audio RNG stream is bit-identical to prior runs.
+            _ = torch.randn(B, video_N_real, self.in_channels, dtype=torch.bfloat16)
             audio_lat_real = torch.randn(B, audio_N_real, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
             audio_lat = torch.zeros(B, audio_N, self.in_channels)
             audio_lat[:, :audio_N_real, :] = audio_lat_real
@@ -104,12 +126,14 @@ class LTXFastPipeline(LTXAVPipeline):
             sigma = sigmas[step_idx].item()
             sigma_next = sigmas[step_idx + 1].item()
 
+            # video_N / audio_N here are the LOGICAL (unpadded) counts that get
+            # forwarded as ``logical_n`` to ring SDPA so padded K positions are masked.
             v_out, a_out = self.transformer.inner_step(
                 video_1BNI_torch=video_lat.unsqueeze(0),
                 video_prompt_1BLP=tt_vp,
                 video_rope_cos=v_cos,
                 video_rope_sin=v_sin,
-                video_N=video_N,
+                video_N=video_N_real,
                 audio_1BNI_torch=audio_lat.unsqueeze(0),
                 audio_prompt_1BLP=tt_ap,
                 audio_rope_cos=a_cos,
@@ -128,6 +152,8 @@ class LTXFastPipeline(LTXAVPipeline):
                 audio_attn_mask=tt_attn_mask,
                 audio_padding_mask=tt_pad_mask_sp,
                 audio_padding_mask_full=tt_pad_mask_full,
+                video_padding_mask=tt_v_pad_mask_sp,
+                video_padding_mask_full=tt_v_pad_mask_full,
             )
             v_vel = LTXTransformerModel.device_to_host(
                 v_out,
@@ -143,22 +169,26 @@ class LTXFastPipeline(LTXAVPipeline):
                 sp_already_gathered=True,
                 tp_already_gathered=True,
             ).squeeze(0)
+            # Zero padded velocity slots so they don't drift the latent in the padded region.
+            v_vel = self._zero_video_padding(v_vel, video_N_real)
 
             v_den = (video_lat.bfloat16().float() - v_vel.float() * sigma).bfloat16()
             a_den = (audio_lat.bfloat16().float() - a_vel.float() * sigma).bfloat16()
 
             if sigma_next == 0.0:
-                video_lat = v_den.float()
+                v_new = v_den.float()
                 a_new = a_den.float()
             else:
-                video_lat = euler_step(video_lat, v_den.float(), sigma, sigma_next).bfloat16().float()
+                v_new = euler_step(video_lat, v_den.float(), sigma, sigma_next).bfloat16().float()
                 a_new = euler_step(audio_lat, a_den.float(), sigma, sigma_next).bfloat16().float()
 
-            audio_lat = torch.zeros_like(audio_lat)
-            audio_lat[:, :audio_N_real, :] = a_new[:, :audio_N_real, :]
+            # Re-zero padded slots in both modalities after each step.
+            video_lat = self._zero_video_padding(v_new, video_N_real)
+            audio_lat = self._zero_audio_padding(a_new, audio_N_real)
             logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f}")
 
-        return video_lat, audio_lat[:, :audio_N_real, :]
+        # Slice both modalities back to logical length before returning.
+        return video_lat[:, :video_N_real, :], audio_lat[:, :audio_N_real, :]
 
     @staticmethod
     def _write_stage1_wav(audio_obj, path: str) -> None:
@@ -349,6 +379,10 @@ class LTXFastPipeline(LTXAVPipeline):
         logger.info(f"VAE decode (forward): {time.time() - t0:.1f}s — {tuple(video_pixels.shape)}")
 
         t0 = time.time()
+        # NOTE: on-device path exists (self.decode_audio_device) and runs end-to-end,
+        # but the LTXVocoder composition has a magnitude bug (per-component PCC
+        # 99-100% with wrong scale) that produces saturated audio at the clamp(-1,1).
+        # Gated to host reference until Stage B vocoder is debugged.
         audio_obj = self.decode_audio_reference(s2_audio, num_frames, fps=fps)
         logger.info(f"Audio decode: {time.time() - t0:.1f}s")
 

@@ -1103,6 +1103,12 @@ class LTXPipeline:
             rope_type=LTXRopeType.SPLIT,
         )  # (1, num_heads, N, D_half)
 
+        # SP padding: pad sequence dim to ttnn.TILE_SIZE * sp_factor so ring SDPA's
+        # N_local % TILE_HEIGHT == 0 and N_global == N_local * ring_size checks pass.
+        # Padded slots use cos=1, sin=0 (identity rotation) — matches the audio path
+        # convention so padded Q/K stay well-defined; SDPA still masks them via logical_n.
+        cos_freq, sin_freq = self._pad_video_rope_sp(cos_freq, sin_freq)
+
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
         tt_cos = bf16_tensor_2dshard(cos_freq, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
@@ -1180,11 +1186,17 @@ class LTXPipeline:
         latent_frames = (num_frames - 1) // temporal_compression + 1
         latent_height = height // spatial_compression
         latent_width = width // spatial_compression
-        num_tokens = latent_frames * latent_height * latent_width
+        video_N_real = latent_frames * latent_height * latent_width
+        # SP padding: round seq dim up to TILE_SIZE * sp_factor so ring SDPA's
+        # N_local % TILE_HEIGHT == 0 and N_global == N_local * ring_size checks pass.
+        video_N = self._video_sp_pad_len(video_N_real)
+        # Used by compute_sigmas / scheduler shift — keep based on logical (real) token count.
+        num_tokens = video_N_real
 
         logger.info(
             f"Generating: {num_frames} frames @ {height}x{width}, "
-            f"latent: {latent_frames}x{latent_height}x{latent_width} = {num_tokens} tokens"
+            f"latent: {latent_frames}x{latent_height}x{latent_width} = {video_N_real} tokens"
+            + (f" (SP-padded to {video_N})" if video_N > video_N_real else "")
         )
 
         # 1. Encode text
@@ -1222,32 +1234,39 @@ class LTXPipeline:
         # 4. Prepare initial noise
         if seed is not None:
             torch.manual_seed(seed)
-        latent = torch.randn(B, num_tokens, self.in_channels, dtype=torch.float32)
-
-        # Scale initial noise by first sigma
-        latent = latent * sigmas[0]
+        # Generate noise at logical seq len, then zero-pad to video_N on dim=1 for SP.
+        latent_real = torch.randn(B, video_N_real, self.in_channels, dtype=torch.float32)
+        latent_real = latent_real * sigmas[0]
+        if video_N > video_N_real:
+            latent = torch.zeros(B, video_N, self.in_channels, dtype=torch.float32)
+            latent[:, :video_N_real, :] = latent_real
+        else:
+            latent = latent_real
 
         # 5. Denoising loop
         for step_idx in range(num_inference_steps):
             sigma = sigmas[step_idx].item()
             sigma_next = sigmas[step_idx + 1].item()
 
-            # Prepare spatial input: (1, B, N, in_channels)
+            # Prepare spatial input: (1, B, video_N, in_channels) — already SP-padded.
             spatial_torch = latent.unsqueeze(0)
             timestep_torch = torch.tensor([sigma])
 
-            # Forward pass (conditioned)
+            # Forward pass (conditioned). video_N is the LOGICAL (unpadded) count and
+            # is forwarded as ``logical_n`` to ring SDPA so padded K positions get masked.
             tt_denoised = self.transformer.inner_step(
                 video_1BNI_torch=spatial_torch,
                 video_prompt_1BLP=tt_prompt,
                 video_rope_cos=rope_cos,
                 video_rope_sin=rope_sin,
                 trans_mat=None,
-                video_N=num_tokens,
+                video_N=video_N_real,
                 timestep_torch=timestep_torch,
             )
-            # Model output is velocity; convert to x0: denoised = sample - velocity * sigma
+            # Model output is velocity (shape (B, video_N, C)). Zero padded slots so the
+            # latent stays clean and Euler updates don't drift in the padded region.
             velocity = LTXTransformerModel.device_to_host(tt_denoised).squeeze(0)
+            velocity = self._zero_video_padding(velocity, video_N_real)
             denoised = latent.float() - velocity.float() * sigma
 
             # CFG
@@ -1258,10 +1277,11 @@ class LTXPipeline:
                     video_rope_cos=rope_cos,
                     video_rope_sin=rope_sin,
                     trans_mat=None,
-                    video_N=num_tokens,
+                    video_N=video_N_real,
                     timestep_torch=timestep_torch,
                 )
                 uncond_velocity = LTXTransformerModel.device_to_host(tt_uncond).squeeze(0)
+                uncond_velocity = self._zero_video_padding(uncond_velocity, video_N_real)
                 uncond = latent.float() - uncond_velocity.float() * sigma
 
                 # guidance = uncond + scale * (cond - uncond)
@@ -1269,6 +1289,9 @@ class LTXPipeline:
 
             # Euler step
             latent = euler_step(latent, denoised, sigma, sigma_next)
+            # Re-zero padded slots (cheap insurance — Euler with zeroed velocity should
+            # leave the zeros in place, but bf16 round-trips can introduce tiny drift).
+            latent = self._zero_video_padding(latent, video_N_real)
 
             if (step_idx + 1) % 5 == 0 or step_idx == 0:
                 logger.info(
@@ -1277,6 +1300,8 @@ class LTXPipeline:
                     f"latent range [{latent.min():.3f}, {latent.max():.3f}]"
                 )
 
+        # Slice out SP padding before VAE decode.
+        latent = latent[:, :video_N_real, :]
         logger.info(f"Denoising complete. Output latent shape: {latent.shape}")
 
         # Optionally decode latents to video
@@ -1386,6 +1411,10 @@ class LTXPipeline:
         v_cos, v_sin = precompute_freqs_cis(v_temporal, **rope_kwargs)  # (1, 32, video_N, 32)
         a_cos, a_sin = precompute_freqs_cis(a_positions, **rope_kwargs)  # (1, 32, audio_N_real, 32)
 
+        # Pad video cross-PE to the same SP boundary used by the main video RoPE
+        # (cos=1, sin=0 in padded slots — identity rotation).
+        v_cos, v_sin = self._pad_video_rope_sp(v_cos, v_sin)
+
         # Pad audio cross-PE to audio_N (matching the audio RoPE padding scheme: cos=1, sin=0).
         if audio_N > audio_N_real:
             d_half = a_cos.shape[-1]
@@ -1420,6 +1449,40 @@ class LTXPipeline:
         out = t.clone()
         out[:, audio_N_real:, :] = 0.0
         return out
+
+    @staticmethod
+    def _zero_video_padding(t: torch.Tensor, video_N_real: int) -> torch.Tensor:
+        """Zero SP-padded video token slots (mirrors _zero_audio_padding)."""
+        if t.shape[1] <= video_N_real:
+            return t
+        out = t.clone()
+        out[:, video_N_real:, :] = 0.0
+        return out
+
+    def _video_sp_pad_len(self, video_N_real: int) -> int:
+        """Round video seq len up to ttnn.TILE_SIZE * sp_factor (ring-SDPA / SP requirement)."""
+        sp_factor = self.parallel_config.sequence_parallel.factor
+        divisor = ttnn.TILE_SIZE * sp_factor
+        return ((video_N_real + divisor - 1) // divisor) * divisor
+
+    def _pad_video_rope_sp(self, cos_freq: torch.Tensor, sin_freq: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Right-pad video RoPE cos/sin on dim=2 to the SP boundary.
+
+        Padded slots use cos=1, sin=0 (identity rotation). Same convention as the audio
+        RoPE padding in ``_prepare_audio_rope`` / ``_prepare_av_cross_pe``.
+        """
+        video_N_real = cos_freq.shape[2]
+        video_N = self._video_sp_pad_len(video_N_real)
+        if video_N == video_N_real:
+            return cos_freq, sin_freq
+        pad = video_N - video_N_real
+        H = cos_freq.shape[1]
+        d_half = cos_freq.shape[-1]
+        cos_pad = torch.ones(1, H, pad, d_half, dtype=cos_freq.dtype)
+        sin_pad = torch.zeros(1, H, pad, d_half, dtype=sin_freq.dtype)
+        cos_freq = torch.cat([cos_freq, cos_pad], dim=2)
+        sin_freq = torch.cat([sin_freq, sin_pad], dim=2)
+        return cos_freq, sin_freq
 
     @staticmethod
     def _apply_modal_guidance(
@@ -1501,6 +1564,36 @@ class LTXPipeline:
         tt_pad_mask_full = bf16_tensor(pad_mask, device=self.mesh_device)
         return tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full
 
+    def _prepare_video_masks(self, video_N: int, video_N_real: int) -> tuple:
+        """Create SP-sharded + replicated padding masks for video.
+
+        Returns ``(pad_mask_sp, pad_mask_full)``:
+            * ``pad_mask_sp``  — shape (1, 1, video_N, 1), SP-sharded on dim 2. Multiply
+              the local (sharded) video activations by this to zero padded slots before
+              they propagate downstream (self-attn residual / cross-attn K / FF).
+            * ``pad_mask_full`` — replicated copy, used after the V→A AllGather to
+              re-mask gathered K so other chips' padded slots also get zeroed.
+
+        Returns ``(None, None)`` when no padding is needed.
+
+        No SDPA attn_mask is returned (unlike audio) — video self-attention uses
+        ring SDPA which masks padded keys via the ``logical_n=video_N_real`` arg.
+        """
+        if video_N <= video_N_real:
+            return None, None
+
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+        pad_mask = torch.ones(1, 1, video_N, 1, dtype=torch.bfloat16)
+        pad_mask[:, :, video_N_real:, :] = 0.0
+        tt_pad_mask_sp = bf16_tensor(
+            pad_mask,
+            device=self.mesh_device,
+            mesh_axis=sp_axis,
+            shard_dim=2,
+        )
+        tt_pad_mask_full = bf16_tensor(pad_mask, device=self.mesh_device)
+        return tt_pad_mask_sp, tt_pad_mask_full
+
     @torch.no_grad()
     def call_av(
         self,
@@ -1541,7 +1634,10 @@ class LTXPipeline:
         B = 1
         latent_frames = (num_frames - 1) // 8 + 1
         latent_h, latent_w = height // 32, width // 32
-        video_N = latent_frames * latent_h * latent_w
+        video_N_real = latent_frames * latent_h * latent_w
+        # SP padding: round seq dim up to TILE_SIZE * sp_factor so ring SDPA's
+        # N_local % TILE_HEIGHT == 0 and N_global == N_local * ring_size checks pass.
+        video_N = self._video_sp_pad_len(video_N_real)
 
         vps = VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
         als = AudioLatentShape.from_video_pixel_shape(vps)
@@ -1549,7 +1645,10 @@ class LTXPipeline:
         sp_factor = self.parallel_config.sequence_parallel.factor
         audio_N = ((audio_N_real + 32 * sp_factor - 1) // (32 * sp_factor)) * (32 * sp_factor)
 
-        logger.info(f"AV: {num_frames}f@{height}x{width}, vN={video_N}, aN={audio_N}(real={audio_N_real})")
+        logger.info(
+            f"AV: {num_frames}f@{height}x{width}, "
+            f"vN={video_N}(real={video_N_real}), aN={audio_N}(real={audio_N_real})"
+        )
 
         v_cos, v_sin = self._prepare_rope(latent_frames, latent_h, latent_w)
         a_cos, a_sin = self._prepare_audio_rope(audio_N, audio_N_real)
@@ -1568,6 +1667,7 @@ class LTXPipeline:
             a_xpe_sin_full,
         ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
         tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
+        tt_v_pad_mask_sp, tt_v_pad_mask_full = self._prepare_video_masks(video_N, video_N_real)
 
         tt_vp = self._prepare_prompt(video_prompt_embeds)
         tt_ap = bf16_tensor(audio_prompt_embeds.unsqueeze(0), device=self.mesh_device)
@@ -1579,7 +1679,8 @@ class LTXPipeline:
         )
 
         if sigmas is None:
-            sigmas = compute_sigmas(steps=num_inference_steps, num_tokens=video_N + audio_N)
+            # Scheduler shift is keyed on the logical token count, not padded.
+            sigmas = compute_sigmas(steps=num_inference_steps, num_tokens=video_N_real + audio_N_real)
         else:
             assert (
                 len(sigmas) == num_inference_steps + 1
@@ -1593,11 +1694,18 @@ class LTXPipeline:
             if init_v.dim() == 2:
                 init_v = init_v.unsqueeze(0)
             noise_v = torch.randn_like(init_v)
-            video_lat = init_v * (1.0 - noise_scale) + noise_v * noise_scale
+            video_lat_real = init_v * (1.0 - noise_scale) + noise_v * noise_scale
         else:
             if seed is not None:
                 torch.manual_seed(seed)
-            video_lat = torch.randn(B, video_N, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
+            video_lat_real = torch.randn(B, video_N_real, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
+
+        # Zero-pad video latent on dim=1 to video_N for SP sharding.
+        if video_N > video_N_real:
+            video_lat = torch.zeros(B, video_N, self.in_channels)
+            video_lat[:, :video_N_real, :] = video_lat_real
+        else:
+            video_lat = video_lat_real
 
         if initial_audio_latent is not None:
             assert noise_scale is not None, "noise_scale required when initial_audio_latent is provided"
@@ -1628,12 +1736,15 @@ class LTXPipeline:
             sigma_next = sigmas[step_idx + 1].item()
 
             def _run(vp, ap, skip_ca=False, skip_sa_blocks=None):
+                # video_N / audio_N here are LOGICAL (unpadded) — passed as ``logical_n``
+                # to ring SDPA so padded K positions get masked. Tensor shapes themselves
+                # carry the padded counts.
                 v, a = self.transformer.inner_step(
                     video_1BNI_torch=video_lat.unsqueeze(0),
                     video_prompt_1BLP=vp,
                     video_rope_cos=v_cos,
                     video_rope_sin=v_sin,
-                    video_N=video_N,
+                    video_N=video_N_real,
                     audio_1BNI_torch=audio_lat.unsqueeze(0),
                     audio_prompt_1BLP=ap,
                     audio_rope_cos=a_cos,
@@ -1654,6 +1765,8 @@ class LTXPipeline:
                     audio_attn_mask=tt_attn_mask,
                     audio_padding_mask=tt_pad_mask_sp,
                     audio_padding_mask_full=tt_pad_mask_full,
+                    video_padding_mask=tt_v_pad_mask_sp,
+                    video_padding_mask_full=tt_v_pad_mask_full,
                 )
                 vv = LTXTransformerModel.device_to_host(
                     v,
@@ -1671,7 +1784,7 @@ class LTXPipeline:
                 ).squeeze(0)
                 vd = (video_lat.bfloat16().float() - vv.float() * sigma).bfloat16()
                 ad = (audio_lat.bfloat16().float() - av.float() * sigma).bfloat16()
-                return vd, self._zero_audio_padding(ad, audio_N_real)
+                return self._zero_video_padding(vd, video_N_real), self._zero_audio_padding(ad, audio_N_real)
 
             v_den, a_den = _run(tt_vp, tt_ap)
 
@@ -1696,6 +1809,7 @@ class LTXPipeline:
                     do_cfg=do_cfg,
                     do_stg=do_stg,
                     do_mod=do_mod,
+                    real_token_count=video_N_real if video_N > video_N_real else None,
                 )
                 a_den = self._apply_modal_guidance(
                     a_den,
@@ -1712,36 +1826,202 @@ class LTXPipeline:
                     real_token_count=audio_N_real,
                 )
 
-            # Gradient estimation: correct velocity using previous step's velocity
+            # Gradient estimation: correct velocity using previous step's velocity.
+            # GE math operates on real (unpadded) slices only — padded slots are noise-free
+            # placeholders, and including them here would leak garbage into the GE state.
             if ge_gamma != 0.0 and sigma_next != 0.0:
-                v_velocity = (video_lat.float() - v_den.float()) / sigma
+                v_lat_real = video_lat[:, :video_N_real, :]
+                v_den_real = v_den[:, :video_N_real, :]
+                v_velocity = (v_lat_real.float() - v_den_real.float()) / sigma
                 a_lat_real = audio_lat[:, :audio_N_real, :]
                 a_den_real = a_den[:, :audio_N_real, :]
                 a_velocity = (a_lat_real.float() - a_den_real.float()) / sigma
                 if prev_v_vel is not None:
                     v_total = ge_gamma * (v_velocity - prev_v_vel) + prev_v_vel
                     a_total = ge_gamma * (a_velocity - prev_a_vel) + prev_a_vel
-                    v_den = (video_lat.float() - v_total * sigma).bfloat16()
+                    v_den_real = (v_lat_real.float() - v_total * sigma).bfloat16()
                     a_den_real = (a_lat_real.float() - a_total * sigma).bfloat16()
-                    a_den = self._zero_audio_padding(a_den, audio_N_real)
+                    # v_den/a_den came pre-zeroed at padded slots from `_run` — only
+                    # the real slice needs updating.
+                    v_den[:, :video_N_real, :] = v_den_real
                     a_den[:, :audio_N_real, :] = a_den_real
                 prev_v_vel, prev_a_vel = v_velocity, a_velocity
 
             # Last step: return denoised directly (sigma_next == 0)
             if sigma_next == 0.0:
-                video_lat = v_den.float()
+                video_lat_new = v_den.float()
                 audio_lat_new = a_den.float()
             else:
-                video_lat = euler_step(video_lat, v_den.float(), sigma, sigma_next).bfloat16().float()
+                video_lat_new = euler_step(video_lat, v_den.float(), sigma, sigma_next).bfloat16().float()
                 audio_lat_new = euler_step(audio_lat, a_den.float(), sigma, sigma_next).bfloat16().float()
-            audio_lat = torch.zeros_like(audio_lat)
-            audio_lat[:, :audio_N_real, :] = audio_lat_new[:, :audio_N_real, :]
+            # Re-zero padded slots after each step to keep the latent clean.
+            video_lat = self._zero_video_padding(video_lat_new, video_N_real)
+            audio_lat = self._zero_audio_padding(audio_lat_new, audio_N_real)
 
             if (step_idx + 1) % 5 == 0 or step_idx == 0:
                 logger.info(f"Step {step_idx+1}/{num_inference_steps}: σ {sigma:.4f}→{sigma_next:.4f}")
 
-        logger.info(f"AV done. video: {video_lat.shape}, audio: ({B},{audio_N_real},{self.in_channels})")
-        return video_lat, audio_lat[:, :audio_N_real, :]
+        logger.info(
+            f"AV done. video: ({B},{video_N_real},{self.in_channels}), "
+            f"audio: ({B},{audio_N_real},{self.in_channels})"
+        )
+        return video_lat[:, :video_N_real, :], audio_lat[:, :audio_N_real, :]
+
+    def _prepare_audio_decoder(self) -> None:
+        """Lazily build the on-device audio decoder chain (mel-VAE + vocoder + BWE).
+
+        Reads weights from ``self.checkpoint_name`` (the LTX-2.3 safetensors).
+        Caches the chain on ``self.tt_audio_decoder`` / ``self.tt_audio_vocoder_bwe``.
+        """
+        if getattr(self, "tt_audio_vocoder_bwe", None) is not None:
+            return
+
+        from safetensors import safe_open
+
+        from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoder
+        from ...models.audio_vae.bwe_ltx import LTXMelSTFT, LTXVocoderWithBWE
+        from ...models.audio_vae.vocoder_ltx import LTXVocoder
+
+        logger.info(f"Loading on-device audio decoder weights from {self.checkpoint_name}")
+
+        # Pull only audio-related keys to avoid materializing the full 22B transformer.
+        def _extract_prefix(prefix: str) -> dict:
+            sub = {}
+            with safe_open(self.checkpoint_name, framework="pt") as f:
+                for k in f.keys():
+                    if k.startswith(prefix):
+                        sub[k[len(prefix) :]] = f.get_tensor(k)
+            return sub
+
+        # ---- LTXAudioDecoder (mel-VAE) ----
+        audio_dec_state = _extract_prefix("audio_vae.decoder.")
+        # per_channel_statistics lives under audio_vae.per_channel_statistics
+        with safe_open(self.checkpoint_name, framework="pt") as f:
+            audio_dec_state["per_channel_statistics.mean-of-means"] = f.get_tensor(
+                "audio_vae.per_channel_statistics.mean-of-means"
+            )
+            audio_dec_state["per_channel_statistics.std-of-means"] = f.get_tensor(
+                "audio_vae.per_channel_statistics.std-of-means"
+            )
+
+        self.tt_audio_decoder = LTXAudioDecoder(
+            ch=128,
+            out_ch=2,
+            ch_mult=(1, 2, 4),
+            num_res_blocks=2,
+            attn_resolutions=(),
+            resolution=256,
+            z_channels=8,
+            mid_block_add_attention=False,
+            sample_rate=16000,
+            mel_hop_length=160,
+            is_causal=True,
+            mel_bins=64,
+            mesh_device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+        )
+        self.tt_audio_decoder.load_torch_state_dict(audio_dec_state, strict=False)
+
+        # ---- main LTXVocoder (16 kHz, total upsample 160) ----
+        voc_state = _extract_prefix("vocoder.vocoder.")
+        main_vocoder = LTXVocoder(
+            upsample_initial_channel=1536,
+            resblock="AMP1",
+            upsample_rates=[5, 2, 2, 2, 2, 2],
+            upsample_kernel_sizes=[11, 4, 4, 4, 4, 4],
+            resblock_kernel_sizes=[3, 7, 11],
+            resblock_dilation_sizes=[[1, 3, 5], [1, 3, 5], [1, 3, 5]],
+            activation="snakebeta",
+            use_tanh_at_final=False,
+            apply_final_activation=True,
+            use_bias_at_final=False,
+            in_channels=128,
+            out_channels=2,
+            mesh_device=self.mesh_device,
+        )
+        main_vocoder.load_torch_state_dict(voc_state, strict=False)
+
+        # ---- BWE generator (48 kHz, total upsample 240, apply_final_activation=False) ----
+        bwe_state = _extract_prefix("vocoder.bwe_generator.")
+        bwe_vocoder = LTXVocoder(
+            upsample_initial_channel=512,
+            resblock="AMP1",
+            upsample_rates=[6, 5, 2, 2, 2],
+            upsample_kernel_sizes=[12, 11, 4, 4, 4],
+            resblock_kernel_sizes=[3, 7, 11],
+            resblock_dilation_sizes=[[1, 3, 5], [1, 3, 5], [1, 3, 5]],
+            activation="snakebeta",
+            use_tanh_at_final=False,
+            apply_final_activation=False,  # BWE generator outputs unclamped residual
+            use_bias_at_final=False,
+            in_channels=128,
+            out_channels=2,
+            mesh_device=self.mesh_device,
+        )
+        bwe_vocoder.load_torch_state_dict(bwe_state, strict=False)
+
+        # ---- MelSTFT ----
+        melstft_state = _extract_prefix("vocoder.mel_stft.")
+        melstft = LTXMelSTFT(
+            filter_length=512,
+            hop_length=80,
+            win_length=512,
+            n_mel_channels=64,
+            mesh_device=self.mesh_device,
+        )
+        melstft.load_torch_state_dict(melstft_state, strict=False)
+
+        # ---- VocoderWithBWE wrapper ----
+        self.tt_audio_vocoder_bwe = LTXVocoderWithBWE(
+            vocoder=main_vocoder,
+            bwe_generator=bwe_vocoder,
+            mel_stft=melstft,
+            input_sampling_rate=16000,
+            output_sampling_rate=48000,
+            hop_length=80,
+            mesh_device=self.mesh_device,
+        )
+        logger.info("On-device audio decoder ready")
+
+    def decode_audio_device(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0):
+        """On-device counterpart to ``decode_audio_reference``.
+
+        Replaces the host-torch ``AudioDecoder`` + ``VocoderWithBWE`` chain with
+        ``LTXAudioDecoder`` (mel-VAE) → ``LTXVocoderWithBWE`` running on the mesh.
+        Falls back to the reference decoder on any exception so the pipeline
+        never silently produces garbage.
+        """
+        try:
+            from ltx_core.types import Audio
+        except ImportError:
+            import sys
+
+            sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+            sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
+            from ltx_core.types import Audio
+
+        try:
+            self._prepare_audio_decoder()
+            audio_N = audio_latent.shape[1]
+            audio_spatial = audio_latent.reshape(1, audio_N, 8, 16).permute(0, 2, 1, 3).float().contiguous()
+            mel_features = self.tt_audio_decoder(audio_spatial)
+            waveform = self.tt_audio_vocoder_bwe(mel_features)
+            sampling_rate = 48000
+
+            video_duration = num_frames / fps
+            target_samples = int(video_duration * sampling_rate)
+            if waveform.shape[-1] > target_samples:
+                waveform = waveform[..., :target_samples]
+
+            audio_obj = Audio(waveform=waveform.squeeze(0).float(), sampling_rate=sampling_rate)
+            logger.info(
+                f"Audio decoded (on-device): {audio_obj.waveform.shape} "
+                f"({audio_obj.waveform.shape[-1] / audio_obj.sampling_rate:.2f}s @ {sampling_rate}Hz)"
+            )
+            return audio_obj
+        except Exception as e:
+            logger.warning(f"On-device audio decode failed: {e}; falling back to reference")
+            return self.decode_audio_reference(audio_latent, num_frames, fps=fps)
 
     def decode_audio_reference(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0):
         """Decode audio latent using reference audio VAE + vocoder (CPU torch).

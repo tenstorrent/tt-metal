@@ -268,6 +268,8 @@ class LTXTransformerBlock(Module):
         audio_attn_mask: ttnn.Tensor | None = None,
         audio_padding_mask: ttnn.Tensor | None = None,
         audio_padding_mask_full: ttnn.Tensor | None = None,
+        video_padding_mask: ttnn.Tensor | None = None,
+        video_padding_mask_full: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         # === VIDEO MODULATION ===
         shifted_v = self.scale_shift_table.data + video_temb
@@ -376,9 +378,14 @@ class LTXTransformerBlock(Module):
             audio_ca_out = self.audio_attn2(spatial_1BND=audio_ca_input, N=audio_N, prompt_1BLP=audio_prompt)
             audio_1BND = audio_1BND + audio_ca_out
 
-        # Drop SP padding tokens before cross-modal attention (reference: padded slots are inert).
-        if audio_padding_mask is not None:
-            audio_1BND = ttnn.multiply(audio_1BND, audio_padding_mask)
+        # NOTE: we previously zeroed padded slots in `audio_1BND` / `video_1BND` here as
+        # a "defense in depth" step before A↔V cross-attention. That multiply is redundant:
+        # the K-side cleanup below — `audio_kv_a2v` and `video_kv_v2a` get multiplied by
+        # `pad_mask_a2v` / `pad_mask_v2a` after their respective AllGathers — already zeros
+        # the only path by which padded tokens could pollute the OTHER modality's real
+        # outputs. Self-attn K is already masked (audio: `audio_attn_mask` column mask;
+        # video: `logical_n` in ring SDPA), and within-modality padded-Q garbage gets
+        # zeroed host-side by `_zero_*_padding` on the velocity.
 
         # === BIDIRECTIONAL A↔V CROSS-ATTENTION ===
         if not skip_cross_attn:
@@ -429,6 +436,17 @@ class LTXTransformerBlock(Module):
                 video_kv_v2a = self.ccl_manager.all_gather_persistent_buffer(
                     video_kv_v2a, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
                 )
+            # Zero padded video tokens in the (gathered) K so they contribute nothing to
+            # V→A cross-attention. This is the ONLY mask that protects the audio side
+            # from padded-video leakage — `video_kv_v2a[padded] = norm(*)*(1+scale)+shift`
+            # is non-zero even when the input residual is zero, so we have to multiply
+            # by the mask after the affine transform. In the sp>1 case we use the
+            # replicated full mask (other chips' slices were just gathered in); in the
+            # sp==1 case the sharded and full masks are identical, so the fallback is
+            # safe. Mirrors `pad_mask_a2v` on the audio side.
+            pad_mask_v2a = video_padding_mask_full if video_padding_mask_full is not None else video_padding_mask
+            if pad_mask_v2a is not None:
+                video_kv_v2a = ttnn.multiply(video_kv_v2a, pad_mask_v2a)
             if self.parallel_config.tensor_parallel.factor > 1:
                 video_kv_v2a = self.ccl_manager.all_gather_persistent_buffer(
                     video_kv_v2a, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
@@ -739,6 +757,8 @@ class LTXTransformerModel(Module):
         audio_attn_mask: ttnn.Tensor | None = None,
         audio_padding_mask: ttnn.Tensor | None = None,
         audio_padding_mask_full: ttnn.Tensor | None = None,
+        video_padding_mask: ttnn.Tensor | None = None,
+        video_padding_mask_full: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run one denoising step on device. Returns video output, or (video, audio) tuple."""
         from ....utils.tensor import bf16_tensor, float32_tensor
@@ -895,6 +915,8 @@ class LTXTransformerModel(Module):
                 audio_attn_mask=audio_attn_mask,
                 audio_padding_mask=audio_padding_mask,
                 audio_padding_mask_full=audio_padding_mask_full,
+                video_padding_mask=video_padding_mask,
+                video_padding_mask_full=video_padding_mask_full,
             )
             if self.has_audio:
                 video_1BND, audio_1BND = result
