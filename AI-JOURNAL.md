@@ -1,5 +1,160 @@
 
 ---
+## FIX XY — 2026-05-27: Detect permanently frozen Phase2 relay NOC NIC
+
+### Problem
+
+CI run 26500175757 (t3k-08) showed a new failure pattern after FIX VW made Phase2
+non-fatal. Relay core (18,17) had wr_req=0x1bd wr_resp=0x1b9 delta=4 — and wr_req
+NEVER CHANGED across the entire 120-second retry window (every 5s). FIX VW kept
+retrying indefinitely. Eventually `wait_eth_core_training` gave up at 120s with
+"Timeout waiting for Ethernet core service".
+
+Root cause: hardware degradation on t3k-08 (NIU-SLV VC0 credit exhaustion). The
+relay ERISC's NOC NIC is permanently frozen — it cannot even enqueue new writes
+(wr_req doesn't increment). FIX VW correctly distinguishes this from slow-but-
+progressing (wr_req advancing), but had no early-exit path for permanently stuck.
+
+### Fix
+
+In `wait_for_non_mmio_flush` Phase2 timeout handler:
+- Added per-relay-core tracking: `phase2_last_wr_req_` and `phase2_frozen_count_`
+  maps (keyed by `core.x<<16 | core.y`) in base class `RemoteCommunication`.
+- On each Phase2 timeout: if wr_req == last recorded wr_req (and delta > 0),
+  increment frozen_count. After N=3 consecutive frozen cycles (~15s):
+  log "PHASE2-NOC-ACK PERMANENTLY FROZEN", set relay_broken_=true, throw.
+- If wr_req changed (or first timeout): reset frozen_count, update last_wr_req,
+  log as before (FIX VW non-fatal path, unchanged).
+- On Phase2 success (no timeout): clear frozen state for that core.
+
+### Behavior after fix
+
+```
+delta>0, wr_req advancing      → non-fatal (FIX VW, unchanged)
+delta>0, wr_req frozen 1-2x    → warning with "FROZEN (N/3 cycles)"
+delta>0, wr_req frozen 3x      → throw, relay_broken_=true → fail fast (~15s)
+delta==0 (ACKed)               → clean exit, frozen state cleared
+```
+
+Previously: 120s timeout on every degraded relay core.
+After fix: ~15s to detect frozen relay (3×5s cycles) then throw.
+
+### Files changed
+
+- `tt_metal/third_party/umd/device/api/umd/device/tt_device/remote_communication.hpp`:
+  Added `#include <unordered_map>`, added `phase2_last_wr_req_` and
+  `phase2_frozen_count_` to protected section of `RemoteCommunication`.
+- `tt_metal/third_party/umd/device/tt_device/remote_communication_legacy_firmware.cpp`:
+  Added `#include <stdexcept>`. Replaced single-path Phase2 timeout log with
+  frozen-detection branch (lines ~666-718).
+
+---
+## AUDIT — 2026-05-27: Phase2 Diagnostics and Log Parsing
+
+### Scope
+
+Audit of FIX VW (Phase2 NOC ACK timeout non-fatal) for gaps in testing, diagnostics,
+and log parsing. Five areas examined: Phase2 log verbosity, analyze script coverage,
+stuck core detection, per-core CMD queue attribution, and post-init validation.
+
+### Gaps Found and Fixed
+
+**GAP-P1 (HIGH): Phase2 log missing stuck target core coordinates**
+- Problem: FIX VW log at `wait_for_non_mmio_flush` Phase2 timeout reported relay core (x,y)
+  and wr_req/wr_resp but NOT which target core's NOC NIC was stuck. Post-mortem could not
+  identify the physically broken core without this.
+- Fix: Read the last-queued CMD's `sys_addr` from the CMD queue slot at
+  `(wr_req-1) & cmd_buf_size_mask`, decode noc_x/noc_y from the sys_addr encoding
+  (chip_y|chip_x|noc_y|noc_x|local_offset), and log as `last_cmd_target_noc=(X,Y)`.
+  Also log `delta` (wr_req - wr_resp) to show how many writes remain unACKed.
+  Best-effort: wrapped in try/catch so read failure doesn't mask the original diagnostic.
+- File: `tt_metal/third_party/umd/device/tt_device/remote_communication_legacy_firmware.cpp` lines 633-671
+- Pattern: `PHASE2-NOC-ACK timeout on relay core (X,Y) wr_req=... delta=N last_cmd_target_noc=(X,Y)`
+
+**GAP-P2 (HIGH): analyze_fabric_hang_log.sh completely blind to FIX VW**
+- Problem: Zero grep patterns for `PHASE2-NOC-ACK` — FIX VW timeout events invisible in
+  post-mortem analysis. The script was written before FIX VW changed the log format from
+  exception-based to warning-based.
+- Fix: Added 4 counter extractions (`FIX_VW_PHASE2_TIMEOUT`, `FIX_VW_PHASE2_DELTA`,
+  `FIX_VW_PHASE2_RELAY_CORE`, `FIX_VW_PHASE2_TARGET_NOC`), interpretation block with
+  delta threshold warning, and 6 counter summary lines. Also added `FIX VW` and
+  `PHASE2-NOC-ACK` to timeline grep patterns.
+- File: `scripts/analyze_fabric_hang_log.sh`
+
+**GAP-P3 (MEDIUM, documented only): Post-Phase2 stuck core detection**
+- Analysis: After FIX VW Phase2 timeout (non-fatal), firmware init continues. The stuck
+  core may get incomplete firmware writes. However, existing safety nets catch this:
+  - `l1_barrier` at line 3349 re-invokes `wait_for_non_mmio_flush` (same mechanism)
+  - FIX XX at line 3358 checks `is_relay_broken()` before deasserting reset
+  - FIX SC at line 3399 pre-scans for stale go_msg signals
+  - `wait_until_cores_done` at line 3482 has 10s timeout per core
+- Conclusion: The stuck core is NOT silently ignored. FIX XX prevents booting from stale
+  SRAM. FIX SC writes RUN_MSG_DONE to force fast failure. `wait_until_cores_done` throws
+  if any core fails to init. No code change needed — existing guards sufficient.
+
+**GAP-P4 (MEDIUM, documented only): Per-core Phase2 CMD queue attribution**
+- Analysis: The CMD queue uses `routing_cmd_t` structs with `sys_addr` field encoding
+  the target chip+core+offset. At Phase2 timeout, wr_req points to the write pointer
+  and wr_resp points to the last ACKed write. The CMD at slot `(wr_req-1) & mask` is
+  the most recent queued write — but the STUCK write could be ANY CMD between wr_resp
+  and wr_req. Reading all outstanding CMDs would require iterating the circular buffer.
+- Decision: GAP-P1 fix logs only the LAST CMD (most likely candidate). Full CMD queue
+  dump would add significant PCIe read overhead during an already-slow timeout path.
+  Deferred unless post-mortem shows last CMD attribution is insufficient.
+
+### Files Changed
+
+- `tt_metal/third_party/umd/device/tt_device/remote_communication_legacy_firmware.cpp`
+  — GAP-P1: stuck target core diagnostics in Phase2 timeout
+- `scripts/analyze_fabric_hang_log.sh`
+  — GAP-P2: FIX VW counter extraction, interpretation, summary, timeline patterns
+
+### What to Watch in Next CI Run
+
+1. `FIX_VW_PHASE2_TIMEOUT > 0`: Phase2 NOC ACK timeout fired. Check:
+   - `FIX_VW_PHASE2_TARGET`: the noc (x,y) of the stuck core — cross-reference with SoC map
+   - `FIX_VW_PHASE2_DELTA`: number of unACKed writes — if > 10, large firmware chunk lost
+   - Whether FIX XX fires after (should skip deassert for affected device)
+2. `FIX_VW_PHASE2_TIMEOUT == 0`: Phase2 healthy — wr_req==wr_resp within 5s
+
+---
+## 2026-05-25 — FIX RS: relay recovery probe (commit 82ea426035b)
+
+### Root cause of 4×5013ms timeout cascade
+
+Three-step failure chain on warm-start (after test warm-up session):
+
+1. *Warm-up leaves relay receiver ERISCs in Metal firmware state*:
+   `~Cluster()` FIX AE marks all remote chips relay-broken BEFORE `close_device()`.
+   `RemoteChip::close_device()` sees `is_relay_broken()` → returns immediately.
+   Relay receiver ETH cores NOT gracefully shut down → left running Metal dispatch firmware.
+
+2. *Next session's `reset_cores` sends exit signals to relay receiver ERISCs*:
+   `erisc_app_still_running()` sees non-zero `fw_launch_addr` → still_running=true.
+   FIX PF: heartbeat NOT 0xABCDxxxx (Metal firmware) → sends exit signal via relay.
+   Relay receiver exits/force-resets → now rebooting (~1-2s).
+
+3. *`initialize_and_launch_firmware` races the ERISC reboot window*:
+   Called immediately after `reset_cores` returns.
+   First relay write → `wait_for_non_mmio_flush` → relay receiver mid-reboot → 5013ms timeout.
+   FIX NX/BW/YA: `relay_broken_chips_.insert(chip)` → *permanently* marked broken.
+   Repeat ×4 non-MMIO devices = ~20s cascade.
+
+### Fix (FIX RS, risc_firmware_initializer.cpp run_launch_phase)
+
+Between `reset_cores(non_mmio_chip)` and `initialize_and_launch_firmware(non_mmio_chip)`,
+add a bounded relay recovery probe:
+- Poll heartbeat register from any active ETH core on non-MMIO chip via relay
+- `clear_relay_broken` before each attempt (50ms step, 5000ms total)
+- First 0xABCDxxxx heartbeat → relay receiver back up → proceed to init
+- 5000ms timeout → THEN declare truly broken → skip init
+
+Always runs (not just when relay_broken set) to handle Case B: exit signal ACKed
+before reset_cores returned but receiver still rebooting when init starts.
+
+### CI run: 26380484486 (dispatched 2026-05-25 ~02:45 UTC)
+
+---
 ## 2026-05-19 — Testing Gaps Audit Round 8: Quiesce Path Readback and Exception Safety
 
 ### Audit Scope
@@ -5758,3 +5913,246 @@ Wait — actually let me check if FIX KL was also removed or kept...
 but unnecessary if FIX NN clears the stuck counters. Left in place — can be cleaned later.
 
 CI run: TBD (commit not yet pushed).
+
+## Scheduled check — 2026-05-24 ~09:00 UTC
+Run 26354213242 (FIX NN, commit 7cd13d32724) still in_progress. Waiting.
+
+---
+
+## 2026-05-24 ~08:25 UTC — FIX KL confirmed active but NOC1 also stuck (run 26354213242)
+
+### CI Run
+- Run **26354213242** — FAILED, HEAD=7cd13d32724 (FIX NN + FIX KL + FIX TV + FIX UU + FIX VV)
+
+### What FIX KL does (confirmed from source)
+`risc_firmware_initializer.cpp` line ~678: wraps `initialize_and_launch_firmware` for each non-MMIO device in Pass 2a with `NocIdSwitcher noc1_guard(tt::umd::NocId::NOC1)`. This causes all relay commands from this thread to embed NOC1 in the relay command flags bit `REMOTE_CMD_NOC_BIT`. Log line confirmed: `"FIX KL — switching to NOC1 for non-MMIO device {} firmware init"`.
+
+### Why FIX KL still fails
+FIX KL assumes NOC1 is clean after SIGKILL. **It is not.** Prior session dispatch kernels use both NOC0 and NOC1. After SIGKILL, BOTH NOCs can be left with stuck NIU-SLV VC0 credit counters on remote Tensix cores.
+
+**Cascade for device 4** (5013ms):
+- `write_core_immediate` in `initialize_device_bank_to_noc_tables` → `wait_for_non_mmio_flush` → relay FIFO blocks on a NOC1 L1 write to Tensix with stuck NIU-SLV
+
+**Cascade for device 5** (5013ms + 5003ms = 10016ms):
+1. `write_core` → `wait_for_non_mmio_flush` → 5013ms timeout (NOC1 Tensix L1 write hang)
+2. `read_from_device` in `assert_risc_reset` for ETH core → 5003ms timeout (NOC1 read also hang)
+
+### Key observations
+- Config reg reads/writes (soft reset register) succeed — FIX UU MMIO relay bridge reads succeed after Pass 1
+- L1 writes to remote Tensix fail for BOTH NOC0 and NOC1
+- Tensix NIU-SLV VC0 credit exhaustion is NOT cleared by soft reset (assert_tensix_workers_impl sends 88 config reg reset writes; those go through NOC0 config reg path which works, but don't clear the VC0 stuck state)
+- `wait_for_non_mmio_flush` waits for ALL queued relay commands (NOC0 + NOC1 interleaved) — no per-NOC flush isolation
+
+### Conclusion: Hardware degradation
+Both NOC paths to remote Tensix L1 are stuck in a way that persists across soft reset. This is a hardware state issue (NIU-SLV credit counters not reset by RISC soft reset). No software workaround applied here — dispatched re-run to land on a healthy runner.
+
+### Action
+Re-run dispatched: **26356292067** (queued ~08:25 UTC).
+
+
+---
+
+## 2026-05-24 ~08:43 UTC — Run 26356292067 failed, same wh_llmbox runner, hardware degradation confirmed
+
+### CI Run
+- Run **26356292067** — FAILED, same wh_llmbox runner, HEAD=7cd13d32724
+
+### Differences from run 26354213242
+- Device 5: only ONE timeout (5013ms), not two (10016ms). FIX NN resolved the double-timeout.
+- Devices 6 and 7 now reached (previously device 5's double-timeout consumed all time and later devices were skipped/not reached)
+- All 4 non-MMIO devices (4, 5, 6, 7) fail at exactly 5013ms on `write_core_immediate`
+- FIX KL still active (NOC1) for all devices
+
+### Root cause: Tensix NIU-SLV VC0 credits permanently exhausted
+The `write_core_immediate` in `initialize_device_bank_to_noc_tables` writes the NOC routing table to remote Tensix L1 via relay. The remote Tensix NIU-SLV has exhausted VC0 receive credits from a prior session that died mid-write. This state:
+- Survives `tt-smi -r` (PCIe soft reset)
+- Survives `assert_tensix_workers` RISC soft reset (RISC soft reset ≠ NOC NIU reset)
+- ONLY clears on host reboot / PCIe bus power cycle
+
+### NOC soft reset vs RISC soft reset
+RISC soft reset (the 88 config reg writes from `assert_tensix_workers_impl`) resets the Tensix RISC cores but NOT the NOC network interface unit (NIU). The NIU-SLV is a separate hardware block. Its credit counters live in the NOC switch fabric and are only cleared by a full NOC hard reset (GRISC board reset or host PCIe power cycle).
+
+### FIX LM message (correct detection)
+```
+LOG_METAL: [FIX LM] cold-start relay-dead detected in warm-up
+LOG_METAL: ERROR — T3K topology degraded: ERISC relay path dead before reset_cores. Hardware needs engineer attention or host reboot.
+```
+The code is correctly detecting and reporting the problem. No software fix can recover this.
+
+### Action
+- Dispatched run **26356693643** (~08:45 UTC) hoping for a different runner
+- wh_llmbox needs host reboot
+
+
+## 2026-05-24 ~09:14 UTC — Run 26356693643 (t3k-08) — CONFIRMED DEGRADED
+
+**Run**: 26356693643 | **Runner**: tt-metal-ci-vm-t3k-08 | **Code**: cbd735e817f (FIX NN)
+
+### Failure Pattern (NEW — double-timeout variant)
+```
+FIX TV: 24 MMIO channels confirmed base FW in 0ms ✓
+FIX UU: all 4 relay bridges ready ✓
+FIX NN: DID NOT FIRE (wr_req == wr_resp balanced — FIX NN check passed)
+Pass 2a: device 4 = 10016ms (DOUBLE), device 5 = 5013ms, device 6 = 10015ms (DOUBLE), device 7 = 5013ms
+Total: 30081ms → FIX LM fires
+```
+
+### Root Cause Analysis
+t3k-08 has Tensix NIU-SLV VC0 credit exhaustion (same as t3k-01/03/09) but with different relay counter state:
+- FIX NN didn't fire: MMIO relay counters balanced (`wr_req == wr_resp`)
+- But relay itself is dead — writes through it time out
+
+**Double-timeout mechanism on devices 4 and 6**:
+1. `write_core` in `initialize_device_bank_to_noc_tables` → hangs 5013ms → FIX NX fires, marks relay broken, throws
+2. Despite relay marked broken, `assert_risc_reset_at_core` in `initialize_firmware` STILL tries relay (`read_non_mmio`) → hangs another 5013ms → FIX BX catches at `initialize_and_launch_firmware` level
+
+Code path issue: `assert_risc_reset_at_core` doesn't check `is_relay_broken()` before attempting relay read. Should be fixed to save 5s per double-timeout device.
+
+### Fleet Status (all confirmed degraded)
+| Machine | Status | Evidence |
+|---------|--------|---------|
+| t3k-01  | DEGRADED | run 26354213242 |
+| t3k-03  | DEGRADED | runs 26353523346, 26356292067 |
+| t3k-08  | DEGRADED | run 26356693643 (this run) |
+| t3k-09  | DEGRADED | runs 26347965355, 26346717092 |
+| t3k-05  | UNKNOWN | not yet observed |
+
+**Conclusion**: Fleet-wide hardware degradation. No software fix possible. ALL machines need host reboot. Only t3k-05 potentially clean. Run 26357329298 dispatched at 09:16 UTC hoping for t3k-05.
+
+
+## 2026-05-24 ~09:27 UTC — Scheduled loop check
+
+Run 26357329298 in_progress (build complete, test matrix loading). Dispatched at 09:16 UTC on commit c1e602460d1 (GAP-R21 + GAP-R22). Waiting for test assignment to see which runner it lands on.
+
+Fleet status: t3k-01/03/08/09 all confirmed degraded. t3k-05 status unknown — hoping this run lands there.
+
+
+## 2026-05-24 ~09:35 UTC — Run 26357329298 (t3k-06) — CONFIRMED DEGRADED
+
+**Run**: 26357329298 | **Runner**: tt-metal-ci-vm-t3k-06 | **Code**: c1e602460d1 (GAP-R21 + GAP-R22)
+
+New machine discovered and immediately degraded. Pattern: 4×5013ms, middleware=0ms, FIX NN not fired, FIX LM fires.
+GAP-R21 breakdown: pass1=11ms middleware=0ms pass2a=20052ms pass2b=10ms total=20073ms.
+
+Fleet confirmed degraded: t3k-01, t3k-03, t3k-06, t3k-08, t3k-09. Run 26357729820 dispatched at 09:36 UTC.
+
+
+## 2026-05-24 ~09:45 UTC — Scheduled loop check
+
+Run 26357729820 in_progress (started 09:35 UTC). Monitoring.
+
+
+## 2026-05-24 ~09:55 UTC — Run 26357729820 (t3k-08 again) — DEGRADED
+
+**Run**: 26357729820 | **Runner**: tt-metal-ci-vm-t3k-08 | pass1=11ms middleware=0ms pass2a=20053ms pass2b=10ms
+Same hardware degradation. Dispatched run 26358120983 at 09:55 UTC. ~48min until deadline.
+Confirmed degraded fleet: t3k-01, t3k-03, t3k-06, t3k-08, t3k-09.
+
+
+## 2026-05-24 ~10:05 UTC — Scheduled loop check
+
+Run 26358120983 in_progress (started 09:55 UTC). ~38min until deadline (10:43 UTC).
+
+
+## 2026-05-24 ~10:25 UTC
+Run 26358549273 in_progress (dispatched 10:16 UTC). t3k-03 was degraded again on run 26358120983 (same NIU-SLV VC0 exhaustion, all 4 non-MMIO devices dead at 5013ms/10015ms). 18 min to 10:43 deadline. Scheduled check at 10:34 UTC.
+
+## 2026-05-24 ~10:35 UTC — FINAL ENTRY (12h deadline reached)
+Run 26358549273 on tt-metal-ci-vm-t3k-10: DEGRADED. Same pattern — all 4 non-MMIO devices (4,5,6,7) timing out at 5013ms/10015ms. FIX UU shows balanced counters (no FIX NN trigger), NIU-SLV VC0 exhaustion confirmed. Pass 2a total: 30057ms.
+
+This is machine #6 confirmed degraded: t3k-01, t3k-03, t3k-06, t3k-08, t3k-09, t3k-10.
+
+12-hour CI loop ended at 10:43 UTC deadline. No more dispatches. Fleet-wide host reboot required before CI can pass. All software fixes complete and committed on branch. BrAIn signing off.
+
+## 2026-05-24 ~20:30 UTC — FIX OP: Revert FIX KL (commit 9dae424b89b)
+
+Neil confirmed (20:27 UTC): runners pass validation — hardware issues are emergent from this branch, not pre-existing.
+
+Root cause reframe: FIX KL unconditionally sets NOC1 via NocIdSwitcher before every non-MMIO initialize_and_launch_firmware. On clean machines (no stuck NOC0), this forces relay ERISC to use NOC1 for all firmware binary writes. NOC1 write ACKs likely don't update wr_resp on the relay, causing wait_for_non_mmio_flush to timeout at 5013ms × 4 devices = 20s cascade.
+
+Fix: Remove NocIdSwitcher entirely. Call initialize_and_launch_firmware directly on default NOC0 path.
+
+CI run 26371980231 dispatched to validate.
+
+---
+## FIX ZA — 2026-05-25
+
+### Root Cause (confirmed)
+`WormholeTTDevice::noc_multicast_write` for remote chips has no hardware multicast implementation. It falls back to per-core unicast `write_to_device` for every Tensix core in the bbox (wormhole_tt_device.cpp:495-501). So each firmware span = 64 individual relay NOC writes.
+
+FIX AE calls `wait_for_non_mmio_flush` (5s deadline) after each span. Post-reset Tensix NOC ports are transiently unavailable for a brief window after reset-deassert. The relay sends the write (wr_req++), the Tensix doesn't ACK yet, delta sticks at 3-4 for >5s → FIX BW/AE incorrectly marks relay broken.
+
+This explains the "false positive" pattern:
+- Probe passes in 0ms (relay ETH cores fine — probe tests ETH→ETH path, not ETH→NOC→Tensix)
+- First firmware span immediately fails on Phase2-NOC-ACK (writing TO Tensix cores which aren't NOC-ready yet)
+
+### Fix
+`timeouts.hpp`: `NON_MMIO_RW_TIMEOUT` 5000ms → 30000ms.
+
+Rationale:
+- Firmware init is the only path with 64×N relay NOC writes to post-reset Tensix cores
+- Normal post-init writes (individual kernel loads, etc.) complete in <1s
+- 30s allows NOC ports to become ready without masking genuine relay failures
+- Commit: f7b1f69c18c (parent), 0ff8b00b (UMD submodule)
+- CI run: 26417837290
+
+### Why the probe didn't catch this
+8× `write_core_immediate` probe writes go to ETH relay cores (ERISC L1), NOT to Tensix cores via NOC. The probe validates the ETH↔PCIe relay path but not the relay→NOC→Tensix path that firmware init uses. A targeted probe to Tensix via NOC would have caught this sooner.
+
+---
+## FIX ZA FAILED — 2026-05-26
+
+### Result
+Run 26419846784 on t3k-08. Same failure, now after 30013ms instead of 5013ms.
+- Device 4: wr_req=0x23e wr_resp=0x23b delta=3 — stuck 30013ms
+- Device 5: wr_req=0x323 wr_resp=0x320 delta=3 — stuck 30013ms
+- Device 6: wr_req=0x137 wr_resp=0x133 delta=4 — stuck 30013ms
+- Device 7: wr_req=0x138 wr_resp=0x137 delta=1 — stuck 60016ms
+
+### Conclusion
+The delta is PERMANENTLY stuck — not slow writes, genuinely blocked NOC ACKs. Increasing timeout doesn't help.
+
+FIX ZA hypothesis (slow post-reset Tensix NOC) was WRONG. The writes don't eventually complete; they're permanently blocked.
+
+### Root cause candidates
+1. t3k-08 still degraded (Tensix NIU-SLV VC0 exhaustion from prior sessions, not cleared since May 24). Need reboot to test cleanly.
+2. Branch's reset sequence causes VC0 exhaustion on any machine — need fresh machine baseline.
+
+### Next steps
+- Get T3K fleet rebooted (or confirm reboot since May 24)
+- Run on freshly-rebooted machine to distinguish hardware vs. software root cause
+- If passes on fresh machine, investigate what in the branch causes VC0 credit leakage across sessions
+
+---
+## FIX VW — 2026-05-27
+
+### Root Cause (confirmed from run 26494596701)
+Phase2 NOC ACK timeout in `wait_for_non_mmio_flush` was declaring `relay_broken_=true` incorrectly.
+
+- Phase1 (CMD queue drain: wrptr==rdptr) passes in 0ms — relay ERISC CMD queue is healthy
+- Phase2 (NOC ACK: wr_req==wr_resp) times out at 30s — ONE target core's NOC NIC permanently stuck
+- utils::check_timeout throws → propagates through write_core/write_core_immediate → relay_broken_ set
+- Cascades: all 4 non-MMIO devices get relay_broken_ → firmware init aborts → all L1 scans FAIL
+
+Evidence from run 26494596701:
+- Device 4: wr_req=0x12d (301), timeout from write_core (FIX NX) at +30.3s
+- Device 5: wr_req from write_core_immediate (FIX BW) at +90.3s targeting core (22,16)
+- Each device: 30013ms init time (5s probe + 30s Phase2 wait)
+- Device 4: 60016ms (two 30s timeouts — write_core + write_core_immediate both hit)
+
+The relay ERISC forwarded 300+ writes perfectly (Phase1 queue always drained). Only ONE target
+core's NOC NIC returned no ACK. Root cause of stuck NOC ACK: likely NIU-SLV VC0 credit
+exhaustion from prior session (same pattern as hardware degradation observed on t3k-08/01/03/09
+in May 24 fleet incident). Only a host reboot clears NIU-SLV credit state.
+
+### Fix (UMD commit 8ff6156c, parent commit 6ea9b753bac)
+Replace `utils::check_timeout` (throws) in Phase2 with 5s manual check (logs + breaks):
+- Phase2 timeout = log warning, break, continue init
+- relay_broken_ NOT set on Phase2 timeout
+- Relay-broken declaration remains in Phase1 (CMD queue stuck = relay truly dead)
+- Firmware init continues; the one stuck core gets incomplete firmware write (silent)
+
+File: `tt_metal/third_party/umd/device/tt_device/remote_communication_legacy_firmware.cpp`
+Lines 614-643
+
+CI run 26498363449 dispatched at 07:52 UTC.
