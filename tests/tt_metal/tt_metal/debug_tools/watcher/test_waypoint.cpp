@@ -115,7 +115,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             };
             kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
                 .unique_id = name,
-                .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path_metal2},
+                .source = kernel_path_metal2,
                 .num_threads = num_threads,
                 .runtime_arguments_schema = {.named_common_runtime_args = {"sync_flag_addr"}},
                 .config_spec = dm_cfg,
@@ -137,7 +137,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     }
     kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
         .unique_id = COMPUTE_KERNEL_NAME,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path_metal2},
+        .source = kernel_path_metal2,
         // Quasar Tensix has 4 Neos so the compute kernel fans out across all of them; WH/BH has 1 TRISC group.
         .num_threads = static_cast<uint8_t>(is_quasar ? 4 : 1),
         .runtime_arguments_schema = {.named_common_runtime_args = {"sync_flag_addr"}},

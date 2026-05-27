@@ -51,8 +51,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         return experimental::metal2_host_api::KernelSpec{
             .unique_id = id,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints_2_0.cpp"},
+
+                "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints_2_0.cpp",
             .num_threads = num_threads,
             .compile_time_arg_bindings = {{"l1_address", l1_addr}},
             .runtime_arguments_schema =

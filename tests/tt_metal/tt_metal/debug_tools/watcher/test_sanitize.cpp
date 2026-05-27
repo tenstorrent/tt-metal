@@ -242,7 +242,7 @@ void RunTestOnCore(
         }
         experimental::metal2_host_api::KernelSpec dm_spec{
             .unique_id = DRAM_COPY_KERNEL_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_metal2},
+            .source = kernel_metal2,
             .num_threads = num_threads,
             .compiler_options = {.defines = defines},
             .compile_time_arg_bindings = cta_bindings,

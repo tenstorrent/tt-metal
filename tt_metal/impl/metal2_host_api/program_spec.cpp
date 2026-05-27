@@ -2081,10 +2081,10 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .entry_size = dfb_spec->entry_size,
         .num_entries = dfb_spec->num_entries,
         .producer_risc_mask = producer_risc_mask,
-        .num_producers = producer->num_threads,
+        .num_producers = static_cast<uint8_t>(producer->num_threads),
         .pap = producer_access_pattern,
         .consumer_risc_mask = consumer_risc_mask,
-        .num_consumers = consumer->num_threads,
+        .num_consumers = static_cast<uint8_t>(consumer->num_threads),
         .cap = consumer_access_pattern,
         .enable_producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers),
         .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
@@ -2104,9 +2104,9 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
     return std::visit(
         [&](const auto& src) -> KernelSource {
             using T = std::decay_t<decltype(src)>;
-            if constexpr (std::is_same_v<T, KernelSpec::SourceFilePath>) {
-                TT_FATAL(!src.path.empty(), "KernelSpec '{}' has empty source file path", kernel_spec.unique_id);
-                return KernelSource(src.path.string(), KernelSource::SourceType::FILE_PATH);
+            if constexpr (std::is_same_v<T, std::filesystem::path>) {
+                TT_FATAL(!src.empty(), "KernelSpec '{}' has empty source file path", kernel_spec.unique_id);
+                return KernelSource(src.string(), KernelSource::SourceType::FILE_PATH);
             } else if constexpr (std::is_same_v<T, KernelSpec::SourceCode>) {
                 TT_FATAL(!src.code.empty(), "KernelSpec '{}' has empty inline source code", kernel_spec.unique_id);
                 return KernelSource(src.code, KernelSource::SourceType::SOURCE_CODE);
@@ -2225,7 +2225,7 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(cons
     TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
 
     return experimental::quasar::QuasarDataMovementConfig{
-        .num_threads_per_cluster = kernel_spec.num_threads,
+        .num_threads_per_cluster = static_cast<uint32_t>(kernel_spec.num_threads),
         .compile_args = {},  // only named_compile_args is used
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
@@ -2248,7 +2248,7 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);
 
     return experimental::quasar::QuasarComputeConfig{
-        .num_threads_per_cluster = kernel_spec.num_threads,
+        .num_threads_per_cluster = static_cast<uint32_t>(kernel_spec.num_threads),
         .math_fidelity = compute_config.math_fidelity,
         .fp32_dest_acc_en = compute_config.fp32_dest_acc_en,
         .dst_full_sync_en = compute_config.dst_full_sync_en,
