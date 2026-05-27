@@ -256,7 +256,72 @@
   </p>
 </section>
 
-<!-- SLIDE 5 — Takeaway -->
+<!-- SLIDE 5 — matmul_silu (production TTNN, no agent) -->
+<section class="slide">
+  <h1>matmul_silu — TTNN production vs Makora hand-tuned</h1>
+  <h2>A different question: how does a Makora kernel hold up against TTNN's own optimized matmul + activation?</h2>
+
+  <p class="small">
+    Reference shapes from <code>kernels/Tenstorrent/references/matmul_fused_activation.py</code>, bf16, HiFi2 + fp32_dest_acc.
+    Measured on latest <code>origin/main</code> against <code>kernels/Tenstorrent/fusion_store/new/matmul_silu.py</code>.
+    Math util = matmul FLOPs / (active_cores × 1&nbsp;GHz × 2048&nbsp;FLOPs/cycle/core) — the
+    same convention as the SDPA perf test.
+  </p>
+
+  <table>
+    <tr>
+      <th>Shape</th><th>Path<sup>*</sup></th>
+      <th class="num">TTNN</th><th class="num">Makora</th><th class="num">TTNN faster</th>
+      <th class="num">PCC</th><th class="num">max_abs_diff</th>
+      <th class="num">TTNN util</th><th class="num">Makora util</th>
+    </tr>
+    <tr><td>(32, 32)</td><td>fused</td>
+      <td class="num">5.0 μs</td><td class="num">6.3 μs</td><td class="num">1.25×</td>
+      <td class="num">1.0000</td><td class="num">0.00e+00</td>
+      <td class="num">0.64%</td><td class="num">0.51%</td></tr>
+    <tr><td>(128, 128)</td><td>fused</td>
+      <td class="num">6.1 μs</td><td class="num">9.4 μs</td><td class="num">1.55×</td>
+      <td class="num">1.0000</td><td class="num">0.00e+00</td>
+      <td class="num">2.11%</td><td class="num">1.36%</td></tr>
+    <tr><td>(4, 1024, 1024) batched</td><td>kwarg<sup>*</sup></td>
+      <td class="num">413 μs</td><td class="num">3,346 μs</td><td class="num">8.1×</td>
+      <td class="num">0.9989</td><td class="num">2.50e-01</td>
+      <td class="num">15.87%</td><td class="num">1.96%</td></tr>
+    <tr class="highlight"><td>(4096, 1024, 1024) unfolded</td><td>fused</td>
+      <td class="num">379 μs</td><td class="num">3,219 μs</td><td class="num win">8.5×</td>
+      <td class="num">0.9989</td><td class="num">2.50e-01</td>
+      <td class="num win">17.28%</td><td class="num">2.04%</td></tr>
+    <tr><td>(2, 1, 2048, 2048) batched</td><td>kwarg<sup>*</sup></td>
+      <td class="num">908 μs</td><td class="num">12,944 μs</td><td class="num">14.3×</td>
+      <td class="num">1.0015</td><td class="num">5.00e-01</td>
+      <td class="num">28.88%</td><td class="num">2.03%</td></tr>
+    <tr class="highlight"><td>(4096, 2048, 2048) unfolded</td><td>fused</td>
+      <td class="num">1,054 μs</td><td class="num">13,111 μs</td><td class="num win">12.4×</td>
+      <td class="num">1.0014</td><td class="num">5.00e-01</td>
+      <td class="num win">24.87%</td><td class="num">2.00%</td></tr>
+  </table>
+
+  <p class="small pad-top">
+    <b>fused</b>: one device program, SiLU applied in-kernel between matmul accumulate and pack
+    (<code>bmm_large_block_zm_fused_bias_activation.cpp</code> with <code>SFPU_ACTIVATION=1</code>).
+    Triggered by passing <code>core_grid=device.core_grid</code> to <code>ttnn.matmul(..., activation="silu", ...)</code>.<br>
+    <b>kwarg</b><sup>*</sup>: two device programs (matmul then unary_chain SiLU, with DRAM round-trip).
+    Forced because TTNN's fused path asserts <code>!fused_activation.has_value()</code> when B is batched
+    (<code>matmul_program_config.cpp:454</code>) — no in-kernel fusion available for batched&nbsp;B today.
+    <b>Unfolded</b> rows flatten the batch into M, leave B as 2D — same FMA count, B no longer batched, fused path accepts them.
+  </p>
+
+  <p class="footnote">
+    Headline: at scale (rows 3–6), TTNN's hand-tuned mcast matmul reaches <b>17–29% math utilization</b>
+    versus Makora's <b>~2% plateau</b>. Makora's flat 1-tile-per-core distribution has every core re-fetching
+    its own K-stream from DRAM; TTNN's row/column mcast amortizes DRAM reads across the grid. At small shapes
+    (rows 1–2) both are dispatch-bound and the gap is small.
+    <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/dnijemcevic/makora_matmul_from_main/verify_makora.py" target="_blank">verify_makora.py</a>
+    <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/dnijemcevic/makora_matmul_from_main/tests/ttnn/unit_tests/operations/matmul_silu/test_makora_bench.py" target="_blank">test_makora_bench.py</a>
+  </p>
+</section>
+
+<!-- SLIDE 6 — Takeaway -->
 <section class="slide">
   <h1>Takeaway</h1>
   <ul style="font-size:17px;">
@@ -264,6 +329,7 @@
     <li><b>End-to-end cost per op: one working session.</b> Planner ~12 min, implementer ~9 min, verifier ~5 min. Refinements 5–10 min each. Tests, capability docs, and refinement checklist are byproducts.</li>
     <li><b>The compounding wins are below the kernel.</b> The agent's edge comes from the <code>kernel_lib</code> helpers absorbing complexity, and from a prompt + refinement protocol that captures hardware constraints precisely. The kernel-level work is straightforward; the leverage is in the layers around it.</li>
     <li><b>Helpers are an LLM-friendly surface.</b> Writing kernels through the <code>kernel_lib</code> helper layer is materially easier for the agent to get right than hand-rolling raw LLK calls. <b>backward_softmax</b> (slide 4) — taken through Phase 0 + four refinements for $60.70 / ~2h of agent time — lands at gmean 1.02× of Makora's hand-tuned bf16 kernel on compute kernel duration.</li>
+    <li><b>And in matmul_silu (slide 5), the picture flips: TTNN's production matmul beats Makora 8–14× at scale</b> because TTNN's row/column mcast amortizes DRAM bandwidth across the grid while Makora's flat distribution re-reads K for every core. Makora's design has a structural ceiling on K-streaming-bound workloads.</li>
   </ul>
   <p class="footnote">
     Bucket B (TTNN-primitive baseline) was not part of this comparison — TTNN's own primitives were uplifted in March–April 2026 and now beat Makora 2–4× without any agent involvement; those kernels are obsolete.
