@@ -1175,17 +1175,8 @@ def main() -> None:
                 if ace_step_vae_bfloat8_activations_enabled():
                     print(
                         "[ace_step_v1_5] VAE: bfloat8 activation compute enabled "
-                        "(ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=1; inter-op buffers stay BF16 ROW_MAJOR)",
+                        "(default on; set ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=0 to disable; inter-op buffers stay BF16 ROW_MAJOR)",
                         flush=True,
-                    )
-                with perf.timed("vae_init", device=dev):
-                    tt_vae = TtOobleckVaeDecoder.from_hf_vae_dir(
-                        str(vae_dir),
-                        device=dev,
-                        latent_frames=int(frames),
-                        batch_size=1,
-                        activation_dtype=act_dtype_vae,
-                        weights_dtype=w_dtype_vae,
                     )
                 if tt_vae is None:
                     with perf.timed("vae_init", device=dev):
@@ -1720,7 +1711,7 @@ def main() -> None:
             if ace_step_vae_bfloat8_activations_enabled():
                 print(
                     "[ace_step_v1_5] VAE: bfloat8 activation compute enabled "
-                    "(ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=1; inter-op buffers stay BF16 ROW_MAJOR)",
+                    "(default on; set ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=0 to disable; inter-op buffers stay BF16 ROW_MAJOR)",
                     flush=True,
                 )
             if ace_step_device_num_chips(dev) > 1:
