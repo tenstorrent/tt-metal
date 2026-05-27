@@ -532,21 +532,14 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
                 [cfg["num_experts_per_tok"], 1, batch_chunk, cfg["hidden_size"]],
             )
 
-            if post_combine_output_tensor.shape[2] == ttnn.TILE_SIZE:
-                post_combine_output_tensor = ttnn.experimental.deepseek_moe_post_combine_tilize(
-                    post_combine_output_tensor,
-                    **cfg["quad_ring_deepseek_moe_post_combine_tilize_config"],
-                )
-
-            else:
-                output_shape = list(post_combine_output_tensor.shape)
-                output_shape[2] = ((output_shape[2] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-                post_combine_output_tensor = ttnn.tilize_with_val_padding(
-                    post_combine_output_tensor,
-                    output_tensor_shape=output_shape,
-                    pad_value=0.0,
-                    memory_config=cfg["quad_ring_deepseek_moe_post_combine_tilize_config"]["output_memory_config"],
-                )
+            output_shape = list(post_combine_output_tensor.shape)
+            output_shape[2] = ((output_shape[2] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            post_combine_output_tensor = ttnn.tilize_with_val_padding(
+                post_combine_output_tensor,
+                output_tensor_shape=output_shape,
+                pad_value=0.0,
+                memory_config=cfg["quad_ring_deepseek_moe_post_combine_tilize_config"]["output_memory_config"],
+            )
 
             summed_experts = ttnn.experimental.deepseek_moe_fast_reduce_nc_fused(
                 post_combine_output_tensor,
