@@ -28,6 +28,32 @@
 //
 // This avoids the dst-reload pattern from v2 (which was producing Inf
 // outputs) by letting the packer handle cross-K-block accumulation.
+//
+// File map:
+//   matmul_phase_v3            (~L56)  — single-matmul phase that accumulates
+//                                         via PACKER_L1_ACC across K-blocks.
+//                                         Used for the down matmul (and gate
+//                                         alone if up isn't fused).
+//   matmul_phase_fused_gu_v3   (~L194) — gate+up fused matmul phase: one
+//                                         K-block read of x feeds two
+//                                         output CBs (gate, up) via two
+//                                         matmul subblocks per pass.
+//   multiply_phase_v3          (~L346) — elementwise silu(gate) * up,
+//                                         producing the activated CB.
+//   kernel_main                (~L384) — chunk loop: read counts/idx from
+//                                         scratch CBs, decide effective_chunks
+//                                         via the UNPACK→{MATH,PACK} mailbox
+//                                         handshake, then per-chunk dispatch
+//                                         the fused-GU phase, multiply phase,
+//                                         and down phase.
+//
+// Thread-private symbols `mailbox_write`/`mailbox_read` live in the
+// `ckernel` namespace (one mailbox slot per (sender, receiver) thread
+// pair). See `ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/
+// reader_bmm_tile_layout_in0_receiver.cpp` for the canonical
+// production usage; we use it here to broadcast the device-side count
+// value computed inside an UNPACK-thread block to MATH and PACK so all
+// three threads agree on `effective_chunks` without re-reading L1.
 
 #include <cstdint>
 
@@ -458,11 +484,11 @@ void kernel_main() {
         const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
         count_value = counts_ptr[global_expert_id];
-        mailbox_write(ckernel::ThreadId::MathThreadId, count_value);
-        mailbox_write(ckernel::ThreadId::PackThreadId, count_value);
+        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_value);
+        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_value);
     }));
-    MATH(count_value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-    PACK(count_value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    MATH(count_value = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    PACK(count_value = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
     // count is in TOKEN rows; convert to tile rows (ceil) and then to chunks.
     const uint32_t count_tiles = (count_value + 31) / 32;
     const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
