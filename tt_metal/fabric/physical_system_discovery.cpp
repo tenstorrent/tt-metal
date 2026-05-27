@@ -19,6 +19,7 @@
 #include <umd/device/cluster.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <cstdint>
 #include "tt_metal/llrt/tunnels_from_mmio_device.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
@@ -41,8 +42,11 @@ std::string get_mobo_name() {
 }
 
 TrayID get_tray_id_for_chip(
-    tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id, const std::string& mobo_name, bool using_mock_cluster_desc) {
-    static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
+    tt::umd::ClusterDescriptor& cluster_desc,
+    ChipId chip_id,
+    const std::string& mobo_name,
+    bool using_mock_cluster_desc) {
+    static const std::unordered_map<std::string, std::vector<std::uint16_t>> mobo_to_bus_ids = {
         {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
         {"H13DSG-O-CPU", {0x01, 0x21, 0x41, 0x61, 0x81, 0xa1, 0xc1, 0xe1}},
@@ -74,8 +78,8 @@ std::pair<TrayID, ASICLocation> get_asic_position(
     tt::umd::ClusterDescriptor& cluster_desc,
     ChipId chip_id,
     bool using_mock_cluster_desc,
-    std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& pcie_devices_per_tray,
-    std::unordered_map<uint32_t, ASICLocation>& pcie_id_to_asic_location) {
+    std::unordered_map<std::uint32_t, std::unordered_set<std::uint32_t>>& pcie_devices_per_tray,
+    std::unordered_map<std::uint32_t, ASICLocation>& pcie_id_to_asic_location) {
     if (cluster_desc.get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc.get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
@@ -117,7 +121,7 @@ std::pair<TrayID, ASICLocation> get_asic_position(
 bool resolve_hostname_uniqueness(
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context) {
     using namespace tt::tt_metal::distributed::multihost;
-    constexpr uint32_t controller_rank = 0;
+    constexpr std::uint32_t controller_rank = 0;
     auto my_rank = *(distributed_context->rank());
 
     bool all_hostnames_unique = true;
@@ -132,10 +136,10 @@ bool resolve_hostname_uniqueness(
                         reinterpret_cast<std::byte*>(&peer_hostname_size), sizeof(peer_hostname_size)),
                     Rank{static_cast<int>(rank)},
                     Tag{0});
-                std::vector<uint8_t> serialized_peer_hostname(peer_hostname_size);
+                std::vector<std::uint8_t> serialized_peer_hostname(peer_hostname_size);
                 distributed_context->recv(
                     tt::stl::as_writable_bytes(
-                        tt::stl::Span<uint8_t>(serialized_peer_hostname.data(), serialized_peer_hostname.size())),
+                        tt::stl::Span<std::uint8_t>(serialized_peer_hostname.data(), serialized_peer_hostname.size())),
                     Rank{static_cast<int>(rank)},
                     Tag{0});
 
@@ -155,7 +159,7 @@ bool resolve_hostname_uniqueness(
         }
     } else {
         auto host_name = get_host_name();
-        auto serialized_hostname = std::vector<uint8_t>(host_name.begin(), host_name.end());
+        auto serialized_hostname = std::vector<std::uint8_t>(host_name.begin(), host_name.end());
         std::size_t serialized_hostname_size = serialized_hostname.size();
         distributed_context->send(
             tt::stl::Span<std::byte>(
@@ -163,7 +167,8 @@ bool resolve_hostname_uniqueness(
             Rank{controller_rank},
             Tag{0});
         distributed_context->send(
-            tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_hostname.data(), serialized_hostname.size())),
+            tt::stl::as_writable_bytes(
+                tt::stl::Span<std::uint8_t>(serialized_hostname.data(), serialized_hostname.size())),
             Rank{controller_rank},
             Tag{0});
 
@@ -175,7 +180,7 @@ bool resolve_hostname_uniqueness(
     return all_hostnames_unique;
 }
 
-uint32_t get_chip_id_for_asic(const umd::ClusterDescriptor& cluster_desc, AsicID asic_id) {
+std::uint32_t get_chip_id_for_asic(const umd::ClusterDescriptor& cluster_desc, AsicID asic_id) {
     const auto& chip_unique_ids = cluster_desc.get_chip_unique_ids();
     for (const auto& [chip_id, unique_id] : chip_unique_ids) {
         if (unique_id == *asic_id) {
@@ -257,8 +262,8 @@ struct OneSidedConnection {
     std::string dst_host;
     AsicID src_asic;
     AsicID dst_asic;
-    uint8_t src_chan;
-    uint8_t dst_chan;
+    std::uint8_t src_chan;
+    std::uint8_t dst_chan;
 };
 
 void erase_one_sided_connections(PhysicalSystemDescriptor& psd, const std::vector<OneSidedConnection>& connections) {
@@ -444,13 +449,13 @@ void exchange_metadata(
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     bool issue_gather) {
     using namespace tt::tt_metal::distributed::multihost;
-    constexpr uint32_t controller_rank = 0;
+    constexpr std::uint32_t controller_rank = 0;
     if (*(distributed_context->size()) == 1) {
         return;
     }
     auto my_rank = *(distributed_context->rank());
-    std::set<uint32_t> sender_ranks;
-    std::set<uint32_t> receiver_ranks;
+    std::set<std::uint32_t> sender_ranks;
+    std::set<std::uint32_t> receiver_ranks;
 
     if (issue_gather) {
         receiver_ranks.insert(controller_rank);
@@ -479,7 +484,7 @@ void exchange_metadata(
                 Tag{0});
 
             distributed_context->send(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_desc.data(), serialized_desc.size())),
+                tt::stl::as_writable_bytes(tt::stl::Span<std::uint8_t>(serialized_desc.data(), serialized_desc.size())),
                 Rank{static_cast<int>(rank)},
                 Tag{0});
         }
@@ -491,10 +496,10 @@ void exchange_metadata(
                     reinterpret_cast<std::byte*>(&peer_descriptor_size), sizeof(peer_descriptor_size)),
                 Rank{static_cast<int>(rank)},
                 Tag{0});
-            std::vector<uint8_t> serialized_peer_desc(peer_descriptor_size);
+            std::vector<std::uint8_t> serialized_peer_desc(peer_descriptor_size);
             distributed_context->recv(
                 tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
+                    tt::stl::Span<std::uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
                 Rank{static_cast<int>(rank)},
                 Tag{0});
             auto peer_desc = deserialize_physical_system_descriptor_from_bytes(serialized_peer_desc);
@@ -516,11 +521,21 @@ void exchange_metadata(
 }
 
 bool is_bh_galaxy_rev_c(tt::umd::ClusterDescriptor& cluster_desc) {
-    if (cluster_desc.get_board_type(0) != BoardType::UBB_BLACKHOLE) {
+    // Multi-rank shared-daemon simulator setups (TT_METAL_NO_CHIP_ID_REMAP=1)
+    // give each rank a disjoint chip-id slice (e.g. rank 0={0,1,4,5}, rank 1={2,3,6,7}),
+    // so chip id 0 may not exist in this rank's cluster descriptor. Use any chip the
+    // rank actually owns rather than hardcoding 0, and bail out if the descriptor is
+    // empty.
+    const auto& all_chips = cluster_desc.get_all_chips();
+    if (all_chips.empty()) {
         return false;
     }
-    uint64_t board_id = cluster_desc.get_board_id_for_chip(0);
-    uint32_t revision_bits = (board_id >> 32) & 0xF;  // bits [35:32]
+    const auto probe_chip = *all_chips.begin();
+    if (cluster_desc.get_board_type(probe_chip) != BoardType::UBB_BLACKHOLE) {
+        return false;
+    }
+    std::uint64_t board_id = cluster_desc.get_board_id_for_chip(probe_chip);
+    std::uint32_t revision_bits = (board_id >> 32) & 0xF;  // bits [35:32]
     return revision_bits >= 3;
 }
 
@@ -533,7 +548,6 @@ PhysicalSystemDescriptor run_local_discovery(
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
     bool all_hostnames_unique) {
-
     PhysicalSystemDescriptor psd(target_device_type);
     if (is_bh_galaxy_rev_c(cluster_desc)) {
         psd.set_is_bh_galaxy_rev_c(true);
@@ -630,7 +644,8 @@ PhysicalSystemDescriptor run_local_discovery(
 
     psd.get_system_graph().host_connectivity_graph[hostname_key] = {};
     // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
-    psd.get_ethernet_firmware_version() = cluster_desc.get_cluster_eth_fw_version().value_or(tt::umd::semver_t(0, 0, 0));
+    psd.get_ethernet_firmware_version() =
+        cluster_desc.get_cluster_eth_fw_version().value_or(tt::umd::semver_t(0, 0, 0));
 
     return psd;
 }
@@ -639,24 +654,18 @@ PhysicalSystemDescriptor run_local_discovery_live(
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
     bool all_hostnames_unique) {
-
-    std::unique_ptr<tt::umd::ClusterDescriptor> cdptr =
-        tt::umd::Cluster::create_cluster_descriptor();
+    std::unique_ptr<tt::umd::ClusterDescriptor> cdptr = tt::umd::Cluster::create_cluster_descriptor();
 
     // Live discovery and silicon discovery refresh the descriptor from UMD; other modes keep a stable snapshot of
     // the caller-provided descriptor.
     auto& cluster_desc_ref = *cdptr;
-    return run_local_discovery(
-        cluster_desc_ref,
-        distributed_context,
-        target_device_type,
-        all_hostnames_unique);
+    return run_local_discovery(cluster_desc_ref, distributed_context, target_device_type, all_hostnames_unique);
 }
 
 }  // namespace discovery_impl
 
 PhysicalSystemDescriptor run_physical_system_discovery(
-    tt::umd::ClusterDescriptor & cluster_desc,
+    tt::umd::ClusterDescriptor& cluster_desc,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
     bool run_global_discovery,
@@ -669,16 +678,17 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     bool all_hostnames_unique = resolve_hostname_uniqueness(distributed_context);
 
     static constexpr bool dispatch_local_discovery = false;
-    static constexpr bool dispatch_live_discovery  = true;
+    static constexpr bool dispatch_live_discovery = true;
 
-    bool const dispatch_live =
-        (!run_live_discovery || (target_device_type != TargetDevice::Silicon)) ?
-            dispatch_local_discovery : dispatch_live_discovery;
+    const bool dispatch_live = (!run_live_discovery || (target_device_type != TargetDevice::Silicon))
+                                   ? dispatch_local_discovery
+                                   : dispatch_live_discovery;
 
-    PhysicalSystemDescriptor psd = dispatch_live ?
-        discovery_impl::run_local_discovery_live(distributed_context, target_device_type, all_hostnames_unique) :
-        discovery_impl::run_local_discovery(cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
-
+    PhysicalSystemDescriptor psd =
+        dispatch_live
+            ? discovery_impl::run_local_discovery_live(distributed_context, target_device_type, all_hostnames_unique)
+            : discovery_impl::run_local_discovery(
+                  cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
 
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
@@ -688,7 +698,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     if (run_global_discovery) {
         exchange_metadata(psd, distributed_context, true);
         auto my_rank_val = *(distributed_context->rank());
-        constexpr uint32_t controller_rank = 0;
+        constexpr std::uint32_t controller_rank = 0;
         if (my_rank_val == controller_rank) {
             remove_unresolved_nodes(psd);
             generate_cross_host_connections(psd);
@@ -704,7 +714,7 @@ LocalEthernetMetrics query_local_ethernet_metrics(
     const PhysicalSystemDescriptor& psd, tt::umd::Cluster& cluster, const Hal* hal) {
     const auto& local_asics = psd.get_asics_connected_to_host(psd.my_host_name());
     const auto& local_asic_graph = psd.get_asic_topology(psd.my_host_name());
-    std::unordered_map<AsicID, std::unordered_map<uint8_t, EthernetMetrics>> local_ethernet_metrics;
+    std::unordered_map<AsicID, std::unordered_map<std::uint8_t, EthernetMetrics>> local_ethernet_metrics;
 
     auto retrain_count_addr = hal->get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
@@ -718,15 +728,15 @@ LocalEthernetMetrics query_local_ethernet_metrics(
     auto* cluster_desc = cluster.get_cluster_description();
     bool arch_blackhole = cluster_desc->get_arch(0) == tt::ARCH::BLACKHOLE;
     // Memory layout for 64B metrics is different on WH vs BH systems/
-    uint64_t hi_offset = arch_blackhole ? sizeof(uint32_t) : 0;
-    uint64_t lo_offset = arch_blackhole ? 0 : sizeof(uint32_t);
+    std::uint64_t hi_offset = arch_blackhole ? sizeof(std::uint32_t) : 0;
+    std::uint64_t lo_offset = arch_blackhole ? 0 : sizeof(std::uint32_t);
 
     for (const auto& asic : local_asics) {
         const auto& asic_connections = local_asic_graph.at(asic);
         for (const auto& [dst_asic, eth_connections] : asic_connections) {
             for (const auto& eth_connection : eth_connections) {
-                uint32_t retrain_count_val = 0, crc_error_val = 0, corr_val_lo = 0, corr_val_hi = 0, uncorr_val_lo = 0,
-                         uncorr_val_hi = 0;
+                std::uint32_t retrain_count_val = 0, crc_error_val = 0, corr_val_lo = 0, corr_val_hi = 0,
+                              uncorr_val_lo = 0, uncorr_val_hi = 0;
 
                 auto src_eth_chan = eth_connection.src_chan;
                 auto src_chip_id = get_chip_id_for_asic(*cluster_desc, asic);
@@ -735,24 +745,25 @@ LocalEthernetMetrics query_local_ethernet_metrics(
                     soc_desc.get_eth_core_for_channel(src_eth_chan, CoordSystem::TRANSLATED);
 
                 cluster.read_from_device(
-                    &retrain_count_val, src_chip_id, translated_eth_core, retrain_count_addr, sizeof(uint32_t));
-                cluster.read_from_device(&crc_error_val, src_chip_id, translated_eth_core, crc_addr, sizeof(uint32_t));
+                    &retrain_count_val, src_chip_id, translated_eth_core, retrain_count_addr, sizeof(std::uint32_t));
                 cluster.read_from_device(
-                    &corr_val_hi, src_chip_id, translated_eth_core, corr_addr + hi_offset, sizeof(uint32_t));
+                    &crc_error_val, src_chip_id, translated_eth_core, crc_addr, sizeof(std::uint32_t));
                 cluster.read_from_device(
-                    &corr_val_lo, src_chip_id, translated_eth_core, corr_addr + lo_offset, sizeof(uint32_t));
+                    &corr_val_hi, src_chip_id, translated_eth_core, corr_addr + hi_offset, sizeof(std::uint32_t));
                 cluster.read_from_device(
-                    &uncorr_val_hi, src_chip_id, translated_eth_core, uncorr_addr + hi_offset, sizeof(uint32_t));
+                    &corr_val_lo, src_chip_id, translated_eth_core, corr_addr + lo_offset, sizeof(std::uint32_t));
                 cluster.read_from_device(
-                    &uncorr_val_lo, src_chip_id, translated_eth_core, uncorr_addr + lo_offset, sizeof(uint32_t));
+                    &uncorr_val_hi, src_chip_id, translated_eth_core, uncorr_addr + hi_offset, sizeof(std::uint32_t));
+                cluster.read_from_device(
+                    &uncorr_val_lo, src_chip_id, translated_eth_core, uncorr_addr + lo_offset, sizeof(std::uint32_t));
 
                 local_ethernet_metrics[asic][src_eth_chan] = {
                     .retrain_count = retrain_count_val,
                     .crc_error_count = crc_error_val,
                     .corrected_codeword_count =
-                        (static_cast<uint64_t>(corr_val_hi) << 32) | static_cast<uint64_t>(corr_val_lo),
+                        (static_cast<std::uint64_t>(corr_val_hi) << 32) | static_cast<std::uint64_t>(corr_val_lo),
                     .uncorrected_codeword_count =
-                        (static_cast<uint64_t>(uncorr_val_hi) << 32) | static_cast<uint64_t>(uncorr_val_lo)};
+                        (static_cast<std::uint64_t>(uncorr_val_hi) << 32) | static_cast<std::uint64_t>(uncorr_val_lo)};
             }
         }
     }

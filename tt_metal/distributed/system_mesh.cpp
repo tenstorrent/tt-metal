@@ -23,7 +23,11 @@
 #include "tt_metal/distributed/distributed_coordinate_translator.hpp"
 
 #include "impl/context/metal_context.hpp"
+#include <llrt/tt_cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <cstdio>
+#include <ctime>
+#include <unistd.h>
 
 namespace tt::tt_metal::distributed {
 // Helper type to keep track of device ID and fabric node ID for a given mesh coordinate.
@@ -110,7 +114,10 @@ SystemMesh::Impl::Impl(const tt::tt_fabric::ControlPlane& control_plane) :
         local_physical_translation_map.shape(),
         coordinate_translator_.local_shape());
 
-    // Populate chip IDs for host-local devices.
+    // Populate chip IDs for host-local devices. Control plane LOCAL scope can span the full
+    // logical mesh on each rank (host_topology 1x1); only chips in user_exposed_chip_ids()
+    // are actually opened on this process (TT_VISIBLE_DEVICES / rank binding).
+    const auto& user_exposed_chips = MetalContext::instance().get_cluster().user_exposed_chip_ids();
     for (const auto& local_coord : MeshCoordinateRange(coordinate_translator_.local_shape())) {
         TT_FATAL(
             local_physical_translation_map.at(local_coord).mesh_id() == mesh_id_,
@@ -120,14 +127,40 @@ SystemMesh::Impl::Impl(const tt::tt_fabric::ControlPlane& control_plane) :
             mesh_id_);
 
         const auto global_coord = coordinate_translator_.local_to_global(local_coord);
+        const ChipId chip_id = local_physical_translation_map.at(local_coord).chip_id();
+        const bool is_exposed = user_exposed_chips.contains(chip_id);
+        // #region agent log
+        {
+            std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+            if (f) {
+                std::fprintf(
+                    f,
+                    "{\"sessionId\":\"ae7d0a\",\"hypothesisId\":\"H_USER_EXPOSED_FILTER\","
+                    "\"location\":\"system_mesh.cpp:Impl\",\"message\":\"coord_chip_mapping\","
+                    "\"data\":{\"chip_id\":%d,\"is_exposed\":%s,\"pid\":%d},\"timestamp\":%ld}\n",
+                    chip_id,
+                    is_exposed ? "true" : "false",
+                    (int)getpid(),
+                    (long)std::time(nullptr));
+                std::fclose(f);
+            }
+        }
+        // #endregion
+        if (!is_exposed) {
+            log_debug(
+                LogDistributed,
+                "SystemMesh: Skipping global coordinate {} — chip {} not in user_exposed_chip_ids",
+                global_coord,
+                chip_id);
+            continue;
+        }
         log_debug(
             LogDistributed,
             "SystemMesh: Populating global coordinate {} with physical coordinate {} at local coordinate {}",
             global_coord,
             local_physical_translation_map.at(local_coord),
             local_coord);
-        system_mapped_devices_.at(global_coord).device_id =
-            MaybeRemote<int>::local(local_physical_translation_map.at(local_coord).chip_id());
+        system_mapped_devices_.at(global_coord).device_id = MaybeRemote<int>::local(chip_id);
     }
 }
 
@@ -200,7 +233,8 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
         system_shape);
 
     // Attempt to fit the requested mesh into the system mesh, potentially rotating it.
-    auto requested_mesh_fits = [&system_offset, &system_shape](const tt::stl::SmallVector<uint32_t>& rotated_shape) {
+    auto requested_mesh_fits = [&system_offset,
+                                &system_shape](const tt::stl::SmallVector<std::uint32_t>& rotated_shape) {
         for (int i = 0; i < system_shape.dims(); ++i) {
             if (system_offset[i] + rotated_shape[i] > system_shape[i]) {
                 return false;
@@ -209,7 +243,7 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
         return true;
     };
 
-    tt::stl::SmallVector<uint32_t> rotated_shape(requested_shape.cbegin(), requested_shape.cend());
+    tt::stl::SmallVector<std::uint32_t> rotated_shape(requested_shape.cbegin(), requested_shape.cend());
     size_t rotations = 0;
     while (!requested_mesh_fits(rotated_shape) && rotations < system_dimensions) {
         std::rotate(rotated_shape.begin(), rotated_shape.begin() + 1, rotated_shape.end());
@@ -224,7 +258,7 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
             system_offset);
     }
 
-    tt::stl::SmallVector<uint32_t> end_coord;
+    tt::stl::SmallVector<std::uint32_t> end_coord;
     for (int i = 0; i < system_dimensions; ++i) {
         end_coord.push_back(system_offset[i] + rotated_shape[i] - 1);
     }
