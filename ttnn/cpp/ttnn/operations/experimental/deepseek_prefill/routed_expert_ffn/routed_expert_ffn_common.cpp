@@ -98,21 +98,28 @@ ttnn::Tensor routed_expert_ffn_chunked(
     uint32_t chunk_M_tiles,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output) {
-    // x is (M, K). Split M into chunks of `chunk_M_tiles` tiles, run the BH
-    // routed_expert_ffn per chunk, and write each chunk's output into a narrow
-    // view of the pre-allocated output tensor. ttnn::narrow is zero-copy: it
-    // returns a Tensor that shares the underlying buffer with an offset, so
-    // both the input slice and the output target are device-op-free. The last
-    // chunk may be smaller (handled by the BH path automatically).
+    // x is (..., M, K). Split M into chunks of `chunk_M_tiles` tiles, run the
+    // BH routed_expert_ffn per chunk, and write each chunk's output into a
+    // narrow view of the pre-allocated output tensor. ttnn::narrow is
+    // zero-copy: it returns a Tensor that shares the underlying buffer with an
+    // offset, so both the input slice and the output target are device-op-free.
+    // The last chunk may be smaller (handled by the BH path automatically).
     const auto& x_shape = x.padded_shape();
+    const auto x_rank = x_shape.rank();
+    TT_FATAL(x_rank >= 2, "routed_expert_ffn_chunked: x must have rank >= 2, got {}", x_rank);
+    // For rank > 2, require all leading dims == 1 (we treat x as (M, K)).
+    for (int i = 0; i < static_cast<int>(x_rank) - 2; ++i) {
+        TT_FATAL(x_shape[i] == 1, "routed_expert_ffn_chunked: x leading dim {} must be 1, got {}", i, x_shape[i]);
+    }
     const uint32_t M = x_shape[-2];
     const uint32_t N = down_proj.padded_shape()[-1];
     const uint32_t M_tiles = M / ttnn::TILE_SIZE;
     const uint32_t chunk_M = chunk_M_tiles * ttnn::TILE_SIZE;
     const uint32_t num_chunks = tt::div_up(M_tiles, chunk_M_tiles);
+    const int32_t narrow_dim = static_cast<int32_t>(x_rank) - 2;
 
     // Allocate the full output tensor once (if not supplied). All chunks write
-    // into views of this buffer.
+    // into views of this buffer. Preserve x's rank — leading dims are all 1.
     ttnn::Tensor full_output;
     if (output.has_value()) {
         TT_FATAL(
@@ -123,13 +130,15 @@ ttnn::Tensor routed_expert_ffn_chunked(
             N);
         full_output = *output;
     } else {
+        ttnn::SmallVector<uint32_t> out_dims(x_rank, 1u);
+        out_dims[x_rank - 2] = M;
+        out_dims[x_rank - 1] = N;
         full_output = ttnn::empty(
-            ttnn::Shape({M, N}),
+            ttnn::Shape(out_dims),
             x.dtype(),
             ttnn::TILE_LAYOUT,
             x.device(),
-            tt::tt_metal::MemoryConfig{
-                tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
+            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
     }
 
     for (uint32_t i = 0; i < num_chunks; ++i) {
@@ -138,12 +147,12 @@ ttnn::Tensor routed_expert_ffn_chunked(
         const uint32_t this_len = end_m - begin_m;
         auto chunk_x = ttnn::narrow(
             /*input_tensor=*/x,
-            /*narrow_dim=*/0,
+            /*narrow_dim=*/narrow_dim,
             /*narrow_start=*/static_cast<int32_t>(begin_m),
             /*length=*/this_len);
         auto chunk_out_view = ttnn::narrow(
             /*input_tensor=*/full_output,
-            /*narrow_dim=*/0,
+            /*narrow_dim=*/narrow_dim,
             /*narrow_start=*/static_cast<int32_t>(begin_m),
             /*length=*/this_len);
         (void)routed_expert_ffn_bh(
