@@ -19,6 +19,8 @@
 #include "api/compute/eltwise_unary/elu.h"
 #include "api/compute/eltwise_unary/gelu.h"
 #include "api/compute/eltwise_unary/hardmish.h"
+#include "api/compute/eltwise_unary/tanh_derivative.h"  // TanhDerivative
+#include "api/compute/logsigmoid.h"                     // Logsigmoid (binary in-DEST)
 #include "api/compute/eltwise_unary/hardtanh.h"
 #include "api/compute/eltwise_unary/prelu.h"
 #include "api/compute/eltwise_unary/relu.h"
@@ -49,6 +51,36 @@ template <Dst Slot = Dst::D0>
 struct Gelu : UnaryOp<Gelu<Slot>, Slot> {
     static ALWI void init() { gelu_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) { gelu_tile(to_u32(Slot) + slot_offset); }
+};
+
+/// d/dx(tanh) = sech²(x). LLK uses `fast_and_approx` bool template param;
+/// surfaced as `Approx::Exact` (default) / `Approx::Fast` in chain style.
+template <Approx fast = Approx::Exact, Dst Slot = Dst::D0>
+struct TanhDerivative : UnaryOp<TanhDerivative<fast, Slot>, Slot> {
+    static ALWI void init() { tanh_derivative_tile_init<static_cast<bool>(fast)>(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        tanh_derivative_tile<static_cast<bool>(fast)>(to_u32(Slot) + slot_offset);
+    }
+};
+
+/// d/dx(gelu). Same Approx pattern as TanhDerivative.
+template <Approx fast = Approx::Exact, Dst Slot = Dst::D0>
+struct GeluDerivative : UnaryOp<GeluDerivative<fast, Slot>, Slot> {
+    static ALWI void init() { gelu_derivative_tile_init<static_cast<bool>(fast)>(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        gelu_derivative_tile<static_cast<bool>(fast)>(to_u32(Slot) + slot_offset);
+    }
+};
+
+/// Logsigmoid binary-in-DEST: logsigmoid_tile(In0, In1, Out) where caller
+/// has loaded x into D[In0] and exp(-x) into D[In1]; result placed in D[Out].
+/// Modelled as BinaryOp (3-DEST, no CB sources).
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct Logsigmoid : BinaryOp<Logsigmoid<In0, In1, Out>, In0, In1, Out> {
+    static ALWI void init() { logsigmoid_tile_init(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        logsigmoid_tile(to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(Out) + slot_offset);
+    }
 };
 
 template <Dst Slot = Dst::D0>
