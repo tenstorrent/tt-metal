@@ -62,8 +62,11 @@ uint32_t float_to_u32(float v) {
 
 // Upper cap on TP>1 worker cores per chip. The MUX channel count is uint8_t
 // but in practice the fabric MUX rejects (or deadlocks) above ~64 full-size
-// channels per core. Don't raise without verifying on hardware.
-constexpr uint32_t kMaxMuxWorkersPerChip = 64u;
+// channels per core. Cap lower than max for fewer fabric ops per chip —
+// each worker sends ~1 packet per direction per chunk, so doubling workers
+// doubles fabric traffic. 16 keeps enough compute parallelism for the post
+// phase without saturating the fabric link.
+constexpr uint32_t kMaxMuxWorkersPerChip = 16u;
 constexpr uint32_t kMuxRowsThreshold = 2u;  // < this many rows → use 1 worker
 
 // Aim for ≥2 rows per worker so the chunk-size heuristic can produce ≥2
@@ -564,9 +567,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             output_cb_id,
             num_tile_cols,
             block_size,
-            // Compute pushes post-transpose stat tiles (row-0 stats) here;
-            // the writer extracts each row 0 into the packed staging CB.
-            stats_transposed_local_cb_id,
+            // Compute pushes col-0 stat tiles here (reduce<SUM,REDUCE_ROW>
+            // output: 32 sums in col 0, rest = 0 by LLK). The writer
+            // extracts col 0 directly via strided L1 loads to pack the page.
+            stats_local_cb_id,
             // The writer scatters the gathered packed pages into row 0 of
             // these tiles for compute to transpose back.
             stats_gathered_cb_id,
