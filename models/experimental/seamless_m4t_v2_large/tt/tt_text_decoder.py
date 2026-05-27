@@ -23,12 +23,14 @@ import ttnn
 
 from models.common.utility_functions import is_blackhole, nearest_32
 from models.experimental.seamless_m4t_v2_large.tt.common import (
+    all_reduce_sum_replicate,
     build_ln_sharded_config,
     matmul_program_config,
     sdpa_program_config,
     TILE,
     to_torch_replicated_first_shard,
 )
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import mesh_cluster_axis, get_tp
 
 
 def _num_to_corerange(batch: int) -> ttnn.CoreRange:
@@ -60,26 +62,38 @@ def init_text_decoder_kv_cache(
     max_seq_len: int,
     encoder_seq_len: int,
     cache_dtype: ttnn.DataType = ttnn.bfloat16,
+    tp: int = 1,
 ) -> tuple[list[list[ttnn.Tensor]], list[list[ttnn.Tensor]]]:
     """
     Allocate per-layer self-attention and cross-attention KV caches.
 
-    Follows the SpeechT5 / Whisper pattern in ``ttnn_speecht5_decoder.init_kv_cache``.
+    When ``tp > 1``, each device holds caches for ``num_attention_heads // tp`` local heads.
+    Caches are replicated (zero-initialized) and diverge during decode as each device
+    writes its local head K/V.
 
     Returns:
         ``(kv_cache, cross_attn_cache)`` where each is a list of length ``num_hidden_layers``
         containing ``[K, V]`` device tensors.
     """
+    num_local_heads = num_attention_heads // tp
     head_dim = hidden_size // num_attention_heads
     chunk_size = 256
     padded_max_seq_len = ((max_seq_len + chunk_size - 1) // chunk_size) * chunk_size
+
+    # For multi-device, replicate the zero tensors to all devices.
+    mm: Optional[object] = None
+    try:
+        if hasattr(device, "get_num_devices") and int(device.get_num_devices()) > 1:
+            mm = ttnn.ReplicateTensorToMesh(device)
+    except Exception:
+        pass
 
     kv_cache: list[list[ttnn.Tensor]] = []
     cross_attn_cache: list[list[ttnn.Tensor]] = []
 
     for _ in range(num_hidden_layers):
-        k_cache = torch.zeros((max_batch_size, num_attention_heads, padded_max_seq_len, head_dim))
-        v_cache = torch.zeros((max_batch_size, num_attention_heads, padded_max_seq_len, head_dim))
+        k_cache = torch.zeros((max_batch_size, num_local_heads, padded_max_seq_len, head_dim))
+        v_cache = torch.zeros((max_batch_size, num_local_heads, padded_max_seq_len, head_dim))
         kv_cache.append(
             [
                 ttnn.from_torch(
@@ -88,6 +102,7 @@ def init_text_decoder_kv_cache(
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mm,
                 ),
                 ttnn.from_torch(
                     v_cache,
@@ -95,12 +110,13 @@ def init_text_decoder_kv_cache(
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mm,
                 ),
             ]
         )
 
-        cross_k = torch.zeros((max_batch_size, num_attention_heads, encoder_seq_len, head_dim))
-        cross_v = torch.zeros((max_batch_size, num_attention_heads, encoder_seq_len, head_dim))
+        cross_k = torch.zeros((max_batch_size, num_local_heads, encoder_seq_len, head_dim))
+        cross_v = torch.zeros((max_batch_size, num_local_heads, encoder_seq_len, head_dim))
         cross_attn_cache.append(
             [
                 ttnn.from_torch(
@@ -109,6 +125,7 @@ def init_text_decoder_kv_cache(
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mm,
                 ),
                 ttnn.from_torch(
                     cross_v,
@@ -116,6 +133,7 @@ def init_text_decoder_kv_cache(
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mm,
                 ),
             ]
         )
@@ -402,6 +420,9 @@ class TTSeamlessM4Tv2Decoder:
         self.hidden_size = hidden_size
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len
+        self._tp = get_tp(device)
+        self._cluster_axis = mesh_cluster_axis(device)
+        self._num_local_heads = num_attention_heads // self._tp
         self._sdpa_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -448,21 +469,24 @@ class TTSeamlessM4Tv2Decoder:
         self._decode_pos_cache: dict[tuple[int, int], ttnn.Tensor] = {}
 
     def _decode_sdpa_configs(
-        self, active_seq_len: int
+        self, active_seq_len: int = 0
     ) -> tuple[ttnn.MemoryConfig, ttnn.SDPAProgramConfig, ttnn.DeviceComputeKernelConfig]:
         chunk_size = 256
         padded_max = ((self.max_seq_len + chunk_size - 1) // chunk_size) * chunk_size
-        bucket = _effective_decode_sdpa_seq_len(active_seq_len, padded_max)
-        key = (self.max_batch_size, self.max_seq_len, bucket)
+        # FIXED: always use padded_max (not dynamic bucket) so the SDPAProgramConfig is
+        # identical for ALL decode positions → a single trace capture covers the full sequence.
+        # Previously: _effective_decode_sdpa_seq_len(active_seq_len, padded_max) returned
+        # dynamic buckets (32/64/128/256) that forced re-capture at each boundary.
+        key = (self.max_batch_size, self.max_seq_len)  # same key every call
         cached = self._decode_sdpa_cache.get(key)
         if cached is None:
             cached = _get_decode_sdpa_configs(
                 self.device,
-                num_attention_heads=self.num_attention_heads,
+                num_attention_heads=self._num_local_heads,  # TP-aware
                 hidden_size=self.hidden_size,
                 max_batch_size=self.max_batch_size,
                 max_seq_len=self.max_seq_len,
-                active_seq_len=active_seq_len,
+                active_seq_len=padded_max,  # fixed max
             )
             self._decode_sdpa_cache[key] = cached
         return cached
@@ -662,8 +686,13 @@ class TTSeamlessM4Tv2Decoder:
         attn_scale: float,
     ) -> ttnn.Tensor:
         """Single-token self-attention with KV cache (decode head ops + ``sdpa_decode``)."""
+        tp = self._tp
+        num_local_heads = num_heads // tp
+        local_hidden = hidden_size // tp  # head output dim per device when tp > 1
         seq_q = 1
         padded_batch = nearest_32(self.max_batch_size)
+        qkv_local_dim = 3 * local_hidden  # 3*H for tp=1, 3*H//tp for tp>1
+
         qkv_w = attn_module.qkv_decode
         qkv = self._linear(
             hidden_states,
@@ -674,16 +703,16 @@ class TTSeamlessM4Tv2Decoder:
         )
         qkv_4d = ttnn.reshape(
             qkv,
-            (1, 1, batch, 3 * hidden_size),
-            (1, 1, padded_batch, 3 * hidden_size),
+            (1, 1, batch, qkv_local_dim),
+            (1, 1, padded_batch, qkv_local_dim),
         )
         ttnn.deallocate(qkv)
 
         _, sdpa_decode_progcfg, sdpa_decode_compute_cfg, create_heads_memcfg, sdpa_output_memcfg = sdpa_decode_bundle
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             qkv_4d,
-            num_heads=num_heads,
-            num_kv_heads=num_heads,
+            num_heads=num_local_heads,
+            num_kv_heads=num_local_heads,
             memory_config=create_heads_memcfg,
         )
         ttnn.deallocate(qkv_4d)
@@ -707,13 +736,13 @@ class TTSeamlessM4Tv2Decoder:
         ttnn.deallocate(q)
 
         attn_out = ttnn.to_memory_config(attn_out, memory_config=sdpa_output_memcfg)
-        merged_4d = ttnn.experimental.nlp_concat_heads_decode(attn_out, num_heads=num_heads)
+        merged_4d = ttnn.experimental.nlp_concat_heads_decode(attn_out, num_heads=num_local_heads)
         ttnn.deallocate(attn_out)
         if padded_batch != batch:
-            merged_4d = ttnn.slice(merged_4d, [0, 0, 0, 0], [1, 1, batch, hidden_size], [1, 1, 1, 1])
+            merged_4d = ttnn.slice(merged_4d, [0, 0, 0, 0], [1, 1, batch, local_hidden], [1, 1, 1, 1])
         merged = ttnn.sharded_to_interleaved(merged_4d, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
         ttnn.deallocate(merged_4d)
-        merged = ttnn.reshape(merged, (batch, seq_q, hidden_size))
+        merged = ttnn.reshape(merged, (batch, seq_q, local_hidden))
         proj = self._linear(
             merged,
             attn_module.out_proj.weight,
@@ -723,6 +752,13 @@ class TTSeamlessM4Tv2Decoder:
             is_decode=True,
         )
         ttnn.deallocate(merged)
+        if tp > 1:
+            proj = all_reduce_sum_replicate(
+                proj,
+                self.device,
+                cluster_axis=self._cluster_axis,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
         return proj
 
     def _cross_attention_decode(
@@ -745,6 +781,9 @@ class TTSeamlessM4Tv2Decoder:
         pc_kv_enc: Optional[object],
         attn_scale: float,
     ) -> ttnn.Tensor:
+        tp = self._tp
+        num_local_heads = num_heads // tp
+        local_hidden = hidden_size // tp  # Q output dim per device when tp > 1
         seq_q = 1
 
         if cross_attn_cache is not None and cross_attn_cache_valid:
@@ -756,7 +795,7 @@ class TTSeamlessM4Tv2Decoder:
                 program_config=pc_q,
                 is_decode=True,
             )
-            qh = self._cross_q_heads_decode(q, num_heads=num_heads)
+            qh = self._cross_q_heads_decode(q, num_heads=num_local_heads)
             kh, vh = cross_attn_cache[0], cross_attn_cache[1]
         else:
             q = self._linear(
@@ -775,12 +814,14 @@ class TTSeamlessM4Tv2Decoder:
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 program_config=pc_kv_enc,
             )
-            k = ttnn.slice(kv_packed, [0, 0, 0], [batch, enc_seq, hidden_size], [1, 1, 1])
-            v = ttnn.slice(kv_packed, [0, 0, hidden_size], [batch, enc_seq, 2 * hidden_size], [1, 1, 1])
+            # TP: kv output dim is 2*local_hidden; split at local_hidden
+            kv_half = int(kv_packed.shape[-1]) // 2
+            k = ttnn.slice(kv_packed, [0, 0, 0], [batch, enc_seq, kv_half], [1, 1, 1])
+            v = ttnn.slice(kv_packed, [0, 0, kv_half], [batch, enc_seq, 2 * kv_half], [1, 1, 1])
             ttnn.deallocate(kv_packed)
-            qh = self._heads(q, batch, seq_q, num_heads, head_dim)
-            kh = self._heads(k, batch, enc_seq, num_heads, head_dim)
-            vh = self._heads(v, batch, enc_seq, num_heads, head_dim)
+            qh = self._heads(q, batch, seq_q, num_local_heads, head_dim)
+            kh = self._heads(k, batch, enc_seq, num_local_heads, head_dim)
+            vh = self._heads(v, batch, enc_seq, num_local_heads, head_dim)
             ttnn.deallocate(q)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
@@ -804,7 +845,7 @@ class TTSeamlessM4Tv2Decoder:
 
         merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
-        merged = ttnn.reshape(merged_4d, (batch, seq_q, hidden_size))
+        merged = ttnn.reshape(merged_4d, (batch, seq_q, local_hidden))
         ttnn.deallocate(merged_4d)
         proj = self._linear(
             merged,
@@ -815,6 +856,13 @@ class TTSeamlessM4Tv2Decoder:
             is_decode=True,
         )
         ttnn.deallocate(merged)
+        if tp > 1:
+            proj = all_reduce_sum_replicate(
+                proj,
+                self.device,
+                cluster_axis=self._cluster_axis,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
         return proj
 
     def _attention(
@@ -890,11 +938,17 @@ class TTSeamlessM4Tv2Decoder:
                 attn_scale=attn_scale,
             )
 
+        tp = self._tp
+        num_local_heads = num_heads // tp
+        local_hidden = hidden_size // tp  # per-device output dim
+
         q_src = hidden_states
         kv_src = hidden_states if encoder_hidden_states is None else encoder_hidden_states
 
         if encoder_hidden_states is None and hasattr(attn_module, "qkv"):
-            pc_qkv = self._matmul_pc(batch * seq_q, hidden_size, 3 * hidden_size)
+            # Self-attention fused QKV. For TP: output is 3*local_hidden per device.
+            qkv_out_dim = int(attn_module.qkv.weight.shape[-1])  # 3*H or 3*H//tp
+            pc_qkv = self._matmul_pc(batch * seq_q, hidden_size, qkv_out_dim)
             qkv = self._linear(
                 q_src,
                 attn_module.qkv.weight,
@@ -902,12 +956,12 @@ class TTSeamlessM4Tv2Decoder:
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 program_config=pc_qkv,
             )
-            qkv_4d = ttnn.reshape(qkv, (batch, 1, seq_q, 3 * hidden_size))
+            qkv_4d = ttnn.reshape(qkv, (batch, 1, seq_q, qkv_out_dim))
             ttnn.deallocate(qkv)
             q, k, v = ttnn.experimental.nlp_create_qkv_heads(
                 qkv_4d,
-                num_heads=num_heads,
-                num_kv_heads=num_heads,
+                num_heads=num_local_heads,
+                num_kv_heads=num_local_heads,
                 transpose_k_heads=False,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
@@ -916,10 +970,9 @@ class TTSeamlessM4Tv2Decoder:
             ttnn.deallocate(q)
             kh, vh = k, v
         else:
-            pc_q = self._matmul_pc(batch * seq_q, hidden_size, hidden_size)
-            pc_kv_single = (
-                pc_q if seq_k == seq_q and kv_src is q_src else self._matmul_pc(batch * seq_k, hidden_size, hidden_size)
-            )
+            # Cross-attention (separate Q and fused KV). For TP: Q output = local_hidden, KV = 2*local_hidden.
+            q_out_dim = int(attn_module.q_proj.weight.shape[-1])  # H or H//tp
+            pc_q = self._matmul_pc(batch * seq_q, hidden_size, q_out_dim)
 
             q = self._linear(
                 q_src,
@@ -930,7 +983,8 @@ class TTSeamlessM4Tv2Decoder:
             )
             kv_packed = None
             if hasattr(attn_module, "kv"):
-                pc_kv2 = self._matmul_pc(batch * seq_k, hidden_size, 2 * hidden_size)
+                kv_out_dim = int(attn_module.kv.weight.shape[-1])  # 2H or 2H//tp
+                pc_kv2 = self._matmul_pc(batch * seq_k, hidden_size, kv_out_dim)
                 kv_packed = self._linear(
                     kv_src,
                     attn_module.kv.weight,
@@ -938,9 +992,12 @@ class TTSeamlessM4Tv2Decoder:
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                     program_config=pc_kv2,
                 )
-                k = ttnn.slice(kv_packed, [0, 0, 0], [batch, seq_k, hidden_size], [1, 1, 1])
-                v = ttnn.slice(kv_packed, [0, 0, hidden_size], [batch, seq_k, 2 * hidden_size], [1, 1, 1])
+                kv_half = int(kv_packed.shape[-1]) // 2
+                k = ttnn.slice(kv_packed, [0, 0, 0], [batch, seq_k, kv_half], [1, 1, 1])
+                v = ttnn.slice(kv_packed, [0, 0, kv_half], [batch, seq_k, 2 * kv_half], [1, 1, 1])
             else:
+                k_out_dim = int(attn_module.k_proj.weight.shape[-1])
+                pc_kv_single = self._matmul_pc(batch * seq_k, hidden_size, k_out_dim)
                 k = self._linear(
                     kv_src,
                     attn_module.k_proj.weight,
@@ -956,9 +1013,9 @@ class TTSeamlessM4Tv2Decoder:
                     program_config=pc_kv_single,
                 )
 
-            qh = self._heads(q, batch, seq_q, num_heads, head_dim)
-            kh = self._heads(k, batch, seq_k, num_heads, head_dim)
-            vh = self._heads(v, batch, seq_k, num_heads, head_dim)
+            qh = self._heads(q, batch, seq_q, num_local_heads, head_dim)
+            kh = self._heads(k, batch, seq_k, num_local_heads, head_dim)
+            vh = self._heads(v, batch, seq_k, num_local_heads, head_dim)
 
             ttnn.deallocate(q)
             if kv_packed is not None:
@@ -1006,7 +1063,7 @@ class TTSeamlessM4Tv2Decoder:
         if (
             len(ls) == 4
             and int(ls[0]) == batch
-            and int(ls[1]) == num_heads
+            and int(ls[1]) == num_local_heads
             and int(ls[2]) == seq_q
             and int(ls[3]) == head_dim
             and len(ps) >= 4
@@ -1017,23 +1074,31 @@ class TTSeamlessM4Tv2Decoder:
             attn_for_concat = ttnn.slice(
                 attn_out,
                 [0, 0, 0, 0],
-                [batch, num_heads, seq_q, head_dim],
+                [batch, num_local_heads, seq_q, head_dim],
                 [1, 1, 1, 1],
             )
             ttnn.deallocate(attn_out)
 
         merged_4d = ttnn.experimental.nlp_concat_heads(attn_for_concat, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_for_concat)
-        merged = ttnn.reshape(merged_4d, (batch, seq_q, hidden_size))
+        merged = ttnn.reshape(merged_4d, (batch, seq_q, local_hidden))
         ttnn.deallocate(merged_4d)
+        out_proj_in_dim = int(attn_module.out_proj.weight.shape[-2])  # H or H//tp
         proj = self._linear(
             merged,
             attn_module.out_proj.weight,
             attn_module.out_proj.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            program_config=self._matmul_pc(batch * seq_q, hidden_size, hidden_size),
+            program_config=self._matmul_pc(batch * seq_q, out_proj_in_dim, hidden_size),
         )
         ttnn.deallocate(merged)
+        if tp > 1:
+            proj = all_reduce_sum_replicate(
+                proj,
+                self.device,
+                cluster_axis=self._cluster_axis,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
         return proj
 
     def _decoder_layers(
@@ -1071,7 +1136,8 @@ class TTSeamlessM4Tv2Decoder:
         # Encoder keys are often 32-wide after subsampling; k_chunk=64 mis-schedules SDPA vs PyTorch.
         sdpa_cross = self._sdpa_program_config(seq, enc_seq, large_chunks=(enc_seq >= 64))
 
-        ffn_intermediate = int(parameters.layers[0].ffn.fc1.weight.shape[1])
+        # fc1.weight shape is [in, out//tp] for TP (column-parallel). shape[-1] = local ffn dim.
+        ffn_intermediate = int(parameters.layers[0].ffn.fc1.weight.shape[-1])
         token_m = batch * seq
         m_tiles = (batch * seq + 31) // 32
         n_tiles = hidden_size // 32
@@ -1090,16 +1156,22 @@ class TTSeamlessM4Tv2Decoder:
         attn_scale = None
         if is_decode:
             assert cache_seq_len is not None
-            sdpa_decode_bundle = self._decode_sdpa_configs(cache_seq_len)
+            sdpa_decode_bundle = self._decode_sdpa_configs()  # fixed config (no active_seq_len)
             attn_scale = 1.0 / math.sqrt(head_dim)
+            # Read TP-aware dims from actual weight shapes (correct for both tp=1 and tp>1).
+            qkv_decode_out = int(parameters.layers[0].self_attn.qkv_decode.weight.shape[-1])
+            self_out_in = int(parameters.layers[0].self_attn.out_proj.weight.shape[-2])
+            cross_q_out = int(parameters.layers[0].cross_attention.q_proj.weight.shape[-1])
+            cross_out_in = int(parameters.layers[0].cross_attention.out_proj.weight.shape[-2])
             decode_attn_pcs = {
-                "qkv": self._decode_matmul_pc(hidden_size, 3 * hidden_size),
-                "out": self._decode_matmul_pc(hidden_size, hidden_size),
-                "q_cross": self._decode_matmul_pc(hidden_size, hidden_size),
-                "out_cross": self._decode_matmul_pc(hidden_size, hidden_size),
+                "qkv": self._decode_matmul_pc(hidden_size, qkv_decode_out),
+                "out": self._decode_matmul_pc(self_out_in, hidden_size),
+                "q_cross": self._decode_matmul_pc(hidden_size, cross_q_out),
+                "out_cross": self._decode_matmul_pc(cross_out_in, hidden_size),
             }
             if not cross_attn_cache_valid:
-                decode_attn_pcs["kv_enc"] = self._matmul_pc(batch * enc_seq, hidden_size, 2 * hidden_size)
+                cross_kv_out = int(parameters.layers[0].cross_attention.kv.weight.shape[-1])
+                decode_attn_pcs["kv_enc"] = self._matmul_pc(batch * enc_seq, hidden_size, cross_kv_out)
 
         for i in range(num_layers):
             layer = parameters.layers[i]
@@ -1206,6 +1278,13 @@ class TTSeamlessM4Tv2Decoder:
                 is_decode=is_decode,
             )
             ttnn.deallocate(ff_in)
+            if self._tp > 1:
+                ff = all_reduce_sum_replicate(
+                    ff,
+                    self.device,
+                    cluster_axis=self._cluster_axis,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
             residual = hidden
             hidden = ttnn.add(residual, ff, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(residual)

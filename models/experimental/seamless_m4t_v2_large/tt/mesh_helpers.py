@@ -34,6 +34,15 @@ def mesh_num_devices(device: ttnn.Device) -> int:
     return 1
 
 
+def get_tp(device: ttnn.Device) -> int:
+    """Tensor-parallelism degree = number of devices on the cluster axis.
+
+    On a 1×4 mesh all 4 devices participate in TP=4.  On a 1×1 mesh (P150)
+    TP=1 means no parallelism (replicated weights, no all_reduce needed).
+    """
+    return mesh_num_devices(device)
+
+
 def mesh_cluster_axis(device: ttnn.Device) -> int:
     """CCL cluster axis: ``1`` for ``MeshShape(1, N)``, ``0`` for ``MeshShape(N, 1)``."""
     if mesh_num_devices(device) <= 1:
@@ -230,19 +239,32 @@ def from_torch_bfloat16_tile(
 # ---------------------------------------------------------------------------
 
 
-def open_seamless_mesh_device(*, enable_decode_trace: bool = False):
+def open_seamless_mesh_device(*, enable_decode_trace: bool = False, enable_2cq: bool = False):
     """Open mesh for ``demo.py``: (1,1) on P150, (1,4) on BH QB.
 
     When ``enable_decode_trace=True``, reserve ``trace_region_size`` for
     ``TTSeamlessM4Tv2Model.generate(..., use_decode_trace=True)``.
+    When ``enable_2cq=True``, open with ``num_command_queues=2`` so CQ1 can
+    stage H2D copies while CQ0 executes the decode trace.
+    ``enable_2cq`` is only effective when combined with ``enable_decode_trace``.
     """
     num_devices = ttnn.get_num_devices()
     if num_devices >= 4:
+        if enable_decode_trace and enable_2cq:
+            device_params = dict(DEVICE_PARAMS_BH_QB_E2E_2CQ_GENERATE)
+        elif enable_decode_trace:
+            device_params = dict(DEVICE_PARAMS_BH_QB_FULL_DECODE_TRACE)
+        else:
+            device_params = dict(DEVICE_PARAMS_BH_QB_FULL)
         mesh_shape = ttnn.MeshShape(*MESH_SHAPE_BH_QB)
-        device_params = dict(DEVICE_PARAMS_BH_QB_FULL_DECODE_TRACE if enable_decode_trace else DEVICE_PARAMS_BH_QB_FULL)
     else:
+        if enable_decode_trace and enable_2cq:
+            device_params = dict(DEVICE_PARAMS_P150_E2E_2CQ_GENERATE)
+        elif enable_decode_trace:
+            device_params = dict(DEVICE_PARAMS_P150_FULL_DECODE_TRACE)
+        else:
+            device_params = dict(DEVICE_PARAMS_P150_FULL)
         mesh_shape = ttnn.MeshShape(*MESH_SHAPE_P150)
-        device_params = dict(DEVICE_PARAMS_P150_FULL_DECODE_TRACE if enable_decode_trace else DEVICE_PARAMS_P150_FULL)
 
     fabric_config = device_params.pop("fabric_config", None)
     if fabric_config is not None:

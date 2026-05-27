@@ -12,6 +12,7 @@ import ttnn
 
 from models.experimental.seamless_m4t_v2_large.tt.common import (
     TILE,
+    all_reduce_sum_replicate,
     build_ln_sharded_config,
     dram_linear_input_mem_config,
     dram_matmul_program_config,
@@ -20,6 +21,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     sdpa_program_config,
     width_sharded_to_l1_interleaved,
 )
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import mesh_cluster_axis, get_tp
 
 
 class TTSeamlessM4Tv2Encoder:
@@ -49,6 +51,8 @@ class TTSeamlessM4Tv2Encoder:
         self.num_hidden_layers = num_hidden_layers
         self.num_attention_heads = num_attention_heads
         self.hidden_size = hidden_size
+        self._tp = get_tp(device)
+        self._cluster_axis = mesh_cluster_axis(device)
         self._sdpa_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi3,
@@ -447,6 +451,33 @@ class TTSeamlessM4Tv2Encoder:
         ttnn.deallocate(normed_sharded)
         return normed
 
+    def _linear_tp(
+        self,
+        x: ttnn.Tensor,
+        weight: ttnn.Tensor,
+        bias: ttnn.Tensor,
+        *,
+        activation: Optional[str] = None,
+        memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
+    ) -> ttnn.Tensor:
+        """Regular (non-DRAM-sharded) linear for TP>1 path.
+
+        Used when weights are ``ShardTensorToMesh`` distributed across devices.
+        Each device computes a local partial result; the caller applies
+        ``all_reduce_sum_replicate`` after row-parallel layers.
+        """
+        kwargs = {}
+        if activation == "relu":
+            kwargs["activation"] = "relu"
+        return ttnn.linear(
+            x,
+            weight,
+            bias=bias,
+            memory_config=memory_config,
+            compute_kernel_config=self._linear_ln_compute_cfg,
+            **kwargs,
+        )
+
     def _attention(
         self,
         hidden_states: ttnn.Tensor,
@@ -461,28 +492,40 @@ class TTSeamlessM4Tv2Encoder:
         hidden_size: int,
         sdpa_cfg: ttnn.SDPAProgramConfig,
     ) -> ttnn.Tensor:
-        # Fused QKV projection: one matmul producing
-        # ``[B, S, 3 * hidden]`` instead of three separate Q/K/V matmuls.
-        qkv = self._linear(
-            hidden_states,
-            attn_module.qkv.weight,
-            attn_module.qkv.bias,
-            logical_out_dim=3 * hidden_size,
-            accept_sharded_input=ttnn.is_sharded(hidden_states),
-            batch=batch,
-            seq=seq_q,
-        )
+        tp = self._tp
+        num_local_heads = num_heads // tp  # = num_heads when tp == 1
+        local_hidden = hidden_size // tp  # per-device head output dim when tp > 1
 
-        # ``nlp_create_qkv_heads`` consumes a 4-D ``[B, 1, S, 3*H]`` input and
-        # returns Q/K/V already shaped as ``[B, num_heads, S, head_dim]`` --
-        # this fuses the per-tensor reshape + permute (HC transpose) into a
-        # single device kernel.
-        qkv_4d = ttnn.reshape(qkv, (batch, 1, seq_q, 3 * hidden_size))
+        if tp > 1:
+            # TP path: column-parallel QKV (output dim = 3 * hidden_size // tp per device).
+            qkv_dim = 3 * local_hidden
+            qkv = self._linear_tp(
+                hidden_states,
+                attn_module.qkv.weight,
+                attn_module.qkv.bias,
+            )
+            qkv_4d = ttnn.reshape(qkv, (batch, 1, seq_q, qkv_dim))
+            ttnn.deallocate(qkv)
+        else:
+            # Single-device DRAM-sharded path.
+            qkv_dim = 3 * hidden_size
+            qkv = self._linear(
+                hidden_states,
+                attn_module.qkv.weight,
+                attn_module.qkv.bias,
+                logical_out_dim=qkv_dim,
+                accept_sharded_input=ttnn.is_sharded(hidden_states),
+                batch=batch,
+                seq=seq_q,
+            )
+            qkv_4d = ttnn.reshape(qkv, (batch, 1, seq_q, qkv_dim))
 
+        # ``nlp_create_qkv_heads`` consumes a 4-D ``[B, 1, S, 3*local_H]`` input and
+        # returns Q/K/V already shaped as ``[B, num_local_heads, S, head_dim]``.
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv_4d,
-            num_heads=num_heads,
-            num_kv_heads=num_heads,
+            num_heads=num_local_heads,
+            num_kv_heads=num_local_heads,
             transpose_k_heads=False,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
@@ -505,24 +548,42 @@ class TTSeamlessM4Tv2Encoder:
 
         merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
-        # ``ttnn.reshape`` returns a view onto ``merged_4d`` storage. For short-seq prefill the
-        # next matmul (DRAM-sharded fast path) consumes ``merged`` synchronously, so deallocating
-        # ``merged_4d`` early is safe. The long-seq chunked matmul makes multiple intermediate
-        # allocations before consuming ``merged``, which can overwrite the freed view; keep
-        # ``merged_4d`` alive until after the projection.
-        merged = ttnn.reshape(merged_4d, (batch, seq_q, hidden_size))
 
-        proj = self._linear(
-            merged,
-            attn_module.out_proj.weight,
-            attn_module.out_proj.bias,
-            logical_out_dim=hidden_size,
-            keep_sharded_output=True,
-            batch=batch,
-            seq=seq_q,
-        )
-        ttnn.deallocate(merged_4d)
-        return proj
+        if tp > 1:
+            # TP: merged is [B, 1, S, H//tp]; reshape and row-parallel out_proj.
+            merged = ttnn.reshape(merged_4d, (batch, seq_q, local_hidden))
+            proj = self._linear_tp(
+                merged,
+                attn_module.out_proj.weight,
+                attn_module.out_proj.bias,
+            )
+            ttnn.deallocate(merged_4d)
+            # all_reduce: sum partial [B, S, H] across TP devices → replicated [B, S, H].
+            proj = all_reduce_sum_replicate(
+                proj,
+                self.device,
+                cluster_axis=self._cluster_axis,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            return proj
+        else:
+            # ``ttnn.reshape`` returns a view onto ``merged_4d`` storage. For short-seq prefill the
+            # next matmul (DRAM-sharded fast path) consumes ``merged`` synchronously, so deallocating
+            # ``merged_4d`` early is safe. The long-seq chunked matmul makes multiple intermediate
+            # allocations before consuming ``merged``, which can overwrite the freed view; keep
+            # ``merged_4d`` alive until after the projection.
+            merged = ttnn.reshape(merged_4d, (batch, seq_q, hidden_size))
+            proj = self._linear(
+                merged,
+                attn_module.out_proj.weight,
+                attn_module.out_proj.bias,
+                logical_out_dim=hidden_size,
+                keep_sharded_output=True,
+                batch=batch,
+                seq=seq_q,
+            )
+            ttnn.deallocate(merged_4d)
+            return proj
 
     def forward(
         self,
@@ -553,6 +614,7 @@ class TTSeamlessM4Tv2Encoder:
         hidden_size = self.hidden_size
         head_dim = hidden_size // num_heads
         num_layers = self.num_hidden_layers
+        tp = self._tp
 
         if inputs_embeds is not None:
             batch = int(inputs_embeds.shape[0])
@@ -592,21 +654,26 @@ class TTSeamlessM4Tv2Encoder:
         n_tiles = hidden_size // 32
         ffn_dim = 8 * hidden_size
         token_rows = batch * seq
-        qkv_n = int(parameters.layers[0].self_attn.qkv.weight.shape[-1])
-        # The L1 WIDTH-sharded activation layout used by the DRAM-sharded matmul kernel only
-        # supports ``m == TILE`` (one input tile row). For long-seq prefill (``token_rows > TILE``)
-        # the chunked path in ``_linear`` runs the matmul kernel ``ceil(m_actual / TILE)`` times and
-        # produces interleaved output, so keep the per-layer hidden state interleaved. Once the
-        # activations stop fitting in L1 (``token_rows * max(hidden, ffn_dim) * 2`` ≳ a few MB)
-        # the per-layer hidden state must live in DRAM; FC1 output at ``seq=4096`` is 64 MB.
-        long_seq = token_rows > TILE
-        long_seq_use_dram = long_seq and token_rows >= 256
-        if long_seq:
-            sharded_hidden_mem = ttnn.DRAM_MEMORY_CONFIG if long_seq_use_dram else ttnn.L1_MEMORY_CONFIG
+
+        if tp > 1:
+            # TP path: standard interleaved activations; DRAM-sharded not used.
+            sharded_hidden_mem = ttnn.L1_MEMORY_CONFIG
+            self._long_seq_mc = None
+            long_seq = False
         else:
-            hidden = self._to_matmul_width_sharded(hidden, token_rows, hidden_size, qkv_n)
-            sharded_hidden_mem = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
-        self._long_seq_mc = sharded_hidden_mem if long_seq else None
+            qkv_n = int(parameters.layers[0].self_attn.qkv.weight.shape[-1])
+            # The L1 WIDTH-sharded activation layout used by the DRAM-sharded matmul kernel only
+            # supports ``m == TILE`` (one input tile row). For long-seq prefill (``token_rows > TILE``)
+            # the chunked path in ``_linear`` runs the matmul kernel ``ceil(m_actual / TILE)`` times and
+            # produces interleaved output, so keep the per-layer hidden state interleaved.
+            long_seq = token_rows > TILE
+            long_seq_use_dram = long_seq and token_rows >= 256
+            if long_seq:
+                sharded_hidden_mem = ttnn.DRAM_MEMORY_CONFIG if long_seq_use_dram else ttnn.L1_MEMORY_CONFIG
+            else:
+                hidden = self._to_matmul_width_sharded(hidden, token_rows, hidden_size, qkv_n)
+                sharded_hidden_mem = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            self._long_seq_mc = sharded_hidden_mem if long_seq else None
 
         for i in range(num_layers):
             layer = parameters.layers[i]
@@ -618,7 +685,7 @@ class TTSeamlessM4Tv2Encoder:
                 m_tiles=m_tiles,
                 n_tiles=n_tiles,
                 input_sharded=ttnn.is_sharded(hidden),
-                output_sharded=not long_seq,
+                output_sharded=(not long_seq) and (tp == 1),
             )
             attn_out = self._attention(
                 normed,
@@ -643,30 +710,42 @@ class TTSeamlessM4Tv2Encoder:
                 m_tiles=m_tiles,
                 n_tiles=n_tiles,
                 input_sharded=ttnn.is_sharded(hidden),
-                output_sharded=not long_seq,
+                output_sharded=(not long_seq) and (tp == 1),
             )
-            ff = self._linear(
-                normed,
-                layer.ffn.fc1.weight,
-                layer.ffn.fc1.bias,
-                activation="relu",
-                logical_out_dim=ffn_dim,
-                keep_sharded_output=not long_seq,
-                accept_sharded_input=not long_seq,
-                batch=batch,
-                seq=seq,
-            )
-            ttnn.deallocate(normed)
-            ff = self._linear(
-                ff,
-                layer.ffn.fc2.weight,
-                layer.ffn.fc2.bias,
-                logical_out_dim=hidden_size,
-                accept_sharded_input=not long_seq,
-                keep_sharded_output=not long_seq,
-                batch=batch,
-                seq=seq,
-            )
+            if tp > 1:
+                # TP FFN: column-parallel fc1 (output = ffn_dim//tp), row-parallel fc2 (output = H).
+                ff = self._linear_tp(normed, layer.ffn.fc1.weight, layer.ffn.fc1.bias, activation="relu")
+                ttnn.deallocate(normed)
+                ff = self._linear_tp(ff, layer.ffn.fc2.weight, layer.ffn.fc2.bias)
+                ff = all_reduce_sum_replicate(
+                    ff,
+                    self.device,
+                    cluster_axis=self._cluster_axis,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+            else:
+                ff = self._linear(
+                    normed,
+                    layer.ffn.fc1.weight,
+                    layer.ffn.fc1.bias,
+                    activation="relu",
+                    logical_out_dim=ffn_dim,
+                    keep_sharded_output=not long_seq,
+                    accept_sharded_input=not long_seq,
+                    batch=batch,
+                    seq=seq,
+                )
+                ttnn.deallocate(normed)
+                ff = self._linear(
+                    ff,
+                    layer.ffn.fc2.weight,
+                    layer.ffn.fc2.bias,
+                    logical_out_dim=hidden_size,
+                    accept_sharded_input=not long_seq,
+                    keep_sharded_output=not long_seq,
+                    batch=batch,
+                    seq=seq,
+                )
             hidden = ttnn.add(hidden, ff, memory_config=sharded_hidden_mem)
             ttnn.deallocate(ff)
 
