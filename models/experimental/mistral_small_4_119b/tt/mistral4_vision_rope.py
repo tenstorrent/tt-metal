@@ -90,6 +90,29 @@ class TtPixtralRoPE2D:
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
+    def lookup_device(self, ids_tt: ttnn.Tensor, seq_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """
+        Look up cos/sin from a pre-uploaded uint32 position-id tensor on device.
+
+        Returns (cos, sin) each of shape [1, 1, seq_len, head_dim] in TILE layout.
+        Does not deallocate ``ids_tt`` (caller owns the buffer for trace replay).
+        """
+        cos = ttnn.embedding(
+            ids_tt,
+            self.cos_table,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        sin = ttnn.embedding(
+            ids_tt,
+            self.sin_table,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cos = ttnn.reshape(cos, [1, 1, seq_len, self.head_dim])
+        sin = ttnn.reshape(sin, [1, 1, seq_len, self.head_dim])
+        return cos, sin
+
     def lookup(self, position_ids: torch.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Look up cos/sin for ``position_ids`` (CPU long tensor of length seq_len) on device.
@@ -105,26 +128,8 @@ class TtPixtralRoPE2D:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-
-        # ttnn.embedding produces [1, seq_len, head_dim] in TILE layout.
-        cos = ttnn.embedding(
-            ids_tt,
-            self.cos_table,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        sin = ttnn.embedding(
-            ids_tt,
-            self.sin_table,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        cos, sin = self.lookup_device(ids_tt, position_ids.numel())
         ttnn.deallocate(ids_tt)
-
-        # Reshape to [1, 1, seq_len, head_dim] to broadcast over n_heads.
-        seq_len = position_ids.numel()
-        cos = ttnn.reshape(cos, [1, 1, seq_len, self.head_dim])
-        sin = ttnn.reshape(sin, [1, 1, seq_len, self.head_dim])
         return cos, sin
 
 
