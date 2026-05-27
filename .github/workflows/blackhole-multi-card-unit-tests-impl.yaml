@@ -64,9 +64,10 @@ jobs:
             test-type: fast-viommu
           - name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
             cmd: |
-              pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
-              # Disabled due to issue https://github.com/tenstorrent/tt-metal/issues/41040
-              # pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
+              # DEBUG-ONLY (branch dgomez/debug-a2a-combine-bug): isolate test_all_to_all_combine_no_trace
+              # with TT_METAL log level cranked up to capture host-side state. All other CCL tests
+              # in this job are skipped on this branch so the failing variant gets full CI bandwidth.
+              TT_METAL_LOGGER_TYPES=Op TT_METAL_LOGGER_LEVEL=DEBUG pytest -svv tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit/test_all_to_all_combine_bh.py
             timeout: 15
             test-type: fast
           # NOTE: All slow / loudbox / qb multi-card BH tests have been migrated

@@ -220,16 +220,48 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
-    // fabric routing info — enumerated for every device in the mesh in row-major order to
-    // build the DEST_CHIP_ID / DEST_MESH_ID define arrays consumed by the writer kernel.
-    // Mirrors the legacy use of `all_mesh_coordinates` (passed as tensor_coords.coords()),
-    // which for these CCL ops covers the entire mesh.
+    // DEBUG-ONLY (branch dgomez/debug-a2a-combine-bug): build dest_chip_id/dest_mesh_id from
+    // tensor_coords.coords() (the legacy path) and ALSO from mesh_view.get_fabric_node_ids()
+    // (the current main path), compare them, log both. The 1D-topology kernel path doesn't
+    // actually consume dest_chip_ids[] for routing, but logging this lets us confirm at
+    // runtime whether the two iteration sources actually differ for this submesh.
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord_fabric_node_id : mesh_view.get_fabric_node_ids()) {
         dest_mesh_id.push_back(*coord_fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)coord_fabric_node_id.chip_id);
     }
+    {
+        std::vector<uint32_t> dbg_mesh_id_via_coords, dbg_chip_id_via_coords;
+        for (const auto& coord : tensor_coords.coords()) {
+            const auto fn = mesh_device->get_fabric_node_id(coord);
+            dbg_mesh_id_via_coords.push_back(*fn.mesh_id);
+            dbg_chip_id_via_coords.push_back((uint32_t)fn.chip_id);
+        }
+        log_info(
+            tt::LogOp,
+            "[a2a_combine DBG] coord={} src_chip_id={} | view_chip_id={} | coords_chip_id={} | match={}",
+            mesh_coordinate,
+            src_chip_id,
+            common::stringify(dest_chip_id),
+            common::stringify(dbg_chip_id_via_coords),
+            dbg_chip_id_via_coords == dest_chip_id);
+    }
     const auto [neighbors, directions] = common::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
+    log_info(
+        tt::LogOp,
+        "[a2a_combine DBG] coord={} flat_mesh_idx={} num_devices={} mesh=({},{}) topology={} "
+        "axis={} locally_reduced={} #neighbors={} directions={}",
+        mesh_coordinate,
+        common::get_linearized_index(mesh_coordinate, mesh_view),
+        num_devices,
+        mesh_view.num_rows(),
+        mesh_view.num_cols(),
+        (uint32_t)topology,
+        axis.has_value() ? (int)axis.value() : -1,
+        (uint32_t)operation_attributes.locally_reduced,
+        neighbors.size(),
+        common::stringify(std::vector<uint32_t>{
+            (uint32_t)directions[0], (uint32_t)directions[1], (uint32_t)directions[2], (uint32_t)directions[3]}));
 
     std::map<std::string, std::string> writer_defines = {
         {"DEST_CHIP_ID", common::stringify(dest_chip_id)},
@@ -309,10 +341,48 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
             token_range_end,
             (uint32_t)cross_device_semaphore.address());
 
+        const size_t rt_args_before_fabric = writer_runtime_args.size();
         for (const auto& neighbor_coordinate : neighbors) {
             const auto neighbor_fabric_id = mesh_device->get_fabric_node_id(neighbor_coordinate);
+            const size_t before = writer_runtime_args.size();
+            const size_t sem_before = desc.semaphores.size();
             append_fabric_connection_rt_args<ProgramDescriptor>(
                 fabric_node_id, neighbor_fabric_id, link_id, desc, sender_core, writer_runtime_args);
+            log_info(
+                tt::LogOp,
+                "[a2a_combine DBG] coord={} core=({},{}) neighbor={} link_id={} | "
+                "rt_args grew {}->{} (+{}) | semaphores grew {}->{} (+{})",
+                mesh_coordinate,
+                sender_core.x,
+                sender_core.y,
+                neighbor_coordinate,
+                link_id,
+                before,
+                writer_runtime_args.size(),
+                writer_runtime_args.size() - before,
+                sem_before,
+                desc.semaphores.size(),
+                desc.semaphores.size() - sem_before);
+        }
+
+        // DEBUG-ONLY: dump full writer RT args after fabric append
+        {
+            std::vector<uint32_t> dbg_args(writer_runtime_args.begin(), writer_runtime_args.end());
+            log_info(
+                tt::LogOp,
+                "[a2a_combine DBG] coord={} core=({},{}) | output_addr=0x{:x} cross_dev_sem=0x{:x} "
+                "init_sem=0x{:x} tok_range=[{},{}) | writer_rt_args(total={}, base=5, fabric={}): {}",
+                mesh_coordinate,
+                sender_core.x,
+                sender_core.y,
+                output_tensor.buffer()->address(),
+                cross_device_semaphore.address(),
+                init_semaphore.address(),
+                token_range_start,
+                token_range_end,
+                writer_runtime_args.size(),
+                writer_runtime_args.size() - rt_args_before_fabric,
+                common::stringify(dbg_args));
         }
 
         KernelDescriptor::RTArgList writer_rt_args_builder;
@@ -323,6 +393,30 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
         }
         desc.kernels[unary_writer_kernel_id].emplace_runtime_args(sender_core, writer_rt_args_builder);
         link_id++;
+    }
+
+    // DEBUG-ONLY: final descriptor summary
+    {
+        std::vector<uint32_t> sem_ids;
+        for (const auto& s : desc.semaphores) {
+            sem_ids.push_back(s.id);
+        }
+        std::vector<uint32_t> cb_sizes;
+        for (const auto& cb : desc.cbs) {
+            cb_sizes.push_back(cb.total_size);
+        }
+        log_info(
+            tt::LogOp,
+            "[a2a_combine DBG] coord={} | final desc: #cbs={} cb_sizes={} #semaphores={} sem_ids={} "
+            "#kernels={} reader_rt_arg_lists={} writer_rt_arg_lists={}",
+            mesh_coordinate,
+            desc.cbs.size(),
+            common::stringify(cb_sizes),
+            desc.semaphores.size(),
+            common::stringify(sem_ids),
+            desc.kernels.size(),
+            desc.kernels[ternary_reader_kernel_id].runtime_args.size(),
+            desc.kernels[unary_writer_kernel_id].runtime_args.size());
     }
 
     return desc;
