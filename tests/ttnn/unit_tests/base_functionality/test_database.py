@@ -110,45 +110,29 @@ def test_enable_logging_and_enable_detailed_buffer_report(device, height, width)
     assert len(buffer_pages) > 0
 
 
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("height", [1024])
 @pytest.mark.parametrize("width", [1024])
-def test_enable_logging_and_enable_comparison_mode(device, height, width, tmp_path):
+def test_enable_logging_and_enable_comparison_mode(device, height, width):
     torch.manual_seed(0)
 
-    report_path = tmp_path / "report"
-    json_path = report_path / "graph_capture.json"
+    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_comparison_mode", True):
+        torch_input_tensor = torch.rand(
+            (height, width),
+            dtype=torch.bfloat16,
+        )
 
-    with (
-        ttnn.manage_config("enable_logging", True),
-        ttnn.manage_config("enable_comparison_mode", True),
-    ):
-        report_path.mkdir(parents=True, exist_ok=True)
-        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-        try:
-            torch_input_tensor = torch.rand(
-                (height, width),
-                dtype=torch.bfloat16,
-            )
+        input_tensor_a = ttnn.from_torch(
+            torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
-            input_tensor_a = ttnn.from_torch(
-                torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
+        input_tensor_b = ttnn.from_torch(
+            torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.to_torch(output_tensor)
 
-            input_tensor_b = ttnn.from_torch(
-                torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-            output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.to_torch(output_tensor)
-        finally:
-            if ttnn.graph.is_graph_capture_active():
-                ttnn.graph.end_graph_capture_to_file(str(json_path))
-
-        ttnn.graph.import_report(json_path, report_path)
-
-    comparison_sidecar_path = json_path.with_suffix(ttnn.graph.COMPARISON_RECORDS_SIDECAR_SUFFIX)
-    assert comparison_sidecar_path.exists()
-
-    sqlite_connection = sqlite3.connect(report_path / ttnn.database.SQLITE_DB_PATH)
+    sqlite_connection = sqlite3.connect(ttnn.CONFIG.report_path / ttnn.database.SQLITE_DB_PATH)
     cursor = sqlite_connection.cursor()
     cursor.execute("SELECT * FROM operations")
     operations = []
@@ -157,31 +141,6 @@ def test_enable_logging_and_enable_comparison_mode(device, height, width, tmp_pa
         operations.append(operation)
 
     assert len(operations) > 0
-
-    cursor.execute(
-        "SELECT tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc FROM local_tensor_comparison_records"
-    )
-    local_tensor_comparison_records = cursor.fetchall()
-
-    cursor.execute(
-        "SELECT tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc FROM global_tensor_comparison_records"
-    )
-    global_tensor_comparison_records = cursor.fetchall()
-
-    assert len(local_tensor_comparison_records) > 0
-    assert len(global_tensor_comparison_records) > 0
-
-    for tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc in (
-        local_tensor_comparison_records + global_tensor_comparison_records
-    ):
-        assert matches
-        assert actual_pcc >= desired_pcc
-        cursor.execute("SELECT tensor_id FROM tensors WHERE tensor_id = ?", (tensor_id,))
-        assert cursor.fetchone() is not None
-        cursor.execute("SELECT tensor_id FROM tensors WHERE tensor_id = ?", (golden_tensor_id,))
-        assert cursor.fetchone() is not None
-
-    sqlite_connection.close()
 
 
 @pytest.mark.requires_fast_runtime_mode_off

@@ -1906,6 +1906,63 @@ class TestGraphReportImport:
 
         conn.close()
 
+    def test_import_populates_comparison_records_from_runtime_sidecar(self, device, tmp_report_dir):
+        """Test comparison mode sidecar is produced at runtime and imported offline."""
+        report_path = tmp_report_dir / "report.json"
+        db_dir = tmp_report_dir / "db"
+
+        with (
+            ttnn.manage_config("enable_fast_runtime_mode", False),
+            ttnn.manage_config("enable_logging", True),
+            ttnn.manage_config("enable_comparison_mode", True),
+        ):
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                torch_input = torch.rand((1024, 1024), dtype=torch.bfloat16)
+                input_tensor_a = ttnn.from_torch(
+                    torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+                )
+                input_tensor_b = ttnn.from_torch(
+                    torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+                )
+                output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.to_torch(output_tensor)
+            finally:
+                if ttnn.graph.is_graph_capture_active():
+                    ttnn.graph.end_graph_capture_to_file(str(report_path))
+
+        sidecar_path = report_path.with_suffix(graph_report.COMPARISON_RECORDS_SIDECAR_SUFFIX)
+        assert sidecar_path.exists()
+
+        db_path = graph_report.import_report(report_path, db_dir)
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc FROM local_tensor_comparison_records"
+        )
+        local_tensor_comparison_records = cursor.fetchall()
+
+        cursor.execute(
+            "SELECT tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc FROM global_tensor_comparison_records"
+        )
+        global_tensor_comparison_records = cursor.fetchall()
+
+        assert len(local_tensor_comparison_records) > 0
+        assert len(global_tensor_comparison_records) > 0
+
+        for tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc in (
+            local_tensor_comparison_records + global_tensor_comparison_records
+        ):
+            assert matches
+            assert actual_pcc >= desired_pcc
+            cursor.execute("SELECT tensor_id FROM tensors WHERE tensor_id = ?", (tensor_id,))
+            assert cursor.fetchone() is not None
+            cursor.execute("SELECT tensor_id FROM tensors WHERE tensor_id = ?", (golden_tensor_id,))
+            assert cursor.fetchone() is not None
+
+        conn.close()
+
 
 class TestReportVersion:
     """Tests for report version handling."""
