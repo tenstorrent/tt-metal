@@ -569,7 +569,7 @@ def _tp_linear_pair(
     raise ValueError(f"_tp_linear_pair: parallel must be 'col' or 'row', got {parallel!r}")
 
 
-def create_text_decoder_parameters(decoder, *, device: ttnn.Device, tp: int = 1) -> dict:
+def create_text_decoder_parameters(decoder, *, device: ttnn.Device, tp: Optional[int] = None) -> dict:
     """
     Convert [`SeamlessM4Tv2Decoder`] weights to TTNN tensors on ``device``.
 
@@ -577,6 +577,7 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device, tp: int = 1)
     When ``tp > 1``, attention and FFN weights are sharded across devices using
     ``ShardTensorToMesh``; embeddings and layer-norms stay replicated.
     """
+    tp = _resolve_tp(device, tp)
     cfg = decoder.config
     scale = embed_scale_for_config(cfg)
     mm = _replicate_mapper(device)
@@ -1329,7 +1330,7 @@ def create_speech_encoder_parameters(
     return make_parameter_dict(out)
 
 
-def create_text_to_unit_parameters(encoder, *, device: ttnn.Device, tp: int = 1) -> dict:
+def create_text_to_unit_parameters(encoder, *, device: ttnn.Device, tp: Optional[int] = None) -> dict:
     """
     Convert the encoder submodule of Transformers
     [`SeamlessM4Tv2TextToUnitForConditionalGeneration`] — ``model.encoder``, i.e.
@@ -1351,6 +1352,7 @@ def create_text_to_unit_parameters(encoder, *, device: ttnn.Device, tp: int = 1)
     DRAM-bandwidth saving on the fused QKV and out projections per layer.
     When ``tp > 1``: TP column/row-parallel sharding overrides DRAM-sharded.
     """
+    tp = _resolve_tp(device, tp)
     layers = _m4t_encoder_self_attn_ffn_layers(
         encoder,
         device=device,
@@ -1540,12 +1542,13 @@ def create_text_to_unit_condgen_parameters(
     t2u: torch.nn.Module,
     *,
     device: ttnn.Device,
-    tp: int = 1,
+    tp: Optional[int] = None,
 ) -> dict:
     """
     Full [`SeamlessM4Tv2TextToUnitForConditionalGeneration`] weights for TTNN:
     ``model.encoder``, ``model.decoder``, and ``lm_head``.
     """
+    tp = _resolve_tp(device, tp)
     mm = _replicate_mapper(device)
     w_lm_torch = t2u.lm_head.weight.detach().T.contiguous().to(torch.bfloat16)
     w_lm = ttnn.from_torch(
