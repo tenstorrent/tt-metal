@@ -10,6 +10,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/tile.hpp>
@@ -105,6 +106,11 @@ struct DataflowBufferSpec {
     //     (derived from their bound kernels' WorkUnitSpecs).
     using DFBIdentifiers = std::vector<DFBSpecName>;
     DFBIdentifiers alias_with;  // empty vector means no aliasing
+
+    //////////////////////////////
+    // Advanced options (see advanced_options.hpp)
+    //////////////////////////////
+    std::optional<DataflowBufferSpecAdvancedOptions> advanced_options = std::nullopt;
 };
 
 // NOTE: Remote DataflowBuffer is not yet supported!
