@@ -174,21 +174,33 @@ def compute_validation_matrix(
         if not base_modules:
             continue
 
+        # Sub-group by mesh shape so each batch runs configs from one mesh topology.
+        # Modules with mesh suffix (e.g. .mesh_1x2) are separated from those without.
+        mesh_to_modules = defaultdict(set)
+        for module in grouped_modules:
+            mesh = parse_mesh_suffix(module)
+            base = strip_grouping_suffix(module)
+            mesh_str = f"{mesh[0]}x{mesh[1]}" if mesh else ""
+            mesh_to_modules[mesh_str].add(base)
+
         hardware_label = _get_hardware_display_label(hardware_group)
         if validation_scope == "lead_models":
             test_group_name = get_lead_models_test_group_name_for_hardware_group(hardware_group)
         else:
             test_group_name = get_test_group_name_for_hardware_group(hardware_group)
         runner_config = get_runner_config(test_group_name)
-        runner_batches = chunk_modules(base_modules, batch_size)
-        total_batches = len(runner_batches)
         trace_id_list = sorted(trace_ids_by_hardware.get(hardware_group, []))
 
-        for index, batch in enumerate(runner_batches, start=1):
-            include.append(
-                {
+        for mesh_str, mesh_modules in sorted(mesh_to_modules.items()):
+            sorted_modules = sorted(mesh_modules)
+            runner_batches = chunk_modules(sorted_modules, batch_size)
+            total_batches = len(runner_batches)
+            mesh_label = f".{mesh_str}" if mesh_str else ""
+
+            for index, batch in enumerate(runner_batches, start=1):
+                entry = {
                     **runner_config,
-                    "batch_display": f"{validation_scope}:{hardware_label}:{batch}",
+                    "batch_display": f"{validation_scope}:{hardware_label}{mesh_label}:{batch}",
                     "batch_ordinal": f"{index}/{total_batches}",
                     "batch_index": index,
                     "module_selector": batch,
@@ -198,8 +210,9 @@ def compute_validation_matrix(
                     "trace_ids": trace_id_list,
                     "hardware_group": hardware_label,
                 }
-            )
-
+                if mesh_str:
+                    entry["mesh_device_shape"] = mesh_str
+                include.append(entry)
     return {"include": include}
 
 
