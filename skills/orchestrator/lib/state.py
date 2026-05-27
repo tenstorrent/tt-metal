@@ -11,6 +11,9 @@ The state file is the source of truth for orchestrator progress; see
 - `bootstrap(model_id, device, arch_name)`: build a fresh skeleton state.
 - `resume_normalize(state)`: make a state safe to resume after a crash.
 - `render_log(state)`: format the state as a BRINGUP_LOG.md markdown document.
+- `redo(state, block, phase)`: reset a phase cell to pending for retry.
+- `skip(state, block, phase, justify, reference_link)`: mark a block as
+  host-resident-allowed with an audited justification.
 """
 
 from __future__ import annotations
@@ -325,3 +328,118 @@ def render_log(state: dict) -> str:
             lines.append(f"- **{name}**: {justification} (ref: {ref})")
 
     return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# redo / skip: manual nudges that mutate state and append a tick_log entry
+# ---------------------------------------------------------------------------
+
+
+def _next_tick_number(state: dict) -> int:
+    """Return the next monotonic tick number for a manual nudge entry.
+
+    Computed as ``max(existing tick numbers, default 0) + 1`` so manual
+    nudges never collide with real orchestrator tick numbers. The ``action``
+    string ("redo[...]" / "skip[...]") disambiguates nudges from tick work.
+    """
+    return max((entry.get("tick", 0) for entry in state["tick_log"]), default=0) + 1
+
+
+def _find_component(state: dict, block: str) -> dict:
+    """Return the component dict whose ``name`` matches ``block``.
+
+    Linear scan — the components list is short (one entry per architectural
+    block) so a dict index would be more bookkeeping than it's worth.
+
+    Raises ``KeyError`` if no component matches.
+    """
+    for component in state["components"]:
+        if component.get("name") == block:
+            return component
+    raise KeyError(f"no component named {block!r}")
+
+
+def redo(state: dict, block: str, phase: str) -> dict:
+    """Reset a phase cell back to pending so the orchestrator retries it.
+
+    Mutates ``state`` in place. Sets the named phase to
+    ``{"status": "pending", "attempts": 0}`` — a clean slate that drops any
+    prior ``pcc``, ``last_error``, or ``notes`` from the failed attempt.
+    Appends a tick_log entry recording the nudge and advances
+    ``updated_at``.
+
+    Raises:
+        ValueError: if ``phase`` is not one of ``PHASE_NAMES``.
+        KeyError: if no component in state matches ``block``.
+
+    Returns:
+        The same state dict (mutated), for chaining.
+    """
+    if phase not in PHASE_NAMES:
+        raise ValueError(f"phase must be one of {PHASE_NAMES}, got {phase!r}")
+
+    component = _find_component(state, block)
+
+    # Clean slate — see docstring. We deliberately do NOT preserve old fields
+    # so the next attempt starts from a known-empty baseline.
+    component[phase] = {"status": "pending", "attempts": 0}
+
+    now = _utc_now_iso()
+    state["tick_log"].append(
+        {
+            "tick": _next_tick_number(state),
+            "ts": now,
+            "action": f"redo[{block}:{phase}]",
+            "result": "ok",
+        }
+    )
+    state["updated_at"] = now
+    return state
+
+
+def skip(state: dict, block: str, phase: str, justify: str, reference_link: str) -> dict:
+    """Mark a block as host-resident-allowed so the no-shortcuts guard passes.
+
+    Mutates ``state`` in place. Sets ``component["host_resident"]`` to
+    ``{"allowed": True, "justification": justify, "reference_link":
+    reference_link}`` and sets the named phase to ``{"status": "skipped"}``
+    (replacing any prior phase fields — the phase is now an explicit skip).
+    Appends a tick_log entry recording the nudge and advances
+    ``updated_at``.
+
+    Raises:
+        ValueError: if ``phase`` is not in ``PHASE_NAMES``, or if either
+            ``justify`` or ``reference_link`` is empty. The escape hatch
+            must be auditable, so empty strings are rejected.
+        KeyError: if no component matches ``block``.
+
+    Returns:
+        The same state dict (mutated), for chaining.
+    """
+    if phase not in PHASE_NAMES:
+        raise ValueError(f"phase must be one of {PHASE_NAMES}, got {phase!r}")
+    if not justify:
+        raise ValueError("justify must be non-empty")
+    if not reference_link:
+        raise ValueError("reference_link must be non-empty")
+
+    component = _find_component(state, block)
+
+    component["host_resident"] = {
+        "allowed": True,
+        "justification": justify,
+        "reference_link": reference_link,
+    }
+    component[phase] = {"status": "skipped"}
+
+    now = _utc_now_iso()
+    state["tick_log"].append(
+        {
+            "tick": _next_tick_number(state),
+            "ts": now,
+            "action": f"skip[{block}:{phase}]",
+            "result": f"host_resident: {justify}",
+        }
+    )
+    state["updated_at"] = now
+    return state

@@ -11,9 +11,11 @@ from skills.orchestrator.lib.state import (
     SchemaError,
     bootstrap,
     load_state,
+    redo,
     render_log,
     resume_normalize,
     save_state,
+    skip,
 )
 
 
@@ -527,3 +529,195 @@ def test_render_log_host_resident_listed():
     # only checking the Host-Resident section reads _None._.
     hr_section = output_b.split("## Host-Resident Exceptions", 1)[1]
     assert "RegularBlock" not in hr_section
+
+
+# ---------------------------------------------------------------------------
+# redo / skip — manual nudges
+# ---------------------------------------------------------------------------
+
+
+def _state_with_component(name="Attention", phase_data=None):
+    """Build a bootstrapped state with one component pre-populated.
+
+    Default ttnn phase is "failing" with a PCC, attempts, and last_error so
+    redo tests can assert these fields are cleared on reset.
+    """
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    phase = phase_data or {
+        "status": "failing",
+        "pcc": 0.81,
+        "attempts": 3,
+        "last_error": "QK-norm mismatch",
+    }
+    state["components"].append(
+        {
+            "name": name,
+            "kind": "attention",
+            "reference": {"status": "done", "pcc": 0.9999, "attempts": 1},
+            "ttnn": phase,
+            "debug": {"status": "n/a"},
+            "optimization": {"status": "blocked", "blocked_on": "ttnn"},
+        }
+    )
+    return state
+
+
+def test_redo_resets_phase():
+    """redo flips the named phase to pending/attempts=0 with a clean slate."""
+    state = _state_with_component()
+
+    redo(state, "Attention", "ttnn")
+
+    comp = state["components"][0]
+    assert comp["ttnn"]["status"] == "pending"
+    assert comp["ttnn"]["attempts"] == 0
+    # Clean slate — previous attempt's fields are dropped.
+    assert "pcc" not in comp["ttnn"]
+    assert "last_error" not in comp["ttnn"]
+
+
+def test_redo_unknown_block_raises_KeyError():
+    """redo on a non-existent component name raises KeyError."""
+    state = _state_with_component()
+    with pytest.raises(KeyError):
+        redo(state, "DoesNotExist", "ttnn")
+
+
+def test_redo_unknown_phase_raises_ValueError():
+    """redo on an unknown phase name raises ValueError."""
+    state = _state_with_component()
+    with pytest.raises(ValueError):
+        redo(state, "Attention", "nonsense")
+
+
+def test_redo_appends_tick_log():
+    """redo appends a tick_log entry with action='redo[block:phase]', result='ok'.
+
+    Tick number is monotonic from any prior log entries (1 when empty).
+    Timestamp matches the ISO-8601-with-Z shape used elsewhere.
+    """
+    state = _state_with_component()
+    assert state["tick_log"] == []  # baseline
+
+    redo(state, "Attention", "ttnn")
+
+    assert len(state["tick_log"]) == 1
+    entry = state["tick_log"][-1]
+    assert entry["action"].startswith("redo[")
+    assert entry["action"] == "redo[Attention:ttnn]"
+    assert entry["result"] == "ok"
+    assert entry["tick"] == 1
+    # Timestamp shape: ISO-8601 with trailing Z, seconds precision.
+    assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", entry["ts"]), entry["ts"]
+
+
+def test_redo_tick_number_is_max_plus_one():
+    """A redo nudge on a state with prior ticks gets tick = max + 1."""
+    state = _state_with_component()
+    state["tick_log"] = [
+        {"tick": 5, "ts": "2026-05-27T14:00:00Z", "action": "x", "result": "ok"},
+        {"tick": 7, "ts": "2026-05-27T14:01:00Z", "action": "y", "result": "ok"},
+    ]
+
+    redo(state, "Attention", "ttnn")
+
+    assert state["tick_log"][-1]["tick"] == 8  # max(5,7) + 1
+
+
+def test_redo_updates_updated_at():
+    """redo advances updated_at to the current time."""
+    state = _state_with_component()
+    state["updated_at"] = "1999-01-01T00:00:00Z"
+
+    redo(state, "Attention", "ttnn")
+
+    assert state["updated_at"] != "1999-01-01T00:00:00Z"
+
+
+def test_redo_returns_same_object():
+    """redo returns the same state dict it was given, for chaining."""
+    state = _state_with_component()
+    out = redo(state, "Attention", "ttnn")
+    assert out is state
+
+
+def test_skip_sets_host_resident_allowed():
+    """skip flips host_resident.allowed=True with the justification + ref.
+
+    The named phase becomes ``{"status": "skipped"}`` with all prior fields
+    (pcc, attempts, last_error) dropped — the phase is an explicit skip.
+    """
+    state = _state_with_component()
+
+    skip(state, "Attention", "ttnn", "Conv too large for L1", "models/foo/decoder.py")
+
+    comp = state["components"][0]
+    assert comp["host_resident"]["allowed"] is True
+    assert comp["host_resident"]["justification"] == "Conv too large for L1"
+    assert comp["host_resident"]["reference_link"] == "models/foo/decoder.py"
+
+    assert comp["ttnn"]["status"] == "skipped"
+    # Previous phase fields are gone — the phase is now an explicit skip.
+    assert "pcc" not in comp["ttnn"]
+    assert "attempts" not in comp["ttnn"]
+    assert "last_error" not in comp["ttnn"]
+
+
+def test_skip_appends_tick_log_with_justify():
+    """skip's tick_log entry has action='skip[...]' and result includes justification."""
+    state = _state_with_component()
+
+    skip(state, "Attention", "ttnn", "Conv too large for L1", "models/foo/decoder.py")
+
+    entry = state["tick_log"][-1]
+    assert entry["action"].startswith("skip[")
+    assert entry["action"] == "skip[Attention:ttnn]"
+    assert "Conv too large for L1" in entry["result"]
+
+
+def test_skip_rejects_empty_justify():
+    """An empty justification is not auditable, so skip raises ValueError."""
+    state = _state_with_component()
+    with pytest.raises(ValueError):
+        skip(state, "Attention", "ttnn", "", "models/foo/decoder.py")
+
+
+def test_skip_rejects_empty_reference_link():
+    """An empty reference_link is not auditable, so skip raises ValueError."""
+    state = _state_with_component()
+    with pytest.raises(ValueError):
+        skip(state, "Attention", "ttnn", "Conv too large for L1", "")
+
+
+def test_skip_unknown_block_raises_KeyError():
+    """skip on a non-existent component name raises KeyError."""
+    state = _state_with_component()
+    with pytest.raises(KeyError):
+        skip(state, "DoesNotExist", "ttnn", "j", "r")
+
+
+def test_skip_unknown_phase_raises_ValueError():
+    """skip on an unknown phase name raises ValueError."""
+    state = _state_with_component()
+    with pytest.raises(ValueError):
+        skip(state, "Attention", "nonsense", "j", "r")
+
+
+def test_skip_then_render_log_shows_host_resident():
+    """After skip(), render_log lists the block in the Host-Resident section.
+
+    Integration sanity check: skip's host_resident dict feeds directly into
+    render_log's exception section.
+    """
+    state = _state_with_component()
+
+    skip(state, "Attention", "ttnn", "Conv too large for L1", "models/foo/decoder.py")
+    output = render_log(state)
+
+    # Locate the Host-Resident section and assert the block + justification appear.
+    hr_section = output.split("## Host-Resident Exceptions", 1)[1]
+    assert "Attention" in hr_section
+    assert "Conv too large for L1" in hr_section
+    assert "models/foo/decoder.py" in hr_section
+    # And the _None._ placeholder must NOT appear in that section.
+    assert "_None._" not in hr_section
