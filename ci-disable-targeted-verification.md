@@ -372,6 +372,17 @@ The automation pushes a state-log commit and may merge `main` into each PR at se
 - Do not include temporary workflow-pruning edits in the final PR branch.
 - After every workflow dispatch, immediately share the run URL in the status update.
 
+## Terminal State (No More Work)
+
+A session is in the legitimate **terminal state** when BOTH of the following are true:
+
+1. Every open draft disable PR is in a verification-completed lifecycle (`verified-pass`, `verified-fail`, or `merged`) — i.e. each PR has consumed its one verification run with a real (non-inconclusive) result.
+2. Every non-Galaxy single-card workflow in the active pipeline list is already covered by an open or merged draft disable PR.
+
+When the terminal state holds, the automation MUST stop without creating new PRs and without dispatching new runs, and MUST emit `"no more work left to do"` as its session-level status. This is the **only** exception to the "fill focus slots with new PRs" requirement in `Session Scope (Up to Three PRs)`.
+
+Distinguish this from the existing paralysis failure mode (`Anti-Paralysis` below): paralysis = idled despite having actionable work; terminal = legitimately out of work. The OUTPUT FORMAT distinguishes them via the `Paralysis check` field (and the new top-line `Status: no more work left to do`) — see the canonical automation prompt.
+
 ## Anti-Paralysis
 
 A session that ends with **0 focus PRs, 0 new dispatches, and 0 new PRs created** is treated as a **paralysis failure mode**, not a normal completion. Empty sessions are bugs.
@@ -388,6 +399,8 @@ The agent MUST trace which guardrail caused an apparently-empty session and over
 
 1. Every open draft PR is already in a terminal state (`verified-pass`, `verified-fail`, `merged`), AND
 2. Every non-Galaxy single-card workflow already has an associated draft PR (no uncovered workflow remains).
+
+This "only acceptable zero-action session" wording defers to `## Terminal State (No More Work)` above — that section is the canonical definition and additionally requires the session to emit `"no more work left to do"` as its session-level status.
 
 When in doubt between "skip due to throttle" and "do something useful", do something useful. The throttle is a guard against thrash, not a license to idle. Treating BH-artifact-expiry, "main is broken", or "all PRs <4h old" as session-ending blockers is the failure mode this section exists to prevent.
 
