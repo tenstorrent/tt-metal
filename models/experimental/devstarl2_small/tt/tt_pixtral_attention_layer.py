@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import vision_seq_memcfg
 from models.experimental.devstarl2_small.tt.tt_pixtralattn import TtMistralImageAttention
 from models.experimental.devstarl2_small.tt.tt_pixtralmlp import MistralTTVisionMLP
 from models.experimental.devstarl2_small.tt.tt_pixtralnorm import TtPixtralRMSNorm
@@ -58,15 +59,16 @@ class TtPixtralAttentionLayer(LightweightModule):
         )
 
     def forward(self, hidden_states: ttnn.Tensor, attention_mask=None, position_embeddings=None) -> ttnn.Tensor:
+        layer_mem = vision_seq_memcfg(int(hidden_states.shape[-2]), int(hidden_states.shape[-1]))
         residual = hidden_states
         x = self.attention_norm(hidden_states)
         x = self.attention(x, position_embeddings=position_embeddings)
-        ttnn.add(residual, x, output_tensor=residual, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.add(residual, x, output_tensor=residual, memory_config=layer_mem)
         ttnn.deallocate(x)
 
         x = self.ffn_norm(residual)
         x = self.mlp(x)
-        ttnn.add(residual, x, output_tensor=residual, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.add(residual, x, output_tensor=residual, memory_config=layer_mem)
         ttnn.deallocate(x)
         return residual
 

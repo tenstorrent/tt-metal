@@ -4,6 +4,7 @@
 import os
 
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.devstarl2_small.devstral_utils.fp8_dequantize_compat import apply_fp8_dequantize_compat
 from models.experimental.devstarl2_small.devstral_utils.dram_sharded_matmul import (
     TILE,
     width_sharded_l1_linear_keep_sharded,
@@ -11,6 +12,8 @@ from models.experimental.devstarl2_small.devstral_utils.dram_sharded_matmul impo
 from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import vision_slice_memcfg
 import ttnn
 import torch
+
+apply_fp8_dequantize_compat()
 
 
 def _patch_merge_ws_m_cap() -> int:

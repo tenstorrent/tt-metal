@@ -11,9 +11,14 @@ from models.common.utility_functions import nearest_32
 from models.experimental.devstarl2_small.devstral_utils.vision_ccl import vision_sum_all_reduce
 from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import (
     pad_seq_to_chunk_multiple,
-    pixtral_vision_seq_chunk_len,
+    pixtral_effective_mm_seq_len,
     trim_seq_dim2,
+    vision_nlp_concat_input_memcfg,
+    vision_nlp_qkv_shard_memcfgs,
     vision_rope_memcfg,
+    vision_seq_memcfg,
+    vision_use_sharded_nlp_concat,
+    vision_use_sharded_nlp_create_qkv,
 )
 
 
@@ -183,16 +188,78 @@ class TtMistralImageAttention(LightweightModule):
         )
 
         self.scale = self.head_dim**-0.5
+        self._padded_head_dim = nearest_32(self.head_dim)
+
+    def _nlp_create_qkv_heads(
+        self, xqkv_fused: ttnn.Tensor, seq_len: int
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """L1 sharded NlpCreateHeads when seq fits tile budget; else DRAM interleaved (SDPA input)."""
+        qkv_width = (self.n_local_heads + 2 * self.n_local_kv_heads) * self._padded_head_dim
+        sdpa_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+
+        if vision_use_sharded_nlp_create_qkv(
+            seq_len, self.n_local_heads, self.n_local_kv_heads, self._padded_head_dim, qkv_width
+        ):
+            qkv_in_mem, qkv_out_mem = vision_nlp_qkv_shard_memcfgs(
+                seq_len, qkv_width, self.n_local_kv_heads, self.configuration
+            )
+            xqkv_sharded = ttnn.interleaved_to_sharded(xqkv_fused, qkv_in_mem)
+            ttnn.deallocate(xqkv_fused)
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                xqkv_sharded,
+                num_heads=self.n_local_heads,
+                num_kv_heads=self.n_local_kv_heads,
+                transpose_k_heads=False,
+                memory_config=qkv_out_mem,
+            )
+            ttnn.deallocate(xqkv_sharded)
+            q = ttnn.to_memory_config(q, sdpa_mem_cfg)
+            k = ttnn.to_memory_config(k, sdpa_mem_cfg)
+            v = ttnn.to_memory_config(v, sdpa_mem_cfg)
+            return q, k, v
+
+        nlp_in_mem = xqkv_fused.memory_config()
+        if nlp_in_mem.is_sharded() or nlp_in_mem.buffer_type != ttnn.BufferType.L1:
+            nlp_in_mem = sdpa_mem_cfg
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            xqkv_fused,
+            num_heads=self.n_local_heads,
+            num_kv_heads=self.n_local_kv_heads,
+            transpose_k_heads=False,
+            memory_config=nlp_in_mem,
+        )
+        ttnn.deallocate(xqkv_fused)
+        q = ttnn.to_memory_config(q, sdpa_mem_cfg)
+        k = ttnn.to_memory_config(k, sdpa_mem_cfg)
+        v = ttnn.to_memory_config(v, sdpa_mem_cfg)
+        return q, k, v
+
+    def _nlp_concat_heads(self, attn_output_1QSD: ttnn.Tensor, seq_len: int) -> ttnn.Tensor:
+        sdpa_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+        if vision_use_sharded_nlp_concat(seq_len, self.n_local_heads, self._padded_head_dim, self.configuration):
+            concat_in_mem = vision_nlp_concat_input_memcfg(
+                seq_len, self._padded_head_dim, self.n_local_heads, self.configuration
+            )
+            attn_sharded = ttnn.interleaved_to_sharded(attn_output_1QSD, concat_in_mem)
+            ttnn.deallocate(attn_output_1QSD)
+            out = ttnn.experimental.nlp_concat_heads(attn_sharded, memory_config=sdpa_mem_cfg)
+            ttnn.deallocate(attn_sharded)
+            return out
+        out = ttnn.experimental.nlp_concat_heads(attn_output_1QSD, memory_config=sdpa_mem_cfg)
+        ttnn.deallocate(attn_output_1QSD)
+        return out
 
     def _linear_qkv_seq_chunked(self, x_11SH, seq_len: int, max_mm_seq_len: int) -> ttnn.Tensor:
         """Fused QKV ``ttnn.linear`` over the sequence axis; chunk so matmul ``m`` fits L1 CB budget."""
         x_11SH, seq_len, original_seq_len = pad_seq_to_chunk_multiple(x_11SH, seq_len, max_mm_seq_len)
+        qkv_width = (self.n_local_heads + 2 * self.n_local_kv_heads) * self._padded_head_dim
+        qkv_mem_cfg = vision_seq_memcfg(seq_len, qkv_width)
         if seq_len <= max_mm_seq_len:
             out = ttnn.linear(
                 x_11SH,
                 self.wqkv,
                 dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=qkv_mem_cfg,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 program_config=self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, seq_len),
             )
@@ -203,7 +270,7 @@ class TtMistralImageAttention(LightweightModule):
             x_batched,
             self.wqkv,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=qkv_mem_cfg,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             program_config=self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, max_mm_seq_len),
         )
@@ -221,7 +288,9 @@ class TtMistralImageAttention(LightweightModule):
         attn_output_11SH, seq_len, original_seq_len = pad_seq_to_chunk_multiple(
             attn_output_11SH, seq_len, max_mm_seq_len
         )
-        wo_mem_cfg = output_memory_config if output_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+        wo_mem_cfg = (
+            output_memory_config if output_memory_config is not None else vision_seq_memcfg(seq_len, self.hidden_size)
+        )
         if seq_len <= max_mm_seq_len:
             out = ttnn.linear(
                 attn_output_11SH,
@@ -246,33 +315,23 @@ class TtMistralImageAttention(LightweightModule):
         return trim_seq_dim2(out, original_seq_len)
 
     def forward(self, x_11SH, position_embeddings=None):
-        if x_11SH.memory_config().buffer_type != ttnn.BufferType.DRAM:
-            x_11SH = ttnn.to_memory_config(x_11SH, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
         seq_len = int(x_11SH.shape[-2])
-        max_mm_seq_len = pixtral_vision_seq_chunk_len(self.configuration)
-        wo_out_mem_cfg = ttnn.DRAM_MEMORY_CONFIG if self.num_devices > 1 else None
+        act_mem_cfg = vision_seq_memcfg(seq_len, self.hidden_size)
+        if x_11SH.memory_config().buffer_type != act_mem_cfg.buffer_type:
+            x_11SH = ttnn.to_memory_config(x_11SH, act_mem_cfg)
+
+        max_mm_seq_len = pixtral_effective_mm_seq_len(self.configuration, seq_len)
+        wo_out_mem_cfg = act_mem_cfg
 
         xqkv_fused = self._linear_qkv_seq_chunked(x_11SH, seq_len, max_mm_seq_len)
         if seq_len > max_mm_seq_len and seq_len % max_mm_seq_len == 0:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
-        (
-            q_heads_1QSD,
-            k_heads_1KSD,
-            v_heads_1VSD,
-        ) = ttnn.experimental.nlp_create_qkv_heads(
-            xqkv_fused,
-            num_heads=self.n_local_heads,
-            num_kv_heads=self.n_local_kv_heads,
-            transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        q_heads_1QSD, k_heads_1KSD, v_heads_1VSD = self._nlp_create_qkv_heads(xqkv_fused, seq_len)
 
         if position_embeddings is not None:
             cos, sin = position_embeddings
             q_heads_1QSD, k_heads_1KSD = apply_rotary_pos_emb_vision_tt(q_heads_1QSD, k_heads_1KSD, cos, sin)
-        ttnn.deallocate(xqkv_fused)
 
         sdpa_cfg = _pixtral_sdpa_program_config(seq_len, max_mm_seq_len, _pixtral_sdpa_grid_size(self.configuration))
         attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
@@ -289,11 +348,7 @@ class TtMistralImageAttention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD)
         ttnn.deallocate(v_heads_1VSD)
 
-        attn_output_11SH = ttnn.experimental.nlp_concat_heads(
-            attn_output_1QSD,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(attn_output_1QSD)
+        attn_output_11SH = self._nlp_concat_heads(attn_output_1QSD, seq_len)
 
         output_11SH = self._linear_wo_seq_chunked(
             attn_output_11SH,

@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import os
+from typing import Any, Tuple
 
 import ttnn
 
 from models.common.utility_functions import nearest_32
 
 VISION_L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
+TILE = 32
 
 
 def vision_activation_memcfg(num_elements: int) -> ttnn.MemoryConfig:
@@ -45,13 +47,14 @@ def vision_seq_memcfg(seq_len: int, feature_dim: int = 1) -> ttnn.MemoryConfig:
 
 
 def vision_rms_norm_memcfg(seq_len: int, feature_dim: int = 1) -> ttnn.MemoryConfig:
-    """Always DRAM: RMSNorm static CBs overlap L1 RoPE / slice buffers on WH (program ~225 clash)."""
-    _ = seq_len, feature_dim
-    return ttnn.DRAM_MEMORY_CONFIG
+    """L1 RMSNorm when seq×feature fits; opt-out via PIXTRAL_VISION_NORM_DRAM=1 (CB clash fallback)."""
+    if os.environ.get("PIXTRAL_VISION_NORM_DRAM", "").strip() in ("1", "true", "True"):
+        return ttnn.DRAM_MEMORY_CONFIG
+    return vision_seq_memcfg(seq_len, feature_dim)
 
 
 def vision_rope_memcfg(seq_len: int, head_dim: int = 1) -> ttnn.MemoryConfig:
-    """L1 for RoPE embed + rotary_embedding when seq×head fits (RMSNorm stays DRAM)."""
+    """L1 for RoPE embed + rotary_embedding when seq×head fits."""
     rope_cap_raw = os.environ.get("PIXTRAL_VISION_L1_ROPE_SEQ_CAP", os.environ.get("PIXTRAL_VISION_L1_SEQ_CAP", "4096"))
     rope_cap = max(32, nearest_32(int(rope_cap_raw)))
     elem_cap_raw = os.environ.get(
@@ -124,3 +127,93 @@ def trim_seq_dim2(x: ttnn.Tensor, original_seq_len: int) -> ttnn.Tensor:
     if int(x.shape[2]) == original_seq_len:
         return x
     return x[:, :, :original_seq_len, :]
+
+
+def _vision_compute_grid_size(configuration: Any) -> tuple[int, int]:
+    grid = configuration.max_grid_size
+    if hasattr(grid, "x") and hasattr(grid, "y"):
+        return int(grid.x), int(grid.y)
+    if isinstance(grid, (tuple, list)) and len(grid) >= 2:
+        return int(grid[0]), int(grid[1])
+    return 8, 8
+
+
+def _vision_nlp_shard_enabled() -> bool:
+    return os.environ.get("PIXTRAL_VISION_NLP_SHARD", "1").strip() not in ("0", "false", "False")
+
+
+def vision_nlp_qkv_shard_memcfgs(
+    seq_len: int,
+    qkv_width: int,
+    n_local_kv_heads: int,
+    configuration: Any,
+    batch: int = 1,
+) -> Tuple[ttnn.MemoryConfig, ttnn.MemoryConfig]:
+    """WIDTH_SHARDED L1 in, HEIGHT_SHARDED L1 out (fast sharded NlpCreateHeads path)."""
+    num_cores = int(n_local_kv_heads)
+    compute_grid_size = _vision_compute_grid_size(configuration)
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
+    shard_shape = [int(seq_len) * int(batch), int(qkv_width) // num_cores]
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    in_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    return in_mem, out_mem
+
+
+def vision_use_sharded_nlp_create_qkv(
+    chunk_seq_len: int,
+    n_local_heads: int,
+    n_local_kv_heads: int,
+    head_dim: int,
+    qkv_width: int,
+) -> bool:
+    """Sharded create_qkv when chunk seq fits HEIGHT-shard limits (seq * heads <= heads * TILE)."""
+    if not _vision_nlp_shard_enabled():
+        return False
+    if int(chunk_seq_len) % TILE != 0 or int(head_dim) % TILE != 0:
+        return False
+    num_cores = int(n_local_kv_heads)
+    if num_cores <= 0 or int(n_local_heads) % num_cores != 0 or int(n_local_kv_heads) % num_cores != 0:
+        return False
+    if int(qkv_width) % num_cores != 0:
+        return False
+    return int(chunk_seq_len) * int(n_local_heads) <= int(n_local_heads) * TILE
+
+
+def vision_use_sharded_nlp_concat(
+    seq_len: int,
+    n_local_heads: int,
+    head_dim: int,
+    configuration: Any,
+    batch: int = 1,
+) -> bool:
+    """HEIGHT-sharded concat (one core per head). Disabled on Blackhole (kernel hang)."""
+    if os.environ.get("PIXTRAL_VISION_NLP_CONCAT_SHARD", "").strip() not in ("1", "true", "True"):
+        return False
+    if not _vision_nlp_shard_enabled():
+        return False
+    if int(seq_len) % TILE != 0 or int(head_dim) % TILE != 0:
+        return False
+    if int(batch) != 1:
+        return False
+    grid_x, _grid_y = _vision_compute_grid_size(configuration)
+    return 0 < int(n_local_heads) <= grid_x
+
+
+def vision_nlp_concat_input_memcfg(
+    seq_len: int,
+    head_dim: int,
+    n_local_heads: int,
+    configuration: Any,
+    batch: int = 1,
+) -> ttnn.MemoryConfig:
+    """HEIGHT-sharded L1: one core per head, full seq_len rows (matches nlp_concat_heads sharded kernel)."""
+    _ = configuration, batch
+    num_cores = int(n_local_heads)
+    return ttnn.create_sharded_memory_config(
+        shape=(int(seq_len), int(head_dim)),
+        core_grid=ttnn.CoreGrid(y=1, x=num_cores),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
