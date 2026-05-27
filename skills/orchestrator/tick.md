@@ -152,6 +152,10 @@ result_json["block"])` and the phase key (one of `reference`, `ttnn`,
 - `status="ok"` → `component[phase] = {"status": "done", "pcc":
   result_json["pcc"], "attempts": old_attempts, "artifacts":
   result_json["artifacts"], "notes": result_json.get("notes", "")}`.
+  **Exception for ttnn:** defer this assignment until after Step 5's
+  guard passes. If Step 5 rejects, overwrite with the standard fail
+  handling instead. The lines below describe the non-ttnn case; for
+  ttnn, hold the result and fall through to Step 5 before mutating.
 - `status="fail"` → `attempts = old_attempts + 1`. If `attempts >=
   state["config"]["max_attempts_per_phase"]` set status to `blocked`,
   else `failing`. Carry `last_error=result_json["last_error"]` and
@@ -183,7 +187,11 @@ The smoke check is dispatched on the NEXT tick (Step 2 override).
 ## Step 5: Guard check for TTNN successes
 
 When the dispatched worker was `ttnn` AND it returned `status="ok"`,
-run the no-shortcuts guard BEFORE marking `ttnn.status="done"`:
+run the no-shortcuts guard. Per the Step 4 ttnn exception, you have
+NOT yet written `done` for this block. Run the guard now — only
+after it passes do you mark `component["ttnn"] = {"status": "done", ...}`.
+If the guard rejects, apply the standard fail handling instead
+(attempts++, blocked at max).
 
 ```python
 from skills.orchestrator.lib.guard import verify_block, lint_block
