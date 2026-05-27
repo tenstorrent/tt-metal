@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import torch
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
@@ -16,6 +18,41 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIReplicatedWColSharded,
 )
 from models.experimental.tt_symbiote.modules.rope import BailingRotarySetup
+
+
+def _env_on(name: str) -> bool:
+    val = os.environ.get(name)
+    return val is not None and val.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _attn_qkv_bfp8_input() -> bool:
+    """Typecast hidden_states from BF16 to BFP8 immediately before the fused
+    QKV matmul (decode only). Saves activation bandwidth into the
+    BF16 x BFP8 -> BF16 HiFi2 matmul. Enabled by ``ATTN_QKV_BFP8_INPUT=1``."""
+    return _env_on("ATTN_QKV_BFP8_INPUT")
+
+
+def _attn_oproj_bfp8_input() -> bool:
+    """Typecast the SDPA / concat-heads output from BF16 to BFP8 immediately
+    before ``o_proj`` (decode only). Saves activation bandwidth into the
+    BF16 x BFP4 -> BFP8 LoFi matmul. Enabled by ``ATTN_OPROJ_BFP8_INPUT=1``."""
+    return _env_on("ATTN_OPROJ_BFP8_INPUT")
+
+
+def _maybe_typecast_to_bfp8(tensor: ttnn.Tensor) -> ttnn.Tensor:
+    """Cast a sharded-or-interleaved BF16 tensor to BFP8 in L1.
+
+    The sharded ``ttnn.typecast`` kernel asserts equal input/output tile
+    size (BF16 tile = 2 KB, BFP8 tile = ~1.1 KB), so when the input is
+    sharded we first convert to L1 interleaved, then typecast. The
+    downstream matmul's input ``to_memory_config`` will reshard back to
+    the layout the matmul kernel wants."""
+    if tensor.dtype == ttnn.bfloat8_b:
+        return tensor
+    if tensor.is_sharded():
+        tensor = ttnn.sharded_to_interleaved(tensor, ttnn.L1_MEMORY_CONFIG)
+    return ttnn.typecast(tensor, ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+
 
 try:
     from transformers.cache_utils import Cache
@@ -285,6 +322,15 @@ class TTNNDotsOCRAttention(TTNNModule):
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+        # ``ATTN_QKV_BFP8_INPUT=1`` -- cast the post-LN activation BF16 -> BFP8
+        # before the QKV matmul (decode only). The QKV matmul is BF16 x BFP8
+        # -> BF16 HiFi2 today; this drops the activation read bandwidth by ~2x.
+        # Sharded typecast hits the BF16/BFP8 tile-size mismatch, so the cast
+        # is done in L1 interleaved and the QKV linear's input
+        # ``to_memory_config`` will reshard to DRAM-sharded as before.
+        if int(seq_length) == 1 and _attn_qkv_bfp8_input():
+            hidden_states = _maybe_typecast_to_bfp8(hidden_states)
+
         qkv_states = self.qkv_proj(hidden_states)
 
         is_decode = int(seq_length) == 1
@@ -524,6 +570,15 @@ class TTNNDotsOCRAttention(TTNNModule):
         if batch_size < 32:
             attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
             attn_output = ttnn.slice(attn_output, [0, 0, 0, 0], [1, 1, batch_size, int(attn_output.shape[-1])])
+
+        # ``ATTN_OPROJ_BFP8_INPUT=1`` -- cast the concat-heads activation
+        # BF16 -> BFP8 before the o_proj matmul (decode only). The o_proj
+        # matmul is BF16 x BFP4 -> BFP8 LoFi today (BFP4 for layers 0-6,
+        # BFP8 for layers 7-27); casting the input matches what gate_up
+        # does and drops activation read bandwidth ~2x. See
+        # ``_maybe_typecast_to_bfp8`` for why this is done in L1 interleaved.
+        if _attn_oproj_bfp8_input():
+            attn_output = _maybe_typecast_to_bfp8(attn_output)
 
         attn_output = self.o_proj(attn_output)
         attn_output = ttnn.squeeze(attn_output, 1)
