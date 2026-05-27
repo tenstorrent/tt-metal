@@ -19,7 +19,7 @@ For each pipeline PR, the single targeted verification run is a NON-REGRESSION C
 
 Each PR gets exactly one targeted verification run total.
 
-- Never dispatch a second verification run for the same PR.
+- Never dispatch a second verification run for the same PR, EXCEPT when the prior verification run was infra-inconclusive (see "Interpreting Verification Results" below). Inconclusive runs do not consume the budget.
 - The single run exists only to confirm no regressions in jobs that were passing on `main`.
 - Do not use PR-branch verification output to discover, justify, or add new disables.
 - Plan and scope that one run carefully before dispatch.
@@ -31,7 +31,8 @@ Each PR gets exactly one targeted verification run total.
 - A "failure" conclusion on the verification workflow run as a whole does NOT by itself mean the PR has a regression.
 - If a job was already failing on `main` before the PR, its continued failure on the PR branch is NOT a regression and does NOT block merge.
 - If a job's failure on the PR is fully attributable to an out-of-scope cause (timeout tracked in the timeout-tracking issue, infra/runner faults, or flaky non-consecutive failures), it does NOT block merge.
-- If the verification run could not actually exercise the previously-passing jobs (for example, infra failure during artifact download or container init), treat the verification as inconclusive: do NOT mark the PR as `verified-pass`, do NOT dispatch a second run, and flag it for human decision in `disabling-work-so-far.md`.
+- If the verification run could not actually exercise the previously-passing jobs (for example, infra failure during artifact download, container init, runner allocation, or any failure that prevented pytest from running on those jobs), treat the verification as INCONCLUSIVE. An inconclusive run does NOT count against the one-run-per-PR budget.
+- For an inconclusive verification, the agent SHOULD dispatch a new verification run on a later session (still subject to the at-most-one-new-dispatch-per-session rule). Do not mark the PR as `verified-pass` until a verification run has actually exercised the previously-passing jobs.
 - Merge-readiness decision rule: a PR is `verified-pass` (ready to merge) iff every job that was passing on `main` immediately before the PR is still passing on the PR's single verification run.
 
 ## PR Disable Batch Policy (Exactly One Initial Batch)
