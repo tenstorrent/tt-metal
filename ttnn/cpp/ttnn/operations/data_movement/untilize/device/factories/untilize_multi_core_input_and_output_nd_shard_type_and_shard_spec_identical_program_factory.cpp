@@ -1,26 +1,55 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+//
+// Metal 2.0 port — see METAL2_PORT_PLAN.md alongside the untilize op directory.
 
 #include "untilize_multi_core_input_and_output_nd_shard_type_and_shard_spec_identical_program_factory.hpp"
 
-#include "ttnn/common/constants.hpp"
-
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-logger/tt-logger.hpp>
 
+using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental::metal2_host_api;
 
 namespace ttnn::prim {
 
-ProgramDescriptor UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::create_descriptor(
+namespace untilize_nd_shard_spec_identical_factory {
+
+constexpr const char* PROGRAM_ID = "untilize_nd_shard_spec_identical";
+constexpr const char* READER = "reader";
+constexpr const char* WRITER = "writer";
+constexpr const char* COMPUTE = "compute";
+constexpr const char* SRC_DFB = "src_dfb";
+constexpr const char* OUT_DFB = "out_dfb";
+constexpr const char* INPUT = "input";
+constexpr const char* OUTPUT = "output";
+constexpr const char* MAIN_WU = "main";
+
+NodeRangeSet to_node_range_set(const CoreRangeSet& crs) {
+    std::vector<NodeRange> ranges;
+    ranges.reserve(crs.ranges().size());
+    for (const auto& cr : crs.ranges()) {
+        ranges.emplace_back(NodeCoord{cr.start_coord.x, cr.start_coord.y}, NodeCoord{cr.end_coord.x, cr.end_coord.y});
+    }
+    return NodeRangeSet(std::move(ranges));
+}
+
+NodeCoord to_node_coord(const CoreCoord& c) { return NodeCoord{c.x, c.y}; }
+
+}  // namespace untilize_nd_shard_spec_identical_factory
+
+ttnn::device_operation::ProgramArtifacts
+UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::create_program_spec(
     const UntilizeOperationAttributes& operation_attributes,
     const UntilizeTensorArgs& tensor_args,
     UntilizeTensorReturnValue& tensor_return_value) {
+    using namespace untilize_nd_shard_spec_identical_factory;
     const auto& a = tensor_args.input;
     const Tensor& output = tensor_return_value;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
@@ -30,27 +59,22 @@ ProgramDescriptor UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdentica
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
     const auto& nd_shard_spec = a.nd_shard_spec().value();
     uint32_t shard_height = nd_shard_spec.shard_shape[-2];
     uint32_t shard_width = nd_shard_spec.shard_shape[-1];
-    CoreRangeSet grid = nd_shard_spec.grid;
+    const CoreRangeSet& grid = nd_shard_spec.grid;
     ShardOrientation orientation = nd_shard_spec.orientation;
+    NodeRangeSet all_nodes = to_node_range_set(grid);
 
     uint32_t shard_vol = nd_shard_spec.shard_shape.volume();
-
     uint32_t num_tiles_per_block = shard_width / tile_width;
     uint32_t num_blocks_per_shard = (shard_height / tile_height) * (shard_vol / (shard_height * shard_width));
     uint32_t num_tiles_per_shard = num_tiles_per_block * num_blocks_per_shard;
 
     const auto& distribution_spec = a.buffer()->buffer_distribution_spec().value();
-
     uint32_t total_shards = distribution_spec.num_shards();
     uint32_t num_cores = grid.num_cores();
     const auto& groups = distribution_spec.core_groups();
@@ -62,82 +86,120 @@ ProgramDescriptor UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdentica
         num_cores,
         num_shards_per_core);
 
-    const uint32_t src0_cb_index = tt::CBIndex::c_0;
-    const uint32_t output_cb_index = tt::CBIndex::c_16;
-
-    ProgramDescriptor desc;
-
-    // Sharded input CB — globally allocated to the input buffer; framework patches
-    // the CB address on cache hits via cb.buffer.
-    {
-        CBDescriptor cb_src0;
-        cb_src0.total_size = num_tiles_per_shard * num_shards_per_core * input_single_tile_size;
-        cb_src0.core_ranges = grid;
-        cb_src0.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        });
-        cb_src0.buffer = src0_buffer;
-        desc.cbs.push_back(std::move(cb_src0));
-    }
-
-    // Sharded output CB — globally allocated to the output buffer.
-    {
-        CBDescriptor cb_output;
-        cb_output.total_size = num_tiles_per_shard * num_shards_per_core * output_single_tile_size;
-        cb_output.core_ranges = grid;
-        cb_output.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_cb_index),
-            .data_format = output_cb_data_format,
-            .page_size = output_single_tile_size,
-        });
-        cb_output.buffer = dst_buffer;
-        desc.cbs.push_back(std::move(cb_output));
-    }
-
-    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index};
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = grid;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = grid;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    std::vector<uint32_t> compute_compile_time_args = {num_tiles_per_block, src0_cb_index, output_cb_index};
-
-    std::vector<std::pair<std::string, std::string>> compute_kernel_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_kernel_defines.emplace_back("DST_ACCUM_MODE", "1");
-    }
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (fp32_dest_acc_en) {
-        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    }
-
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp";
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = grid;
-    compute_desc.compile_time_args = std::move(compute_compile_time_args);
-    compute_desc.defines = std::move(compute_kernel_defines);
-    compute_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+    DataflowBufferSpec src_dfb{
+        .unique_id = SRC_DFB,
+        .entry_size = input_single_tile_size,
+        .num_entries = num_tiles_per_shard * num_shards_per_core,
+        .data_format_metadata = input_cb_data_format,
+        .borrowed_from = INPUT,
+    };
+    DataflowBufferSpec out_dfb{
+        .unique_id = OUT_DFB,
+        .entry_size = output_single_tile_size,
+        .num_entries = num_tiles_per_shard * num_shards_per_core,
+        .data_format_metadata = output_cb_data_format,
+        .borrowed_from = OUTPUT,
     };
 
-    // Run-time args
+    KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            KernelSpec::SourceFilePath{
+                "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded_metal2.cpp"},
+        .dfb_bindings = {{
+            .dfb_spec_name = SRC_DFB,
+            .local_accessor_name = "shard",
+            .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+        }},
+        .runtime_arguments_schema = {.named_runtime_args = {"num_tiles_per_core"}},
+        .config_spec =
+            DataMovementConfiguration{
+                .gen1_data_movement_config =
+                    DataMovementConfiguration::Gen1DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_1,
+                        .noc = NOC::RISCV_1_default,
+                    },
+            },
+    };
+
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = KernelSpec::SourceFilePath{"ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+                                             "writer_unary_sharded_metal2.cpp"},
+        .dfb_bindings = {{
+            .dfb_spec_name = OUT_DFB,
+            .local_accessor_name = "out",
+            .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+        }},
+        .runtime_arguments_schema = {.named_runtime_args = {"num_units"}},
+        .config_spec =
+            DataMovementConfiguration{
+                .gen1_data_movement_config =
+                    DataMovementConfiguration::Gen1DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = NOC::RISCV_0_default,
+                    },
+            },
+    };
+
+    std::vector<ComputeConfiguration::UnpackToDestModeEntry> unpack_to_dest_mode;
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode.emplace_back(SRC_DFB, UnpackToDestMode::UnpackToDestFp32);
+    }
+
+    KernelSpec::CompilerOptions::Defines compute_defines;
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
+        compute_defines.emplace_back("DST_ACCUM_MODE", "1");
+    }
+
+    KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source =
+            KernelSpec::SourceFilePath{
+                "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_metal2.cpp"},
+        .compiler_options = {.defines = std::move(compute_defines)},
+        .dfb_bindings =
+            {
+                {.dfb_spec_name = SRC_DFB,
+                 .local_accessor_name = "src",
+                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER},
+                {.dfb_spec_name = OUT_DFB,
+                 .local_accessor_name = "dst",
+                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER},
+            },
+        .compile_time_arg_bindings = {{"per_core_block_tile_cnt", num_tiles_per_block}},
+        .runtime_arguments_schema = {.named_runtime_args = {"per_core_block_cnt"}},
+        .config_spec =
+            ComputeConfiguration{
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+            },
+    };
+
+    WorkUnitSpec main_wu{
+        .unique_id = MAIN_WU,
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = all_nodes,
+    };
+
+    ProgramSpec spec{
+        .program_id = PROGRAM_ID,
+        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
+        .dataflow_buffers = {std::move(src_dfb), std::move(out_dfb)},
+        .tensor_parameters =
+            {
+                {.unique_id = INPUT, .spec = a.tensor_spec()},
+                {.unique_id = OUTPUT, .spec = output.tensor_spec()},
+            },
+        .work_units = {std::move(main_wu)},
+    };
+
+    using KernelRunParams = ProgramRunParams::KernelRunParams;
+
+    KernelRunParams reader_rp{.kernel_spec_name = READER};
+    KernelRunParams writer_rp{.kernel_spec_name = WRITER};
+    KernelRunParams compute_rp{.kernel_spec_name = COMPUTE};
+
     auto cores = corerange_to_cores(grid, std::nullopt, orientation == ShardOrientation::ROW_MAJOR);
     auto page_mapping = distribution_spec.compute_page_mapping();
     const auto& mapped_cores = page_mapping.all_cores;
@@ -151,19 +213,33 @@ ProgramDescriptor UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdentica
             num_blocks_to_process = num_blocks_per_shard * num_shards_on_core;
             num_tiles_to_process = num_tiles_per_block * num_blocks_to_process;
         }
-
-        // Sharded readers/writers consume only the (per-launch) tile count; no Buffer* slot is
-        // needed because the CB itself carries the buffer binding.
-        reader_desc.emplace_runtime_args(core, {num_tiles_to_process});
-        compute_desc.emplace_runtime_args(core, {num_blocks_to_process});
-        writer_desc.emplace_runtime_args(core, {num_tiles_to_process});
+        reader_rp.named_runtime_args.push_back({
+            .node = to_node_coord(core),
+            .args = {{"num_tiles_per_core", num_tiles_to_process}},
+        });
+        writer_rp.named_runtime_args.push_back({
+            .node = to_node_coord(core),
+            .args = {{"num_units", num_tiles_to_process}},
+        });
+        compute_rp.named_runtime_args.push_back({
+            .node = to_node_coord(core),
+            .args = {{"per_core_block_cnt", num_blocks_to_process}},
+        });
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    ProgramRunParams run_params;
+    run_params.kernel_run_params.push_back(std::move(reader_rp));
+    run_params.kernel_run_params.push_back(std::move(writer_rp));
+    run_params.kernel_run_params.push_back(std::move(compute_rp));
+    run_params.tensor_args = {
+        {.tensor_parameter_name = INPUT, .tensor = std::cref(a.mesh_tensor())},
+        {.tensor_parameter_name = OUTPUT, .tensor = std::cref(output.mesh_tensor())},
+    };
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_params),
+    };
 }
 
 }  // namespace ttnn::prim
