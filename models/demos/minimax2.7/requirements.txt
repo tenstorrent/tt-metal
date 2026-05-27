@@ -1,0 +1,3 @@
+# MiniMax-M2.7 needs a recent transformers that ships the `minimax_m2` model_type.
+# 4.57.0 is the floor used by the gpt_oss demo; bump if HF adds M2-specific fixes.
+transformers>=4.57.0
