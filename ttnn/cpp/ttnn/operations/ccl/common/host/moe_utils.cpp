@@ -167,7 +167,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
                         planes_in_direction);
                     // If there's only 1 or 2 devices, ring wrap-around can detect a neighbor though there's no fabric
                     // link, causing planes_in_direction=0 which collapses the overall min to 0.
-                    if (planes_in_direction > 1) {
+                    if (planes_in_direction > 0) {
                         num_available_routing_planes = std::min(num_available_routing_planes, planes_in_direction);
                     }
                 }
