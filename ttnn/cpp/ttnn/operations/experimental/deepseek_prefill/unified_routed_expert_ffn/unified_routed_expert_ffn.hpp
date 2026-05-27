@@ -34,7 +34,20 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 //   global_expert_idx_table: device-resident UINT32 vector,
 //      counts[global_expert_idx_table[local_expert_id]] == this expert's
 //      actual token count.
+//   expert_region_offsets: device-resident UINT32 vector, per-global-expert
+//      starting M-row (in tokens, tile-aligned) inside x / output. Used only
+//      when use_region_offsets=true. See use_region_offsets below.
 //   local_expert_id: index into global_expert_idx_table.
+//   use_region_offsets: selects between two execution paths (see
+//      UnifiedRoutedExpertFfnParams in types.hpp for the canonical definition):
+//        true  (fused extract+FFN+insert path): kernels add
+//              start_tile_row = expert_region_offsets[global_id]/32 to all DRAM
+//              tile indices so x reads and output writes hit this expert's
+//              slice of a shared dispatched_buffer.
+//        false (unfused path): x is the already-extracted per-expert tokens
+//              tensor and output is a fresh per-expert tensor, both starting
+//              at row 0. expert_region_offsets is unused (still passed for
+//              tensor-spec uniformity).
 //   compute_kernel_config: optional matmul math fidelity / accumulator config.
 //   output: optional pre-allocated (M_max, K=emb) DRAM-interleaved output
 //      tensor to write into. Must match x.dtype() and shape.
@@ -51,12 +64,23 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& output = std::nullopt);
 
-// MoE-level composite op: takes the dispatched buffer + ALL experts' weights
-// and loops experts_per_chip times INSIDE the op, calling
-//   extract -> unified_routed_expert_ffn -> insert
-// per expert. Python passes everything; no host-side counts/idx read, no
-// per-expert Python loop. The unified FFN reads counts on-device so each
-// expert's work scales to its actual count.
+// MoE-level composite: takes the dispatched buffer + ALL local experts'
+// weights and loops over local experts in C++, launching one per-expert
+// unified_routed_expert_ffn device program per iteration. NOT a single fused
+// device op across experts (per-expert FFN entries still appear in
+// tt-perf-report); Python sees one call, the device sees N.
+//
+// Two path variants:
+//   num_routed_experts <= 64: each per-expert FFN call uses the fused-extract
+//     path (use_region_offsets=true), reading from / writing to a single
+//     allocated output buffer using device-resident region offsets.
+//   num_routed_experts >  64: each iteration runs the unfused
+//     extract -> unified_routed_expert_ffn(use_region_offsets=false) -> insert
+//     chain. Required on the 256-expert / 32-per-chip configuration because
+//     the fused path's CB layout clashes with an L1 buffer placement.
+//
+// The unified FFN reads counts on-device so each expert's work scales to its
+// actual count. No host-side counts/idx read, no per-expert Python loop.
 ttnn::Tensor unified_routed_expert_moe(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& expert_region_offsets,

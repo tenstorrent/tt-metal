@@ -35,11 +35,23 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             down_proj (ttnn.Tensor): (K=hidden, N=emb).
             counts (ttnn.Tensor): UINT32, per-global-expert token counts.
             global_expert_idx_table (ttnn.Tensor): UINT32, maps local id -> global.
+            expert_region_offsets (ttnn.Tensor): UINT32, per-global-expert
+                starting M-row inside x/output (in tokens, tile-aligned).
+                Used only when ``use_region_offsets=True``.
             local_expert_id (int): index into global_expert_idx_table.
+            use_region_offsets (bool, default=True): execution-path selector.
+                True  -> fused-extract path. Kernels add
+                        ``start_tile_row = expert_region_offsets[global_id]/32``
+                        to all DRAM tile indices so x reads / output writes
+                        hit this expert's slice of a shared buffer.
+                False -> unfused path. x is the already-extracted per-expert
+                        tokens tensor (rows start at 0); ``expert_region_offsets``
+                        is ignored.
 
         Keyword Args:
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
             output (ttnn.Tensor, optional): pre-allocated output buffer.
+                Must match x.dtype() and x.shape().
 
         Returns:
             ttnn.Tensor: (M_max, K=emb).
@@ -61,9 +73,23 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
     ttnn::bind_function<"unified_routed_expert_moe", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
-        MoE-level composite op: takes the full dispatched buffer + ALL local
-        experts' weights and loops per-expert internally, calling
-            extract -> unified_routed_expert_ffn -> insert.
+        MoE-level composite: takes the full dispatched buffer + ALL local
+        experts' weights and loops over local experts in C++, launching one
+        ``unified_routed_expert_ffn`` device program per expert (each per-expert
+        program is a single fused SwiGLU FFN). This is NOT a single fused
+        device op across experts — per-expert FFN entries still appear in
+        tt-perf-report.
+
+        Two path variants:
+          - num_routed_experts <= 64: each per-expert FFN call uses the
+            fused-extract path (use_region_offsets=true), reading from /
+            writing to a single allocated output buffer using the
+            device-resident region offsets.
+          - num_routed_experts >  64: each iteration runs the unfused
+            extract -> unified_routed_expert_ffn(use_region_offsets=false)
+            -> insert chain. Required on the 256-expert / 32-per-chip
+            configuration because the fused path's CB layout clashes with
+            an L1 buffer placement.
 
         The unified FFN reads device-resident counts/idx and bounds its
         chunk loop to the actually-occupied chunks per expert. The host
