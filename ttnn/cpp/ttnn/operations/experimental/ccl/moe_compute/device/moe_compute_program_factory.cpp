@@ -288,6 +288,17 @@ std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     return combine_cores;
 }
 
+ttnn::CoreRange get_moe_worker_mcast_bounding_box(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const uint32_t bh_ring_size) {
+    const auto core_ret =
+        get_cores(mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, bh_ring_size);
+    return std::get<7>(core_ret).bounding_box();
+}
+
 MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFactory::create_mesh_workload(
     const MoEComputeParams& args,
     const ttnn::MeshCoordinateRangeSet& mesh_coordinates,

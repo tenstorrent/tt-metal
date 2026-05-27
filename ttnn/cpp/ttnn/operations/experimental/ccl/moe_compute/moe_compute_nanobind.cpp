@@ -139,5 +139,20 @@ void bind_get_moe_combine_cores(nb::module_& mod) {
             nb::arg("mesh_device"),
             nb::arg("combine_token_parallel_cores"),
             nb::arg("combine_data_parallel_cores")));
+
+    const auto* bbox_doc =
+        R"doc(Return the logical CoreRange bounding box of tilize + matmul + combine worker cores.
+This matches the `all_worker_cores_bounding_box` used by the tilize kernel's per-expert count mcast.)doc";
+    ttnn::bind_function<"get_moe_worker_mcast_bounding_box", "ttnn.experimental.">(
+        mod,
+        bbox_doc,
+        ttnn::overload_t(
+            nb::overload_cast<ttnn::MeshDevice*, const uint32_t, const uint32_t, const uint32_t, const uint32_t>(
+                &ttnn::experimental::get_moe_worker_mcast_bounding_box),
+            nb::arg("mesh_device"),
+            nb::arg("combine_token_parallel_cores"),
+            nb::arg("combine_data_parallel_cores"),
+            nb::arg("hidden_size"),
+            nb::arg("bh_ring_size") = 12));
 }
 }  // namespace ttnn::operations::experimental::ccl

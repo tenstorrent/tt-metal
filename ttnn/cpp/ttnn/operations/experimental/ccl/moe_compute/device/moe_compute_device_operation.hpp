@@ -60,5 +60,6 @@ std::vector<Tensor> moe_compute(
     const std::optional<uint32_t>& bh_ring_size = std::nullopt);
 
 using ttnn::experimental::prim::get_moe_combine_cores;
+using ttnn::experimental::prim::get_moe_worker_mcast_bounding_box;
 
 }  // namespace ttnn::prim

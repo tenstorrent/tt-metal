@@ -176,7 +176,12 @@ def _run_model_test(
 
 
 def validate_per_expert_tokens(
-    mesh_device, experts_per_device, num_devices, per_expert_total_tokens_output_tensor, expert_token_counts
+    mesh_device,
+    experts_per_device,
+    num_devices,
+    per_expert_total_tokens_output_tensor,
+    expert_token_counts,
+    worker_mcast_bbox=None,
 ):
     logger.info(f"\n========== Per Expert Total Tokens Tensor Validation ==========")
     per_expert_tokens_all_passed = True
@@ -188,7 +193,6 @@ def validate_per_expert_tokens(
     # Row is experts_per_device uint32s, aligned to 16 bytes. Replicated on every core
     per_expert_row_bytes = ((experts_per_device * 4 + l1_alignment - 1) // l1_alignment) * l1_alignment
     per_expert_row_elements = per_expert_row_bytes // 4
-    # Note: the bounding box containing tilize, matmul, combine cores spans the whole grid.
     core_range = mesh_device.compute_with_storage_grid_size()
     num_cores = core_range.x * core_range.y
     expected_per_expert_shape = (num_devices * num_cores, per_expert_row_elements)
@@ -213,35 +217,82 @@ def validate_per_expert_tokens(
     # the kernel only multicasts the counts to its `all_worker_cores_bounding_box`
     # (= tilize + matmul + combine cores). On WH 6U the op uses the full grid, so every
     # core is inside the bbox and every shard slot gets the count via mcast. On BH single
-    # LB the op uses ~110 of the grid's 130 cores, so the leftover ~20 shard slots per
-    # device hold the initial-allocation zero. Treat "actual=0 while expected>0" as
-    # "core not in mcast bbox" and skip it; only flag truly inconsistent values
-    # (different nonzero, or expected=0 with a nonzero read).
-    cores_per_device_validated = 0
-    for device_idx in range(num_devices):
-        for c in range(num_cores):
-            device_counts = per_expert_total_tokens_torch[device_idx][c]
+    # LB the op uses ~110 of the grid's 130 cores, so shard slots outside the bbox hold
+    # the initial-allocation zero. When `worker_mcast_bbox` is provided, skip out-of-bbox
+    # slots explicitly (strict in-bbox check). When omitted (legacy callers), fall back
+    # to the heuristic: treat actual=0/expected>0 as off-bbox; flag any other mismatch.
+    all_core_range_set = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(core_range.x - 1, core_range.y - 1),
+            ),
+        }
+    )
+    grid_cores_row_major = ttnn.corerange_to_cores(all_core_range_set, row_wise=True)
+    assert len(grid_cores_row_major) == num_cores
 
-            core_in_bbox = False
-            for local_exp_idx in range(experts_per_device):
-                expected_count = expert_token_counts[device_idx, local_exp_idx].item()
-                actual_count = device_counts[local_exp_idx].item()
+    if worker_mcast_bbox is not None:
 
-                if actual_count == 0 and expected_count > 0:
-                    # Core outside the kernel's mcast bbox — never written by the op.
+        def core_in_mcast_bbox(core_coord):
+            return (
+                worker_mcast_bbox.start.x <= core_coord.x <= worker_mcast_bbox.end.x
+                and worker_mcast_bbox.start.y <= core_coord.y <= worker_mcast_bbox.end.y
+            )
+
+        cores_per_device_validated = 0
+        for device_idx in range(num_devices):
+            for c, core_coord in enumerate(grid_cores_row_major):
+                if not core_in_mcast_bbox(core_coord):
                     continue
 
-                core_in_bbox = True
-                if actual_count != expected_count:
-                    logger.warning(
-                        f"  Device {device_idx}, Core {c}, Expert {local_exp_idx}: "
-                        f"count mismatch - expected {expected_count}, got {actual_count}"
-                    )
-                    per_expert_tokens_all_passed = False
-                else:
-                    logger.info(f"  Device {device_idx}, Core {c}, Expert {local_exp_idx}: count={actual_count} PASSED")
-            if core_in_bbox and device_idx == 0:
-                cores_per_device_validated += 1
+                device_counts = per_expert_total_tokens_torch[device_idx][c]
+                for local_exp_idx in range(experts_per_device):
+                    expected_count = expert_token_counts[device_idx, local_exp_idx].item()
+                    actual_count = device_counts[local_exp_idx].item()
+
+                    if actual_count != expected_count:
+                        logger.warning(
+                            f"  Device {device_idx}, Core {c} ({core_coord.x},{core_coord.y}), "
+                            f"Expert {local_exp_idx}: count mismatch - expected {expected_count}, got {actual_count}"
+                        )
+                        per_expert_tokens_all_passed = False
+                    else:
+                        logger.info(
+                            f"  Device {device_idx}, Core {c} ({core_coord.x},{core_coord.y}), "
+                            f"Expert {local_exp_idx}: count={actual_count} PASSED"
+                        )
+                if device_idx == 0:
+                    cores_per_device_validated += 1
+    else:
+        # Legacy heuristic: treat actual=0 with expected>0 as "core not in mcast bbox"
+        # and skip; only flag truly inconsistent values.
+        cores_per_device_validated = 0
+        for device_idx in range(num_devices):
+            for c in range(num_cores):
+                device_counts = per_expert_total_tokens_torch[device_idx][c]
+
+                core_in_bbox = False
+                for local_exp_idx in range(experts_per_device):
+                    expected_count = expert_token_counts[device_idx, local_exp_idx].item()
+                    actual_count = device_counts[local_exp_idx].item()
+
+                    if actual_count == 0 and expected_count > 0:
+                        continue
+
+                    core_in_bbox = True
+                    if actual_count != expected_count:
+                        logger.warning(
+                            f"  Device {device_idx}, Core {c}, Expert {local_exp_idx}: "
+                            f"count mismatch - expected {expected_count}, got {actual_count}"
+                        )
+                        per_expert_tokens_all_passed = False
+                    else:
+                        logger.info(
+                            f"  Device {device_idx}, Core {c}, Expert {local_exp_idx}: count={actual_count} PASSED"
+                        )
+                if core_in_bbox and device_idx == 0:
+                    cores_per_device_validated += 1
 
     # Sanity: ensure the mcast actually reached a meaningful number of cores per device.
     # (Catches the regression where the mcast bbox shrinks to 0 by accident.)
@@ -1963,6 +2014,9 @@ def run_moe_compute_test(
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(
         mesh_device, output_height_shard_dim, output_width_shard_dim
     )
+    worker_mcast_bbox = ttnn.experimental.get_moe_worker_mcast_bounding_box(
+        mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size
+    )
     per_expert_tokens_all_passed = True
     activation_all_passed = True
     e_t_all_passed = True
@@ -1988,7 +2042,12 @@ def run_moe_compute_test(
             # ========== Per Expert Total Tokens Tensor Validation ==========
             expert_token_counts = per_expert_tokens_goldens[layer_id]
             if not validate_per_expert_tokens(
-                mesh_device, experts_per_device, num_devices, per_expert_total_tokens_output_tensor, expert_token_counts
+                mesh_device,
+                experts_per_device,
+                num_devices,
+                per_expert_total_tokens_output_tensor,
+                expert_token_counts,
+                worker_mcast_bbox,
             ):
                 per_expert_tokens_all_passed = False
 
@@ -2174,10 +2233,13 @@ def test_moe_compute_bh_lb(
        wait count at writer.cpp:362 adjusts to N-1 on Linear vs N on Ring (no antipodal
        doubling on a line).
 
-    2. Op auto-downgrades Topology::Ring → Linear (fixed).
-       moe_compute_device_operation.cpp:442 calls `ttnn::ccl::get_usable_topology(...)`
-       before forwarding the topology into SelectiveReduceCombineParams. On p150_x8
-       (LINE/LINE) the downgrade fires and downstream kernels run the Linear code path.
+    2. Test pins topology=Linear explicitly (workaround).
+       `ttnn::ccl::get_usable_topology(...)` (called from moe_compute_device_operation.cpp)
+       only checks tensor-span coverage, so on a 2x4 LINE/LINE mesh with cluster_axis=1 it
+       still returns Ring — the downgrade does NOT auto-fire on physically-LINE meshes. This
+       test forces `topology=ttnn.Topology.Linear` so downstream kernels run the Linear code
+       path. Fixing the shared CCL helper to consult physical wrap edges is a separate
+       follow-up that affects all CCL ops (all_gather, reduce_scatter, ...), not just MoE.
 
     3. experts_per_device is cluster-axis-aware (fixed).
        Four sites now compute `cluster_devices = mesh_view.shape()[cluster_axis]`
