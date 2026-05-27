@@ -213,29 +213,29 @@ def pack_bfp8_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
     return exponents + mantissas
 
 
-def truncate_bfp8_to_bfp4(bfp8_mantissas):
-    """Truncate BFP8 mantissas to BFP4 format.
+def truncate_bfp8(bfp8_mantissas, magnitude_bits):
+    """Truncate BFP8 mantissas to a narrower BFP format.
 
     BFP8 mantissas are 8 bits: 1 sign bit + 7 magnitude bits.
-    BFP4 mantissas are 4 bits: 1 sign bit + 3 magnitude bits.
-
-    Truncation: keep the top 3 magnitude bits, drop the last 4 bits.
-    This matches hardware behavior which uses simple truncation.
+    The output keeps the sign bit and the top ``magnitude_bits`` of the
+    7 magnitude bits, dropping the bottom (7 - magnitude_bits) bits.
+    This matches hardware behavior which uses simple truncation when
+    narrowing BFP8 to BFP4 or BFP2 (per WormholeB0 Packers/FormatConversion.md).
 
     Args:
-        bfp8_mantissas: List of 8-bit BFP8 mantissa values
+        bfp8_mantissas: List of 8-bit BFP8 mantissa values.
+        magnitude_bits: Number of magnitude bits to keep in the output
+            (3 for BFP4, 1 for BFP2).
 
     Returns:
-        List of 4-bit BFP4 mantissa values (as integers 0-15)
+        List of (magnitude_bits + 1)-bit truncated mantissas.
     """
-    bfp4_mantissas = []
-    for bfp8 in bfp8_mantissas:
-        sign = (bfp8 >> 7) & 0x1
-        # Extract 7-bit magnitude and truncate to top 3 bits
-        magnitude = (bfp8 >> 4) & 0x7
-        bfp4 = (sign << 3) | magnitude
-        bfp4_mantissas.append(bfp4)
-    return bfp4_mantissas
+    shift = 7 - magnitude_bits
+    mag_mask = (1 << magnitude_bits) - 1
+    return [
+        (((bfp8 >> 7) & 0x1) << magnitude_bits) | ((bfp8 >> shift) & mag_mask)
+        for bfp8 in bfp8_mantissas
+    ]
 
 
 def float_to_bfp4_block(block):
@@ -247,12 +247,8 @@ def float_to_bfp4_block(block):
               BFP8 has 1 sign bit + 7 magnitude bits.
       Step 2: Truncate BFP8 → BFP4 (keep top 3 of the 7 magnitude bits).
     """
-    # Step 1: Convert to BFP8 first
     shared_exponent, bfp8_mantissas = float_to_bfp8_block(block)
-
-    # Step 2: Truncate BFP8 mantissas to BFP4
-    bfp4_mantissas = truncate_bfp8_to_bfp4(bfp8_mantissas)
-
+    bfp4_mantissas = truncate_bfp8(bfp8_mantissas, magnitude_bits=3)
     return shared_exponent, bfp4_mantissas
 
 
@@ -286,31 +282,16 @@ def pack_bfp4_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
 
 
 def float_to_bfp2_block(block):
-    n = len(block)
+    """Pack a 16-element block to BFP2_b format.
 
-    raw_bytes = struct.pack(f"<{n}f", *(float(v) for v in block))
-    all_bits = struct.unpack(f"<{n}I", raw_bytes)
-
-    signs = [0] * n
-    exponents = [0] * n
-    mantissas = [0] * n
-    shared_exponent = 0
-
-    for i, bits in enumerate(all_bits):
-        if bits & 0x7FFFFFFF:  # nonzero magnitude (handles -0.0 too)
-            signs[i] = bits >> 31
-            exp = (bits >> 23) & 0xFF
-            exponents[i] = exp
-            mantissas[i] = 0x800000 | (bits & 0x7FFFFF)
-            if exp > shared_exponent:
-                shared_exponent = exp
-
-    bfp2_mantissas = [0] * n
-    for i in range(n):
-        if mantissas[i]:
-            shifted = mantissas[i] >> (shared_exponent - exponents[i])
-            bfp2_mantissas[i] = (signs[i] << 1) | ((shifted >> 23) & 0x1)
-
+    Per hardware spec (WormholeB0 Packers/FormatConversion.md):
+      Step 1: Convert to BFP8 using float_to_bfp8_block (round-to-nearest,
+              one shared 8-bit exponent per 16 datums).
+              BFP8 has 1 sign bit + 7 magnitude bits.
+      Step 2: Truncate BFP8 → BFP2 (keep top 1 of the 7 magnitude bits).
+    """
+    shared_exponent, bfp8_mantissas = float_to_bfp8_block(block)
+    bfp2_mantissas = truncate_bfp8(bfp8_mantissas, magnitude_bits=1)
     return shared_exponent, bfp2_mantissas
 
 
