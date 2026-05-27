@@ -14,7 +14,6 @@ The state file is the source of truth for orchestrator progress; see
 
 from __future__ import annotations
 
-import copy
 import json
 import os
 import warnings
@@ -47,11 +46,14 @@ _SCHEMA_VERSION = 1
 
 # The four phase keys present on each component (per SPEC.md). Used by
 # resume_normalize to demote in_progress workers whose owning session is gone.
-_PHASE_NAMES = ("reference", "ttnn", "debug", "optimization")
+# Public because downstream tasks (render_log, redo, skip) consume the same
+# canonical phase ordering.
+PHASE_NAMES = ("reference", "ttnn", "debug", "optimization")
 
-# Default tunables baked into a fresh state by bootstrap(). Deep-copied on
-# every bootstrap call so the returned state owns its own dict.
-_DEFAULT_CONFIG = {
+# Default tunables baked into a fresh state by bootstrap(). Public because
+# downstream tasks read these as the canonical defaults. The dict is flat and
+# holds only primitives, so a shallow copy in bootstrap is sufficient.
+DEFAULT_CONFIG = {
     "max_parallel_reference": 4,
     "max_attempts_per_phase": 10,
     "tick_interval_sec": 60,
@@ -148,6 +150,8 @@ def bootstrap(model_id: str, device: str, arch_name: str) -> dict:
     so versioned model identifiers like ``...-1.7B-Base`` remain readable.
     """
     slug = model_id.lower().replace("/", "_").replace("-", "_")
+    # Single timestamp reused for both fields so they are structurally equal
+    # at bootstrap time. updated_at advances when ticks mutate state.
     now = _utc_now_iso()
     return {
         "schema_version": _SCHEMA_VERSION,
@@ -160,7 +164,7 @@ def bootstrap(model_id: str, device: str, arch_name: str) -> dict:
         "components": [],
         "locks": {"device": {"held_by": None, "held_since": None}},
         "tick_log": [],
-        "config": copy.deepcopy(_DEFAULT_CONFIG),
+        "config": dict(DEFAULT_CONFIG),
     }
 
 
@@ -175,14 +179,19 @@ def resume_normalize(state: dict) -> dict:
     Mutates ``state`` in place and returns it (so callers can chain
     ``state = resume_normalize(load_state(path))``).
     """
-    for component in state.get("components", []):
-        for phase in _PHASE_NAMES:
+    # Top-level keys (components, locks, locks.device) are guaranteed by
+    # _validate / the canonical schema, so they're accessed directly.
+    # Per-component phase keys are NOT enforced by _validate, so they keep
+    # the defensive guard — a component may legitimately omit phases it has
+    # not reached yet.
+    for component in state["components"]:
+        for phase in PHASE_NAMES:
             phase_dict = component.get(phase)
             if isinstance(phase_dict, dict) and phase_dict.get("status") == "in_progress":
                 phase_dict["status"] = "pending"
 
-    device_lock = state.get("locks", {}).get("device")
-    if isinstance(device_lock, dict) and device_lock.get("held_by") is not None:
+    device_lock = state["locks"]["device"]
+    if device_lock.get("held_by") is not None:
         device_lock["held_by"] = None
         device_lock["held_since"] = None
 

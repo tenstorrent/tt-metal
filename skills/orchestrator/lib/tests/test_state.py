@@ -206,25 +206,32 @@ def test_bootstrap_passes_validate(tmp_path):
 
 
 def test_resume_normalize_demotes_in_progress():
-    """in_progress phases become pending; other statuses are untouched."""
+    """in_progress phases become pending; other statuses are preserved.
+
+    The non-in_progress phases here intentionally span done / failing so the
+    "unchanged" assertions actually prove preservation rather than re-asserting
+    the input (which would be tautological if a phase started as ``pending``).
+    """
     state = bootstrap("Qwen/Qwen3-TTS-12Hz-1.7B-Base", "n150", "wormhole_b0")
     state["components"].append(
         {
             "name": "Attention",
             "reference": {"status": "done"},
             "ttnn": {"status": "in_progress"},
-            "debug": {"status": "in_progress"},
-            "optimization": {"status": "pending"},
+            "debug": {"status": "failing"},
+            "optimization": {"status": "done"},
         }
     )
 
     resume_normalize(state)
 
     comp = state["components"][0]
-    assert comp["reference"]["status"] == "done"
+    # Demoted.
     assert comp["ttnn"]["status"] == "pending"
-    assert comp["debug"]["status"] == "pending"
-    assert comp["optimization"]["status"] == "pending"
+    # Preserved — not in_progress, not pending.
+    assert comp["reference"]["status"] == "done"
+    assert comp["debug"]["status"] == "failing"
+    assert comp["optimization"]["status"] == "done"
 
 
 def test_resume_normalize_clears_device_lock():
