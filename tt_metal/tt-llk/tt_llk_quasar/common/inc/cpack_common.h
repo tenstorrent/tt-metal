@@ -41,4 +41,95 @@ inline void _update_clear_dest_bank_id_()
 {
     clear_dest_bank_id = 1 - clear_dest_bank_id;
 }
+
+namespace
+{
+// L1 outputs allowed for Float32 / Float16 / Float16_b pack inputs (Quasar Packer Gasket table).
+inline bool is_quasar_pack_float_src_l1_dst_supported(const DataFormat dst)
+{
+    switch (dst)
+    {
+        case DataFormat::Float32:
+        case DataFormat::Tf32:
+        case DataFormat::Float16:
+        case DataFormat::Float16_b:
+        case DataFormat::Fp8R:
+        case DataFormat::Fp8P:
+        case DataFormat::MxFp8R:
+        case DataFormat::MxFp8P:
+        case DataFormat::MxFp6R:
+        case DataFormat::MxFp6P:
+        case DataFormat::MxFp4:
+        case DataFormat::MxInt8:
+        case DataFormat::MxInt4:
+        case DataFormat::MxInt2:
+            return true;
+        default:
+            return false;
+    }
+}
+} // namespace
+
+/**
+ * Whether packing from dest register format \p pack_src_format to L1 format \p pack_dst_format is
+ * supported on Quasar for dynamic packer reconfiguration.
+ *
+ * Input is programmed via THCON PACKER IN_DATA_FORMAT; L1 output format is taken from the buffer
+ * descriptor at pack time. This function validates the gasket conversion pair only.
+ *
+ * Rules follow the Quasar Packer Format Conversions table (gasket outside TDMA).
+ */
+__attribute__((noinline, optimize("no-jump-tables"))) inline bool is_quasar_pack_reconfig_pair_supported(
+    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format)
+{
+    const DataFormat src = static_cast<DataFormat>(pack_src_format);
+    const DataFormat dst = static_cast<DataFormat>(pack_dst_format);
+
+    switch (src)
+    {
+        // -------------------------------------------------------------------------
+        // Float32 — Float32, TF32, Float16, Float16_b, FP8*, MX*, MXINT*
+        case DataFormat::Float32:
+            return is_quasar_pack_float_src_l1_dst_supported(dst);
+
+        // -------------------------------------------------------------------------
+        // Float16 / Float16_b — FP8/MX/L1 F16 set (spec omits Float32/Tf32 vs Float32 row).
+        // TODO: gate Float32/Tf32 via helper flag or split helpers once we tighten this table.
+        case DataFormat::Float16:
+        case DataFormat::Float16_b:
+            return is_quasar_pack_float_src_l1_dst_supported(dst);
+
+        // -------------------------------------------------------------------------
+        // INT32 — INT32, INT8, UINT8
+        case DataFormat::Int32:
+            switch (dst)
+            {
+                case DataFormat::Int32:
+                case DataFormat::Int8:
+                case DataFormat::UInt8:
+                    return true;
+                default:
+                    return false;
+            }
+
+        // -------------------------------------------------------------------------
+        // INT8 — INT8
+        case DataFormat::Int8:
+            return dst == DataFormat::Int8;
+
+        // -------------------------------------------------------------------------
+        // UINT8 — UINT8
+        case DataFormat::UInt8:
+            return dst == DataFormat::UInt8;
+
+        // -------------------------------------------------------------------------
+        // INT16 — INT16 (SFPU UINT16 output path)
+        case DataFormat::Int16:
+            return dst == DataFormat::Int16;
+
+        default:
+            return false;
+    }
+}
+
 } // namespace ckernel::pack
