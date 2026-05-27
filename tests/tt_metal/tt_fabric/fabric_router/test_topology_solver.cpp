@@ -4810,7 +4810,7 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_RingToMesh48Nodes) {
 }
 
 // Isolated regression for TopologyMapper auto-discovery: same ~32×32 SAT scale as mock-cluster control plane init.
-// No preferred constraints → single hard encode + one SAT solve even under RELAXED (including parallel logical
+// No preferred constraints → single hard encode + one Kissat call even under RELAXED (including parallel logical
 // edges).
 TEST_F(TopologySolverTest, SolveTopologyMapping_Sat_32MeshAutoDiscoveryScale_IsFast) {
     auto target_graph = create_2d_mesh_graph<TestTargetNode>(4, 8);

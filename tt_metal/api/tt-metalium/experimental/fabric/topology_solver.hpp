@@ -774,7 +774,7 @@ struct ConstraintIndexData {
         bool quiet_mode = false) const;
 };
 
-/** SAT encoder state (no CaDiCaL types in the public header). */
+/** SAT encoder state (no Kissat types). */
 struct TopologySatHardEncoding {
     bool trivial_unsat = false;
     std::string trivial_reason;
@@ -783,7 +783,7 @@ struct TopologySatHardEncoding {
 };
 
 /**
- * Index-only view of GraphIndexData for the SAT backend (implemented in topology_solver_sat.cpp).
+ * Index-only view of GraphIndexData for the Kissat backend (implemented in topology_solver_sat.cpp).
  */
 struct TopologySatGraphView {
     size_t n_target = 0;
@@ -1135,7 +1135,7 @@ private:
 };
 
 /**
- * @brief SAT (CaDiCaL) search engine using hard CNF encoding plus preferred-hit maximization
+ * @brief SAT (Kissat) search engine using hard CNF encoding plus preferred-hit maximization
  *
  * Encodes domain, degree, injectivity, edge preservation, same-rank groups, and cardinality, then searches for a
  * model that **maximizes the number of targets** whose chosen global lies in that target's preferred set (same notion
