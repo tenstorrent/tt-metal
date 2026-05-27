@@ -62,7 +62,6 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
         !operation_attributes.output_mem_config.is_sharded(),
         "Output memory config must be interleaved (L1 or DRAM), not sharded");
 
-
     // FP8 output is only supported on Blackhole, and only when the dispatched buffer is TILE.
     // The BF16 -> FP8 conversion happens in the packer when the untilize compute kernel writes
     // tiles into the untilize CB (which inherits the output tensor's Fp8_e4m3 DataFormat).
