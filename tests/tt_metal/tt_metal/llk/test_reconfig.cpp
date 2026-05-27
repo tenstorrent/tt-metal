@@ -399,7 +399,6 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
             .entry_size = f16_tile_size,
             .num_entries = 1,
             .data_format_metadata = tt::DataFormat::Float16_b,
-            .disable_implicit_sync = true,
         };
     };
     auto make_f32_input_dfb = [&](const std::string& name) {
@@ -408,7 +407,6 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
             .entry_size = f32_tile_size,
             .num_entries = 1,
             .data_format_metadata = tt::DataFormat::Float32,
-            .disable_implicit_sync = true,
         };
     };
     experimental::metal2_host_api::DataflowBufferSpec inp0_dfb_spec = make_f16_input_dfb(INP0_DFB);
@@ -422,7 +420,6 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         .entry_size = f16_tile_size,
         .num_entries = kNumOps,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .disable_implicit_sync = true,
     };
 
     using DFBEndpoint = experimental::metal2_host_api::KernelSpec::DFBEndpointType;
@@ -467,7 +464,8 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {INP0_DFB, INP1_DFB, INP2_DFB, INP3_DFB, INP4_DFB, INP5_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -485,7 +483,8 @@ bool single_core_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>&
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {OUT_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{

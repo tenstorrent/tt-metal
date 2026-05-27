@@ -33,12 +33,15 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
-    // input_tensor: [1, num_heads, input_seq_len, head_dim]
-    // cache_tensor: [max_num_blocks, num_kv_heads, block_size, head_dim]
+    // input_tensor:      [input_batch, num_heads, input_seq_len, head_dim]
+    //   input_batch == 1 on the legacy single-batch path; input_batch == N
+    //   on the batched path, where N matches batch_idx_tensor element count.
+    // cache_tensor:      [max_num_blocks, num_kv_heads, block_size, head_dim]
     // page_table_tensor: [b, max_num_blocks_per_seq]
     //
     // head_dim comes from the input and block_size honors the override; the cache shape
     // is only a byte budget (per-block byte count enforced in validate).
+    const uint32_t input_batch = input_tensor.padded_shape()[0];
     const uint32_t num_heads = input_tensor.padded_shape()[1];
     const uint32_t input_seq_len = input_tensor.padded_shape()[2];
 
@@ -49,8 +52,13 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
     const uint32_t Wt = head_dim / TILE_WIDTH;
     const uint32_t block_size_t = block_size / TILE_HEIGHT;
 
-    uint32_t num_blocks_of_work = num_heads * input_seq_len_t;
-    uint32_t num_blocks_of_work_per_head = input_seq_len_t;
+    // Each "block of work" is one (batch, head, seq_tile) triple to write.
+    // num_blocks_of_work_per_batch lets the writer kernel recover the batch
+    // index for the batched path; on the legacy path input_batch == 1 so
+    // num_blocks_of_work == num_blocks_of_work_per_batch.
+    const uint32_t num_blocks_of_work_per_batch = num_heads * input_seq_len_t;
+    const uint32_t num_blocks_of_work = input_batch * num_blocks_of_work_per_batch;
+    const uint32_t num_blocks_of_work_per_head = input_seq_len_t;
 
     // Pagetable-specific parameters
     uint32_t page_table_stick_size_B = page_table_tensor.buffer()->aligned_page_size();
@@ -60,18 +68,36 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
     uint32_t log2_page_table_stick_size_B = std::log2(page_table_stick_size_B);
     tt::DataFormat page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.dtype());
 
-    // batch_idx_tensor specific parameters
-    bool use_batch_idx_tensor = batch_idx_tensor.has_value();
+    // batch_idx_tensor specific parameters. When provided, the tensor's
+    // element count must equal input_batch: one batch_idx per input batch
+    // row. The legacy single-batch case (input_batch == 1, tensor.shape ==
+    // [1]) falls out naturally.
+    const bool use_batch_idx_tensor = batch_idx_tensor.has_value();
     uint32_t batch_idx_buffer_addr = 0;
-    tt::DataFormat batch_idx_data_format = tt::DataFormat::UInt32;  // Assuming batch_idx is uint32
-    uint32_t batch_idx_stick_size_B = 4;                            // Assuming scalar uint32
+    tt::DataFormat batch_idx_data_format = tt::DataFormat::UInt32;
+    uint32_t batch_idx_stick_size_B = 4;  // per-element size, e.g. 4 for uint32
+    uint32_t batch_idx_num_elements = 1;
 
     if (use_batch_idx_tensor) {
         const auto& tensor = batch_idx_tensor.value();
         batch_idx_buffer_addr = tensor.buffer()->address();
         batch_idx_data_format = tt_metal::datatype_to_dataformat_converter(tensor.dtype());
         batch_idx_stick_size_B = tensor.element_size();
-        TT_FATAL(tensor.physical_volume() == 1, "batch_idx_tensor must contain a single element.");
+        batch_idx_num_elements = tensor.physical_volume();
+        TT_FATAL(
+            batch_idx_num_elements == input_batch,
+            "batch_idx_tensor must contain input_batch ({}) elements, got {}",
+            input_batch,
+            batch_idx_num_elements);
+    } else {
+        // No batch_idx_tensor: scalar fallback path writes one batch row,
+        // so input_batch must be 1. Previously implicit; explicit FATAL
+        // avoids silently dropping rows > 0.
+        TT_FATAL(
+            input_batch == 1,
+            "When no batch_idx_tensor is provided, input_batch must be 1 (got {}); pass a batch_idx_tensor of size "
+            "input_batch to fill multiple batch rows in one call.",
+            input_batch);
     }
 
     tt_metal::IDevice* device = input_tensor.device();
@@ -98,7 +124,15 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
     create_cb(src0_cb_index, program, all_cores, single_tile_size, num_input_tiles, cb_data_format);
     create_cb(page_table_cb_index, program, all_cores, page_table_stick_size_B, 1, page_table_data_format);
     if (use_batch_idx_tensor) {
-        create_cb(cb_batch_idx_id, program, all_cores, batch_idx_stick_size_B, 1, batch_idx_data_format);
+        // CB holds all `batch_idx_num_elements` entries so the writer kernel
+        // can pick the right entry per batch row in the batched case.
+        create_cb(
+            cb_batch_idx_id,
+            program,
+            all_cores,
+            batch_idx_stick_size_B * batch_idx_num_elements,
+            1,
+            batch_idx_data_format);
     }
 
     auto* src_buffer = input_tensor.buffer();
@@ -117,10 +151,13 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
         Wt,
         log2_page_table_stick_size_B,
         page_table_stick_size_B,
-        // New compile-time args for batch_idx_tensor
+        // batch_idx_tensor compile-time args (positions 8..12). Positions 9..12
+        // are only meaningful when use_batch_idx_tensor is true.
         (uint32_t)use_batch_idx_tensor,
-        cb_batch_idx_id,        // Meaningful only if use_batch_idx_tensor is true
-        batch_idx_stick_size_B  // Meaningful only if use_batch_idx_tensor is true
+        cb_batch_idx_id,
+        batch_idx_stick_size_B,        // per-element size, e.g. 4 for uint32
+        batch_idx_num_elements,        // 1 = legacy single-batch, N = batched
+        num_blocks_of_work_per_batch,  // num_heads * input_seq_len_t, for row_id -> batch decode
     };
     TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
     TensorAccessorArgs(page_table_buffer).append_to(writer_compile_time_args);
