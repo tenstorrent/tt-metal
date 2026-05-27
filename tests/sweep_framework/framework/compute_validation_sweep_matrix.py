@@ -174,14 +174,16 @@ def compute_validation_matrix(
         if not base_modules:
             continue
 
-        # Sub-group by mesh shape so each batch runs configs from one mesh topology.
-        # Modules with mesh suffix (e.g. .mesh_1x2) are separated from those without.
+        # Sub-group by mesh shape only when the hardware group has multiple
+        # distinct mesh topologies (e.g. N300 with both [1,1] and [1,2]).
         mesh_to_modules = defaultdict(set)
         for module in grouped_modules:
             mesh = parse_mesh_suffix(module)
             base = strip_grouping_suffix(module)
             mesh_str = f"{mesh[0]}x{mesh[1]}" if mesh else ""
             mesh_to_modules[mesh_str].add(base)
+
+        needs_mesh_split = len(mesh_to_modules) > 1
 
         hardware_label = _get_hardware_display_label(hardware_group)
         if validation_scope == "lead_models":
@@ -191,28 +193,47 @@ def compute_validation_matrix(
         runner_config = get_runner_config(test_group_name)
         trace_id_list = sorted(trace_ids_by_hardware.get(hardware_group, []))
 
+        if needs_mesh_split:
         for mesh_str, mesh_modules in sorted(mesh_to_modules.items()):
-            sorted_modules = sorted(mesh_modules)
-            runner_batches = chunk_modules(sorted_modules, batch_size)
+                sorted_modules = sorted(mesh_modules)
+                runner_batches = chunk_modules(sorted_modules, batch_size)
+                total_batches = len(runner_batches)
+                mesh_label = f".{mesh_str}" if mesh_str else ""
+    
+                for index, batch in enumerate(runner_batches, start=1):
+                    entry = {
+                        **runner_config,
+                        "batch_display": f"{validation_scope}:{hardware_label}{mesh_label}:{batch}",
+                        "batch_ordinal": f"{index}/{total_batches}",
+                        "batch_index": index,
+                        "module_selector": batch,
+                        "suite_name": "model_traced",
+                        "validation_scope": validation_scope,
+                        "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
+                        "trace_ids": trace_id_list,
+                        "hardware_group": hardware_label,
+                    }
+                    if mesh_str:
+                        entry["mesh_device_shape"] = mesh_str
+                    include.append(entry)
+        else:
+            runner_batches = chunk_modules(base_modules, batch_size)
             total_batches = len(runner_batches)
-            mesh_label = f".{mesh_str}" if mesh_str else ""
-
             for index, batch in enumerate(runner_batches, start=1):
-                entry = {
-                    **runner_config,
-                    "batch_display": f"{validation_scope}:{hardware_label}{mesh_label}:{batch}",
-                    "batch_ordinal": f"{index}/{total_batches}",
-                    "batch_index": index,
-                    "module_selector": batch,
-                    "suite_name": "model_traced",
-                    "validation_scope": validation_scope,
-                    "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
-                    "trace_ids": trace_id_list,
-                    "hardware_group": hardware_label,
-                }
-                if mesh_str:
-                    entry["mesh_device_shape"] = mesh_str
-                include.append(entry)
+                include.append(
+                    {
+                        **runner_config,
+                        "batch_display": f"{validation_scope}:{hardware_label}:{batch}",
+                        "batch_ordinal": f"{index}/{total_batches}",
+                        "batch_index": index,
+                        "module_selector": batch,
+                        "suite_name": "model_traced",
+                        "validation_scope": validation_scope,
+                        "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
+                        "trace_ids": trace_id_list,
+                        "hardware_group": hardware_label,
+                    }
+                )
     return {"include": include}
 
 
