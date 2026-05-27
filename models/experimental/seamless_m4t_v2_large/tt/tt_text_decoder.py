@@ -62,7 +62,7 @@ def init_text_decoder_kv_cache(
     max_seq_len: int,
     encoder_seq_len: int,
     cache_dtype: ttnn.DataType = ttnn.bfloat16,
-    tp: int = 1,
+    tp: Optional[int] = None,
 ) -> tuple[list[list[ttnn.Tensor]], list[list[ttnn.Tensor]]]:
     """
     Allocate per-layer self-attention and cross-attention KV caches.
@@ -75,6 +75,8 @@ def init_text_decoder_kv_cache(
         ``(kv_cache, cross_attn_cache)`` where each is a list of length ``num_hidden_layers``
         containing ``[K, V]`` device tensors.
     """
+    if tp is None:
+        tp = get_tp(device)
     num_local_heads = num_attention_heads // tp
     head_dim = hidden_size // num_attention_heads
     chunk_size = 256
@@ -316,8 +318,8 @@ def _effective_decode_sdpa_seq_len(active_seq_len: int, padded_max_seq_len: int)
 def _get_decode_sdpa_configs(
     device: ttnn.Device,
     *,
-    num_attention_heads: int,
-    hidden_size: int,
+    num_local_heads: int,
+    head_dim: int,
     max_batch_size: int,
     max_seq_len: int,
     active_seq_len: int,
@@ -329,8 +331,7 @@ def _get_decode_sdpa_configs(
     ttnn.MemoryConfig,
 ]:
     """Decode SDPA + head-op memory configs (``nlp_create_qkv_heads_decode`` / ``sdpa_decode`` / ``concat_heads_decode``)."""
-    head_dim = hidden_size // num_attention_heads
-    padded_num_heads = nearest_32(num_attention_heads)
+    padded_num_heads = nearest_32(num_local_heads)
 
     grid_size = device.compute_with_storage_grid_size()
     batch_grid = ttnn.num_cores_to_corerangeset(max_batch_size, grid_size, row_wise=True)
@@ -468,25 +469,26 @@ class TTSeamlessM4Tv2Decoder:
         self._decode_sdpa_cache: dict = {}
         self._decode_pos_cache: dict[tuple[int, int], ttnn.Tensor] = {}
 
-    def _decode_sdpa_configs(
-        self, active_seq_len: int = 0
-    ) -> tuple[ttnn.MemoryConfig, ttnn.SDPAProgramConfig, ttnn.DeviceComputeKernelConfig]:
+    def decode_trace_cache_seq_len(self, active_seq_len: int) -> int:
+        """Return decode SDPA cache bucket (32/64/128/256, capped by ``max_seq_len``)."""
         chunk_size = 256
         padded_max = ((self.max_seq_len + chunk_size - 1) // chunk_size) * chunk_size
-        # FIXED: always use padded_max (not dynamic bucket) so the SDPAProgramConfig is
-        # identical for ALL decode positions → a single trace capture covers the full sequence.
-        # Previously: _effective_decode_sdpa_seq_len(active_seq_len, padded_max) returned
-        # dynamic buckets (32/64/128/256) that forced re-capture at each boundary.
-        key = (self.max_batch_size, self.max_seq_len)  # same key every call
+        return _effective_decode_sdpa_seq_len(active_seq_len, padded_max)
+
+    def _decode_sdpa_configs(
+        self, active_seq_len: int
+    ) -> tuple[ttnn.MemoryConfig, ttnn.SDPAProgramConfig, ttnn.DeviceComputeKernelConfig]:
+        effective_seq = self.decode_trace_cache_seq_len(active_seq_len)
+        key = (self.max_batch_size, self.max_seq_len, effective_seq)
         cached = self._decode_sdpa_cache.get(key)
         if cached is None:
             cached = _get_decode_sdpa_configs(
                 self.device,
-                num_attention_heads=self._num_local_heads,  # TP-aware
-                hidden_size=self.hidden_size,
+                num_local_heads=self._num_local_heads,
+                head_dim=self.hidden_size // self.num_attention_heads,
                 max_batch_size=self.max_batch_size,
                 max_seq_len=self.max_seq_len,
-                active_seq_len=padded_max,  # fixed max
+                active_seq_len=effective_seq,
             )
             self._decode_sdpa_cache[key] = cached
         return cached
@@ -606,7 +608,7 @@ class TTSeamlessM4Tv2Decoder:
                 int(weight.shape[-2]),
                 int(weight.shape[-1]),
             )
-        return ttnn.linear(
+        out = ttnn.linear(
             x,
             weight,
             bias=bias,
@@ -615,6 +617,16 @@ class TTSeamlessM4Tv2Decoder:
             compute_kernel_config=ck,
             activation=activation,
         )
+        # TP 1D multicast matmul may return ``[B, 1, S, N]`` or ``[1, 1, M, N]``; downstream
+        # attention slices expect ``[B, S, N]``.
+        if len(x.shape) == 3:
+            batch = int(x.shape[0])
+            seq = int(x.shape[1])
+            if len(out.shape) == 4 and int(out.shape[1]) == 1:
+                out = ttnn.reshape(out, (batch, seq, int(out.shape[-1])))
+            elif len(out.shape) == 2 and int(out.shape[0]) == batch * seq:
+                out = ttnn.reshape(out, (batch, seq, int(out.shape[-1])))
+        return out
 
     def _build_ln_sharded_config(self, m_tiles: int, n_tiles: int):
         return build_ln_sharded_config(self.device, m_tiles, n_tiles, self._ln_sharded_cache)
@@ -706,7 +718,6 @@ class TTSeamlessM4Tv2Decoder:
             (1, 1, batch, qkv_local_dim),
             (1, 1, padded_batch, qkv_local_dim),
         )
-        ttnn.deallocate(qkv)
 
         _, sdpa_decode_progcfg, sdpa_decode_compute_cfg, create_heads_memcfg, sdpa_output_memcfg = sdpa_decode_bundle
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
@@ -715,6 +726,7 @@ class TTSeamlessM4Tv2Decoder:
             num_kv_heads=num_local_heads,
             memory_config=create_heads_memcfg,
         )
+        ttnn.deallocate(qkv)
         ttnn.deallocate(qkv_4d)
 
         k_cache, v_cache = kv_cache
@@ -957,7 +969,6 @@ class TTSeamlessM4Tv2Decoder:
                 program_config=pc_qkv,
             )
             qkv_4d = ttnn.reshape(qkv, (batch, 1, seq_q, qkv_out_dim))
-            ttnn.deallocate(qkv)
             q, k, v = ttnn.experimental.nlp_create_qkv_heads(
                 qkv_4d,
                 num_heads=num_local_heads,
@@ -965,6 +976,7 @@ class TTSeamlessM4Tv2Decoder:
                 transpose_k_heads=False,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
+            ttnn.deallocate(qkv)
             ttnn.deallocate(qkv_4d)
             qh = ttnn.multiply(q, 1.0 / math.sqrt(head_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(q)
@@ -1156,7 +1168,7 @@ class TTSeamlessM4Tv2Decoder:
         attn_scale = None
         if is_decode:
             assert cache_seq_len is not None
-            sdpa_decode_bundle = self._decode_sdpa_configs()  # fixed config (no active_seq_len)
+            sdpa_decode_bundle = self._decode_sdpa_configs(cache_seq_len)
             attn_scale = 1.0 / math.sqrt(head_dim)
             # Read TP-aware dims from actual weight shapes (correct for both tp=1 and tp>1).
             qkv_decode_out = int(parameters.layers[0].self_attn.qkv_decode.weight.shape[-1])

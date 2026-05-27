@@ -16,7 +16,7 @@ Out of scope: attentions/hidden-state outputs, label loss. Text-decoder KV cache
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple, Union
 
 import torch
@@ -85,8 +85,10 @@ class TextDecoderKvDecodeRuntime:
     pos_tt: ttnn.Tensor
     cur_pos_tt: ttnn.Tensor
     logits_tt: Optional[ttnn.Tensor] = None
+    logits_tt_by_cache_seq_len: dict[int, ttnn.Tensor] = field(default_factory=dict)
     trace_cache_seq_len: Optional[int] = None
     trace_id: Optional[int] = None
+    trace_ids_by_cache_seq_len: dict[int, int] = field(default_factory=dict)
 
 
 def _subsampled_lens_dev(attention_mask_2d: ttnn.Tensor, kernel_size: int, stride: int) -> ttnn.Tensor:
@@ -716,12 +718,51 @@ class TTSeamlessM4Tv2Model:
         ttnn.deallocate(dec_out)
         return logits
 
+    def _fixed_decode_trace_sdpa_len(self) -> int:
+        """Single SDPA bucket for Metal decode trace (max 256; see ``_next_power_of_2_cap256``)."""
+        return self.text_decoder.decode_trace_cache_seq_len(self.max_text_seq_len)
+
+    def _release_all_active_decode_traces(self) -> None:
+        """Release every captured decode trace (required before re-capture on BH)."""
+        if self._kv_decode_rt is None:
+            return
+        rt = self._kv_decode_rt
+        for bucket in list(rt.trace_ids_by_cache_seq_len.keys()):
+            self._release_decode_trace_bucket(bucket)
+        ttnn.synchronize_device(self.device)
+
+    def _release_decode_trace_bucket(self, cache_seq_len: int) -> None:
+        """Release one SDPA bucket trace and its logits output tensor."""
+        if self._kv_decode_rt is None:
+            return
+        rt = self._kv_decode_rt
+        bucket = int(cache_seq_len)
+        trace_id = rt.trace_ids_by_cache_seq_len.pop(bucket, None)
+        if trace_id is not None:
+            ttnn.release_trace(self.device, trace_id)
+        old_logits = rt.logits_tt_by_cache_seq_len.pop(bucket, None)
+        if old_logits is not None:
+            ttnn.deallocate(old_logits)
+        if rt.trace_cache_seq_len == bucket:
+            rt.trace_id = None
+            rt.trace_cache_seq_len = None
+        if rt.logits_tt is old_logits:
+            rt.logits_tt = None
+
     def release_text_decoder_decode_trace(self) -> None:
-        """Release captured decode trace so device buffers can be reallocated."""
-        if self._kv_decode_rt is not None and self._kv_decode_rt.trace_id is not None:
-            ttnn.release_trace(self.device, self._kv_decode_rt.trace_id)
-            self._kv_decode_rt.trace_id = None
-            self._kv_decode_rt.trace_cache_seq_len = None
+        """Release all captured decode traces (keeps ``logits_tt`` and H2D buffers)."""
+        if self._kv_decode_rt is None:
+            return
+        rt = self._kv_decode_rt
+        for trace_id in list(rt.trace_ids_by_cache_seq_len.values()):
+            ttnn.release_trace(self.device, trace_id)
+        rt.trace_ids_by_cache_seq_len.clear()
+        for logits in rt.logits_tt_by_cache_seq_len.values():
+            ttnn.deallocate(logits)
+        rt.logits_tt_by_cache_seq_len.clear()
+        rt.logits_tt = None
+        rt.trace_id = None
+        rt.trace_cache_seq_len = None
 
     def _release_kv_decode_runtime(self) -> None:
         self.release_text_decoder_decode_trace()
@@ -770,17 +811,6 @@ class TTSeamlessM4Tv2Model:
             rt.cur_pos_tt,
         )
 
-    def _ensure_kv_decode_logits_buffer(self, rt: TextDecoderKvDecodeRuntime, sample: ttnn.Tensor) -> ttnn.Tensor:
-        if rt.logits_tt is None:
-            rt.logits_tt = ttnn.allocate_tensor_on_device(
-                sample.shape,
-                sample.dtype,
-                sample.layout,
-                self.device,
-                ttnn.DRAM_MEMORY_CONFIG,
-            )
-        return rt.logits_tt
-
     def _upload_single_token_to_decode_rt(self, token_id: int, batch_size: int) -> None:
         """Upload one greedy-decode token id into the pre-allocated ``[B, 1]`` decode buffer."""
         rt = self._ensure_kv_decode_runtime(batch_size)
@@ -795,13 +825,26 @@ class TTSeamlessM4Tv2Model:
         token_id: int,
         position: int,
         batch_size: int,
+        *,
+        cq_id: int = 0,
     ) -> None:
-        """Upload one decode token + position on pre-allocated device buffers (small H2D only)."""
+        """Upload decode token + position (host-only; safe while a decode trace is active)."""
         rt = self._ensure_kv_decode_runtime(batch_size)
-        self._upload_single_token_to_decode_rt(token_id, batch_size)
-        pos_tt = tt_position_ids_decode_step(rt.token_tt, self.pad_token_id, position)
-        ttnn.copy(pos_tt, rt.pos_tt)
-        ttnn.deallocate(pos_tt)
+        tok_cpu = torch.tensor([[int(token_id)]] * batch_size, dtype=torch.int32)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(tok_cpu, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+            rt.token_tt,
+            cq_id=cq_id,
+        )
+        # HF ``create_position_ids_from_input_ids`` for a non-pad ``[B,1]`` decode token:
+        # ``(cumsum(mask) + position) * mask + pad_id`` → ``1 + position + pad_id``.
+        pos_val = 1 + position + self.pad_token_id
+        pos_cpu = torch.full((batch_size, 1), pos_val, dtype=torch.int32)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(pos_cpu, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+            rt.pos_tt,
+            cq_id=cq_id,
+        )
 
     def _upload_kv_decode_step_inputs_cq1(
         self,
@@ -809,30 +852,8 @@ class TTSeamlessM4Tv2Model:
         position: int,
         batch_size: int,
     ) -> None:
-        """Upload decode token + position on CQ1 (for 2CQ pipelined decode).
-
-        Uses ``cq_id=1`` for both H2D copies so CQ0 can execute the Metal trace concurrently.
-        Position IDs are uploaded directly from a CPU tensor (not via device intermediate)
-        to avoid CQ0 device operations during CQ1's upload window.
-        """
-        rt = self._ensure_kv_decode_runtime(batch_size)
-        tok_cpu = torch.tensor([[int(token_id)]] * batch_size, dtype=torch.int32)
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(tok_cpu, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
-            rt.token_tt,
-            cq_id=1,
-        )
-        # Position IDs must match what ``tt_position_ids_decode_step`` computes on CQ0.
-        # For a non-pad decode token the formula is: (cumsum + position) * mask + pad_id
-        # = (1 + position) * 1 + pad_id = 1 + position + pad_id.
-        # We compute this on the host to avoid issuing CQ0 device ops during the CQ1 window.
-        pos_val = 1 + position + self.pad_token_id
-        pos_cpu = torch.full((batch_size, 1), pos_val, dtype=torch.int32)
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(pos_cpu, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
-            rt.pos_tt,
-            cq_id=1,
-        )
+        """Upload decode token + position on CQ1 (for 2CQ pipelined decode)."""
+        self._upload_kv_decode_step_inputs(token_id, position, batch_size, cq_id=1)
 
     def _cached_t2u_attention_mask(self, real_len: int, padded_dec_seq: int) -> ttnn.Tensor:
         key = (int(real_len), int(padded_dec_seq))
@@ -871,6 +892,51 @@ class TTSeamlessM4Tv2Model:
         ttnn.deallocate(dec_out)
         return logits
 
+    def _decode_trace_bucket(self, position: int) -> int:
+        """SDPA bucket used for the single Metal decode trace (BH: one capture only)."""
+        del position
+        return self._fixed_decode_trace_sdpa_len()
+
+    def _select_decode_trace_for_position(self, position: int, batch_size: int) -> Optional[int]:
+        """Return trace id for the SDPA bucket at ``position``, or None if not captured yet."""
+        rt = self._ensure_kv_decode_runtime(batch_size)
+        cache_len = self._decode_trace_bucket(position)
+        trace_id = rt.trace_ids_by_cache_seq_len.get(cache_len)
+        if trace_id is None:
+            return None
+        rt.trace_id = trace_id
+        rt.trace_cache_seq_len = cache_len
+        rt.logits_tt = rt.logits_tt_by_cache_seq_len.get(cache_len)
+        return trace_id
+
+    def _decode_step_kv_lm(
+        self,
+        rt: TextDecoderKvDecodeRuntime,
+        encoder_hidden: ttnn.Tensor,
+        cross_4d: ttnn.Tensor,
+        kv_cache: list,
+        cross_attn_cache: list,
+        *,
+        cache_seq_len: int,
+    ) -> ttnn.Tensor:
+        """One KV decode step + ``lm_head`` → ``[B, 1, V]`` logits."""
+        dec_out = self.text_decoder.forward(
+            rt.token_tt,
+            rt.pos_tt,
+            encoder_hidden,
+            None,
+            cross_4d,
+            kv_cache=kv_cache,
+            cross_attn_cache=cross_attn_cache,
+            cross_attn_cache_valid=True,
+            current_decode_pos=rt.cur_pos_tt,
+            cache_seq_len=cache_seq_len,
+            trace_no_profiler=True,
+        )
+        logits = self._lm_head(dec_out)
+        ttnn.deallocate(dec_out)
+        return logits
+
     def capture_text_decoder_decode_trace(
         self,
         token_id: int,
@@ -881,73 +947,82 @@ class TTSeamlessM4Tv2Model:
         cross_attn_cache: list,
         *,
         batch_size: int = 1,
+        cache_seq_len: Optional[int] = None,
     ) -> None:
-        """Capture Metal trace for one KV decode step (fixed SDPA program bucket at ``max_text_seq_len``).
-
-        **Single-capture design:** ``config_cache_len`` is always set to ``padded_max`` (the
-        tile-aligned ``max_text_seq_len``), so the SDPA ``SDPAProgramConfig`` is identical
-        regardless of decode position.  This means the trace is captured **once** and
-        replayed for all positions without re-capture at 32/64/128/256 bucket boundaries.
-        """
+        """Capture Metal trace for one KV decode step (single max SDPA bucket on BH)."""
         rt = self._ensure_kv_decode_runtime(batch_size)
-        self.release_text_decoder_decode_trace()
-
-        # Fixed SDPA bucket = tile-aligned max_text_seq_len.
-        # All decode positions produce the same SDPAProgramConfig → single trace valid everywhere.
-        _chunk = 256
-        padded_max = ((self.max_text_seq_len + _chunk - 1) // _chunk) * _chunk
-        config_cache_len = padded_max
-
-        def traced_step() -> None:
-            out = self.text_decoder.forward(
-                rt.token_tt,
-                rt.pos_tt,
-                encoder_hidden,
-                None,
-                cross_4d,
-                kv_cache=kv_cache,
-                cross_attn_cache=cross_attn_cache,
-                cross_attn_cache_valid=True,
-                current_decode_pos=rt.cur_pos_tt,
-                cache_seq_len=config_cache_len,
-                trace_no_profiler=True,
-            )
-            logits = self._lm_head(out)
-            ttnn.deallocate(out)
-            logits_buf = self._ensure_kv_decode_logits_buffer(rt, logits)
-            ttnn.copy(logits, logits_buf)
-            ttnn.deallocate(logits)
-            ttnn.plus_one(rt.cur_pos_tt)
+        config_cache_len = int(cache_seq_len) if cache_seq_len is not None else self._fixed_decode_trace_sdpa_len()
+        if config_cache_len in rt.trace_ids_by_cache_seq_len:
+            return
+        self._release_all_active_decode_traces()
+        ttnn.synchronize_device(self.device)
 
         self._upload_kv_decode_step_inputs(token_id, position, batch_size)
         self._reset_kv_decode_cur_pos(position, batch_size)
         ttnn.synchronize_device(self.device)
 
-        if not self._decode_trace_kernels_warmed:
-            traced_step()
-            ttnn.synchronize_device(self.device)
-            self._decode_trace_kernels_warmed = True
-            self._upload_kv_decode_step_inputs(token_id, position, batch_size)
-            self._reset_kv_decode_cur_pos(position, batch_size)
-            ttnn.synchronize_device(self.device)
+        # Compile outside trace (``tt_transformers`` / Llama pattern). JIT during capture
+        # issues host→device writes forbidden while ``trace_id`` is active.
+        compile_logits = self._decode_step_kv_lm(
+            rt,
+            encoder_hidden,
+            cross_4d,
+            kv_cache,
+            cross_attn_cache,
+            cache_seq_len=config_cache_len,
+        )
+        ttnn.synchronize_device(self.device)
+        ttnn.deallocate(compile_logits)
 
-        rt.trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
-        traced_step()
-        ttnn.end_trace_capture(self.device, rt.trace_id, cq_id=0)
+        self._upload_kv_decode_step_inputs(token_id, position, batch_size)
+        self._reset_kv_decode_cur_pos(position, batch_size)
+        ttnn.synchronize_device(self.device)
+        self._decode_trace_kernels_warmed = True
+
+        capture_logits: Optional[ttnn.Tensor] = None
+
+        def traced_step_capture() -> None:
+            nonlocal capture_logits
+            capture_logits = self._decode_step_kv_lm(
+                rt,
+                encoder_hidden,
+                cross_4d,
+                kv_cache,
+                cross_attn_cache,
+                cache_seq_len=config_cache_len,
+            )
+
+        trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        traced_step_capture()
+        ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+        if capture_logits is None:
+            raise RuntimeError("Decode trace capture produced no logits tensor.")
+        rt.logits_tt_by_cache_seq_len[config_cache_len] = capture_logits
+        rt.logits_tt = capture_logits
+        rt.trace_ids_by_cache_seq_len[config_cache_len] = trace_id
+        rt.trace_id = trace_id
         rt.trace_cache_seq_len = config_cache_len
         ttnn.synchronize_device(self.device)
-        self._upload_kv_decode_step_inputs(token_id, position, batch_size)
-        self._reset_kv_decode_cur_pos(position, batch_size)
-        ttnn.synchronize_device(self.device)
 
-    def execute_text_decoder_decode_trace(self) -> ttnn.Tensor:
-        """Replay captured decode trace; caller must ``_upload_kv_decode_step_inputs`` first."""
-        if self._kv_decode_rt is None or self._kv_decode_rt.trace_id is None:
+    def execute_text_decoder_decode_trace(self, *, cache_seq_len: Optional[int] = None) -> ttnn.Tensor:
+        """Replay a captured decode trace; caller must upload inputs and reset ``cur_pos_tt`` first."""
+        if self._kv_decode_rt is None:
             raise RuntimeError("Decode trace not captured; call capture_text_decoder_decode_trace first.")
-        if self._kv_decode_rt.logits_tt is None:
+        rt = self._kv_decode_rt
+        bucket = int(cache_seq_len) if cache_seq_len is not None else rt.trace_cache_seq_len
+        if bucket is None:
+            raise RuntimeError("Decode trace bucket unknown; call capture_text_decoder_decode_trace first.")
+        trace_id = rt.trace_ids_by_cache_seq_len.get(bucket)
+        if trace_id is None:
+            raise RuntimeError(f"Decode trace not captured for bucket {bucket}.")
+        rt.trace_id = trace_id
+        rt.trace_cache_seq_len = bucket
+        logits_tt = rt.logits_tt_by_cache_seq_len.get(bucket)
+        if logits_tt is None:
             raise RuntimeError("Decode trace logits buffer missing; re-capture the trace.")
-        ttnn.execute_trace(self.device, self._kv_decode_rt.trace_id, cq_id=0, blocking=True)
-        return self._kv_decode_rt.logits_tt
+        rt.logits_tt = logits_tt
+        ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=True)
+        return logits_tt
 
     def _decode_token_with_kv_cache_traced(
         self,
@@ -960,10 +1035,11 @@ class TTSeamlessM4Tv2Model:
         *,
         batch_size: int = 1,
     ) -> ttnn.Tensor:
-        # Single-trace design: capture once (when trace_id is None), then replay for all positions.
-        # The fixed SDPA bucket in capture_text_decoder_decode_trace ensures the same
-        # SDPAProgramConfig at every position → no re-capture at bucket boundaries.
-        if self._kv_decode_rt is None or self._kv_decode_rt.trace_id is None:
+        ttnn.synchronize_device(self.device)
+        cache_seq_len = self._fixed_decode_trace_sdpa_len()
+        rt = self._ensure_kv_decode_runtime(batch_size)
+        need_capture = cache_seq_len not in rt.trace_ids_by_cache_seq_len
+        if need_capture:
             self.capture_text_decoder_decode_trace(
                 token_id,
                 position,
@@ -972,9 +1048,13 @@ class TTSeamlessM4Tv2Model:
                 kv_cache,
                 cross_attn_cache,
                 batch_size=batch_size,
+                cache_seq_len=cache_seq_len,
             )
+            # Capture's traced_step already ran one decode + lm_head (single KV update).
+            return rt.logits_tt
         self._upload_kv_decode_step_inputs(token_id, position, batch_size)
-        return self.execute_text_decoder_decode_trace()
+        self._reset_kv_decode_cur_pos(position, batch_size)
+        return self.execute_text_decoder_decode_trace(cache_seq_len=cache_seq_len)
 
     def _prefill_text_decoder_kv_cache(
         self,
@@ -1494,6 +1574,51 @@ class TTSeamlessM4Tv2Model:
         ranked = sorted(range(K), key=lambda k: _norm_score(scores[k], len(seqs[k])), reverse=True)
         return seqs[ranked[0]]
 
+    def _logits_row_to_host(
+        self,
+        logits: ttnn.Tensor,
+        dec_len: int,
+    ) -> "torch.Tensor":
+        """Read one logits row ``[B, V]`` on host (no device allocations; safe under active trace)."""
+        import torch as _torch
+
+        batch = int(logits.shape[0])
+        idx = dec_len - 1
+        dec_seq = int(logits.shape[1])
+        vocab_w = int(logits.shape[2])
+        host = to_torch_replicated_first_shard(logits).to(_torch.float32).contiguous()
+        if host.dim() == 3:
+            return host[:, idx, :].reshape(batch, vocab_w)
+        if host.dim() == 2 and int(host.shape[0]) == batch and int(host.shape[1]) == vocab_w:
+            return host
+        if host.dim() == 2 and int(host.shape[0]) == batch:
+            return host.reshape(batch, dec_seq, vocab_w)[:, idx, :]
+        return host.reshape(batch, dec_seq, vocab_w)[:, idx, :]
+
+    def _greedy_next_token_id(
+        self,
+        logits: ttnn.Tensor,
+        dec_len: int,
+        *,
+        repetition_penalty: float = 1.0,
+        prev_token_ids: Optional[List[int]] = None,
+    ) -> int:
+        """Greedy argmax via host readback only (for traced KV decode; no device allocs)."""
+        import torch as _torch
+
+        host = self._logits_row_to_host(logits, dec_len)
+        if repetition_penalty > 1.0 and prev_token_ids:
+            ids = _torch.as_tensor(list(prev_token_ids), dtype=_torch.int64)
+            vocab_w = int(host.shape[-1])
+            ids = ids[(ids >= 0) & (ids < vocab_w)]
+            if ids.numel() > 0:
+                scores = host[0, ids]
+                penalized = _torch.where(
+                    scores < 0, scores * float(repetition_penalty), scores / float(repetition_penalty)
+                )
+                host[0, ids] = penalized
+        return int(host[0].argmax().item())
+
     def _greedy_next_token(
         self,
         logits: ttnn.Tensor,
@@ -1817,7 +1942,8 @@ class TTSeamlessM4Tv2Model:
             # ``lm_head`` on the last seed hidden state; decode steps start at ``cur_pos == seed_len``.
             cross_valid = False
             cur_pos = seed_len
-            decode_trace_ready = False
+            # Trace from the first decode-loop step (one SDPA bucket; no mid-loop re-capture).
+            decode_trace_ready = use_decode_trace and not do_sample
             decode_steps_remaining = max_new_tokens
 
             if seed_len > 0:
@@ -1863,8 +1989,8 @@ class TTSeamlessM4Tv2Model:
                 if use_decode_trace and decode_trace_ready and not do_sample:
                     if use_2cq:
                         # 2CQ pipelined decode: CQ1 uploads H2D while CQ0 executes trace.
-                        rt = self._kv_decode_rt
-                        if rt is None or rt.trace_id is None:
+                        trace_id = self._select_decode_trace_for_position(cur_pos, batch_size)
+                        if trace_id is None:
                             logits = self._decode_token_with_kv_cache_traced(
                                 cur_tok,
                                 cur_pos,
@@ -1874,7 +2000,9 @@ class TTSeamlessM4Tv2Model:
                                 cross_attn_cache,
                                 batch_size=batch_size,
                             )
+                            _2cq_op_event = ttnn.record_event(self.device, 0)
                         else:
+                            rt = self._kv_decode_rt
                             # CQ1 waits until CQ0 has finished the previous trace
                             # (decode input buffers are free to be overwritten).
                             ttnn.wait_for_event(1, _2cq_op_event)
@@ -1883,7 +2011,8 @@ class TTSeamlessM4Tv2Model:
                             write_event = ttnn.record_event(self.device, 1)
                             # CQ0 waits for CQ1 uploads before executing the trace.
                             ttnn.wait_for_event(0, write_event)
-                            ttnn.execute_trace(self.device, rt.trace_id, cq_id=0, blocking=True)
+                            self._reset_kv_decode_cur_pos(cur_pos, batch_size)
+                            ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=True)
                             # Update op_event: CQ0 has finished this trace step.
                             _2cq_op_event = ttnn.record_event(self.device, 0)
                             logits = rt.logits_tt
@@ -1909,22 +2038,50 @@ class TTSeamlessM4Tv2Model:
                         cross_4d=decode_cross_4d,
                         batch_size=batch_size,
                     )
+                # Guard against occasional invalid traced logits buffer; fall back to eager decode.
+                if (
+                    use_decode_trace
+                    and decode_trace_ready
+                    and hasattr(ttnn, "is_allocated")
+                    and not ttnn.is_allocated(logits)
+                ):
+                    logits = self._decode_token_with_kv_cache(
+                        cur_tok,
+                        cur_pos,
+                        enc_tt,
+                        enc_attn_tt,
+                        kv_cache,
+                        cross_attn_cache,
+                        cross_valid,
+                        cross_4d=decode_cross_4d,
+                        batch_size=batch_size,
+                    )
+                    use_decode_trace = False
+                    decode_trace_ready = False
                 if do_sample:
                     next_tt, next_id = self._sample_next_token(
                         logits, 1, temperature=temperature, top_k=top_k, top_p=top_p
+                    )
+                    ttnn.deallocate(next_tt)
+                elif use_decode_trace and decode_trace_ready:
+                    # Host readback only — ``ttnn.slice`` / ``argmax`` allocate device memory and
+                    # corrupt traced logits while a Metal trace is active.
+                    next_id = self._greedy_next_token_id(
+                        logits, 1, repetition_penalty=repetition_penalty, prev_token_ids=seq_host
                     )
                 else:
                     next_tt, next_id = self._greedy_next_token(
                         logits, 1, repetition_penalty=repetition_penalty, prev_token_ids=seq_host
                     )
-                ttnn.deallocate(logits)
-                ttnn.deallocate(next_tt)
+                    ttnn.deallocate(next_tt)
+                # Keep traced logits buffer alive across decode steps.
+                # In trace mode ``logits`` may alias runtime-owned DRAM buffers.
+                if not (use_decode_trace and decode_trace_ready and not do_sample):
+                    ttnn.deallocate(logits)
                 seq_host.append(next_id)
                 cur_pos += 1
                 if not cross_valid:
                     cross_valid = True
-                if use_decode_trace and not decode_trace_ready:
-                    decode_trace_ready = True
                 if eos_ids and next_id in eos_ids:
                     break
             ttnn.deallocate(decode_cross_4d)
