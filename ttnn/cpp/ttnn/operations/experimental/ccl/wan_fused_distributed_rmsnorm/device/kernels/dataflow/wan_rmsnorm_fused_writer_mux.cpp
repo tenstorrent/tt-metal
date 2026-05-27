@@ -321,13 +321,12 @@ void kernel_main() {
         const uint32_t packed_gathered_base = get_write_ptr(stats_packed_gathered_cb);
         const uint32_t my_packed_gathered_addr = packed_gathered_base + my_device_index * page_size_bytes;
 
-        // Wait for compute to deliver `rows_in_chunk` stat tiles (col-0
-        // form: 32 fp32 sums in col 0, rest zero). Extract col 0 via 32
-        // strided L1 loads per tile — local-to-local L1 loads run at RISC-V
-        // speed (~1 cycle each) without NoC overhead.
-        cb_wait_front(stats_local_cb, rows_in_chunk);
+        // Cumulative wait: writer can start packing row 0 while compute is
+        // still producing row 1+. Overlaps writer-pack with compute-pre for
+        // chunks with >1 row.
         const uint32_t stats_local_base = get_read_ptr(stats_local_cb);
         for (uint32_t r = 0; r < rows_in_chunk; r++) {
+            cb_wait_front(stats_local_cb, r + 1);
             const volatile tt_l1_ptr uint32_t* tile_src =
                 reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(stats_local_base + r * stats_tile_bytes);
             uint32_t* packed_dst = reinterpret_cast<uint32_t*>(packed_local_addr + r * kRowBytesPerTile);
