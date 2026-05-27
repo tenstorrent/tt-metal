@@ -52,7 +52,7 @@ Each automation session has TWO distinct work lanes: **Focus PRs** (dispatch lan
 
 Cap: **up to 3 examining PRs per session.**
 
-Examining PRs are existing open draft disable PRs in a non-terminal lifecycle that need maintenance but should NOT consume a workflow-dispatch slot this session. For each examining PR, the agent performs ALL of:
+Examining PRs are existing open draft disable PRs that need maintenance but should NOT consume a workflow-dispatch slot this session. The default eligibility is "PRs in a non-terminal lifecycle"; under **tier 1** terminal state (see `Terminal States (Two Tiers)` → tier 1), eligibility expands to ANY non-merged open draft disable PR — `verified-pass` / `verified-fail` PRs included — because they still need ongoing rebase + disable-revalidation maintenance to stay merge-ready. For each examining PR, the agent performs ALL of:
 
 - Rebase the PR branch onto the latest `origin/main` and push the merge.
 - Revalidate every currently-disabled test against the latest `main` runs; remove disables for tests that have been fixed on `main`.
@@ -100,7 +100,7 @@ If after filling priorities 1, 2, and 3 the agent has fewer than 3 focus PRs bec
 Focus slots filled: N/3 (reason: <e.g. only 1 uncovered workflow remained, no priority-2/3 PRs available>)
 ```
 
-Terminal state (every open draft PR `verified-pass` / `verified-fail` / `merged` AND every non-Galaxy single-card workflow covered) remains the only legitimate ZERO-action session — see `Terminal State (No More Work)` below.
+Tier 2 terminal state (every disable PR `merged` AND every non-Galaxy single-card workflow covered by a merged PR) remains the only legitimate ZERO-action session — see `Terminal States (Two Tiers)` below. Tier 1 (every non-Galaxy single-card workflow covered by an open or merged PR, but not all merged yet) still permits up to 3 examining-PR maintenance passes and any available priority-2/3 focus fills; it is NOT a zero-action session.
 
 ### Lane independence
 
@@ -423,16 +423,45 @@ The automation pushes a state-log commit and may merge `main` into each PR at se
 - Do not include temporary workflow-pruning edits in the final PR branch.
 - After every workflow dispatch, immediately share the run URL in the status update.
 
-## Terminal State (No More Work)
+## Terminal States (Two Tiers)
 
-A session is in the legitimate **terminal state** when BOTH of the following are true:
+The automation has TWO distinct terminal-style session states. They differ in which conjuncts hold and how much work the session is allowed to do. Tier 2 is strictly stronger than tier 1.
 
-1. Every open draft disable PR is in a verification-completed lifecycle (`verified-pass`, `verified-fail`, or `merged`) — i.e. each PR has consumed its one verification run with a real (non-inconclusive) result.
-2. Every non-Galaxy single-card workflow in the active pipeline list is already covered by an open or merged draft disable PR.
+### Tier 1 — "All workflows covered, examining-lane only"
 
-When the terminal state holds, the automation MUST stop without creating new PRs and without dispatching new runs, and MUST emit `"no more work left to do"` as its session-level status. This is the **only** exception to the "fill focus slots with new PRs" requirement in `Session Scope (Two Lanes — Focus and Examining)`. The separate "Fewer than 3 uncovered workflows" carve-out (`limited` outcome) covers the non-terminal sub-3-focus-PR case.
+A session is in **tier 1** when this conjunct holds:
 
-Distinguish this from the existing paralysis failure mode (`Anti-Paralysis` below): paralysis = idled despite having actionable work; terminal = legitimately out of work. The OUTPUT FORMAT distinguishes them via the `Paralysis check` field (and the new top-line `Status: no more work left to do`) — see the canonical automation prompt.
+1. Every non-Galaxy single-card workflow in the active pipeline list is already covered by an open or merged draft disable PR created by this automation.
+
+When tier 1 holds, the automation MUST:
+
+- **Stop creating new focus PRs** — suppress priority-1 (new PR for uncovered workflow) focus-slot fills for the session. There are no uncovered workflows by definition.
+- **Continue examining-lane work on up to 3 PRs.** Examining-lane work is the standard rebase + revalidate-disables-against-`main` + log-analyze-completed-runs + comment + issue sync + state-log-update flow. Under tier 1 the examining lane is allowed on ANY open draft disable PR that has not yet been merged, regardless of lifecycle stage (`new`, `batch-committed`, `verifying`, `verification-inconclusive`, `verified-pass`, `verified-fail` — all eligible), because even `verified-pass`/`verified-fail` PRs need ongoing rebase + disable-revalidation maintenance to stay merge-ready. If fewer than 3 non-merged PRs exist, examine all of them (the lane runs at less than capacity).
+- **Continue priority-2 and priority-3 focus-lane fills if any exist.** Legacy `batch-committed`-no-verify PRs (priority 2) and `verification-inconclusive` PRs (priority 3) are existing PRs that still need a first or retry dispatch — those are NOT new-PR creation and remain available in tier 1, subject to the 3-dispatch / 3-focus-PR session caps.
+- **Do NOT emit the top-line `Status: no more work left to do`.** Work is still happening in the examining lane (and possibly in the focus lane at priority 2/3); the session is not at terminal stop.
+- Emit `Paralysis check: coverage-complete: <K> examining PRs (no new PRs needed; M focus PRs in priorities 2/3 if any)`. This is an acceptable session-end value; NOT a paralysis bug. See `## Anti-Paralysis` for the full enumeration of Paralysis-check outcomes.
+
+### Tier 2 — "Fully done"
+
+A session is in **tier 2** when BOTH of the following are true:
+
+1. Every disable PR ever created by this automation is `merged`. PRs that were closed without merging count as terminal for this conjunct — they are not "open and unmerged" any longer.
+2. Every non-Galaxy single-card workflow in the active pipeline list is already covered by a **merged** disable PR (tier 1's coverage requirement, tightened from "open or merged" to "merged only").
+
+When tier 2 holds, the automation MUST do ZERO work — no examining-lane maintenance, no focus-lane dispatches, no new PRs. It MUST emit:
+
+- `Status: no more work left to do` as the top-line OUTPUT field.
+- `Paralysis check: terminal: no more work left to do`.
+
+This is the ONLY legitimate zero-action session.
+
+### Relationship between the tiers
+
+- Tier 2 implies tier 1 (every merged PR also counts as an open-or-merged PR for tier 1's coverage conjunct).
+- When tier 2 holds, the session takes the tier-2 branch (zero work, terminal status), NOT the tier-1 branch. Check tier 2 first.
+- The previous single-tier terminal state ("every open draft PR `verified-pass`/`verified-fail`/`merged` AND every workflow covered") was insufficient: `verified-pass` PRs that sit unmerged still need rebases + disable-revalidation to stay merge-ready, which the new tier 1 captures. Tier 2 is the strict "literally nothing left to do" stop.
+
+Distinguish both tiers from the paralysis failure mode (`Anti-Paralysis` below): paralysis = idled despite having actionable work; tier 1 = no more *new* PRs needed but examining (and priority-2/3 focus) work continues; tier 2 = literally nothing left to do. The OUTPUT FORMAT distinguishes the three via the `Paralysis check` field (`passed` / `limited` / `coverage-complete` / `terminal` / `PARTIAL` / `FAILED`) and the top-line `Status: no more work left to do` (emitted only in tier 2).
 
 ## Anti-Paralysis
 
@@ -457,11 +486,12 @@ The `Paralysis check` field in OUTPUT must use one of these exact prefixes:
 
 - **`passed: N focus PRs (each dispatched) + M examining PRs`** — normal completion. At least one lane produced work and every focus PR received its dispatch.
 - **`limited: N focus PRs (only K uncovered workflows + L priority-2/3 PRs available)`** — fewer than 3 focus slots filled because (a) fewer than 3 uncovered non-Galaxy single-card workflows existed AND (b) priority-2 / priority-3 PRs were not sufficient to fill the remaining slots. Acceptable; NOT a paralysis bug. See `Session Scope (Two Lanes — Focus and Examining)` → "Fewer than 3 uncovered workflows".
-- **`terminal: no more work left to do`** — both terminal-state conjuncts hold (every open draft PR `verified-pass` / `verified-fail` / `merged` AND every non-Galaxy single-card workflow covered). The top-line `Status: no more work left to do` MUST also be emitted. See `Terminal State (No More Work)`.
+- **`coverage-complete: <K> examining PRs (no new PRs needed; M focus PRs in priorities 2/3 if any)`** — tier-1 terminal state holds (every non-Galaxy single-card workflow is already covered by an open or merged disable PR) but tier 2 does NOT hold (some PRs are still unmerged). Priority-1 new-PR creation is suppressed for the session, but examining-lane work continued on K PRs and any available priority-2/3 focus fills happened on M PRs. The top-line `Status: no more work left to do` is NOT emitted (work is still happening). Acceptable; NOT a paralysis bug. See `Terminal States (Two Tiers)` → tier 1.
+- **`terminal: no more work left to do`** — tier-2 terminal state holds (every disable PR is `merged` AND every non-Galaxy single-card workflow is covered by a merged disable PR). The top-line `Status: no more work left to do` MUST also be emitted. See `Terminal States (Two Tiers)` → tier 2.
 - **`PARTIAL: created N focus PRs but only dispatched M (cap reason: …)`** — a focus PR was created but its dispatch was skipped despite the 3-dispatch cap NOT being exhausted by other focus PRs. This is a bug. Acceptable ONLY when the cap is provably exhausted, in which case the reason MUST explicitly name which PRs consumed the dispatch slots.
-- **`FAILED: <reason>`** — zero examining PRs AND zero focus PRs, no acceptable terminal-state or limited-work justification. Include an explicit guardrail-trace identifying which carve-out, fresh-build fallback, examining-lane action, or new-PR fill the agent failed to invoke. A FAILED paralysis check is a bug report on the automation prompt and should be escalated.
+- **`FAILED: <reason>`** — zero examining PRs AND zero focus PRs, no acceptable terminal-state, coverage-complete, or limited-work justification. Include an explicit guardrail-trace identifying which carve-out, fresh-build fallback, examining-lane action, or new-PR fill the agent failed to invoke. A FAILED paralysis check is a bug report on the automation prompt and should be escalated.
 
-The terminal state defined in `## Terminal State (No More Work)` above is the canonical zero-action session; the `limited` outcome above is the canonical sub-3-focus-PR-but-non-terminal session. Anything else with zero focus PRs and zero examining PRs is paralysis.
+The tier-2 terminal state defined in `## Terminal States (Two Tiers)` above is the canonical zero-action session; the tier-1 `coverage-complete` outcome is the canonical "no new PRs needed but examining-lane work continues" session; the `limited` outcome above is the canonical sub-3-focus-PR-but-non-terminal session. Anything else with zero focus PRs and zero examining PRs is paralysis.
 
 When in doubt between "skip due to throttle" and "do something useful", do something useful. The throttle is a guard against thrash, not a license to idle. Treating BH-artifact-expiry, "main is broken", or "all PRs <4h old" as session-ending blockers is the failure mode this section exists to prevent.
 
