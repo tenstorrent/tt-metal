@@ -588,9 +588,20 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
         max_seq_len=max(seq_len, 128),
         max_local_batch_size=local_batch_size,
         paged_attention_config=paged_attention_config,
+        # Mirror production `create_tt_model` (models/demos/gpt_oss/demo/text_demo.py):
+        # throughput experts is gated on global_batch_size > 1, not tokens-per-step > 1.
+        # Single-user prefill on a multi-row mesh runs the low-throughput path in
+        # production (multi-user prefill is staged through `batched_prefill` with one
+        # user per row). The DeepSeek prefill kernels assume each row contributes a
+        # disjoint slice of tokens; feeding them a single user's seq either replicated
+        # across rows (8× duplication of all-reduced expert outputs) or sharded across
+        # rows (correct for experts but breaks the layer's self-attention, which needs
+        # the full seq per chip) gives a fundamentally inconsistent test setup. Gate
+        # on `local_batch_size > 1` so the throughput path is only exercised in the
+        # batched configurations it's actually designed for.
         use_throughput_experts=setup["mesh_device"].shape[0] > 1
-        and local_batch_size * seq_len > 1
-        and throughput_experts_supported_on_arch(),  # high throughput experts don't support single user decode currently
+        and local_batch_size > 1
+        and throughput_experts_supported_on_arch(),
     )
     return decoder_layer
 
