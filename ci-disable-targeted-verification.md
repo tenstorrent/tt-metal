@@ -32,7 +32,7 @@ Each PR gets exactly one targeted verification run total.
 - If a job was already failing on `main` before the PR, its continued failure on the PR branch is NOT a regression and does NOT block merge.
 - If a job's failure on the PR is fully attributable to an out-of-scope cause (timeout tracked in the timeout-tracking issue, infra/runner faults, or flaky non-consecutive failures), it does NOT block merge.
 - If the verification run could not actually exercise the previously-passing jobs (for example, infra failure during artifact download, container init, runner allocation, or any failure that prevented pytest from running on those jobs), treat the verification as INCONCLUSIVE. An inconclusive run does NOT count against the one-run-per-PR budget.
-- For an inconclusive verification, the agent SHOULD dispatch a new verification run on a later session (still subject to the at-most-one-new-dispatch-per-session rule). Do not mark the PR as `verified-pass` until a verification run has actually exercised the previously-passing jobs.
+- For an inconclusive verification, the agent SHOULD dispatch a new verification run on a later session (still subject to the at most THREE new dispatches per session rule). Do not mark the PR as `verified-pass` until a verification run has actually exercised the previously-passing jobs.
 - Merge-readiness decision rule: a PR is `verified-pass` (ready to merge) iff every job that was passing on `main` immediately before the PR is still passing on the PR's single verification run.
 
 ## PR Disable Batch Policy (Exactly One Initial Batch)
@@ -62,25 +62,83 @@ Rationale: PRs may remain open for days, and we must avoid disabling tests that 
 
 ## Build Reuse Requirement (No Rebuilds)
 
-For this project, verification runs must reuse existing build artifacts.
-Do not run fresh build steps for targeted verification.
+For this project, verification runs must reuse existing build artifacts. Do not run fresh build steps for targeted verification.
 
-Before dispatching a verification run:
+The reusable mechanism is the `use-artifacts-from-run` input on `.github/workflows/build-artifact.yaml`. It is ALREADY DEFINED there — you do NOT need to modify `build-artifact.yaml`. You only modify the PIPELINE workflow file being dispatched (for example `.github/workflows/t3000-e2e-tests.yaml`) so it accepts the input and threads it into its `build-artifact` job.
 
-1. Modify the pipeline workflow file being dispatched so `workflow_dispatch` can accept an artifact-source run ID (for example, `use-artifacts-from-run`).
-2. Thread that input into the workflow's `build-artifact` call so it is passed to `.github/workflows/build-artifact.yaml`.
-3. Confirm the called workflow supports artifact reuse and skips build when the run ID is set.
-4. Dispatch the verification run with that run ID so build artifacts are downloaded instead of rebuilt.
+### Step 1: Add the input to the pipeline workflow's `workflow_dispatch.inputs` block
 
-Run ID selection rules:
+Open the target pipeline workflow file (e.g. `.github/workflows/t3000-e2e-tests.yaml`). Find the `on:` block. Under `workflow_dispatch.inputs`, add this entry (preserve any existing inputs):
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      # ... existing inputs unchanged ...
+      use-artifacts-from-run:
+        required: false
+        type: string
+        default: ""
+        description: "Workflow run ID to download build artifacts from (skips build)"
+```
+
+### Step 2: Thread the input into the `build-artifact` job's `with:` block
+
+In the same file, find the job that calls `./.github/workflows/build-artifact.yaml`. It usually looks like this:
+
+```yaml
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      # ... other existing fields ...
+```
+
+Add ONE line at the end of its `with:` block:
+
+```yaml
+      use-artifacts-from-run: ${{ inputs.use-artifacts-from-run || '' }}
+```
+
+The complete patched job should look like this (existing fields preserved, one new line added at the end of `with:`):
+
+```yaml
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      # ... other existing fields ...
+      use-artifacts-from-run: ${{ inputs.use-artifacts-from-run || '' }}
+```
+
+### Step 3: Commit those workflow edits to the temporary verification branch only
+
+These edits live on the temporary verification branch (the branch you create for pruning jobs); they do NOT belong on the real disable PR branch. Do not include them in the final PR diff.
+
+### Step 4: Dispatch the verification run with the artifact-source run ID
+
+When you dispatch the workflow, pass `use-artifacts-from-run` as a string equal to the chosen source run ID (e.g. `26445104085`). The `build-artifact.yaml` workflow handles the rest: it skips the build job and downloads the build outputs from the source run via its `download-artifacts` job (which only runs when `inputs.use-artifacts-from-run != ''`).
+
+If the source run does not contain the required artifacts (build tarball, and wheel if the pipeline needs one), the downstream test jobs will fail at the "Initialize containers" / artifact-download step — that is the standard signature of an incompatible source run.
+
+### Source run selection rules (unchanged)
 
 - Prefer a successful recent `Merge Gate` run.
-- The source run should match the same build intent (platform/build-type/LTO/tracy expectations).
-- The source run must contain the required build outputs (build tarball and wheel when needed by the pipeline).
-- Prefer a source run on the same commit, or the nearest compatible commit prior to the disable-only changes.
+- Source run must match the same build intent (platform, build-type, LTO/Tracy expectations).
+- Source run must contain the required build outputs (build tarball, and wheel if the pipeline needs one).
+- Prefer the same commit, or the nearest compatible commit prior to the disable-only changes.
 
-If no compatible artifact-source run is available, do not dispatch a rebuild run.
-First find another compatible source run or update the plan/branch flow to obtain one.
+If no compatible source run exists, do NOT dispatch a fresh build instead. Wait for a compatible source run.
+
+### Verifying the patch worked before dispatch
+
+After committing the workflow edits on the temporary branch, you can sanity-check the patch with a local file read of the workflow file. The patched workflow's `workflow_dispatch.inputs` must list `use-artifacts-from-run`, and the `build-artifact` job's `with:` block must include `use-artifacts-from-run: ${{ inputs.use-artifacts-from-run || '' }}`.
+
+If either is missing, the dispatch will run a fresh build instead of reusing artifacts.
 
 ## In-Scope vs Out-of-Scope Failures
 
@@ -124,7 +182,7 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
 
 ## Safety Constraints
 
-- Each automation session may dispatch at most one new workflow run.
+- Each automation session may dispatch up to THREE new workflow runs total.
 - Multiple workflow runs may be in progress concurrently across PRs; the cap applies only to new dispatches per session.
 - Never dispatch unrelated workflows.
 - Keep PRs as draft until final validation.
