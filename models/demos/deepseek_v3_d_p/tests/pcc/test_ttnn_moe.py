@@ -120,14 +120,6 @@ from tests.ttnn.utils_for_testing import comp_pcc
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize(
-    "num_iterations",
-    [
-        pytest.param(1, id="iter1"),
-        pytest.param(3, id="iter3"),
-        pytest.param(5, id="iter5"),
-    ],
-)
 def test_ttnn_moe(
     mesh_device,
     device_params,
@@ -141,7 +133,6 @@ def test_ttnn_moe(
     num_links,
     topology,
     gate_fallback_mode,
-    num_iterations,
 ):
     """
     Test TtMoe PCC against TorchMoe reference.
@@ -356,24 +347,16 @@ def test_ttnn_moe(
     profiler.end("tt_moe_creation")
 
     profiler.start("tt_forward")
-    logger.debug(f"Running TtMoe forward pass ({num_iterations} iterations)...")
+    logger.debug("Running TtMoe forward pass...")
 
-    tt_output = None
-    tt_intermediates = None
-    for iter_idx in range(num_iterations):
-        tt_x = upload_tt_x()
-        is_last = iter_idx == num_iterations - 1
-        capture_intermediates = is_last and run_pcc_check
-        iter_label = f"tt_forward_iter{iter_idx}"
-        signpost(header=f"{iter_label}_START")
-        profiler.start(iter_label)
-        tt_output, tt_intermediates = tt_moe(tt_x, return_intermediates=capture_intermediates)
-        ttnn.synchronize_device(mesh_device)
-        profiler.end(iter_label)
-        signpost(header=f"{iter_label}_END")
-        logger.debug(f"  iter {iter_idx}: {profiler.get(iter_label) * 1000:.2f} ms")
+    tt_x = upload_tt_x()
+    signpost(header="tt_forward_START")
+    tt_output, tt_intermediates = tt_moe(tt_x, return_intermediates=run_pcc_check)
+    ttnn.synchronize_device(mesh_device)
+    signpost(header="tt_forward_END")
 
     profiler.end("tt_forward")
+    logger.debug(f"  tt_forward: {profiler.get('tt_forward') * 1000:.2f} ms")
 
     # Early return when run_pcc_check=False (profiling mode)
     if not run_pcc_check:

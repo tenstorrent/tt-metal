@@ -193,44 +193,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     auto* region_offsets_buffer = t.expert_region_offsets.buffer();
     auto* out_buffer = tensor_return_value.buffer();
 
-    // -------------------------- scratch buffer + semaphore ----------------
-    // LEGACY DRAM scratch — used by the previous DRAM-round-trip activated
-    // path. The current L1-mcast activated path doesn't touch this buffer;
-    // both reader and writer kernels declare the accessor but
-    // `(void)scratch_acc` it. The buffer is kept as a 1-tile placeholder
-    // (~1KB DRAM) so the TensorAccessorArgs CT-arg layout in both kernels
-    // stays compatible with the existing slot order. Without shrinking,
-    // each cached program (one per local_expert_id × layer) would hold a
-    // ~1.15MB DRAM buffer it never reads, multiplying across the full
-    // DS-V3 prefill to ~184MB of leaked DRAM.
-    const uint32_t scratch_num_tiles = 1;
-    const uint32_t scratch_bytes = scratch_num_tiles * tt::tile_size(intermed_df);
-    tt::tt_metal::InterleavedBufferConfig scratch_cfg{
-        .device = t.x.device(),
-        .size = scratch_bytes,
-        .page_size = tt::tile_size(intermed_df),
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-    auto activated_scratch = tt::tt_metal::CreateBuffer(scratch_cfg);
-    auto* scratch_buffer = activated_scratch.get();
-
-    // Global semaphore reserved on every compute core (CreateSemaphore puts
-    // it at the same L1 offset on every core in the range). The writer kernel
-    // NoC-increments the OWNER core's slot; the reader on every core waits on
-    // ITS OWN slot for value == total_cores — that requires each writer to
-    // increment all cores' slots, OR we designate one core as the master and
-    // have only its reader wait. Simpler approach: every writer increments
-    // every reader's slot via NoC mcast.
-    const uint32_t total_cores = GRID_X * GRID_Y;
-    // ready_sem lives on EVERY core's L1 at the same offset, but is meaningful
-    // only on the controller's L1 — non-controllers atomic-inc the controller's
-    // slot per barrier. Reused for both barrier A and barrier B per chunk with
-    // chunk-indexed targets.
-    const uint32_t semaphore_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
-    // done_sem lives on every core's L1. Controller writes the new "done" value
-    // to every core's slot (including its own) once it sees ready_sem reach the
-    // per-barrier target. Reader spins on it with target 2*chunk+1; the next-
-    // chunk phase-3-drain (in writer) spins on it with target 2*chunk+2.
-    const uint32_t done_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    // -------------------------- semaphores --------------------------------
     // Weight-multicast semaphores for in1 (gate/up/down). Pattern: per
     // N-col group (gx fixed, gy=0..GRID_Y-1), one sender at gy=0 reads the
     // weight slice from DRAM and mcasts it to the other GRID_Y-1 cores in
@@ -239,10 +202,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // mcast-sets `valid` to 1 on all receivers; receivers wait for valid==1.
     // Same sem pair is reused across gate/up/down phases (phases are
     // sequential, sem values reset between K-blocks).
-    constexpr uint32_t INVALID_SEM = 0;
-    constexpr uint32_t VALID_SEM = 1;
-    (void)INVALID_SEM;
-    (void)VALID_SEM;
     const uint32_t in1_ready_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
     const uint32_t in1_valid_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
     // in0 (x) multicast within M-row groups: sender at (gx=0, gy) reads x
@@ -357,7 +316,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // -------------------------- kernel build ------------------------------
     // Reader compile-time args. Order must exactly match the layout the reader
     // kernel reads via get_compile_time_arg_val(idx) and the TensorAccessor
-    // offsets it computes from offset 19 onwards.
+    // offsets it computes after the named-arg block.
     std::vector<uint32_t> reader_ct_args = {
         CB_IN0_X,
         CB_IN1_GATE,
@@ -377,24 +336,19 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         N_gate_tiles_full,
         N_down_tiles_full,
         M_tiles_full,
-        total_cores,
         num_chunks,
         chunk_M_tiles,
         // CB_ACTIVATED — consumed by the reader during phase 4 L1 mcast.
         CB_ACTIVATED,
-        // GRID_X — replaces the hard-coded 8 in reader's L1 mcast. With
-        // 11-core M-rows we need the mcast num_dests and the NoC-table
-        // endpoint index to track.
+        // GRID_X — M-row mcast group size, used for both num_dests and the
+        // NoC-table endpoint index.
         GRID_X,
         // K_down_tiles_padded — phase-4 K-loop bound. K dim of down is
         // padded to N_gate_padded so per-K-block sender = gx == kb holds.
         K_down_tiles_padded,
         // region_offsets share CB_IDX_SCRATCH's single page — reader writes
         // idx at offset 0 and region_offsets at offset idx_page_bytes
-        // within the same L1 page. Pass idx_page_bytes so the kernels know
-        // where to split. CT arg slot here is the byte offset of
-        // region_offsets within the shared idx-scratch L1 page. Only read
-        // when use_region_offsets=true; otherwise unused.
+        // within the same L1 page. Only read when use_region_offsets=true.
         idx_page_size,
         // use_region_offsets: when false, the kernel skips the
         // region_offsets DRAM read and uses start_tile_row=0 (correct for
@@ -408,7 +362,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(idx_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(scratch_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(region_offsets_buffer).append_to(reader_ct_args);
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -451,7 +404,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         static_cast<uint32_t>(op.use_region_offsets),  // 18
     };
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(scratch_buffer).append_to(writer_ct_args);
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -530,7 +482,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/"
-        "fused_swiglu_v3.cpp",
+        "fused_swiglu.cpp",
         core_range_set,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::LoFi,
@@ -542,26 +494,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         });
 
     // -------------------------- per-core runtime args ---------------------
-    // Every writer NoC-increments ALL cores' semaphore slots so every reader
-    // sees value == total_cores once every core has hit its sync point.
-    // Writer therefore needs the NoC (x, y) of every core in the grid.
-    // For v1 we hard-code "increment self only" by using each core's own
-    // coords as the target — this makes the increment effectively local and
-    // we instead spin a per-core counter on the reader. The cross-core gather
-    // is achieved by having the reader poll the counter as it ramps from 0
-    // up to total_cores: each writer increments ITS OWN sem slot, and every
-    // reader on every core polls THEIR OWN slot until it reaches 1, which
-    // means THAT core's writer finished its phase-3 drain. But that only
-    // gives us a per-core barrier, not a global one.
-    //
-    // The correct minimum-overhead pattern for "wait until every core has
-    // finished phase 3" is: each writer NoC-increments a single global
-    // semaphore on a designated owner core; every reader on every core
-    // polls THAT same semaphore via remote NoC reads through
-    // `noc_semaphore_wait_remote` (or equivalent). For simplicity in v1 we
-    // implement that via every writer NoC-incrementing every core's slot
-    // (64 increments per writer = 4096 NoC sem-incs per program; cheap at
-    // ~10ns each).
+    // Cross-core synchronization is now done entirely via L1-mcast: weights
+    // mcast within N-col groups using in1_{ready,valid}_sem, x mcast within
+    // M-row groups using in0_{ready,valid}_sem, and activated mcast within
+    // M-row groups (rotating sender per phase-4 K-block) using
+    // act_{ready,valid}_sem. No global cross-grid barrier is needed.
     std::vector<CoreCoord> cores;
     cores.reserve(GRID_X * GRID_Y);
     for (uint32_t gy = 0; gy < GRID_Y; ++gy) {
@@ -570,16 +507,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         }
     }
 
-    // Resolve the multicast rectangle covering the whole compute grid in
-    // NoC (virtual) coords. The writer kernel uses noc_semaphore_inc_multicast
-    // to bump every core's local sem slot in a single NoC transaction.
     auto* device = t.x.device();
-    const auto top_left_noc = device->worker_core_from_logical_core(CoreCoord{0, 0});
-    const auto bot_right_noc = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, GRID_Y - 1});
-    const uint32_t mcast_x_start = top_left_noc.x;
-    const uint32_t mcast_y_start = top_left_noc.y;
-    const uint32_t mcast_x_end = bot_right_noc.x;
-    const uint32_t mcast_y_end = bot_right_noc.y;
 
     for (uint32_t idx = 0; idx < cores.size(); ++idx) {
         const auto& core = cores[idx];
@@ -588,7 +516,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const uint32_t my_mt = gy;
         const uint32_t my_nt_gu = gx;
         const uint32_t my_nt_d = gx;
-        const uint32_t chunk_start_tile_row = 0;  // single chunk for v1
 
         // Weight-multicast topology for in1 (gate/up/down). For each N-col
         // group (fixed gx), the sender is the gy=0 core. Receivers are the
@@ -621,6 +548,17 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const uint32_t in0_sender_nx = in0_sender_noc.x;
         const uint32_t in0_sender_ny = in0_sender_noc.y;
 
+        // Reader runtime arg layout (must match reader_unified_re.cpp):
+        //   0..5: tensor addrs (x, gate, up, down, counts, idx)
+        //   6: my_mt
+        //   7: my_nt_gu
+        //   8: my_nt_d
+        //   9..18: in1 multicast args
+        //  19..28: in0 multicast args
+        //  29: act_ready_sem_id
+        //  30: act_valid_sem_id
+        //  31: region_offsets_addr
+        //  32+: M-row NoC coord table (GRID_X pairs of x, y)
         std::vector<uint32_t> reader_args = {
             x_buffer->address(),
             gate_buffer->address(),
@@ -628,50 +566,37 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             down_buffer->address(),
             counts_buffer->address(),
             idx_buffer->address(),
-            scratch_buffer->address(),
-            semaphore_addr,
             my_mt,
             my_nt_gu,
             my_nt_d,
-            chunk_start_tile_row,
-            // in1 multicast args (indices 12..20):
-            static_cast<uint32_t>(is_in1_sender),  // 12
-            in1_ready_sem_addr,                    // 13
-            in1_valid_sem_addr,                    // 14
-            in1_num_receivers,                     // 15
-            in1_mcast_nx_start,                    // 16
-            in1_mcast_ny_start,                    // 17
-            in1_mcast_nx_end,                      // 18
-            in1_mcast_ny_end,                      // 19
-            in1_sender_nx,                         // 20
-            in1_sender_ny,                         // 21
-            // in0 multicast args (indices 22..31):
-            static_cast<uint32_t>(is_in0_sender),  // 22
-            in0_ready_sem_addr,                    // 23
-            in0_valid_sem_addr,                    // 24
-            in0_num_receivers,                     // 25
-            in0_mcast_nx_start,                    // 26
-            in0_mcast_ny_start,                    // 27
-            in0_mcast_nx_end,                      // 28
-            in0_mcast_ny_end,                      // 29
-            in0_sender_nx,                         // 30
-            in0_sender_ny,                         // 31
-            // done_sem id (32) — kept for now but unused after L1 mcast switch.
-            done_sem_addr,  // 32
-            // Activated L1 mcast sems (33, 34) — replace the cross-core
-            // phase-3/4 barrier with per-K-block sender/receiver handshake.
-            act_ready_sem_addr,  // 33
-            act_valid_sem_addr,  // 34
-            // expert_region_offsets DRAM buffer address (35). Reader pulls
-            // the page into cb_region_offsets_scratch L1 at kernel start;
-            // writer cb_wait_fronts the same CB to read start_tile_row.
-            region_offsets_buffer->address(),  // 35
+            static_cast<uint32_t>(is_in1_sender),
+            in1_ready_sem_addr,
+            in1_valid_sem_addr,
+            in1_num_receivers,
+            in1_mcast_nx_start,
+            in1_mcast_ny_start,
+            in1_mcast_nx_end,
+            in1_mcast_ny_end,
+            in1_sender_nx,
+            in1_sender_ny,
+            static_cast<uint32_t>(is_in0_sender),
+            in0_ready_sem_addr,
+            in0_valid_sem_addr,
+            in0_num_receivers,
+            in0_mcast_nx_start,
+            in0_mcast_ny_start,
+            in0_mcast_nx_end,
+            in0_mcast_ny_end,
+            in0_sender_nx,
+            in0_sender_ny,
+            act_ready_sem_addr,
+            act_valid_sem_addr,
+            region_offsets_buffer->address(),
         };
         // M-row NoC coord table: for our M-row (gy=my_mt), the NoC (x, y) of
-        // each of the 8 cores (gx=0..GRID_X-1). Reader uses this per phase-4
-        // K-block (kb=0..7) to find the sender's NoC addr and to build the
-        // M-row mcast rectangle. Starts at index 36 now (was 35 before
-        // region_offsets_addr was added).
+        // each of the GRID_X cores (gx=0..GRID_X-1). Reader uses this per
+        // phase-4 K-block (kb=0..K_down_tiles_padded-1) to find the sender's
+        // NoC addr and to build the M-row mcast rectangle.
         for (uint32_t gxi = 0; gxi < GRID_X; ++gxi) {
             const auto noc = device->worker_core_from_logical_core(CoreCoord{gxi, gy});
             reader_args.push_back(static_cast<uint32_t>(noc.x));
@@ -679,44 +604,15 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         }
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
 
-        // Writer runtime arg layout matches writer_unified_re.cpp:
+        // Writer runtime arg layout (must match writer_unified_re.cpp):
         //   0: output_addr
-        //   1: scratch_addr
-        //   2: sem_addr (local L1 offset)
-        //   3: num_sync_cores (total cores covered by the multicast)
-        //   4: mcast_x_start  (NoC virtual coords of the rectangle's top-left)
-        //   5: mcast_y_start
-        //   6: mcast_x_end    (NoC virtual coords of the bottom-right)
-        //   7: mcast_y_end
-        //   8: my_mt
-        //   9: my_nt_gu
-        //  10: my_nt_d
-        //  11: chunk_start_tile_row (legacy / unused)
-        //  12: done_sem_addr (controller writes per-barrier; readers/writers wait)
-        //  13+ : per-core NoC coords (interleaved x, y)
+        //   1: my_mt
+        //   2: my_nt_d
         std::vector<uint32_t> writer_args = {
             out_buffer->address(),
-            scratch_buffer->address(),
-            semaphore_addr,
-            static_cast<uint32_t>(cores.size()),
-            mcast_x_start,
-            mcast_y_start,
-            mcast_x_end,
-            mcast_y_end,
             my_mt,
-            my_nt_gu,
             my_nt_d,
-            chunk_start_tile_row,
-            done_sem_addr,
         };
-        // Append the NoC virtual coords of every compute core (interleaved
-        // x, y). The controller writer uses this to unicast-set each other
-        // core's sem slot directly.
-        for (const auto& c : cores) {
-            const auto noc_coord = device->worker_core_from_logical_core(c);
-            writer_args.push_back(static_cast<uint32_t>(noc_coord.x));
-            writer_args.push_back(static_cast<uint32_t>(noc_coord.y));
-        }
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
     }
 
@@ -726,9 +622,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             .reader_kernel_id = reader_kernel_id,
             .writer_kernel_id = writer_kernel_id,
             .compute_kernel_id = compute_kernel_id,
-            .cores = std::move(cores),
-            .activated_scratch = std::move(activated_scratch),
-            .semaphore_addr = semaphore_addr}};
+            .cores = std::move(cores)}};
 }
 
 void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
@@ -740,7 +634,6 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
     const auto reader_id = cached_program.shared_variables.reader_kernel_id;
     const auto writer_id = cached_program.shared_variables.writer_kernel_id;
     const auto& cores = cached_program.shared_variables.cores;
-    const auto* scratch_buf = cached_program.shared_variables.activated_scratch.get();
 
     const uint32_t x_addr = t.x.buffer()->address();
     const uint32_t gate_addr = t.gate_proj.buffer()->address();
@@ -748,7 +641,6 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
     const uint32_t down_addr = t.down_proj.buffer()->address();
     const uint32_t counts_addr = t.counts.buffer()->address();
     const uint32_t idx_addr = t.global_expert_idx_table.buffer()->address();
-    const uint32_t scratch_addr = scratch_buf->address();
     const uint32_t region_offsets_addr = t.expert_region_offsets.buffer()->address();
     const uint32_t out_addr = tensor_return_value.buffer()->address();
 
@@ -760,14 +652,12 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
         reader_args[3] = down_addr;
         reader_args[4] = counts_addr;
         reader_args[5] = idx_addr;
-        reader_args[6] = scratch_addr;
-        // index 35 = region_offsets_addr (must stay in sync with the layout
+        // index 31 = region_offsets_addr (must stay in sync with the layout
         // built in create() and consumed by reader_unified_re.cpp).
-        reader_args[35] = region_offsets_addr;
+        reader_args[31] = region_offsets_addr;
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_id, core);
         writer_args[0] = out_addr;
-        writer_args[1] = scratch_addr;
     }
 }
 

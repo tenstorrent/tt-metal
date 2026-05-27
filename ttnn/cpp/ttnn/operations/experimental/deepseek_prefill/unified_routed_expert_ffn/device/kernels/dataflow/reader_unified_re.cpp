@@ -4,23 +4,21 @@
 
 // Reader kernel for unified_routed_expert_ffn.
 //
-// Per-core responsibilities, sequenced in one pass:
-//   - Read counts/idx_table scratch and discover this expert's active token
-//     count (currently used only for diagnostics; the host pre-sized the
-//     output buffer, the writer drops chunks beyond the count).
-//   - Phase 1 (gate matmul): per K-block, push per_core_M * in0_block_w_gu
-//     tiles of x to cb_in0_x and per_core_N_gu * in0_block_w_gu tiles of
-//     gate_proj to cb_in1_gate.
-//   - Phase 2 (up matmul): re-stream x and stream up_proj.
-//   - WAIT on a global semaphore until it reaches `total_cores`. The writer
-//     kernel of each core increments the semaphore once it's done draining
-//     cb_activated to the per-program DRAM scratch tensor, so once the
-//     semaphore equals total_cores every core's M-rows × hidden columns of
-//     activated are coherent in scratch.
-//   - Phase 4 (down matmul): per K-block, read this core's per_core_M rows
-//     × in0_block_w_d columns from the activated scratch into
-//     cb_in0_down_full, and stream the matching in1 K-block of down_proj
-//     into cb_in1_down.
+// Per-core responsibilities, sequenced over `effective_chunks` chunks
+// (effective_chunks = ceil(this expert's token count / chunk_M_tiles)):
+//   - Read counts/idx_table scratch once at kernel start to discover this
+//     expert's active token count and (when use_region_offsets) its
+//     start_tile_row in the shared dispatched_buffer.
+//   - Phase 1 (gate matmul, fused with phase 2): per K-block, sender at
+//     gx=0 NoC-mcasts the x K-block to its M-row receivers (in0 mcast);
+//     sender at gy=0 NoC-mcasts the gate+up K-block to its N-col
+//     receivers (in1 mcast). Handshakes are per-K-block ready/valid
+//     sems (in0_*_sem, in1_*_sem).
+//   - Phase 4 (down matmul): per K-block kb, exactly one core in the
+//     M-row (gx==kb) is the "activated sender" — it L1-mcasts its
+//     cb_activated tiles to all M-row cores' cb_in0_down_full (with
+//     loopback) using act_{ready,valid}_sem. The in1_down sender at
+//     gy=0 mcasts the down K-block weight in parallel on the other NoC.
 
 #include <cstdint>
 
@@ -37,70 +35,59 @@ void kernel_main() {
     const uint32_t down_addr = get_arg_val<uint32_t>(3);
     const uint32_t counts_addr = get_arg_val<uint32_t>(4);
     const uint32_t idx_table_addr = get_arg_val<uint32_t>(5);
-    const uint32_t scratch_addr = get_arg_val<uint32_t>(6);  // activated scratch DRAM tensor
-    const uint32_t sem_id = get_arg_val<uint32_t>(7);        // semaphore id (resolves to L1 addr via get_semaphore)
-    const uint32_t sem_addr = get_semaphore(sem_id);
 
-    const uint32_t my_mt = get_arg_val<uint32_t>(8);
-    const uint32_t my_nt_gu = get_arg_val<uint32_t>(9);
-    const uint32_t my_nt_d = get_arg_val<uint32_t>(10);
-    const uint32_t chunk_start_tile_row = get_arg_val<uint32_t>(11);
+    const uint32_t my_mt = get_arg_val<uint32_t>(6);
+    const uint32_t my_nt_gu = get_arg_val<uint32_t>(7);
+    const uint32_t my_nt_d = get_arg_val<uint32_t>(8);
 
-    // Weight-multicast runtime args (indices 12..21).
-    const uint32_t is_in1_sender_u32 = get_arg_val<uint32_t>(12);
+    // Weight-multicast runtime args (indices 9..18).
+    const uint32_t is_in1_sender_u32 = get_arg_val<uint32_t>(9);
     const bool is_in1_sender = is_in1_sender_u32 != 0;
-    const uint32_t in1_ready_sem_id = get_arg_val<uint32_t>(13);
-    const uint32_t in1_valid_sem_id = get_arg_val<uint32_t>(14);
-    const uint32_t in1_num_receivers = get_arg_val<uint32_t>(15);
-    const uint32_t in1_mcast_nx_start = get_arg_val<uint32_t>(16);
-    const uint32_t in1_mcast_ny_start = get_arg_val<uint32_t>(17);
-    const uint32_t in1_mcast_nx_end = get_arg_val<uint32_t>(18);
-    const uint32_t in1_mcast_ny_end = get_arg_val<uint32_t>(19);
-    const uint32_t in1_sender_nx = get_arg_val<uint32_t>(20);
-    const uint32_t in1_sender_ny = get_arg_val<uint32_t>(21);
+    const uint32_t in1_ready_sem_id = get_arg_val<uint32_t>(10);
+    const uint32_t in1_valid_sem_id = get_arg_val<uint32_t>(11);
+    const uint32_t in1_num_receivers = get_arg_val<uint32_t>(12);
+    const uint32_t in1_mcast_nx_start = get_arg_val<uint32_t>(13);
+    const uint32_t in1_mcast_ny_start = get_arg_val<uint32_t>(14);
+    const uint32_t in1_mcast_nx_end = get_arg_val<uint32_t>(15);
+    const uint32_t in1_mcast_ny_end = get_arg_val<uint32_t>(16);
+    const uint32_t in1_sender_nx = get_arg_val<uint32_t>(17);
+    const uint32_t in1_sender_ny = get_arg_val<uint32_t>(18);
     const uint32_t in1_ready_sem_addr = get_semaphore(in1_ready_sem_id);
     const uint32_t in1_valid_sem_addr = get_semaphore(in1_valid_sem_id);
 
-    // x (in0) multicast runtime args (indices 22..31).
-    const uint32_t is_in0_sender_u32 = get_arg_val<uint32_t>(22);
+    // x (in0) multicast runtime args (indices 19..28).
+    const uint32_t is_in0_sender_u32 = get_arg_val<uint32_t>(19);
     const bool is_in0_sender = is_in0_sender_u32 != 0;
-    const uint32_t in0_ready_sem_id = get_arg_val<uint32_t>(23);
-    const uint32_t in0_valid_sem_id = get_arg_val<uint32_t>(24);
-    const uint32_t in0_num_receivers = get_arg_val<uint32_t>(25);
-    const uint32_t in0_mcast_nx_start = get_arg_val<uint32_t>(26);
-    const uint32_t in0_mcast_ny_start = get_arg_val<uint32_t>(27);
-    const uint32_t in0_mcast_nx_end = get_arg_val<uint32_t>(28);
-    const uint32_t in0_mcast_ny_end = get_arg_val<uint32_t>(29);
-    const uint32_t in0_sender_nx = get_arg_val<uint32_t>(30);
-    const uint32_t in0_sender_ny = get_arg_val<uint32_t>(31);
+    const uint32_t in0_ready_sem_id = get_arg_val<uint32_t>(20);
+    const uint32_t in0_valid_sem_id = get_arg_val<uint32_t>(21);
+    const uint32_t in0_num_receivers = get_arg_val<uint32_t>(22);
+    const uint32_t in0_mcast_nx_start = get_arg_val<uint32_t>(23);
+    const uint32_t in0_mcast_ny_start = get_arg_val<uint32_t>(24);
+    const uint32_t in0_mcast_nx_end = get_arg_val<uint32_t>(25);
+    const uint32_t in0_mcast_ny_end = get_arg_val<uint32_t>(26);
+    const uint32_t in0_sender_nx = get_arg_val<uint32_t>(27);
+    const uint32_t in0_sender_ny = get_arg_val<uint32_t>(28);
     const uint32_t in0_ready_sem_addr = get_semaphore(in0_ready_sem_id);
     const uint32_t in0_valid_sem_addr = get_semaphore(in0_valid_sem_id);
 
-    // done_sem: legacy from the DRAM-scratch barrier — not used after the L1
-    // mcast switch.
-    const uint32_t done_sem_id = get_arg_val<uint32_t>(32);
-    const uint32_t done_sem_addr = get_semaphore(done_sem_id);
-    (void)done_sem_id;
-    (void)done_sem_addr;
-
     // Activated L1 mcast sems. Sender (gx == kb at phase-4 K-block kb) waits
-    // on its act_ready_sem for GRID_X - 1 incs from the 7 receivers; then
+    // on its act_ready_sem for GRID_X - 1 incs from the receivers; then
     // mcasts cb_activated -> all M-row cores' cb_in0_down_full L1; then
     // mcasts act_valid_sem to release receivers.
-    const uint32_t act_ready_sem_id = get_arg_val<uint32_t>(33);
-    const uint32_t act_valid_sem_id = get_arg_val<uint32_t>(34);
+    const uint32_t act_ready_sem_id = get_arg_val<uint32_t>(29);
+    const uint32_t act_valid_sem_id = get_arg_val<uint32_t>(30);
     const uint32_t act_ready_sem_addr = get_semaphore(act_ready_sem_id);
     const uint32_t act_valid_sem_addr = get_semaphore(act_valid_sem_id);
 
     // expert_region_offsets DRAM buffer address. Reader fetches the page at
-    // kernel start, pushes cb_region_offsets_scratch so the writer can read
-    // the same L1 data (one DRAM read total per program for the offsets).
-    const uint32_t region_offsets_addr = get_arg_val<uint32_t>(35);
+    // kernel start into cb_idx_scratch (appended to the idx page) so the
+    // writer reads the same L1 data — one DRAM read total per program for
+    // the offsets.
+    const uint32_t region_offsets_addr = get_arg_val<uint32_t>(31);
 
-    // M-row NoC coord table: 8 (x, y) pairs at runtime args 36..51 (shifted
-    // by one to make room for region_offsets_addr at index 35). Used to
-    // resolve the sender's NoC addr per phase-4 K-block kb (= gx).
-    constexpr uint32_t M_ROW_NOC_RT_OFFSET = 36;
+    // M-row NoC coord table: GRID_X (x, y) pairs starting at runtime arg 32.
+    // Used to resolve the sender's NoC addr per phase-4 K-block kb (= gx).
+    constexpr uint32_t M_ROW_NOC_RT_OFFSET = 32;
 
     // -------------------------- compile-time args -------------------------
     constexpr uint32_t cb_in0_x = get_compile_time_arg_val(0);
@@ -122,21 +109,20 @@ void kernel_main() {
     constexpr uint32_t N_gate_tiles_full = get_compile_time_arg_val(15);
     constexpr uint32_t N_down_tiles_full = get_compile_time_arg_val(16);
     constexpr uint32_t M_tiles_full = get_compile_time_arg_val(17);
-    constexpr uint32_t total_cores = get_compile_time_arg_val(18);
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(19);
-    constexpr uint32_t chunk_M_tiles = get_compile_time_arg_val(20);
-    constexpr uint32_t cb_activated = get_compile_time_arg_val(21);
-    constexpr uint32_t GRID_X_NOC = get_compile_time_arg_val(22);  // M-row mcast group size (11 in v2)
-    constexpr uint32_t K_down_tiles_padded = get_compile_time_arg_val(23);
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(18);
+    constexpr uint32_t chunk_M_tiles = get_compile_time_arg_val(19);
+    constexpr uint32_t cb_activated = get_compile_time_arg_val(20);
+    constexpr uint32_t GRID_X_NOC = get_compile_time_arg_val(21);  // M-row mcast group size
+    constexpr uint32_t K_down_tiles_padded = get_compile_time_arg_val(22);
     // Byte offset of expert_region_offsets within cb_idx_scratch's single
     // L1 page. The CB is sized to hold idx (at offset 0) followed by
     // region_offsets (at this offset). Only used when use_region_offsets.
-    constexpr uint32_t region_offsets_l1_byte_offset = get_compile_time_arg_val(24);
+    constexpr uint32_t region_offsets_l1_byte_offset = get_compile_time_arg_val(23);
     // When false, skip the region_offsets DRAM read and use start_tile_row=0
     // (correct for the unfused extract->FFN path where `x` is already the
     // per-expert slice starting at row 0). Also lets the host shrink
     // CB_IDX_SCRATCH to just the idx page (one fewer page worth of L1).
-    constexpr bool use_region_offsets = get_compile_time_arg_val(25) != 0;
+    constexpr bool use_region_offsets = get_compile_time_arg_val(24) != 0;
 
     constexpr uint32_t g_in0_block_num_tiles = per_core_M * in0_block_w_gu;
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
@@ -145,7 +131,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 26;
+    constexpr uint32_t x_accessor_offset = 25;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
 
@@ -169,11 +155,7 @@ void kernel_main() {
     constexpr auto idx_args = TensorAccessorArgs<idx_accessor_offset>();
     const auto idx_acc = TensorAccessor(idx_args, idx_table_addr);
 
-    constexpr uint32_t scratch_accessor_offset = idx_args.next_compile_time_args_offset();
-    constexpr auto scratch_args = TensorAccessorArgs<scratch_accessor_offset>();
-    const auto scratch_acc = TensorAccessor(scratch_args, scratch_addr, get_tile_size(cb_in0_down_full));
-
-    constexpr uint32_t region_offsets_accessor_offset = scratch_args.next_compile_time_args_offset();
+    constexpr uint32_t region_offsets_accessor_offset = idx_args.next_compile_time_args_offset();
     constexpr auto region_offsets_args = TensorAccessorArgs<region_offsets_accessor_offset>();
     const auto region_offsets_acc = TensorAccessor(region_offsets_args, region_offsets_addr);
 
@@ -241,14 +223,10 @@ void kernel_main() {
     // skips the OOB output writes downstream.
     const uint32_t M_bound = (count_tiles < M_tiles_full) ? count_tiles : M_tiles_full;
 
-    // Per-chunk M-row base: recomputed inside the chunk loop below.
-    (void)chunk_start_tile_row;  // legacy runtime arg, base is now derived per chunk
-
     const uint32_t x_tile_bytes = get_tile_size(cb_in0_x);
     const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
     const uint32_t up_tile_bytes = get_tile_size(cb_in1_up);
     const uint32_t down_tile_bytes = get_tile_size(cb_in1_down);
-    const uint32_t scratch_tile_bytes = get_tile_size(cb_in0_down_full);
 
     // Weight-multicast helper. For each in1 K-block:
     //   * Sender (gy=0): wait for all GRID_Y-1 receivers to inc the local
@@ -456,11 +434,6 @@ void kernel_main() {
                 cb_push_back(cb_in1_up, g_in1_block_num_tiles);
             }
         }
-
-        (void)total_cores;
-        (void)sem_addr;
-        (void)scratch_acc;
-        (void)scratch_tile_bytes;
 
         // -------- PHASE 4 — down matmul feed via L1 mcast of activated + down weight mcast --
         //

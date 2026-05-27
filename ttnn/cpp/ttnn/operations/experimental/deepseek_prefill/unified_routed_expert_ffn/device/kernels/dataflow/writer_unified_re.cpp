@@ -4,14 +4,14 @@
 
 // Writer kernel for unified_routed_expert_ffn.
 //
-// Single responsibility after the L1-mcast refactor: pop `cb_out` (the down
-// matmul's per-core final block, packed one subblock at a time) and write
-// tiles to the DRAM-interleaved output tensor at this core's (mt, nt_d) tile
-// region. Looped over chunks.
-//
-// The previous phase-3 drain to DRAM scratch + cross-core barrier is gone —
-// activated tiles are now distributed across the M-row by the READER via
-// L1 multicast (one sender per phase-4 K-block).
+// Single responsibility: pop `cb_out` (the down matmul's per-core final
+// block, packed one subblock at a time) and write tiles to the DRAM-
+// interleaved output tensor at this core's (mt, nt_d) tile region, looped
+// over `effective_chunks` chunks. Reads the device-side counts/idx
+// scratch CBs to compute effective_chunks and start_tile_row (when
+// use_region_offsets=true). The activated tiles are distributed across
+// the M-row by the READER via L1 multicast — there is no DRAM scratch
+// round-trip or cross-core barrier.
 
 #include <cstdint>
 
@@ -22,11 +22,8 @@ constexpr uint32_t TILE_HEIGHT = 32;
 
 void kernel_main() {
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
-    // Runtime args 1..12 are legacy from the scratch-barrier era. Ignored here
-    // but kept in the layout so program_factory does not need to renumber
-    // existing args yet.
-    const uint32_t my_mt = get_arg_val<uint32_t>(8);
-    const uint32_t my_nt_d = get_arg_val<uint32_t>(10);
+    const uint32_t my_mt = get_arg_val<uint32_t>(1);
+    const uint32_t my_nt_d = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_out = get_compile_time_arg_val(1);
     constexpr uint32_t per_core_M = get_compile_time_arg_val(2);
