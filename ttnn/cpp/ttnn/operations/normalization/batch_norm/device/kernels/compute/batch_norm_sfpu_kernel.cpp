@@ -58,51 +58,38 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
 
     const uint32_t inner_count = freq - tile_start;
 
-    // Held operands consumed by the per-iter chain below. CallerManaged on the chain side
-    // means the chain emits no wait/pop edges on these — the caller owns them.
-    cb_wait_front(cb_bcast, 1);
-    cb_wait_front(cb_den, 1);
-    if constexpr (WeightHas) {
-        cb_wait_front(cb_weight, 1);
-    }
-    if constexpr (BiasHas) {
-        cb_wait_front(cb_bias, 1);
-    }
-
     // Output CB depends on whether the typecast tail runs: when NeedsTypecast is true the
     // typecast tile writes the cast result to cb_output_final directly, so the fused chain's
     // pack target is cb_output_final; otherwise it's cb_output_0.
     constexpr uint32_t cb_final_out = NeedsTypecast ? cb_output_final : cb_output_0;
 
     // Stage 2..5 fused — DEST[0] threaded through Sub → Mul(den) → [Mul(weight)] → [Add(bias)]
-    // → [Typecast] → Pack. CopyTile<…, D1, CallerManaged> loads each new operand into D1; the
-    // SFPU binaries then consume (D0, D1) and write back to D0.
+    // → [Typecast] → Pack. CopyTile<…, D1> loads each new operand into D1; the SFPU binaries
+    // then consume (D0, D1) and write back to D0.
+    //
+    // Lifecycles: every held single-tile operand uses Bulk + Scalar — chain's
+    // window_1d<Scalar> collapses to 1, so each side emits a single
+    // cb_wait_front(cb, 1) at the chain head and cb_pop_front(cb, 1) at the tail.
+    // For cb_weight / cb_bias, wrapping the CopyTile in OptionalChainElement also
+    // makes the wait/pop conditional on the compile-time flag — when the option
+    // is off the wrapped element collapses to a tag with a_policy() == CallerManaged,
+    // so the chain emits NOTHING for the inactive branch (CB ids, wait, pop all
+    // suppressed).
     eltwise_chain(
         inner_count,
         CopyTile<cb_other, Dst::D0, Streaming, OperandKind::Scalar, CopyTileReconfig::Input>{},
-        CopyTile<cb_bcast, Dst::D1, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
+        CopyTile<cb_bcast, Dst::D1, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
         SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        CopyTile<cb_den, Dst::D1, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
+        CopyTile<cb_den, Dst::D1, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
         MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
         OptionalChainElement<
             WeightHas,
-            CopyTile<cb_weight, Dst::D1, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>>{},
+            CopyTile<cb_weight, Dst::D1, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>>{},
         OptionalChainElement<WeightHas, MulBinary<Dst::D0, Dst::D1, Dst::D0>>{},
-        OptionalChainElement<
-            BiasHas,
-            CopyTile<cb_bias, Dst::D1, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>>{},
+        OptionalChainElement<BiasHas, CopyTile<cb_bias, Dst::D1, Bulk, OperandKind::Scalar, CopyTileReconfig::Input>>{},
         OptionalChainElement<BiasHas, AddBinary<Dst::D0, Dst::D1, Dst::D0>>{},
         OptionalChainElement<NeedsTypecast, Typecast<TcInFmt, TcOutFmt, Dst::D0>>{},
         PackTile<cb_final_out, Dst::D0, OutStreaming, OperandKind::Scalar, PackTileReconfig::Output>{});
-
-    cb_pop_front(cb_bcast, 1);
-    cb_pop_front(cb_den, 1);
-    if constexpr (WeightHas) {
-        cb_pop_front(cb_weight, 1);
-    }
-    if constexpr (BiasHas) {
-        cb_pop_front(cb_bias, 1);
-    }
 }
 
 void kernel_main() {
