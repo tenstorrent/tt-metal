@@ -228,6 +228,12 @@ public:
                 flags += fmt::format(" -Wl,--defsym=__min_stack={} ", MEM_TRISC_STACK_MIN_SIZE);
             }
         }
+        // Suppress LTO false positive on the device-print lock's atomic exchange.
+        // GCC's -Wstringop-overflow object-size analysis treats Quasar's small
+        // fixed cached-L1 mailbox address as a size-0 object. Source-level
+        // #pragma diagnostic doesn't apply to LTO-emitted warnings, so the
+        // suppression has to live on the link command.
+        flags += "-Wno-stringop-overflow ";
         return flags;
     }
 
