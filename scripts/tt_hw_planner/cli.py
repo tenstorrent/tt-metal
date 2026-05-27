@@ -6288,6 +6288,64 @@ def _maybe_escalate_pcc_fail(
         return original_rc
 
 
+def _capture_worktree_deltas_as_overlay(worktree_path, model_id):
+    """Capture every modified file in `worktree_path` as a per-model overlay.
+
+    Fires on BOTH full success (rc=0) and partial success (rc != 0 with at
+    least some agent-modified files). v12 demonstrated the production
+    pain: a 3h41m run graduated 5 components but ended rc=1, so the
+    previous success-only capture path discarded all 5. Capturing on
+    partial success too means the next `up` run starts from those
+    graduated stubs via the existing pre-flight already-native detection,
+    skipping the components that already work.
+
+    Stubs persisted from a failed run may contain broken native code -
+    that's OK: pre-flight pytest will detect failure and the convergence
+    loop will retry them. The worst case is "same as starting fresh";
+    the best case is "5 fewer components to redo."
+
+    Returns (captured_count, capture_ok). On any exception the function
+    returns (0, False) and the caller preserves the worktree so deltas
+    aren't lost.
+
+    Generic across models -- it just diffs the worktree against base and
+    stores patches, no model-specific filtering.
+    """
+    import subprocess as _subprocess
+
+    from .overlay_manager import store_patch as _store_patch
+
+    captured = 0
+    try:
+        proc = _subprocess.run(
+            ["git", "diff", "--name-only"],
+            cwd=str(worktree_path),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"git diff --name-only failed: {proc.stderr.strip()}")
+        changed = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+        for f in changed:
+            diff_proc = _subprocess.run(
+                ["git", "diff", "--", f],
+                cwd=str(worktree_path),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if diff_proc.returncode != 0 or not diff_proc.stdout.strip():
+                continue
+            rec = _store_patch(model_id, f, diff_proc.stdout, source="captured_from_bringup")
+            if rec:
+                captured += 1
+        return captured, True
+    except Exception as exc:
+        print(f"  [isolation] capture failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return captured, False
+
+
 def cmd_up(args) -> int:
     if not getattr(args, "isolation", "none") == "worktree":
         return _cmd_up_core(args)
@@ -6344,38 +6402,11 @@ def _cmd_up_isolated(args) -> int:
             else:
                 os.environ[k] = v
 
-        if rc == 0:
-            print(f"  [isolation] success — capturing LLM deltas as overlay for {args.model_id}")
-            captured = 0
-            capture_ok = False
-            try:
-                proc = subprocess.run(
-                    ["git", "diff", "--name-only"],
-                    cwd=session.path,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if proc.returncode != 0:
-                    raise RuntimeError(f"git diff --name-only failed: {proc.stderr.strip()}")
-                changed = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
-                for f in changed:
-                    diff_proc = subprocess.run(
-                        ["git", "diff", "--", f],
-                        cwd=session.path,
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    if diff_proc.returncode != 0 or not diff_proc.stdout.strip():
-                        continue
-                    rec = store_patch(args.model_id, f, diff_proc.stdout, source="captured_from_bringup")
-                    if rec:
-                        captured += 1
-                capture_ok = True
-            except Exception as exc:
-                print(f"  [isolation] capture failed: {type(exc).__name__}: {exc}", file=sys.stderr)
-            if capture_ok:
+        capture_label = "full success" if rc == 0 else f"partial success (rc={rc})"
+        print(f"  [isolation] {capture_label} — capturing LLM deltas as overlay for {args.model_id}")
+        captured, capture_ok = _capture_worktree_deltas_as_overlay(session.path, args.model_id)
+        if capture_ok:
+            if rc == 0:
                 print(f"  [isolation] captured {captured} LLM delta(s); destroying worktree")
                 try:
                     _wt_destroy(session)
@@ -6386,16 +6417,21 @@ def _cmd_up_isolated(args) -> int:
                         file=sys.stderr,
                     )
             else:
+                print(f"  [isolation] captured {captured} LLM delta(s); worktree preserved at:")
+                print(f"     {session.path}")
                 print(
-                    f"  [isolation] partial-capture failure — preserving worktree at {session.path} so deltas aren't lost. "
-                    f"Inspect overlays/{args.model_id.replace('/', '_')}/ for what was captured before the failure.",
-                    file=sys.stderr,
+                    f"  [isolation] next `up` run will start from these overlays "
+                    f"(skipping already-graduated components). To start clean, run:"
                 )
+                print(f"     python -m scripts.tt_hw_planner overlay-drop {args.model_id}")
+                print(f"  [isolation] cd to worktree to debug. To delete it later:")
+                print(f"     git worktree remove --force {session.path}")
         else:
-            print(f"  [isolation] bring-up rc={rc}; worktree preserved at:")
-            print(f"     {session.path}")
-            print(f"  [isolation] cd there to debug. To clean up later:")
-            print(f"     git worktree remove --force {session.path}")
+            print(
+                f"  [isolation] capture failed; preserving worktree at {session.path} so deltas aren't lost. "
+                f"Inspect overlays/{args.model_id.replace('/', '_')}/ for what was captured before the failure.",
+                file=sys.stderr,
+            )
 
 
 def _cmd_up_core(args) -> int:
