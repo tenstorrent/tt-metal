@@ -100,9 +100,14 @@ WanFusedDistributedRmsnormSizing compute_sizing(const WanFusedDistributedRmsnorm
     s.num_workers = s.is_tp_1 ? 1u : pick_num_workers_tp_gt_1(s.num_tile_rows);
     s.use_mux = !s.is_tp_1 && (s.num_workers > 1);
     const uint32_t rows_per_worker = tt::div_up(s.num_tile_rows, s.num_workers);
+    // Phase 9 packed-AG: one fabric mcast per chunk, so fewer chunks = fewer
+    // fabric round-trips. Aim for 1 chunk per worker (= rows_per_worker rows
+    // per packet) for the multichunk shape regime where each worker already
+    // has few rows. Cap at kMaxChunkSizeRows for L1 budget (chunk-sized CBs:
+    // input, stats_local, transposed_local, packed_gathered all scale with
+    // chunk_size).
     constexpr uint32_t kMaxChunkSizeRows = 4u;
-    const uint32_t chunk_for_two = std::max(1u, (rows_per_worker + 1u) / 2u);
-    s.chunk_size_rows = std::min<uint32_t>(chunk_for_two, kMaxChunkSizeRows);
+    s.chunk_size_rows = std::min<uint32_t>(std::max(1u, rows_per_worker), kMaxChunkSizeRows);
     s.window_size = s.chunk_size_rows;
     // Pages are addressed across the whole chip (not per-worker) so the
     // buffer shape doesn't depend on num_workers. Each chunk a worker
@@ -272,8 +277,9 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // ceil(rows/2) as the chunk size (capped at kMaxChunkSizeRows); when only
     // 1 row, chunk=1 (no overlap possible at all).
     constexpr uint32_t kMaxChunkSizeRows = 4u;
-    const uint32_t chunk_for_two_chunks = std::max(1u, (num_tile_rows_per_worker + 1u) / 2u);
-    const uint32_t chunk_size_rows = std::min<uint32_t>(chunk_for_two_chunks, kMaxChunkSizeRows);
+    // Aim for 1 chunk per worker (= rows_per_worker rows per packet) to
+    // minimize fabric ops. Cap for L1 budget.
+    const uint32_t chunk_size_rows = std::min<uint32_t>(std::max(1u, num_tile_rows_per_worker), kMaxChunkSizeRows);
     // Phase 9 packed-page AG: every chunk this chip processes maps to a
     // distinct DRAM page. Page index = my_device_index * num_chunks_per_device
     // + chunk_idx_on_device. Independent of num_workers per design.
