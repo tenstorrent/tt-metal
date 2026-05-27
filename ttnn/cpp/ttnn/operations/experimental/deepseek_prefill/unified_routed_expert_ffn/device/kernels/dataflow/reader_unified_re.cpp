@@ -195,7 +195,13 @@ void kernel_main() {
     if constexpr (use_region_offsets) {
         const volatile tt_l1_ptr uint32_t* region_offsets_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1 + region_offsets_l1_byte_offset);
-        start_tile_row = region_offsets_ptr[global_expert_id] / 32;
+        const uint32_t region_offset = region_offsets_ptr[global_expert_id];
+        // Contract: producer (offset_cumsum) emits per-expert region offsets
+        // in TOKEN rows that are tile-aligned (multiple of TILE_HEIGHT=32).
+        // A non-aligned value would silently shift this expert's tile reads
+        // into the previous expert's tile rows.
+        ASSERT((region_offset & (TILE_HEIGHT - 1)) == 0);
+        start_tile_row = region_offset / TILE_HEIGHT;
     }
     // count_value is in TOKEN rows. Convert to tile rows (ceil) then to chunks.
     // For count=0 the loop is empty (no chunks processed). For count > 0 we

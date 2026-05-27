@@ -259,6 +259,11 @@ class TtMoERoutingSetup(LightweightModule):
         # an L1-overflow at program create. DRAM has plenty of room for these
         # tiny UINT32 vectors and the downstream ops read them device-side
         # via DRAM access — no perf delta from the move.
+        #
+        # Contract: expert_region_offsets entries are TOKEN rows, tile-aligned
+        # (multiples of TILE_HEIGHT=32). The unified routed-expert FFN's
+        # reader/writer kernels divide by 32 to derive start_tile_row; the
+        # kernels ASSERT this alignment.
         (
             global_dispatch_offsets,
             total_counts_per_expert,
