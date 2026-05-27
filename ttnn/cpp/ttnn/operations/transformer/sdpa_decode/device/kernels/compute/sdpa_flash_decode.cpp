@@ -86,6 +86,8 @@ void kernel_main() {
     constexpr uint32_t cb_q_rm = tt::CBIndex::c_10;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
     constexpr uint32_t cb_zero_in = tt::CBIndex::c_12;
+    // #44366: compute reads cur_pos from c_15 (writer reads from c_8) — see reader_decode_all.cpp.
+    constexpr uint32_t cb_cur_pos = tt::CBIndex::c_15;
 
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im = tt::CBIndex::c_25;
@@ -146,11 +148,9 @@ void kernel_main() {
             cur_pos = cur_pos_arg;
         } else {
             // Read cur_pos from CB using mailbox-based synchronization (issue #27979).
-            // #44366: compute uses c_15 (writer uses c_8) — see reader_decode_all.cpp.
-            constexpr uint32_t cb_index_id = tt::CBIndex::c_15;
-            cb_wait_front(cb_index_id, 1);
-            cur_pos = read_tile_value(cb_index_id, 0, cur_batch / q_heads_parallel_factor);
-            cb_pop_front(cb_index_id, 1);
+            cb_wait_front(cb_cur_pos, 1);
+            cur_pos = read_tile_value(cb_cur_pos, 0, cur_batch / q_heads_parallel_factor);
+            cb_pop_front(cb_cur_pos, 1);
         }
         if (cur_pos == UINT32_MAX) {
             // cur_pos of -1 indicates that the user should be skipped
