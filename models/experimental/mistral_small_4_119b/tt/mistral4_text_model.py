@@ -150,6 +150,11 @@ class TtMistral4TextModel:
         self.cos_table_tt: ttnn.Tensor | None = None
         self.sin_table_tt: ttnn.Tensor | None = None
         self._rope_table_positions: int = 0
+        # CPU copies retained so the decode-step rope buffers can be updated
+        # cheaply via CPU indexing + copy_host_to_device_tensor (avoids device
+        # slice → new allocation each step, and enables trace replay).
+        self._cos_cpu: torch.Tensor | None = None
+        self._sin_cpu: torch.Tensor | None = None
 
         # ── Pre-allocated per-step device tensors for decode ──────────────
         # The decode loop calls ttnn.as_tensor(...) for input_id and
@@ -167,6 +172,36 @@ class TtMistral4TextModel:
         )
         self._decode_cur_pos_device = ttnn.as_tensor(
             torch.zeros(1, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        # Pre-allocated single-position RoPE buffers for decode — updated each
+        # step from _cos_cpu/_sin_cpu before the decode kernel (or trace replay).
+        self._cos_decode = ttnn.as_tensor(
+            torch.zeros(1, 1, 1, QK_ROPE_HEAD_DIM, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        self._sin_decode = ttnn.as_tensor(
+            torch.zeros(1, 1, 1, QK_ROPE_HEAD_DIM, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        # Pre-allocated single-element buffer for the on-device argmax result.
+        # _argmax_to_device writes here; _readback_argmax reads from here.
+        # Separating the two lets _argmax_to_device run inside the trace while
+        # _readback_argmax (ttnn.to_torch) runs outside it.
+        self._decode_token_out = ttnn.as_tensor(
+            torch.zeros(1, 1, 1, dtype=torch.int32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
@@ -206,6 +241,19 @@ class TtMistral4TextModel:
             ttnn.deallocate(self.cos_table_tt)
         if self.sin_table_tt is not None:
             ttnn.deallocate(self.sin_table_tt)
+
+        # Normalise to [1, 1, S, D] bfloat16 on CPU before uploading, so
+        # _cos_cpu/_sin_cpu are always consistently shaped for index lookups.
+        def _normalise_cpu(t: torch.Tensor) -> torch.Tensor:
+            t = t.to(torch.bfloat16)
+            while t.dim() < 4:
+                t = t.unsqueeze(0)
+            if t.shape[-1] > QK_ROPE_HEAD_DIM:
+                t = t[..., :QK_ROPE_HEAD_DIM]
+            return t.contiguous()
+
+        self._cos_cpu = _normalise_cpu(cos_full)
+        self._sin_cpu = _normalise_cpu(sin_full)
 
         self.cos_table_tt = _upload(cos_full)
         self.sin_table_tt = _upload(sin_full)
@@ -272,15 +320,17 @@ class TtMistral4TextModel:
         ttnn.deallocate(logits_tt)
         return logits_host[0].to(torch.bfloat16)
 
-    def _next_token_on_device(self, x_last: ttnn.Tensor) -> int:
+    def _argmax_to_device(self, x_last: ttnn.Tensor) -> ttnn.Tensor:
         """
-        On-device greedy next-token from one hidden state.
+        On-device greedy argmax from one hidden state — trace-safe half.
 
-        x_last: [1, 1, 1, HIDDEN_SIZE] (last position's hidden, replicated on mesh).
-        Returns the token id as a Python int.
+        Runs rms_norm → lm_head → all_gather → argmax entirely on device and
+        writes the result into the pre-allocated ``_decode_token_out`` buffer.
+        Returns ``_decode_token_out`` so it can be deallocated by the caller
+        when not running under a trace (trace replay re-uses the same buffer).
 
-        Pipeline: rms_norm → lm_head (partial) → all_gather over vocab → argmax → readback.
-        Only a single uint32 per device crosses the PCIe boundary.
+        Does NOT call ttnn.to_torch — host readback must happen outside the
+        trace via ``_readback_argmax()``.
         """
         x_normed = _rms_norm(x_last, self.final_norm_w, self.compute_kernel_config, ttnn.L1_MEMORY_CONFIG)
         partial = ttnn.linear(
@@ -312,15 +362,24 @@ class TtMistral4TextModel:
 
         idx_tt = ttnn.argmax(full, dim=-1)  # per device: [1, 1, 1] uint32 ROW_MAJOR
         ttnn.deallocate(full)
+        # Copy argmax result into pre-allocated output buffer so trace replay can
+        # overwrite the same slot on every step without re-allocating.
+        ttnn.assign(idx_tt, self._decode_token_out)
+        ttnn.deallocate(idx_tt)
+        return self._decode_token_out
 
-        # Every device holds the same full logits, so every argmax result is identical.
-        # Pull the first device's value.
+    def _readback_argmax(self) -> int:
+        """Read the argmax token id from ``_decode_token_out`` to host (not traced)."""
         idx_host = ttnn.to_torch(
-            idx_tt,
+            self._decode_token_out,
             mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
         )
-        ttnn.deallocate(idx_tt)
         return int(idx_host.flatten()[0].item())
+
+    def _next_token_on_device(self, x_last: ttnn.Tensor) -> int:
+        """Convenience wrapper used by prefill paths (not traced)."""
+        self._argmax_to_device(x_last)
+        return self._readback_argmax()
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -434,10 +493,12 @@ class TtMistral4TextModel:
         return logits_tt
 
     def _decode_upload_step_state(self, input_id: torch.Tensor, current_pos: int) -> None:
-        """Update pre-allocated input_id and cur_pos device tensors in-place.
+        """Update all pre-allocated decode input tensors in-place for this step.
 
-        Skips the per-step device allocation and ReplicateTensorToMesh dispatch
-        that ttnn.as_tensor(device=...) does for small per-step tensors.
+        Updates: token id, current position scalar, and the single-position
+        cos/sin RoPE buffers.  All three must be refreshed before either a
+        direct kernel dispatch or a trace replay so the correct position's
+        embeddings and KV-cache slot are used.
         """
         input_id_host = ttnn.from_torch(
             input_id.to(torch.int32),
@@ -454,6 +515,27 @@ class TtMistral4TextModel:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         ttnn.copy_host_to_device_tensor(cur_pos_host, self._decode_cur_pos_device)
+
+        # Update single-position RoPE buffers from the retained CPU table.
+        # CPU indexing is free; copy_host_to_device_tensor reuses the pre-
+        # allocated device buffer so no new device allocation occurs.
+        assert self._cos_cpu is not None, "cache_rope_tables() must be called before decode"
+        cos_pos = self._cos_cpu[:, :, current_pos : current_pos + 1, :].contiguous()
+        sin_pos = self._sin_cpu[:, :, current_pos : current_pos + 1, :].contiguous()
+        cos_host = ttnn.from_torch(
+            cos_pos,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        sin_host = ttnn.from_torch(
+            sin_pos,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(cos_host, self._cos_decode)
+        ttnn.copy_host_to_device_tensor(sin_host, self._sin_decode)
 
     def decode(self, input_id: torch.Tensor, current_pos: int) -> torch.Tensor:
         """
@@ -516,12 +598,15 @@ class TtMistral4TextModel:
         ttnn.deallocate(x_last)
         return token_id
 
-    def decode_next_token(self, input_id: torch.Tensor, current_pos: int) -> int:
-        """Decode one token and return the greedy next token id (on-device argmax)."""
-        self._decode_upload_step_state(input_id, current_pos)
+    def _decode_kernel(self, current_pos: int) -> None:
+        """
+        Single decode step using pre-allocated buffers (_decode_input_id_device,
+        _decode_cur_pos_device, _cos_decode, _sin_decode).
 
-        cos_tt, sin_tt = self._rope_slice(current_pos, current_pos + 1)
-
+        KV cache write uses update_cache_for_token_ (Python int current_pos), so
+        this cannot be captured as a trace.  The argmax result lands in
+        _decode_token_out; host readback happens outside via _readback_argmax().
+        """
         x = ttnn.embedding(
             self._decode_input_id_device,
             self.embed_weight,
@@ -532,14 +617,27 @@ class TtMistral4TextModel:
         x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
 
         for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
-            x = layer.forward_decode(x, cos_tt, sin_tt, kv_cache, current_pos, self._decode_cur_pos_device)
+            x = layer.forward_decode(
+                x, self._cos_decode, self._sin_decode, kv_cache, current_pos, self._decode_cur_pos_device
+            )
 
-        ttnn.deallocate(cos_tt)
-        ttnn.deallocate(sin_tt)
-
-        token_id = self._next_token_on_device(x)
+        self._argmax_to_device(x)
         ttnn.deallocate(x)
-        return token_id
+
+    def capture_decode_trace(self) -> None:
+        """Placeholder — trace capture requires a trace-compatible KV cache write.
+
+        update_cache_for_token_ burns the Python int position into the trace,
+        making it position-specific.  A future implementation using a device-
+        tensor-indexed write (e.g. paged_update_cache with sharded input) would
+        re-enable this.  For now this is a no-op so call sites don't need to change.
+        """
+
+    def decode_next_token(self, input_id: torch.Tensor, current_pos: int) -> int:
+        """Decode one token and return the greedy next token id (on-device argmax)."""
+        self._decode_upload_step_state(input_id, current_pos)
+        self._decode_kernel(current_pos)
+        return self._readback_argmax()
 
     # ── Embedding-input entry points (multimodal) ──────────────────────────
 
