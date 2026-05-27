@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
 
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 
 namespace tt::tt_metal::experimental::metal2_host_api {
@@ -57,6 +59,11 @@ struct TensorParameter {
     bool dynamic_tensor_shape = false;
 
     // Additional relaxation options will be added in the future.
+
+    //////////////////////////////
+    // Advanced options (see advanced_options.hpp)
+    //////////////////////////////
+    std::optional<TensorParameterAdvancedOptions> advanced_options = std::nullopt;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

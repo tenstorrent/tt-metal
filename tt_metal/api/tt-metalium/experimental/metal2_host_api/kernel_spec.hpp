@@ -12,6 +12,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
@@ -298,6 +299,11 @@ struct KernelSpec {
         // the inter-thread communication pattern here.
     };
     std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
+
+    //////////////////////////////////////////////////////////////////////////////
+    // Advanced options (see advanced_options.hpp)
+    //////////////////////////////////////////////////////////////////////////////
+    std::optional<KernelSpecAdvancedOptions> advanced_options = std::nullopt;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api
