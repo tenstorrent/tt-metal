@@ -116,7 +116,17 @@ def test_pipeline_av_fast(
 
     prompt = os.environ.get(
         "PROMPT",
-        ("a cat playing piano"),
+        (
+            "A young woman with shoulder-length wavy brown hair sits on a wooden stool, "
+            "cradling an acoustic guitar. The camera holds a steady medium close-up, "
+            "framing her face and guitar neck. Warm key light illuminates her left side "
+            "while soft fill light prevents harsh shadows. She strums gently, looking "
+            "directly at camera with genuine warmth. Her mouth opens clearly as she sings "
+            '"Doo-be-doo, doo-be-day, oh what a sunny day" with precise lip sync and '
+            "natural facial expressions. Her head moves subtly with the rhythm. Simple "
+            "chord progression underlies her melodic voice. Shot with 50mm lens at f/2.0, "
+            "shallow depth of field, warm color grade emphasizing skin tones."
+        ),
     )
     num_frames = int(os.environ.get("NUM_FRAMES", "121"))
     height = int(os.environ.get("HEIGHT", "512"))

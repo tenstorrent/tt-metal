@@ -319,8 +319,19 @@ class LTXTransformerBlock(Module):
                 video_normed = self.ccl_manager.all_gather_persistent_buffer(
                     video_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
                 )
-            video_ff = self.ffn(video_normed, compute_kernel_config=self.ff_compute_kernel_config)
-            video_1BND = ttnn.addcmul(video_1BND, video_ff, v_gate_ff)
+            # Ring: fused ff1 + ff2 + RS + addcmul (`MinimalMatmulStridedReduceScatterAsync`).
+            # Linear: that op asserts Ring-only, so fall back to plain ffn() + addcmul.
+            if self.ccl_manager.topology == ttnn.Topology.Ring:
+                video_1BND = self.ffn.forward_fused_addcmul(
+                    video_normed,
+                    video_1BND,
+                    v_gate_ff,
+                    scalar=1.0,
+                    compute_kernel_config=self.ff_compute_kernel_config,
+                )
+            else:
+                video_ff = self.ffn(video_normed, compute_kernel_config=self.ff_compute_kernel_config)
+                video_1BND = ttnn.addcmul(video_1BND, video_ff, v_gate_ff)
             return video_1BND
 
         # === AUDIO PATH (has_audio=True from here) ===
@@ -440,8 +451,17 @@ class LTXTransformerBlock(Module):
             video_normed = self.ccl_manager.all_gather_persistent_buffer(
                 video_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
-        video_ff = self.ffn(video_normed, compute_kernel_config=self.ff_compute_kernel_config)
-        video_1BND = ttnn.addcmul(video_1BND, video_ff, v_gate_ff)
+        if self.ccl_manager.topology == ttnn.Topology.Ring:
+            video_1BND = self.ffn.forward_fused_addcmul(
+                video_normed,
+                video_1BND,
+                v_gate_ff,
+                scalar=1.0,
+                compute_kernel_config=self.ff_compute_kernel_config,
+            )
+        else:
+            video_ff = self.ffn(video_normed, compute_kernel_config=self.ff_compute_kernel_config)
+            video_1BND = ttnn.addcmul(video_1BND, video_ff, v_gate_ff)
 
         # === AUDIO FEEDFORWARD ===
         audio_normed = self.audio_norm3(audio_1BND)
@@ -450,8 +470,17 @@ class LTXTransformerBlock(Module):
             audio_normed = self.ccl_manager.all_gather_persistent_buffer(
                 audio_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
-        audio_ff = self.audio_ff(audio_normed, compute_kernel_config=self.ff_compute_kernel_config)
-        audio_1BND = ttnn.addcmul(audio_1BND, audio_ff, a_gate_ff)
+        if self.ccl_manager.topology == ttnn.Topology.Ring:
+            audio_1BND = self.audio_ff.forward_fused_addcmul(
+                audio_normed,
+                audio_1BND,
+                a_gate_ff,
+                scalar=1.0,
+                compute_kernel_config=self.ff_compute_kernel_config,
+            )
+        else:
+            audio_ff = self.audio_ff(audio_normed, compute_kernel_config=self.ff_compute_kernel_config)
+            audio_1BND = ttnn.addcmul(audio_1BND, audio_ff, a_gate_ff)
 
         return video_1BND, audio_1BND
 
