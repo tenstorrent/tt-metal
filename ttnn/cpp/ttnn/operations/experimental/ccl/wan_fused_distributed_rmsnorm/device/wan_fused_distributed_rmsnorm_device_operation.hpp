@@ -50,6 +50,7 @@ Tensor wan_fused_distributed_rmsnorm(
     ttnn::ccl::Topology topology,
     float epsilon,
     uint32_t num_heads_per_device,
+    bool per_head_norm,
     const std::optional<const Tensor>& weight,
     const std::optional<const Tensor>& bias,
     const std::optional<const Tensor>& transformation_mat,

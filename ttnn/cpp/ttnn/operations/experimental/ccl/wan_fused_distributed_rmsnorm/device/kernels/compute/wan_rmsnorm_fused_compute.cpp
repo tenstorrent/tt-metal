@@ -86,6 +86,12 @@ void kernel_main() {
     // multiply (sub-phase 2.5). Mirrors weight handling.
     constexpr uint32_t bias_cb = get_compile_time_arg_val(28);
     constexpr uint32_t has_bias = get_compile_time_arg_val(29);
+    // Per-head normalization (FLUX.2): reduce over head_dim per head instead
+    // of the full row. Forces is_tp_1 path (skip AG entirely); pre phase
+    // produces num_heads_per_device stat tiles per row, post phase computes
+    // an rsqrt per head and applies it to that head's columns.
+    constexpr uint32_t per_head_norm = get_compile_time_arg_val(30);
+    constexpr uint32_t num_heads_per_device = get_compile_time_arg_val(31);
 
     constexpr uint32_t stats_dest_cb = (is_tp_1 != 0) ? stats_gathered_cb : stats_local_cb;
     // Per-row post reduce reads ring_size tiles. With packed AG enabled the
@@ -119,7 +125,10 @@ void kernel_main() {
         const uint32_t rows_in_chunk =
             (row_processed + chunk_size_rows <= num_tile_rows) ? chunk_size_rows : (num_tile_rows - row_processed);
         const uint32_t chunk_input_tiles = rows_in_chunk * num_tile_cols;
-        const uint32_t chunk_stats_tiles = rows_in_chunk * stats_tiles_cols;
+        // per_head_norm produces num_heads_per_device stats per row (one per
+        // head) instead of stats_tiles_cols (== ring_size) for the AG path.
+        constexpr uint32_t per_row_stats_count = (per_head_norm != 0) ? num_heads_per_device : stats_tiles_cols;
+        const uint32_t chunk_stats_tiles = rows_in_chunk * per_row_stats_count;
 
         // -------- PHASE 1: PRE — sum(x**2) per row --------
         // Cumulative input wait (Phase 4): instead of one cb_wait_front for the
@@ -127,48 +136,65 @@ void kernel_main() {
         // compute is processing block N. Counter resets per chunk because we
         // cb_pop_front(input_cb, chunk_input_tiles) at the end.
         uint32_t input_tiles_waited = 0;
+        // Per-head norm: inner reduce spans head_dim_tiles columns per head;
+        // we run num_heads_per_device reduces per row. Whole-row norm: single
+        // reduce over num_tile_cols per row.
+        constexpr uint32_t pre_groups_per_row = (per_head_norm != 0) ? num_heads_per_device : 1u;
+        constexpr uint32_t pre_group_width = (per_head_norm != 0) ? head_dim_tiles : num_tile_cols;
         for (uint32_t r = 0; r < rows_in_chunk; r++) {
             const uint32_t row_base = r * num_tile_cols;
 
-            reconfig_data_format(input_cb, input_cb);
-            pack_reconfig_data_format(pre_intermediate_cb);
-            PACK((llk_pack_reconfig_l1_acc(0)));
-            mul_tiles_init(input_cb, input_cb);
+            for (uint32_t g = 0; g < pre_groups_per_row; g++) {
+                const uint32_t group_base = row_base + g * pre_group_width;
 
-            cb_reserve_back(pre_intermediate_cb, 1);
+                reconfig_data_format(input_cb, input_cb);
+                pack_reconfig_data_format(pre_intermediate_cb);
+                PACK((llk_pack_reconfig_l1_acc(0)));
+                mul_tiles_init(input_cb, input_cb);
 
-            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                const uint32_t tiles_in_block =
-                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
-                input_tiles_waited += tiles_in_block;
-                cb_wait_front(input_cb, input_tiles_waited);
+                cb_reserve_back(pre_intermediate_cb, 1);
 
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                    const uint32_t abs_idx = row_base + col_tile + i;
-                    mul_tiles(input_cb, input_cb, abs_idx, abs_idx, i);
-                }
-                tile_regs_commit();
-
-                tile_regs_wait();
-                for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                    pack_tile<true>(i, pre_intermediate_cb, 0);
-                    if (col_tile == 0 && i == 0) {
-                        PACK((llk_pack_reconfig_l1_acc(1)));
+                for (uint32_t col_tile = 0; col_tile < pre_group_width; col_tile += block_size) {
+                    const uint32_t tiles_in_block =
+                        ((pre_group_width - col_tile) >= block_size) ? block_size : (pre_group_width - col_tile);
+                    // Cumulative wait covers the absolute tile range we need:
+                    // r*num_tile_cols + g*pre_group_width + col_tile + tiles_in_block.
+                    // Reader pushes block_size at a time across the whole row, so
+                    // a wait for fewer-than-block_size tiles is satisfied by the
+                    // next reader push regardless.
+                    const uint32_t need = group_base + col_tile + tiles_in_block;
+                    if (need > input_tiles_waited) {
+                        cb_wait_front(input_cb, need);
+                        input_tiles_waited = need;
                     }
-                }
-                tile_regs_release();
-            }
-            cb_push_back(pre_intermediate_cb, 1);
-            PACK((llk_pack_reconfig_l1_acc(0)));
 
-            // Row-reduce → 1 stat tile per row. SUM (col 0 = sum of row).
-            // Post phase will divide by H_full via AVG scalar.
-            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-                pre_intermediate_cb,
-                reduce_scalar_sum_cb,
-                stats_dest_cb,
-                compute_kernel_lib::ReduceInputBlockShape::single());
+                    tile_regs_acquire();
+                    for (uint32_t i = 0; i < block_size && col_tile + i < pre_group_width; i++) {
+                        const uint32_t abs_idx = group_base + col_tile + i;
+                        mul_tiles(input_cb, input_cb, abs_idx, abs_idx, i);
+                    }
+                    tile_regs_commit();
+
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < block_size && col_tile + i < pre_group_width; i++) {
+                        pack_tile<true>(i, pre_intermediate_cb, 0);
+                        if (col_tile == 0 && i == 0) {
+                            PACK((llk_pack_reconfig_l1_acc(1)));
+                        }
+                    }
+                    tile_regs_release();
+                }
+                cb_push_back(pre_intermediate_cb, 1);
+                PACK((llk_pack_reconfig_l1_acc(0)));
+
+                // Row/head reduce → 1 stat tile. SUM (col 0 = sum). Post phase
+                // divides by H_full or head_dim via the AVG scalar.
+                compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+                    pre_intermediate_cb,
+                    reduce_scalar_sum_cb,
+                    stats_dest_cb,
+                    compute_kernel_lib::ReduceInputBlockShape::single());
+            }
         }
 
         // Phase 9 pre: NO compute-side transpose needed. The writer extracts
@@ -186,65 +212,84 @@ void kernel_main() {
             uint32_t rope_cos_tile_in_head = 0;
             uint32_t rope_sin_tile_in_head = 0;
 
-            // Phase 9 post: writer scattered the gathered packed pages
-            // directly into COL 0 of stats_gathered_cb tiles (strided stores),
-            // so reduce<AVG,REDUCE_ROW> runs on stats_gathered_cb unchanged.
-            // No compute post-transpose needed — col-0 is the natural stat
-            // tile layout that reduce<AVG,REDUCE_ROW> expects.
-            compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
-                stats_gathered_cb,
-                reduce_scalar_avg_cb,
-                reduce_result_cb,
-                compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));
+            // Per-head norm: do reduce + eps+rsqrt + sub-phase 1 per head, so
+            // each head's rsqrt only stays in reduce_result_cb long enough to
+            // be consumed by that head's mul. Whole-row norm: one iteration.
+            constexpr uint32_t post_groups_per_row = (per_head_norm != 0) ? num_heads_per_device : 1u;
+            constexpr uint32_t post_group_width = (per_head_norm != 0) ? head_dim_tiles : num_tile_cols;
+            for (uint32_t g = 0; g < post_groups_per_row; g++) {
+                const uint32_t group_col_base = g * post_group_width;
+                const uint32_t group_abs_base = row_base + group_col_base;
 
-            // mean + eps; rsqrt → reduce_result_cb (in-place)
-            cb_wait_front(reduce_result_cb, 1);
-            reconfig_data_format(reduce_result_cb, epsilon_cb);
-            pack_reconfig_data_format(reduce_result_cb);
-            add_tiles_init(reduce_result_cb, epsilon_cb);
-            tile_regs_acquire();
-            add_tiles(reduce_result_cb, epsilon_cb, 0, 0, 0);
-            rsqrt_tile_init<use_legacy_rsqrt>();
-            rsqrt_tile<use_legacy_rsqrt>(0);
-            tile_regs_commit();
-            cb_pop_front(reduce_result_cb, 1);
-            cb_reserve_back(reduce_result_cb, 1);
-            tile_regs_wait();
-            pack_tile(0, reduce_result_cb);
-            tile_regs_release();
-            cb_push_back(reduce_result_cb, 1);
+                // Phase 9 post (TP>1 path): writer scattered the gathered
+                // packed pages directly into COL 0 of stats_gathered_cb tiles
+                // (strided stores), so reduce<AVG,REDUCE_ROW> over the row of
+                // ring_size tiles runs on stats_gathered_cb unchanged. For the
+                // per-head path each head's stat is a single tile.
+                if constexpr (per_head_norm != 0) {
+                    compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
+                        stats_gathered_cb,
+                        reduce_scalar_avg_cb,
+                        reduce_result_cb,
+                        compute_kernel_lib::ReduceInputBlockShape::single());
+                } else {
+                    compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
+                        stats_gathered_cb,
+                        reduce_scalar_avg_cb,
+                        reduce_result_cb,
+                        compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));
+                }
 
-            // Phase 7: hoist reconfig_data_format + *_init_short out of the
-            // col-tile loop. Each sub-phase (mul_rms / weight / matmul / cos /
-            // sin / add) does ONE reconfig at its start, then a tight col-tile
-            // loop. intermediate_cb and rotated_input_cb are sized num_tile_cols
-            // (not block_size) to hold a full row between phases.
-
-            cb_wait_front(reduce_result_cb, 1);
-
-            // ----- Sub-phase 1: x * (1/rms) → mul_rms_result_cb -----
-            reconfig_data_format(input_cb, reduce_result_cb);
-            pack_reconfig_data_format(mul_rms_result_cb);
-            mul_bcast_cols_init_short(input_cb, reduce_result_cb);
-            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                cb_reserve_back(mul_rms_result_cb, block_size);
-                // Standard acquire→math→commit→wait→pack→release ordering
-                // (matches composite post_allgather). MATH issues all block
-                // muls then commits; PACK can then drain dst registers while
-                // the next block's MATH can already acquire+issue. Math TRISC
-                // and Pack TRISC overlap across blocks.
+                // mean + eps; rsqrt → reduce_result_cb (in-place)
+                cb_wait_front(reduce_result_cb, 1);
+                reconfig_data_format(reduce_result_cb, epsilon_cb);
+                pack_reconfig_data_format(reduce_result_cb);
+                add_tiles_init(reduce_result_cb, epsilon_cb);
                 tile_regs_acquire();
-                for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                    const uint32_t abs_idx = row_base + col_tile + i;
-                    mul_tiles_bcast_cols(input_cb, reduce_result_cb, abs_idx, 0, i);
-                }
+                add_tiles(reduce_result_cb, epsilon_cb, 0, 0, 0);
+                rsqrt_tile_init<use_legacy_rsqrt>();
+                rsqrt_tile<use_legacy_rsqrt>(0);
                 tile_regs_commit();
+                cb_pop_front(reduce_result_cb, 1);
+                cb_reserve_back(reduce_result_cb, 1);
                 tile_regs_wait();
-                for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                    pack_tile(i, mul_rms_result_cb);
-                }
+                pack_tile(0, reduce_result_cb);
                 tile_regs_release();
-                cb_push_back(mul_rms_result_cb, block_size);
+                cb_push_back(reduce_result_cb, 1);
+
+                cb_wait_front(reduce_result_cb, 1);
+
+                // ----- Sub-phase 1: x * (1/rms) → mul_rms_result_cb -----
+                reconfig_data_format(input_cb, reduce_result_cb);
+                pack_reconfig_data_format(mul_rms_result_cb);
+                mul_bcast_cols_init_short(input_cb, reduce_result_cb);
+                for (uint32_t col_tile = 0; col_tile < post_group_width; col_tile += block_size) {
+                    // Per_head_norm pushes head_dim_tiles per head (no padding)
+                    // so multiple heads don't blow past intermediate_cb. The
+                    // legacy whole-row path keeps the block_size-padded push so
+                    // downstream sub-phases (still block_size-driven) consume
+                    // matching counts even when num_tile_cols < block_size.
+                    const uint32_t tiles_in_block =
+                        (per_head_norm != 0)
+                            ? (((post_group_width - col_tile) >= block_size) ? block_size
+                                                                             : (post_group_width - col_tile))
+                            : block_size;
+                    cb_reserve_back(mul_rms_result_cb, tiles_in_block);
+                    tile_regs_acquire();
+                    for (uint32_t i = 0; i < block_size && col_tile + i < post_group_width; i++) {
+                        const uint32_t abs_idx = group_abs_base + col_tile + i;
+                        mul_tiles_bcast_cols(input_cb, reduce_result_cb, abs_idx, 0, i);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < block_size && col_tile + i < post_group_width; i++) {
+                        pack_tile(i, mul_rms_result_cb);
+                    }
+                    tile_regs_release();
+                    cb_push_back(mul_rms_result_cb, tiles_in_block);
+                }
+
+                cb_pop_front(reduce_result_cb, 1);
             }
 
             if constexpr (has_weight) {
@@ -432,7 +477,6 @@ void kernel_main() {
                     cb_pop_front(rotated_input_cb, block_size);
                 }
             }
-            cb_pop_front(reduce_result_cb, 1);
 
             if constexpr (fuse_rope) {
                 // Pop matches per-row push count: num_tile_cols for per-head

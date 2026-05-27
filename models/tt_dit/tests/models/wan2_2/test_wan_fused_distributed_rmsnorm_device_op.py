@@ -48,6 +48,28 @@ def _torch_rmsnorm(
     return out.to(torch.bfloat16)
 
 
+def _torch_per_head_rmsnorm(
+    x: torch.Tensor,
+    weight: torch.Tensor | None,
+    eps: float,
+    num_heads: int,
+    head_dim: int,
+) -> torch.Tensor:
+    """Per-head RMSNorm: reduce over head_dim only.
+
+    x: [B, 1, N, H] where H = num_heads * head_dim. Returns same shape.
+    """
+    B, _, N, H = x.shape
+    assert H == num_heads * head_dim
+    x_heads = x.to(torch.float32).reshape(B, 1, N, num_heads, head_dim)
+    mean_sq = (x_heads * x_heads).mean(dim=-1, keepdim=True)  # [B,1,N,num_heads,1]
+    out = x_heads * torch.rsqrt(mean_sq + eps)
+    out = out.reshape(B, 1, N, H)
+    if weight is not None:
+        out = out * weight.to(torch.float32).reshape(1, 1, 1, -1)
+    return out.to(torch.bfloat16)
+
+
 def _torch_rmsnorm_then_rope(
     x: torch.Tensor,
     weight: torch.Tensor | None,
@@ -196,6 +218,66 @@ def test_wan_fused_distributed_rmsnorm_device_op_tp1_bias(
 
     out_torch = to_torch(out)
     ref = _torch_rmsnorm(x_torch, weight_torch, EPS, bias=bias_torch)
+    assert_quality(ref, out_torch, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"),
+    [((2, 4), {**line_params, "trace_region_size": 90112})],
+    indirect=True,
+    ids=["bh_2x4_line"],
+)
+@pytest.mark.parametrize(
+    ("N", "num_heads", "head_dim", "has_weight"),
+    [
+        pytest.param(32, 4, 128, False, id="N32_4heads_d128_noweight"),
+        pytest.param(32, 4, 128, True, id="N32_4heads_d128_weight"),
+        pytest.param(64, 8, 128, True, id="N64_8heads_d128_weight"),
+    ],
+)
+def test_wan_fused_distributed_rmsnorm_device_op_tp1_per_head_norm(
+    mesh_device: ttnn.MeshDevice,
+    N: int,
+    num_heads: int,
+    head_dim: int,
+    has_weight: bool,
+) -> None:
+    """Per-head normalization (FLUX.2): reduce over head_dim per head, not full row."""
+    H = num_heads * head_dim
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 1))
+    ccl_manager = CCLManager(mesh_device=submesh, num_links=1, topology=ttnn.Topology.Linear)
+    ag_sem = ccl_manager.get_ag_ping_pong_semaphore(0)
+
+    EPS = 1e-6
+    torch.manual_seed(0)
+    x_torch = torch.randn((1, 1, N, H), dtype=torch.bfloat16)
+    tt_x = bf16_tensor(x_torch, device=submesh)
+    if has_weight:
+        weight_torch = torch.randn(H, dtype=torch.bfloat16)
+        tt_weight = from_torch(weight_torch.reshape(1, H), device=submesh, dtype=ttnn.bfloat16)
+    else:
+        weight_torch = None
+        tt_weight = None
+
+    logger.info(f"Per-head norm: N={N} num_heads={num_heads} head_dim={head_dim} has_weight={has_weight}")
+    out = ttnn.experimental.wan_fused_distributed_rmsnorm(
+        tt_x,
+        0,
+        submesh,
+        ag_sem,
+        topology=ttnn.Topology.Linear,
+        epsilon=EPS,
+        num_heads_per_device=num_heads,
+        per_head_norm=True,
+        weight=tt_weight,
+        use_device_op=True,
+    )
+
+    out_torch = to_torch(out)  # [1, num_heads, N, head_dim]
+    # Compare in [1, num_heads, N, head_dim] form. Reference is [1, 1, N, H]
+    # interleaved by head; reshape via [1, N, num_heads, head_dim] then permute.
+    ref_flat = _torch_per_head_rmsnorm(x_torch, weight_torch, EPS, num_heads, head_dim)
+    ref = ref_flat.reshape(1, N, num_heads, head_dim).permute(0, 2, 1, 3).contiguous()
     assert_quality(ref, out_torch, pcc=0.999)
 
 

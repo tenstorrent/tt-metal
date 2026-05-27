@@ -92,10 +92,18 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.ring_size >= 1, "ring_size must be >= 1");
     TT_FATAL(args.num_links >= 1, "num_links must be >= 1");
     TT_FATAL(args.cluster_axis < 2, "cluster_axis must be 0 or 1");
-    if (args.ring_size > 1) {
+    // per_head_norm skips the AG entirely; the kernel does NOT need a fabric
+    // sem when this path is active, even for ring_size > 1.
+    if (args.ring_size > 1 && !args.per_head_norm) {
         TT_FATAL(
             !args.multi_device_global_semaphore.empty(),
             "multi_device_global_semaphore must be non-empty when ring_size > 1");
+    }
+    if (args.per_head_norm) {
+        TT_FATAL(
+            args.num_heads_per_device > 1,
+            "per_head_norm requires num_heads_per_device > 1 (got {})",
+            args.num_heads_per_device);
     }
 }
 
@@ -183,6 +191,7 @@ Tensor wan_fused_distributed_rmsnorm(
     ttnn::ccl::Topology topology,
     float epsilon,
     uint32_t num_heads_per_device,
+    bool per_head_norm,
     const std::optional<const Tensor>& weight,
     const std::optional<const Tensor>& bias,
     const std::optional<const Tensor>& transformation_mat,
@@ -208,6 +217,7 @@ Tensor wan_fused_distributed_rmsnorm(
     auto operation_attributes = OperationType::operation_attributes_t(
         epsilon,
         num_heads_per_device,
+        per_head_norm,
         dtype,
         memory_config.value_or(input_tensor.memory_config()),
         cluster_axis,
