@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>reduce_tile &mdash; TT-Metalium  documentation</title>
+  <title>reduce_tile &mdash; TT-Metalium&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
@@ -41,7 +41,7 @@
 </a>
 
 <a href="../../../../index.html">
-    TT-Metalium
+    TT-Metalium&trade;
 </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
@@ -92,7 +92,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../../../../index.html">TT-Metalium</a>
+          <a href="../../../../index.html">TT-Metalium&trade;</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -130,7 +130,7 @@
 </ul>
 
 <p>NOTE: For SUM and AVG operations, the value in <code class="docutils literal notranslate"><span class="pre">icb_scaler</span></code> is a scaling factor of the final sum of values across rows/columns/both, so there is no real constraint in terms of it’s value. For MAX operation, maximum value will be obtained as expected, but it will be scaled by the values in <code class="docutils literal notranslate"><span class="pre">icb_scaler</span></code>. In any case, it is recommended to use the above-mentioned scaling factors to ensure that operations function as intended. Refer to ISA documentation for more details. NOTE: For other valid ways of populating the <code class="docutils literal notranslate"><span class="pre">icb_scaler</span></code>, refer to the ISA documentation.</p>
-<p>Output tile layout (packer-zeroing contract): for all three values of <code class="docutils literal notranslate"><span class="pre">reduce_dim</span></code>, <code class="docutils literal notranslate"><span class="pre">reduce_init</span></code> programs the packer’s edge masks (<code class="docutils literal notranslate"><span class="pre">_llk_pack_reduce_mask_config_&lt;…,</span> <span class="pre">reduce_dim&gt;</span></code>) so that any output datum that is not part of the reduction result is written to CB by the packer as zero. Specifically, for any tile packed into <code class="docutils literal notranslate"><span class="pre">ocb</span></code> while this reduce_init’s packer state is in effect:</p>
+<p>Output tile layout (packer-zeroing contract): for all three values of <code class="docutils literal notranslate"><span class="pre">reduce_dim</span></code>, <code class="docutils literal notranslate"><span class="pre">reduce_init</span></code> programs the packer’s edge masks (<code class="docutils literal notranslate"><span class="pre">_llk_pack_reduce_mask_config_&lt;reduce_dim,</span> <span class="pre">…&gt;</span></code>) so that any output datum that is not part of the reduction result is written to CB by the packer as zero. Specifically, for any tile packed into <code class="docutils literal notranslate"><span class="pre">ocb</span></code> while this reduce_init’s packer state is in effect:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">REDUCE_SCALAR</span></code>: the scalar result is at face-0 <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">0]</span></code>; every other datum in the tile is zero.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">REDUCE_ROW</span></code>: each row’s reduced value is at column 0 of that row; every other datum in the tile is zero.</p></li>

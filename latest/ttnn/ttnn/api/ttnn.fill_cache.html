@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.fill_cache &mdash; TT-NN  documentation</title>
+  <title>ttnn.fill_cache &mdash; TT-NN&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
@@ -41,7 +41,7 @@
 </a>
 
 <a href="../../index.html">
-    TT-NN
+    TT-NN&trade;
 </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
@@ -117,7 +117,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../../index.html">TT-NN</a>
+          <a href="../../index.html">TT-NN&trade;</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -144,19 +144,22 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">fill_cache</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.fill_cache" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Fills the cache tensor in place with the values from input at the specified batch_idx.</p>
+<p>Fills the cache tensor in place with the values from input at the specified batch_idx,
+optionally offset along the sequence dimension by update_idx (tile-aligned).</p>
 <p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">cache_tensor</span></code>: The cache tensor to be written to.
 :type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">cache_tensor</span></code>: ttnn.Tensor
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: The token tensor to be written to the cache.
 :type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: ttnn.Tensor
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">batch_idx</span></code>: The index into the cache tensor.
 :type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">batch_idx</span></code>: int</p>
+<p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">update_idx</span></code>: seq-dim offset within the user slot, must be a multiple of TILE_HEIGHT. Default = 0.
+:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">update_idx</span></code>: int</p>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor1</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor2</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">update_cache</span><span class="p">(</span><span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="p">,</span> <span class="n">batch_idx</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">cache_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">4</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">fill_cache</span><span class="p">(</span><span class="n">cache_tensor</span><span class="p">,</span> <span class="n">input_tensor</span><span class="p">,</span> <span class="n">batch_idx</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">update_idx</span><span class="o">=</span><span class="mi">32</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>

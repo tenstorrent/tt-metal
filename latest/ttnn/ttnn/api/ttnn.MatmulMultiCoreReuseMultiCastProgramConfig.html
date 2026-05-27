@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.MatmulMultiCoreReuseMultiCastProgramConfig &mdash; TT-NN  documentation</title>
+  <title>ttnn.MatmulMultiCoreReuseMultiCastProgramConfig &mdash; TT-NN&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
@@ -41,7 +41,7 @@
 </a>
 
 <a href="../../index.html">
-    TT-NN
+    TT-NN&trade;
 </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
@@ -122,7 +122,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../../index.html">TT-NN</a>
+          <a href="../../index.html">TT-NN&trade;</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -152,6 +152,17 @@
 <p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
 <p>The “2D” matmul program config is used for block sharded tensors, and general interleaved tensors.</p>
 <dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCastProgramConfig.allowed_worker_cores">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">allowed_worker_cores</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCastProgramConfig.allowed_worker_cores" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Optional set of worker cores to restrict the matmul computation to.</p>
+<p>When set, overrides <code class="docutils literal notranslate"><span class="pre">compute_with_storage_grid_size</span></code> for determining the active
+compute grid. Accepts a <code class="docutils literal notranslate"><span class="pre">CoreRangeSet</span></code> describing the exact cores to use.</p>
+</dd>
+</dl>
+
+<dl class="py property">
 <dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCastProgramConfig.compute_with_storage_grid_size">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">compute_with_storage_grid_size</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCastProgramConfig.compute_with_storage_grid_size" title="Permalink to this definition"></a>
 </dt>
@@ -160,6 +171,7 @@
 <p>Specifies the 2D grid of cores (x, y) that will be used for computation and have
 access to storage. This determines how the computation is distributed across cores
 and affects multicast communication patterns.</p>
+<p><strong>DEPRECATED</strong>: Use <code class="docutils literal notranslate"><span class="pre">allowed_worker_cores</span></code> instead for finer control over the compute grid.</p>
 </dd>
 </dl>
 

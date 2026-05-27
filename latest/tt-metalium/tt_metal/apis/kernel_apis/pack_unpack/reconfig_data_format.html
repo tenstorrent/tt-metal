@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>reconfig_data_format &mdash; TT-Metalium  documentation</title>
+  <title>reconfig_data_format &mdash; TT-Metalium&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
@@ -41,7 +41,7 @@
 </a>
 
 <a href="../../../../index.html">
-    TT-Metalium
+    TT-Metalium&trade;
 </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
@@ -92,7 +92,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../../../../index.html">TT-Metalium</a>
+          <a href="../../../../index.html">TT-Metalium&trade;</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -121,7 +121,8 @@
 <span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">to_from_int8</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">is_tile_dim_reconfig_en</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1ac2e53f3f26eeda20067d21e197e3f101"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">reconfig_data_format</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">srca_new_operand</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">srcb_new_operand</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_b_bEN7ckernel20reconfig_data_formatEvK8uint32_tK8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Helper function to reconfigure srca and srcb data formats. </p>
+<p>Helper function to reconfigure srca and srcb data formats.</p>
+<p>NOTE(ARCH_QUASAR): On Quasar, buffer descriptors are programmed into the unpack MOP at op init. reconfig_data_format only reprograms THCON data formats (gasket), not the MOP. When operands or DFB/buffer descriptors change, call the op init again for the new operand pair before the next unpack operation. </p>
 </dd>
 </dl>
 
@@ -130,7 +131,8 @@
 <span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">to_from_int8</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">is_tile_dim_reconfig_en</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1aa113553bb9b949db41cf907161fe7d86"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">reconfig_data_format</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">srca_old_operand</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">srca_new_operand</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">srcb_old_operand</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">srcb_new_operand</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_b_bEN7ckernel20reconfig_data_formatEvK8uint32_tK8uint32_tK8uint32_tK8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Helper function to reconfigure srca/srcb data formats, only if they differ from existing formats. </p>
+<p>Helper function to reconfigure srca/srcb data formats, only if they differ from existing formats.</p>
+<p>NOTE(ARCH_QUASAR): See reconfig_data_format(srca_new_operand, srcb_new_operand). </p>
 </dd>
 </dl>
 

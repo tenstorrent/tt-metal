@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>APIs &mdash; TT-NN  documentation</title>
+  <title>APIs &mdash; TT-NN&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
@@ -41,7 +41,7 @@
 </a>
 
 <a href="../index.html">
-    TT-NN
+    TT-NN&trade;
 </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
@@ -640,7 +640,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../index.html">TT-NN</a>
+          <a href="../index.html">TT-NN&trade;</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -1491,7 +1491,7 @@
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.isclose.html#ttnn.isclose" title="ttnn.isclose"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.isclose</span></code></a></p></td>
-<td><p>Computes isclose for <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and returns the tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code></p></td>
+<td><p>Computes isclose for <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and returns the tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code>.</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.lcm.html#ttnn.lcm" title="ttnn.lcm"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.lcm</span></code></a></p></td>
@@ -2312,7 +2312,7 @@
 <tbody>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.kv_cache.fill_cache_for_user_.html#ttnn.kv_cache.fill_cache_for_user_" title="ttnn.kv_cache.fill_cache_for_user_"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.kv_cache.fill_cache_for_user_</span></code></a></p></td>
-<td><p>Populates the <code class="xref py py-attr docutils literal notranslate"><span class="pre">cache</span></code> tensor in-place with values sourced from <code class="xref py py-attr docutils literal notranslate"><span class="pre">input</span></code> at <code class="xref py py-attr docutils literal notranslate"><span class="pre">batch_index</span></code>.</p></td>
+<td><p>Populates the <code class="xref py py-attr docutils literal notranslate"><span class="pre">cache</span></code> tensor in-place with values sourced from <code class="xref py py-attr docutils literal notranslate"><span class="pre">input</span></code> at <code class="xref py py-attr docutils literal notranslate"><span class="pre">batch_index</span></code>, optionally offset along the sequence dimension by <code class="xref py py-attr docutils literal notranslate"><span class="pre">update_idx</span></code> (tile-aligned).</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.kv_cache.update_cache_for_token_.html#ttnn.kv_cache.update_cache_for_token_" title="ttnn.kv_cache.update_cache_for_token_"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.kv_cache.update_cache_for_token_</span></code></a></p></td>
@@ -2320,7 +2320,7 @@
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.fill_cache.html#ttnn.fill_cache" title="ttnn.fill_cache"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.fill_cache</span></code></a></p></td>
-<td><p>Fills the cache tensor in place with the values from input at the specified batch_idx.</p></td>
+<td><p>Fills the cache tensor in place with the values from input at the specified batch_idx, optionally offset along the sequence dimension by update_idx (tile-aligned).</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.update_cache.html#ttnn.update_cache" title="ttnn.update_cache"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.update_cache</span></code></a></p></td>

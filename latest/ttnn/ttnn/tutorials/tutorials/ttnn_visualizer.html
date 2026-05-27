@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TT-NN Visualizer &mdash; TT-NN  documentation</title>
+  <title>TT-NN Visualizer &mdash; TT-NN&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
@@ -41,7 +41,7 @@
 </a>
 
 <a href="../../../index.html">
-    TT-NN
+    TT-NN&trade;
 </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
@@ -113,7 +113,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../../../index.html">TT-NN</a>
+          <a href="../../../index.html">TT-NN&trade;</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -227,6 +227,7 @@ This tutorial uses the predefined YOLOv4 model as an example, but you can profil
 <span class="w">    </span><span class="nt">"enable_logging"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
 <span class="w">    </span><span class="nt">"report_name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ttnn_visualizer_tutorial"</span><span class="p">,</span>
 <span class="w">    </span><span class="nt">"enable_graph_report"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"enable_graph_python_stack_traces"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
 <span class="w">    </span><span class="nt">"enable_detailed_buffer_report"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
 <span class="w">    </span><span class="nt">"enable_detailed_tensor_report"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
 <span class="w">    </span><span class="nt">"enable_comparison_mode"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
@@ -238,6 +239,7 @@ This tutorial uses the predefined YOLOv4 model as an example, but you can profil
 <li><p><strong>enable_fast_runtime_mode</strong> - Must be disabled to enable logging.</p></li>
 <li><p><strong>enable_logging</strong> - Synchronizes main thread after every operation and logs the operation.</p></li>
 <li><p><strong>report_name</strong> (<em>optional</em>) - Name of the report used by TT-NN Visualizer. If not provided, no data will be dumped to disk.</p></li>
+<li><p><strong>enable_graph_python_stack_traces</strong> (<em>optional</em>) - When true, outermost Python <code class="docutils literal notranslate"><span class="pre">begin_graph_capture</span></code> records Python call stacks. <code class="docutils literal notranslate"><span class="pre">ttnn.graph.full_graph_capture</span></code> always records Python stacks regardless of this flag.</p></li>
 <li><p><strong>enable_detailed_buffer_report</strong> (if <em>report_name</em> is set) - Enable to visualize the detailed buffer report after every operation.</p></li>
 <li><p><strong>enable_graph_report</strong> (if <em>report_name</em> is set) - Enable to visualize the graph after every operation.</p></li>
 <li><p><strong>enable_detailed_tensor_report</strong> (if <em>report_name</em> is set) - Enable to visualize the values of input and output tensors of every operation.</p></li>
@@ -275,7 +277,7 @@ Ensure all required global variables from <code class="docutils literal notransl
 <span class="m">2025</span>-08-01<span class="w"> </span><span class="m">09</span>:20:51.664<span class="w"> </span><span class="p">|</span><span class="w"> </span>DEBUG<span class="w">    </span><span class="p">|</span><span class="w"> </span>ttnn:&lt;module&gt;:73<span class="w"> </span>-<span class="w"> </span>Loading<span class="w"> </span>ttnn<span class="w"> </span>configuration<span class="w"> </span>from<span class="w"> </span>/root/tt-metal/vis.setup
 <span class="m">2025</span>-08-01<span class="w"> </span><span class="m">09</span>:20:51.665<span class="w"> </span><span class="p">|</span><span class="w"> </span>DEBUG<span class="w">    </span><span class="p">|</span><span class="w"> </span>ttnn:&lt;module&gt;:83<span class="w"> </span>-<span class="w"> </span>Initial<span class="w"> </span>ttnn.CONFIG:
 Config<span class="o">{</span><span class="nv">cache_path</span><span class="o">=</span>/root/.cache/ttnn,model_cache_path<span class="o">=</span>/root/.cache/ttnn/models,tmp_dir<span class="o">=</span>/tmp/ttnn,enable_model_cache<span class="o">=</span>false,<span class="w"> </span><span class="se">\</span>
-<span class="w">   </span><span class="nv">enable_fast_runtime_mode</span><span class="o">=</span>false,throw_exception_on_fallback<span class="o">=</span>false,enable_logging<span class="o">=</span>true,enable_graph_report<span class="o">=</span>false,enable_detailed_buffer_report<span class="o">=</span>true,<span class="w"> </span><span class="se">\</span>
+<span class="w">   </span><span class="nv">enable_fast_runtime_mode</span><span class="o">=</span>false,throw_exception_on_fallback<span class="o">=</span>false,enable_logging<span class="o">=</span>true,enable_graph_report<span class="o">=</span>false,enable_graph_python_stack_traces<span class="o">=</span>true,enable_detailed_buffer_report<span class="o">=</span>true,<span class="w"> </span><span class="se">\</span>
 <span class="w">   </span><span class="nv">enable_detailed_tensor_report</span><span class="o">=</span>false,enable_comparison_mode<span class="o">=</span>false,comparison_mode_should_raise_exception<span class="o">=</span>false,<span class="w"> </span><span class="se">\</span>
 <span class="w">   </span><span class="nv">comparison_mode_pcc</span><span class="o">=</span><span class="m">0</span>.9999,root_report_path<span class="o">=</span>generated/ttnn/reports,report_name<span class="o">=</span>ttnn_visualizer_tutorial,4042956046390500517<span class="o">}</span>
 <span class="m">2025</span>-08-01<span class="w"> </span><span class="m">09</span>:20:51.754<span class="w"> </span><span class="p">|</span><span class="w"> </span>info<span class="w">     </span><span class="p">|</span><span class="w">   </span>SiliconDriver<span class="w"> </span><span class="p">|</span><span class="w"> </span>Opened<span class="w"> </span>PCI<span class="w"> </span>device<span class="w"> </span><span class="m">4</span><span class="p">;</span><span class="w"> </span>KMD<span class="w"> </span>version:<span class="w"> </span><span class="m">1</span>.34.0<span class="p">;</span><span class="w"> </span>API:<span class="w"> </span><span class="m">1</span><span class="p">;</span><span class="w"> </span>IOMMU:<span class="w"> </span>disabled<span class="w"> </span><span class="o">(</span>pci_device.cpp:197<span class="o">)</span>
