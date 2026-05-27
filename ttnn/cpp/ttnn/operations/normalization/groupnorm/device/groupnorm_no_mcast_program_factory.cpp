@@ -275,6 +275,36 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
 
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+
+    // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
+    // UnpackToDestFp32 (set below). UnpackToDestFp32 is what bypasses the unpacker's
+    // Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
+    // UnpackToDestFp32 writes into. Without fp32 DEST, UnpackToDestFp32 can't be enabled
+    // and inputs are silently truncated to TF32 (10 mantissa bits) on the way through SrcA.
+    TT_FATAL(
+        !(use_welford && in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "group_norm welford with Float32 input requires fp32_dest_acc_en=true in the compute "
+        "kernel config; otherwise precision is silently lost in the unpacker format conversion.");
+
+    // welford_unpack_fp32_active is true iff the compute kernel's intake transpose_wh_tile
+    // reads from a CB that carries UnpackToDestFp32, regardless of which CB is used: c_29
+    // in the TILIZE_IN branch (configured below) or the c_19 alias of c_0 in the
+    // non-TILIZE_IN branch (welford_fp32_alias). Both paths route the transpose through
+    // llk_math_transpose_dest, whose math-side init records slots [16, 32) of the math-thread
+    // replay buffer (clobbering welford's LREG2 / LREG3 portions), so the kernel's SFPU re-init
+    // after the transpose must fire iff this is true.
+    const bool welford_unpack_fp32_active =
+        use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32;
+
+    // welford_fp32_alias is the non-TILIZE_IN sub-case (c_19 alias is only useful when
+    // c_0 isn't itself the consumer of the FP32 transpose, i.e. when tilize_in is false).
+    const bool welford_fp32_alias = welford_unpack_fp32_active && !tilize_in;
+
+    const uint32_t cb_in0_welford_index =
+        welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_19) : static_cast<uint32_t>(tt::CBIndex::c_0);
+
     TT_FATAL(num_channels_per_group > 0, "num_channels_per_group must be > 0 (W={}, num_groups={})", W, num_groups);
     TT_FATAL(
         num_rows_per_batch_per_core_group_1 > 0,
@@ -528,6 +558,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"num_out_blocks", num_out_blocks},
         {"num_channels_per_group", num_channels_per_group},
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
+        // Reader pushes the cb_in0_welford alias in lockstep with cb_in0 so compute's welford
+        // section can wait_front on the alias independently. When welford_fp32_alias is false,
+        // cb_in0_welford_index == c_0 and the reader's gated push is skipped.
+        {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
+        {"cb_in0_welford", cb_in0_welford_index},
     };
 
     std::unordered_map<std::string, uint32_t> reader_mcast_sender_named_compile_time_args_group_2 = {
@@ -556,6 +591,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"num_out_blocks", num_out_blocks},
         {"num_channels_per_group", num_channels_per_group},
         {"num_rows_per_group", num_rows_per_batch_per_core_group_2},
+        // Reader pushes the cb_in0_welford alias in lockstep with cb_in0 so compute's welford
+        // section can wait_front on the alias independently. When welford_fp32_alias is false,
+        // cb_in0_welford_index == c_0 and the reader's gated push is skipped.
+        {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
+        {"cb_in0_welford", cb_in0_welford_index},
     };
 
     std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_1 = {};
@@ -808,34 +848,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"reciprocal_size", num_reciprocals},
     };
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
 
     std::string compute_kernel_path =
         (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp");
-
-    // Float32 input requires fp32 dest accumulation; otherwise the unpacker would silently
-    // downcast through SrcA to TF32 / Float16_b (~10 mantissa bits).
-    TT_FATAL(
-        !(use_welford && in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
-        "group_norm welford with Float32 input requires fp32_dest_acc_en=true in the compute "
-        "kernel config; otherwise precision is silently lost in the unpacker format conversion.");
-
-    // welford_unpack_fp32_active is true iff the compute kernel's intake transpose_wh_tile
-    // reads from a CB that carries UnpackToDestFp32, regardless of which CB is used: c_29
-    // in the TILIZE_IN branch (configured below) or the c_19 alias of c_0 in the
-    // non-TILIZE_IN branch (welford_fp32_alias). Both paths route the transpose through
-    // llk_math_transpose_dest, whose math-side init records slots [16, 32) of the math-thread
-    // replay buffer (clobbering welford's LREG2 / LREG3 portions), so the kernel's SFPU re-init
-    // after the transpose must fire iff this is true.
-    const bool welford_unpack_fp32_active =
-        use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32;
-
-    // welford_fp32_alias is the non-TILIZE_IN sub-case (c_19 alias is only useful when
-    // c_0 isn't itself the consumer of the FP32 transpose, i.e. when tilize_in is false).
-    const bool welford_fp32_alias = welford_unpack_fp32_active && !tilize_in;
 
     // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
     // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode):
@@ -874,8 +891,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
-    const uint32_t cb_in0_welford_index =
-        welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_19) : static_cast<uint32_t>(tt::CBIndex::c_0);
     mcast_sender_compute_named_compile_time_args_group_1["welford_fp32_alias"] =
         static_cast<uint32_t>(welford_fp32_alias);
     mcast_sender_compute_named_compile_time_args_group_1["welford_unpack_fp32_active"] =

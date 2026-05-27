@@ -67,9 +67,10 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     cb_ex_obj.reserve_back(1);
     cb_ex2_obj.reserve_back(1);
     if constexpr (welford_state_fp32_alias) {
-        // Reserve the aliases too. Aliases share SRAM, but have independent read/write counters
-        // and need to be kept in sync so the next block's wait_front on the aliases (used by
-        // copy_tile for fp32 precision) sees the data.
+        // Must be done in compute: cb_ex / cb_ex2 hold welford state (mean / M2) which are
+        // produced by pack_tile below; the reader never writes these CBs. Aliases share SRAM
+        // but have independent read/write counters and need to be kept in sync so the next
+        // block's wait_front on the aliases (used by copy_tile for fp32 precision) sees the data.
         cb_ex_welford_obj.reserve_back(1);
         cb_ex2_welford_obj.reserve_back(1);
     }
@@ -163,6 +164,8 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         cb_ex_obj.reserve_back(1);
         cb_ex2_obj.reserve_back(1);
         if constexpr (welford_state_fp32_alias) {
+            // This alias update must be in the compute kernel.
+            // pack_tile below is the producer of cb_ex / cb_ex2.
             cb_ex_welford_obj.reserve_back(1);
             cb_ex2_welford_obj.reserve_back(1);
         }

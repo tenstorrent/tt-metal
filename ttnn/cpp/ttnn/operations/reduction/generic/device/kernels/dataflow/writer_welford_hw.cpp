@@ -10,9 +10,10 @@
 // Welford merge formula, applies Bessel's correction, and writes the
 // combined scalar into cb_combined for the compute kernel to apply
 // sqrtf (if std) and re-pack in the output format. cb_combined is
-// normally Float32, but for variance output to bf16 the program
+// normally fp32, but for variance output to bf16 the program
 // factory may declare it as bf16 to save SRAM with no precision loss
-// (combined_is_bf16 compile-time arg selects the path).
+// since data is packed to bf16 output anyways and there is no math before
+// the final pack. combined_is_bf16 compile-time arg selects the path.
 //
 // Phase 2 (per output): Waits for the compute kernel to pack the
 // output tile into cb_out (in the correct output data format), then

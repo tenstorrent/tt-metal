@@ -303,13 +303,10 @@ void kernel_main() {
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
                     cb_in0.wait_front(1);
                     if constexpr (welford_fp32_alias) {
-                        // The reader pushed 1 tile to cb_in0; mirror push on the alias so its
-                        // wr_ptr/rd_ptr advance in lockstep with cb_in0's. They share SRAM
-                        // (multi-buffer-index alias) so no data movement is needed; this is
-                        // purely bookkeeping. Done in compute rather than in reader, so reader
-                        // is generic (works for consumers that need aliasing and those that don't).
-                        cb_in0_welford.reserve_back(1);
-                        cb_in0_welford.push_back(1);
+                        // The reader pushes cb_in0 and cb_in0_welford in separate push_back
+                        // calls (cb_in0 first, alias second); cb_in0.wait_front above only
+                        // synchronizes on the first. Wait on the alias to synchronize on the
+                        // second before transpose_wh_tile reads via the alias below.
                         cb_in0_welford.wait_front(1);
                     }
 #ifdef TILIZE_IN
@@ -443,10 +440,10 @@ void kernel_main() {
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
                     cb_in0.wait_front(1);
                     if constexpr (welford_fp32_alias) {
-                        // Lockstep with cb_in0 across all phases so the alias's rd_ptr stays
-                        // aligned with cb_in0's.
-                        cb_in0_welford.reserve_back(1);
-                        cb_in0_welford.push_back(1);
+                        // The reader pushes cb_in0 and cb_in0_welford in lockstep; wait on the
+                        // alias so its rd_ptr advance (via pop_front below) is synchronized with
+                        // the reader's wr_ptr advance on the alias.
+                        cb_in0_welford.wait_front(1);
                     }
 
                     uint32_t group_offset = 0;

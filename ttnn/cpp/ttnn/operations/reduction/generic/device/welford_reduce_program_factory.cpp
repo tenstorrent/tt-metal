@@ -53,17 +53,20 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(tensor_arg.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
-    // Float32 input requires fp32 dest accumulation; otherwise the unpacker would silently
-    // downcast through SrcA to TF32 / Float16_b (~10 mantissa bits).
+    // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
+    // UnpackToDestFp32 (set below). UnpackToDestFp32 is what bypasses the unpacker's
+    // Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
+    // UnpackToDestFp32 writes into. Without fp32 DEST, UnpackToDestFp32 can't be enabled
+    // and inputs are silently truncated to TF32 (10 mantissa bits) on the way through SrcA.
     TT_FATAL(
         !(input_cb_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
         "ttnn.std/var with Float32 input requires fp32_dest_acc_en=true in the compute kernel "
         "config; otherwise precision is silently lost in the unpacker format conversion.");
 
-    // Scalar datatype is hardcoded bfloat16 due to tile creation in reader
-    // Match cb_scalar's format to the input format. When input is FP32, keeping cb_scalar at
-    // BF16 leaves the unpacker reading SrcB at a mismatched stride against SrcA in the welford
-    // mul_tiles_bcast_scalar path, which silently produces zeros at cb_scaled.
+    // Match cb_scalar's data format to the input. When cb_in is FP32, cb_scalar must also be
+    // FP32: mul_tiles_bcast_scalar reads cb_in as SrcA and cb_scalar as SrcB, and a
+    // format/stride mismatch between the two operands would cause the unpacker to silently
+    // produce zeros into DEST.
     tt::DataFormat scalar_cb_data_format =
         (input_cb_data_format == tt::DataFormat::Float32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t scalar_single_tile_size = tt::tile_size(scalar_cb_data_format);
@@ -170,9 +173,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     // reads via the precision-preserving unpack-to-DEST path. On the do_scale path c_0 stays
     // Default so the FPU mul_tiles_bcast_scalar SrcA read works (UnpackToDest is incompatible
     // with FPU SrcA); the SFPU welford on that path reads cb_scaled instead, and cb_scaled's
-    // own UnpackToDestFp32 flag preserves the FPU mul output mantissa. Because do_scale is a
-    // compile-time constant, no single program ever needs both modes on c_0 simultaneously,
-    // so the layernorm-style alias CB pattern is not required here.
+    // own UnpackToDestFp32 flag preserves the FPU mul output mantissa.
     CBIndex input_cb_index = CBIndex::c_0;
     uint32_t input_tiles_per_cb = 2;
     desc.cbs.push_back(CBDescriptor{
@@ -296,8 +297,8 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     reduce_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
     reduce_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
 
-    // Named CT arg consumed only by the W-reduce compute kernel: gates the full hw_configure
-    // pairs in the do_scale wt-inner loop that switch UNPACK between cb_in's Default mode
+    // welford_fp32_input gates the full hw_configure pairs in the W-reduce compute kernel
+    // in the do_scale wt-inner loop that switch UNPACK between cb_in's Default mode
     // (FPU mul SrcA) and cb_scaled's UnpackToDestFp32 mode (welford-intake transpose). H- and
     // HW-reduce kernels don't have a cb_scaled-style intermediate and don't need this flag.
     std::vector<std::pair<std::string, uint32_t>> welford_named_args;
@@ -415,39 +416,34 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     }
 
     // For Float32 input with fp32_dest_acc_en, force unpack-to-dest in fp32 mode so that
-    // the unpacker writes full fp32 to DEST instead of routing through SrcA (which would
-    // be downcast to TF32 with only 10 mantissa bits), losing precision and even leading to
-    // large-mean fp32 variance silently collapsing to ~0 due to TF32 truncation
-    // wiping the bits that distinguish nearby samples.
+    // the unpacker writes full fp32 to DEST instead of routing through SrcA, which would
+    // downcast to TF32, losing precision and even leading to large-mean fp32 variance
+    // silently collapsing to ~0 due to TF32 truncation wiping the bits that are different
+    // between nearby samples.
     //
     // Apply this to every Float32 CB the compute kernel reads back via copy_tile /
     // transpose_wh_tile:
-    //   - Input CB: needed on all three reduction paths (H, W, HW).
+    //   - Input CB: needed on all three reduction paths (H, W, HW), but only on the !do_scale
+    //     path with FP32 input, where the Welford SFPU intake reads c_0 directly via
+    //     copy_tile/transpose_wh_tile, so UnpackToDestFp32 preserves the full FP32 into DEST.
+    //     On the do_scale path input CB is read by the FPU mul (SrcA), which is incompatible
+    //     with UnpackToDest mode. The precision-preserving plumbing lives downstream on cb_scaled.
     //   - W-reduce only: cb_var (c_19) -- the variance tile is read back after the initial
     //     transpose to undo it.
     //   - W-reduce + do_scale only: cb_scaled (c_20) -- the FPU-scaled input tile is read
     //     back by transpose_wh_tile, whose result feeds the SFPU welford on DEST.
+    //     flagged UnpackToDestFp32 to preserve the up-to-22 mantissa bits the FPU mul output
+    //     can carry beyond its TF32 inputs.
     //   - HW-reduce only: cb_combined (c_22) -- the variance tile is read back after the
     //     writer-side cross-core re-reduction.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    // c_0 (cb_in): UnpackToDestFp32 only on the !do_scale path with FP32 input. On the
-    // !do_scale path the welford SFPU intake reads c_0 directly via copy_tile / transpose_wh_tile,
-    // so UnpackToDestFp32 preserves the full FP32 mantissa into DEST. On the do_scale path c_0
-    // is read by the FPU mul (SrcA), which is incompatible with UnpackToDest mode -- c_0 must
-    // stay Default there, and the precision-preserving plumbing lives downstream on cb_scaled.
     if (input_cb_data_format == tt::DataFormat::Float32 && !do_scale) {
         unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     if (reduce_w && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
         unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_19)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    // c_20 (cb_scaled): flagged UnpackToDestFp32 to preserve the up-to-22 mantissa bits the
-    // FPU mul output can carry beyond its TF32 inputs. UnpackToDest mode is global per
-    // unpacker context, so the kernel pairs every wt-inner-iteration's cb_scaled transpose
-    // (full transpose_wh_init, which programs UNPACK for cb_scaled's UnpackToDestFp32 mode)
-    // with a full init_bcast at the next iteration's mul (which reprograms UNPACK back to
-    // cb_in's Default mode). See welford_reduce_w.cpp do_scale loop for the pairing.
     if (reduce_w && do_scale && input_cb_data_format == tt::DataFormat::Float32) {
         unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_20)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }

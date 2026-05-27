@@ -38,11 +38,12 @@ void kernel_main() {
 
     // Circular buffer that the reader kernel fills with input tiles.
     // For FP32 input + do_scale=false: c_0 is flagged UnpackToDestFp32 by the program factory
-    //   so copy_tile preserves the FP32 mantissa into DEST for the welford SFPU consumer.
+    // so copy_tile preserves the FP32 mantissa into DEST for the welford SFPU consumer.
     // For do_scale=true: c_0 stays Default so the FPU mul_tiles_bcast_scalar SrcA read works.
     // (H-reduce does not need the FP32-input compile-time flag the W kernel uses for its
-    // cb_scaled hw_configure pairing -- this kernel's do_scale path runs FPU mul + welford
-    // entirely on DEST with no UnpackToDest-mode CB in the inner loop.)
+    // cb_scaled hw_configure pairing; this kernel's do_scale path hands the FPU mul's output
+    // straight to welford via DEST with no CB hop in between, and no UnpackToDest-mode
+    // CB is read in the inner loop.)
     constexpr auto cb_in = tt::CBIndex::c_0;
     // Scalar tile produced by the reader via generate_reduce_scaler.
     constexpr auto cb_scalar = tt::CBIndex::c_2;

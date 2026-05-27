@@ -37,12 +37,12 @@ void kernel_main() {
 
     // Circular buffer that the reader kernel fills with input tiles.
     // For FP32 input + do_scale=false: c_0 is flagged UnpackToDestFp32 by the program factory
-    //   so the welford SFPU intake (transpose_wh_tile) reads with full FP32 precision.
+    // so the welford SFPU intake (transpose_wh_tile) reads with full FP32 precision.
     // For FP32 input + do_scale=true: c_0 stays Default for the FPU mul SrcA read; precision
-    //   preservation lives on cb_scaled (c_20) below.
+    // preservation lives on cb_scaled (c_20) below.
     // For BF16 input: c_0 is Default regardless.
     constexpr auto cb_in = tt::CBIndex::c_0;
-    // True when input is FP32; gates full hw_configure pairs in the do_scale wt-inner loop
+    // True when input is FP32; gates full hw_configure pairs in the do_scale Wt-inner loop
     // to flip UNPACK between cb_in (Default, for FPU mul) and cb_scaled (UnpackToDestFp32,
     // for welford-intake transpose). On BF16 input neither CB carries UnpackToDestFp32, so
     // _init_short calls suffice.
@@ -122,16 +122,16 @@ void kernel_main() {
         // (same MATH-side effect as welford_reinit), so a separate welford_reinit after the mul
         // is not required here.
         if constexpr (!do_scale) {
+            reconfig_data_format_srca(cb_in);
             // cb_in's UnpackToDestFp32 mode (FP32 input only) was already programmed by
             // compute_kernel_hw_startup(cb_in, cb_out) at kernel entry, so _init_short is
             // enough here. For BF16 input cb_in is Default mode and the same call works.
-            reconfig_data_format_srca(cb_in);
             transpose_wh_init_short(cb_in);
             tile_regs_acquire();
         }
-        // do_scale path: full init_bcast and full transpose_wh_init happen INSIDE the wt loop
-        // (each iteration) to pair UNPACK mode flips for cb_in (Default, FPU mul SrcA) and
-        // cb_scaled (UnpackToDestFp32, unpack-to-DEST consumer for the welford-intake transpose).
+        // In contrast, on do_scale path, full init_bcast and full transpose_wh_init happen inside
+        // the Wt loop (each iteration) to pair UNPACK mode flips for cb_in (Default, FPU mul SrcA)
+        // and cb_scaled (UnpackToDestFp32, unpack-to-DEST consumer for the welford-intake transpose).
         // The first iteration's init_bcast also resets the leaked UnpackToDest mode from the
         // previous NCHt iteration's final transpose_wh_init(cb_var, cb_out), so no separate
         // outer-loop reset is needed.
@@ -149,8 +149,10 @@ void kernel_main() {
                     // Full init_bcast each iter: programs UNPACK hw_configure for cb_in
                     // (Default mode), resetting any UnpackToDest mode left by either the previous
                     // wt's cb_scaled transpose or the previous NCHt's cb_var final transpose.
-                    // The redundant init each iter is the cost of keeping cb_scaled flagged
-                    // UnpackToDestFp32 to preserve the FPU mul output's mantissa.
+                    // On FP32 input, the _init_short variants are not sufficient because they
+                    // skip llk_unpack_hw_configure, which is the only call that reprograms the
+                    // unpack-to-DEST mode bit; reconfig_data_format_srca reprograms only
+                    // SrcA's src/dst data format and tile geometry, not the unpack-to-DEST bit.
                     init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR>(cb_in, cb_scalar, cb_scaled);
                 } else {
                     mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);

@@ -143,10 +143,9 @@ void kernel_main() {
 #endif
     cb_in.wait_front(per_core_MN);
     if constexpr (welford_fp32_alias) {
-        // The tilize call above pushed per_core_MN tiles into cb_in (c_1). Mirror that push
-        // on the alias (c_31) so it tracks cb_in's state They share SRAM (multi-buffer-index alias)
-        // so no data movement is needed; this is purely bookkeeping. Done in compute rather than
-        // in reader, so reader is generic (works for consumers that need aliasing and those that don't).
+        // Mirror the tilize push on the alias (c_31, shares SRAM with cb_in / c_1) so it tracks
+        // cb_in's state. Must be done in compute: the producer of cb_in is the
+        // tilize call above (a compute op), not the reader; the reader never writes cb_in.
         cb_in_welford.reserve_back(per_core_MN);
         cb_in_welford.push_back(per_core_MN);
         cb_in_welford.wait_front(per_core_MN);

@@ -625,31 +625,38 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
         #       input count for dim=None, the product of the reduced axes for
         #       a tuple, the single axis size for an int dim).
         #
-        # Per-element TF32 quantization error: |TF32(x_i) - x_i| <= eps_TF32 * |x_i| ~ 1e-3 * |x_i|.
-        #   - max/min: output relative error <= eps_TF32 ~ 1e-3.
-        #   - sum of N values: typical (random-walk) ||error||_inf ~ eps_TF32 * ||x||_2
-        #     = eps_TF32 * sqrt(N) * |scalar| ~ 1e-3 * 421 * 4 ~ 1.68 for N = 177408.
-        #     Relative error ~ eps_TF32 ~ 1e-3 (output magnitude scales with sqrt(N)).
-        #   - mean: same relative error as sum; absolute error is sum_error / N.
+        # Per-element error model:
+        # 13 mantissa bits are discarded by FP32->TF32, so for any
+        # x_i the truncated value has magnitude <= |x_i|. Treating the dropped
+        # fraction as uniform on [0, eps_TF32 * |x_i|] gives:
+        #   E[error_i] = -eps_TF32 / 2 * x_i   (sign(error_i) = -sign(x_i))
+        #   Var(error_i) = (eps_TF32 * |x_i|)^2 / 12   (uniform on a 1-ULP interval)
+        # The non-zero mean adds a systematic bias of -eps_TF32 / 2 * sum to the
+        # sum-reduction output, i.e. a constant relative bias of -5e-4. The
+        # variance is the same as for round-to-nearest. Per-op behavior:
+        #   - max/min: output relative error <= eps_TF32 ~ 1e-3 (one input selected).
+        #   - sum of N values: 1-sigma random walk eps_TF32 / (2*sqrt(3)) * sqrt(N) *
+        #     |scalar| ~ 0.49 for N=177408, |scalar|_max=4; plus a deterministic
+        #     bias eps_TF32 / 2 * |sum| (scales with the output, like rtol).
+        #   - mean: same relative behavior as sum; absolute error is sum_error / N.
         #
-        # rtol = 5e-3 gives ~5x safety over eps_TF32, covering cascaded TF32
-        # truncations (scaler mul + accumulation) and worst-of-six-scalars cases.
-        # pcc = 0.999 is preserved because TF32 noise is uniform-relative and
-        # doesn't bias the output pattern.
+        # rtol = 5e-3 ~ 5*eps_TF32 absorbs the 5e-4 bias plus 1-sigma random walk
+        # for typical |y|. pcc = 0.999 is preserved because TF32 noise has small
+        # relative magnitude that does not bias the output *pattern* meaningfully.
         rtol = 5e-3
         pcc = 0.999
         if op in ("sum", "mean") and shape == (3, 4, 8, 56, 33) and dim is None:
             # Scalar output of zero-mean reduction (sum or mean of 177408 randn
-            # samples). mean = sum/N preserves relative errors, so both share
-            # the same relative-error distribution. Per-element half-ULP TF32
-            # error treated as uniform on [-eps_TF32*|x|/2, eps_TF32*|x|/2] gives
-            # sum-error stddev = eps_TF32 / (2*sqrt(3)) * sqrt(N) * |scalar|
-            # ~ 0.49 for N=177408, |scalar|_max=4 (1-sigma); 3-sigma ~ 1.46.
-            # bf16 with the same formula gives 1-sigma ~ 3.89, and the user's
-            # atol=1.5 covers ~0.4-sigma; atol=0.3 here covers ~0.6-sigma, the
-            # same tuning style (rtol*|y| carries typical |sum|).
-            # Mean inherits the default atol since its absolute error is
-            # sum_error/N ~ 3e-6.
+            # samples). mean = sum/N preserves relative errors, so both share the
+            # same error distribution. Using the model from above, the 1-sigma
+            # random walk on the sum is eps_TF32 / (2*sqrt(3)) * sqrt(N) * |scalar|
+            # ~ 0.49 (3-sigma ~ 1.46) for N=177408, |scalar|_max=4. The systematic
+            # bias is eps_TF32/2 * |sum|, which scales with |sum| and is absorbed
+            # by rtol for typical |sum|. bf16 with the same random-walk formula
+            # gives 1-sigma ~ 3.89; the user's atol=1.5 covers ~0.4-sigma. Here
+            # atol=0.3 covers ~0.6-sigma -- same tuning style (rtol*|y| carries
+            # typical |sum|). Mean inherits the default atol since its absolute
+            # error is sum_error/N ~ 3e-6.
             #
             # Frobenius on a scalar output degenerates to |error|/|y|, and |y|
             # follows a zero-mean Gaussian (sqrt(N)*|scalar|-stddev for sum,

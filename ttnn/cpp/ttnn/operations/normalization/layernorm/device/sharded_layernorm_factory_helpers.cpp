@@ -827,9 +827,9 @@ void add_kernel_descriptors(
         {"cb_ex2pe", tt::CBIndex::c_20},
         {"cb_x", tt::CBIndex::c_24},
         // Welford-fp32 alias of cb_x (c_0 in non-fused mode, c_24 in fused mode). When the
-        // alias is active the kernel reads cb_x_welford for the welford section so the unpacker
-        // takes the UnpackToDest fp32 path; the post-welford eltwise still reads cb_x via SrcA.
-        // When inactive, cb_x_welford == cb_x at the kernel side (see
+        // alias is active the kernel reads cb_x_welford for the Welford section so the unpacker
+        // takes the UnpackToDestFp32 path; the post-Welford eltwise still reads cb_x via SrcA.
+        // When inactive, cb_x_welford == cb_x on the kernel side (see
         // layernorm_sharded_welford.cpp) so the named arg can stay present unconditionally.
         {"cb_x_welford", tt::CBIndex::c_29},
         {"welford_fp32_alias", static_cast<uint8_t>(kernel_config.welford_fp32_alias ? 1 : 0)},
@@ -920,16 +920,15 @@ void add_kernel_descriptors(
 
     // Compute kernel (all-to-all cores)
     KernelDescriptor compute_all_to_all_kernel_desc;
-    // Welford-fp32 alias index gets UnpackToDest fp32 mode so the welford section reads full
-    // fp32 into DEST via cb_x_welford (c_29). cb_x itself (c_0 non-fused, c_24 fused) stays at
+    // Welford-fp32 alias index gets UnpackToDestFp32 mode so the welford section reads full
+    // FP32 into DEST via cb_x_welford (c_29). cb_x itself (c_0 non-fused, c_24 fused) stays at
     // Default mode so the post-welford FPU eltwise (sub_tiles_bcast_cols) keeps reading via
-    // SrcA Tf32. Same multi-buffer-index aliasing pattern as the matmul shared output+interm CB.
+    // SrcA TF32.
     //
     // cb_ex_global (c_15) was considered and rejected. Its only consumer is transpose_wh_tile,
     // which would benefit from UnpackToDestFp32 in isolation, but the transpose result is then
     // packed into cb_transpose and the downstream consumers (sub_tiles_bcast_cols /
-    // mul_tiles_bcast_cols) read cb_transpose via SrcA, truncating to TF32. The flag would
-    // preserve fp32 inside the transpose without delivering a user-visible precision win.
+    // mul_tiles_bcast_cols) read cb_transpose via SrcA, truncating to TF32.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (kernel_config.welford_fp32_alias) {
@@ -993,9 +992,9 @@ void add_cb_descriptors(
     };
 
     // CB 0: in0 sharded. In non-fused welford-fp32 mode we also register c_29 as a second
-    // buffer index on the same allocation so the welford section can read with
-    // unpack_to_dest_mode=UnpackToDestFp32 while the post-welford eltwise keeps reading c_0
-    // via SrcA. In fused mode c_0 carries the raw input which welford never reads -- welford
+    // buffer index on the same SRAM so the Welford section can read with UnpackToDestFp32
+    // while the post-Welford eltwise keeps reading c_0 via SrcA.
+    // In fused mode c_0 carries the raw input which Welford never reads -- Welford
     // reads the post-add result in c_24 instead -- so the alias goes there (see CB 24 below).
     {
         auto cb0_desc = make_cb_descriptor(
@@ -1055,9 +1054,8 @@ void add_cb_descriptors(
     }
 
     // CB 24: x. In fused welford-fp32 mode we add c_29 as a second buffer index on c_24
-    // (the post-add result), backed by the same allocation, configured with
-    // unpack_to_dest_mode=UnpackToDestFp32 for the welford section. The post-welford eltwise
-    // still reads c_24 via SrcA (Tf32).
+    // (the post-add result), backed by the same SRAM, configured with UnpackToDestFp32
+    // for the Welford section. The post-Welford eltwise still reads c_24 via SrcA (TF32).
     {
         auto cbx_desc = make_cb_descriptor(
             cb_config.x_CB_size,

@@ -132,9 +132,10 @@ void kernel_main() {
 
                 cb_x_obj.reserve_back(block.full_block_size());
                 if constexpr (welford_fp32_alias) {
-                    // We are in fuse_pre_add branch: compute is the producer of cb_x (post-add sum).
-                    // Push the alias alongside cb_x so Welford's wait_front on cb_x_welford
-                    // sees the tiles.
+                    // Must be done in the compute kernel: on the fuse_pre_add path compute is the
+                    // producer of cb_x via the add_tiles -> pack_tile sequence below; the reader
+                    // never writes cb_x. Push the alias alongside cb_x so Welford's wait_front on
+                    // cb_x_welford sees the tiles.
                     cb_x_welford_obj.reserve_back(block.full_block_size());
                 }
                 tile_regs_wait();

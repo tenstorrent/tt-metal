@@ -36,9 +36,7 @@ void kernel_main() {
 #if FUSE_PRE_ADD
     constexpr uint32_t blk = get_compile_time_arg_val(2);
 #endif
-    // True iff the factory configured cb_inp with UnpackToDestFp32, i.e. transpose_wh_tile
-    // below takes the unpack-to-DEST fp32 path whose math-side init records slots [16, 32) of
-    // the math-thread replay buffer (clobbering welford's LREG2 / LREG3 portions). Used by the
+    // True iff the factory configured cb_inp with UnpackToDestFp32. Used by the
     // non-FUSE branch to gate the welford state re-establishment after the transpose.
     constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
 
@@ -193,21 +191,20 @@ void kernel_main() {
         welford_init();
 
         // When the input CB carries Float32 with fp32_dest_acc_en=true, the program factory
-        // sets unpack_to_dest_mode=UnpackToDestFp32 for cb_inp so transpose_wh_tile takes the
-        // UnpackToDest fp32 path (preserves full 23-mantissa-bit fp32 into DEST rather than
-        // downcasting to TF32 in SrcA). Its math-side init (called from transpose_wh_init_short)
-        // records slots [16, 32) of the math-thread replay buffer, clobbering the LREG2 / LREG3
-        // portions of welford's recurrence (welford records slots [0, 32), which is 4 LREG
-        // variants of 8 instructions each, fully unrolled). Re-establish welford state after each
+        // sets UnpackToDestFp32 for cb_inp so transpose_wh_tile preserves FP32 precision into DEST.
+        // Its math-side init (called from transpose_wh_init_short) records slots [16, 32) of the
+        // math-thread replay buffer, clobbering the LREG2 / LREG3 portions of Welford's recurrence
+        // (welford records slots [0, 32), which is 4 LREG variants of 8 instructions each, fully unrolled).
+        // Re-establish welford state after each
         // transpose_wh_tile so welford_update replays welford ops instead of stale
         // transpose-dest ops. LREG4/5 (the running mean / M2 accumulator) survive transpose_dest
         // because it only uses FPU MOVs. The pre-transpose transpose_wh_init_short also
         // reprograms UNPACK A for a transposed read (the previous iteration's welford_reinit
         // toggled it back to transpose=0).
         //
-        // When the unpack-to-DEST fp32 path is inactive (e.g. bf16 input), transpose_wh_tile
-        // routes through SrcA without touching the math-thread replay buffer, and welford_update
-        // is pure SFPU and does not disturb UNPACK/MATH datacopy state set by the pre-loop
+        // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_wh_tile routes
+        // through SrcA without touching the math-thread replay buffer, and welford_update is
+        // pure SFPU and does not disturb UNPACK/MATH datacopy state set by the pre-loop
         // transpose_wh_init.
         for (uint32_t wt = 0; wt < (Wt - 1); wt++) {
             cb_wait_front(cb_inp, 1);  // cumulative wait

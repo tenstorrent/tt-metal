@@ -253,10 +253,11 @@ void kernel_main() {
     add_tiles_init(cb_in0, cb_in1);
     cb_in_obj.reserve_back(num_tiles_per_block);
     if constexpr (welford_fp32_alias) {
-        // cb_x_welford shares cb_in's SRAM but has its own read/write pointers. Compute is the
-        // producer of cb_in (post-add result) on the fused path, so reserve and push both
-        // indices side by side. pack_tile writes once via cb_in's wr_ptr; the alias
-        // lets the welford section wait_front on c_29 independently of cb_in.
+        // Must be done in the compute kernel: on the fused path compute is the producer of cb_in
+        // via the add_tiles -> pack_tile sequence below; the reader never writes cb_in.
+        // cb_x_welford shares cb_in's SRAM but has its own read/write pointers, so reserve and push
+        // both indices side by side. pack_tile writes once via cb_in's wr_ptr; the alias lets the
+        // welford section wait_front on c_29 independently of cb_in.
         cb_x_welford_obj.reserve_back(num_tiles_per_block);
     }
     for (uint32_t i = 0; i < block_ht; i++) {

@@ -223,8 +223,11 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
         "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/device/kernels/compute/"
         "layernorm_post_allgather_welford.cpp";
 
-    // Float32 input requires fp32 dest accumulation; otherwise the unpacker would silently
-    // downcast through SrcA to TF32 / Float16_b (~10 mantissa bits).
+    // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
+    // UnpackToDestFp32 (set below). UnpackToDestFp32 is what bypasses the unpacker's
+    // Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
+    // UnpackToDestFp32 writes into. Without fp32 DEST, UnpackToDestFp32 can't be enabled
+    // and inputs are silently truncated to TF32 (10 mantissa bits) on the way through SrcA.
     TT_FATAL(
         !(in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
         "dit_layernorm_post_all_gather with Float32 input requires fp32_dest_acc_en=true in the "

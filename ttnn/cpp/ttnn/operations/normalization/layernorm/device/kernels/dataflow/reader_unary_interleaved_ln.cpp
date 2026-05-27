@@ -175,7 +175,7 @@ void kernel_main() {
             layernorm_dataflow_utils::read_block_to_cb(noc, cb_in1, src_b, src1_tile_bytes, flat_offset, block);
 #else
             // Non-fused welford-fp32 alias: cb_x_welford shares cb_in0's memory but has its own
-            // semaphore. After the data lands in cb_in0 (and therefore in shared memory), push
+            // read/write pointers. After the data lands in cb_in0, push
             // cb_x_welford by the same amount so compute can wait_front on the alias separately
             // for welford reads. Skipped when no alias is active (cb_x_welford == cb_in0; the
             // duplicate push would double-count cb_in0's semaphore).
