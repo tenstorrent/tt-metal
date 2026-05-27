@@ -6,7 +6,6 @@
 #include "impl/context/metal_context.hpp"
 #include "system_memory_manager.hpp"
 #include <tt-metalium/tt_align.hpp>
-#include <dlfcn.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -45,21 +44,6 @@ void on_dispatch_timeout_detected();
 
 namespace {
 
-using TTSimClockAllDevicesFn = void (*)(std::uint32_t);
-
-void* open_ttsim_handle() {
-    void* handle = nullptr;
-    if (const char* sim_path = std::getenv("TT_METAL_SIMULATOR")) {
-#ifdef RTLD_NOLOAD
-        handle = dlopen(sim_path, RTLD_NOW | RTLD_NOLOAD);
-#endif
-    }
-    if (handle == nullptr) {
-        handle = RTLD_DEFAULT;
-    }
-    return handle;
-}
-
 bool dram_backed_cq_dirty_flush_enabled() {
     static const bool enabled = [] {
         const char* env = std::getenv("TT_METAL_DRAM_BACKED_CQ_DIRTY_FLUSH");
@@ -73,34 +57,6 @@ bool dram_backed_cq_dirty_flush_enabled() {
         return value == "1" || value == "true" || value == "TRUE" || value == "on" || value == "ON";
     }();
     return enabled;
-}
-
-TTSimClockAllDevicesFn get_ttsim_clock_all_devices() {
-    static TTSimClockAllDevicesFn fn = [] {
-        void* handle = open_ttsim_handle();
-        return reinterpret_cast<TTSimClockAllDevicesFn>(dlsym(handle, "libttsim_clock_all_devices"));
-    }();
-    return fn;
-}
-
-std::uint32_t get_ttsim_cq_wait_clock_cycles() {
-    static std::uint32_t cycles = [] {
-        if (const char* env = std::getenv("TT_METAL_SIMULATOR_CQ_WAIT_CLOCKS")) {
-            return static_cast<std::uint32_t>(std::stoul(env));
-        }
-        return 1000u;
-    }();
-    return cycles;
-}
-
-void pump_ttsim_clock_if_enabled(ContextId context_id) {
-    auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
-    if (!ctx.rtoptions().get_simulator_enabled()) {
-        return;
-    }
-    if (auto* clock_all_devices = get_ttsim_clock_all_devices()) {
-        clock_all_devices(get_ttsim_cq_wait_clock_cycles());
-    }
 }
 
 bool wrap_ge(std::uint32_t a, std::uint32_t b) {
