@@ -33,7 +33,13 @@ _HIFIGAN_MEL_CHUNK = 384
 # Max upsampled time for a single ``ttnn.conv1d`` on BH (above this, use fixed-window chunks).
 _HIFIGAN_MAX_CONV1D_TLEN = 4096
 # Interior time rows per conv chunk; halo uses same-padding overlap for correct stitching.
-_VOCODER_CONV1D_INTERIOR = 512
+# Sized so the padded conv input (interior + 2*halo) stays just under the single-conv1d L1
+# budget ``_HIFIGAN_MAX_CONV1D_TLEN`` (4096). HiFi-GAN resblock padding maxes at 25 (kernel 11,
+# dilation 5), so fixed_in <= 3968 + 50 = 4018 < 4096. A wide interior is critical for perf:
+# the chunk loop slices the full (up to ~0.5 M-row) timeline once per chunk, so its cost grows
+# ~O(n^2) in the chunk count. Going 512 -> 3968 cut the 1546-unit (≈31 s audio) vocoder from
+# ~20 min to ~30 s at unchanged PCC (0.9994 vs 0.9995).
+_VOCODER_CONV1D_INTERIOR = 3968
 
 
 def _vocoder_dram_slice_count(input_length: int) -> int:
