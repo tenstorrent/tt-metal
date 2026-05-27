@@ -71,15 +71,14 @@ void FabricBuilder::discover_channels() {
         // Identify and cache dispatch links
         uint32_t dispatch_link_idx = tt::tt_metal::RelayMux::get_dispatch_link_index(
             control_plane, is_galaxy_cluster, local_node_, neighbor_fabric_node_id, device_);
-        size_t num_dispatch_links_in_direction = 0;
+        size_t num_dispatch_links = 0;
         for (const auto& eth_chan : active_eth_chans) {
             if (is_dispatch_link(eth_chan, dispatch_link_idx)) {
                 dispatch_links_.insert(eth_chan);
-                num_dispatch_links_in_direction += 1;
+                num_dispatch_links++;
             }
         }
-        // Publish the fast-dispatch reservation for ControlPlane::get_num_unreserved_routing_planes.
-        control_plane.register_dispatch_reservation(local_node_, direction, num_dispatch_links_in_direction);
+        control_plane.register_dispatch_reserved_planes(local_node_, direction, num_dispatch_links);
     }
 }
 

@@ -226,7 +226,7 @@ public:
     // the runtime (e.g., for the fast-dispatch tunnel). Called whenever dispatch links are identified;
     // not intended as a query API. Set semantics: the latest call wins, so repeated invocation during
     // fabric re-init is idempotent.
-    void register_dispatch_reservation(
+    void register_dispatch_reserved_planes(
         FabricNodeId fabric_node_id, RoutingDirection routing_direction, size_t num_reserved);
 
     std::set<std::pair<chan_id_t, eth_chan_directions>> get_active_fabric_eth_channels(

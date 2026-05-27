@@ -2038,7 +2038,7 @@ size_t ControlPlane::get_num_unreserved_routing_planes(
     return live > reserved ? live - reserved : 0;
 }
 
-void ControlPlane::register_dispatch_reservation(
+void ControlPlane::register_dispatch_reserved_planes(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction, size_t num_reserved) {
     this->num_dispatch_reserved_planes_[fabric_node_id][routing_direction] = num_reserved;
 }
