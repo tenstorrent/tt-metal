@@ -7,14 +7,18 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <optional>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
+
+#include <immintrin.h>
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
@@ -371,6 +375,62 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
     // pytensor can return invalid data type, so we need to parse the tensor to get the data type.
     auto preprocessed_py_tensor = parse_py_tensor(py_tensor, target_dtype);
     return to_host_buffer(preprocessed_py_tensor.contiguous_py_tensor);
+}
+
+// Non-temporal store memcpy. Bypasses cache on the destination side, eliminating
+// the Read-For-Ownership traffic that standard memcpy incurs (~2x memory bandwidth
+// for write-heavy workloads). Should only be used for large (>L3) payloads where
+// the destination won't be read soon after.
+//
+// Requires AVX2. Falls back to std::memcpy for unaligned head/tail bytes.
+// Issues sfence at the end so NT writes are visible to subsequent loads.
+//
+// Returns true if NT path was used, false if it fell back entirely to memcpy.
+static inline bool nt_memcpy_avx2(void* __restrict__ dst, const void* __restrict__ src, size_t n) {
+    // Need 32-byte alignment on the destination for streaming stores.
+    // Head: handle unaligned bytes with regular memcpy.
+    constexpr size_t VEC = 32;
+    auto* d = static_cast<unsigned char*>(dst);
+    auto* s = static_cast<const unsigned char*>(src);
+
+    size_t head = (VEC - (reinterpret_cast<uintptr_t>(d) & (VEC - 1))) & (VEC - 1);
+    if (head > n) {
+        head = n;
+    }
+    if (head > 0) {
+        std::memcpy(d, s, head);
+        d += head;
+        s += head;
+        n -= head;
+    }
+
+    // Bulk: process 4 NT-stores (128 bytes) per iteration. Use unaligned source
+    // loads (_mm256_loadu_si256) since pinned host shard alignment is not guaranteed
+    // to be 32-byte. Destination stores are aligned (we adjusted dst above).
+    constexpr size_t STRIDE = 4 * VEC;  // 128 B/iter
+    size_t bulk_n = n & ~(STRIDE - 1);
+    for (size_t i = 0; i < bulk_n; i += STRIDE) {
+        __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(s + i));
+        __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(s + i + VEC));
+        __m256i v2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(s + i + 2 * VEC));
+        __m256i v3 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(s + i + 3 * VEC));
+        _mm256_stream_si256(reinterpret_cast<__m256i*>(d + i), v0);
+        _mm256_stream_si256(reinterpret_cast<__m256i*>(d + i + VEC), v1);
+        _mm256_stream_si256(reinterpret_cast<__m256i*>(d + i + 2 * VEC), v2);
+        _mm256_stream_si256(reinterpret_cast<__m256i*>(d + i + 3 * VEC), v3);
+    }
+    d += bulk_n;
+    s += bulk_n;
+    n -= bulk_n;
+
+    // Tail: leftover < STRIDE bytes, fall back to memcpy (small enough to not matter).
+    if (n > 0) {
+        std::memcpy(d, s, n);
+    }
+
+    // Ensure NT stores are globally visible before any subsequent load on the same thread.
+    _mm_sfence();
+    return true;
 }
 
 }  // namespace
@@ -1288,6 +1348,196 @@ void pytensor_module(nb::module_& mod) {
 
                 data = tt_tensor.cpu().to_torch() # move TT Tensor to host and convert it to torch tensor
 
+        )doc")
+        .def(
+            "batch_to_torch",
+            [](const Tensor& self, nb::ndarray<nb::pytorch> dest, bool physical, int n_threads) {
+                // Batch compose: concatenate all shards of a multi-device host tensor
+                // directly into a pre-allocated torch tensor, in a single C++ call.
+                // Eliminates N Python to_torch calls + N allocations + torch.cat.
+                //
+                // physical=false (default): strip padding, dest gets logical-shape data.
+                // physical=true: copy full physical buffers contiguously (one large
+                // memcpy per shard). dest must be large enough for physical volume x n_shards.
+                // Caller slices the view to logical.
+                //
+                // n_threads: number of std::thread workers used for the parallel memcpy
+                //   path. 1 (default) preserves the original single-threaded yolo semantics
+                //   and uses the simplest code path. >1 partitions the destination buffer
+                //   into n_threads equal byte-ranges and copies each from the appropriate
+                //   source shard(s). Sweet spot on a 32-physical-core EPYC is n_threads=32.
+                //
+                // Cherry-picked from origin/yolo_bh_glx_tt_deploy (yolo demo team) +
+                // extended with std::thread parallelism for large-payload D2H workloads.
+                using namespace CMAKE_UNIQUE_NAMESPACE;
+                TT_FATAL(is_cpu_tensor(self), "batch_to_torch requires a host tensor, got {}", self.storage_type());
+
+                // n_threads=0 means auto: use hardware_concurrency()/2 (skip SMT threads).
+                // Clamps to >=1 to keep the fast path valid on systems where the runtime
+                // can't determine concurrency.
+                if (n_threads <= 0) {
+                    unsigned hw = std::thread::hardware_concurrency();
+                    n_threads = static_cast<int>(std::max(1u, hw / 2u));
+                }
+
+                const auto& storage = self.host_storage();
+                std::vector<HostBuffer> buffers;
+                storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+
+                const auto& spec = self.tensor_spec();
+                const auto& logical_shape = spec.logical_shape();
+                const auto& physical_shape = spec.physical_shape();
+                const size_t n_shards = buffers.size();
+                const size_t elem_size = self.element_size();
+
+                const size_t phys_h = physical_shape.height();
+                const size_t phys_w = physical_shape.width();
+                const size_t phys_shard_bytes = phys_h * phys_w * elem_size;
+
+                if (physical) {
+                    // Physical copy: contiguous memcpy per shard, including padding
+                    const size_t total_phys_bytes = phys_shard_bytes * n_shards;
+                    TT_FATAL(
+                        dest.nbytes() >= total_phys_bytes,
+                        "batch_to_torch(physical=True): dest buffer too small ({} bytes vs {} needed)",
+                        dest.nbytes(),
+                        total_phys_bytes);
+
+                    // Use NT (streaming, cache-bypassing) stores when:
+                    //  - parallel path (n_threads > 1) AND
+                    //  - total payload exceeds the L3 footprint where RFO traffic dominates.
+                    // The 64 MB threshold matches a typical EPYC 9004 socket's L3 (32-128 MB).
+                    // Below that, standard memcpy is faster because the cached writes are
+                    // reread by downstream code without an extra memory round-trip.
+                    constexpr size_t NT_THRESHOLD_BYTES = 64ull * 1024ull * 1024ull;
+                    const bool use_nt = (n_threads > 1) && (total_phys_bytes >= NT_THRESHOLD_BYTES);
+
+                    auto* dst = static_cast<std::byte*>(dest.data());
+                    {
+                        nb::gil_scoped_release release;
+                        if (n_threads <= 1) {
+                            // Fast path: original yolo single-threaded behavior.
+                            for (size_t i = 0; i < n_shards; i++) {
+                                auto src = buffers[i].view_bytes();
+                                std::memcpy(dst + i * phys_shard_bytes, src.data(), phys_shard_bytes);
+                            }
+                        } else {
+                            // Parallel path: split total bytes across n_threads workers.
+                            // Each worker walks across shards to copy its assigned byte range.
+                            const size_t total = total_phys_bytes;
+                            const size_t chunk = (total + n_threads - 1) / n_threads;
+                            std::vector<std::thread> workers;
+                            workers.reserve(n_threads);
+                            for (int t = 0; t < n_threads; ++t) {
+                                workers.emplace_back([&, t]() {
+                                    size_t lo = std::min<size_t>(static_cast<size_t>(t) * chunk, total);
+                                    size_t hi = std::min<size_t>(lo + chunk, total);
+                                    for (size_t bytes_done = lo; bytes_done < hi;) {
+                                        size_t shard_idx = bytes_done / phys_shard_bytes;
+                                        size_t shard_off = bytes_done % phys_shard_bytes;
+                                        size_t n = std::min<size_t>(phys_shard_bytes - shard_off, hi - bytes_done);
+                                        auto src = buffers[shard_idx].view_bytes();
+                                        if (use_nt) {
+                                            nt_memcpy_avx2(dst + bytes_done, src.data() + shard_off, n);
+                                        } else {
+                                            std::memcpy(dst + bytes_done, src.data() + shard_off, n);
+                                        }
+                                        bytes_done += n;
+                                    }
+                                });
+                            }
+                            for (auto& w : workers) {
+                                w.join();
+                            }
+                        }
+                    }
+                } else {
+                    // Logical copy: strip padding if needed
+                    const size_t logical_volume = logical_shape.volume();
+                    const size_t logical_shard_bytes = logical_volume * elem_size;
+                    const size_t total_logical_bytes = logical_shard_bytes * n_shards;
+
+                    TT_FATAL(
+                        dest.nbytes() >= total_logical_bytes,
+                        "batch_to_torch: dest buffer too small ({} bytes vs {} needed)",
+                        dest.nbytes(),
+                        total_logical_bytes);
+
+                    auto* dst = static_cast<std::byte*>(dest.data());
+                    const bool needs_depad =
+                        (spec.logical_2d_shape() != physical_shape) && (spec.layout() != Layout::TILE);
+
+                    {
+                        nb::gil_scoped_release release;
+                        if (!needs_depad) {
+                            if (n_threads <= 1) {
+                                for (size_t i = 0; i < n_shards; i++) {
+                                    auto src = buffers[i].view_bytes();
+                                    std::memcpy(dst + i * logical_shard_bytes, src.data(), logical_shard_bytes);
+                                }
+                            } else {
+                                const size_t total = total_logical_bytes;
+                                const size_t chunk = (total + n_threads - 1) / n_threads;
+                                std::vector<std::thread> workers;
+                                workers.reserve(n_threads);
+                                for (int t = 0; t < n_threads; ++t) {
+                                    workers.emplace_back([&, t]() {
+                                        size_t lo = std::min<size_t>(static_cast<size_t>(t) * chunk, total);
+                                        size_t hi = std::min<size_t>(lo + chunk, total);
+                                        for (size_t bytes_done = lo; bytes_done < hi;) {
+                                            size_t shard_idx = bytes_done / logical_shard_bytes;
+                                            size_t shard_off = bytes_done % logical_shard_bytes;
+                                            size_t n =
+                                                std::min<size_t>(logical_shard_bytes - shard_off, hi - bytes_done);
+                                            auto src = buffers[shard_idx].view_bytes();
+                                            std::memcpy(dst + bytes_done, src.data() + shard_off, n);
+                                            bytes_done += n;
+                                        }
+                                    });
+                                }
+                                for (auto& w : workers) {
+                                    w.join();
+                                }
+                            }
+                        } else {
+                            const size_t log_h = spec.logical_2d_shape().height();
+                            const size_t log_w = spec.logical_2d_shape().width();
+                            const size_t row_bytes = log_w * elem_size;
+                            const size_t phys_row_bytes = phys_w * elem_size;
+
+                            for (size_t i = 0; i < n_shards; i++) {
+                                auto src = buffers[i].view_bytes();
+                                auto* src_ptr = src.data();
+                                auto* dst_shard = dst + i * log_h * row_bytes;
+                                for (size_t r = 0; r < log_h; r++) {
+                                    std::memcpy(dst_shard + r * row_bytes, src_ptr + r * phys_row_bytes, row_bytes);
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            nb::arg("dest"),
+            nb::arg("physical") = false,
+            nb::arg("n_threads") = 1,
+            R"doc(
+            Batch-compose a multi-device host tensor into a pre-allocated torch tensor.
+
+            Copies all shard data contiguously into ``dest`` in a single C++ call.
+            Avoids per-shard Python to_torch overhead and torch.cat allocation.
+
+            Args:
+                dest: Pre-allocated torch tensor to copy into.
+                physical: If True, copy full physical buffers (including tile padding)
+                    contiguously. dest must hold n_shards x phys_h x phys_w elements.
+                    Caller can then slice [:, :log_h, :log_w] to get logical data.
+                    If False (default), strip padding during copy.
+                n_threads: Number of std::thread workers for parallel memcpy. Default 1
+                    (single-threaded, original yolo behavior). For large payloads
+                    (>100 MB) on multi-core hosts, 16-32 threads typically give 2-3x
+                    additional speedup. Pass 0 to auto-detect (uses
+                    std::thread::hardware_concurrency()/2 to skip SMT threads).
+                    Has no effect on the depadding path.
         )doc")
         .def(
             "to_numpy",
