@@ -331,7 +331,7 @@ class LTXFastPipeline(LTXAVPipeline):
         self.transformer = None
         gc.collect()
 
-        self._prepare_vae()
+        self._prepare_vae(num_frames=num_frames, height=height, width=width)
         latent_h, latent_w = height // 32, width // 32
         video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w)
         audio_obj = self.decode_audio_reference(s2_audio, num_frames, fps=fps)

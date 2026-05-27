@@ -27,7 +27,7 @@ import ttnn
 
 from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
 from ...models.transformers.ltx.ltx_transformer import LTXTransformerModel
-from ...parallel.config import DiTParallelConfig, ParallelFactor
+from ...parallel.config import DiTParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
@@ -155,6 +155,7 @@ class LTXPipeline:
         parallel_config: DiTParallelConfig,
         ccl_manager: CCLManager,
         *,
+        vae_parallel_config: VaeHWParallelConfig | None = None,
         # Transformer config
         num_attention_heads: int = 32,
         attention_head_dim: int = 128,
@@ -172,6 +173,14 @@ class LTXPipeline:
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        # VAE H/W shard config. Defaults to mirroring transformer's tp/sp axes:
+        # H gets the tp_axis, W gets the sp_axis (matches Wan's role assignment).
+        if vae_parallel_config is None:
+            vae_parallel_config = VaeHWParallelConfig(
+                height_parallel=parallel_config.tensor_parallel,
+                width_parallel=parallel_config.sequence_parallel,
+            )
+        self.vae_parallel_config = vae_parallel_config
         self.mode = mode
 
         self.num_attention_heads = num_attention_heads
@@ -325,6 +334,12 @@ class LTXPipeline:
             sequence_parallel=ParallelFactor(factor=mesh_shape[sp_axis], mesh_axis=sp_axis),
             tensor_parallel=ParallelFactor(factor=mesh_shape[tp_axis], mesh_axis=tp_axis),
         )
+        # VAE shards H on the tp axis, W on the sp axis — same role mapping as Wan.
+        # For bh_2x4sp1tp0 (mesh 2x4, tp=axis 0, sp=axis 1): h_factor=2, w_factor=4.
+        vae_parallel_config = VaeHWParallelConfig(
+            height_parallel=ParallelFactor(factor=mesh_shape[tp_axis], mesh_axis=tp_axis),
+            width_parallel=ParallelFactor(factor=mesh_shape[sp_axis], mesh_axis=sp_axis),
+        )
         ccl_manager = CCLManager(mesh_device, topology=topology)
 
         pipeline_cls = pipeline_class or LTXPipeline
@@ -332,6 +347,7 @@ class LTXPipeline:
             mesh_device=mesh_device,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
+            vae_parallel_config=vae_parallel_config,
             mode=mode,
         )
         pipeline.is_fsdp = is_fsdp
@@ -939,6 +955,8 @@ class LTXPipeline:
                 patch_size=patch_size,
                 base_channels=base_channels,
                 mesh_device=self.mesh_device,
+                parallel_config=self.vae_parallel_config,
+                ccl_manager=self.ccl_manager,
             )
             self.vae_decoder.load_torch_state_dict(state_dict)
             logger.info("Loaded TTNN VAE decoder")
@@ -951,18 +969,35 @@ class LTXPipeline:
             self.vae_decoder.load_state_dict(state_dict)
             logger.info("Loaded torch-only VAE decoder")
 
-    def _prepare_vae(self) -> None:
-        """Push VAE decoder onto the mesh. Cached when `TT_DIT_CACHE_DIR` is set."""
+    def _prepare_vae(
+        self,
+        *,
+        num_frames: int | None = None,
+        height: int | None = None,
+        width: int | None = None,
+    ) -> None:
+        """Push VAE decoder onto the mesh. Cached when `TT_DIT_CACHE_DIR` is set.
+
+        Pass ``num_frames``, ``height``, ``width`` so the decoder can pre-compute
+        per-layer ConvDims and pick exact-match blockings from ``_BLOCKINGS``.
+        Omit them to fall back to channel-only blocking lookup.
+        """
         if not self._vae_decoder_blocks:
             return
 
         from ...models.vae.vae_ltx import LTXVideoDecoder
+        from ...utils.conv3d import conv3d_blocking_hash
 
         self.vae_decoder = LTXVideoDecoder(
             decoder_blocks=self._vae_decoder_blocks,
             causal=self._vae_causal,
             base_channels=self._vae_base_channels,
             mesh_device=self.mesh_device,
+            parallel_config=self.vae_parallel_config,
+            ccl_manager=self.ccl_manager,
+            num_frames=num_frames,
+            height=height,
+            width=width,
         )
 
         def _vae_state_provider() -> dict[str, torch.Tensor]:
@@ -981,10 +1016,15 @@ class LTXPipeline:
             return vae_state
 
         if self.checkpoint_name is not None:
+            # Blocking-hash subfolder mirrors Wan: when conv3d C_in_block changes
+            # (e.g. blockings refined from a sweep), prepare_conv3d_weights re-runs
+            # automatically rather than silently loading mis-shaped weights.
+            blocking_key = conv3d_blocking_hash(self.vae_decoder)
+            subfolder = f"vae_{blocking_key}" if blocking_key else "vae"
             cache_module.load_model(
                 self.vae_decoder,
                 model_name=os.path.basename(self.checkpoint_name).removesuffix(".safetensors"),
-                subfolder="vae",
+                subfolder=subfolder,
                 parallel_config=self.parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 get_torch_state_dict=_vae_state_provider,
