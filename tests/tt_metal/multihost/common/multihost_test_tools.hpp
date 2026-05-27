@@ -143,12 +143,13 @@ inline int multihost_main(int argc, char** argv) {
     // Run tests on every rank
     int local_rc = RUN_ALL_TESTS();
 
-    // need to make sure that  we get context after the tests, old one could be revoked
-    const auto& context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    fmt::print("Rank {}: local rc = {}\n", *context->rank(), local_rc);
+    // Sync on MPI_COMM_WORLD: gtest/Metal teardown may invalidate the sub-context comm from
+    // get_current_world(), but launcher ranks still share the unsplit world communicator.
+    const auto& world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
+    fmt::print("Rank {}: local rc = {}\n", *world_ctx->rank(), local_rc);
     // Propagate the worst return code to all ranks
 
-    ASSERT_EQ_ALL_RANKS(local_rc, context);
+    ASSERT_EQ_ALL_RANKS(local_rc, world_ctx);
 
     return local_rc;
 }

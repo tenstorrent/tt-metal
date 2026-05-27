@@ -25,20 +25,16 @@ namespace ll_api {
 
 namespace wormhole {
 
-uint64_t get_static_tlb_size() {
-    return 1ULL << 20;
-}
+std::uint64_t get_static_tlb_size() { return 1ULL << 20; }
 
 }  // namespace wormhole
 
 namespace blackhole {
 
-static constexpr uint32_t NUM_PORTS_PER_DRAM_CHANNEL = 3;
-static constexpr uint32_t NUM_DRAM_CHANNELS = 8;
+static constexpr std::uint32_t NUM_PORTS_PER_DRAM_CHANNEL = 3;
+static constexpr std::uint32_t NUM_DRAM_CHANNELS = 8;
 
-uint64_t get_static_tlb_size() {
-    return 2 * (1ULL << 20);
-}
+std::uint64_t get_static_tlb_size() { return 2 * (1ULL << 20); }
 
 // Returns last port of dram channel passed as the argument to align with dram_preferred_worker_endpoint
 // This core will be used for configuring 4GB TLB.
@@ -50,23 +46,23 @@ tt_xy_pair ddr_to_noc0(unsigned i) {
 
 namespace quasar {
 
-uint64_t get_static_tlb_size() { return 4ULL * (1ULL << 30); }
+std::uint64_t get_static_tlb_size() { return 4ULL * (1ULL << 30); }
 
 }  // namespace quasar
 
 void configure_static_tlbs(
-    tt::ARCH arch, tt::ChipId mmio_device_id, const metal_SocDescriptor& sdesc, tt::umd::Cluster& device_driver) {
-    using get_static_tlb_size_ptr = uint64_t (*)();
+    tt::ARCH arch,
+    tt::ChipId mmio_device_id,
+    const metal_SocDescriptor& sdesc,
+    tt::umd::Cluster& device_driver,
+    bool include_dram_tlbs) {
+    using get_static_tlb_size_ptr = std::uint64_t (*)();
     get_static_tlb_size_ptr get_static_tlb_size;
 
     // Need to set these values based on arch because UMD does not expose architecture_implementation
     switch (arch) {
-        case tt::ARCH::WORMHOLE_B0:
-            get_static_tlb_size = wormhole::get_static_tlb_size;
-            break;
-        case tt::ARCH::BLACKHOLE:
-            get_static_tlb_size = blackhole::get_static_tlb_size;
-            break;
+        case tt::ARCH::WORMHOLE_B0: get_static_tlb_size = wormhole::get_static_tlb_size; break;
+        case tt::ARCH::BLACKHOLE: get_static_tlb_size = blackhole::get_static_tlb_size; break;
         case tt::ARCH::QUASAR: get_static_tlb_size = quasar::get_static_tlb_size; break;
         default: TT_THROW("Configuring static TLBs is not supported for {}", tt::get_string(arch));
     }
@@ -83,17 +79,18 @@ void configure_static_tlbs(
         device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, tt::umd::tlb_data::Strict);
     }
     // Setup static TLBs for all eth cores
-    for (const  tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::ETH, tt::CoordSystem::TRANSLATED)) {
+    for (const tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::ETH, tt::CoordSystem::TRANSLATED)) {
         device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, tt::umd::tlb_data::Strict);
     }
 
-    if (arch == tt::ARCH::BLACKHOLE) {
+    if (arch == tt::ARCH::BLACKHOLE && include_dram_tlbs) {
         // Setup static 4GB tlbs for DRAM cores.
-        uint32_t dram_addr = 0;
+        std::uint32_t dram_addr = 0;
         for (std::uint32_t dram_channel = 0; dram_channel < blackhole::NUM_DRAM_CHANNELS; dram_channel++) {
             tt::umd::CoreCoord dram_core =
                 tt::umd::CoreCoord(blackhole::ddr_to_noc0(dram_channel), tt::CoreType::DRAM, tt::CoordSystem::NOC0);
-            device_driver.configure_tlb(mmio_device_id, dram_core, 4ULL * (1ULL << 30), dram_addr, tt::umd::tlb_data::Posted);
+            device_driver.configure_tlb(
+                mmio_device_id, dram_core, 4ULL * (1ULL << 30), dram_addr, tt::umd::tlb_data::Posted);
         }
     }
 }
