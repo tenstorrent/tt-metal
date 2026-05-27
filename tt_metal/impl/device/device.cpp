@@ -1764,6 +1764,20 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                 mux_reset_failed_cores.insert(mux_core);
             }
         }
+
+        // GAP-R24 (#42429): Phase 2 MUX summary — total elapsed and reset failure count.
+        // Without this, analyzing CI logs requires scanning every per-channel Phase 2 line
+        // to determine whether MUX teardown was clean.  This single line tells us immediately.
+        if (!active_channels.empty()) {
+            log_info(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Device {} Phase 2 MUX summary: "
+                "{} channel(s), {} reset failure(s){}",
+                this->id(),
+                active_channels.size(),
+                mux_reset_failed_cores.size(),
+                mux_reset_failed_cores.empty() ? "" : " — Phase 3 L1 overwrite unsafe for failed cores");
+        }
     }
 
     // Phase 2.5: Terminate ERISC fabric routers before re-loading firmware.

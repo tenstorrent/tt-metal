@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <string>
 #include <utility>
 
 #include "all_gather_device_operation.hpp"
@@ -179,8 +180,20 @@ ttnn::Tensor all_gather(
     std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<CoreRangeSet>& sub_core_grid,
     bool use_l1_small_for_semaphores) {
+    // GAP-R23 (#42429): INFO-level entry logging for AllGather hang diagnosis.
+    // When AllGather hangs, this line tells us exactly which call was in-progress,
+    // on which device, with what shape/dim/links — previously invisible in CI logs.
+    log_info(
+        tt::LogOp,
+        "AllGather ENTRY: shape={}, dim={}, num_links={}, cluster_axis={}, topology={}",
+        input_tensor.logical_shape(),
+        dim,
+        num_links,
+        cluster_axis.has_value() ? std::to_string(cluster_axis.value()) : "none",
+        static_cast<int>(topology));
+
     using OperationType = ttnn::operations::ccl::AllGatherDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
+    auto result = ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .memory_config = memory_config,
             .dim = dim,
@@ -194,5 +207,15 @@ ttnn::Tensor all_gather(
             .sub_core_grid = sub_core_grid,
             .use_l1_small_for_semaphores = use_l1_small_for_semaphores},
         OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor});
+
+    // GAP-R23: EXIT logging — if we reach here, AllGather completed without hanging.
+    log_info(
+        tt::LogOp,
+        "AllGather EXIT: shape={}, dim={}, num_links={}",
+        input_tensor.logical_shape(),
+        dim,
+        num_links);
+
+    return result;
 }
 }  // namespace ttnn::prim

@@ -1234,6 +1234,17 @@ FIX_XY_FROZEN_WARNINGS=$(grep -cE 'wr_req FROZEN' "$CLEAN" 2>/dev/null; :)
 FIX_YZ_READ_SKIP=$(grep -cE 'FIX YZ: read_non_mmio skipped' "$CLEAN" 2>/dev/null; :)
 FIX_YZ_WRITE_SKIP=$(grep -cE 'FIX YZ: write_to_non_mmio skipped' "$CLEAN" 2>/dev/null; :)
 FIX_YZ_TOTAL=$(( ${FIX_YZ_READ_SKIP:-0} + ${FIX_YZ_WRITE_SKIP:-0} ))
+# GAP-R24 (#42429): Phase 2 MUX assert_risc_reset failures and summary.
+# assert_risc_reset_at_core FAILED means MUX BRISC may still be running when Phase 3
+# overwrites its L1 — causes corrupted MUX kernel → opaque AllGather hang on next dispatch.
+PHASE2_MUX_RESET_FAILED=$(grep -cE 'assert_risc_reset_at_core FAILED' "$CLEAN" 2>/dev/null; :)
+PHASE2_MUX_SUMMARY=$(grep -cE 'Phase 2 MUX summary' "$CLEAN" 2>/dev/null; :)
+PHASE2_MUX_SUMMARY_FAILURES=$(grep -oP 'Phase 2 MUX summary.*?\K[0-9]+ reset failure' "$CLEAN" 2>/dev/null | grep -oP '^[0-9]+' | awk '{s+=$1} END{print s+0}'; :)
+# GAP-R23 (#42429): AllGather ENTRY/EXIT counters.
+# If ENTRY > EXIT, an AllGather was in-flight when the process hung or crashed.
+ALLGATHER_ENTRY=$(grep -cE 'AllGather ENTRY:' "$CLEAN" 2>/dev/null; :)
+ALLGATHER_EXIT=$(grep -cE 'AllGather EXIT:' "$CLEAN" 2>/dev/null; :)
+ALLGATHER_IN_FLIGHT=$(( ${ALLGATHER_ENTRY:-0} - ${ALLGATHER_EXIT:-0} ))
 # FIX PF (#42429): UMD base fw heartbeat detected at Metal exit — skip writing Metal exit signal.
 # Fires in risc_firmware_initializer.cpp when BRISC is still running base-UMD fw at process shutdown.
 # Clears stale fw_launch_addr to unblock next session.  Distinct from FIX PA (which fires during init).
@@ -2012,6 +2023,24 @@ if [ "${FIX_YZ_TOTAL:-0}" -gt 0 ]; then
     echo "     Without FIX YZ: each call would block for 30s in ETH CMD queue spin loop."
     echo "     Time saved: ~$((FIX_YZ_TOTAL * 30))s of wasted UMD timeout."
 fi
+# GAP-R24: Phase 2 MUX reset failures
+if [ "${PHASE2_MUX_RESET_FAILED:-0}" -gt 0 ]; then
+    echo "  => [GAP-R24] Phase 2 MUX assert_risc_reset_at_core FAILED ${PHASE2_MUX_RESET_FAILED} time(s)."
+    echo "     MUX BRISC may still be running when Phase 3 overwrites its L1."
+    echo "     Likely consequence: corrupted MUX kernel → AllGather hang on next dispatch."
+    echo "     Root cause: PCIe access failure or UMD timeout during Tensix reset."
+fi
+if [ "${PHASE2_MUX_SUMMARY:-0}" -gt 0 ] && [ "${PHASE2_MUX_SUMMARY_FAILURES:-0}" -gt 0 ]; then
+    echo "  => [GAP-R24] Phase 2 MUX summary: ${PHASE2_MUX_SUMMARY_FAILURES} total reset failure(s) across ${PHASE2_MUX_SUMMARY} summary line(s)."
+fi
+# GAP-R23: AllGather in-flight detection
+if [ "${ALLGATHER_ENTRY:-0}" -gt 0 ]; then
+    echo "  => [GAP-R23] AllGather dispatches: ${ALLGATHER_ENTRY} ENTRY, ${ALLGATHER_EXIT:-0} EXIT."
+    if [ "${ALLGATHER_IN_FLIGHT:-0}" -gt 0 ]; then
+        echo "     *** ${ALLGATHER_IN_FLIGHT} AllGather(s) were IN-FLIGHT when process hung/crashed! ***"
+        echo "     Check the last AllGather ENTRY line for shape/dim/num_links of the stuck call."
+    fi
+fi
 if [ "${PASS2A_DEV_COUNT:-0}" -gt 0 ]; then
     echo "  => [Pass 2a per-device] ${PASS2A_DEV_COUNT} non-MMIO device(s) initialized, max elapsed: ${PASS2A_DEV_MAX_MS:-?}ms."
     if [ "${PASS2A_DEV_MAX_MS:-0}" -gt 5000 ]; then
@@ -2518,6 +2547,12 @@ echo "  FIX_XY_FROZEN_RELAY:      ${FIX_XY_FROZEN_RELAY:-n/a}  (relay core decla
 echo "  FIX_YZ_READ_SKIP:         ${FIX_YZ_READ_SKIP:-0}  (read_non_mmio skipped — relay already broken)"
 echo "  FIX_YZ_WRITE_SKIP:        ${FIX_YZ_WRITE_SKIP:-0}  (write_to_non_mmio skipped — relay already broken)"
 echo "  FIX_YZ_TOTAL:             ${FIX_YZ_TOTAL:-0}  (total FIX YZ early-exits — ~30s saved per skip)"
+echo "  PHASE2_MUX_RESET_FAILED:  ${PHASE2_MUX_RESET_FAILED:-0}  (Phase 2 MUX assert_risc_reset_at_core failures — L1 overwrite unsafe)"
+echo "  PHASE2_MUX_SUMMARY:       ${PHASE2_MUX_SUMMARY:-0}  (Phase 2 MUX summary lines logged)"
+echo "  PHASE2_MUX_FAILURES_TOTAL: ${PHASE2_MUX_SUMMARY_FAILURES:-0}  (total MUX reset failures from summary lines)"
+echo "  ALLGATHER_ENTRY:           ${ALLGATHER_ENTRY:-0}  (AllGather ENTRY log lines — dispatches started)"
+echo "  ALLGATHER_EXIT:            ${ALLGATHER_EXIT:-0}  (AllGather EXIT log lines — dispatches completed)"
+echo "  ALLGATHER_IN_FLIGHT:       ${ALLGATHER_IN_FLIGHT:-0}  (AllGather(s) still in-flight at hang/crash)"
 echo "  PASS2A_DEV_COUNT:          ${PASS2A_DEV_COUNT:-0}  (non-MMIO devices initialized in Pass 2a)"
 echo "  PASS2A_DEV_MAX_MS:         ${PASS2A_DEV_MAX_MS:-n/a}ms  (longest Pass 2a per-device elapsed)"
 echo "  PASS2B_DEV_COUNT:          ${PASS2B_DEV_COUNT:-0}  (MMIO devices initialized in Pass 2b)"
