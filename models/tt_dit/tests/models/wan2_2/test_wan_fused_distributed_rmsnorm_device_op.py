@@ -228,6 +228,67 @@ def test_wan_fused_distributed_rmsnorm_device_op_tp1_bias(
     ids=["bh_2x4_line"],
 )
 @pytest.mark.parametrize(
+    ("N", "H", "has_bias"),
+    [
+        pytest.param(32, 256, False, id="N32_H256_noBias"),
+        pytest.param(32, 256, True, id="N32_H256_Bias"),
+        pytest.param(64, 1280, True, id="N64_H1280_Bias"),
+    ],
+)
+def test_wan_fused_distributed_rmsnorm_device_op_tp1_per_token_weight(
+    mesh_device: ttnn.MeshDevice,
+    N: int,
+    H: int,
+    has_bias: bool,
+) -> None:
+    """TP=1 with per-token weight (and optional per-token bias) — shape [N, H]."""
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 1))
+    ccl_manager = CCLManager(mesh_device=submesh, num_links=1, topology=ttnn.Topology.Linear)
+    ag_sem = ccl_manager.get_ag_ping_pong_semaphore(0)
+
+    EPS = 1e-6
+    torch.manual_seed(0)
+    x_torch = torch.randn((1, 1, N, H), dtype=torch.bfloat16)
+    weight_torch = torch.randn(N, H, dtype=torch.bfloat16)
+    bias_torch = torch.randn(N, H, dtype=torch.bfloat16) if has_bias else None
+    tt_x = bf16_tensor(x_torch, device=submesh)
+    tt_weight = from_torch(weight_torch, device=submesh, dtype=ttnn.bfloat16)
+    tt_bias = from_torch(bias_torch, device=submesh, dtype=ttnn.bfloat16) if has_bias else None
+
+    logger.info(f"Per-token weight: N={N} H={H} has_bias={has_bias}")
+    out = ttnn.experimental.wan_fused_distributed_rmsnorm(
+        tt_x,
+        0,
+        submesh,
+        ag_sem,
+        topology=ttnn.Topology.Linear,
+        epsilon=EPS,
+        num_heads_per_device=1,
+        weight=tt_weight,
+        bias=tt_bias,
+        use_device_op=True,
+    )
+
+    out_torch = to_torch(out)
+    x_f = x_torch.to(torch.float32)
+    mean_sq = (x_f * x_f).mean(dim=-1, keepdim=True)
+    rms = torch.rsqrt(mean_sq + EPS)
+    # Per-token weight/bias broadcast across heads/channels but per row.
+    w_f = weight_torch.to(torch.float32).reshape(1, 1, N, H)
+    ref = x_f * rms * w_f
+    if has_bias:
+        ref = ref + bias_torch.to(torch.float32).reshape(1, 1, N, H)
+    ref = ref.to(torch.bfloat16)
+    assert_quality(ref, out_torch, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"),
+    [((2, 4), {**line_params, "trace_region_size": 90112})],
+    indirect=True,
+    ids=["bh_2x4_line"],
+)
+@pytest.mark.parametrize(
     ("N", "num_heads", "head_dim", "has_weight"),
     [
         pytest.param(32, 4, 128, False, id="N32_4heads_d128_noweight"),
