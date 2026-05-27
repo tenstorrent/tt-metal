@@ -15,8 +15,8 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import no_init_weights
 
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
-from models.demos.deepseek_v3.utils.config_helpers import dequantize
+from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2ForCausalLM
+from models.demos.minimax_m27.utils.config_helpers import dequantize
 
 
 def load_tokenizer(model_path: str):
@@ -116,7 +116,7 @@ def unload_weight_from_weights_dict(
 def add_dynamic_weight_loading_hooks(
     module: torch.nn.Module,
     weights_dict: dict[str, torch.Tensor],
-    lazy_modules: list[str] = ["DeepseekV3Attention", "DeepseekV3MLP"],
+    lazy_modules: list[str] = ["MiniMaxM2Attention", "MiniMaxM2MLP"],
     model_name: str = "",
     thread_pool_executor: concurrent.futures.ThreadPoolExecutor | None = None,
 ):
@@ -146,7 +146,7 @@ def add_dynamic_weight_loading_hooks(
 
 def add_gc_hooks(
     module: torch.nn.Module,
-    lazy_modules: list[str] = ["DeepseekV3Attention", "DeepseekV3MLP"],
+    lazy_modules: list[str] = ["MiniMaxM2Attention", "MiniMaxM2MLP"],
     model_name: str = "",
 ):
     def collect():
@@ -247,9 +247,9 @@ def prepare_model_state_dict(
                 "Random weights with 'moe' single layer is not supported by RowBatchedModel demo yet. Use 'mlp' or disable random mode."
             )
         logger.info("Building random weights from HF reference model (ForCausalLM)...")
-        from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict
+        from models.demos.minimax_m27.utils.test_utils import add_inv_scale_to_state_dict
 
-        ref_model = DeepseekV3ForCausalLM(hf_config).eval()
+        ref_model = MiniMaxM2ForCausalLM(hf_config).eval()
         # Ensure parameter/buffer dtype matches downstream expectations (bfloat16)
         ref_model = ref_model.to(dtype=torch.bfloat16)
         torch_state = ref_model.state_dict()
@@ -276,7 +276,7 @@ def prepare_model_state_dict(
         if "lm_head.weight" not in hf_weights:
             raise RuntimeError(
                 "No HF safetensors found in model path or missing 'lm_head.weight'. "
-                "Set DEEPSEEK_V3_HF_MODEL to a directory containing DeepSeek-V3 safetensors, or pass --model-path."
+                "Set MINIMAX_M27_HF_MODEL to a directory containing MiniMax M2.7 safetensors, or pass --model-path."
             )
         model_state = {
             k: v

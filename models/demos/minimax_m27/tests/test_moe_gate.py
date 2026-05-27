@@ -10,10 +10,10 @@ import ttnn
 
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
-from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, run_module_forward
+from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2MoEGate as ReferenceMoEGate
 from tests.ttnn.utils_for_testing import comp_pcc
 
 

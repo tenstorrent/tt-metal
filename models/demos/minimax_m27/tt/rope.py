@@ -5,8 +5,8 @@
 import torch
 
 import ttnn
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding
-from models.demos.deepseek_v3.utils.config_helpers import find_largest_divisor
+from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2RotaryEmbedding
+from models.demos.minimax_m27.utils.config_helpers import find_largest_divisor
 
 
 def get_rot_transformation_mat():
@@ -26,49 +26,36 @@ def get_cos_sin_matrix(hf_config):
     Returns:
         cos: Cosine matrix for rotary embeddings.
         sin: Sine matrix for rotary embeddings.
-    This function uses the DeepseekV3YarnRotaryEmbedding class to generate the matrices
-    based on the provided HuggingFace configuration.
-
-    HuggingFace returns cos/sin matrices in the format of [max_seq_len, dim], where dim is [t1, .., td//2, t1, .., td//2].
-    This is because HF is the format of [r, r, ..., i, i, ...] which requires cos/sin to be [t1, t2, ..., td//2, t1, t2, ..., td//2].
-    However, the Meta-style frequencies are in the format of [r, i, r, i, ...], so the cos/sin need to be [t1, t1, ..., td//2, td//2].
+    This function generates rotary frequencies using the local MiniMax reference implementation.
 
     """
-    args = {
-        "dim": hf_config.qk_rope_head_dim,
-        "max_position_embeddings": hf_config.max_seq_len,
-        "base": hf_config.rope_theta * 1.0,
-        "device": "cpu",
-        "scaling_factor": hf_config.rope_scaling["factor"],
-        "original_max_position_embeddings": hf_config.rope_scaling["original_max_position_embeddings"],
-        "beta_fast": hf_config.rope_scaling["beta_fast"],
-        "beta_slow": hf_config.rope_scaling["beta_slow"],
-        "mscale": hf_config.rope_scaling["mscale"],
-        "mscale_all_dim": hf_config.rope_scaling["mscale_all_dim"],
-    }
+    rope_dim = getattr(hf_config, "qk_rope_head_dim", None)
+    if rope_dim is None:
+        rope_dim = getattr(hf_config, "rotary_dim", None)
+    if rope_dim is None:
+        raise ValueError("Missing rotary dimension. Expected either qk_rope_head_dim or rotary_dim in hf_config.")
 
-    reference_rope = DeepseekV3YarnRotaryEmbedding(**args)
+    max_seq_len = getattr(hf_config, "max_seq_len", None)
+    if max_seq_len is None:
+        max_seq_len = getattr(hf_config, "max_position_embeddings", None)
+    if max_seq_len is None:
+        raise ValueError("Missing max sequence length. Expected max_seq_len or max_position_embeddings in hf_config.")
 
-    # [max_seq_len, dim], where dim is [t1, .., td//2, t1, .., td//2]
-    cos = reference_rope.cos_cached
-    sin = reference_rope.sin_cached
+    reference_rope = MiniMaxM2RotaryEmbedding(hf_config)
+    position_ids = torch.arange(max_seq_len, dtype=torch.long).unsqueeze(0)
+    dummy_x = torch.zeros((1, 1, rope_dim), dtype=torch.float32)
+    cos, sin = reference_rope(dummy_x, position_ids)
 
-    # Undo the HF permute
-    cos = cos[:, : cos.shape[1] // 2]
-    cos = torch.stack((cos, cos), dim=-1).flatten(-2)
-
-    sin = sin[:, : sin.shape[1] // 2]
-    sin = torch.stack((sin, sin), dim=-1).flatten(-2)
-
-    cos = cos.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, dim]
-    sin = sin.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, dim]
+    # [batch, max_seq_len, dim] -> [1, 1, max_seq_len, dim]
+    cos = cos.unsqueeze(1)
+    sin = sin.unsqueeze(1)
 
     return cos, sin
 
 
 class RotarySetup:
     """
-    Class to set up rotary positional embeddings for DeepSeekV3 models.
+    Class to set up rotary positional embeddings for DeepSeek/MiniMax models.
 
     Duplicate + changes from TTT rope.py
     NOTE: it would be better to re-migrate this class to TTT rope.py at some point
@@ -77,7 +64,18 @@ class RotarySetup:
     def __init__(self, device, batch_size_per_row: int, hf_config):
         self.batch_size_per_row = batch_size_per_row
         self.hf_config = hf_config
-        self.dim = hf_config.qk_rope_head_dim
+        self.dim = getattr(hf_config, "qk_rope_head_dim", None)
+        if self.dim is None:
+            self.dim = getattr(hf_config, "rotary_dim", None)
+        if self.dim is None:
+            raise ValueError("Missing rotary dimension. Expected either qk_rope_head_dim or rotary_dim in hf_config.")
+        self.max_seq_len = getattr(hf_config, "max_seq_len", None)
+        if self.max_seq_len is None:
+            self.max_seq_len = getattr(hf_config, "max_position_embeddings", None)
+        if self.max_seq_len is None:
+            raise ValueError(
+                "Missing max sequence length. Expected max_seq_len or max_position_embeddings in hf_config."
+            )
         self.device = device
 
         self.core_grid = device.compute_with_storage_grid_size()
@@ -175,7 +173,7 @@ class RotarySetup:
         cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config)
 
         if seq_len is not None:
-            assert seq_len <= self.hf_config.max_seq_len, "seq_len must be less than or equal to max_seq_len"
+            assert seq_len <= self.max_seq_len, "seq_len must be less than or equal to max_seq_len"
             cos_matrix_torch = cos_matrix_torch[..., :seq_len, :]
             sin_matrix_torch = sin_matrix_torch[..., :seq_len, :]
 

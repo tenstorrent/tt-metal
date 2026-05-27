@@ -10,7 +10,6 @@ import ttnn
 
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -20,15 +19,14 @@ from models.demos.deepseek_v3.utils.test_utils import (
     get_test_weight_config,
     run_module_forward,
 )
+from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2SparseMoeBlock
 
 
 @pytest.fixture
 def reference_model(hf_config):
-    """Get the actual DeepSeek MLP model using local implementation."""
+    """Get the MiniMax sparse MoE block reference model."""
     torch.use_deterministic_algorithms(True)
-    # Note : Running Reference MoE without shared experts
-    hf_config.n_shared_experts = None
-    return DeepseekV3MoE(hf_config).eval()
+    return MiniMaxM2SparseMoeBlock(hf_config).eval()
 
 
 @pytest.mark.parametrize(
@@ -90,7 +88,7 @@ def test_forward_pass(
     reference_model.eval()
     reference_model.to(torch.bfloat16)
     with torch.no_grad():
-        reference_output = reference_model(torch_input)
+        reference_output, _ = reference_model(torch_input)
 
     weight_config = get_test_weight_config(
         MoE, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False

@@ -7,7 +7,6 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
@@ -18,6 +17,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     get_test_weight_config,
     run_module_forward,
 )
+from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2RMSNorm
 
 
 @pytest.mark.parametrize(
@@ -76,7 +76,7 @@ def test_forward_pass(
     hidden_size = getattr(hf_config, hf_config_size_attr)
 
     # Get the reference inputs and outputs
-    reference_model = DeepseekV3RMSNorm(
+    reference_model = MiniMaxM2RMSNorm(
         hidden_size=hidden_size,
         eps=hf_config.rms_norm_eps,
     ).eval()

@@ -8,7 +8,6 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.reference.reference_utils import topk_bitonic
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     BinaryOpConfig,
@@ -29,6 +28,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import ModelPrefillConfig, RunPrefillConfig, WeightConfig
+from models.demos.minimax_m27.reference.reference_utils import topk_bitonic
 
 
 class MoEGate(AbstractModule):

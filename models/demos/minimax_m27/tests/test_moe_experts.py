@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,6 @@ import ttnn
 
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP as ReferenceExpert
 from models.demos.deepseek_v3.tt.experts import Experts as TTExperts
 from models.demos.deepseek_v3.utils.config_helpers import SPARSITY_BLOCK_SIZE, even_int_div, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -24,9 +24,10 @@ from models.demos.deepseek_v3.utils.test_utils import (
     get_test_weight_config,
     run_module_forward,
 )
+from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2MLP as ReferenceExpert
 
 
-class DeepseekV3MoEExperts(nn.Module):
+class MiniMaxM27MoEExperts(nn.Module):
     """
     A mixed expert module containing shared experts.
     """
@@ -34,13 +35,11 @@ class DeepseekV3MoEExperts(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
+        routed_experts = getattr(config, "num_local_experts", getattr(config, "n_routed_experts"))
+        expert_config = deepcopy(config)
+        expert_config.intermediate_size = getattr(config, "moe_intermediate_size", config.intermediate_size)
 
-        self.experts = nn.ModuleList(
-            [
-                ReferenceExpert(config, intermediate_size=config.moe_intermediate_size).eval()
-                for i in range(config.n_routed_experts)
-            ]
-        )
+        self.experts = nn.ModuleList([ReferenceExpert(expert_config).eval() for i in range(routed_experts)])
 
     def forward(self, hidden_states):
         outputs = []
@@ -93,7 +92,7 @@ def create_combined_state_dict(module_path: str, model_path: Path, state_dict: d
 )
 @pytest.mark.parametrize(
     "module_path",
-    ["model.layers.3.mlp.experts.0-255"],
+    ["model.layers.3.block_sparse_moe.experts.0-255"],
 )
 def test_forward_pass(
     mode: str,
@@ -109,9 +108,10 @@ def test_forward_pass(
     state_dict: dict[str, torch.Tensor],
 ):
     batch_size = 1
-    num_experts_per_device = even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
+    num_local_experts = getattr(hf_config, "num_local_experts", getattr(hf_config, "n_routed_experts"))
+    num_experts_per_device = even_int_div(num_local_experts, mesh_device.get_num_devices())
 
-    reference_model = DeepseekV3MoEExperts(hf_config).eval()
+    reference_model = MiniMaxM27MoEExperts(hf_config).eval()
     torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
     sparsity = torch.ones(1, 1, even_int_div(seq_len, SPARSITY_BLOCK_SIZE), num_experts_per_device)
 

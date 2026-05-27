@@ -9,7 +9,6 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP
 from models.demos.deepseek_v3.tt.mlp.mlp import MLP
 from models.demos.deepseek_v3.tt.mlp.mlp_dequant import MLPDequant
 from models.demos.deepseek_v3.tt.mlp.non_expert import NonExpert
@@ -23,13 +22,14 @@ from models.demos.deepseek_v3.utils.test_utils import (
     load_reference_io_tensors_for_module,
     run_module_forward,
 )
+from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2MLP
 
 
 # TODO: Doesn't work on multi-host - we should figure out why
 @pytest.mark.requires_device(["TG"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_device):
-    reference_model = DeepseekV3MLP(hf_config).eval()
+    reference_model = MiniMaxM2MLP(hf_config).eval()
     reference_state_dict = reference_model.to(torch.bfloat16).state_dict()
     run_weight_conversion_test(
         MLPClass=MLP,
@@ -161,7 +161,7 @@ def test_forward_pass(
 
     # Get the reference IO
     if not issubclass(MLPClass, MLPDequant):
-        reference_model = DeepseekV3MLP(hf_config).eval()
+        reference_model = MiniMaxM2MLP(hf_config).eval()
         state_dict = reference_model.to(torch.bfloat16).state_dict()
         torch_input = torch.randn(num_module_layers, 1, seq_len, hf_config.hidden_size)
 

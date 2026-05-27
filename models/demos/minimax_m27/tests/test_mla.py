@@ -13,7 +13,6 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
@@ -29,6 +28,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     torch_cache_from_paged,
     torch_cache_from_transformers_single_layer,
 )
+from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2Attention
 
 PCC_REQUIRED = 0.99
 PCC_REQUIRED_KVPE = 0.999
@@ -167,13 +167,13 @@ def generate_reference_io(
     if mode != "prefill":
         raise NotImplementedError("Decode mode has been removed from minimax_m27.")
     if module_path is None:
-        reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
+        reference_model = MiniMaxM2Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
         state_dict = add_inv_scale_to_state_dict(
             reference_model.state_dict(),
             block_shape=hf_config.quantization_config["weight_block_size"],
         )
     else:
-        reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
+        reference_model = MiniMaxM2Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
         state_dict = sub_state_dict(state_dict, module_path + ".")
         dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
         reference_model.load_state_dict(dequantized_state_dict)

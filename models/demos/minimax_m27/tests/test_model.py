@@ -9,7 +9,6 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
@@ -25,6 +24,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_reference_with_attention,
     torch_cache_from_transformers,
 )
+from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2ForCausalLM
 
 
 def generate_reference_io(
@@ -50,7 +50,7 @@ def generate_reference_io(
         logger.info(f"Creating reference model")
         # Create model on meta device (no weight initialization or memory allocation)
         with torch.device("meta"):
-            reference_model = DeepseekV3ForCausalLM(hf_config).eval()
+            reference_model = MiniMaxM2ForCausalLM(hf_config).eval()
 
         # Move to target device without allocating memory for parameters
         reference_model = reference_model.to_empty(device=torch.device("cpu"))
@@ -60,7 +60,7 @@ def generate_reference_io(
         reference_model = reference_model.to(torch.bfloat16)
     else:
         logger.info("Creating reference model with random weights")
-        reference_model = DeepseekV3ForCausalLM(hf_config).eval().to(torch.bfloat16)
+        reference_model = MiniMaxM2ForCausalLM(hf_config).eval().to(torch.bfloat16)
         state_dict = add_inv_scale_to_state_dict(
             reference_model.to(torch.bfloat16).state_dict(),
             block_shape=hf_config.quantization_config["weight_block_size"],

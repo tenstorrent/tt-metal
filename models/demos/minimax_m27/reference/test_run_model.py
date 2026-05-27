@@ -1,49 +1,35 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
 
-import torch
+from transformers import AutoConfig, AutoTokenizer
 
-from models.demos.deepseek_v3.reference.deepseek_reference_outputs_gen import *
+from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2ForCausalLM
 
 
 def create_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="A script to trace the IO of the deepseek model.")
-    parser.add_argument("local_model_path", type=str, help="Path to the local model directory.")
-    parser.add_argument("prompt", type=str, help="Prompt to generate outputs for.")
+    parser = argparse.ArgumentParser(description="Smoke-check local MiniMax reference model wiring.")
+    parser.add_argument(
+        "--local-model-path",
+        type=str,
+        default="/data/minimax_m27",
+        help="Path to local MiniMax model directory (config/tokenizer files).",
+    )
     return parser
 
 
 def main():
-    # Parse the sysargs
     parser = create_parser()
     args = parser.parse_args()
 
-    # Load the tokenizer
-    print("Loading tokenizer")
-    tokenizer = load_tokenizer(args.local_model_path)
-    print("Tokenizer loaded successfully")
+    cfg = AutoConfig.from_pretrained(args.local_model_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.local_model_path, trust_remote_code=True)
+    model = MiniMaxM2ForCausalLM(cfg).eval()
 
-    with torch.no_grad():
-        # Load the model with uninitialized weights
-        print("Loading uninitialized model")
-        model = load_model_uninitialized(args.local_model_path)
-        model.eval()
-        print("Model loaded successfully")
-
-        # Load the model weights
-        print("Loading model weights")
-        weights_dict = load_model_weights(args.local_model_path)
-        add_dynamic_weight_loading_hooks(model, weights_dict)
-        print("Model weights loaded successfully")
-
-        # Run the model
-        model_inputs = tokenizer(args.prompt, return_tensors="pt")
-        print("Running the model")
-        outputs = model.generate(**model_inputs, max_new_tokens=50)
-        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        print(generated_text)
+    print(f"Tokenizer vocab size: {tokenizer.vocab_size}")
+    print(f"Reference model class: {model.__class__.__name__}")
+    print(f"Hidden size: {cfg.hidden_size}, layers: {cfg.num_hidden_layers}")
 
 
 if __name__ == "__main__":

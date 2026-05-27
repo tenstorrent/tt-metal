@@ -11,7 +11,6 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3DecoderLayer
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d import DecoderBlock1D
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d_base import DecoderBlock1DBase
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d import DecoderBlock2D
@@ -33,6 +32,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_reference_with_attention,
     torch_cache_from_transformers_single_layer,
 )
+from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2DecoderLayer
 
 
 def generate_reference_io(
@@ -47,7 +47,7 @@ def generate_reference_io(
 ):
     if mode != "prefill":
         raise NotImplementedError("Decode mode has been removed from minimax_m27.")
-    reference_model = DeepseekV3DecoderLayer(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
+    reference_model = MiniMaxM2DecoderLayer(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
     if module_path is not None:
         state_dict = sub_state_dict(state_dict, module_path + ".")
         reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
