@@ -46,17 +46,21 @@ for entry in "${PIPELINES[@]}"; do
   IFS='|' read -r workflow display test_hint <<<"$entry"
   log "checking: $workflow ($display)"
 
-  # Latest COMPLETED run on $BRANCH. In-progress runs are intentionally ignored.
-  run=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&status=completed&per_page=1" \
+  # Latest run on $BRANCH (any status). We deliberately do NOT pass
+  # status=completed: a re-attempt flips the run back to in_progress, and
+  # the filter would then hide it and surface an OLDER completed run.
+  # Status is checked client-side below.
+  run=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&per_page=1" \
         --jq '.workflow_runs[0]' 2>/dev/null || echo "null")
 
   if [[ -z "$run" || "$run" == "null" ]]; then
-    blocks+=("▸ *$display* — _no completed runs on $BRANCH_")
-    log "  no completed runs found"
+    blocks+=("▸ *$display* — _no runs on $BRANCH_")
+    log "  no runs found"
     continue
   fi
 
   run_id=$(jq -r '.id'         <<<"$run")
+  status=$(jq -r '.status // "unknown"' <<<"$run")
   conclusion=$(jq -r '.conclusion // "unknown"' <<<"$run")
   sha=$(jq -r '.head_sha'      <<<"$run")
   url=$(jq -r '.html_url'      <<<"$run")
@@ -66,7 +70,8 @@ for entry in "${PIPELINES[@]}"; do
   prev_id=$(jq -r '.run_id // ""' <<<"$prev")
   prev_sha=$(jq -r '.sha    // ""' <<<"$prev")
 
-  # Cache hit: same run as last time. Reuse cached summary, no LLM call.
+  # Cache hit: same run as last time (covers in-progress re-attempts of the
+  # cached run too — run_id is stable across attempts).
   if [[ "$run_id" == "$prev_id" ]]; then
     cached=$(jq -r --arg w "$workflow" '.[$w].summary // ""' "$STATE")
     if [[ -n "$cached" ]]; then
@@ -74,6 +79,20 @@ for entry in "${PIPELINES[@]}"; do
       log "  cache hit (run #$run_number unchanged)"
       continue
     fi
+  fi
+
+  # New run_id but not yet completed (fresh trigger queued, or a re-attempt
+  # in flight). Reuse the previous cached block instead of analyzing.
+  if [[ "$status" != "completed" ]]; then
+    cached=$(jq -r --arg w "$workflow" '.[$w].summary // ""' "$STATE")
+    if [[ -n "$cached" ]]; then
+      blocks+=("$cached")
+      log "  run #$run_number is $status — reusing previous cached summary"
+      continue
+    fi
+    blocks+=("▸ *$display* — _run #$run_number $status, no prior data_")
+    log "  run #$run_number is $status, no cache available"
+    continue
   fi
 
   # Cache miss: fetch logs (only on failure) and commit range, run agent.
@@ -127,15 +146,18 @@ EOF
 # Context
 $context"
 
+  # Pass the prompt over stdin, not via `-p "$full_prompt"`. Inlining a
+  # large prompt as an argv arg blows past ARG_MAX (~128 KB) when failure
+  # logs are big and the kernel rejects the exec with E2BIG.
   set +e
   summary=$(cd "$TT_METAL_DIR" && \
-            claude --model "$MODEL" -p "$full_prompt" </dev/null 2>>"$AGENT_ERR")
+            claude --model "$MODEL" -p <<<"$full_prompt" 2>>"$AGENT_ERR")
   rc=$?
   set -e
 
   if [[ $rc -ne 0 || -z "$summary" ]]; then
     log "  agent failed (rc=$rc); using fallback block"
-    summary="▸ *$display*  ❌ $conclusion  _run #$run_number_
+    summary="▸ *$display*  ❌ $conclusion  _run #${run_number}_
 (agent error — see $url)"
   fi
 
