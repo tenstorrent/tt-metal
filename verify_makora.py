@@ -37,7 +37,15 @@ import torch
 
 import ttnn
 
-MAKORA_ROOT = Path("/localdev/dnijemcevic/kernels/Tenstorrent/fusion_store")
+# Makora kernel source root. Defaults to the in-repo copy that ships with this
+# branch; override with MAKORA_ROOT env var to point at an external mirror
+# (e.g. /localdev/dnijemcevic/kernels/Tenstorrent/fusion_store).
+MAKORA_ROOT = Path(
+    os.environ.get(
+        "MAKORA_ROOT",
+        Path(__file__).resolve().parent / "tests/ttnn/unit_tests/operations/matmul_silu/makora",
+    )
+)
 DEVICE_KERNEL_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 
 REQUIRED_ENV_VARS = (
