@@ -230,22 +230,12 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
         dest_mesh_id.push_back(*coord_fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)coord_fabric_node_id.chip_id);
     }
-    {
-        std::vector<uint32_t> dbg_mesh_id_via_coords, dbg_chip_id_via_coords;
-        for (const auto& coord : tensor_coords.coords()) {
-            const auto fn = mesh_device->get_fabric_node_id(coord);
-            dbg_mesh_id_via_coords.push_back(*fn.mesh_id);
-            dbg_chip_id_via_coords.push_back((uint32_t)fn.chip_id);
-        }
-        log_info(
-            tt::LogOp,
-            "[a2a_combine DBG] coord={} src_chip_id={} | view_chip_id={} | coords_chip_id={} | match={}",
-            mesh_coordinate,
-            src_chip_id,
-            common::stringify(dest_chip_id),
-            common::stringify(dbg_chip_id_via_coords),
-            dbg_chip_id_via_coords == dest_chip_id);
-    }
+    log_info(
+        tt::LogOp,
+        "[a2a_combine DBG] coord={} src_chip_id={} dest_chip_id_via_view={}",
+        mesh_coordinate,
+        src_chip_id,
+        common::stringify(dest_chip_id));
     const auto [neighbors, directions] = common::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
     log_info(
         tt::LogOp,
