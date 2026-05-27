@@ -1851,7 +1851,12 @@ def _run_auto_iterate_loop(
 
             _parallel_extra_jobs = []
             if parallel_agents > 1 and iter_target_component:
-                from .parallel_iterate import pick_n_distinct_targets, AgentJob, run_parallel_agents
+                from .parallel_iterate import (
+                    AgentJob,
+                    build_target_focused_prompt,
+                    pick_n_distinct_targets,
+                    run_parallel_agents,
+                )
 
                 _ungraduated_now, _ = _auto_iteration_blockers(MODEL)
                 _exclude = set([iter_target_component]) | set(permanently_skipped)
@@ -1859,10 +1864,15 @@ def _run_auto_iterate_loop(
                     _ungraduated_now, n=parallel_agents - 1, exclude=list(_exclude)
                 )
                 for _extra in _extra_targets:
-                    _extra_prompt = (
-                        prompt.replace(f"{iter_target_component}", _extra)
-                        if iter_target_component != _extra
-                        else prompt
+                    _extra_attempts = attempts_per_component.get(_extra, 0)
+                    _extra_failure_class = last_failure_class_per_component.get(_extra, "")
+                    _extra_failure_block = per_comp_failure.get(_extra, "")
+                    _extra_prompt = build_target_focused_prompt(
+                        base_prompt=prompt,
+                        target_component=_extra,
+                        attempts_so_far=_extra_attempts,
+                        prior_failure_class=_extra_failure_class,
+                        prior_failure_block=_extra_failure_block,
                     )
                     _parallel_extra_jobs.append(
                         AgentJob(
