@@ -157,12 +157,6 @@ Tensor UpdateKVCacheOperation::create_output_tensors(
     return tensor_args.cache;
 }
 
-tt::tt_metal::operation::Hash UpdateKVCacheOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return tt::tt_metal::operation::hash_operation<UpdateKVCacheOperation>(
-        args.op_type, std::vector<Tensor>{tensor_args.cache, tensor_args.input});
-}
-
 Tensor update_cache(
     const Tensor& cache,
     const Tensor& input,

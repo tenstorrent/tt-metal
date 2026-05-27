@@ -139,20 +139,6 @@ Tensor WindowedScaledDotProductAttentionDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(attrs, tensors), tensors.q.device());
 }
 
-ttsl::hash::hash_t WindowedScaledDotProductAttentionDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensors) {
-    operation::Hash hash = operation::hash_operation<WindowedScaledDotProductAttentionDeviceOperation>(
-        attrs.scale,
-        attrs.output_mem_config,
-        attrs.program_config,
-        attrs.compute_kernel_config,
-        tensors.q,
-        tensors.k,
-        tensors.v,
-        tensors.cu_window_seqlens);
-    return hash;
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor>
 WindowedScaledDotProductAttentionDeviceOperation::create_op_performance_model(
     const operation_attributes_t& attrs, const tensor_args_t& tensors, tensor_return_value_t& output_tensor) {

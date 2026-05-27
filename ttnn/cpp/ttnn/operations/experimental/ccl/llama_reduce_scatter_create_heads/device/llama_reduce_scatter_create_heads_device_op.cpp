@@ -118,25 +118,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::create_output_tensors(
     return tensors;
 }
 
-tt::tt_metal::operation::Hash LlamaReduceScatterCreateHeadsDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    return tt::tt_metal::operation::hash_operation<LlamaReduceScatterCreateHeadsDeviceOperation>(
-        attributes.dim,
-        attributes.cluster_axis,
-        attributes.ring_devices,
-        attributes.num_links,
-        attributes.num_heads,
-        attributes.num_kv_heads,
-        attributes.head_dim,
-        attributes.slice_size,
-        attributes.topology,
-        attributes.use_noc1_only,
-        attributes.use_optimal_ccl_for_llama,
-        tensor_args.input_tensor.dtype(),
-        tensor_args.input_tensor.memory_config(),
-        tensor_args.input_tensor.device()->id());
-}
-
 }  // namespace ttnn::operations::experimental::ccl
 
 namespace ttnn::prim {

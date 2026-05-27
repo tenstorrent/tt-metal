@@ -274,34 +274,6 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     };
 }
 
-ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
-    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
-    const std::vector<Tensor> input_tensors = {
-        tensor_args.input_q,
-        tensor_args.input_k,
-        tensor_args.input_v,
-        tensor_args.joint_q,
-        tensor_args.joint_k,
-        tensor_args.joint_v,
-        tensor_args.gathered_k,
-        tensor_args.gathered_v,
-    };
-    return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
-        input_tensors,
-        args.joint_strategy,
-        args.scale,
-        args.is_causal,
-        args.is_balanced,
-        args.logical_n,
-        args.ring_size,
-        args.compute_kernel_config,
-        args.program_config,
-        args.ccl_core_grid_offset,
-        ttnn::experimental::prim::RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
-            args.all_gather_operation_attributes, args.all_gather_tensor_args) /*all_gather input tensors*/
-    );
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceOperation::create_op_performance_model(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args, RingJointSDPAResult& output_tensors) {
     Tensors input_tensors = {

@@ -80,28 +80,6 @@ WelfordReduceDeviceOperation::tensor_return_value_t WelfordReduceDeviceOperation
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.device());
 }
 
-ttsl::hash::hash_t WelfordReduceDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<WelfordReduceDeviceOperation>(
-        operation_attributes.math_op,
-        operation_attributes.reduce_dim,
-        operation_attributes.scalar,
-        operation_attributes.output_mem_config,
-        operation_attributes.output_dtype,
-        operation_attributes.compute_kernel_config,
-        operation_attributes.sub_core_grids,
-        operation_attributes.correction,
-        operation_attributes.reduce_batch_size,
-        program_factory.index(),
-        tensor_args.dtype(),
-        tensor_args.memory_config(),
-        tensor_args.padded_shape(),
-        tensor_args.logical_shape(),
-        tensor_args.tensor_spec().tile());
-}
-
 ttnn::Tensor welford_reduce(
     const Tensor& input_tensor,
     tt::tt_metal::ReduceOpMath reduce_math,

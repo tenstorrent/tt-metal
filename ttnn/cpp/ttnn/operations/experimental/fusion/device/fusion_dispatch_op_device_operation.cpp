@@ -32,18 +32,6 @@ fusion_dispatch_tensor_return_value_t FusionDispatchOpDeviceOperation::create_ou
     return tensor_args.output_tensor;
 }
 
-ttsl::hash::hash_t FusionDispatchOpDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t&) {
-    // Must differ from GenericOpDeviceOperation::compute_program_hash — same descriptor would
-    // otherwise hit the wrong cached_mesh_workload_t layout (segfault in override).
-    size_t hash = ttsl::hash::type_hash<FusionDispatchOpDeviceOperation>;
-    for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {
-        ttsl::hash::hash_combine(hash, mesh_coord_range);
-        ttsl::hash::hash_combine(hash, ttnn::operations::generic::compute_program_descriptor_hash(program_descriptor));
-    }
-    return hash;
-}
-
 ProgramDescriptor FusionDispatchOpDeviceOperation::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,

@@ -173,25 +173,6 @@ AllToAllAsyncDeviceOperation::tensor_return_value_t AllToAllAsyncDeviceOperation
     return tensor_args.persistent_output_buffer;
 }
 
-ttsl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "AllToAllAsyncDeviceOperation::compute_program_hash is called");
-
-    auto subdevice_id = operation_attributes.sub_device_id;
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    return tt::tt_metal::operation::hash_operation<AllToAllAsyncDeviceOperation>(
-        operation_attributes.in_dim,
-        operation_attributes.out_dim,
-        operation_attributes.num_links,
-        operation_attributes.ring_size,
-        operation_attributes.output_mem_config,
-        operation_attributes.topology,
-        subdevice_core_range_set,
-        tensor_args);
-}
-
 Tensor all_to_all_async(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& persistent_intermediate_buffer,

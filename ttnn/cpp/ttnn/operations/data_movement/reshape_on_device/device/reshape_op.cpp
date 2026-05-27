@@ -81,22 +81,6 @@ ReshapeDeviceOperation::tensor_return_value_t ReshapeDeviceOperation::create_out
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
-ttsl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
-    return operation::hash_operation<ReshapeDeviceOperation>(
-        operation_attributes.logical_output_shape,
-        operation_attributes.padded_output_shape,
-        operation_attributes.output_mem_config,
-        program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_tensor.layout(),
-        input_tensor.padded_shape());
-}
-
 tt::tt_metal::Tensor reshape_on_device(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& logical_output_shape,

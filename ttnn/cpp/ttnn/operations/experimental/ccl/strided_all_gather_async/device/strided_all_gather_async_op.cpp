@@ -33,24 +33,6 @@ StridedAllGatherAsync::tensor_return_value_t StridedAllGatherAsync::create_outpu
     return {create_device_tensor(compute_output_specs(attributes, tensor_args), tensor_args.input_tensor.device())};
 }
 
-tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "StridedAllGatherAsync::compute_program_hash is called");
-    return tt::tt_metal::operation::hash_operation<StridedAllGatherAsync>(
-        attributes.dim,
-        attributes.num_links,
-        attributes.ring_size,
-        attributes.output_mem_config,
-        attributes.topology,
-        attributes.cluster_axis,
-        attributes.num_workers_per_link,
-        attributes.num_buffers_per_channel,
-        attributes.mm_cores_y,
-        attributes.mm_block_ht,
-        attributes.mm_block_wt,
-        tensor_args);
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

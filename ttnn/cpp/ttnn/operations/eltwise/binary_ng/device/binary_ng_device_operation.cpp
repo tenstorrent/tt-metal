@@ -484,32 +484,6 @@ BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_o
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
 }
 
-ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& input_tensor_b = tensor_args.input_tensor_b;
-
-    TT_FATAL(is_device_tensor(input_tensor_a), "Unexpected Tensor type {}", input_tensor_a.storage_type());
-
-    if (input_tensor_b.has_value()) {
-        TT_FATAL(is_device_tensor(*input_tensor_b), "Unexpected Tensor type {}", input_tensor_b->storage_type());
-
-        const auto shard_volumes = get_shard_volumes(
-            input_tensor_a.tensor_spec(), input_tensor_b->tensor_spec(), compute_output_specs(attributes, tensor_args));
-
-        return operation::hash_operation<BinaryNgDeviceOperation>(
-            attributes,
-            input_tensor_a.dtype(),
-            input_tensor_a.memory_config(),
-            input_tensor_b->dtype(),
-            input_tensor_b->memory_config(),
-            shard_volumes);
-    }
-
-    return operation::hash_operation<BinaryNgDeviceOperation>(
-        attributes, input_tensor_a.dtype(), input_tensor_a.memory_config());
-}
-
 bool BinaryNgDeviceOperation::skip_launch(
     const operation_attributes_t& /*attributes*/,
     const tensor_args_t& /*tensor_args*/,

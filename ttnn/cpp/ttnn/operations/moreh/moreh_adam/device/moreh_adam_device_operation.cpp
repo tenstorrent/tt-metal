@@ -100,14 +100,6 @@ MorehAdamOperation::tensor_return_value_t MorehAdamOperation::create_output_tens
     return ret;
 }
 
-auto MorehAdamOperation::compute_program_hash(
-    const MorehAdamOperation::operation_attributes_t& operation_attributes,
-    const MorehAdamOperation::tensor_args_t& tensor_args) -> ttsl::hash::hash_t {
-    auto operation_attributes_without_step_and_lr = operation_attributes;
-    operation_attributes_without_step_and_lr.step = 0;
-    operation_attributes_without_step_and_lr.lr = 0.0f;
-    return ttsl::hash::hash_objects_with_default_seed(operation_attributes_without_step_and_lr, tensor_args);
-}
 }  // namespace ttnn::operations::moreh::moreh_adam
 
 namespace ttnn::prim {
