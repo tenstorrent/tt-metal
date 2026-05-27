@@ -62,21 +62,23 @@ uint32_t float_to_u32(float v) {
 
 // Upper cap on TP>1 worker cores per chip. The MUX channel count is uint8_t
 // but in practice the fabric MUX rejects (or deadlocks) above ~64 full-size
-// channels per core. Cap lower than max for fewer fabric ops per chip —
-// each worker sends ~1 packet per direction per chunk, so doubling workers
-// doubles fabric traffic. 16 keeps enough compute parallelism for the post
-// phase without saturating the fabric link.
+// channels per core. Lower cap = fewer fabric ops per chip (each worker
+// sends ~1 packet per direction per chunk).
 constexpr uint32_t kMaxMuxWorkersPerChip = 16u;
-constexpr uint32_t kMuxRowsThreshold = 2u;  // < this many rows → use 1 worker
+// num_tile_rows below this falls back to the LEGACY whole-tile writer
+// (single worker). The packed-page MUX writer has significant per-chunk
+// fabric overhead that doesn't pay off until we have ≥4 tile-rows worth
+// of compute per chip — at that point parallelism + packed bytes win.
+constexpr uint32_t kMuxRowsThreshold = 4u;
 
-// Aim for ≥2 rows per worker so the chunk-size heuristic can produce ≥2
-// chunks per worker; combined with Phase 5's double-buffered input_cb this
-// gives inter-chunk AG/compute overlap. Capped at kMaxMuxWorkersPerChip.
-//
-// Guard for very small shapes: if the overlap-target would drop below
-// kMinWorkersForOverlap, fall back to max parallelism. At tiny num_tile_rows
-// (e.g. L=512 → 16 rows) the per-worker work is so small that halving the
-// worker count costs more than the overlap saves.
+// Pick num_workers for the MUX/packed path. Aim for ~2 rows per worker so
+// chunk_size_rows = rows_per_worker can pack 2 rows into one fabric packet
+// (256 B of real data per packet). Cap at kMaxMuxWorkersPerChip — past that,
+// the doubled fabric traffic per chip outpaces the additional compute
+// parallelism we'd get. For small num_tile_rows (~8 to kMinWorkersForOverlap)
+// the per-worker compute load is small, so fall back to max parallelism
+// (1 row per worker) — empirically this gives the best balance for
+// prodlike-mid-sized shapes (N=256 H=640pd).
 constexpr uint32_t kMinWorkersForOverlap = 16u;
 uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows) {
     if (num_tile_rows < kMuxRowsThreshold) {
@@ -107,9 +109,9 @@ WanFusedDistributedRmsnormSizing compute_sizing(const WanFusedDistributedRmsnorm
     // fabric round-trips. Aim for 1 chunk per worker (= rows_per_worker rows
     // per packet) for the multichunk shape regime where each worker already
     // has few rows. Cap at kMaxChunkSizeRows for L1 budget (chunk-sized CBs:
-    // input, stats_local, transposed_local, packed_gathered all scale with
+    // input, stats_local, packed_gathered, stats_gathered all scale with
     // chunk_size).
-    constexpr uint32_t kMaxChunkSizeRows = 4u;
+    constexpr uint32_t kMaxChunkSizeRows = 8u;
     s.chunk_size_rows = std::min<uint32_t>(std::max(1u, rows_per_worker), kMaxChunkSizeRows);
     s.window_size = s.chunk_size_rows;
     // Pages are addressed across the whole chip (not per-worker) so the
@@ -279,7 +281,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // N's compute and chunk N's output drain. When the worker has ≥2 rows, pick
     // ceil(rows/2) as the chunk size (capped at kMaxChunkSizeRows); when only
     // 1 row, chunk=1 (no overlap possible at all).
-    constexpr uint32_t kMaxChunkSizeRows = 4u;
+    constexpr uint32_t kMaxChunkSizeRows = 8u;
     // Aim for 1 chunk per worker (= rows_per_worker rows per packet) to
     // minimize fabric ops. Cap for L1 budget.
     const uint32_t chunk_size_rows = std::min<uint32_t>(std::max(1u, num_tile_rows_per_worker), kMaxChunkSizeRows);
