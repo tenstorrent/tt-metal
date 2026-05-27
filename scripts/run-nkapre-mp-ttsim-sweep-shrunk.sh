@@ -44,8 +44,11 @@ cp "$CRAQ_SIM/src/_out/release_wh/libttsim.so" "$WH_SIM_DIR/libttsim.so"
 cp "$TT_METAL_HOME/tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml" "$WH_SIM_DIR/soc_descriptor.yaml"
 export TT_METAL_SIMULATOR="$WH_SIM_DIR/libttsim.so"
 export TT_METAL_SIMULATOR_HOME="$WH_SIM_DIR"
-export TT_METAL_MOCK_CLUSTER_DESC_PATH="${TT_METAL_MOCK_CLUSTER_DESC_PATH:-tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml}"
 export ARCH_NAME=wormhole_b0
+# tt-run blocks TT_METAL_MOCK_CLUSTER_DESC_PATH from parent env; per-rank mock
+# descriptors must be passed via --mock-cluster-rank-binding (T3K big mesh).
+MOCK_CLUSTER_RANK_BINDING="${MOCK_CLUSTER_RANK_BINDING:-tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_2x4_big_mesh_cluster_desc_mapping.yaml}"
+TT_RUN_MOCK_ARGS="--mock-cluster-rank-binding ${MOCK_CLUSTER_RANK_BINDING}"
 
 TTSIMD_BIN=""
 TTSIM_RPC_SRC=""
@@ -131,10 +134,14 @@ if [ "$use_daemon" -eq 1 ]; then
     export TTSIMD_SOCKET
     export TT_TTSIMD_SOCKET="$TTSIMD_SOCKET"
     export TT_METAL_SIMULATOR="$WH_SIM_DIR/libttsim_rpc.so"
+    # Client ranks use physical chip IDs; ttsimd is a separate process and must
+    # match so eth peers and fabric handshakes target the same Device*.
+    export TT_METAL_NO_CHIP_ID_REMAP=1
+    export TTSIMD_PHYSICAL_CHIP_IDS=1
     # Each run_cmd starts its own ttsimd so a daemon crash in test N does not
     # poison test N+1. Trap still cleans up the last one on exit.
     trap stop_ttsimd EXIT INT TERM
-    log "daemon mode (per-test ttsimd): TT_METAL_SIMULATOR=$TT_METAL_SIMULATOR TTSIMD_SOCKET=$TTSIMD_SOCKET timeout=${PER_CMD_TIMEOUT}s"
+    log "daemon mode (per-test ttsimd): TT_METAL_SIMULATOR=$TT_METAL_SIMULATOR TTSIMD_SOCKET=$TTSIMD_SOCKET mock=$MOCK_CLUSTER_RANK_BINDING timeout=${PER_CMD_TIMEOUT}s"
 else
     log "in-process ttsim: TT_METAL_SIMULATOR=$TT_METAL_SIMULATOR timeout=${PER_CMD_TIMEOUT}s"
 fi
@@ -229,35 +236,35 @@ fi
 
 # 2.mp/2x2_fabric_ubench — single unicast, 1 packet, size 64.
 run_cmd "2.mp/2x2_fabric_ubench_shrunk" \
-    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_t3k_2x2_ttsim.yaml"
+    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' ${TT_RUN_MOCK_ARGS} --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_t3k_2x2_ttsim.yaml"
 
 # 2.mp/multi_host_fabric — smallest single gtest case.
 run_cmd "2.mp/multi_host_fabric_shrunk" \
-    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter='InterMeshSplit1x2FabricFixture.MultiHopUnicast'"
+    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' ${TT_RUN_MOCK_ARGS} --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter='InterMeshSplit1x2FabricFixture.MultiHopUnicast'"
 
 # 2.mp/mesh_socket — single iteration, 1 transaction, 256-byte data.
 run_cmd "2.mp/mesh_socket_shrunk" \
-    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_t3k_2x2_ttsim.yaml"
+    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' ${TT_RUN_MOCK_ARGS} --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_t3k_2x2_ttsim.yaml"
 
 # Distributed multiprocess tests (already small, just narrow gtest filter).
 run_cmd "2.mp/BigMeshDualRankTest2x4" \
-    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter='*BigMeshDualRankTest2x4*'"
+    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' ${TT_RUN_MOCK_ARGS} --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter='*BigMeshDualRankTest2x4*'"
 run_cmd "2.mp/BigMeshDualRankMeshShapeSweep" \
-    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter='*BigMeshDualRankMeshShapeSweep*'"
+    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' ${TT_RUN_MOCK_ARGS} --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter='*BigMeshDualRankMeshShapeSweep*'"
 
 # ttnn dual-rank send/recv: just the first parametrized case per fixture.
 run_cmd "2.mp/ttnn_dual_rank_2x2_shrunk" \
-    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/ttnn/multiprocess/unit_tests_dual_rank_2x2 --gtest_filter='MeshDeviceSplit2x2SendRecvTests/MeshDeviceSplit2x2SendRecvFixture.SendRecvAsync/0'"
+    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' ${TT_RUN_MOCK_ARGS} --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/ttnn/multiprocess/unit_tests_dual_rank_2x2 --gtest_filter='MeshDeviceSplit2x2SendRecvTests/MeshDeviceSplit2x2SendRecvFixture.SendRecvAsync/0'"
 run_cmd "2.mp/ttnn_dual_rank_2x4_shrunk" \
-    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4 --gtest_filter='BigMeshDualRankTest2x4.HostAllGather'"
+    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' ${TT_RUN_MOCK_ARGS} --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4 --gtest_filter='BigMeshDualRankTest2x4.HostAllGather'"
 
 run_cmd "2.mp/ttnn_launch_op" \
-    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml build/test/ttnn/unit_tests_ttnn --gtest_filter='*LaunchOperation*'"
+    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' ${TT_RUN_MOCK_ARGS} --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml build/test/ttnn/unit_tests_ttnn --gtest_filter='*LaunchOperation*'"
 
 run_cmd "2.mp/py_data_parallel" \
-    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml pytest -svv tests/ttnn/distributed/test_data_parallel_example.py"
+    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' ${TT_RUN_MOCK_ARGS} --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml pytest -svv tests/ttnn/distributed/test_data_parallel_example.py"
 run_cmd "2.mp/py_submesh" \
-    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml pytest -svv tests/ttnn/distributed/test_submesh_not_spanning_all_ranks_T3000.py"
+    "tt-run --mpi-args '--allow-run-as-root --oversubscribe' ${TT_RUN_MOCK_ARGS} --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml pytest -svv tests/ttnn/distributed/test_submesh_not_spanning_all_ranks_T3000.py"
 
 log "Summary: $SUMMARY"
 python3 - "$SUMMARY" <<'PY'
