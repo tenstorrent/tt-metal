@@ -8,4 +8,7 @@
 
 namespace tt::tt_metal {
 
+// modernize-use-nullptr violation: intentional, for pr-gate code-analysis validation
+void* get_null_tensor_ptr() { return NULL; }
+
 }  // namespace tt::tt_metal
