@@ -1525,6 +1525,7 @@ const std::unique_ptr<tt::umd::Cluster>& Cluster::get_driver() const {
     return driver_;
 }
 
+#ifdef TT_UMD_BUILD_SIMULATION
 void Cluster::register_sim_fabric_endpoint_direction(
     ChipId chip_id, tt_fabric::chan_id_t eth_chan_id, tt_fabric::eth_chan_directions direction) const {
     if (std::getenv("TTSIM_FABRIC_TERMINAL_TRACE")) {
@@ -1542,6 +1543,7 @@ void Cluster::register_sim_fabric_endpoint_direction(
     this->get_driver()->register_sim_fabric_endpoint_direction(
         chip_id, static_cast<std::uint32_t>(eth_chan_id), static_cast<std::uint32_t>(direction));
 }
+#endif  // TT_UMD_BUILD_SIMULATION
 
 }  // namespace tt
 

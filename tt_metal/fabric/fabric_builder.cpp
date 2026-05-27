@@ -98,8 +98,10 @@ void FabricBuilder::create_routers() {
                 .is_dispatch_link = is_dispatch,
             };
 
+#ifdef TT_UMD_BUILD_SIMULATION
             cluster.register_sim_fabric_endpoint_direction(
                 device_->id(), eth_chan, control_plane.routing_direction_to_eth_direction(direction));
+#endif  // TT_UMD_BUILD_SIMULATION
 
             auto router_builder = FabricRouterBuilder::create(device_, program_, local_node_, location);
             routers_.insert({eth_chan, std::move(router_builder)});
