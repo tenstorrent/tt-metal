@@ -89,11 +89,6 @@ struct DataMovementConfiguration {
 };
 
 // A name identifying a KernelSpec within a ProgramSpec.
-//
-// CONVENTION: define names as `constexpr const char*` constants, e.g.:
-//   constexpr const char* READER_KERNEL = "reader";
-//   KernelSpec{.unique_id = READER_KERNEL, ...};
-// Reusing a single constant helps catch typos and errors at compile time.
 using KernelSpecName = std::string;
 
 // A KernelSpec is a descriptor for a Tenstorrent kernel:
