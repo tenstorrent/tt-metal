@@ -545,7 +545,29 @@ PhysicalSystemDescriptor run_local_discovery(
         cluster_desc = std::make_unique<tt::umd::ClusterDescriptor>(*cluster.get_cluster_description());
     } else {
         // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
-        cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
+        // FIX AB (#42429): Cluster::create_cluster_descriptor forces device_init_failure_action=THROW.
+        // When called after a Metal init that left relays broken (all non-MMIO devices have
+        // relay_broken_=true), the new RemoteCommunicationLegacyFirmware objects created during
+        // topology re-discovery start with relay_broken_=false and time out (30s) trying to probe
+        // remote devices via the broken ETH relay.  The exception then propagates through
+        // ControlPlane::init_control_plane_auto_discovery → set_fabric_config, aborting CreateDevices
+        // entirely and causing "0/8 chips" (FIX GS-3 in the CI wrapper).
+        //
+        // Fix: catch the exception and fall back to the existing cluster descriptor, which already
+        // reflects the correct topology from the initial Cluster construction.  The ControlPlane will
+        // still be initialised with the full topology; broken devices are identified separately via
+        // relay_broken_ flags set during run_launch_phase.
+        try {
+            cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
+        } catch (const std::exception& e) {
+            log_warning(
+                LogMetal,
+                "FIX AB (#42429): Live topology re-discovery threw during ControlPlane init "
+                "(likely broken ETH relay from prior Metal init): {}. "
+                "Falling back to cached cluster descriptor.",
+                e.what());
+            cluster_desc = std::make_unique<tt::umd::ClusterDescriptor>(*cluster.get_cluster_description());
+        }
     }
     const auto& chip_unique_ids = cluster_desc->get_chip_unique_ids();
     const auto& eth_connections = cluster_desc->get_ethernet_connections();
