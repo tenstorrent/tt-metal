@@ -259,6 +259,28 @@ std::set<tt::tt_metal::AsicID> compute_required_asics_for_fabric_node(
     return required_asics;
 }
 
+void add_intra_mesh_port_type_preferred_constraints(
+    ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
+    const LogicalAdjacencyMap& logical_adjacency,
+    const PhysicalAdjacencyMap& physical_adjacency,
+    const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank,
+    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
+    const TopologyMappingConfig& config) {
+    if (!config.port_type_links.has_value()) {
+        return;
+    }
+    const PortTypeLinkMap& port_type_links = *config.port_type_links;
+
+    for (const auto& [fabric_node, _] : logical_adjacency) {
+        const auto preferred_asics = compute_preferred_asics_for_fabric_node(
+            fabric_node, logical_adjacency, physical_adjacency, node_to_host_rank, asic_to_host_rank, port_type_links);
+
+        if (!preferred_asics.empty()) {
+            intra_mesh_constraints.add_preferred_constraint(fabric_node, preferred_asics);
+        }
+    }
+}
+
 TopologyMappingResult map_mesh_to_physical(
     MeshId mesh_id,
     const LogicalAdjacencyMap& logical_adjacency,
@@ -404,6 +426,9 @@ TopologyMappingResult map_mesh_to_physical(
                 pinnings_str);
         }
     }
+
+    add_intra_mesh_port_type_preferred_constraints(
+        constraints, logical_adjacency, physical_adjacency, node_to_host_rank, asic_to_host_rank, config);
 
     ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED;
     auto mode_it = config.mesh_validation_modes.find(mesh_id);
@@ -2586,6 +2611,28 @@ TopologyMappingResult map_multi_mesh_to_physical(
             // Build ASIC positions map and add pinning constraints
             auto asic_positions_to_asic_ids = build_asic_positions_map(physical_graph, config);
             add_pinning_constraints(intra_mesh_constraints, asic_positions_to_asic_ids, config, logical_mesh_id);
+
+            std::map<FabricNodeId, MeshHostRankId> node_to_host_rank;
+            if (fabric_node_id_to_mesh_rank.contains(logical_mesh_id)) {
+                node_to_host_rank = fabric_node_id_to_mesh_rank.at(logical_mesh_id);
+            }
+            std::map<tt::tt_metal::AsicID, MeshHostRankId> asic_to_host_rank;
+            if (asic_id_to_mesh_rank.contains(logical_mesh_id)) {
+                asic_to_host_rank = asic_id_to_mesh_rank.at(logical_mesh_id);
+            } else {
+                for (const auto& [_, asic_set] : config.hostname_to_asics) {
+                    for (const auto& asic_id : asic_set) {
+                        asic_to_host_rank[asic_id] = ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
+                    }
+                }
+            }
+            add_intra_mesh_port_type_preferred_constraints(
+                intra_mesh_constraints,
+                logical_graph.get_adjacency_map(),
+                physical_graph.get_adjacency_map(),
+                node_to_host_rank,
+                asic_to_host_rank,
+                config);
 
             // Determine validation mode
             auto validation_mode = determine_intra_mesh_validation_mode(config, logical_mesh_id);

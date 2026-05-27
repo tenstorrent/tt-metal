@@ -656,8 +656,8 @@ TEST(PortTypeMappingHelpers, PortTypePreferenceRank) {
 }
 
 TEST(PortTypeMappingHelpers, CanonicalPortTypeLinkKey) {
-    const auto a = TopologyMapperUtilsTest::make_asic(10);
-    const auto b = TopologyMapperUtilsTest::make_asic(20);
+    const tt::tt_metal::AsicID a{10};
+    const tt::tt_metal::AsicID b{20};
     EXPECT_EQ(canonical_port_type_link_key(a, b), (PortTypeLinkKey{a, b}));
     EXPECT_EQ(canonical_port_type_link_key(b, a), (PortTypeLinkKey{a, b}));
 }
@@ -708,7 +708,8 @@ TEST(PortTypeMappingHelpers, ComputePreferredAsicsForSameHostNeighbor) {
 
     const auto preferred_for_node1 = compute_preferred_asics_for_fabric_node(
         node1, logical_adj, physical_adj, node_ranks, asic_ranks, port_type_links);
-    EXPECT_EQ(preferred_for_node1, (std::set<tt::tt_metal::AsicID>{asic_b}));
+    // Both AsicA and AsicB have TRACE links to rank-0 ASICs (conservative pre-filter).
+    EXPECT_EQ(preferred_for_node1, (std::set<tt::tt_metal::AsicID>{asic_a, asic_b}));
 }
 
 TEST(PortTypeMappingHelpers, ComputeRequiredAsicsForCrossHostNeighbor) {
@@ -747,6 +748,46 @@ TEST(PortTypeMappingHelpers, ComputeRequiredAsicsForCrossHostNeighbor) {
     const auto required_for_node1 = compute_required_asics_for_fabric_node(
         node1, logical_adj, physical_adj, node_ranks, asic_ranks, port_type_links);
     EXPECT_EQ(required_for_node1, (std::set<tt::tt_metal::AsicID>{asic_x}));
+}
+
+TEST(PortTypeMappingHelpers, MapMeshPrefersTraceForSameHostEdge) {
+    const MeshId mesh_id{0};
+    const FabricNodeId node0(mesh_id, 0);
+    const FabricNodeId node1(mesh_id, 1);
+    const tt::tt_metal::AsicID asic_a{100};
+    const tt::tt_metal::AsicID asic_b{101};
+    const tt::tt_metal::AsicID asic_c{102};
+
+    LogicalAdjacencyMap logical_adj;
+    logical_adj[node0] = {node1};
+    logical_adj[node1] = {node0};
+
+    PhysicalAdjacencyMap physical_adj;
+    physical_adj[asic_a] = {asic_b, asic_c};
+    physical_adj[asic_b] = {asic_a};
+    physical_adj[asic_c] = {asic_a};
+
+    const MeshHostRankId rank0{0};
+    std::map<FabricNodeId, MeshHostRankId> node_ranks{{node0, rank0}, {node1, rank0}};
+    std::map<tt::tt_metal::AsicID, MeshHostRankId> asic_ranks{{asic_a, rank0}, {asic_b, rank0}, {asic_c, rank0}};
+
+    PortTypeLinkMap port_type_links{
+        {canonical_port_type_link_key(asic_a, asic_b), tt::tt_metal::PortType::TRACE},
+        {canonical_port_type_link_key(asic_a, asic_c), tt::tt_metal::PortType::QSFP_DD},
+    };
+
+    TopologyMappingConfig config_without_port_types;
+    const auto result_without =
+        map_mesh_to_physical(mesh_id, logical_adj, physical_adj, node_ranks, asic_ranks, config_without_port_types);
+    ASSERT_TRUE(result_without.success);
+
+    TopologyMappingConfig config_with_port_types;
+    config_with_port_types.port_type_links = port_type_links;
+    const auto result_with =
+        map_mesh_to_physical(mesh_id, logical_adj, physical_adj, node_ranks, asic_ranks, config_with_port_types);
+    ASSERT_TRUE(result_with.success);
+    EXPECT_NE(result_with.fabric_node_to_asic.at(node0), asic_c);
+    EXPECT_NE(result_with.fabric_node_to_asic.at(node1), asic_c);
 }
 
 // =============================================================================

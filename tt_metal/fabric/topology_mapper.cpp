@@ -508,7 +508,8 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
             }
         }
         if (!physical_mesh_asics.empty()) {
-            config.port_type_links = build_port_type_link_map(physical_system_descriptor_, physical_mesh_asics);
+            config.port_type_links = ::tt::tt_metal::experimental::tt_fabric::build_port_type_link_map(
+                physical_system_descriptor_, physical_mesh_asics);
             log_debug(
                 tt::LogFabric,
                 "Port-type link map: {} undirected ASIC pair(s) with port type metadata",
