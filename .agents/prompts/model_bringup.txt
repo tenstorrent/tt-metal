@@ -1,0 +1,18 @@
+/goal Bring up the target HuggingFace model end-to-end through the agent-driven TTNN model bringup pipeline.
+
+Target model: HF_MODEL
+
+Work in the current tt-metal checkout on the current branch. Read `.agents/notes/model-bringup-mission.md` and `.agents/notes/output-files.md` first, then use the repo-local skills in this exact order:
+
+1. Use $functional-decoder.
+2. Use $optimize-decoder.
+3. Use $multichip-decoder.
+4. Use $productize.
+
+For each stage, read the skill, understand its final objectives, and iterate on that stage until it is genuinely complete before moving to the next stage. Do not treat a partial implementation, diagnostic failure, skipped validation, reduced scope, or unresolved blocker as completion unless the skill itself defines that outcome as a final blocked result with evidence.
+
+When a stage fails, debug it with curiosity and persistence: inspect the reference implementation, read relevant tt-metal and TTNN code, reduce failures to evidence, fix issues in the implementation when possible, and rerun the needed validation. Use the previous completed stage as the baseline for the next stage.
+
+Keep the work log current as you go. Record commands, hardware, branch/commit, important failures, fixes, measurements, and decisions. Keep final outputs in the locations requested by the active skill and `.agents/notes/output-files.md`.
+
+The overall goal is complete only when all final objectives from all four skills have been achieved, including the final reports and evidence required by each skill.
