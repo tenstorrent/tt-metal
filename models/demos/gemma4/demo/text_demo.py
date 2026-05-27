@@ -143,7 +143,7 @@ def load_demo_prompt(target_bucket, instruct=True):
 # Batch-32 batched prefill helpers and tests.
 _BATCH_DEMO_SIZE = 32
 # Prefill lengths for ``test_demo_batch_32`` (4096 hits the 128k batched-prefill ceiling).
-_DEMO_BATCH_PREFILL_LENGTHS = [128, 1024, 2048, 4096]
+_DEMO_BATCH_PREFILL_LENGTHS = [128, 512, 1024, 2048, 4096]
 # Prefill-only batch coverage; 2048/4096 may xfail on DRAM-limited meshes (see below).
 _BATCH_PREFILL_LENGTHS = [128, 1024, 2048]
 
