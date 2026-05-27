@@ -55,6 +55,12 @@ def test_pipeline_av_fast_stage1_only(
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
+    num_frames = int(os.environ.get("NUM_FRAMES", "121"))
+    height = int(os.environ.get("HEIGHT", "512"))
+    width = int(os.environ.get("WIDTH", "768"))
+
+    # In-init warmup off: stage-1-only test never runs s2, so skip the
+    # full-res s2 compile. We warm s1 explicitly below.
     pipeline = LTXFastPipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=_default_checkpoint(),
@@ -65,7 +71,16 @@ def test_pipeline_av_fast_stage1_only(
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
+        run_warmup=False,
     )
+
+    if os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True"):
+        pipeline.warmup_buffers(
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            stages=("s1",),
+        )
 
     os.environ.setdefault("LTX_DUMP_STAGE1_AUDIO", "1")
     output_path = os.environ.get("OUTPUT_PATH", "ltx_fast_stage1_only.mp4")
@@ -73,9 +88,9 @@ def test_pipeline_av_fast_stage1_only(
     s1_video, s1_audio = pipeline.generate_stage1_only(
         _load_prompt(),
         output_path=output_path,
-        num_frames=int(os.environ.get("NUM_FRAMES", "121")),
-        height=int(os.environ.get("HEIGHT", "512")),
-        width=int(os.environ.get("WIDTH", "768")),
+        num_frames=num_frames,
+        height=height,
+        width=width,
         seed=int(os.environ.get("SEED", "10")),
     )
 
