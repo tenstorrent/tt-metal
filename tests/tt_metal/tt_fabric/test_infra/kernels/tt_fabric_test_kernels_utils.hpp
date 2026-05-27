@@ -1104,7 +1104,7 @@ struct SenderKernelTrafficConfig {
         }
 
         // STEP 2: Wait for space
-        if constexpr (BENCHMARK_MODE){
+        if constexpr (BENCHMARK_MODE) {
             connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
             // STEP 3: Send packet
             auto* conn = static_cast<EdmSenderT*>(connection_ptr_);
@@ -1127,7 +1127,6 @@ struct SenderKernelTrafficConfig {
             connection_manager_->template send_header_non_blocking<BENCHMARK_MODE>(
                 connection_ptr_, connection_idx_, (uint32_t)packet_header);
         }
-
 
         // STEP 4: Update state (after successful send)
         if constexpr (!BENCHMARK_MODE) {

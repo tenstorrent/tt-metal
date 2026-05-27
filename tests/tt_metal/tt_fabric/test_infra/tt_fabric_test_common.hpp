@@ -169,8 +169,8 @@ public:
         }
     }
 
-    bool open_devices(const TestFabricSetup& fabric_setup,
-                      ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE) {
+    bool open_devices(
+        const TestFabricSetup& fabric_setup, ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE) {
         const auto& topology = fabric_setup.topology;
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
 

@@ -16,10 +16,8 @@
 #include "tt_fabric_test_interfaces.hpp"
 
 EthCoreBufferReadback::EthCoreBufferReadback(
-    const std::unordered_map<MeshCoordinate, TestDevice>& test_devices,
-    TestFixture& fixture)
-    : test_devices_(test_devices), fixture_(fixture) {
-}
+    const std::unordered_map<MeshCoordinate, TestDevice>& test_devices, TestFixture& fixture) :
+    test_devices_(test_devices), fixture_(fixture) {}
 
 void EthCoreBufferReadback::clear_buffer(uint32_t address, size_t buffer_size) {
     auto& ctx = tt::tt_metal::MetalContext::instance();
@@ -44,7 +42,8 @@ void EthCoreBufferReadback::clear_buffer(uint32_t address, size_t buffer_size) {
     }
 }
 
-std::vector<EthCoreBufferResult> EthCoreBufferReadback::read_buffer(uint32_t address, size_t buffer_size, bool read_all_active) {
+std::vector<EthCoreBufferResult> EthCoreBufferReadback::read_buffer(
+    uint32_t address, size_t buffer_size, bool read_all_active) {
     auto& ctx = tt::tt_metal::MetalContext::instance();
     auto& cluster = ctx.get_cluster();
     auto& control_plane = ctx.get_control_plane();
@@ -94,7 +93,14 @@ std::vector<EthCoreBufferResult> EthCoreBufferReadback::read_buffer(uint32_t add
             for (const auto& link_index : link_indices) {
                 const auto eth_channel = eth_cores.at(link_index);
                 const auto& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, tt::CoordSystem::LOGICAL);
-                process_core(coord, fabric_node_id, CoreCoord(eth_core.x, eth_core.y), eth_channel, direction, link_index, physical_chip_id);
+                process_core(
+                    coord,
+                    fabric_node_id,
+                    CoreCoord(eth_core.x, eth_core.y),
+                    eth_channel,
+                    direction,
+                    link_index,
+                    physical_chip_id);
             }
         }
 

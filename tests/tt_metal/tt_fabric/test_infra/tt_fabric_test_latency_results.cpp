@@ -211,8 +211,7 @@ void LatencyResultsManager::setup_latency_test_workers(
 
         // Set latency responder kernel
         receiver_test_device.set_receiver_kernel_src(
-            receiver_core,
-            "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_latency_responder.cpp");
+            receiver_core, "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_latency_responder.cpp");
 
         log_debug(
             tt::LogTest,
@@ -608,8 +607,8 @@ void LatencyResultsManager::write_summary_csv_to_file(
 
         csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology << ","
                    << result.sender_device_id << "," << result.sender_core_x << "," << result.sender_core_y << ","
-                   << result.responder_device_id << "," << result.responder_core_x << "," << result.responder_core_y << ","
-                   << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
+                   << result.responder_device_id << "," << result.responder_core_x << "," << result.responder_core_y
+                   << "," << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
                    << result.payload_size << "," << std::fixed << std::setprecision(2) << result.net_min_ns << ","
                    << result.net_max_ns << "," << result.net_avg_ns << "," << result.net_p99_ns << ","
                    << result.responder_min_ns << "," << result.responder_max_ns << "," << result.responder_avg_ns << ","

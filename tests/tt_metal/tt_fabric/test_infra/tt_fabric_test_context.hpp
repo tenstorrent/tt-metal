@@ -127,8 +127,8 @@ public:
 
     void process_traffic_config(TestConfig& config);
 
-    bool open_devices(const TestFabricSetup& fabric_setup,
-                      ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE) {
+    bool open_devices(
+        const TestFabricSetup& fabric_setup, ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE) {
         return fixture_->open_devices(fabric_setup, channel_trimming_mode);
     }
 
