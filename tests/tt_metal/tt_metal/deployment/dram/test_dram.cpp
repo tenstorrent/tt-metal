@@ -120,6 +120,25 @@ struct DramPatternTimingSummary {
     uint64_t bytes[kMaxPatternId] = {};
 };
 
+[[maybe_unused]]
+static double error_rate_bank(const DramBankSummary& bank) {
+    uint64_t total_errors = bank.suspected_write_error_bytes + bank.suspected_read_error_bytes;
+    return (double)total_errors / bank.checked_bytes;
+};
+
+[[maybe_unused]]
+static double error_rate_chip(const DramChipSummary& chip) {
+    double total = 0.0;
+    int count = 0;
+
+    for (auto& b : chip.banks) {
+        total += error_rate_bank(b);
+        count++;
+    }
+
+    return total / count;
+};
+
 static void accumulate_pattern_timing_summary(DramPatternTimingSummary& dst, const DramMultiInstanceSummary& run) {
     for (const auto& entry : run.per_core_results) {
         const DramBaseResult& r = entry.result;
@@ -322,7 +341,7 @@ static void log_dram_bank_result_table(const DramGalaxySummary& s) {
 
     const size_t bdf_col_width = std::max(std::string("BDF").size(), std::string("0000:00:00.0").size());
     const size_t device_id_col_width = std::string("Device ID").size();
-    const size_t bank_col_width = 2;
+    const size_t bank_col_width = 9;
 
     auto make_separator = [&]() {
         std::string sep = "+";
@@ -351,7 +370,7 @@ static void log_dram_bank_result_table(const DramGalaxySummary& s) {
     std::string header = "|";
     header += make_left_cell("BDF", bdf_col_width) + "|";
     header += make_left_cell("Device ID", device_id_col_width) + "|";
-    for (size_t bank = 0; bank < num_dram_channels; ++bank) {
+    for (size_t bank = 0; bank < num_dram_channels; bank++) {
         header += make_center_cell(fmt::format("D{}", bank), bank_col_width) + "|";
     }
     log_info(tt::LogTest, "{}", header);
@@ -362,9 +381,11 @@ static void log_dram_bank_result_table(const DramGalaxySummary& s) {
         row += make_left_cell(pci_bdf_for_device_id(chip.device_id), bdf_col_width) + "|";
         row += make_left_cell(fmt::format("{}", chip.device_id), device_id_col_width) + "|";
 
-        for (size_t bank = 0; bank < num_dram_channels; ++bank) {
+        for (size_t bank = 0; bank < num_dram_channels; bank++) {
             if (bank < chip.banks.size()) {
-                row += make_center_cell(chip.banks[bank].pass ? "OK" : "NO", bank_col_width) + "|";
+                std::string msg =
+                    chip.banks[bank].pass ? "OK" : fmt::format("{:.2}ppm", error_rate_bank(chip.banks[bank]) * 1e6);
+                row += make_center_cell(msg, bank_col_width) + "|";
             } else {
                 row += make_center_cell("--", bank_col_width) + "|";
             }
@@ -399,7 +420,7 @@ static void print_subtest_status(
         pattern_name(pattern_id),
         elapsed_ms);
 
-    if (summary != nullptr && !summary->pass) {
+    if (summary && !summary->pass) {
         out = fmt::format(
             "{} {}/{} suspected write errors {}/{} suspected read errors",
             out,
@@ -733,7 +754,30 @@ static void log_galaxy_summary(const char* name, const DramGalaxySummary& s, std
     }
 
     if (!s.pass) {
-        log_info(tt::LogTest, "write_err={} read_err={}", format_error_pct(write_pct), format_error_pct(read_pct));
+        log_critical(tt::LogTest, "write_err={} read_err={}", format_error_pct(write_pct), format_error_pct(read_pct));
+        for (auto& c : s.chips) {
+            if (c.pass) {
+                continue;
+            }
+
+            for (int i = 0; i < c.banks.size(); i++) {
+                auto& b = c.banks[i];
+                if (b.pass) {
+                    continue;
+                }
+
+                log_critical(
+                    tt::LogTest,
+                    "bdf={} device_id={} bank_id={}"
+                    " checked_bytes={} write_err={} read_err={}",
+                    pci_bdf_for_device_id(c.device_id),
+                    c.device_id,
+                    i,
+                    b.checked_bytes,
+                    b.suspected_write_error_bytes,
+                    b.suspected_read_error_bytes);
+            }
+        }
     }
 
     log_dram_bank_result_table(s);
