@@ -455,8 +455,22 @@ class TTSeamlessM4Tv2Model:
         ttnn.synchronize_device(self.device)
 
     def clear_runtime_program_cache(self) -> None:
-        """Drop JIT programs and per-shape conv/matmul prep caches so the next modality fits in L1."""
-        self.device.disable_and_clear_program_cache()
+        """Release the decode trace and per-shape conv/matmul prep caches between modalities.
+
+        The *device* program cache is deliberately left alone (enabled, not cleared):
+          * Clearing it does not free runtime L1 — circular buffers are allocated per dispatch,
+            not held by cached programs — so it does not help the next modality "fit".
+          * Once the HiFi-GAN vocoder has populated it, ``(disable_and_)clear_program_cache`` takes
+            many minutes on the BH mesh, stalling the demo between tasks.
+          * Leaving it enabled lets decode-trace capture work and lets the vocoder's repeated
+            same-shape conv chunks reuse compiled programs instead of recompiling each window.
+        Persistent *device* memory (preprocessed conv/matmul weights) is still freed via the
+        per-module prep caches cleared below.
+        """
+        # A captured decode trace hard-codes this modality's programs *and* KV/encoder buffer
+        # addresses; release it so a later ``generate()`` re-captures against its own buffers
+        # instead of replaying a stale trace (which hangs in ``execute_trace``).
+        self.release_text_decoder_decode_trace()
         self.vocoder._conv1d_prepared_cache.clear()
         self.vocoder._matmul_pc_cache.clear()
         self.speech_encoder._conv1d_prepared_cache.clear()
@@ -1944,6 +1958,12 @@ class TTSeamlessM4Tv2Model:
             cur_pos = seed_len
             # Trace from the first decode-loop step (one SDPA bucket; no mid-loop re-capture).
             decode_trace_ready = use_decode_trace and not do_sample
+            # A decode trace captured by a previous ``generate()`` call references that call's
+            # ``kv_cache`` / encoder buffers, which were just reallocated above. Release it so this
+            # call re-captures against its own buffers (guards back-to-back generate without a
+            # ``clear_runtime_program_cache`` in between).
+            if decode_trace_ready:
+                self.release_text_decoder_decode_trace()
             decode_steps_remaining = max_new_tokens
 
             if seed_len > 0:
