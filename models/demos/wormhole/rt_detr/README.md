@@ -53,7 +53,7 @@ Official repo: [lyuwenyu/RT-DETR](https://github.com/lyuwenyu/RT-DETR)
 ```
 rt_detr/
 ├── demo/
-│   ├── demo.py                  # Demo inference script
+│   ├── demo_inference.py                  # Demo inference script
 │   ├── demo_images/             # Input images
 │   └── demo_output/             # Annotated output images
 ├── tt/
