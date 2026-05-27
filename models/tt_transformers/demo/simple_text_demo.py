@@ -198,8 +198,11 @@ def create_tt_page_table(global_batch_size, data_parallel, paged_attention_confi
     page_table = None
 
     if paged_attention_config:
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
+        # Diagnostic: use sequential (identity) permutation to test whether randperm-based
+        # physical page assignment causes slot-dependent numerical differences.
+        # If ci-eval-32 passes with arange but fails with randperm, the root cause is
+        # physical DRAM page ordering affecting SDPA NOC read behavior.
+        permutation = torch.arange(paged_attention_config.max_num_blocks)
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation).repeat(data_parallel)
         page_table = reverse_permutation.reshape(
@@ -1257,6 +1260,20 @@ def test_demo_text(
                 prompt_tokens=input_tokens_prefill_pt,
                 output_tokens=out_tok,
             )
+
+            # Diagnostic: at decode step 0, log argmax tokens for all users to reveal
+            # if the same prompt at different batch slots produces different predictions.
+            # This narrows the root cause to a single forward pass vs accumulated state.
+            if iteration == 0 and "ci-eval-32" in test_id:
+                if device_sampling_params is not None:
+                    diag_toks = logits.view(-1).tolist()
+                else:
+                    diag_toks = torch.argmax(logits.view(global_batch_size, -1), dim=-1).tolist()
+                logger.info(f"[DIAG step-0 batch={batch_idx}] argmax tokens per slot: {diag_toks}")
+                # Check if same-prompt slots produce identical tokens
+                # In batch 0: prompts are [p0,p1,...,p31]; in batch 1: [p1,p2,...,p31,p0]
+                # So for batch>=1, slot i has the same prompt as slot i+1 in the previous batch.
+                # Within a single batch, prompts are all different so we just log the raw tokens.
 
             # Get the next token
             if device_sampling_params is not None:
