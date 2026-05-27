@@ -99,7 +99,7 @@ models:
       - "--track_memory"
       - "--batch_size=4"
       - "--max_steps=2048"
-    mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_4_8_line_line.textproto"
+    mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_4_8_ring_ring.textproto"
     tokenize:
       text_file: "data/shakespeare.txt"
       hf_tokenizer: "/mnt/MLPerf/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659"
@@ -113,7 +113,7 @@ models:
       - "--track_memory"
       - "--batch_size=8"
       - "--max_steps=2048"
-    mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_8_4_line_line.textproto"
+    mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_8_4_ring_ring.textproto"
     tokenize:
       text_file: "data/shakespeare.txt"
       hf_tokenizer: "/mnt/MLPerf/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659"
