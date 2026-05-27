@@ -3,10 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"  // Hardsigmoid
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // MulBinary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
+
+// `#ifdef`-driven constexpr selectors: keep the program-factory's INP_FLOAT*
+// numeric defines but reduce them to compile-time booleans here so the chain
+// body is a single eltwise_chain call gated by OptionalChainElement instead
+// of two top-level #ifdef'd chain invocations.
+#ifdef INP_FLOAT32
+constexpr bool kIsFloat32 = true;
+#else
+constexpr bool kIsFloat32 = false;
+#endif
+constexpr bool kIsFloat = !kIsFloat32;
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -14,7 +27,7 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
-    binary_op_init_common(cb_input, cb_input, cb_output);
+    init_sfpu(cb_input, cb_output);
 
     // Hardswish: x * hardsigmoid(x). Same shape as tanhshrink (27bcccc7fea)
     // with Tanh -> Hardsigmoid and Sub -> Mul.
@@ -26,7 +39,12 @@ void kernel_main() {
     //          + DestReuseBinary<cb_input, Mul, DEST_TO_SRCA> + PackTile.
     //          srca = DEST = hardsigmoid(x), srcb = cb_input,
     //          result = hardsigmoid(x) * cb_input.
-#ifdef INP_FLOAT32
+    //
+    // Both paths share the CopyTile(D0 HeldStream) + Hardsigmoid + PackTile
+    // outer shape. OptionalChainElement collapses the inactive branch to a
+    // no-op tag (no wait, no pop, no compute emitted), so the chain "selects"
+    // between (CopyTile<D1, NoWaitPop> + MulBinary) and DestReuseBinary based
+    // on kIsFloat32 / kIsFloat.
     compute_kernel_lib::eltwise_chain(
         num_tiles,
         compute_kernel_lib::CopyTile<
@@ -36,45 +54,33 @@ void kernel_main() {
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::CopyTileReconfig::None>{},
         compute_kernel_lib::Hardsigmoid<compute_kernel_lib::Dst::D0>{},
-        compute_kernel_lib::CopyTile<
-            cb_input,
-            compute_kernel_lib::Dst::D1,
-            compute_kernel_lib::NoWaitPop,
-            compute_kernel_lib::OperandKind::Scalar,
-            compute_kernel_lib::CopyTileReconfig::None>{},
-        compute_kernel_lib::
-            MulBinary<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
+        compute_kernel_lib::OptionalChainElement<
+            kIsFloat32,
+            compute_kernel_lib::CopyTile<
+                cb_input,
+                compute_kernel_lib::Dst::D1,
+                compute_kernel_lib::NoWaitPop,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::None>>{},
+        compute_kernel_lib::OptionalChainElement<
+            kIsFloat32,
+            compute_kernel_lib::
+                MulBinary<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>>{},
+        compute_kernel_lib::OptionalChainElement<
+            kIsFloat,
+            compute_kernel_lib::DestReuseBinary<
+                cb_input,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::DestReuseReconfig::Input,
+                compute_kernel_lib::Streaming,
+                compute_kernel_lib::OperandKind::Scalar>>{},
         compute_kernel_lib::PackTile<
             cb_output,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutStreaming,
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::PackTileReconfig::None>{});
-#endif
-#ifdef INP_FLOAT
-    compute_kernel_lib::eltwise_chain(
-        num_tiles,
-        compute_kernel_lib::CopyTile<
-            cb_input,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::HeldStream,
-            compute_kernel_lib::OperandKind::Scalar,
-            compute_kernel_lib::CopyTileReconfig::None>{},
-        compute_kernel_lib::Hardsigmoid<compute_kernel_lib::Dst::D0>{},
-        compute_kernel_lib::DestReuseBinary<
-            cb_input,
-            compute_kernel_lib::BinaryFpuOp::Mul,
-            compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::DestReuseReconfig::Input,
-            compute_kernel_lib::Streaming,
-            compute_kernel_lib::OperandKind::Scalar>{},
-        compute_kernel_lib::PackTile<
-            cb_output,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutStreaming,
-            compute_kernel_lib::OperandKind::Scalar,
-            compute_kernel_lib::PackTileReconfig::None>{});
-#endif
 }

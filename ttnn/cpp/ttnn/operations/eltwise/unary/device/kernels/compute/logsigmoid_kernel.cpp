@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Exp
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Negative
@@ -15,7 +16,7 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
-    binary_op_init_common(cb_input, cb_input, cb_output);
+    init_sfpu(cb_input, cb_output);
 
     // Logsigmoid(x) = -log(1 + exp(-x)) = -softplus(-x).
     //   D0 = cb_input   (HeldStream — second copy reuses same tile)

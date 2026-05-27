@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Typecast
 
@@ -11,7 +12,7 @@ void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(2);
     constexpr uint32_t output_cb = get_compile_time_arg_val(3);
 
-    binary_op_init_common(input_cb, input_cb, output_cb);
+    init_sfpu(input_cb, output_cb);
 
     // CHAIN_TYPECAST_IN_DF / CHAIN_TYPECAST_OUT_DF are numeric defines emitted
     // by the program factory; they map to DataFormat enum values consumed by

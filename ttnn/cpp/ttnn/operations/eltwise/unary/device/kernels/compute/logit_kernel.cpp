@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Log
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"       // Clamp, RsubUnary
@@ -17,7 +18,7 @@ void kernel_main() {
     constexpr auto cb_tmp0 = tt::CBIndex::c_1;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
-    binary_op_init_common(cb_input, cb_input, cb_output);
+    init_sfpu(cb_input, cb_output);
 
     // Logit(x) = log(x / (1 - x)).
     //

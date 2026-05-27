@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -12,10 +13,9 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
-    binary_op_init_common(cb_input, cb_input, cb_output);
+    init_sfpu(cb_input, cb_output);
 
-    // Identity: per-tile cb_input -> cb_output. Original used init_sfpu +
-    // copy_tile_init at boot, plain copy_tile / pack_tile per iter.
+    // Identity: per-tile cb_input -> cb_output. Single-stage chain.
     compute_kernel_lib::eltwise_chain(
         num_tiles,
         compute_kernel_lib::CopyTile<
