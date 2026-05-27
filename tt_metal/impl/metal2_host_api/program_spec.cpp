@@ -1358,10 +1358,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     //////////////////////////////////
 
     for (const auto& sem : spec.semaphores) {
-        TT_FATAL(
-            sem.memory_type == SemaphoreSpec::SemaphoreMemoryType::L1,
-            "SemaphoreSpec '{}' uses non-L1 memory type, which is not yet supported",
-            sem.unique_id);
         if (is_gen2_arch()) {
             TT_FATAL(
                 sem.initial_value == 0,
