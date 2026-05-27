@@ -82,6 +82,8 @@ Fold HF model reading into the bringup. Before coding, write down the model fact
 7. Compare with the closest existing tt-metal model or `models/common` primitive before inventing a new implementation.
 8. For novel architectures, do a structural diff against a close HF reference model by comparing configs, classes, method signatures, and roles such as attention, MLP, MoE, RMSNorm, RoPE, decoder layer, and causal LM.
 
+If you need to update the HF transformers version or install dependencies in the local venv to run the reference model, do so.
+
 ## Layer-Kind Selection
 
 Use judgement, but treat distinct decoder computation as a distinct layer kind. Dense vs MoE layers qualify. Shared-KV vs normal layers qualify. MLA vs standard attention qualifies. Pure mask differences, such as sliding-window vs full attention, usually should not create two decoder implementations; parameterize the implementation and make tests cover both modes.
@@ -112,15 +114,14 @@ For MoE models, collect enough router and expert tensor statistics to synthesize
 
 ## Low-PCC Debug Ladder
 
-If full-decoder PCC misses the threshold, do not stop after recording the failure. Run a short, evidence-producing debug ladder before declaring failure:
+Your goal is to bring up the decoder with matching PCC. Reporting failure is not the aim, achieving success is the aim. If PCC is low, take your time, dive in and deeply debug it. Some non-binding ideas for you:
 
 1. Split the decoder into component comparisons: input norm, QKV projection, RoPE, attention/SDPA output, output projection, shared MLP, router/gate, selected experts, expert reduction, post norms, residuals, and layer scales.
 2. Re-run the worst component with higher fidelity: `ttnn.bfloat16` or `ttnn.float32` where supported, `MathFidelity.HiFi4`, `fp32_dest_acc_en=True`, `math_approx_mode=False`, exact GELU/activation modes, non-approx softmax/exp settings, and higher-precision accumulation for matmul/linear/SDPA program configs.
 3. Check reference parity before blaming TTNN: HF dtype, activation variant, RoPE theta/scaling/partial rotation, attention scale, mask/window semantics, GQA/KV replication, K=V tying, RMSNorm epsilon/scale, router top-k ordering, and residual/layer-scale order.
 4. Minimize the failing case: shorter sequence, single token, one head, one active expert, dense equivalent for sparse expert math, or one layer-kind representative. Preserve the minimized command and PCC in debug notes.
-5. Prefer fixes that move the full decoder PCC, not only a component PCC. If a high-fidelity diagnostic passes but the production dtype path fails, record the delta and either keep the high-fidelity setting for functional correctness or justify the remaining optimized path separately.
 
-Only write a final `fail` artifact after this ladder has been attempted or is impossible, and include the best PCC, tested knobs, component-localization evidence, and concrete next debugging steps.
+Don't give up, there's always a reason for bad PCC and there's usually a workaorund. If you narrow the problem down to a bug in tt-metal, make a clear reproducer for it and note it in your report. Then look for a workaround or a fix on-branch.
 
 ## Required Tests
 
@@ -137,7 +138,7 @@ Required test behavior:
 - Test decode at the full sequence length supported by the reference model unless KV-cache DRAM capacity prevents it. If it is prevented, run a capacity probe that attempts the full length or calculates an impossible allocation from actual model shapes and available device DRAM, then test the largest feasible length on the reserved hardware.
 - Test prefill at the full supported length unless L1/DRAM capacity prevents it. If it is prevented, provide the same capacity evidence and largest feasible tested length.
 - Explicitly report any max sequence reduction with command IDs, logs, failure signatures, and hardware/memory evidence. Do not use "tractability", profiling cost, watcher cost, runtime, or reduced synthetic sequence convenience as the reason for a passing reduced-length artifact.
-- Run the same deterministic input multiple times and assert identical TTNN outputs.
+- Every pytest should run the same deterministic input on-device multiple times and assert identical TTNN outputs.
 - Gate the five-minute stress loop behind an opt-in marker or environment variable so regular CI stays focused.
 
 ## Trace, Profiling, And Watcher
