@@ -65,6 +65,32 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         "local_expert_id ({}) >= idx_table size ({})",
         op.local_expert_id,
         t.global_expert_idx_table.logical_shape()[-1]);
+
+    // optional_output: writer kernel computes per-core tile indices from
+    // x.padded_shape[-2]/TILE; a smaller output buffer would overflow.
+    if (t.optional_output.has_value()) {
+        const auto& out = *t.optional_output;
+        TT_FATAL(out.storage_type() == tt::tt_metal::StorageType::DEVICE, "optional_output must be on device");
+        TT_FATAL(out.layout() == tt::tt_metal::Layout::TILE, "optional_output must be TILE layout");
+        TT_FATAL(is_dram_interleaved(out), "optional_output must be DRAM-interleaved");
+        TT_FATAL(
+            out.dtype() == t.x.dtype(), "optional_output dtype ({}) must match x dtype ({})", out.dtype(), t.x.dtype());
+        const auto& out_shape = out.padded_shape();
+        TT_FATAL(
+            out_shape.rank() == x_shape.rank(),
+            "optional_output rank ({}) must match x rank ({})",
+            out_shape.rank(),
+            x_shape.rank());
+        for (int i = 0; i < static_cast<int>(out_shape.rank()); ++i) {
+            TT_FATAL(
+                out_shape[i] == x_shape[i],
+                "optional_output padded_shape[{}] ({}) must match x padded_shape[{}] ({})",
+                i,
+                out_shape[i],
+                i,
+                x_shape[i]);
+        }
+    }
 }
 
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_hit(
