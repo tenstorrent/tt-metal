@@ -206,9 +206,24 @@ void kernel_main() {
     const auto stats_dram_accessor = TensorAccessor(stats_dram_args, stats_dram_addr);
     const uint32_t num_tile_rows = tile_row_end - tile_row_start;
 
-    // ---------- Build + connect MUX senders ----------
+    // ---------- Build MUX senders + start zero-init ----------
     auto fwd_mux_conn = build_mux_sender(fwd_mux_args);
     auto bwd_mux_conn = build_mux_sender(bwd_mux_args);
+
+    const uint32_t stats_tile_bytes = get_tile_size(stats_gathered_cb);
+
+    // Issue the ONE-TIME L1 zero before waiting on fabric endpoints — the
+    // direct stores run on this core's RISC-V independently of the fabric
+    // status polling, so the ~3 µs zero overlaps the fabric handshake latency.
+    cb_reserve_back(stats_gathered_cb, chunk_size_rows * ring_size);
+    {
+        const uint32_t zero_base = get_write_ptr(stats_gathered_cb);
+        volatile tt_l1_ptr uint32_t* zero_tile_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_base);
+        const uint32_t words_per_tile = stats_tile_bytes / sizeof(uint32_t);
+        for (uint32_t i = 0; i < words_per_tile; i++) {
+            zero_tile_words[i] = 0u;
+        }
+    }
 
     if (fwd_mux_args.connection_valid) {
         tt::tt_fabric::wait_for_fabric_endpoint_ready(
@@ -234,58 +249,33 @@ void kernel_main() {
     // ---------- Allocate packet headers ----------
     auto pkt_hdr_forward = PacketHeaderPool::allocate_header();
     auto pkt_hdr_backward = PacketHeaderPool::allocate_header();
-
-    const uint32_t stats_tile_bytes = get_tile_size(stats_gathered_cb);
     // Each packed page = window_size × 128 B of real data. Last chunk on
     // each chip may have rows_in_chunk < chunk_size_rows; we still allocate
     // and transmit a full page (padding bytes are unread garbage).
     const uint32_t page_size_bytes = chunk_size_rows * kRowBytesPerTile;
 
-    // ---------- ONE-TIME zero of stats_gathered_cb L1 region ----------
-    // Why: after packed AG, the writer scatters only ROW 0 of each tile
-    // (face_00[0..63] + face_01[0..63]). The COMPUTE kernel then transposes
-    // each tile so that row 0 → col 0. But transpose copies the ENTIRE tile,
-    // so anything in rows 1..31 becomes cols 1..31 of the transposed tile.
-    // The downstream reduce<AVG,REDUCE_ROW> sums across ALL 32 cols of each
-    // row — if cols 1..31 hold uninitialized L1 garbage, the mean is wrong.
+    // ---------- ONE-TIME bulk-NoC fill of stats_gathered_cb tiles ----------
+    // The first tile was already zeroed above (before the fabric-endpoint
+    // wait, so the zero-write overlaps the wait). Now bulk-NoC that zero
+    // tile into every other slot. Local→local NoC writes run in parallel
+    // with NCRISC; no serial store overhead.
     //
-    // In Phase 8 this wasn't an issue because reduce<SUM,REDUCE_ROW> in pre
-    // explicitly produces zero in cols 1..31 (LLK behavior), and the whole
-    // 4 KB tile was fabric-mcast intact. With packed pages we only transmit
-    // the 128 B of real data per tile, so we must zero the rest ourselves.
-    //
-    // Zero ONCE here, not per chunk: the CB's L1 slots cycle (chunk N's
-    // tiles use the same L1 addresses as chunk 0). The scatter only touches
-    // row 0 each chunk, so cols 1..31 stay zero across chunks.
-    //
-    // Implementation: zero ONE tile via direct L1 stores (1024 stores, ~1 µs),
-    // then noc_async_write that zero tile to each of the other (chunk_stats_tiles-1)
-    // slots. Bulk NoC writes are ~10× faster than serial RISC-V stores at L1
-    // for the same byte count — for chunk=4×ring=8=32 KB, that's ~3 µs total
-    // vs ~27 µs with naive store-loop.
+    // Why we zero: the scatter only touches col 0 (face_00 col 0 + face_10
+    // col 0) of each tile. reduce<AVG,REDUCE_ROW> in compute reads ALL 32
+    // cols per row, so cols 1..31 (and the unused faces 01/11) must be
+    // zero or the mean is corrupted. One-time zero suffices because the
+    // CB slots cycle and the scatter only ever touches col 0.
     const uint32_t chunk_stats_tiles_init = chunk_size_rows * ring_size;
-    {
-        cb_reserve_back(stats_gathered_cb, chunk_stats_tiles_init);
+    if (chunk_stats_tiles_init > 1) {
         const uint32_t zero_base = get_write_ptr(stats_gathered_cb);
-        // Zero the first tile via direct stores.
-        volatile tt_l1_ptr uint32_t* zero_tile_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_base);
-        const uint32_t words_per_tile = stats_tile_bytes / sizeof(uint32_t);
-        for (uint32_t i = 0; i < words_per_tile; i++) {
-            zero_tile_words[i] = 0u;
+        const uint64_t src_noc_addr = safe_get_noc_addr(my_x[0], my_y[0], zero_base, 0);
+        for (uint32_t i = 1; i < chunk_stats_tiles_init; i++) {
+            const uint32_t dst_addr = zero_base + i * stats_tile_bytes;
+            noc_async_read(src_noc_addr, dst_addr, stats_tile_bytes);
         }
-        // Now bulk-NoC the zero tile to every other slot. Local→local NoC writes
-        // run in parallel with NCRISC; no serial store overhead.
-        if (chunk_stats_tiles_init > 1) {
-            const uint64_t src_noc_addr = safe_get_noc_addr(my_x[0], my_y[0], zero_base, 0);
-            for (uint32_t i = 1; i < chunk_stats_tiles_init; i++) {
-                const uint32_t dst_addr = zero_base + i * stats_tile_bytes;
-                const uint64_t dst_noc_addr = safe_get_noc_addr(my_x[0], my_y[0], dst_addr, 0);
-                noc_async_read(src_noc_addr, dst_addr, stats_tile_bytes);
-            }
-            noc_async_read_barrier();
-        }
-        // Don't push — the chunk loop will fill row 0 of each tile and push then.
+        noc_async_read_barrier();
     }
+    // Don't push — the chunk loop will fill col 0 of each tile and push then.
 
     // GlobalSemaphore lives on THIS worker core; remote chips' matching workers
     // atomic_inc it via fabric. Compute its NoC-0 addr for the packet headers
