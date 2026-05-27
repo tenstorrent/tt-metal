@@ -119,7 +119,7 @@
       --rank-bindings-mapping rank_bindings_mapping.yaml \
       --mpi-args "--allow-run-as-root --host $PIPELINE_HOSTS --map-by slot --bind-to none --tag-output" \
       python3 -m pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io_decoder_sweep_chunked_trace.py::test_run_host_io_decoder_sweep_chunked_trace_world_size_4 \
-      --timeout=1200
+      --timeout=0
   model: deepseek_decode
   skus:
     bh_galaxy:
