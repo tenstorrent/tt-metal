@@ -681,3 +681,199 @@ def test_embedding_perf_dp_2cq(mesh_device, per_device_batch):
     logger.info(f"  Sequential sum (pre+H2D+compute+to_torch avg):  {seq_sum:.3f}ms / iter")
     logger.info(f"  Overlap savings (sequential − amortized):  {seq_sum - overlap_amortized_ms:.3f}ms / iter")
     logger.info("=" * 80)
+
+
+# ==============================================================================
+# Three-stage breakdown: H2D -> Forward -> D2H (sync, no overlap)
+# ==============================================================================
+#
+# Sequential per-iter timing of the three stages a customer pays in a serving
+# pipeline. No 2-CQ overlap, no async tricks — each stage is fully completed
+# (synchronize_device) before the next starts. This is what a single-stream
+# customer would measure with naive code.
+#
+# D2H uses the optimized stack:
+#   untilize_with_unpadding (device, multicore)
+#   -> on-device copy into a persistent DRAM staging slot
+#   -> copy_device_to_host_tensor into a pre-allocated host_staging
+#   -> host_staging.batch_to_torch(dest, physical=True, n_threads=0)
+#
+# H2D uses the existing copy_host_to_device_tensor pattern: pre-build the
+# 4 input ttnn tensors once on host, then per-iter overwrite the 4 device
+# input slots in place (single sync at end).
+
+
+def _allocate_d2h_stack(out_dev: ttnn.Tensor, mesh_device, global_batch: int, hidden: int):
+    """One-time setup for the optimized D2H path.
+
+    Returns (dram_staging, dest_torch). With ttnn.copy_device_to_torch the
+    intermediate ttnn host_staging tensor is no longer needed -- the device
+    DMA writes directly into dest_torch.
+    """
+    b, _, s, d = out_dev.shape
+    sample_rm = ttnn.untilize_with_unpadding(out_dev, output_tensor_end=(b - 1, 0, s - 1, d - 1), use_multicore=True)
+    dram_staging = ttnn.clone(sample_rm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(sample_rm)
+    dest_torch = torch.empty((global_batch, 1, s, hidden), dtype=torch.bfloat16)
+    return dram_staging, dest_torch
+
+
+def _d2h_step_optimized(out_dev, mesh_device, dram_staging, dest_torch):
+    """Apply the optimized D2H fast path. Returns the dest torch tensor.
+
+    Pipeline:
+        1. untilize_with_unpadding on device  -> bf16 ROW_MAJOR
+        2. on-device copy into persistent DRAM staging slot
+        3. ttnn.copy_device_to_torch: PCIe DMA + 1 memcpy directly to dest_torch
+    """
+    b, _, s, d = out_dev.shape
+    out_rm = ttnn.untilize_with_unpadding(out_dev, output_tensor_end=(b - 1, 0, s - 1, d - 1), use_multicore=True)
+    ttnn.copy(out_rm, dram_staging)
+    ttnn.deallocate(out_rm)
+    ttnn.copy_device_to_torch(dram_staging, dest_torch)
+    return dest_torch
+
+
+@pytest.mark.parametrize(
+    "batch_size",
+    [1, 32],
+    ids=["batch1", "batch32"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 50_000_000, "num_command_queues": 1}],
+    indirect=True,
+)
+def test_embedding_perf_h2d_forward_d2h(mesh_device, batch_size):
+    """Per-iteration H2D -> Forward -> D2H sequential breakdown.
+
+    Customer-facing perf report. No CQ-overlap. Pure sequential cost of
+    each stage in a single-stream serving pipeline. Uses the optimized
+    D2H stack (untilize_with_unpadding + copy_device_to_host_tensor +
+    batch_to_torch(n_threads=0)).
+    """
+    dtype = ttnn.bfloat8_b
+    device_name = determine_device_name(mesh_device)[0]
+    hidden = 1024  # BGE-M3 hidden dim
+
+    # ── Build model ──────────────────────────────────────────────────
+    logger.info(f"Building model (H2D->Forward->D2H): B{batch_size} S{SEQ_LEN} {device_name}")
+    t0 = time.perf_counter()
+    model_args, model, _ = create_tt_model(
+        mesh_device=mesh_device,
+        max_batch_size=batch_size,
+        max_seq_len=SEQ_LEN,
+        dtype=dtype,
+    )
+    build_time = time.perf_counter() - t0
+    logger.info(f"Model built in {build_time:.1f}s")
+
+    # ── Prepare inputs ───────────────────────────────────────────────
+    mask_dtype = dtype if batch_size in (1, 32) else ttnn.bfloat16
+    host_inputs = prepare_inputs(model_args.tokenizer, batch_size, SEQ_LEN, model_args.pad_token_id)
+    host_tensors = to_host_tensors(host_inputs, mask_dtype)
+    device_tensors = allocate_device_tensors(host_tensors, mesh_device)
+
+    # ── Compile + Trace ──────────────────────────────────────────────
+    logger.info("Compiling (first forward)...")
+    out = model.forward(**device_tensors)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(out)
+    logger.info("Capturing trace...")
+    trace_out = model.capture_trace(**device_tensors, mesh_device=mesh_device, cq_id=0)
+
+    # Warm trace once before allocating the D2H stack (so trace_out is finalized)
+    for _ in range(3):
+        model.execute_trace(blocking=True)
+
+    # ── Set up the optimized D2H stack ──────────────────────────────
+    # trace_out has the model output tensor (bf8b TILE DRAM, possibly sharded
+    # along dim=0 for DP). Allocate the staging buffers ONCE.
+    num_devices = mesh_device.get_num_devices()
+    global_batch = batch_size * num_devices  # matches trace_out's logical batch dim
+    dram_staging, dest_torch = _allocate_d2h_stack(trace_out, mesh_device, global_batch, hidden)
+
+    # ── Pre-build host inputs for H2D (reused across iters) ──────────
+    # We use the SAME host tensors each iter — the H2D cost is what we want
+    # to measure, not from_torch host-prep.
+    h2d_keys = ("input_ids", "attention_mask", "token_type_ids", "position_ids")
+
+    # ── Warmup the 3-stage pipeline ─────────────────────────────────
+    logger.info("Warming up H2D + forward + D2H pipeline...")
+    for _ in range(3):
+        for key in h2d_keys:
+            ttnn.copy_host_to_device_tensor(host_tensors[key], device_tensors[key])
+        ttnn.synchronize_device(mesh_device)
+        model.execute_trace(blocking=True)
+        _d2h_step_optimized(trace_out, mesh_device, dram_staging, dest_torch)
+
+    # ── Benchmark ───────────────────────────────────────────────────
+    logger.info(f"Measuring {NUM_ITERATIONS} iters of sequential H2D -> Forward -> D2H")
+    h2d_times, fwd_times, d2h_times, iter_times = [], [], [], []
+    for _ in range(NUM_ITERATIONS):
+        t_iter = time.perf_counter()
+
+        # H2D: 4 copies + sync
+        t0 = time.perf_counter()
+        for key in h2d_keys:
+            ttnn.copy_host_to_device_tensor(host_tensors[key], device_tensors[key])
+        ttnn.synchronize_device(mesh_device)
+        t1 = time.perf_counter()
+
+        # Forward: execute trace (blocking sync inside)
+        model.execute_trace(blocking=True)
+        t2 = time.perf_counter()
+
+        # D2H: untilize -> copy_device_to_torch (direct PCIe -> torch.Tensor)
+        _d2h_step_optimized(trace_out, mesh_device, dram_staging, dest_torch)
+        t3 = time.perf_counter()
+
+        h2d_times.append((t1 - t0) * 1000.0)
+        fwd_times.append((t2 - t1) * 1000.0)
+        d2h_times.append((t3 - t2) * 1000.0)
+        iter_times.append((t3 - t_iter) * 1000.0)
+
+    model.release_trace()
+
+    # ── Report ──────────────────────────────────────────────────────
+    def _stats(samples):
+        s = sorted(samples)
+        n = len(s)
+        return {
+            "avg": sum(s) / n,
+            "min": s[0],
+            "p50": s[n // 2],
+            "max": s[-1],
+        }
+
+    h2d_s = _stats(h2d_times)
+    fwd_s = _stats(fwd_times)
+    d2h_s = _stats(d2h_times)
+    iter_s = _stats(iter_times)
+
+    logger.info("")
+    logger.info("=" * 90)
+    logger.info(
+        f"  BGE-M3 H2D -> Forward -> D2H breakdown  |  batch={batch_size}  S={SEQ_LEN}  "
+        f"{device_name}  ({num_devices} chip{'s' if num_devices > 1 else ''})"
+    )
+    logger.info("=" * 90)
+    logger.info(
+        f"  {'Stage':<10} | {'avg ms':>10} | {'min ms':>10} | {'p50 ms':>10} | {'max ms':>10} | {'% of iter':>10}"
+    )
+    logger.info("-" * 90)
+    iter_avg = iter_s["avg"]
+    for name, s in (("H2D", h2d_s), ("Forward", fwd_s), ("D2H", d2h_s)):
+        pct = (s["avg"] / iter_avg) * 100.0 if iter_avg > 0 else 0.0
+        logger.info(
+            f"  {name:<10} | {s['avg']:>10.3f} | {s['min']:>10.3f} | {s['p50']:>10.3f} | {s['max']:>10.3f} | {pct:>9.1f}%"
+        )
+    logger.info("-" * 90)
+    logger.info(
+        f"  {'TOTAL':<10} | {iter_s['avg']:>10.3f} | {iter_s['min']:>10.3f} | {iter_s['p50']:>10.3f} | {iter_s['max']:>10.3f} | {100.0:>9.1f}%"
+    )
+    logger.info("=" * 90)
+    logger.info(
+        f"  Throughput (sequential, no overlap): {batch_size / (iter_avg / 1000):.1f} embeddings/s ({batch_size * SEQ_LEN / (iter_avg / 1000):.0f} tokens/s)"
+    )
+    logger.info("=" * 90)
