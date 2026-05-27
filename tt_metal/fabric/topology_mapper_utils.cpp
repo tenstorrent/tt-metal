@@ -259,6 +259,75 @@ std::set<tt::tt_metal::AsicID> compute_required_asics_for_fabric_node(
     return required_asics;
 }
 
+bool fabric_node_has_cross_host_required_port_type(
+    FabricNodeId fabric_node,
+    const LogicalAdjacencyMap& logical_adjacency,
+    const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank) {
+    const auto fabric_rank = fabric_node_rank(node_to_host_rank, fabric_node);
+    if (!fabric_rank.has_value()) {
+        return false;
+    }
+
+    const auto logical_it = logical_adjacency.find(fabric_node);
+    if (logical_it == logical_adjacency.end()) {
+        return false;
+    }
+
+    for (const auto& neighbor : logical_it->second) {
+        const auto neighbor_rank = fabric_node_rank(node_to_host_rank, neighbor);
+        if (!neighbor_rank.has_value()) {
+            continue;
+        }
+        const auto edge_requirement = infer_logical_edge_port_requirement(fabric_rank.value(), neighbor_rank.value());
+        if (edge_requirement.required.has_value()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::optional<std::string> add_intra_mesh_port_type_required_constraints(
+    ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
+    const LogicalAdjacencyMap& logical_adjacency,
+    const PhysicalAdjacencyMap& physical_adjacency,
+    const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank,
+    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
+    const TopologyMappingConfig& config) {
+    if (!config.port_type_links.has_value()) {
+        return std::nullopt;
+    }
+    const PortTypeLinkMap& port_type_links = *config.port_type_links;
+    const auto physical_asics = physical_asics_from_adjacency(physical_adjacency);
+
+    for (const auto& [fabric_node, _] : logical_adjacency) {
+        const auto required_asics = compute_required_asics_for_fabric_node(
+            fabric_node, logical_adjacency, physical_adjacency, node_to_host_rank, asic_to_host_rank, port_type_links);
+
+        if (required_asics.empty()) {
+            if (fabric_node_has_cross_host_required_port_type(fabric_node, logical_adjacency, node_to_host_rank)) {
+                return fmt::format(
+                    "No physical ASIC satisfies required port type for fabric node {} (mesh_id={}, chip_id={})",
+                    fabric_node,
+                    fabric_node.mesh_id.get(),
+                    fabric_node.chip_id);
+            }
+            continue;
+        }
+
+        if (required_asics.size() < physical_asics.size()) {
+            if (!intra_mesh_constraints.add_required_constraint(fabric_node, required_asics)) {
+                return fmt::format(
+                    "Failed to add required port-type constraint for fabric node {} (mesh_id={}, chip_id={})",
+                    fabric_node,
+                    fabric_node.mesh_id.get(),
+                    fabric_node.chip_id);
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
 void add_intra_mesh_port_type_preferred_constraints(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const LogicalAdjacencyMap& logical_adjacency,
@@ -425,6 +494,13 @@ TopologyMappingResult map_mesh_to_physical(
                 mesh_id.get(),
                 pinnings_str);
         }
+    }
+
+    if (const auto port_type_error = add_intra_mesh_port_type_required_constraints(
+            constraints, logical_adjacency, physical_adjacency, node_to_host_rank, asic_to_host_rank, config)) {
+        result.success = false;
+        result.error_message = *port_type_error;
+        return result;
     }
 
     add_intra_mesh_port_type_preferred_constraints(
@@ -2626,10 +2702,44 @@ TopologyMappingResult map_multi_mesh_to_physical(
                     }
                 }
             }
+            const auto& logical_adjacency = logical_graph.get_adjacency_map();
+            const auto& physical_adjacency = physical_graph.get_adjacency_map();
+
+            if (const auto port_type_error = add_intra_mesh_port_type_required_constraints(
+                    intra_mesh_constraints,
+                    logical_adjacency,
+                    physical_adjacency,
+                    node_to_host_rank,
+                    asic_to_host_rank,
+                    config)) {
+                log_info(
+                    tt::LogFabric,
+                    "Attempt {}: Port-type required constraint error for mesh {} -> {}: {}",
+                    retry_attempt,
+                    logical_mesh_id.get(),
+                    physical_mesh_id.get(),
+                    *port_type_error);
+                if (!handle_forbidden_constraint(
+                        inter_mesh_constraints,
+                        logical_mesh_id,
+                        physical_mesh_id,
+                        failed_mesh_pairs,
+                        current_attempt_failed_pairs,
+                        retry_attempt,
+                        logical_meshes,
+                        physical_meshes,
+                        inter_mesh_validation_mode,
+                        result,
+                        *port_type_error)) {
+                    return result;
+                }
+                continue;
+            }
+
             add_intra_mesh_port_type_preferred_constraints(
                 intra_mesh_constraints,
-                logical_graph.get_adjacency_map(),
-                physical_graph.get_adjacency_map(),
+                logical_adjacency,
+                physical_adjacency,
                 node_to_host_rank,
                 asic_to_host_rank,
                 config);
