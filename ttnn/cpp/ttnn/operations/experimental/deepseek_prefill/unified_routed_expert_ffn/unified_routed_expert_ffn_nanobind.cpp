@@ -28,6 +28,18 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         ``counts[global_expert_idx_table[local_expert_id]]`` at runtime and
         skips M-chunks beyond that count.
 
+        Tensor requirements (enforced in validate_on_program_cache_miss):
+            * dtype: x must be BFLOAT8_B (BFLOAT16 path is untested and
+              rejected host-side; reintroduce when a real caller + PCC test
+              lands); gate/up/down any matmul-compatible weight dtype.
+            * layout: all tensors TILE.
+            * memory_config: all tensors DRAM-interleaved.
+            * Blackhole-only — host expects 11x8 compute grid.
+
+        PCC target: >= 0.97 vs PyTorch reference (matches the sibling
+        routed_expert_ffn subsystem norm; the existing test_unified_routed_expert
+        cases land at ~0.98 on DS-V3 dims with LoFi math fidelity).
+
         Args:
             x (ttnn.Tensor): (M_max, K=emb) DRAM-interleaved tile-layout input.
             gate_proj (ttnn.Tensor): (K=emb, N=hidden).
