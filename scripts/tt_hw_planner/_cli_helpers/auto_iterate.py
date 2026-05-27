@@ -3259,27 +3259,43 @@ def _run_auto_iterate_loop(
                 f"        --auto-max-iters 12 --auto-agent-timeout 1500\n"
             )
             return 1
-        if not skipped_set:
+        ungraduated_now, _ = _auto_iteration_blockers(MODEL)
+        ungraduated_now = sorted(set(ungraduated_now) - set(skipped_set))
+        if not skipped_set and not ungraduated_now:
             banner(
                 f"AUTO-ITERATE: demo runs natively end-to-end on {BOX} " f"after {max_iters} iter(s) (no CPU fallback)"
             )
-        else:
+        elif allow_partial_cpu:
             banner(
                 f"AUTO-ITERATE: best-effort bring-up complete on {BOX} — "
-                f"{len(graduated_set)} native, {len(skipped_set)} on CPU fallback"
+                f"{len(graduated_set)} native, "
+                f"{len(skipped_set) + len(ungraduated_now)} on CPU fallback "
+                f"(--allow-partial-cpu was set)"
+            )
+        else:
+            banner(
+                f"AUTO-ITERATE: PARTIAL — {len(graduated_set)} component(s) "
+                f"native on {BOX}; "
+                f"{len(skipped_set) + len(ungraduated_now)} still on CPU fallback. "
+                f"Re-run with --allow-partial-cpu to accept this as SUCCESS, "
+                f"or with --auto-max-iters >= 24 to push the remaining "
+                f"components to native."
             )
         _print_bringup_summary(MODEL, box=BOX, sep=sep)
         _print_validation_breakdown()
         if graduated_set:
             print(f"  native TTNN  this run: {', '.join(graduated_set)}")
-        if skipped_set:
-            print(f"  CPU fallback this run: {', '.join(skipped_set)}")
+        if skipped_set or ungraduated_now:
+            cpu_components = sorted(set(skipped_set) | set(ungraduated_now))
+            print(f"  CPU fallback this run: {', '.join(cpu_components)}")
             print(
                 "\n  Retry CPU-fallback components later (re-scaffolding not needed):\n"
                 f"    python -m scripts.tt_hw_planner promote {MODEL} \\\n"
                 f"        --box {BOX} --auto --auto-agent {provider} \\\n"
                 f"        --auto-max-iters 12 --auto-agent-timeout 1500\n"
             )
+        if (skipped_set or ungraduated_now) and not allow_partial_cpu:
+            return 1
         return 0
 
     banner(f"AUTO-ITERATE exhausted {max_iters} iter(s); final pytest did not pass even with CPU fallback")

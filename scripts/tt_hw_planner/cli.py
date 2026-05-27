@@ -7454,6 +7454,11 @@ from .commands.auto_onboard import cmd_auto_onboard  # noqa: F401
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
+    except Exception:
+        pass
     argv = list(sys.argv[1:] if argv is None else argv)
 
     SUBCOMMANDS = {
