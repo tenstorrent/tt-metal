@@ -162,8 +162,8 @@ void run_strided_dfb_copy_test(
     writer.compiler_options.defines.push_back({"KERNEL_COMPILE_TIME_ARGS", output_cta_str});
 
     // Runtime varargs: [0]=base_addr, [1]=total_pages
-    reader.runtime_arguments_schema.num_runtime_varargs = 2;
-    writer.runtime_arguments_schema.num_runtime_varargs = 2;
+    reader.advanced_options.emplace().num_runtime_varargs = 2;
+    writer.advanced_options.emplace().num_runtime_varargs = 2;
 
     // DFB: one entry per page, pipelined depth = num_dfb_entries.
     // data_format_metadata must be set — set_dfb_tile_dims calls get_tile_size() unconditionally
