@@ -293,6 +293,7 @@ def _run_case(case, iters):
         "tracy",
         "-r",
         "-p",
+        "--sync-host-device",
         "-m",
         "pytest",
         nodeid,
