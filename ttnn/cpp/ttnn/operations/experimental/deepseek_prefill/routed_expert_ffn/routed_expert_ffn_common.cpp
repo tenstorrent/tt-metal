@@ -247,14 +247,12 @@ ttnn::Tensor routed_expert_ffn(
         return detail::routed_expert_ffn_wh(x, gate_proj, up_proj, down_proj, compute_kernel_config, output);
     }
 
-    // Blackhole: optimized BH path can handle up to ~4k tokens (M_tiles=128)
-    // before per-core L1 is exhausted. For larger inputs, chunk M into 2k-token
-    // slices (M_tiles=64), run the BH path per chunk, and write each chunk's
-    // output into a narrow view of a pre-allocated output (no slice / concat).
-    // M_tiles=64 is the sweet-spot for matmul utilization on DeepSeek V3 dims:
-    // ~528us per 2k chunk vs ~556us per 2k in a 4k chunk (M_tiles=128). The
-    // ~5% per-token speedup comes from smaller per_core_M (8 vs 16) keeping
-    // the in0/intermediate CBs in cache.
+    // Blackhole: the optimized BH path is L1-bound at per-core scratch +
+    // partials. Per-core L1 for DeepSeek V3 dims (emb=7168, hidden=2048)
+    // holds up to M_tiles=128. We chunk at 64 so the same JIT-cached
+    // program-config services M sizes from 2k tokens up to the input cap:
+    // M_tiles<=64 runs in one chunk, larger M splits into ceil(M/64) chunks
+    // that each reuse the same routed_expert_ffn_bh program.
     constexpr uint32_t MAX_CHUNK_M_TILES = 64;
     if (M_tiles <= MAX_CHUNK_M_TILES) {
         return detail::routed_expert_ffn_bh(
