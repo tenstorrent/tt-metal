@@ -35,15 +35,10 @@ struct SemaphoreSpec {
     // Target nodes
     Nodes target_nodes;
 
-    //////////////////////////////
-    // Advanced options
-    //////////////////////////////
-
-    // Initial value
-    // NOTE: Setting a non-zero initial value is not supported on Gen2 architectures.
-    // NOTE: Runtime wants to deprecate this feature for ALL architectures.
-    //       When remote DFB becomes available, non-zero initial values will be removed.
-    uint32_t initial_value = 0;
+    //////////////////////////////////////////////////////////////////////////////
+    // Advanced options (see advanced_options.hpp)
+    //////////////////////////////////////////////////////////////////////////////
+    std::optional<SemaphoreAdvancedOptions> advanced_options = std::nullopt;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

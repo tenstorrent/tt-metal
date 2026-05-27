@@ -134,6 +134,14 @@ struct AdvancedKernelRunParams {
     CommonVarargs common_runtime_varargs;
 };
 
+struct SemaphoreAdvancedOptions {
+    // Initial value
+    // NOTE: Setting a non-zero initial value is not supported on Gen2 architectures.
+    // NOTE: Runtime wants to deprecate this feature for ALL architectures.
+    //       When remote DFB becomes available, non-zero initial values will be removed.
+    uint32_t initial_value = 0;
+};
+
 struct TensorParameterAdvancedOptions {
     // By default, the MeshTensor argument provided at execution time must
     // EXACTLY match the TensorParameter's declared TensorSpec. The options

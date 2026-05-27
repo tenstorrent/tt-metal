@@ -966,7 +966,7 @@ TEST_F(ProgramSpecTestQuasar, SemaphoreNonZeroInitialValueFailsOnQuasar) {
     SemaphoreSpec sem;
     sem.unique_id = "sem_0";
     sem.target_nodes = NodeCoord{0, 0};
-    sem.initial_value = 1;
+    sem.advanced_options = SemaphoreAdvancedOptions{.initial_value = 1};
     spec.semaphores = {sem};
 
     EXPECT_THAT(
@@ -2409,11 +2409,12 @@ TEST(AggregateSpecTypes, SemaphoreSpecDesignatedInitializers) {
     SemaphoreSpec sem{
         .unique_id = "my_semaphore",
         .target_nodes = NodeCoord{0, 0},
-        .initial_value = 7,
+        .advanced_options = SemaphoreAdvancedOptions{.initial_value = 7},
     };
 
     EXPECT_EQ(sem.unique_id, "my_semaphore");
-    EXPECT_EQ(sem.initial_value, 7u);
+    ASSERT_TRUE(sem.advanced_options.has_value());
+    EXPECT_EQ(sem.advanced_options->initial_value, 7u);
 }
 
 TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
@@ -2744,7 +2745,7 @@ TEST_F(ProgramSpecTestGen1, SemaphoresWithNonZeroInitialValueSucceedOnGen1) {
     SemaphoreSpec sem;
     sem.unique_id = "sem_0";
     sem.target_nodes = NodeCoord{0, 0};
-    sem.initial_value = 3;
+    sem.advanced_options = SemaphoreAdvancedOptions{.initial_value = 3};
     spec.semaphores = {sem};
 
     spec.kernels[0].semaphore_bindings = {

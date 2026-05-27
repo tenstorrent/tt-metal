@@ -1372,12 +1372,13 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     //////////////////////////////////
 
     for (const auto& sem : spec.semaphores) {
+        const uint32_t init_value = sem.advanced_options.has_value() ? sem.advanced_options->initial_value : 0u;
         if (is_gen2_arch()) {
             TT_FATAL(
-                sem.initial_value == 0,
+                init_value == 0,
                 "SemaphoreSpec '{}' has initial_value={} but only zero is supported on Quasar",
                 sem.unique_id,
-                sem.initial_value);
+                init_value);
         }
     }
 
@@ -2495,8 +2496,10 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     SemaphoreNameToIdMap semaphore_name_to_id;
     for (const auto& semaphore_spec : spec.semaphores) {
         const SemaphoreSpecName& semaphore_name = semaphore_spec.unique_id;
+        const uint32_t init_value =
+            semaphore_spec.advanced_options.has_value() ? semaphore_spec.advanced_options->initial_value : 0u;
         uint32_t sem_id = program_impl->create_semaphore(
-            to_node_range_set(semaphore_spec.target_nodes), semaphore_spec.initial_value, CoreType::WORKER);
+            to_node_range_set(semaphore_spec.target_nodes), init_value, CoreType::WORKER);
         program_impl->register_semaphore_spec_name(semaphore_name, sem_id);
         semaphore_name_to_id[semaphore_name] = sem_id;
     }
