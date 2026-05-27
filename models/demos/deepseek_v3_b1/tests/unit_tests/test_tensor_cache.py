@@ -1317,6 +1317,7 @@ class TestForceCacheOverride:
 
     def test_forced_cache_miss(self, cache_dir, device):
         """force_cache_override should overwrite the previous cache"""
+        torch.manual_seed(0)
         cold_cache = TensorCache(cache_dir)  # simulate a "previous" run
 
         data_a = torch.randn(16, 16, dtype=torch.bfloat16)
@@ -1366,7 +1367,7 @@ class TestForceCacheOverride:
 
         assert preprocess_call_count[0] == 2  # preprocess should be called again due to force_cache_override
         assert paths.data_path.stat().st_mtime_ns > mtime0  # file should be updated
-        assert hash1 != hash0  # content should be diff (?)
+        assert hash1 != hash0  # content should be different
 
         ttnn.deallocate(result1, force=True)
         ttnn.deallocate(result2, force=True)
@@ -1374,6 +1375,7 @@ class TestForceCacheOverride:
     def test_no_override_no_rewrite(self, cache_dir, device):
         """Without force_cache_override, a second call should be a pure hit:
         no rebuild / rewrite should happen"""
+        torch.manual_seed(1)
         cache = TensorCache(cache_dir)
 
         data_a = torch.randn(16, 16, dtype=torch.bfloat16)

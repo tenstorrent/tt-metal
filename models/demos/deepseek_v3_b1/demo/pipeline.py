@@ -135,9 +135,7 @@ def create_single_galaxy_spec_decode_pipeline_configuration(
     def stage_3(device: ttnn.MeshDevice) -> StageKind:
         return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
 
-    # make stage_0 and 1 the BaseLMHead if enable_speculative_decode is true otherwise passthrough
     if not enable_speculative_decode:
-        # stage_0 = lambda d: PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
         stage_1 = lambda d: PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
 
     return PipelineConfiguration(
@@ -345,7 +343,6 @@ def create_single_pod_spec_decode_no_decoder_pipeline_configuration(
     )
 
 
-# use logic here
 def create_sp4_pipeline_configuration(
     weight_provider: WeightProvider,
     *,

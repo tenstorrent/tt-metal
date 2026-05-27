@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Protocol
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
@@ -275,12 +276,11 @@ class CacheWeightProvider:
         model_path = Path(model_path)
         assert model_path.exists(), f"Model path does not exist: {model_path}"
         assert model_path.is_dir(), f"Model path is not a directory: {model_path}"
-        # if force_cache_override:
-        #     from loguru import logger
-        #     logger.info(
-        #         "force_cache_override=True: all cache lookups will be forced to miss; "
-        #         "every artifact will be rebuilt and re-stored this run"
-        #     )
+        if force_cache_override:
+            logger.info(
+                "force_cache_override=True: all cache lookups will be forced to miss; "
+                "every artifact will be rebuilt and re-stored this run"
+            )
         self._cache = TensorCache(cache_path, force_cache_override=force_cache_override)
         self._state_dict = LazyStateDict(model_path)
         self._schema_version = schema_version

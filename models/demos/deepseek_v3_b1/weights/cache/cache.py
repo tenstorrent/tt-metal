@@ -181,14 +181,8 @@ class TensorCache:
         return ContentAddressedStoragePaths(object_dir=object_dir, data_path=object_dir / "data.tensorbin")
 
     def _lookup(self, artifact_id: str) -> CacheEntry:
-        logger.info("lookup for: {}", artifact_id)
         paths = self._content_addressed_paths(artifact_id)
-        if self.force_cache_override:
-            if paths.object_dir.exists():
-                shutil.rmtree(paths.object_dir, ignore_errors=True)
-            logger.info("force_cache_override=True: cache lookup for {}, forced to miss", artifact_id)
-            return AbsentCacheEntry(artifact_id=artifact_id)
-        if not paths.object_dir.exists():
+        if not paths.object_dir.exists() or self.force_cache_override:
             return AbsentCacheEntry(artifact_id=artifact_id)
         if paths.data_path.is_file():
             return PresentCacheEntry(artifact_id=artifact_id, paths=paths)
@@ -308,14 +302,8 @@ class TensorCache:
 
     def _lookup_compressed(self, artifact_id: str) -> "CacheEntry":
         """Check for compact BSPM cache entry (tiles.bin + assignment.npy)."""
-        logger.info("lookup for: {}", artifact_id)
         obj_dir = self._objects_dir / artifact_id[:2] / artifact_id
-        if self.force_cache_override:
-            if obj_dir.exists():
-                shutil.rmtree(obj_dir, ignore_errors=True)
-            logger.info("force_cache_override=True: cache lookup for {}, forced to miss", artifact_id)
-            return AbsentCacheEntry(artifact_id=artifact_id)
-        if not obj_dir.exists():
+        if not obj_dir.exists() or self.force_cache_override:
             return AbsentCacheEntry(artifact_id=artifact_id)
         tiles_path = obj_dir / "tiles.bin"
         assignment_path = obj_dir / "assignment.npy"
@@ -419,14 +407,8 @@ class TensorCache:
 
     def _lookup_sram_compressed(self, artifact_id: str) -> "CacheEntry":
         """Check for a present SRAM-compressed CAS entry (shards.bin + metadata.json)."""
-        logger.info("lookup for: {}", artifact_id)
         paths = self._sram_compressed_paths(artifact_id)
-        if self.force_cache_override:
-            if paths.object_dir.exists():
-                shutil.rmtree(paths.object_dir, ignore_errors=True)
-            logger.info("force_cache_override=True: cache lookup for {}, forced to miss", artifact_id)
-            return AbsentCacheEntry(artifact_id=artifact_id)
-        if not paths.object_dir.exists():
+        if not paths.object_dir.exists() or self.force_cache_override:
             return AbsentCacheEntry(artifact_id=artifact_id)
         if paths.data_path.is_file() and (paths.object_dir / "metadata.json").is_file():
             return PresentCacheEntry(artifact_id=artifact_id, paths=paths)
