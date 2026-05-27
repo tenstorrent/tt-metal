@@ -21,7 +21,7 @@ from pathlib import Path
 import yaml
 
 from compute_sweep_matrix import chunk_modules
-from constants import format_hardware_suffix, parse_hardware_suffix, strip_grouping_suffix
+from constants import format_hardware_suffix, parse_hardware_suffix, parse_mesh_suffix, strip_grouping_suffix
 from matrix_runner_config import (
     GENERATION_MANIFEST_FILENAME,
     get_lead_models_test_group_name_for_hardware_group,
