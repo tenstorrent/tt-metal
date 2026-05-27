@@ -176,7 +176,7 @@ def _extract_mesh_shape_from_vector(vector):
                     parsed = ast.literal_eval(ms)
                     if isinstance(parsed, list) and len(parsed) == 2:
                         return tuple(parsed)
-                except Exception:
+                except Exception:  # best-effort mesh extraction; fall through to default
                     pass
     return (1, 1)
 
@@ -541,7 +541,7 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
     """
     if VECTOR_GROUPING_MODE == "hw":
         grouped_vectors = group_vectors_by_hardware_and_mesh(vectors)
-        format_group_suffix = lambda group_key: _format_hw_mesh_suffix(group_key)
+        format_group_suffix = _format_hw_mesh_suffix
     else:
         grouped_vectors = group_vectors_by_mesh_shape(vectors)
         format_group_suffix = format_mesh_suffix
