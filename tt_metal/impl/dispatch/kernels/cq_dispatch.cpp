@@ -370,7 +370,6 @@ void process_write_host_h() {
             noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
             noc_nonposted_writes_acked[noc_index] += num_noc_packets_written;
 #endif
-#endif
 
             // This will update the write ptr on device and host
             // We flush to ensure the ptr has been read out of l1 before we update it again
