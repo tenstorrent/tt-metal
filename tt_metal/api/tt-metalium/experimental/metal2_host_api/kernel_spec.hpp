@@ -70,14 +70,6 @@ struct KernelSpec {
     // Number of kernel threads
     int num_threads = 1;
 
-    // (Optional) Per-node thread count specification
-    // The default threading is num_threads. However, you may override this on a per-node basis.
-    // NOTE: This feature is currently unsupported. It's an open question if we EVER want to support it.
-    //       Here as a placeholder; specifying it will trigger a runtime error.
-    using NodeSpecificThreadCount = std::pair<Nodes, int>;  // {node_set, num_threads}
-    using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
-    std::optional<NodeSpecificThreadCounts> node_specific_thread_counts = std::nullopt;
-
     // Kernel type (methods)
     bool is_dm_kernel() const { return std::holds_alternative<DataMovementConfiguration>(config_spec); }
     bool is_compute_kernel() const { return std::holds_alternative<ComputeConfiguration>(config_spec); }

@@ -587,8 +587,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
     // Validate no per-node thread maps are used (not yet implemented)
     for (const auto& kernel : spec.kernels) {
+        const bool has_node_specific =
+            kernel.advanced_options.has_value() && kernel.advanced_options->node_specific_thread_counts.has_value();
         TT_FATAL(
-            !kernel.node_specific_thread_counts.has_value(),
+            !has_node_specific,
             "KernelSpec '{}' specifies node_specific_thread_counts, but per-node thread counts are not implemented.",
             kernel.unique_id);
     }
