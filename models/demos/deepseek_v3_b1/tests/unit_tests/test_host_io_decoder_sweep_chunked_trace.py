@@ -47,7 +47,7 @@ def _require_host_io_sweep_env() -> None:
 def _assert_chunked_trace_is_readable(trace_root: Path, model_id: str, prompt_id: str) -> None:
     trace_dir = _trace_dir(trace_root, model_id, prompt_id)
     if not (trace_dir / "index.json").is_file():
-        pytest.skip("chunked 128K trace is not present")
+        pytest.fail(f"chunked 128K trace is not present: {trace_dir}")
 
     reader = ChunkedTraceReader(trace_dir)
     assert reader.index["layout"] == "chunked_group_a_v1"
