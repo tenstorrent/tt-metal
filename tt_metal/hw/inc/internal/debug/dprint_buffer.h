@@ -4,7 +4,11 @@
 
 #pragma once
 
+#ifdef ENV_LLK_INFRA
+#include "hostdev/device_print_common.h"
+#else
 #include "hostdev/dev_msgs.h"
+#endif
 
 inline volatile tt_l1_ptr DevicePrintMemoryLayout* get_device_print_buffer() {
 #ifdef ENV_LLK_INFRA
