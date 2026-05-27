@@ -57,3 +57,31 @@ def test_dropout_output_tensor(device):
     assert torch.allclose(
         tensor_torch, output_torch
     ), "output_tensor parameter not working: input tensor was not modified in place"
+
+
+def test_dropout_seed_distinguishes_cache_entries(device):
+    """Regression: descriptor framework only re-patches Buffer* slots on cache hit.
+    `seed` is a non-Buffer RTA scalar; if it's omitted from compute_program_hash,
+    two same-shape calls with different seeds collide on the cached program and
+    the second uses the first call's seed (identical dropout mask)."""
+    t = torch.ones((1, 1, 32, 64))
+    tensor = ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+
+    out_a = ttnn.to_torch(ttnn.experimental.dropout(tensor, probability=0.5, scale=2.0, seed=1234))
+    cache_after_a = device.num_program_cache_entries()
+
+    out_b = ttnn.to_torch(ttnn.experimental.dropout(tensor, probability=0.5, scale=2.0, seed=1234))
+    cache_after_b = device.num_program_cache_entries()
+
+    out_c = ttnn.to_torch(ttnn.experimental.dropout(tensor, probability=0.5, scale=2.0, seed=5678))
+    cache_after_c = device.num_program_cache_entries()
+
+    assert cache_after_b == cache_after_a, "same seed must reuse the cached program"
+    assert cache_after_c > cache_after_b, (
+        "different seed must produce a distinct cache entry — otherwise the second call "
+        "silently reuses the first call's seed (identical dropout mask bug)"
+    )
+    assert not torch.equal(out_a, out_c), "different seeds must produce different dropout masks"

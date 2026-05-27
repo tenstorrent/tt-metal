@@ -141,3 +141,36 @@ def test_bernoulli_with_compute_kernel_options(shape, in_dtype, out_dtype, devic
         npu_input, seed, dtype=get_lib_dtype(ttnn, out_dtype), compute_kernel_config=compute_kernel_config
     )
     assert list(npu_output.shape) == shape
+
+
+def test_bernoulli_seed_distinguishes_cache_entries(device):
+    """Regression: descriptor framework only re-patches Buffer* slots on cache hit.
+    `seed` is a non-Buffer RTA scalar; if it's omitted from compute_program_hash,
+    two same-shape calls with different seeds collide on the cached program and
+    the second uses the first call's seed. Asserts both the observable outcome
+    (different seed -> different output) and the underlying mechanism
+    (different seed -> distinct cache entry)."""
+    import torch
+
+    shape = [1, 32, 64]
+    cpu_input = torch.full(shape, 0.5, dtype=torch.float32)
+    npu_input = ttnn.from_torch(cpu_input, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+
+    out_a = ttnn.to_torch(ttnn.bernoulli(npu_input, seed=1234, dtype=ttnn.float32))
+    cache_after_a = device.num_program_cache_entries()
+
+    out_b = ttnn.to_torch(ttnn.bernoulli(npu_input, seed=1234, dtype=ttnn.float32))
+    cache_after_b = device.num_program_cache_entries()
+
+    out_c = ttnn.to_torch(ttnn.bernoulli(npu_input, seed=5678, dtype=ttnn.float32))
+    cache_after_c = device.num_program_cache_entries()
+
+    assert cache_after_b == cache_after_a, "same seed must reuse the cached program"
+    assert cache_after_c > cache_after_b, (
+        "different seed must produce a distinct cache entry — otherwise the second call "
+        "silently reuses the first call's seed (cache-collision bug)"
+    )
+    assert not torch.equal(out_a, out_c), "different seeds must produce different outputs"

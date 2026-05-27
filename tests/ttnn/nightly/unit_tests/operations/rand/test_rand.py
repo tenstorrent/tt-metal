@@ -524,3 +524,39 @@ def test_rand_mesh_2d_shard_and_replicate(mesh_device, shard_mesh_dim):
                     f"Device {coord} and device {tuple(shard_neighbor)} are on different "
                     f"shards but hold identical data"
                 )
+
+
+def test_rand_seed_range_distinguish_cache_entries(device):
+    """Regression: descriptor framework only re-patches Buffer* slots on cache hit.
+    `seed`, `from`, and `to` are non-Buffer RTA scalars on rand. If any are
+    omitted from compute_program_hash, calls that differ only in those values
+    collide on the cached program and silently reuse the first call's values."""
+    shape = (1, 32, 64)
+    common = dict(device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+
+    a = ttnn.to_torch(ttnn.rand(shape=shape, low=0.0, high=1.0, seed=1234, **common))
+    cache_a = device.num_program_cache_entries()
+
+    b_same = ttnn.to_torch(ttnn.rand(shape=shape, low=0.0, high=1.0, seed=1234, **common))
+    cache_b = device.num_program_cache_entries()
+
+    c_seed = ttnn.to_torch(ttnn.rand(shape=shape, low=0.0, high=1.0, seed=5678, **common))
+    cache_c = device.num_program_cache_entries()
+
+    d_high = ttnn.to_torch(ttnn.rand(shape=shape, low=0.0, high=10.0, seed=1234, **common))
+    cache_d = device.num_program_cache_entries()
+
+    e_low = ttnn.to_torch(ttnn.rand(shape=shape, low=-1.0, high=1.0, seed=1234, **common))
+    cache_e = device.num_program_cache_entries()
+
+    assert cache_b == cache_a, "same params must reuse the cached program"
+    assert cache_c > cache_b, "different seed must produce a distinct cache entry"
+    assert cache_d > cache_c, "different `high` must produce a distinct cache entry"
+    assert cache_e > cache_d, "different `low` must produce a distinct cache entry"
+
+    assert not torch.equal(a, c_seed), "different seeds must produce different outputs"
+    assert d_high.max() > 1.5, "different `high` must actually take effect — output range was capped to first call's"
+    assert e_low.min() < -0.1, "different `low` must actually take effect — output range was floored to first call's"
