@@ -499,6 +499,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(has_weight),
         static_cast<uint32_t>(fuse_rope),
         head_dim_tiles,
+        chunk_size_rows,
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     if (has_weight) {
