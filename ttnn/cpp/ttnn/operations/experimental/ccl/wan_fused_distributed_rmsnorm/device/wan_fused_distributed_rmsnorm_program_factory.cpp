@@ -62,9 +62,10 @@ uint32_t float_to_u32(float v) {
 
 // Upper cap on TP>1 worker cores per chip. The MUX channel count is uint8_t
 // but in practice the fabric MUX rejects (or deadlocks) above ~64 full-size
-// channels per core. Lower cap = fewer fabric ops per chip (each worker
-// sends ~1 packet per direction per chunk).
-constexpr uint32_t kMaxMuxWorkersPerChip = 16u;
+// channels per core. For big shapes (Wan N=18944 with ~592 tile rows),
+// more workers means fewer chunks-per-worker, which keeps each worker's
+// chunk loop short and the per-chunk fabric overhead amortized.
+constexpr uint32_t kMaxMuxWorkersPerChip = 64u;
 // num_tile_rows below this falls back to the LEGACY whole-tile writer
 // (single worker). The packed-page MUX writer has significant per-chunk
 // fabric overhead that doesn't pay off until we have ≥4 tile-rows worth
@@ -114,7 +115,14 @@ WanFusedDistributedRmsnormSizing compute_sizing(const WanFusedDistributedRmsnorm
     // input, stats_local, packed_gathered, stats_gathered all scale with
     // chunk_size).
     constexpr uint32_t kMaxChunkSizeRows = 8u;
-    s.chunk_size_rows = std::min<uint32_t>(std::max(1u, rows_per_worker), kMaxChunkSizeRows);
+    // L1 budget cap: input_cb is double-buffered 2 * chunk * num_tile_cols
+    // bf16 tiles = chunk * num_tile_cols * 4 KB per worker. Other CBs add
+    // ~150 KB. Keep input_cb ≤ 512 KB so total ≤ 750 KB (half of L1):
+    //   chunk * num_tile_cols ≤ 128.
+    const uint32_t num_tile_cols_for_chunk_cap = std::max(1u, W / TILE_WIDTH);
+    const uint32_t chunk_h_cap = std::max(1u, 128u / num_tile_cols_for_chunk_cap);
+    s.chunk_size_rows =
+        std::min<uint32_t>(std::min<uint32_t>(std::max(1u, rows_per_worker), kMaxChunkSizeRows), chunk_h_cap);
     s.window_size = s.chunk_size_rows;
     // Pages are addressed across the whole chip (not per-worker) so the
     // buffer shape doesn't depend on num_workers. Each chunk a worker
@@ -284,9 +292,11 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // ceil(rows/2) as the chunk size (capped at kMaxChunkSizeRows); when only
     // 1 row, chunk=1 (no overlap possible at all).
     constexpr uint32_t kMaxChunkSizeRows = 8u;
-    // Aim for 1 chunk per worker (= rows_per_worker rows per packet) to
-    // minimize fabric ops. Cap for L1 budget.
-    const uint32_t chunk_size_rows = std::min<uint32_t>(std::max(1u, num_tile_rows_per_worker), kMaxChunkSizeRows);
+    // L1 budget cap (matches compute_sizing): chunk * num_tile_cols ≤ 128
+    // keeps input_cb under ~512 KB per worker.
+    const uint32_t chunk_h_cap = std::max(1u, 128u / std::max(1u, num_tile_cols));
+    const uint32_t chunk_size_rows =
+        std::min<uint32_t>(std::min<uint32_t>(std::max(1u, num_tile_rows_per_worker), kMaxChunkSizeRows), chunk_h_cap);
     // Phase 9 packed-page AG: every chunk this chip processes maps to a
     // distinct DRAM page. Page index = my_device_index * num_chunks_per_device
     // + chunk_idx_on_device. Independent of num_workers per design.
