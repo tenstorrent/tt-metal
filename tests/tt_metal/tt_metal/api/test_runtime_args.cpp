@@ -89,24 +89,6 @@ uint32_t get_runtime_arg_addr(
     return (result_base + offset + uncached_l1_offset);
 };
 
-distributed::MeshWorkload initialize_program_data_movement(
-    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/, const CoreRangeSet& core_range_set) {
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt::tt_metal::Program program = tt_metal::CreateProgram();
-
-    tt_metal::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
-        core_range_set,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
-
-    workload.add_program(device_range, std::move(program));
-    return workload;
-}
-
 distributed::MeshWorkload initialize_program_data_movement_rta(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreRangeSet& core_range_set,
@@ -115,29 +97,66 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt::tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t rta_base_dm = get_runtime_arg_addr(
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
         tt::tt_metal::HalProcessorClassType::DM,
         0,
         common_rtas);
-    std::map<std::string, std::string> dm_defines = {
+    // MAX_DMS is only consumed inside the kernel's `#ifdef COMPILE_FOR_DM` block,
+    // which is Quasar-only (gen1 compiles for COMPILE_FOR_BRISC/NCRISC instead),
+    // so defining it unconditionally is harmless on gen1.
+    uint32_t max_dms = MetalContext::instance().hal().get_processor_types_count(
+        HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(HalProcessorClassType::DM));
+    experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines dm_defines = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_unique_rt_args)},
-        {"RESULTS_ADDR", std::to_string(rta_base_dm)}};
+        {"RESULTS_ADDR", std::to_string(rta_base_dm)},
+        {"MAX_DMS", std::to_string(max_dms)}};
     if (common_rtas) {
-        dm_defines["COMMON_RUNTIME_ARGS"] = "1";
+        dm_defines.push_back({"COMMON_RUNTIME_ARGS", "1"});
     }
 
-    tt_metal::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
-        core_range_set,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .defines = dm_defines});
+    constexpr const char* KERNEL = "dm_runtime_args";
+
+    // Both gen1 and gen2 DM configs are populated; the runtime selects the one
+    // matching the active arch. On Quasar all 6 user DMs (DM2..DM7) run the
+    // kernel; on WH/BH the legacy DM was a single RISCV_0 thread.
+    experimental::metal2_host_api::DataMovementConfiguration dm_cfg{
+        .gen1_data_movement_config =
+            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
+        .gen2_data_movement_config = experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
+    };
+    const bool is_quasar = MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
+    const uint8_t num_threads = is_quasar ? static_cast<uint8_t>(kQuasarNumUserDms) : uint8_t{1};
+
+    experimental::metal2_host_api::KernelSpec kernel_spec{
+        .unique_id = KERNEL,
+        .source =
+            experimental::metal2_host_api::KernelSpec::SourceFilePath{
+                "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp"},
+        .num_threads = num_threads,
+        .compiler_options = {.defines = dm_defines},
+        .runtime_arguments_schema =
+            {
+                .num_runtime_varargs = num_unique_rt_args,
+                .num_common_runtime_varargs = common_rtas ? num_unique_rt_args : 0u,
+            },
+        .config_spec = dm_cfg,
+    };
+
+    experimental::metal2_host_api::WorkUnitSpec wu{
+        .unique_id = "main",
+        .kernels = {KERNEL},
+        .target_nodes = core_range_set,
+    };
+    experimental::metal2_host_api::ProgramSpec spec{
+        .program_id = "dm_runtime_args",
+        .kernels = {kernel_spec},
+        .work_units = {wu},
+    };
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
     workload.add_program(device_range, std::move(program));
     return workload;
@@ -194,7 +213,7 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
             .unique_id = kernel_names[k],
             .source =
                 experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp"},
+                    "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp"},
             .num_threads = static_cast<uint8_t>(dm_processors_per_kernel),
             .compiler_options = {.defines = defines_vec},
             .runtime_arguments_schema =

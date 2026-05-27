@@ -437,7 +437,7 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        if chunk_start_idx is not None:
+        if chunk_start_idx is not None and int(chunk_start_idx) > 0:
             chunk_start_idx_tensor = torch.tensor([chunk_start_idx], dtype=torch.int32)
             tt_chunk_start_idx = ttnn.from_torch(
                 chunk_start_idx_tensor,

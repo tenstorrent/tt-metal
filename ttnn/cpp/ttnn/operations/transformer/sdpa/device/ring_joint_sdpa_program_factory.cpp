@@ -6,6 +6,10 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <cstddef>
+#include <cstdint>
+#include <map>
 #include <optional>
 #include <cmath>
 #include <string>
@@ -16,7 +20,9 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <hostdevcommon/common_values.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
 
@@ -24,28 +30,15 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-RingJointSDPAProgramFactory::cached_mesh_workload_t RingJointSDPAProgramFactory::create_mesh_workload(
+tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     const RingJointSDPAParams& args,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const RingJointSDPAInputs& tensor_args,
-    RingJointSDPAResult& output_tensors) {
-    tt::tt_metal::distributed::MeshWorkload mesh_workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
-
-    for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(args, coord, tensor_args, output_tensors);
-        mesh_workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_vars.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
-    }
-
-    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_vars)};
-}
-
-RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::create_at(
-    const RingJointSDPAParams& args,
-    const ttnn::MeshCoordinate& coord,
-    const RingJointSDPAInputs& tensor_args,
-    RingJointSDPAResult& output_tensors) {
+    RingJointSDPAResult& output_tensors,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    TT_FATAL(
+        mesh_dispatch_coordinate.has_value(),
+        "RingJointSDPAProgramFactory::create_descriptor requires mesh_dispatch_coordinate");
+    const auto& coord = mesh_dispatch_coordinate.value();
     /*
     The QKV inputs are fractured on the sequence dimension across ring_size.
     The sequence length comes in padded such that it is divisible by `TILE_HEIGHT * ring_size`.
@@ -53,35 +46,36 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     Naming:
         - padded_N: the global, padded sequence length
-        - local_padded_N: the local shard of the padded sequence length. local_padded_N = padded_N / ring_size
+        - kv_local_padded_N: local shard of padded sequence length for K/V (== padded_N / ring_size)
+        - q_local_padded_N: local Q seq length. For chunked prefill < kv_local_padded_N; otherwise equal.
         - logical_n: the logical global sequence length. logical_n <= padded_N.
         - L: the logical joint sequence length
 
-    input_tensor_q: B x NH x local_padded_N x DH
-    input_tensor_k: B x NH x local_padded_N x DH
-    input_tensor_v: B x NH x local_padded_N x DH
+    input_tensor_q: B x NH  x q_local_padded_N  x DH
+    input_tensor_k: B x NHK x kv_local_padded_N x DH
+    input_tensor_v: B x NH  x kv_local_padded_N x DH
 
-    gathered_input_tensor_k: B x NH x padded_N x DH
-    gathered_input_tensor_v: B x NH x padded_N x DH
+    gathered_input_tensor_k: B x NHK x padded_N x DH
+    gathered_input_tensor_v: B x NH  x padded_N x DH
 
     joint_tensor_q: B x NH x L x DH
     joint_tensor_k: B x NH x L x DH
     joint_tensor_v: B x NH x L x DH
 
-    output_tensor: B x NH x local_padded_N x DH
+    output_tensor: B x NH x q_local_padded_N x DH
     joint_output_tensor: B x NH x L x DH
 
 
     The algorithm is roughly described below.
     - for each ring iteration:
         - read a Q chunk from input_tensor_q
-        - for each KV chunk in local_padded_N:
+        - for each KV chunk in kv_local_padded_N:
             - on the first ring iteration, read from local input_tensor_k and input_tensor_v
             - otherwise, read from gathered_input_tensor_k and gathered_input_tensor_v
             - on the last ring iteration, also read from joint_tensor_k and joint_tensor_v
             - if the KV chunk is from the non-joint input and contains the global token index (logical_n - 1), generate
     a mask
-            - else if the KV chunk is from non-joint input and contains the local token index (local_padded_N - 1),
+            - else if the KV chunk is from non-joint input and contains the local token index (kv_local_padded_N - 1),
     generate an attention mask
             - else if the KV chunk is from the joint input and contains the local token index (L - 1), generate a mask
             - compute attention
@@ -89,7 +83,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         - if this is not the first ring iteration, do the LSE update.
     */
 
-    log_debug(tt::LogOp, "DEBUG: create_at is called");
+    log_debug(tt::LogOp, "DEBUG: create_descriptor is called");
 
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& input_tensor_k = tensor_args.input_k;
@@ -109,7 +103,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     std::size_t q_chunk_size = args.get_q_chunk_size();
     std::size_t k_chunk_size = args.get_k_chunk_size();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor desc;
 
     auto* mesh_device = input_tensor_q.device();
     uint32_t device_index = ccl::get_linearized_index_from_physical_coord(
@@ -173,12 +167,19 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     log_debug(tt::LogOp, "k_shape (gathered): {}", k_shape);
     log_debug(tt::LogOp, "v_shape (gathered): {}", v_shape);
 
-    const uint32_t B = q_shape[0], NH = q_shape[1], NHK = k_shape[1], local_padded_N = q_shape[2], DH = q_shape[3];
+    // q_local_padded_N (Q rows per device) can be shorter than kv_local_padded_N for chunked prefill.
+    const uint32_t B = q_shape[0];
+    const uint32_t NH = q_shape[1];
+    const uint32_t NHK = k_shape[1];
+    const uint32_t DH = q_shape[3];
+    const uint32_t q_local_padded_N = q_shape[2];
+    const uint32_t kv_local_padded_N = tensor_args.input_k.logical_shape()[2];
     const uint32_t padded_N = k_shape[2];
     const uint32_t L = joint_q_shape[2];
     const uint32_t vDH = v_shape[3];
 
-    const uint32_t local_padded_Nt = local_padded_N / tt::constants::TILE_HEIGHT;
+    const uint32_t q_local_padded_Nt = q_local_padded_N / tt::constants::TILE_HEIGHT;
+    const uint32_t kv_local_padded_Nt = kv_local_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t padded_Nt = padded_N / tt::constants::TILE_HEIGHT;
     // Find unpadded sequence lengths in tiles
     const uint32_t Lt = tt::div_up(L, tt::constants::TILE_HEIGHT);
@@ -196,25 +197,37 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
-    // Lightweight mask: needed when any K/joint dimension has padding, or when causal masking is active.
-    const bool local_n_has_padding = (local_padded_Nt % Sk_chunk_t) != 0;
+    // Chunked-prefill balanced layout: each device holds one per-chunk K region per chunk.
+    // The region is q_local_padded_Nt tiles (Q is exactly one such region per call). The
+    // diagonal-tile CB slot is shared with is_causal — needed whenever either is on.
+    const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
+    const uint32_t chunk_size_t = q_local_padded_Nt * ring_size;
+    const bool diag_tile_enabled = args.is_causal || tensor_args.is_chunked();
+    // Kernel-level is_causal flag carries the legacy local-frame causal-stamp semantics. Chunked
+    // prefill is mathematically causal (args.is_causal=True) but uses absolute-coords stamps every
+    // ring iter, so the chunked path supersedes the legacy path — mask the flag off here.
+    const bool kernel_is_causal = args.is_causal && !tensor_args.is_chunked();
+
+    // Lightweight mask: needed when any K/joint dimension has padding, or when causal/chunked
+    // masking is active.
+    const bool local_n_has_padding = (kv_local_padded_Nt % Sk_chunk_t) != 0;
     const bool global_n_has_padding = (args.logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     const bool joint_has_padding = L > 0 && (L % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     const bool needs_lightweight_mask =
-        (local_n_has_padding || global_n_has_padding || joint_has_padding) || args.is_causal;
+        (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled;
 
     // Partial tile support when padding boundary falls inside a tile.
     const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
     const uint32_t joint_l_partial_col = L % tt::constants::TILE_HEIGHT;
     const uint32_t partial_mask_tiles = (global_n_partial_col != 0 ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
-    const uint32_t causal_diag_tiles = args.is_causal ? 1 : 0;
+    const uint32_t causal_diag_tiles = diag_tile_enabled ? 1 : 0;
     // Single CB holds: 1 neginf tile + optional causal diagonal + up to 2 partial mask tiles
     const uint32_t total_lightweight_mask_tiles = 1 + causal_diag_tiles + partial_mask_tiles;
 
-    const uint32_t num_local_q_chunks = tt::div_up(local_padded_N, q_chunk_size);
+    const uint32_t num_local_q_chunks = tt::div_up(q_local_padded_N, q_chunk_size);
     const uint32_t num_joint_q_chunks = tt::div_up(L, q_chunk_size);
     const uint32_t num_q_chunks = num_local_q_chunks + num_joint_q_chunks;
-    const uint32_t num_local_k_chunks = tt::div_up(local_padded_N, k_chunk_size);
+    const uint32_t num_local_k_chunks = tt::div_up(kv_local_padded_N, k_chunk_size);
     const uint32_t num_joint_k_chunks = tt::div_up(L, k_chunk_size);
 
     log_debug(tt::LogOp, "B: {}", B);
@@ -225,14 +238,16 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     log_debug(tt::LogOp, "vDH: {}", vDH);
 
     // Log padded dimensions
-    log_debug(tt::LogOp, "local_padded_N: {}", local_padded_N);
+    log_debug(tt::LogOp, "q_local_padded_N: {}", q_local_padded_N);
+    log_debug(tt::LogOp, "kv_local_padded_N: {}", kv_local_padded_N);
     log_debug(tt::LogOp, "padded_N: {}", padded_N);
     log_debug(tt::LogOp, "L: {}", L);
 
     // Log tile dimensions
     log_debug(tt::LogOp, "DHt: {}", DHt);
     log_debug(tt::LogOp, "vDHt: {}", vDHt);
-    log_debug(tt::LogOp, "local_padded_Nt: {}", local_padded_Nt);
+    log_debug(tt::LogOp, "q_local_padded_Nt: {}", q_local_padded_Nt);
+    log_debug(tt::LogOp, "kv_local_padded_Nt: {}", kv_local_padded_Nt);
     log_debug(tt::LogOp, "padded_Nt: {}", padded_Nt);
     log_debug(tt::LogOp, "Lt: {}", Lt);
 
@@ -260,10 +275,42 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             : true;
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet core_grid_set(core_grid);
     uint32_t num_cores = grid_size.x * grid_size.y;
 
-    // Init fused op signaler
-    sdpa_fused_op_signaler->init_fused_op(program, mesh_device, core_grid);
+    // Init fused op signaler — descriptor-pattern equivalent of
+    // RingSDPAFusedOpSignaler::init_fused_op. The signaler stores the receiver-cores
+    // noc list and two signal semaphore IDs (one for forward, one for backward).
+    // Semaphore IDs match insertion order into desc.semaphores.
+    {
+        sdpa_fused_op_signaler->fused_op_signaler_mode = ttnn::experimental::ccl::FusedOpSignalerMode::MULTI;
+        sdpa_fused_op_signaler->fused_op_receiver_cores_noc.clear();
+        const auto cores = tt::tt_metal::corerange_to_cores(core_grid_set, std::nullopt, /*row_wise=*/true);
+        for (const auto& core : cores) {
+            sdpa_fused_op_signaler->fused_op_receiver_cores_noc.push_back(
+                mesh_device->worker_core_from_logical_core(core));
+        }
+        const uint32_t fused_sem0_id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = fused_sem0_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = core_grid_set,
+            .initial_value = 0,
+        });
+        const uint32_t fused_sem1_id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = fused_sem1_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = core_grid_set,
+            .initial_value = 0,
+        });
+        sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores.clear();
+        sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores.push_back(fused_sem0_id);
+        sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores.push_back(fused_sem1_id);
+        sdpa_fused_op_signaler->num_fused_op_cores_to_signal =
+            sdpa_fused_op_signaler->fused_op_receiver_cores_noc.size();
+        sdpa_fused_op_signaler->initialized_fused_op = true;
+    }
 
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
     log_debug(
@@ -328,13 +375,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t out_in0_block_w = Sk_chunk_t;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
-    // Streaming compute v2: eliminates row buffers via cb_push_back_hold_wr_ptr.
-    // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
-    // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap.
-    // The `Sk_chunk_t % qk_out_subblock_w == 0` clause is tautological — the selector already
-    // guarantees it — but kept explicit for clarity of the subblock-tiling requirement.
-    const bool use_streaming_compute =
-        !fp32_dest_acc_en && qk_out_subblock_h <= 2 && Sk_chunk_t % qk_out_subblock_w == 0 && qk_in0_num_subblocks > 1;
+    // Ring-joint streaming supports single-Q-subblock shapes; only fp32 dest acc stays on the legacy path.
+    const bool use_streaming_compute = !fp32_dest_acc_en;
     log_debug(
         tt::LogOp,
         "use_streaming_compute: {} (is_causal={}, Sq_chunk_t={}, Sk_chunk_t={}, sbh={}, sbw={})",
@@ -406,18 +448,17 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     class bfloat16 bfloat_identity_scalar(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
 
-    union {
-        float f;
-        uint32_t u;
-    } scale_union{};
-    scale_union.f = scale.value_or(1.0f);
+    const float scale_value = scale.value_or(1.0f);
+    const uint32_t scale_packed = std::bit_cast<uint32_t>(scale_value);
 
     // log scale
-    log_debug(tt::LogOp, "scale: {}", scale_union.f);
+    log_debug(tt::LogOp, "scale: {}", scale_value);
 
     // Enable per-head zigzag for load balancing in balanced causal mode
     // Requires even num_q_chunks for symmetric light/heavy work distribution
-    const bool enable_zigzag_balancing = args.is_balanced && args.is_causal && (num_q_chunks % 2 == 0);
+    // Chunked prefill rides its own absolute-coords path, not the legacy local-frame causal stamp,
+    // so the zigzag asymmetry doesn't apply — gate on kernel_is_causal, not args.is_causal.
+    const bool enable_zigzag_balancing = args.is_balanced && kernel_is_causal && (num_q_chunks % 2 == 0);
 
     // Cores actually issuing Q reads. When the flat q-chunk distribution is smaller
     // than the grid the trailing cores get zero work; zigzag distributes pairs, so
@@ -433,8 +474,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        local_padded_N,
-        local_padded_Nt,
+        q_local_padded_Nt,
+        kv_local_padded_Nt,
         padded_Nt,
         static_cast<uint32_t>(args.logical_n),
         logical_nt,
@@ -447,11 +488,13 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_q_chunks,
         args.all_gather_operation_attributes.ring_size,
         qk_out_subblock_h,
-        args.is_causal,
+        kernel_is_causal,
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
-        static_cast<uint32_t>(use_streaming_compute),
-        num_active_cores,  // num_q_readers for get_barrier_read_threshold
+        // Reader slot 24: chunked_enabled (writer/compute use slot 24/33 for use_streaming_compute).
+        static_cast<uint32_t>(tensor_args.is_chunked()),
+        num_active_cores,
+        chunk_size_t,
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -465,20 +508,39 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
-     * ChainSemaphores groups the three semaphore IDs for a single chain and handles
-     * creation and compile-time arg appending together.
+     * ChainSemaphores groups the three semaphore IDs for a single chain (sender,
+     * receiver, valid) and pushes them as SemaphoreDescriptor entries on the
+     * descriptor. The IDs are sequential indices into desc.semaphores.
      */
     struct ChainSemaphores {
         uint32_t sender_id;
         uint32_t receiver_id;
         uint32_t valid_id;
 
-        static ChainSemaphores create(Program& prog, const CoreRange& grid) {
-            return {
-                CreateSemaphore(prog, grid, INVALID),
-                CreateSemaphore(prog, grid, INVALID),
-                CreateSemaphore(prog, grid, VALID),
-            };
+        static ChainSemaphores create(ProgramDescriptor& desc, const CoreRangeSet& cores) {
+            ChainSemaphores out;
+            out.sender_id = static_cast<uint32_t>(desc.semaphores.size());
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = out.sender_id,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = cores,
+                .initial_value = INVALID,
+            });
+            out.receiver_id = static_cast<uint32_t>(desc.semaphores.size());
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = out.receiver_id,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = cores,
+                .initial_value = INVALID,
+            });
+            out.valid_id = static_cast<uint32_t>(desc.semaphores.size());
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = out.valid_id,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = cores,
+                .initial_value = VALID,
+            });
+            return out;
         }
 
         void append_to_compile_args(std::vector<uint32_t>& args) const {
@@ -492,11 +554,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // Computed early to gate resource allocation
     const bool k_uses_batch_chain = (NHK == 1);
 
-    const auto head_sems = ChainSemaphores::create(program, core_grid);  // head chain (V, optionally K)
+    const auto head_sems = ChainSemaphores::create(desc, core_grid_set);  // head chain (V, optionally K)
     // Only create batch semaphores for MLA mode (NHK == 1)
     std::optional<ChainSemaphores> batch_sems;
     if (k_uses_batch_chain) {
-        batch_sems = ChainSemaphores::create(program, core_grid);  // batch chain (K in MLA mode)
+        batch_sems = ChainSemaphores::create(desc, core_grid_set);  // batch chain (K in MLA mode)
     }
 
     // Append semaphore ids to reader compile-time args (must match reader kernel expectations)
@@ -517,8 +579,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        local_padded_N,
-        local_padded_Nt,
+        q_local_padded_Nt,
+        kv_local_padded_Nt,
         padded_Nt,
         args.logical_n,
         logical_nt,
@@ -530,31 +592,22 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_joint_k_chunks,
         num_q_chunks,
         packed_identity_scalar,
-        scale_union.u,
+        scale_packed,
         args.all_gather_operation_attributes.ring_size,
         global_n_partial_col,
         joint_l_partial_col,
-        (std::uint32_t)use_streaming_compute,
-        args.is_causal,
+        static_cast<std::uint32_t>(use_streaming_compute),
+        kernel_is_causal,
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
-        (std::uint32_t)out_out_subblock_h,
+        static_cast<std::uint32_t>(out_out_subblock_h),
+        static_cast<uint32_t>(tensor_args.is_chunked()),
+        chunk_size_t,
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
-
-    // Early format check: when all data formats are identical, reconfig calls can be skipped.
-    const tt::DataFormat q_df_early = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
-    const tt::DataFormat k_df_early = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
-    const tt::DataFormat v_df_early = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
-    const tt::DataFormat out_df_early = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    const tt::DataFormat im_df_early = tt::DataFormat::Float16_b;
-    const tt::DataFormat mask_df_early = tt::DataFormat::Float16_b;
-    const bool uniform_dataformat =
-        (q_df_early == k_df_early && q_df_early == v_df_early && q_df_early == out_df_early &&
-         q_df_early == mask_df_early && q_df_early == im_df_early);
 
     std::vector<uint32_t> compute_compile_time_args = {
         B,
@@ -564,8 +617,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        local_padded_N,
-        local_padded_Nt,
+        q_local_padded_Nt,
+        kv_local_padded_Nt,
         padded_Nt,
         args.logical_n,
         logical_nt,
@@ -589,14 +642,15 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         out_in0_num_subblocks,
         out_in1_num_subblocks,
         out_num_blocks,
-        scale_union.u,
-        (std::uint32_t)use_streaming_compute,
+        scale_packed,
+        static_cast<std::uint32_t>(use_streaming_compute),
         global_n_partial_col,
         joint_l_partial_col,
-        (std::uint32_t)uniform_dataformat,
-        args.is_causal,
+        kernel_is_causal,
         args.is_balanced,
-        static_cast<uint32_t>(enable_zigzag_balancing)};
+        static_cast<uint32_t>(enable_zigzag_balancing),
+        static_cast<uint32_t>(tensor_args.is_chunked()),
+        chunk_size_t};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -643,144 +697,94 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
 
-    // Q input
-    auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
-                            .set_page_size(tt::CBIndex::c_0, q_tile_size);
+    uint32_t next_cb_index = 0;
+    const auto allocate_cb = [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat data_format) -> uint32_t {
+        const uint32_t cb_index = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = page_size_bytes * num_pages,
+            .core_ranges = core_grid_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_index),
+                .data_format = data_format,
+                .page_size = page_size_bytes,
+            }}},
+        });
+        return cb_index;
+    };
+    const auto allocate_tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) -> uint32_t {
+        return allocate_cb(tile_size, num_tiles, data_format);
+    };
 
-    CreateCircularBuffer(program, core_grid, c_in0_config);
-    // K input
-    auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
-                            .set_page_size(tt::CBIndex::c_1, k_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in1_config);
-    // V input
-    auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
-                            .set_page_size(tt::CBIndex::c_2, v_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in2_config);
+    const uint32_t cb_q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
+    const uint32_t cb_k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
+    const uint32_t cb_v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
 
     // Lightweight mask CB: holds neginf + optional causal diagonal + optional partial tiles.
     // Used for both causal (ring_iter 0) and padding (ring_iter > 0) masking.
-    if (needs_lightweight_mask) {
-        auto c_in3_config =
-            CircularBufferConfig(total_lightweight_mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
-                .set_page_size(tt::CB::c_in3, mask_tile_size);
-        CreateCircularBuffer(program, core_grid, c_in3_config);
-    }
+    constexpr uint32_t inactive_cb = std::numeric_limits<uint32_t>::max();
+    const uint32_t cb_mask_in =
+        needs_lightweight_mask ? allocate_tile_cb(total_lightweight_mask_tiles, mask_tile_size, mask_df) : inactive_cb;
 
-    // scale input
-    auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_4, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_4, scalar_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in4_config);
+    const uint32_t cb_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
+    const uint32_t cb_identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
+    const uint32_t cb_stats_in = allocate_tile_cb(statistics_tiles, im_tile_size, im_df);
+    const uint32_t cb_prev_out = allocate_tile_cb(out_im_tiles, out_tile_size, out_df);
+    const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
 
-    // identity scale input
-    auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in5_config);
+    const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, im_tile_size, im_df);
+    const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
+    const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
+    const uint32_t cb_max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
 
-    // stats input
-    auto c_in6_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}})
-                            .set_page_size(tt::CBIndex::c_6, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in6_config);
+    const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df);
+    const uint32_t cb_stats_out = allocate_tile_cb(statistics_tiles, im_tile_size, im_df);
 
-    // previous block output as input
-    auto c_in7_config = CircularBufferConfig(out_im_tiles * out_tile_size, {{tt::CBIndex::c_7, out_df}})
-                            .set_page_size(tt::CBIndex::c_7, out_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in7_config);
-
-    // column identity input
-    auto c_in8_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_8, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_8, scalar_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in8_config);
-
-    // cb_qk_im
-    auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CBIndex::c_24, im_df}})
-                                  .set_page_size(tt::CBIndex::c_24, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed0_config);
-
-    // cb_out_im
-    auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_25, im_df}})
-                                  .set_page_size(tt::CBIndex::c_25, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed1_config);
-
-    // cb_out_accumulate_im
-    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_26, im_df}})
-                                  .set_page_size(tt::CBIndex::c_26, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed2_config);
-
-    // cb_cur_max
-    auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_27, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_27, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed3_config);
-
-    // cb_prev_max
-    auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_28, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_28, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed4_config);
-
-    // cb_cur_sum
-    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_29, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_29, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed5_config);
-
-    // cb_prev_sum
-    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_30, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_30, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed6_config);
-
-    // cb_exp_max_diff
-    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_31, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_31, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed7_config);
-
-    // Output
-    auto c_out0_config = CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
-                             .set_page_size(tt::CBIndex::c_16, out_tile_size);
-    CreateCircularBuffer(program, core_grid, c_out0_config);
-
-    // stats output
-    auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})
-                             .set_page_size(tt::CBIndex::c_17, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_out1_config);
-
-    // Streaming compute v2: 1-tile recip scratch CB (c_9) for normalize_row_streaming.
-    // c_4 is used by cb_scale_in in ring joint, so we use c_9 instead.
-    if (use_streaming_compute) {
-        auto c_recip_scratch_config = CircularBufferConfig(1 * im_tile_size, {{tt::CBIndex::c_9, im_df}})
-                                          .set_page_size(tt::CBIndex::c_9, im_tile_size);
-        CreateCircularBuffer(program, core_grid, c_recip_scratch_config);
-    }
+    // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
+    // cb_scale_in is live in ring joint, so streaming uses a dedicated scratch CB.
+    const uint32_t cb_recip_scratch = use_streaming_compute ? allocate_tile_cb(1, im_tile_size, im_df) : inactive_cb;
 
     // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
-    // cb_sum_out (c_10) = compute pushes sum for writer to save to DRAM.
-    // cb_sum_in (c_11) = writer pushes restored sum from DRAM for compute to read.
-    if (use_streaming_compute) {
-        auto c_sum_out_config =
-            CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_10, stats_df}})
-                .set_page_size(tt::CBIndex::c_10, stats_tile_size);
-        CreateCircularBuffer(program, core_grid, c_sum_out_config);
+    // cb_sum_out = compute pushes sum for writer to save to DRAM.
+    // cb_sum_in = writer pushes restored sum from DRAM for compute to read.
+    const uint32_t cb_sum_out =
+        use_streaming_compute ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : inactive_cb;
+    const uint32_t cb_sum_in =
+        use_streaming_compute ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : inactive_cb;
 
-        auto c_sum_in_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}})
-                                   .set_page_size(tt::CBIndex::c_11, stats_tile_size);
-        CreateCircularBuffer(program, core_grid, c_sum_in_config);
+    // Signal CB: compute signals writer when last K-chunk starts.
+    // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.
+    constexpr uint32_t signal_page_size = 16;
+    const uint32_t cb_signal =
+        use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
 
-        // Signal CB (c_12): compute signals writer when last K-chunk starts.
-        // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.
-        constexpr uint32_t signal_page_size = 16;
-        auto c_signal_config = CircularBufferConfig(signal_page_size, {{tt::CBIndex::c_12, tt::DataFormat::UInt16}})
-                                   .set_page_size(tt::CBIndex::c_12, signal_page_size);
-        CreateCircularBuffer(program, core_grid, c_signal_config);
-    }
+    const std::vector<uint32_t> cb_compile_time_args = {
+        cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,    cb_identity_scale_in,
+        cb_stats_in, cb_prev_out, cb_col_identity, cb_recip_scratch, cb_sum_out,     cb_sum_in,
+        cb_signal,   cb_out,      cb_stats_out,    cb_qk_im,         cb_out_im_A,    cb_out_im_B,
+        cb_max_A,    cb_max_B,    cb_sum_A,        cb_sum_B,         cb_exp_max_diff};
+    const std::vector<uint32_t> reader_cb_compile_time_args = {cb_q_in, cb_k_in, cb_v_in};
+    reader_compile_time_args.insert(
+        reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
+    writer_compile_time_args.insert(
+        writer_compile_time_args.end(), cb_compile_time_args.begin(), cb_compile_time_args.end());
+    compute_compile_time_args.insert(
+        compute_compile_time_args.end(), cb_compile_time_args.begin(), cb_compile_time_args.end());
 
-    uint32_t q_addr = input_tensor_q.buffer()->address();
-    uint32_t k_addr = input_tensor_k.buffer()->address();
-    uint32_t v_addr = input_tensor_v.buffer()->address();
-    uint32_t gathered_k_addr = gathered_input_tensor_k.buffer()->address();
-    uint32_t gathered_v_addr = gathered_input_tensor_v.buffer()->address();
-    uint32_t joint_q_addr = joint_tensor_q.buffer()->address();
-    uint32_t joint_k_addr = joint_tensor_k.buffer()->address();
-    uint32_t joint_v_addr = joint_tensor_v.buffer()->address();
-    uint32_t out_addr = output_tensor.buffer()->address();
-    uint32_t joint_out_addr = joint_output_tensor.buffer()->address();
-    uint32_t stats_addr = stats_output_tensor.buffer()->address();
+    auto* const q_buf = input_tensor_q.buffer();
+    auto* const k_buf = input_tensor_k.buffer();
+    auto* const v_buf = input_tensor_v.buffer();
+    auto* const gathered_k_buf = gathered_input_tensor_k.buffer();
+    auto* const gathered_v_buf = gathered_input_tensor_v.buffer();
+    auto* const joint_q_buf = joint_tensor_q.buffer();
+    auto* const joint_k_buf = joint_tensor_k.buffer();
+    auto* const joint_v_buf = joint_tensor_v.buffer();
+    auto* const out_buf = output_tensor.buffer();
+    auto* const joint_out_buf = joint_output_tensor.buffer();
+    auto* const stats_buf = stats_output_tensor.buffer();
 
     /**
      * Build chain selection for store-and-forward across cores per (batch, head).
@@ -1350,29 +1354,43 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         log_info(tt::LogOp, "K chain mode: head (NHK != 1, {})", head_mcast_enabled ? "mcast" : "unicast");
     }
 
-    // Create kernels (deferred until after chain construction for mcast_enabled flag)
-    auto reader_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp",
-        core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
+    // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
+    KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
 
-    auto writer_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_writer.cpp",
-        core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
+    // Build kernel descriptors locally so we can append per-core runtime args
+    // before pushing them into desc.kernels at the end. KernelDescriptor creation
+    // is deferred (just like the original CreateKernel calls were) until after chain
+    // construction, since the mcast_enabled compile-time arg is patched above.
+    KernelDescriptor reader_kernel{};
+    reader_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp";
+    reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel.core_ranges = core_grid_set;
+    reader_kernel.compile_time_args = reader_compile_time_args;
+    reader_kernel.defines = kernel_defines;
+    reader_kernel.config = ReaderConfigDescriptor{};
 
-    auto compute_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp",
-        core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = defines});
+    KernelDescriptor writer_kernel{};
+    writer_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_writer.cpp";
+    writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel.core_ranges = core_grid_set;
+    writer_kernel.compile_time_args = writer_compile_time_args;
+    writer_kernel.defines = kernel_defines;
+    writer_kernel.config = WriterConfigDescriptor{};
+
+    KernelDescriptor compute_kernel{};
+    compute_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp";
+    compute_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel.core_ranges = core_grid_set;
+    compute_kernel.compile_time_args = compute_compile_time_args;
+    compute_kernel.defines = kernel_defines;
+    compute_kernel.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .math_approx_mode = math_approx_mode,
+    };
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -1389,18 +1407,18 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         log_debug(tt::LogOp, "global_q_start: {}", global_q_start);
         log_debug(tt::LogOp, "global_q_end: {}", global_q_end);
 
-        std::vector<uint32_t> reader_args = {
-            q_addr,
-            k_addr,
-            v_addr,
-            gathered_k_addr,
-            gathered_v_addr,
-            joint_q_addr,
-            joint_k_addr,
-            joint_v_addr,
-            global_q_start,
-            global_q_end,
-        };
+        KernelDescriptor::RTArgList reader_args;
+        reader_args.push_back(q_buf);
+        reader_args.push_back(k_buf);
+        reader_args.push_back(v_buf);
+        reader_args.push_back(gathered_k_buf);
+        reader_args.push_back(gathered_v_buf);
+        reader_args.push_back(joint_q_buf);
+        reader_args.push_back(joint_k_buf);
+        reader_args.push_back(joint_v_buf);
+        reader_args.push_back(global_q_start);
+        reader_args.push_back(global_q_end);
+
         // Append chain runtime args for store-and-forward
         const auto& head_chain = head_chain_configs.at(i);
         const auto& batch_chain = batch_chain_configs.at(i);
@@ -1423,38 +1441,53 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             head_chain.next_core_q_chunks);
 
         // Head chain (V chain, optionally K in non-MLA): 18 args via unified layout
-        head_chain.append_to_args(reader_args);
+        std::vector<uint32_t> head_chain_args;
+        head_chain.append_to_args(head_chain_args);
+        reader_args.append(head_chain_args);
 
         // Batch chain (K chain in MLA mode): 18 args + 1 for loop padding (only when NHK == 1)
         if (k_uses_batch_chain) {
-            batch_chain.append_to_args(reader_args);
-            reader_args.push_back(k_chain_max_q[i]);
+            std::vector<uint32_t> batch_chain_args;
+            batch_chain.append_to_args(batch_chain_args);
+            reader_args.append(batch_chain_args);
+            reader_args.push_back(k_chain_max_q[i]);  // For K mcast loop padding (per-chain)
         }
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args);
+        std::vector<uint32_t> reader_signaler_args;
+        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_signaler_args);
+        reader_args.append(reader_signaler_args);
 
-        SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
+        reader_kernel.emplace_runtime_args(core, reader_args);
 
         // Writer args
-        std::vector<uint32_t> writer_args = {
-            out_addr,
-            joint_out_addr,
-            stats_addr,
-            global_q_start,
-            global_q_end,
-        };
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args);
-        SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
+        KernelDescriptor::RTArgList writer_args;
+        writer_args.push_back(out_buf);
+        writer_args.push_back(joint_out_buf);
+        writer_args.push_back(stats_buf);
+        writer_args.push_back(global_q_start);
+        writer_args.push_back(global_q_end);
+        std::vector<uint32_t> writer_signaler_args;
+        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
+        writer_args.append(writer_signaler_args);
+        writer_kernel.emplace_runtime_args(core, writer_args);
 
         // Compute args
-        std::vector<uint32_t> compute_args = {
-            global_q_start,
-            global_q_end,
-        };
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args);
-        SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
+        KernelDescriptor::RTArgList compute_args;
+        compute_args.push_back(global_q_start);
+        compute_args.push_back(global_q_end);
+        std::vector<uint32_t> compute_signaler_args;
+        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_signaler_args);
+        compute_args.append(compute_signaler_args);
+        compute_kernel.emplace_runtime_args(core, compute_args);
     }
+
+    // Push the SDPA kernels into desc before invoking the all-gather helper so
+    // the helper appends its own kernels after these. Their indices in
+    // desc.kernels will be 0/1/2 respectively (they are the first kernels appended).
+    desc.kernels.push_back(std::move(reader_kernel));
+    desc.kernels.push_back(std::move(writer_kernel));
+    desc.kernels.push_back(std::move(compute_kernel));
 
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> all_gather_fused_op_signaler =
         ttnn::experimental::ccl::AllGatherFusedOpSignaler();
@@ -1472,8 +1505,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         gathered_input_tensor_k,
         gathered_input_tensor_v,
     };
-    auto all_gather_shared_variables = ring_attention_all_gather_async_multi_core_with_workers_helper(
-        program,  // Must pass ring_joint_sdpa's program
+    // Append the all-gather portion to `desc`. The helper assigns sequential
+    // semaphore IDs starting at `desc.semaphores.size()` (current count) and
+    // returns kernel indices into `desc.kernels`. Runtime args are auto-patched
+    // by the descriptor framework on cache hits, so no override path is needed.
+    ring_attention_all_gather_async_multi_core_with_workers_helper(
+        desc,
         all_gather_input_tensors,
         coord,
         forward_coord,
@@ -1490,78 +1527,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.ccl_core_grid_offset,
         args.all_gather_operation_attributes.core_allocation_strategy);
 
-    return cached_program_t{
-        std::move(program),
-        {num_cores, grid_size, reader_kernels_id, writer_kernels_id, compute_kernels_id, all_gather_shared_variables}};
-}
-
-void RingJointSDPAProgramFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const RingJointSDPAParams& args,
-    const RingJointSDPAInputs& tensor_args,
-    RingJointSDPAResult& output_tensors) {
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-
-        ring_attention_all_gather_async_multicore_with_workers_override_runtime_arguments(
-            shared_vars.all_gather_shared_variables,
-            program,
-            {tensor_args.input_k, tensor_args.input_v},       /*input_tensors*/
-            {tensor_args.gathered_k, tensor_args.gathered_v}, /*output_tensors*/
-            args.all_gather_operation_attributes.semaphore);
-
-        // Get addresses for regular tensors
-        auto* q_buffer = tensor_args.input_q.buffer();
-        auto* k_buffer = tensor_args.input_k.buffer();
-        auto* v_buffer = tensor_args.input_v.buffer();
-        auto* gathered_k_buffer = tensor_args.gathered_k.buffer();
-        auto* gathered_v_buffer = tensor_args.gathered_v.buffer();
-        auto* joint_q_buffer = tensor_args.joint_q.buffer();
-        auto* joint_k_buffer = tensor_args.joint_k.buffer();
-        auto* joint_v_buffer = tensor_args.joint_v.buffer();
-
-        // Get addresses for output tensors
-        auto* out_buffer = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX].buffer();
-        auto* joint_out_buffer = output_tensors[RING_JOINT_SDPA_JOINT_OUTPUT_IDX].buffer();
-        auto* stats_buffer = output_tensors[RING_JOINT_SDPA_STATS_OUTPUT_IDX].buffer();
-
-        uint32_t q_addr = q_buffer->address();
-        uint32_t k_addr = k_buffer->address();
-        uint32_t v_addr = v_buffer->address();
-        uint32_t gathered_k_addr = gathered_k_buffer->address();
-        uint32_t gathered_v_addr = gathered_v_buffer->address();
-        uint32_t joint_q_addr = joint_q_buffer->address();
-        uint32_t joint_k_addr = joint_k_buffer->address();
-        uint32_t joint_v_addr = joint_v_buffer->address();
-        uint32_t out_addr = out_buffer->address();
-        uint32_t joint_out_addr = joint_out_buffer->address();
-        uint32_t stats_addr = stats_buffer->address();
-
-        auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
-        auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
-
-        for (uint32_t i = 0; i < shared_vars.num_cores; ++i) {
-            CoreCoord core = {i % shared_vars.grid_size.x, i / shared_vars.grid_size.x};
-
-            auto& reader_args = reader_args_by_core[core.x][core.y];
-            auto& writer_args = writer_args_by_core[core.x][core.y];
-
-            // Update reader args
-            reader_args[0] = q_addr;
-            reader_args[1] = k_addr;
-            reader_args[2] = v_addr;
-            reader_args[3] = gathered_k_addr;
-            reader_args[4] = gathered_v_addr;
-            reader_args[5] = joint_q_addr;
-            reader_args[6] = joint_k_addr;
-            reader_args[7] = joint_v_addr;
-
-            // Update writer args
-            writer_args[0] = out_addr;
-            writer_args[1] = joint_out_addr;
-            writer_args[2] = stats_addr;
-        }
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

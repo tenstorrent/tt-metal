@@ -81,9 +81,7 @@ uint32_t _start() {
     }
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-#if defined(NOC_API_V2)
-        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-#endif
+        overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     }
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
