@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute kernel for GELU backward using polynomial-based GELU derivative
-// Uses Sollya-derived minimax polynomials for high accuracy (Max ULP = 1)
+// Compute kernel for GELU backward using polynomial-based GELU derivative.
+// Uses Sollya-derived minimax polynomials for high accuracy (Max ULP = 1).
 
 #include <cstdint>
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"  // GeluDerivative
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // MulBinary
@@ -19,37 +20,43 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_1;
     constexpr auto cb_grad_in = tt::CBIndex::c_2;
 
-    binary_op_init_common(cb_grad_out, cb_input, cb_grad_in);
+    unary_op_init_common(cb_grad_out, cb_grad_in);
 
     // GELU backward: grad_in = grad_out * GELU'(input).
     //   D0 = grad_out, D1 = input -> GeluDerivative<D1>, MulBinary<D0, D1, D0>.
-    // Original comment notes that GELU derivative uses extra DEST as scratch
-    // during polynomial evaluation, so the multi-tile batching isn't possible
-    // there. The chain's per-tile iteration handles that constraint naturally —
-    // each iteration acquires fresh DEST, runs derivative, and packs result.
-    for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        compute_kernel_lib::eltwise_chain(
-            per_core_block_size,
-            compute_kernel_lib::CopyTile<
-                cb_grad_out,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::None>{},
-            compute_kernel_lib::CopyTile<
-                cb_input,
-                compute_kernel_lib::Dst::D1,
-                compute_kernel_lib::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::None>{},
-            compute_kernel_lib::GeluDerivative<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D1>{},
-            compute_kernel_lib::
-                MulBinary<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_grad_in,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutStreaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::PackTileReconfig::None>{});
-    }
+    //
+    // 2D shape: outer = per_core_block_cnt rows, inner = per_core_block_size tiles per row.
+    // Single chain replaces the outer for-loop + per-call chain. Per-element inits
+    // (gelu_derivative_tile_init, mul_binary_tile_init, copy_tile_to_dst_init_short)
+    // are hoisted once before the outer walk by the chain's hoist machinery —
+    // previously each outer iteration's eltwise_chain() call paid those inits.
+    //
+    // Lifecycles:
+    //   cb_grad_out / cb_input  Chunked + Block (per-chunk wait+pop of per_core_block_size tiles)
+    //   cb_grad_in              OutChunked + Block (per-chunk reserve+push)
+    const auto shape = compute_kernel_lib::EltwiseShape::of(per_core_block_cnt, per_core_block_size);
+
+    compute_kernel_lib::eltwise_chain(
+        shape,
+        compute_kernel_lib::CopyTile<
+            cb_grad_out,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::Chunked,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::CopyTileReconfig::None>{},
+        compute_kernel_lib::CopyTile<
+            cb_input,
+            compute_kernel_lib::Dst::D1,
+            compute_kernel_lib::Chunked,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::CopyTileReconfig::None>{},
+        compute_kernel_lib::GeluDerivative<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D1>{},
+        compute_kernel_lib::
+            MulBinary<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
+        compute_kernel_lib::PackTile<
+            cb_grad_in,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::OutChunked,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::PackTileReconfig::None>{});
 }
