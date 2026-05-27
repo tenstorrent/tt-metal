@@ -427,6 +427,11 @@ void kernel_main() {
                     prefetcher_finalize_block</*skip_ptr_update=*/true>(
                         iface, t_page_bytes_per_recv, num_receivers, noc_index);
                     PROFILE_ACCUM(prof_finalize);
+                } else {
+                    // The ping-pong DMA can reuse this stage slot two chunks later.
+                    // Make sure all posted writes sourced from it have departed first.
+                    noc_async_posted_writes_flushed();
+                    PROFILE_ACCUM(prof_flush);
                 }
 
                 // Advance counters to next chunk.
