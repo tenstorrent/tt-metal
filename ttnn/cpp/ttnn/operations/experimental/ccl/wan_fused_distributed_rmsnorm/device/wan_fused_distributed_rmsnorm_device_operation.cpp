@@ -53,6 +53,15 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             "Weight last dim ({}) must equal input H per device ({})",
             weight->padded_shape()[-1],
             padded[3]);
+        // Per-token weight has shape [N, H] (or [..., N, H]); broadcast is
+        // [1, H]. Distinguish via the logical (not padded) seqlen dim.
+        const auto& w_logical = weight->logical_shape();
+        const auto w_n = w_logical[-2];
+        TT_FATAL(
+            w_n == 1 || w_n == shape[2],
+            "Weight second-to-last logical dim ({}) must be 1 (broadcast) or N ({}) for per-token",
+            w_n,
+            shape[2]);
     }
 
     if (bias.has_value()) {
@@ -64,6 +73,13 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             "Bias last dim ({}) must equal input H per device ({})",
             bias->padded_shape()[-1],
             padded[3]);
+        const auto& b_logical = bias->logical_shape();
+        const auto b_n = b_logical[-2];
+        TT_FATAL(
+            b_n == 1 || b_n == shape[2],
+            "Bias second-to-last logical dim ({}) must be 1 (broadcast) or N ({}) for per-token",
+            b_n,
+            shape[2]);
     }
 
     const bool rope_present = trans_mat.has_value() || rope_cos.has_value() || rope_sin.has_value();

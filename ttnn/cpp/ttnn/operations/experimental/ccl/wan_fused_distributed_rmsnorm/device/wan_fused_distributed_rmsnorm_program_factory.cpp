@@ -170,6 +170,13 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
 
     const bool has_weight = weight.has_value();
     const bool has_bias = bias.has_value();
+    // Per-token weight/bias: shape [N, H] (or [B,1,N,H]) instead of broadcast
+    // [1, H]. Detected by checking the second-to-last logical dim — broadcast
+    // weight has 1 there. When set, the reader reads per-row tiles using
+    // noc_async_read_tile (full 4 KB/tile) and compute uses mul_tiles instead
+    // of mul_tiles_bcast_rows.
+    const bool per_token_weight = has_weight && (weight->logical_shape()[-2] > 1);
+    const bool per_token_bias = has_bias && (bias->logical_shape()[-2] > 1);
     const bool fuse_rope = trans_mat.has_value() && rope_cos.has_value() && rope_sin.has_value();
 
     // Per-head RoPE: cos/sin shape[1] == num_heads_per_device gives each head
@@ -450,16 +457,15 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         create_cb(stats_transposed_gathered_cb_id, program, worker_core_set, fp32_tile_size, ring, fp32_format);
     }
 
-    if (has_weight) {
-        create_cb(weight_cb_id, program, worker_core_set, bf16_tile_size, num_tile_cols, bf16_format);
-    } else {
-        create_cb(weight_cb_id, program, worker_core_set, bf16_tile_size, 1, bf16_format);
-    }
-    if (has_bias) {
-        create_cb(bias_cb_id, program, worker_core_set, bf16_tile_size, num_tile_cols, bf16_format);
-    } else {
-        create_cb(bias_cb_id, program, worker_core_set, bf16_tile_size, 1, bf16_format);
-    }
+    // Per-token weight/bias is per-row: weight_cb holds chunk_size_rows
+    // worth of weight tiles (one row's slice at a time), popped per row by
+    // compute. Broadcast weight/bias holds a single row's worth, retained
+    // across the whole worker. has_bias is implied by has_weight.
+    const uint32_t weight_cb_tiles =
+        has_weight ? (per_token_weight ? chunk_size_rows * num_tile_cols : num_tile_cols) : 1;
+    create_cb(weight_cb_id, program, worker_core_set, bf16_tile_size, weight_cb_tiles, bf16_format);
+    const uint32_t bias_cb_tiles = has_bias ? (per_token_bias ? chunk_size_rows * num_tile_cols : num_tile_cols) : 1;
+    create_cb(bias_cb_id, program, worker_core_set, bf16_tile_size, bias_cb_tiles, bf16_format);
 
     create_cb(reduce_scalar_sum_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
     create_cb(reduce_scalar_avg_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
@@ -540,6 +546,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         rope_seqlen_tiles,
         bias_cb_id,
         static_cast<uint32_t>(has_bias),
+        static_cast<uint32_t>(per_token_weight),
+        static_cast<uint32_t>(per_token_bias),
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     if (has_weight) {
@@ -707,6 +715,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(has_bias),
         static_cast<uint32_t>(args.per_head_norm ? 1u : 0u),
         args.num_heads_per_device,
+        static_cast<uint32_t>(per_token_weight),
+        static_cast<uint32_t>(per_token_bias),
     };
 
     KernelHandle compute_kernel_id = CreateKernel(

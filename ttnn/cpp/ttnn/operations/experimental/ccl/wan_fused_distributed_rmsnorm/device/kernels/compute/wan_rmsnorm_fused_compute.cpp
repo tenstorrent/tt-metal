@@ -92,6 +92,11 @@ void kernel_main() {
     // an rsqrt per head and applies it to that head's columns.
     constexpr uint32_t per_head_norm = get_compile_time_arg_val(30);
     constexpr uint32_t num_heads_per_device = get_compile_time_arg_val(31);
+    // Per-token weight / bias: [N, H] (vs broadcast [1, H]). Reader pushes
+    // per-row tiles. Compute uses mul_tiles / add_tiles (no _bcast_rows) and
+    // pops the row's weight/bias tiles at end of each row in the chunk.
+    constexpr uint32_t per_token_weight = get_compile_time_arg_val(32);
+    constexpr uint32_t per_token_bias = get_compile_time_arg_val(33);
 
     constexpr uint32_t stats_dest_cb = (is_tp_1 != 0) ? stats_gathered_cb : stats_local_cb;
     // Per-row post reduce reads ring_size tiles. With packed AG enabled the
@@ -294,14 +299,21 @@ void kernel_main() {
 
             if constexpr (has_weight) {
                 // ----- Sub-phase 2: (x * 1/rms) * weight → mul_weight_result_cb -----
-                // weight is row-broadcast (same per col), pushed to weight_cb by
-                // the reader once on the worker's first chunk. cb_wait_front
-                // cumulatively per col-block so compute can start as soon as
-                // the first block of weight is in (reader pushes in block_size
-                // chunks). Pop happens at end of kernel.
+                // Broadcast weight (default): weight_cb holds num_tile_cols
+                // row-broadcast tiles pushed once per worker; we use
+                // mul_tiles_bcast_rows so the same weight column applies to
+                // every token row.
+                // Per-token weight: weight_cb holds chunk_size_rows * num_tile_cols
+                // tiles, with this row's slice at the front. Use mul_tiles
+                // directly (no broadcast) and pop the row's slice at end of
+                // row.
                 reconfig_data_format(mul_rms_result_cb, weight_cb);
                 pack_reconfig_data_format(mul_weight_result_cb);
-                mul_bcast_rows_init_short(mul_rms_result_cb, weight_cb);
+                if constexpr (per_token_weight != 0) {
+                    mul_tiles_init(mul_rms_result_cb, weight_cb);
+                } else {
+                    mul_bcast_rows_init_short(mul_rms_result_cb, weight_cb);
+                }
 
                 for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                     const uint32_t tiles_in_block =
@@ -310,7 +322,11 @@ void kernel_main() {
                     cb_wait_front(mul_rms_result_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                        mul_tiles_bcast_rows(mul_rms_result_cb, weight_cb, i, col_tile + i, i);
+                        if constexpr (per_token_weight != 0) {
+                            mul_tiles(mul_rms_result_cb, weight_cb, i, col_tile + i, i);
+                        } else {
+                            mul_tiles_bcast_rows(mul_rms_result_cb, weight_cb, i, col_tile + i, i);
+                        }
                     }
                     tile_regs_commit();
                     cb_pop_front(mul_rms_result_cb, block_size);
@@ -326,13 +342,16 @@ void kernel_main() {
 
             if constexpr (has_bias) {
                 // ----- Sub-phase 2.5: + bias → add_bias_result_cb -----
-                // bias is row-broadcast (same per col). add_tiles_bcast_rows
-                // mirrors the weight pattern: cumulative wait so compute can
-                // start consuming as soon as the first block of bias arrives.
-                // Pop happens at end of kernel.
+                // Broadcast bias uses add_tiles_bcast_rows; per-token bias
+                // uses add_tiles. Same per-row pop pattern as weight when
+                // per_token_bias.
                 reconfig_data_format(mul_weight_result_cb, bias_cb);
                 pack_reconfig_data_format(add_bias_result_cb);
-                add_bcast_rows_init_short(mul_weight_result_cb, bias_cb);
+                if constexpr (per_token_bias != 0) {
+                    add_tiles_init(mul_weight_result_cb, bias_cb);
+                } else {
+                    add_bcast_rows_init_short(mul_weight_result_cb, bias_cb);
+                }
                 for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                     const uint32_t tiles_in_block =
                         (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
@@ -340,7 +359,11 @@ void kernel_main() {
                     cb_wait_front(mul_weight_result_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                        add_tiles_bcast_rows(mul_weight_result_cb, bias_cb, i, col_tile + i, i);
+                        if constexpr (per_token_bias != 0) {
+                            add_tiles(mul_weight_result_cb, bias_cb, i, col_tile + i, i);
+                        } else {
+                            add_tiles_bcast_rows(mul_weight_result_cb, bias_cb, i, col_tile + i, i);
+                        }
                     }
                     tile_regs_commit();
                     cb_pop_front(mul_weight_result_cb, block_size);
@@ -485,6 +508,16 @@ void kernel_main() {
                 cb_pop_front(rope_cos_cb, rope_pop_per_row);
                 cb_pop_front(rope_sin_cb, rope_pop_per_row);
             }
+
+            // Per-token weight/bias: pop the row's slice now so the next
+            // row's slice is at the front. (Broadcast path keeps the same
+            // tiles across all rows and pops at end of kernel.)
+            if constexpr (per_token_weight != 0) {
+                cb_pop_front(weight_cb, num_tile_cols);
+            }
+            if constexpr (per_token_bias != 0) {
+                cb_pop_front(bias_cb, num_tile_cols);
+            }
         }
 
         // -------- RELEASE THIS CHUNK --------
@@ -497,10 +530,12 @@ void kernel_main() {
     cb_pop_front(reduce_scalar_sum_cb, 1);
     cb_pop_front(reduce_scalar_avg_cb, 1);
     cb_pop_front(epsilon_cb, 1);
-    if constexpr (has_weight) {
+    // Broadcast weight/bias: pop the worker's single row slice at end of
+    // kernel. Per-token already popped per-row inside the chunk loop.
+    if constexpr (has_weight && per_token_weight == 0) {
         cb_pop_front(weight_cb, num_tile_cols);
     }
-    if constexpr (has_bias) {
+    if constexpr (has_bias && per_token_bias == 0) {
         cb_pop_front(bias_cb, num_tile_cols);
     }
     if constexpr (fuse_rope) {
