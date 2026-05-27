@@ -16,6 +16,7 @@ import torch
 
 from models.common.utility_functions import nearest_32
 from models.experimental.seamless_m4t_v2_large.tt.common import (
+    all_reduce_sum_replicate,
     MATMUL_1D_SEQ_THRESHOLD,
     TILE,
     matmul_program_config,
@@ -24,7 +25,11 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     to_torch_replicated_first_shard,
     width_sharded_to_l1_interleaved,
 )
-from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import from_torch_bfloat16_tile
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
+    from_torch_bfloat16_tile,
+    mesh_cluster_axis,
+    get_tp,
+)
 
 
 # Match ``torch.finfo(torch.bfloat16).min`` used by HF attention masking.
@@ -104,6 +109,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
         self.feature_projection_input_dim = feature_projection_input_dim
         self.speech_encoder_attention_heads = speech_encoder_attention_heads
         self.speech_encoder_intermediate_size = speech_encoder_intermediate_size
+        self._tp = get_tp(device)
+        self._cluster_axis = mesh_cluster_axis(device)
+        self._num_local_heads = speech_encoder_attention_heads // self._tp
         self.speech_encoder_layers = speech_encoder_layers
         self.layer_norm_eps = layer_norm_eps
         self.speech_encoder_chunk_size = speech_encoder_chunk_size
@@ -964,8 +972,14 @@ class TTSeamlessM4Tv2SpeechEncoder:
         k_transposed: bool = False,
         accept_sharded_input: bool = False,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, None]:
-        """Slice Q|K|V then reshape/permute (adapter SDPA and fallback)."""
-        pc_qkv = self._matmul_program_config(batch * seq_len, hsz, 3 * hsz)
+        """Slice Q|K|V then reshape/permute (adapter SDPA and fallback).
+
+        For TP>1 the QKV weight is column-parallel ``[H, 3H//tp]`` so the local
+        dim per Q/K/V group is ``H//tp`` (= ``qkv_out_dim // 3``).
+        """
+        qkv_out_dim = int(attn_module.qkv.weight.shape[-1])  # 3*H or 3*H//tp
+        local_hidden = qkv_out_dim // 3  # H or H//tp
+        pc_qkv = self._matmul_program_config(batch * seq_len, hsz, qkv_out_dim)
         qkv = self._linear(
             hidden_states,
             attn_module.qkv.weight,
@@ -975,9 +989,21 @@ class TTSeamlessM4Tv2SpeechEncoder:
             batch=batch,
             seq=seq_len,
         )
-        q = ttnn.slice(qkv, [0, 0, 0], [batch, seq_len, hsz], [1, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-        k = ttnn.slice(qkv, [0, 0, hsz], [batch, seq_len, 2 * hsz], [1, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-        v = ttnn.slice(qkv, [0, 0, 2 * hsz], [batch, seq_len, 3 * hsz], [1, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+        q = ttnn.slice(qkv, [0, 0, 0], [batch, seq_len, local_hidden], [1, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+        k = ttnn.slice(
+            qkv,
+            [0, 0, local_hidden],
+            [batch, seq_len, 2 * local_hidden],
+            [1, 1, 1],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        v = ttnn.slice(
+            qkv,
+            [0, 0, 2 * local_hidden],
+            [batch, seq_len, 3 * local_hidden],
+            [1, 1, 1],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         ttnn.deallocate(qkv)
         qh = self._heads(q, batch, seq_len, num_heads, head_dim)
         kh = (self._k_heads_transposed if k_transposed else self._heads)(k, batch, seq_len, num_heads, head_dim)
@@ -1000,9 +1026,15 @@ class TTSeamlessM4Tv2SpeechEncoder:
         k_transposed: bool = False,
         accept_sharded_input: bool = False,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        """``split_query_key_value_and_split_heads`` on fused ``[B, S, 3*H]`` QKV matmul output."""
+        """``split_query_key_value_and_split_heads`` on fused ``[B, S, 3*H]`` QKV matmul output.
+
+        For TP>1 the preprocessed QKV weight has shape ``[H, 3*H//tp]`` so
+        ``attn_module.qkv.weight.shape[-1]`` gives the TP-local output dim.
+        ``num_heads`` should already be ``num_local_heads = total_heads // tp``.
+        """
         _ = head_dim
-        pc_qkv = self._matmul_program_config(batch * seq_len, hsz, 3 * hsz)
+        qkv_out_dim = int(attn_module.qkv.weight.shape[-1])  # 3*H or 3*H//tp for TP
+        pc_qkv = self._matmul_program_config(batch * seq_len, hsz, qkv_out_dim)
         qkv = self._linear(
             hidden_states,
             attn_module.qkv.weight,
@@ -1171,13 +1203,16 @@ class TTSeamlessM4Tv2SpeechEncoder:
         use_relative: bool,
         accept_sharded_input: bool = False,
     ) -> ttnn.Tensor:
-        num_heads = self.speech_encoder_attention_heads
-        head_dim = self.hidden_size // num_heads
+        # For TP>1 use local head count; head_dim is per-head and does not change.
+        num_heads = self._num_local_heads
+        head_dim = self.hidden_size // self.speech_encoder_attention_heads
         hsz = self.hidden_size
         scale = 1.0 / math.sqrt(head_dim)
 
         token_m = batch * seq_len
-        pc_out = self._matmul_program_config(token_m, hsz, hsz)
+        # For TP>1 the row-parallel out_proj maps [H//tp → H]; read dim from weight.
+        local_in_dim = int(attn_module.linear_out.weight.shape[-2])
+        pc_out = self._matmul_program_config(token_m, local_in_dim, hsz)
         # Stage 17: for relative attention, K is extracted directly as [B, H, D, S]
         # (k_transposed=True), eliminating the downstream kh_t = permute(k,(0,1,3,2)).
         q, k, v, qkv_src = self._qkv_heads(
@@ -1236,7 +1271,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             )
             # Long-audio: ``_relative_embedding_table`` returns an uncached table at this seq.
             # Deallocate after the BMM so the next layer's table fits in DRAM.
-            head_dim_local = self.hidden_size // self.speech_encoder_attention_heads
+            head_dim_local = self.hidden_size // self.speech_encoder_attention_heads  # per-head, constant
             uncached_pos_bmm = seq_len * seq_len * head_dim_local * 2 > _MAX_CACHED_REL_POS_TABLE_BYTES
             rel_logits = self._relative_logits_bmm(
                 q,
@@ -1281,6 +1316,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
             out_3d = ttnn.reshape(out, (batch, seq_len, hsz))
             ttnn.deallocate(out)
             out = out_3d
+        # TP all_reduce: sum partial row-parallel outputs across devices → replicated full hidden state.
+        if self._tp > 1:
+            out = all_reduce_sum_replicate(out, self.device, cluster_axis=self._cluster_axis)
         if qkv_src is not None:
             ttnn.deallocate(qkv_src)
         return out
@@ -1309,9 +1347,11 @@ class TTSeamlessM4Tv2SpeechEncoder:
     ) -> ttnn.Tensor:
         token_rows = batch * seq_len
         hdim = self.hidden_size
-        ff_dim = self.speech_encoder_intermediate_size
-        pc1 = self._tuned_matmul_pc(token_rows, hdim, ff_dim)
-        pc2 = self._tuned_matmul_pc(token_rows, ff_dim, hdim)
+        # For TP>1 intermediate_dense is column-parallel → local ff_dim = ff_dim//tp.
+        # Read from weight shape so this works for both tp=1 and tp>1.
+        local_ff_dim = int(ffn.intermediate_dense.weight.shape[-1])
+        pc1 = self._tuned_matmul_pc(token_rows, hdim, local_ff_dim)
+        pc2 = self._tuned_matmul_pc(token_rows, local_ff_dim, hdim)
         h = self._linear(
             x,
             ffn.intermediate_dense.weight,
@@ -1331,6 +1371,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
             seq=seq_len,
         )
         ttnn.deallocate(h)
+        # TP all_reduce: row-parallel output_dense gives partial sums; sum across devices.
+        if self._tp > 1:
+            out = all_reduce_sum_replicate(out, self.device, cluster_axis=self._cluster_axis)
         return out
 
     def _relu_ffn(
@@ -1344,9 +1387,10 @@ class TTSeamlessM4Tv2SpeechEncoder:
     ) -> ttnn.Tensor:
         token_rows = batch * seq_len
         hdim = self.hidden_size
-        ff_dim = self.speech_encoder_intermediate_size
-        pc1 = self._tuned_matmul_pc(token_rows, hdim, ff_dim)
-        pc2 = self._tuned_matmul_pc(token_rows, ff_dim, hdim)
+        # For TP>1 intermediate_dense is column-parallel → local ff_dim = ff_dim//tp.
+        local_ff_dim = int(ffn.intermediate_dense.weight.shape[-1])
+        pc1 = self._tuned_matmul_pc(token_rows, hdim, local_ff_dim)
+        pc2 = self._tuned_matmul_pc(token_rows, local_ff_dim, hdim)
         h = self._linear(
             x,
             ffn.intermediate_dense.weight,
@@ -1366,6 +1410,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
             seq=seq_len,
         )
         ttnn.deallocate(h)
+        # TP all_reduce: row-parallel output_dense gives partial sums; sum across devices.
+        if self._tp > 1:
+            out = all_reduce_sum_replicate(out, self.device, cluster_axis=self._cluster_axis)
         return out
 
     def _conv_module(

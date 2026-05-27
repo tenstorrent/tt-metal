@@ -225,8 +225,13 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
     input_ids = text_inputs["input_ids"]
     input_text_attn = text_inputs["attention_mask"]
 
-    # Optional KV-decode Metal trace (needs trace_region_size in device params; slow per position).
-    use_decode_trace = False
+    # KV-decode Metal trace (single-capture, valid for all decode positions).
+    # Requires ``trace_region_size`` in device params — ``open_seamless_mesh_device`` with
+    # ``enable_decode_trace=True`` sets ``trace_region_size=450_000_000`` automatically.
+    use_decode_trace = True
+    # 2CQ: CQ1 stages next-step H2D while CQ0 executes the trace.
+    # Requires ``num_command_queues=2`` — set when ``enable_2cq=True`` in ``open_seamless_mesh_device``.
+    use_2cq = True
     # Long eng→hin needs ~50 decode tokens. Default was 48, but truncation at ~31 tokens is a
     # text-decoder KV-cache issue (see ``use_kv_cache``); budget must be high enough once fixed.
     gen_max_new = int(
@@ -249,6 +254,7 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         eos_token_id=cfg.eos_token_id,
         use_kv_cache=True,
         use_decode_trace=use_decode_trace,
+        use_2cq=use_2cq,
         repetition_penalty=rep_penalty,
         # Do not enable in-generate conv prewarm (see ``tt_seamless_m4t_v2_model.generate``).
     )
@@ -273,13 +279,15 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
     # the device-0 result.
     from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import open_seamless_mesh_device
 
-    device, mesh_shape = open_seamless_mesh_device(enable_decode_trace=bool(gen_common.get("use_decode_trace")))
+    device, mesh_shape = open_seamless_mesh_device(
+        enable_decode_trace=bool(gen_common.get("use_decode_trace")),
+        enable_2cq=bool(gen_common.get("use_2cq")),
+    )
     ttnn.SetDefaultDevice(device)
     rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
-    print(
-        f"  Demo device: MeshShape({rows}, {cols}) ({rows * cols} P150"
-        f"{'s' if rows * cols > 1 else ''}, replicated forward)"
-    )
+    tp = rows * cols
+    trace_info = "trace+2CQ" if (use_decode_trace and use_2cq) else ("trace" if use_decode_trace else "eager")
+    print(f"  Demo device: MeshShape({rows}, {cols}) — TP={tp} — decode: {trace_info}")
 
     try:
         tt_model = make_tt_model(device, model, cfg, t2u_cfg)

@@ -31,6 +31,7 @@ import ttnn
 
 from models.common.utility_functions import nearest_32
 from models.experimental.seamless_m4t_v2_large.tt.common import (
+    all_reduce_sum_replicate,
     core_grid,
     dram_matmul_program_config,
     ensure_l1_width_sharded_activation,
@@ -41,6 +42,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     to_torch_replicated_first_shard,
     width_sharded_to_l1_interleaved,
 )
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, mesh_cluster_axis
 
 # Chunk ``H @ enc`` along upsampled rows (same row count as speech-encoder long mel matmuls).
 _HARD_UPSAMPLE_MATMUL_CHUNK_ROWS = TILE
@@ -1191,6 +1193,11 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
         self.num_hidden_layers = num_hidden_layers
         self.num_attention_heads = num_attention_heads
         self.hidden_size = hidden_size
+        # TP: number of devices participating in tensor parallelism.
+        self._tp = get_tp(device)
+        self._cluster_axis = mesh_cluster_axis(device)
+        # local head count = total_heads / tp (for single device tp=1, unchanged).
+        self._num_local_heads = num_attention_heads // self._tp
         self._sdpa_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -1317,8 +1324,16 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
         hidden_size: int,
         sdpa_cfg: ttnn.SDPAProgramConfig,
     ) -> ttnn.Tensor:
+        """TP-aware self-attention.
+
+        For TP>1 the preprocessed QKV weight is column-parallel ``[H, 3H//tp]`` and
+        out_proj is row-parallel ``[H//tp, H]``. ``num_heads`` must already be
+        ``num_local_heads = total_heads // tp``.
+        """
         token_m = batch * seq
-        pc_qkv = self._matmul_pc(token_m, hidden_size, 3 * hidden_size)
+        # Read TP-local QKV output dim from weight shape (works for tp=1 and tp>1).
+        qkv_out_dim = int(attn_module.qkv.weight.shape[-1])
+        pc_qkv = self._matmul_pc(token_m, hidden_size, qkv_out_dim)
         qkv = self._linear(
             hidden_states,
             attn_module.qkv.weight,
@@ -1327,7 +1342,7 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
             batch=batch,
             seq=seq,
         )
-        qkv_4d = ttnn.reshape(qkv, (batch, 1, seq, 3 * hidden_size))
+        qkv_4d = ttnn.reshape(qkv, (batch, 1, seq, qkv_out_dim))
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv_4d,
@@ -1355,9 +1370,12 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
 
         merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
-        merged = ttnn.reshape(merged_4d, (batch, seq, hidden_size))
+        # For TP>1: merged dim = num_local_heads * head_dim = hidden_size // tp.
+        local_hidden = num_heads * head_dim
+        merged = ttnn.reshape(merged_4d, (batch, seq, local_hidden))
 
-        pc_out = self._matmul_pc(token_m, hidden_size, hidden_size)
+        local_in_dim = int(attn_module.out_proj.weight.shape[-2])  # H or H//tp
+        pc_out = self._matmul_pc(token_m, local_in_dim, hidden_size)
         proj = self._linear(
             merged,
             attn_module.out_proj.weight,
@@ -1367,13 +1385,17 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
             seq=seq,
         )
         ttnn.deallocate(merged)
+        # TP all_reduce: row-parallel out_proj gives partial sums; sum to full hidden.
+        if self._tp > 1:
+            proj = all_reduce_sum_replicate(proj, self.device, cluster_axis=self._cluster_axis)
         return proj
 
     def forward(self, inputs_embeds: ttnn.Tensor, attention_mask_4d: ttnn.Tensor) -> ttnn.Tensor:
         parameters = self.parameters
-        num_heads = self.num_attention_heads
+        # For TP>1 use local head count; head_dim is per-head and does not change.
+        num_heads = self._num_local_heads
         hidden_size = self.hidden_size
-        head_dim = hidden_size // num_heads
+        head_dim = hidden_size // self.num_attention_heads
         num_layers = self.num_hidden_layers
 
         batch = int(inputs_embeds.shape[0])
@@ -1384,6 +1406,7 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
         hidden = inputs_embeds
         sdpa_cfg = self._sdpa_program_config(seq, seq)
         token_m = batch * seq
+        # For TP>1 fc1 is column-parallel → local ffn_dim = ffn_dim // tp.
         ffn_dim = int(parameters.layers[0].ffn.fc1.weight.shape[-1])
         pc_ffn_fc1 = self._matmul_pc(token_m, hidden_size, ffn_dim)
         pc_ffn_fc2 = self._matmul_pc(token_m, ffn_dim, hidden_size)
@@ -1434,6 +1457,9 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
                 batch=batch,
                 seq=seq,
             )
+            # TP all_reduce: row-parallel fc2 gives partial sums; sum to full hidden.
+            if self._tp > 1:
+                ff = all_reduce_sum_replicate(ff, self.device, cluster_axis=self._cluster_axis)
             hidden = ttnn.add(hidden, ff, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(ff)
 
@@ -1481,6 +1507,10 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         self.variance_predictor_embed_dim = variance_predictor_embed_dim
         self.variance_predictor_hidden_dim = variance_predictor_hidden_dim
         self.variance_predictor_kernel_size = variance_predictor_kernel_size
+        # TP: number of devices in tensor-parallel group.
+        self._tp = get_tp(device)
+        self._cluster_axis = mesh_cluster_axis(device)
+        self._num_local_dec_heads = decoder_attention_heads // self._tp
 
         self.encoder = TTSeamlessM4Tv2TextToUnitEncoder(
             device,
@@ -1768,8 +1798,14 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         hidden_size: int,
         sdpa_cfg: ttnn.SDPAProgramConfig,
     ) -> ttnn.Tensor:
+        """TP-aware decoder self-attention.
+
+        ``num_heads`` must already be ``num_local_heads = total_heads // tp``.
+        QKV weight is column-parallel ``[H, 3H//tp]``; out_proj is row-parallel ``[H//tp, H]``.
+        """
         token_m = batch * seq
-        pc_qkv = self._matmul_pc(token_m, hidden_size, 3 * hidden_size)
+        qkv_out_dim = int(attn_module.qkv.weight.shape[-1])
+        pc_qkv = self._matmul_pc(token_m, hidden_size, qkv_out_dim)
         qkv = self._linear(
             hidden_states,
             attn_module.qkv.weight,
@@ -1778,7 +1814,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             batch=batch,
             seq=seq,
         )
-        qkv_4d = ttnn.reshape(qkv, (batch, 1, seq, 3 * hidden_size))
+        qkv_4d = ttnn.reshape(qkv, (batch, 1, seq, qkv_out_dim))
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv_4d,
@@ -1806,9 +1842,12 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
 
         merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
-        merged = ttnn.reshape(merged_4d, (batch, seq, hidden_size))
+        # For TP>1: local hidden = num_local_heads * head_dim = hidden_size // tp.
+        local_hidden = num_heads * head_dim
+        merged = ttnn.reshape(merged_4d, (batch, seq, local_hidden))
 
-        pc_out = self._matmul_pc(token_m, hidden_size, hidden_size)
+        local_in_dim = int(attn_module.out_proj.weight.shape[-2])
+        pc_out = self._matmul_pc(token_m, local_in_dim, hidden_size)
         proj = self._linear(
             merged,
             attn_module.out_proj.weight,
@@ -1818,6 +1857,9 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             seq=seq,
         )
         ttnn.deallocate(merged)
+        # TP all_reduce: sum partial row-parallel results across devices.
+        if self._tp > 1:
+            proj = all_reduce_sum_replicate(proj, self.device, cluster_axis=self._cluster_axis)
         return proj
 
     def _duration_predictor(
@@ -2171,8 +2213,9 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         else:
             pad_unit, attn_4d_tt, pad_unit_tt = self._decoder_masks(padded_unit_seq=padded_unit_seq, dur_sum=dur_sum)
 
-        num_heads = self.decoder_attention_heads
-        head_dim = self.hidden_size // num_heads
+        # For TP>1 use local head count; head_dim is per-head and does not change.
+        num_heads = self._num_local_dec_heads
+        head_dim = self.hidden_size // self.decoder_attention_heads
         sdpa_cfg = self._sdpa_program_config(padded_unit_seq, padded_unit_seq)
 
         for i in range(self.decoder_layers):
