@@ -12,6 +12,7 @@ DRAM bandwidth bottleneck in decode mode.
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode, pad_to_size
 from models.tt_transformers.tt.mlp import MLP
@@ -179,6 +180,11 @@ class Qwen35FusedMLP(MLP):
         li_ff1_3_compute_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
         )
+        # For large ISL (>= 2048), packer_l1_acc=True allocates a per_core_M*per_core_N
+        # fp16 accumulator CB that pushes total L1 usage past the 1.5 MB limit on BH.
+        # Switch to hifi2_na (fp32_dest_acc_en=False, packer_l1_acc=False) for prefill.
+        if mode == Mode.PREFILL and seq_len >= 2048:
+            li_ff1_3_compute_cfg = self.args.compute_kernel_config_hifi2_na
 
         if mode == Mode.PREFILL and seq_len >= self.args.prefill_len_cutoff:
             x = ttnn.reshape(x, [1, seq_len // self.args.prefill_len_cutoff, self.args.prefill_len_cutoff, -1])
@@ -258,11 +264,15 @@ class Qwen35FusedMLP(MLP):
                 pc = self._fused_decode_pc
                 mem = self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher)
             else:
+                # For large ISL on BH, in0_block_w=8 makes the double-buffered in0+in1
+                # CBs too large. Drop to 4 to halve them; total stays under 1.5 MB.
+                w1w3_in0_block_w = 4 if (seq_len >= 2048 and is_blackhole()) else None
                 pc = self.args.matmul_config(
                     m=min(seq_len, self.args.prefill_len_cutoff),
                     k=self.args.dim // self.args.cluster_shape[0],
                     n=2 * self.hidden_dim_tp,
                     grid_size=self.args.mlp1_3_grid(seq_len),
+                    in0_block_w=w1w3_in0_block_w,
                 )
                 mem = None
             w1w3_out = ttnn.linear(
@@ -309,6 +319,8 @@ class Qwen35FusedMLP(MLP):
         li_ff2_compute_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
+        if mode == Mode.PREFILL and seq_len >= 2048:
+            li_ff2_compute_cfg = self.args.compute_kernel_config_hifi2_na
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
 
         if seq_len > 128 and mode != Mode.DECODE:

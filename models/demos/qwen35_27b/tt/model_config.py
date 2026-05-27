@@ -59,12 +59,11 @@ DRAM_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoo
 
 
 def _prefill_grid_default():
-    # BH P150: (x=8, y=10) = 80 cores. Matches tt_transformers' validated BH
-    # convention. Helps large-M matmuls (M≥10 tiles); chunked M=256 paths stay
-    # at 64 cores because m_tiles=8 < grid_y=10 — accepted tradeoff. (10, 8)
-    # was tried but produces garbled output because per_core_N*grid_x > n_tiles
-    # for several shapes (e.g. N=2048: 7*10 > 64) and the kernel does not mask
-    # N-axis overflow. WH stays at (x=8, y=8) = 64.
+    # BH P150: 11×10 = 110 worker cores. We use (x=8, y=10) = 80 cores.
+    # grid_x=8 ensures N-tiles are always integer per core (all Qwen35 N dims are
+    # multiples of 32, so N/32/8 is exact). L1 overflow at ISL>=2048 is handled
+    # by switching to packer_l1_acc=False compute configs in forward() methods.
+    # WH stays at (x=8, y=8) = 64.
     return (8, 10) if is_blackhole() else (8, 8)
 
 
@@ -198,19 +197,23 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None):
 
 # ── Compute Kernel Configs ─────────────────────────────────────────────────
 
-COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi2,
-    math_approx_mode=True,
-    fp32_dest_acc_en=True,
-    packer_l1_acc=True,
-)
 
-COMPUTE_HIFI4 = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi4,
-    math_approx_mode=False,
-    fp32_dest_acc_en=True,
-    packer_l1_acc=True,
-)
+def _make_compute_cfg(fidelity, approx_mode, fp32_acc, packer_l1):
+    arch = ttnn.Arch[ttnn.get_arch_name().upper()]
+    return ttnn.init_device_compute_kernel_config(
+        arch,
+        math_fidelity=fidelity,
+        math_approx_mode=approx_mode,
+        fp32_dest_acc_en=fp32_acc,
+        packer_l1_acc=packer_l1,
+    )
+
+
+COMPUTE_HIFI2 = _make_compute_cfg(ttnn.MathFidelity.HiFi2, True, True, True)
+COMPUTE_HIFI4 = _make_compute_cfg(ttnn.MathFidelity.HiFi4, False, True, True)
+# HiFi2 without packer-L1 accumulation — required for large ISL (>=2048) where
+# packer_l1_acc=True pushes CB allocation above the 1.5 MB L1 limit on Blackhole.
+COMPUTE_HIFI2_NA = _make_compute_cfg(ttnn.MathFidelity.HiFi2, False, False, False)
 
 
 # ── FP8 Dequantization ────────────────────────────────────────────────────
@@ -295,7 +298,7 @@ class Qwen35ModelArgs(ModelArgs):
         self.gdn_nv = GDN_Nv
         self.gdn_dv = GDN_Dv
         self.gdn_conv_kernel_size = GDN_CONV_KERNEL_SIZE
-        self.gdn_chunk_size = 64  # Chunkwise prefill chunk size (must be power of 2, >= 32)
+        self.gdn_chunk_size = 128  # Chunkwise prefill chunk size (must be power of 2, >= 32)
 
         # Override prefill_len_cutoff for long-sequence support.
         # Framework default is 512 on BH, which limits MLP matmul to 512 rows.

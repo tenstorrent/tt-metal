@@ -60,6 +60,7 @@ class Transformer(TTTransformer):
         paged_attention_config=None,
         use_paged_kv_cache=False,
         prefetcher=None,
+        use_ttnn_ops=False,
     ):
         # Build with Qwen35Attention as default, then swap GDN layers after
         super().__init__(
@@ -91,7 +92,12 @@ class Transformer(TTTransformer):
                     paged_attention_config=paged_attention_config,
                     use_paged_kv_cache=use_paged_kv_cache,
                     prefetcher=prefetcher,
+                    use_ttnn_ops=use_ttnn_ops,
                 )
+
+        # Expose rope_setup on args so attention.forward_prefill uses get_prefill_rot_mats
+        # (ttnn.slice/reshape device ops) instead of ttnn.from_torch (host write, not traceable).
+        args._rope_setup_ref = self.rope_setup
 
         # Load attention-specific mesh weights and wire them up
         cache_dir = str(weight_cache_path / "attention_mesh")
@@ -580,6 +586,149 @@ class Transformer(TTTransformer):
 
         return x_normed
 
+    def _prefill_forward_device(self, tt_token_ids):
+        """Pure device-side prefill: embedding + chunked layer loop + final norm.
+
+        No state management — caller must reset states before and replicate after.
+
+        Args:
+            tt_token_ids: [1, 1, 1, seq_len] uint32 ROW_MAJOR device tensor
+        Returns:
+            x_normed: last-token 32-tile slice after final RMSNorm
+        """
+        import time as _time
+
+        _profile = os.environ.get("PREFILL_PROFILE") == "1"
+
+        def _sync_t():
+            if _profile:
+                ttnn.synchronize_device(self.mesh_device)
+                return _time.perf_counter()
+            return 0.0
+
+        x = self.embd(tt_token_ids)
+        x = ttnn.unsqueeze_to_4D(x)
+
+        seq_len = x.shape[2]
+        chunk_size = self.args.prefill_len_cutoff
+        n_layers = len(self.layers)
+        x_last = None
+
+        for layer_idx in range(n_layers):
+            layer = self.layers[layer_idx]
+            layer_type = self.args.layer_types[layer_idx]
+            is_last_layer = layer_idx == n_layers - 1
+            is_attention = layer_type == "full_attention"
+            # Always pass full sequence per layer — chunk_gated_delta_rule handles
+            # internal chunking.  Layer-level chunking would require ttnn.copy writes
+            # between Python calls, which are forbidden inside trace capture.
+            layer_chunk_size = seq_len
+
+            t_layer_start = _sync_t()
+            chunk_outputs = []
+            for chunk_start in range(0, seq_len, layer_chunk_size):
+                chunk_end = min(chunk_start + layer_chunk_size, seq_len)
+
+                if chunk_end == seq_len and len(chunk_outputs) == 0:
+                    x_chunk = x
+                else:
+                    x_chunk = ttnn.slice(x, (0, 0, chunk_start, 0), (1, 1, chunk_end, x.shape[-1]))
+
+                out_chunk = layer(x_chunk, current_pos=None, rot_mats_global=None, mode=Mode.PREFILL)
+
+                if is_last_layer and chunk_end == seq_len:
+                    last_tok_in_chunk = chunk_end - chunk_start - 1
+                    get_last = (last_tok_in_chunk // 32) * 32
+                    x_last = ttnn.slice(out_chunk, (0, 0, get_last, 0), (1, 1, get_last + 32, out_chunk.shape[-1]))
+
+                chunk_outputs.append(out_chunk)
+
+            if len(chunk_outputs) == 1:
+                x_new = chunk_outputs[0]
+            else:
+                x_new = ttnn.concat(chunk_outputs, dim=2)
+                for c in chunk_outputs:
+                    ttnn.deallocate(c)
+
+            t_layer_end = _sync_t()
+            if _profile:
+                n_chunks = len(chunk_outputs) if is_attention else (seq_len + chunk_size - 1) // chunk_size
+                logger.info(
+                    f"  layer {layer_idx} ({layer_type:<16}) {(t_layer_end-t_layer_start)*1000:7.1f} ms"
+                    f"  ({n_chunks} chunk(s), chunk_size={layer_chunk_size})"
+                )
+
+            ttnn.deallocate(x)
+            x = x_new
+
+        ttnn.deallocate(x)
+        t_norm_start = _sync_t()
+        out = self.norm(x_last, mode=Mode.PREFILL)
+        t_norm_end = _sync_t()
+        if _profile:
+            logger.info(f"  norm                               {(t_norm_end-t_norm_start)*1000:7.1f} ms")
+        return out
+
+    def _reset_all_prefill_states(self, seq_len=None):
+        """Initialize or zero all prefill state buffers.
+
+        First call (or when seq_len changes): allocates new persistent buffers via
+        _init_prefill_states.  Attention layers get fresh KV caches via reset_state().
+
+        Subsequent calls with same seq_len: zeros GDN buffers in-place so tensor
+        addresses stay stable across trace capture → execute.  Attention KV caches
+        are intentionally left as-is (the trace overwrites them anyway via fill_cache).
+        """
+        for layer in self.layers:
+            attn = layer.attention
+            if hasattr(attn, "_init_prefill_states"):
+                # GDN layer: init on first call, zero in-place on repeat
+                buf_ready = (
+                    seq_len is not None
+                    and hasattr(attn, "_prefill_output_buf")
+                    and attn._prefill_output_buf is not None
+                    and getattr(attn, "_prefill_output_seq_len", None) == seq_len
+                )
+                if buf_ready:
+                    attn._zero_prefill_states_inplace()
+                else:
+                    attn._init_prefill_states(seq_len)
+            elif hasattr(attn, "reset_state"):
+                # Attention layer: always get fresh (zero) KV caches
+                attn.reset_state()
+
+    def _zero_all_prefill_states_inplace(self):
+        """Zero GDN prefill state buffers in-place without creating new tensors.
+
+        Preserves tensor addresses so a captured trace can be re-executed with a
+        fresh (all-zero) starting state.  Attention KV caches are not touched because
+        the trace's fill_cache ops will overwrite them completely.
+        """
+        for layer in self.layers:
+            attn = layer.attention
+            if hasattr(attn, "_zero_prefill_states_inplace"):
+                attn._zero_prefill_states_inplace()
+
+    def _replicate_all_prefill_states(self):
+        """Replicate layer states to all batch slots (call after each prefill trace execute)."""
+        for layer in self.layers:
+            attn = layer.attention
+            if hasattr(attn, "replicate_kv_cache_to_batch"):
+                attn.replicate_kv_cache_to_batch()
+            if hasattr(attn, "replicate_prefill_state_to_batch"):
+                attn.replicate_prefill_state_to_batch()
+
+    def _apply_all_trace_prefill_states(self):
+        """Copy trace-internal tensors to persistent prefill buffers (call after trace execute).
+
+        Must be called BEFORE _replicate_all_prefill_states so that the replication
+        sources (_prefill_conv_states, _prefill_rec_states) contain the correct data.
+        """
+        for layer in self.layers:
+            attn = layer.attention
+            if hasattr(attn, "_apply_trace_prefill_states"):
+                attn._apply_trace_prefill_states()
+
 
 def allocate_paged_kv_caches(
     model_args,
@@ -640,6 +789,7 @@ def create_qwen35_model(
     use_paged_kv_cache=False,
     prefetcher=None,
     n_layers=None,
+    use_ttnn_ops=False,
 ):
     """Factory function to create a fully initialized Qwen3.5 Transformer.
 
@@ -685,6 +835,7 @@ def create_qwen35_model(
         paged_attention_config=paged_attention_config,
         use_paged_kv_cache=use_paged_kv_cache,
         prefetcher=prefetcher,
+        use_ttnn_ops=use_ttnn_ops,
     )
 
     logger.info("Qwen3.5 model ready")

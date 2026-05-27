@@ -1069,6 +1069,7 @@ def gdn_prefill_fused(
     Nk_TP=4,
     repeat_factor=3,
     key_dim_tp=512,
+    use_ttnn_ops=False,
 ):
     """Prefill GDN: process N tokens in a single kernel dispatch.
 
@@ -1091,6 +1092,32 @@ def gdn_prefill_fused(
         num_tokens: N
     """
     logger.debug(f"GDN prefill: num_pairs={num_pairs}, num_tokens={num_tokens}")
+
+    if use_ttnn_ops or os.environ.get("GDN_PREFILL_TTNN_OPS"):
+        from models.demos.qwen35_27b.tt.gdn_kernel.gdn_kernel_op_ttnn_v2 import gdn_prefill_ttnn_opt
+
+        logger.debug("GDN prefill: using ttnn ops optimized path")
+        gdn_prefill_ttnn_opt(
+            conv_out,
+            a_fused,
+            b_fused,
+            neg_exp_A,
+            dt_bias,
+            norm_w,
+            scale_tt,
+            rms_scale_tt,
+            rms_eps_tt,
+            state,
+            output,
+            num_pairs=num_pairs,
+            num_tokens=num_tokens,
+            Nv_TP=Nv_TP,
+            Nk_TP=Nk_TP,
+            repeat_factor=repeat_factor,
+            key_dim_tp=key_dim_tp,
+        )
+        return
+
     _gdn_prefill_fused(
         conv_out,
         a_fused,

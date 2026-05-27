@@ -20,14 +20,6 @@ import torch
 import ttnn
 
 _TILE = 32
-_EYE_CACHE = {}
-
-
-def _chunk_eye(size):
-    """Return a cached [size, size] float32 identity matrix on CPU."""
-    if size not in _EYE_CACHE:
-        _EYE_CACHE[size] = torch.eye(size, dtype=torch.float32)
-    return _EYE_CACHE[size]
 
 
 def _create_triu_ones(size, device, dtype=ttnn.float32, memory_config=None):
@@ -52,14 +44,22 @@ def create_chunk_masks(chunk_size, device):
     Call once during model init and pass as `cached_masks` to avoid
     recreating on every forward call (48 layers x every prefill).
 
-    Returns dict with keys: triu_ones, tril_mask, lower_causal
+    Returns dict with keys: triu_ones, tril_mask, lower_causal, eye
     """
     triu_ones = _create_triu_ones(chunk_size, device, dtype=ttnn.float32)
     triu_ones = ttnn.reshape(triu_ones, [1, chunk_size, chunk_size])
     tril_mask = _create_tril_ones(chunk_size, device, dtype=ttnn.float32)
     tril_mask = ttnn.reshape(tril_mask, [1, chunk_size, chunk_size])
     lower_causal = _create_tril_ones(chunk_size, device, dtype=ttnn.float32)
-    return {"triu_ones": triu_ones, "tril_mask": tril_mask, "lower_causal": lower_causal}
+    eye = ttnn.from_torch(
+        torch.eye(chunk_size, dtype=torch.float32).unsqueeze(0),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return {"triu_ones": triu_ones, "tril_mask": tril_mask, "lower_causal": lower_causal, "eye": eye}
 
 
 def l2_norm(x, dim=-1, eps=1e-6):
@@ -90,6 +90,200 @@ def softplus(x, memory_config=None):
         log1p = ttnn.log1p(exp_neg, memory_config=mc)
         relu_x = ttnn.relu(x, memory_config=mc)
         return ttnn.add(relu_x, log1p, memory_config=mc)
+
+
+def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
+    """Compute L^{-1} for a batch of lower triangular matrices using Neumann doubling.
+
+    Decomposes L = D (I + N) where D = diag(L), N = D^{-1}(L - D) strictly lower triangular.
+    Since N is nilpotent (N^C = 0), the Neumann series is exact:
+      (I + N)^{-1} = sum_{k=0}^{C-1} (-N)^k
+    Computed in ceil(log2(C)) doubling steps:
+      f(2n) = f(n) @ (I + (-N)^n),  starting from f(1) = I, P = -N
+
+    Args:
+        L: [batch, C, C] float32 lower triangular, positive diagonal
+        eye_1cc: [1, C, C] float32 identity (pre-allocated, broadcast to batch)
+        mesh_device: mesh for tensor ops
+    Returns:
+        L_inv: [batch, C, C] float32
+    """
+    import math as _math
+
+    _hifi_cfg = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    mc = ttnn.DRAM_MEMORY_CONFIG
+
+    C = L.shape[1]
+    batch = L.shape[0]
+
+    # Extract diagonal of L as a vector to avoid creating 1/0 = ∞ values.
+    # D_mat has L's diagonal entries, zeros elsewhere.
+    D_mat = ttnn.multiply(L, eye_1cc, memory_config=mc)  # [batch, C, C]
+    # Sum each row of D_mat → [batch, C] (off-diagonal zeros → row sum = diagonal value)
+    D_diag = ttnn.sum(D_mat, dim=-1, memory_config=mc)  # [batch, C]
+    D_inv = ttnn.reciprocal(D_diag, memory_config=mc)  # [batch, C]  all in (0, 1]
+    ttnn.deallocate(D_diag)
+    D_inv_row = ttnn.reshape(D_inv, [batch, C, 1], memory_config=mc)  # for row-scaling N
+    D_inv_col = ttnn.reshape(D_inv, [batch, 1, C], memory_config=mc)  # for col-scaling L_inv
+    ttnn.deallocate(D_inv)
+
+    # N = D^{-1} (L - D)  via row scaling (no full matrix multiply needed)
+    L_strict = ttnn.subtract(L, D_mat, memory_config=mc)
+    ttnn.deallocate(D_mat)
+    N = ttnn.multiply(D_inv_row, L_strict, memory_config=mc)  # [batch,C,1] * [batch,C,C]
+    ttnn.deallocate(L_strict)
+
+    # Neumann doubling: f(2n) = f(n) @ (I + P),  P = (-N)^n
+    # Step 0: f(1) = I, f(2) = I @ (I + (-N)) = I - N.
+    # Initialize R = I - N directly (broadcasts [1,C,C] + [batch,C,C] → [batch,C,C])
+    # to avoid needing a batched identity tensor.
+    P = ttnn.neg(N, memory_config=mc)  # P = -N, [batch, C, C]
+    ttnn.deallocate(N)
+    R = ttnn.add(eye_1cc, P, memory_config=mc)  # R = I - N = f(2), [batch, C, C]
+    P_new = ttnn.matmul(P, P, memory_config=mc, compute_kernel_config=_hifi_cfg)  # P = N^2
+    ttnn.deallocate(P)
+    P = P_new
+
+    # Remaining steps: start from n=2 (already done one step above)
+    n_steps = _math.ceil(_math.log2(C)) if C > 1 else 0
+    for _ in range(n_steps - 1):
+        I_plus_P = ttnn.add(eye_1cc, P, memory_config=mc)
+        R_new = ttnn.matmul(R, I_plus_P, memory_config=mc, compute_kernel_config=_hifi_cfg)
+        ttnn.deallocate(I_plus_P)
+        ttnn.deallocate(R)
+        R = R_new
+        P_new = ttnn.matmul(P, P, memory_config=mc, compute_kernel_config=_hifi_cfg)
+        ttnn.deallocate(P)
+        P = P_new
+
+    ttnn.deallocate(P)
+
+    # L_inv = (I+N)^{-1} @ D^{-1}  via column scaling  (R[b,i,j] * D_inv[b,j])
+    L_inv = ttnn.multiply(R, D_inv_col, memory_config=mc)  # [batch,C,C] * [batch,1,C]
+    ttnn.deallocate(R)
+    ttnn.deallocate(D_inv_row)
+    ttnn.deallocate(D_inv_col)
+
+    # Newton-Schulz refinement: X <- X(2I - LX).
+    # Neumann in float32 has O(cond(L)*eps) error per step; real model k-vectors can
+    # be highly coherent → large off-diagonal N → cancellation across 7 doubling steps.
+    # One NS step squares the residual: ||I - L*X_new|| ≈ ||I - L*X||^2.
+    for _ in range(2):
+        LX = ttnn.matmul(L, L_inv, memory_config=mc, compute_kernel_config=_hifi_cfg)
+        two_I_minus_LX = ttnn.subtract(ttnn.add(eye_1cc, eye_1cc, memory_config=mc), LX, memory_config=mc)
+        ttnn.deallocate(LX)
+        L_inv_new = ttnn.matmul(L_inv, two_I_minus_LX, memory_config=mc, compute_kernel_config=_hifi_cfg)
+        ttnn.deallocate(two_I_minus_LX)
+        ttnn.deallocate(L_inv)
+        L_inv = L_inv_new
+
+    return L_inv
+
+
+def _solve_lower_triangular_blocked_ttnn(L, eye_1cc, mesh_device):
+    """Compute L^{-1} using blocked forward substitution — numerically stable, trace-compatible.
+
+    Splits the C×C problem into n = C/32 tile-aligned blocks of 32×32:
+
+      X[i,i] = inv(L[i,i])                                       (diagonal — Neumann on 32×32)
+      X[i,j] = -inv(L[i,i]) @ sum_{k=j}^{i-1} L[i,k] @ X[k,j]  (below-diagonal — GEMM)
+
+    All diagonal blocks are inverted in ONE batched Neumann+NS call [n*batch, 32, 32].
+    Off-diagonal blocks use tile-aligned slice+GEMM — 4 sequential outer steps for C=128.
+
+    Why this is more stable than the monolithic Neumann on [batch, 128, 128]:
+    - Within a 32-token block, the decay mask exp(decay[b]-decay[a]) suppresses off-diagonal
+      entries because a-b ≤ 32. For typical GDN decay rates this makes ||N||_2 << 1 for the
+      sub-block, so Neumann converges cleanly.
+    - The off-diagonal updates are exact GEMMs — no precision loss there.
+
+    Trace-compatible: only TTNN device ops (matmul, slice, concat, elementwise). No CPU.
+
+    Args:
+        L:       [batch, C, C] float32 lower triangular, positive diagonal. C must be a multiple of 32.
+        eye_1cc: [1, C, C] float32 identity (pre-allocated on device, broadcast to batch)
+        mesh_device: mesh device for allocating zero blocks
+    Returns:
+        L_inv: [batch, C, C] float32
+    """
+    _B = _TILE  # tile / block size = 32
+    C = L.shape[-1]
+    assert C % _B == 0, f"C must be a multiple of {_B}, got {C}"
+    n = C // _B
+    batch = L.shape[0]
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    _hifi_cfg = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    # 32×32 identity for diagonal block inversions (sliced from the caller's eye_1cc)
+    eye_bb = ttnn.slice(eye_1cc, [0, 0, 0], [1, _B, _B], memory_config=mc)
+
+    # ---- Step 1: invert each diagonal block independently ----
+    # Each call handles [batch, B, B] — no aliasing, unambiguous ownership.
+    # (Batching all into one call would be faster but causes view/double-free for n=1.)
+    inv_Lii = []
+    for i in range(n):
+        Lii = ttnn.slice(L, [0, i * _B, i * _B], [batch, (i + 1) * _B, (i + 1) * _B], memory_config=mc)
+        inv_Lii.append(_solve_lower_triangular_ttnn(Lii, eye_bb, mesh_device))
+        ttnn.deallocate(Lii)
+    ttnn.deallocate(eye_bb)
+
+    # ---- Step 2: blocked forward substitution ----
+    # X[(i,j)] for j <= i
+    X = {}
+    for i in range(n):
+        X[(i, i)] = inv_Lii[i]
+        for j in range(i):
+            # rhs = sum_{k=j}^{i-1}  L[i,k] @ X[k,j]
+            rhs = None
+            for k in range(j, i):
+                L_ik = ttnn.slice(L, [0, i * _B, k * _B], [batch, (i + 1) * _B, (k + 1) * _B], memory_config=mc)
+                term = ttnn.matmul(L_ik, X[(k, j)], memory_config=mc, compute_kernel_config=_hifi_cfg)
+                ttnn.deallocate(L_ik)
+                if rhs is None:
+                    rhs = term
+                else:
+                    rhs_new = ttnn.add(rhs, term, memory_config=mc)
+                    ttnn.deallocate(rhs)
+                    ttnn.deallocate(term)
+                    rhs = rhs_new
+            neg_Xii_rhs = ttnn.neg(
+                ttnn.matmul(inv_Lii[i], rhs, memory_config=mc, compute_kernel_config=_hifi_cfg),
+                memory_config=mc,
+            )
+            ttnn.deallocate(rhs)
+            X[(i, j)] = neg_Xii_rhs
+
+    # ---- Step 3: assemble L_inv from blocks ----
+    # Upper-triangle blocks are zero; lower-triangle blocks come from X.
+    # Use multiply-by-zero (device op) instead of ttnn.zeros (host write) for trace compatibility.
+    zeros_bb = ttnn.multiply(inv_Lii[0], 0.0, memory_config=mc) if n > 1 else None
+    rows = []
+    for i in range(n):
+        row = ttnn.concat(
+            [X[(i, j)] if j <= i else zeros_bb for j in range(n)],
+            dim=-1,
+            memory_config=mc,
+        )
+        rows.append(row)
+    L_inv = ttnn.concat(rows, dim=-2, memory_config=mc)
+
+    if zeros_bb is not None:
+        ttnn.deallocate(zeros_bb)
+    # X values are not explicitly deallocated: for n=1, ttnn.concat on a single tensor
+    # returns the same underlying buffer, making L_inv an alias of X[(0,0)]. Deallocating
+    # X entries here would free L_inv before the caller uses it.  Python GC handles cleanup.
+
+    return L_inv
 
 
 def chunk_gated_delta_rule(
@@ -252,11 +446,20 @@ def chunk_gated_delta_rule(
     if cached_masks is not None:
         triu_ones = cached_masks["triu_ones"]
         tril_mask = cached_masks["tril_mask"]
+        _eye_1cc = cached_masks["eye"]
     else:
         triu_ones = _create_triu_ones(chunk_size, mesh_device, dtype=ttnn.float32)
         triu_ones = ttnn.reshape(triu_ones, [1, chunk_size, chunk_size])
         tril_mask = _create_tril_ones(chunk_size, mesh_device, dtype=ttnn.float32)
         tril_mask = ttnn.reshape(tril_mask, [1, chunk_size, chunk_size])
+        _eye_1cc = ttnn.from_torch(
+            torch.eye(chunk_size, dtype=torch.float32).unsqueeze(0),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     g_c_3d = ttnn.reshape(g_c, [batch, 1, chunk_size], memory_config=None)
     decay = ttnn.reshape(
@@ -307,27 +510,13 @@ def chunk_gated_delta_rule(
     attn_raw = ttnn.neg(ttnn.multiply(kk, L_mask, memory_config=_cmc), memory_config=_cmc)
     ttnn.deallocate(kk)
 
-    # Forward substitution: compute R = (I - A)^{-1} where A is lower triangular.
-    # Uses LAPACK batched triangular solve on CPU.
-    # For multi-device mesh: round-trip via ConcatMeshToTensor / ShardTensorToMesh
-    # because each device holds different head shards.
-    A = ttnn.to_torch(attn_raw, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    A = A.float()
+    # Forward substitution: (I - A)^{-1} where A = attn_raw is lower triangular.
+    # Fully on-device via blocked Neumann+GEMM — trace-compatible, no CPU round-trip.
+    # Each device independently processes its own head shard.
+    L_tt = ttnn.add(_eye_1cc, ttnn.neg(attn_raw, memory_config=_cmc), memory_config=_cmc)
     ttnn.deallocate(attn_raw)
-    eye = _chunk_eye(chunk_size)
-    I_minus_A = eye - A
-    del A
-    attn_cpu = torch.linalg.solve_triangular(I_minus_A, eye.expand_as(I_minus_A), upper=False)
-    del I_minus_A
-    attn = ttnn.from_torch(
-        attn_cpu,
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-        memory_config=_cmc,
-    )
-    del attn_cpu
+    attn = _solve_lower_triangular_blocked_ttnn(L_tt, _eye_1cc, mesh_device)
+    ttnn.deallocate(L_tt)
 
     v_corrected = ttnn.matmul(attn, v_beta_c, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
     del v_beta_c
@@ -362,17 +551,18 @@ def chunk_gated_delta_rule(
     else:
         lower_causal = _create_tril_ones(chunk_size, mesh_device, dtype=ttnn.float32)
 
-    S = ttnn.zeros(
-        [BH, K, V],
-        device=mesh_device,
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=None,
-    )
     if initial_state is not None:
         S = ttnn.typecast(
             ttnn.reshape(initial_state, [BH, K, V], memory_config=None),
             ttnn.float32,
+            memory_config=None,
+        )
+    else:
+        S = ttnn.zeros(
+            [BH, K, V],
+            device=mesh_device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
             memory_config=None,
         )
 

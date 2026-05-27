@@ -509,10 +509,11 @@ def chunk_gated_delta_rule_ttnn(
 
     # HiFi2 + fp32 accumulation for all chunk matmuls. The default compute kernel uses
     # lower fidelity, which introduces per-matmul rounding errors that compound across
-    # the Neumann series iterations and inter-chunk state propagation steps. The recurrent
-    # step already uses HiFi2 + fp32_dest_acc_en — match that precision here.
-    _hifi_cfg = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+    # HiFi4 + fp32 accumulation — arch-agnostic.
+    _arch = ttnn.Arch[ttnn.get_arch_name().upper()]
+    _hifi_cfg = ttnn.init_device_compute_kernel_config(
+        _arch,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
