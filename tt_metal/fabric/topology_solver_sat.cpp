@@ -464,7 +464,7 @@ bool topology_sat_build_initial_domains(
 // WHY AC-3: After degree/constraint filtering the domains can still contain globals that
 // have no feasible partner for some adjacent target.  AC-3 iteratively removes such
 // "unsupported" values.  Smaller domains mean fewer SAT variables and shorter support
-// clauses in Step 6, which substantially speeds up the SAT solver on dense instances.
+// clauses in Step 6, which substantially speeds up Kissat on dense instances.
 //
 // The worklist starts with every arc (t, t_neigh).  Whenever a domain shrinks, all arcs
 // pointing INTO t are re-added so their support can be re-checked.  The iteration cap of
@@ -562,7 +562,7 @@ bool topology_sat_apply_arc_consistency(
 
 // Step 3: Allocate one SAT Boolean variable per (target, domain-global) pair and record
 // them in enc.assign_lit / enc.allowed_global_idx.  Preferred globals for a target are
-// listed first in the row so that the solver's internal variable-order heuristic naturally
+// listed first in the row so that Kissat's internal variable-order heuristic naturally
 // tries preferred assignments first under a single solve (no MaxSAT needed).
 void topology_sat_create_assignment_variables(
     TopologySatSolver& solver,
@@ -892,7 +892,7 @@ bool topology_sat_encode_hard_constraints(
 //   Backward (x -> p):  for each pi:  not x_{t,g_{pi}}  v  p
 //
 // The resulting p_t literals are collected into pref_hit_literals_out and later
-// fed into topology_sat_add_at_least_k_literals to force the solver toward the
+// fed into topology_sat_add_at_least_k_literals to force Kissat toward the
 // maximum simultaneously achievable preferred-hit count.
 void topology_sat_append_preferred_hit_indicators(
     TopologySatSolver& solver,
