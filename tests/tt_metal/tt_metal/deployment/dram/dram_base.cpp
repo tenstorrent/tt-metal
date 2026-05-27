@@ -48,7 +48,7 @@ static std::string device_log_prefix(IDevice* device) {
 
 static bool dram_test_verbose_enabled() {
     const char* env = std::getenv("DRAM_TEST_VERBOSE");
-    return env != nullptr && std::string(env) == "1";
+    return env && strcmp(env, "0");
 }
 
 static void log_verbose_dram_work_item(
@@ -113,7 +113,7 @@ static void log_dram_failure(IDevice* device, const CoreCoord& core, const DramB
     log_info(
         tt::LogTest,
         "{} Mismatch on dram_controller={} core {} pattern={} repeat={} pass={}: failures={}, "
-        "first_fail_classified_as={}, write_failures={}, read_failures={}",
+        "first_fail_classified_as={}, write_failures={}, read_failures={}, words_checked={}",
         device_log_prefix(device),
         result->bank_id,
         core,
@@ -123,7 +123,8 @@ static void log_dram_failure(IDevice* device, const CoreCoord& core, const DramB
         result->failures,
         dram_failure_kind_name(result->failure_kind),
         result->suspected_write_failures,
-        result->suspected_read_failures);
+        result->suspected_read_failures,
+        result->words_checked);
 }
 
 static inline void accumulate_result_into_summary(DramRunSummary& summary, const DramBaseResult* result) {

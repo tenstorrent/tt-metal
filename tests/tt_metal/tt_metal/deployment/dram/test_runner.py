@@ -14,20 +14,46 @@ timeregex = "\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+"
 teststart = re.compile("\[\s+RUN\s+\] (.*)")
 testend = re.compile("\[\s+([^ ]*)\s+\] (.*) \(.*\)")
 testbdf = re.compile(f"({timeregex}).*Test \| \[bdf=(.*)\]\[device_id=(.*)\].*")
+testbankerror = re.compile(
+    f"({timeregex}).*Test \| bdf=(.*) device_id=(.*) bank_id=(.*) checked_bytes=(.*) write_err=(.*) read_err=(.*) .*"
+)
 testmismatch = re.compile(
     f"({timeregex}).*Test \| \[bdf=(.*)\]\[device_id=(.*)\]"
     + " Mismatch on dram_controller=(.*) core (.*) pattern=(.*) repeat=(.*)"
     + " pass=(.*): failures=(.*), first_fail_classified_as=(.*),"
-    + " write_failures=(.*), read_failures=(.*) .*"
+    + " write_failures=(.*), read_failures=(.*), words_checked=(.*) .*"
 )
 
 print_logs = True
 
 
 @dataclass
+class TestedBank:
+    checked_bytes: int
+    write_errors: int
+    read_errors: int
+
+    def to_dict(self):
+        return self.__dict__
+
+
+@dataclass
+class TestedChips:
+    bdf: str
+    errored_banks: dict[str, TestedBank]
+
+    def to_dict(self):
+        return {
+            "bdf": self.bdf,
+            "errored_banks": {i: self.errored_banks[i].to_dict() for i in self.errored_banks},
+        }
+
+
+@dataclass
 class TestRun:
     name: str
     errors: list[dict]
+    chips: dict[str, TestedChips]
     status: str
 
     def to_dict(self):
@@ -35,6 +61,7 @@ class TestRun:
             "name": self.name,
             "errors": self.errors,
             "status": self.status,
+            "chips": {i: self.chips[i].to_dict() for i in self.chips},
         }
 
 
@@ -52,6 +79,7 @@ class EventType(Enum):
     TESTEND = auto()
     MISMATCH = auto()
     BDF = auto()
+    BANKERROR = auto()
 
 
 @dataclass
@@ -94,15 +122,16 @@ def parse_mismatch(l: str) -> Optional[Event]:
     extra = {
         "bdf": m.group(2),
         "dev_id": m.group(3),
-        "bank": m.group(4),
+        "bank": int(m.group(4)),
         "core": m.group(5),
         "pattern": m.group(6),
-        "repeat": m.group(7),
-        "pass": m.group(8),
-        "failures": m.group(9),
+        "repeat": int(m.group(7)),
+        "pass": int(m.group(8)),
+        "failures": int(m.group(9)),
         "first_fail_classified_as": m.group(10),
-        "write_failures": m.group(11),
-        "read_failures": m.group(12),
+        "write_failures": int(m.group(11)),
+        "read_failures": int(m.group(12)),
+        "words_checked": int(m.group(13)),
     }
     # print(f"\tMISMATCH '{extra}'")
 
@@ -123,12 +152,31 @@ def parse_bdf(l: str) -> Optional[Event]:
     return Event(EventType.BDF, extra)
 
 
+def parse_bankerror(l: str) -> Optional[Event]:
+    m = testbankerror.match(l)
+    if m is None:
+        return None
+
+    extra = {
+        "bdf": m.group(2),
+        "dev_id": m.group(3),
+        "bank": int(m.group(4)),
+        "checked_bytes": int(m.group(5)),
+        "write_err": int(m.group(6)),
+        "read_err": int(m.group(7)),
+    }
+    print(f"\tBANKERROR '{extra}'")
+
+    return Event(EventType.BANKERROR, extra)
+
+
 def parse_line(l: str) -> Optional[Event]:
     if print_logs:
         print(f"l: {l}")
 
     parsers = [
         parse_teststart,
+        parse_bankerror,
         parse_mismatch,
         parse_testend,
         parse_bdf,
@@ -165,10 +213,16 @@ def parse_evs(evs: list[Event], bdfs: dict[str, str]) -> Iterator[TestRun]:
     test: str = ""
     runs: list[TestRun] = []
     errors: list[dict] = []
+    chips: dict[str, TestedChips] = {}
 
     stresstest = "MeshDispatchFixture.TensixDeploymentEthernet05StressTest"
     drambidir = "MeshDispatchFixture.TensixDeploymentEthernet04DataIntegrityDramBidir"
     noprocs = [drambidir]
+
+    def ensure_chip(extra: dict):
+        chipid = extra["dev_id"]
+        if chipid not in chips:
+            chips[chipid] = TestedChips(extra["bdf"], {})
 
     it = iter(evs)
     for e in it:
@@ -176,12 +230,18 @@ def parse_evs(evs: list[Event], bdfs: dict[str, str]) -> Iterator[TestRun]:
             test = e.extra["name"]
             errors = []
         elif e.typ == EventType.TESTEND:
-            runs.append(TestRun(test, errors, e.extra["status"]))
+            runs.append(TestRun(test, errors, chips, e.extra["status"]))
             errors = []
+            chips = {}
         elif e.typ == EventType.MISMATCH:
             errors.append(e.extra)
         elif e.typ == EventType.BDF:
             bdfs[e.extra["dev_id"]] = e.extra["bdf"]
+        elif e.typ == EventType.BANKERROR:
+            ensure_chip(e.extra)
+            b = TestedBank(e.extra["checked_bytes"], e.extra["write_err"], e.extra["read_err"])
+            chips[e.extra["dev_id"]].errored_banks[e.extra["bank"]] = b
+            print(chips)
 
     yield from runs
 
