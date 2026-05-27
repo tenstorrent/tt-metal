@@ -104,7 +104,7 @@ struct KernelSpecAdvancedOptions {
     std::optional<NumVarargsPerNode> num_runtime_varargs_per_node = std::nullopt;
 };
 
-struct DataflowBufferSpecAdvancedOptions {
+struct DFBSpecAdvancedOptions {
     // Alias two or more DFBs.
     // Aliased DFBs are logically distinct, but physically share the same backing memory.
     // Aliased DFBs offer NO guarantees against data clobbering; kernel logic must ensure safety.
@@ -115,6 +115,23 @@ struct DataflowBufferSpecAdvancedOptions {
     //   - All members must target the same node set
     //     (derived from their bound kernels' WorkUnitSpecs).
     std::vector<DFBSpecName> alias_with;
+};
+
+struct AdvancedKernelRunParams {
+    // Unnamed runtime argument "varargs" (companion to the vararg schema declared
+    // on KernelSpecAdvancedOptions). Specified per-node; length can vary per-node.
+    // (Slated for eventual removal in favor of typed array runtime args.)
+    struct NodeVarargs {
+        NodeCoord node;
+        std::vector<uint32_t> args;
+    };
+    std::vector<NodeVarargs> runtime_varargs;
+
+    // Unnamed common runtime argument "varargs" — broadcast to every node the kernel
+    // runs on. Companion to num_common_runtime_varargs in the schema.
+    // (Slated for eventual removal in favor of typed array common runtime args.)
+    using CommonVarargs = std::vector<uint32_t>;
+    CommonVarargs common_runtime_varargs;
 };
 
 struct TensorParameterAdvancedOptions {
