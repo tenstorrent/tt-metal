@@ -210,7 +210,7 @@
       <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/dnijemcevic/backward_softmax_agentic/ttnn/ttnn/operations/multigammaln_lanczos/kernels/multigammaln_lanczos_compute.cpp" target="_blank">multigammaln_lanczos_compute.cpp</a></li>
     <li><b>atan_mean:</b> <b>one parameterised kernel covers both of Makora's shape-specialised variants</b> (<code>tall</code> + <code>high_channel</code>) — the split had no structural justification.
       <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/dnijemcevic/backward_softmax_agentic/ttnn/ttnn/operations/atan_mean/kernels/atan_mean_compute.cpp" target="_blank">atan_mean_compute.cpp</a></li>
-    <li>Agent builds on the <code>kernel_lib</code> helper layer (<code>sfpu_atan</code>, <code>reduce&lt;AVG, REDUCE_ROW&gt;</code>, <code>calculate_and_prepare_reduce_scaler</code>). Makora hand-rolls raw LLK calls.</li>
+    <li>Agent builds on the <code>kernel_lib</code> helper layer (<code>sfpu_atan</code>, <code>reduce&lt;AVG, REDUCE_ROW&gt;</code>, <code>calculate_and_prepare_reduce_scaler</code>). Makora's generated kernel calls raw LLK directly.</li>
   </ul>
   <p class="footnote">
     Across the four head-to-heads: Makora is <b>at most 3% faster</b> (two ops), parity on a third, and the agent is <b>7% faster</b> on the fourth. Numerical output bit-equivalent (PCC = 1.0000) end-to-end; compute-only numbers above strip NoC to isolate kernel speed.
@@ -239,7 +239,7 @@
     <a class="ev" href="https://github.com/tenstorrent/tt-metal/blob/dnijemcevic/backward_softmax_agentic/ttnn/ttnn/operations/backward_softmax/changelog.md" target="_blank">changelog.md</a>
   </p>
 
-  <h3 class="pad-top">Head-to-head vs Makora's hand-tuned bf16 kernel (compute config matched 1:1)</h3>
+  <h3 class="pad-top">Head-to-head vs Makora's AI-generated bf16 kernel (compute config matched 1:1)</h3>
   <table>
     <tr><th>Shape</th><th>Wt</th><th>Lanes</th><th class="num">Full pipeline</th><th class="num">Compute-only</th><th>Note</th></tr>
     <tr><td>(1, 1, 2048, 64)</td><td>2</td><td>64</td><td class="num">1.06×</td><td class="num">1.02×</td><td></td></tr>
@@ -252,13 +252,13 @@
 
   <p class="footnote">
     PCC = 1.0000 across all shapes — kernels numerically equivalent at bf16.
-    <b>Compute kernel is at parity (gmean 1.02×)</b>; the 11-percentage-point full-pipeline gap is in dataflow plumbing — per-tile NoC barriers + CB sync overhead that Makora's 27-iteration hand-tuned design coalesces. A bulk-barrier reader hack didn't close the gap (NCRISC already pipelines reads internally; the real lever is writer-side coalescing with a deeper output CB — out of scope for this measurement).
+    <b>Compute kernel is at parity (gmean 1.02×)</b>; the 11-percentage-point full-pipeline gap is in dataflow plumbing — per-tile NoC barriers + CB sync overhead that Makora's 27-iteration AI-generated design coalesces. A bulk-barrier reader hack didn't close the gap (NCRISC already pipelines reads internally; the real lever is writer-side coalescing with a deeper output CB — out of scope for this measurement).
   </p>
 </section>
 
 <!-- SLIDE 5 — matmul_silu (production TTNN, no agent) -->
 <section class="slide">
-  <h1>matmul_silu — TTNN production vs Makora hand-tuned</h1>
+  <h1>matmul_silu — TTNN production vs Makora AI-generated</h1>
   <h2>A different question: how does a Makora kernel hold up against TTNN's own optimized matmul + activation?</h2>
 
   <p class="small">
@@ -328,7 +328,7 @@
     <li><b>Two agent stacks at parity.</b> Across four compute-kernel head-to-heads, Makora is at most <b>3% faster</b>; the agent is <b>7% faster</b> on one of them.</li>
     <li><b>End-to-end cost per op: one working session.</b> Planner ~12 min, implementer ~9 min, verifier ~5 min. Refinements 5–10 min each. Tests, capability docs, and refinement checklist are byproducts.</li>
     <li><b>The compounding wins are below the kernel.</b> The agent's edge comes from the <code>kernel_lib</code> helpers absorbing complexity, and from a prompt + refinement protocol that captures hardware constraints precisely. The kernel-level work is straightforward; the leverage is in the layers around it.</li>
-    <li><b>Helpers are an LLM-friendly surface.</b> Writing kernels through the <code>kernel_lib</code> helper layer is materially easier for the agent to get right than hand-rolling raw LLK calls. <b>backward_softmax</b> (slide 4) — taken through Phase 0 + four refinements for $60.70 / ~2h of agent time — lands at gmean 1.02× of Makora's hand-tuned bf16 kernel on compute kernel duration.</li>
+    <li><b>Helpers are an LLM-friendly surface.</b> Writing kernels through the <code>kernel_lib</code> helper layer is materially easier for the agent to get right than hand-rolling raw LLK calls. <b>backward_softmax</b> (slide 4) — taken through Phase 0 + four refinements for $60.70 / ~2h of agent time — lands at gmean 1.02× of Makora's AI-generated bf16 kernel on compute kernel duration.</li>
     <li><b>And in matmul_silu (slide 5), the picture flips: TTNN's production matmul beats Makora 8–14× at scale</b> because TTNN's row/column mcast amortizes DRAM bandwidth across the grid while Makora's flat distribution re-reads K for every core. Makora's design has a structural ceiling on K-streaming-bound workloads.</li>
   </ul>
   <p class="footnote">
