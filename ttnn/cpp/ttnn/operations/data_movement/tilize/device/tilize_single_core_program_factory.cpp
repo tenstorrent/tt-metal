@@ -3,39 +3,39 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tilize_single_core_program_factory.hpp"
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
-TilizeSingleCoreProgramFactory::cached_program_t TilizeSingleCoreProgramFactory::create(
-    const ttnn::prim::TilizeParams& operation_attributes,
-    const ttnn::prim::TilizeInputs& tensor_args,
-    const Tensor& output_tensor) {
-    tt::tt_metal::Program program{};
 
-    auto a = tensor_args.input_tensor;
-    const auto& output = output_tensor;
-    auto sub_core_grids = operation_attributes.sub_core_grids;
+ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
+    const TilizeParams& operation_attributes, const TilizeInputs& tensor_args, Tensor& tensor_return_value) {
+    const auto& a = tensor_args.input_tensor;
+    const Tensor& output = tensor_return_value;
+    const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
     CoreRange default_core({0, 0}, {0, 0});
     CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value()).at(0) : default_core;
+    CoreRangeSet core_ranges{core};
 
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
+    Buffer* src0_buffer = a.buffer();
 
     // This should allocate a DRAM buffer on the device
 
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
+    Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
@@ -73,100 +73,98 @@ TilizeSingleCoreProgramFactory::cached_program_t TilizeSingleCoreProgramFactory:
     uint32_t num_leftover_tiles = num_tiles_in_row % num_tiles_per_block;
     uint32_t leftover_width_in_row = num_leftover_tiles * a.element_size();
 
-    uint32_t src0_cb_index = 0;
-    uint32_t num_input_tiles = num_tiles_per_block;
+    const uint32_t src0_cb_index = 0;
+    const uint32_t output_cb_index = tt::CBIndex::c_16;
+    const uint32_t num_input_tiles = num_tiles_per_block;
+    const uint32_t num_output_tiles = num_tiles_per_block;
 
-    auto src0_cb_config = tt::tt_metal::CircularBufferConfig(
-                              num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
-                              .set_page_size(src0_cb_index, input_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core, src0_cb_config);
+    ProgramDescriptor desc;
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
-    uint32_t num_output_tiles = num_tiles_per_block;
-    auto cb_output_config = tt::tt_metal::CircularBufferConfig(
-                                num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
-                                .set_page_size(output_cb_index, output_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_input_tiles * input_single_tile_size,
+        .core_ranges = core_ranges,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
+            .data_format = input_cb_data_format,
+            .page_size = input_single_tile_size,
+        }}},
+    });
 
-    const std::array reader_kernel_args = {
-        src0_buffer->address(),
-        num_sticks,
-        stick_size,
-        num_tiles_per_block,
-        block_width_size,
-        num_full_blocks_in_row,
-        num_leftover_tiles,
-        leftover_width_in_row,
-        std::uint32_t{0},  // row_start_id
-    };
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_output_tiles * output_single_tile_size,
+        .core_ranges = core_ranges,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_cb_index),
+            .data_format = output_cb_data_format,
+            .page_size = output_single_tile_size,
+        }}},
+    });
 
     // Reader compile-time args
     std::vector<uint32_t> reader_compile_time_args = {stick_size};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Tilized reader
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
-        "reader_unary_stick_layout_split_rows_singlecore.cpp",
-        core,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        "reader_unary_stick_layout_split_rows_singlecore.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_ranges;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    // Buffer* slots register BufferBindings so the framework patches addresses on cache hits.
+    reader_desc.emplace_runtime_args(
+        core.start_coord,
+        {src0_buffer,
+         num_sticks,
+         stick_size,
+         num_tiles_per_block,
+         block_width_size,
+         num_full_blocks_in_row,
+         num_leftover_tiles,
+         leftover_width_in_row,
+         std::uint32_t{0}});  // row_start_id
 
     // Tilized writer
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        core,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_ranges;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
+    writer_desc.emplace_runtime_args(core.start_coord, {dst_buffer, num_tiles, std::uint32_t{0}});
 
     std::vector<uint32_t> compute_args = {
         num_tiles / num_tiles_per_block,  // per_core_block_cnt
         num_tiles_per_block               // per_core_block_tile_cnt
     };
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_llk_acc) {
-        unpack_to_dest_mode[tt::CBIndex::c_0] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
     }
 
-    tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
-        core,
-        tt::tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = fp32_llk_acc,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .compile_args = compute_args,
-        });
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = "ttnn/cpp/ttnn/kernel/compute/tilize.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = core_ranges;
+    compute_desc.compile_time_args = std::move(compute_args);
+    compute_desc.config = ComputeConfigDescriptor{
+        .fp32_dest_acc_en = fp32_llk_acc,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+    };
 
-    tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 
-    tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles, 0});
-    return cached_program_t{std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, core}};
+    return desc;
 }
 
-void TilizeSingleCoreProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ttnn::prim::TilizeParams& /*operation_attributes*/,
-    const ttnn::prim::TilizeInputs& tensor_args,
-    const Tensor& output_tensor) {
-    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    auto& core = cached_program.shared_variables.core;
-    auto* src_buffer = tensor_args.input_tensor.buffer();
-    auto& program = cached_program.program;
-    auto* dst_buffer = output_tensor.buffer();
-    CoreCoord core_0 = corerange_to_cores(core).at(0);
-    {
-        auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core_0);
-        runtime_args[0] = src_buffer->address();
-    }
-    {
-        auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core_0);
-        runtime_args[0] = dst_buffer->address();
-    }
-}
 }  // namespace ttnn::prim
