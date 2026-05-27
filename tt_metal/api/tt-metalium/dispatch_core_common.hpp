@@ -29,7 +29,7 @@ public:
 
     DispatchCoreConfig(DispatchCoreType type, DispatchCoreAxis axis) : type_(type), axis_(axis) {}
 
-    static DispatchCoreType get_default_type();
+    static DispatchCoreType get_default_dispatch_core_type();
     static DispatchCoreConfig create_dispatch_core_config(
         std::optional<DispatchCoreType> dispatch_core_type = std::nullopt,
         std::optional<DispatchCoreAxis> dispatch_core_axis = std::nullopt,

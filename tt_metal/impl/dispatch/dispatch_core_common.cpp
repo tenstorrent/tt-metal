@@ -34,7 +34,7 @@ DispatchCoreAxis get_default_dispatch_core_axis(std::optional<tt::tt_fabric::Fab
 
 }  // namespace
 
-DispatchCoreType DispatchCoreConfig::get_default_type() {
+DispatchCoreType DispatchCoreConfig::get_default_dispatch_core_type() {
     const auto cluster_type = tt::tt_metal::GetClusterType();
     if (cluster_type == tt::tt_metal::ClusterType::N300 || cluster_type == tt::tt_metal::ClusterType::T3K ||
         cluster_type == tt::tt_metal::ClusterType::N300_2x2) {
@@ -68,10 +68,10 @@ DispatchCoreConfig DispatchCoreConfig::create_dispatch_core_config(
         if (dispatch_core_axis.value() == DispatchCoreAxis::COL) {
             return DispatchCoreConfig(DispatchCoreType::WORKER, dispatch_core_axis.value());
         }
-        return DispatchCoreConfig(get_default_type(), dispatch_core_axis.value());
+        return DispatchCoreConfig(get_default_dispatch_core_type(), dispatch_core_axis.value());
     }
 
-    return DispatchCoreConfig(get_default_type(), get_default_dispatch_core_axis(fabric_tensix_config));
+    return DispatchCoreConfig(get_default_dispatch_core_type(), get_default_dispatch_core_axis(fabric_tensix_config));
 }
 
 DispatchCoreAxis DispatchCoreConfig::get_default_axis() {
