@@ -86,7 +86,7 @@ inline void _calculate_sfpu_binary_(
         else if constexpr (BINOP == BinaryOp::DIV)
         {
             constexpr int reciprocal_iterations = 2; // Two Newton-Raphson iterations
-            sfpi::vFloat result                 = in0 * _sfpu_reciprocal_<reciprocal_iterations>(in1);
+            result                              = in0 * _sfpu_reciprocal_<reciprocal_iterations>(in1);
 
             v_if (in1 == 0)
             {

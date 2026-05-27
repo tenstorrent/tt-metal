@@ -234,3 +234,103 @@ def test_sfpu_binary_div_quasar(formats_dest_acc, implied_math_format, tile_indi
         assert (
             actual == 1.0
         ), f"x/x special case at lane {lane}: expected exact 1.0, got {actual}"
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats_dest_acc=_get_valid_formats_dest_acc(),
+    implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
+        formats_dest_acc[0]
+    ),
+    tile_indices=_TILE_INDEX_VARIANTS,
+)
+def test_sfpu_binary_mul_quasar(formats_dest_acc, implied_math_format, tile_indices):
+    """
+    Test mul
+    """
+    formats, dest_acc = formats_dest_acc
+    src0_idx, src1_idx, dst_idx = tile_indices
+
+    num_tiles_needed = max(src0_idx, src1_idx, dst_idx) + 1
+    input_dimensions = [num_tiles_needed * 32, 32]
+
+    torch.manual_seed(42)
+
+    spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=spec,
+        spec_B=spec,
+    )
+
+    src_A = _prepare_div_inputs(src_A, formats.input_format, src0_idx, src1_idx)
+
+    num_faces = 4
+    mathop = MathOperation.SfpuElwmul
+
+    generate_golden = get_golden_generator(BinarySFPUGolden)
+    golden_full = generate_golden(
+        mathop,
+        src_A,
+        src0_idx,
+        src1_idx,
+        dst_idx,
+        32,  # num_iterations: 32 rows = 1 full tile
+        input_dimensions,
+        formats.input_format,
+    ).flatten()
+    dst_start = dst_idx * _ELEMENTS_PER_TILE
+    golden_tensor = golden_full[dst_start : dst_start + _ELEMENTS_PER_TILE]
+
+    # Convert golden to output format for comparison.
+    torch_format_out = format_dict[formats.output_format]
+    golden_tensor = golden_tensor.to(torch_format_out)
+
+    tile_count_res = 1  # we only pack the single output tile
+
+    # SFPU reads from DEST directly, so we use UnpDest to load operands there —
+    # no need to route through SRC registers and the FPU.
+    configuration = TestConfig(
+        "sources/quasar/sfpu_binary_div_quasar_test.cpp",
+        formats,
+        templates=[
+            MATH_OP(mathop=mathop),
+            IMPLIED_MATH_FORMAT(implied_math_format),
+            UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
+            DEST_SYNC(),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_FACES(num_faces),
+            TEST_FACE_DIMS(),
+            SFPU_TILE_INDICES(src0_idx, src1_idx, dst_idx),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_A,
+            tile_count_res=tile_count_res,
+            num_faces=num_faces,
+        ),
+        unpack_to_dest=True,
+        dest_acc=dest_acc,
+    )
+
+    res_from_L1 = configuration.run().result
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
+
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format_out)
+
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"
