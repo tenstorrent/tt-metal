@@ -28,7 +28,7 @@
 
   .side-by-side { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
   .code-col h3 { margin: 0 0 6px; font-size: 12px; color: #57606a; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; }
-  pre.code { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 10px 12px; overflow-x: auto; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 11.5px; line-height: 1.5; margin: 0; white-space: pre; }
+  pre.code { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 10px 12px; overflow: auto; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 11.5px; line-height: 1.5; margin: 0; white-space: pre; max-height: 72vh; }
 
   /* Decision highlight regions */
   .dz {
@@ -56,6 +56,45 @@
   body.hd-4 .dz[data-d="4"] { background: rgba(207, 34, 46, 0.50); box-shadow: 0 0 0 1px #cf222e; }
   body.hd-5 .dz[data-d="5"] { background: rgba(159, 75, 191, 0.55); box-shadow: 0 0 0 1px #9f4bbf; }
   body.hd-6 .dz[data-d="6"] { background: rgba(255, 122, 0, 0.55); box-shadow: 0 0 0 1px #ff7a00; }
+
+  /* Focus mode: when body[data-focus="N"] is set, dim everything in code panels
+     except the matching .dz spans (which keep / intensify their colour). */
+  body[data-focus] pre.code .code-body,
+  body[data-focus] pre.code .code-body * { color: #b9c0c8; }
+  body[data-focus] pre.code .dz { background: transparent; box-shadow: none; }
+  body[data-focus="1"] .dz[data-d="1"] { background: rgba(255, 191, 0, 0.55) !important; color: #222 !important; box-shadow: 0 0 0 1px #d6a000 !important; }
+  body[data-focus="2"] .dz[data-d="2"] { background: rgba(46, 160, 67, 0.55) !important; color: #222 !important; box-shadow: 0 0 0 1px #2ea043 !important; }
+  body[data-focus="3"] .dz[data-d="3"] { background: rgba(63, 138, 224, 0.55) !important; color: #222 !important; box-shadow: 0 0 0 1px #3f8ae0 !important; }
+  body[data-focus="4"] .dz[data-d="4"] { background: rgba(207, 34, 46, 0.50) !important; color: #222 !important; box-shadow: 0 0 0 1px #cf222e !important; }
+  body[data-focus="5"] .dz[data-d="5"] { background: rgba(159, 75, 191, 0.55) !important; color: #222 !important; box-shadow: 0 0 0 1px #9f4bbf !important; }
+  body[data-focus="6"] .dz[data-d="6"] { background: rgba(255, 122, 0, 0.55) !important; color: #222 !important; box-shadow: 0 0 0 1px #ff7a00 !important; }
+  body[data-focus] .dz[data-d] *,
+  body[data-focus="1"] .dz[data-d="1"] *,
+  body[data-focus="2"] .dz[data-d="2"] *,
+  body[data-focus="3"] .dz[data-d="3"] *,
+  body[data-focus="4"] .dz[data-d="4"] *,
+  body[data-focus="5"] .dz[data-d="5"] *,
+  body[data-focus="6"] .dz[data-d="6"] * { color: inherit; }
+
+  /* Focus toolbar (above the side-by-side panes) */
+  .focus-toolbar {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    margin-top: 14px; padding: 10px 12px;
+    background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px;
+  }
+  .focus-toolbar .focus-label { font-size: 12px; color: #57606a; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-right: 6px; }
+  .focus-toolbar button {
+    border: 1px solid var(--fbtn-border, #d0d7de);
+    background: var(--fbtn-bg, #fff);
+    color: var(--fbtn-fg, #24292f);
+    padding: 4px 10px; border-radius: 999px;
+    font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .focus-toolbar button:hover { filter: brightness(0.97); }
+  .focus-toolbar button.active { box-shadow: 0 0 0 2px #0969da; }
+  .focus-toolbar button .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--fbtn-border, #999); }
+  .focus-toolbar button.show-all { --fbtn-bg: #1c2128; --fbtn-fg: #fff; --fbtn-border: #1c2128; margin-left: auto; }
 
   /* Floating tooltip near cursor */
   .decision-popover {
@@ -198,35 +237,53 @@
   <section class="panel" id="panel-moreh_clip_step3">
     <h1>moreh_clip_grad_norm_step3 — <span class="badge badge-full">FULL</span></h1>
     <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/kernels/moreh_clip_grad_norm_step3_kernel.cpp</div>
-    <div class="meta"><b>Commits:</b> <span class="commit-link">98c5ebb783b</span> initial migration · <span class="commit-link">7ec7613c5d0</span> simplify (Bulk + Scalar absorbs the held-scalar wait/pop) &nbsp; <b>Test:</b> <code>test_moreh_clip_grad_norm.py</code> — 20 PASS &nbsp; <b>Hover</b> a highlighted region to see the decision it ties to; the same color appears on both sides where the decision applies.</div>
+    <div class="meta"><b>Commits:</b> <span class="commit-link">98c5ebb783b</span> initial migration · <span class="commit-link">7ec7613c5d0</span> simplify (Bulk + Scalar absorbs the held-scalar wait/pop) &nbsp; <b>Test:</b> <code>test_moreh_clip_grad_norm.py</code> — 20 PASS</div>
+
+    <div class="focus-toolbar" data-fkernel="moreh_clip_step3">
+      <span class="focus-label">Focus on decision:</span>
+      <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 · CB ids → constexpr</button>
+      <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 · Bulk + Scalar lifecycle</button>
+      <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 · Streaming on cb_x</button>
+      <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 · Reconfig flags</button>
+      <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 · Init choice</button>
+      <button class="show-all">Show all</button>
+    </div>
 
     <div class="side-by-side">
       <div class="code-col">
-        <h3>Before</h3>
-<pre class="code"><span class="code-body">void kernel_main() {
+        <h3>Before (full kernel)</h3>
+<pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/kernel/compute/moreh_common.hpp"
+#include "api/dataflow/circular_buffer.h"
+
+void kernel_main() {
     int i{0};
     const auto num_tiles = get_arg_val&lt;uint32_t&gt;(i++);
 
     <span class="dz" data-d="1">std::uint8_t input_id{0};
     const auto cb_x = input_id++;
-    CircularBuffer cb_x_obj(cb_x);
+    CircularBuffer cb_x_obj(cb_x);                                                                       // input
     const auto cb_clip_coef_clamped = input_id++;
-    CircularBuffer cb_clip_coef_clamped_obj(cb_clip_coef_clamped);
+    CircularBuffer cb_clip_coef_clamped_obj(cb_clip_coef_clamped);                                       // clip_coef_clamped
 
     std::uint8_t output_id{16};
     const auto cb_y = output_id++;
-    CircularBuffer cb_y_obj(cb_y);</span>
+    CircularBuffer cb_y_obj(cb_y);                                                                       // output</span>
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
 
     <span class="dz" data-d="5">binary_op_init_common(cb_x, cb_clip_coef_clamped, cb_y);</span>
 
-    <span class="dz" data-d="2">cb_clip_coef_clamped_obj.wait_front(onetile);</span>
+    <span class="dz" data-d="2">cb_clip_coef_clamped_obj.wait_front(onetile);                                                        // comes from the reader</span>
 
+    // Compute cb_y
     for (uint32_t tile_idx = 0; tile_idx &lt; num_tiles; tile_idx++) {
         tile_regs_acquire();
-        <span class="dz" data-d="3">cb_x_obj.wait_front(onetile);</span>
+        <span class="dz" data-d="3">cb_x_obj.wait_front(onetile);                                                                    // comes from the reader</span>
         cb_y_obj.reserve_back(onetile);
 
         <span class="dz" data-d="4">mul_tiles_bcast_scalar_init_short(cb_x, cb_clip_coef_clamped);
@@ -244,18 +301,35 @@
 }</span></pre>
       </div>
       <div class="code-col">
-        <h3>After</h3>
-<pre class="code"><span class="code-body">void kernel_main() {
+        <h3>After (full kernel)</h3>
+<pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "api/dataflow/circular_buffer.h"
+
+void kernel_main() {
     int i{0};
     const auto num_tiles = get_arg_val&lt;uint32_t&gt;(i++);
 
-    <span class="dz" data-d="1">constexpr uint32_t cb_x = 0;
-    constexpr uint32_t cb_clip_coef_clamped = 1;
-    constexpr uint32_t cb_y = 16;</span>
+    <span class="dz" data-d="1">constexpr uint32_t cb_x = 0;                  // input
+    constexpr uint32_t cb_clip_coef_clamped = 1;  // clip_coef_clamped (held scalar)
+    constexpr uint32_t cb_y = 16;                 // output</span>
 
     <span class="dz" data-d="5">compute_kernel_hw_startup(cb_x, cb_clip_coef_clamped, cb_y);</span>
 
-    // cb_y = cb_x × cb_clip_coef_clamped[scalar bcast]
+    // cb_y = cb_x × cb_clip_coef_clamped[scalar bcast].
+    // Lifecycles:
+    //   cb_x — Streaming + Scalar OperandKind (per-iter wait+pop of one tile).
+    //   cb_clip_coef_clamped — Bulk + Scalar. `window_1d&lt;Scalar&gt;` collapses
+    //     the Bulk window to 1 tile (the old "Bulk + Scalar over-waits"
+    //     gotcha was fixed in 14a5a61e462), so the chain emits exactly
+    //     `cb_wait_front(1)` at the head and `cb_pop_front(1)` at the tail —
+    //     no external wait/pop needed.
+    // Reconfig: original used `mul_tiles_bcast_scalar_init_short` (no
+    // `_with_dt`) and plain `pack_tile` — no per-iter format reconfig.
+    // Chain matches with `BinaryDataFormatReconfig::None` + `PackTileReconfig::None`.
     compute_kernel_lib::eltwise_chain(
         num_tiles,
         compute_kernel_lib::BinaryFpu&lt;
@@ -264,8 +338,8 @@
             compute_kernel_lib::BinaryFpuOp::Mul,
             compute_kernel_lib::BroadcastDim::Scalar,
             <span class="dz" data-d="4">compute_kernel_lib::BinaryDataFormatReconfig::None</span>,
-            <span class="dz" data-d="3">compute_kernel_lib::Streaming</span>,
-            <span class="dz" data-d="2">compute_kernel_lib::Bulk</span>,  // window_1d&lt;Scalar&gt; → 1-tile wait+pop
+            <span class="dz" data-d="3">compute_kernel_lib::Streaming</span>,  // cb_x
+            <span class="dz" data-d="2">compute_kernel_lib::Bulk</span>,       // cb_clip_coef_clamped (Scalar → 1-tile wait+pop)
             compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OperandKind::Scalar&gt;{},
@@ -280,7 +354,7 @@
     </div>
 
     <div class="legend">
-      <h4>Decisions (also visible by hovering the code)</h4>
+      <h4>Decisions — hover for tooltip, click the buttons above to focus the code on a single decision</h4>
       <ul>
         <li><span class="swatch" style="background:rgba(255,191,0,0.45)"></span><b>1 · CB ids → constexpr.</b> Chain template parameters require constexpr CB ids; <code>std::uint8_t input_id{0}; const auto cb_x = input_id++;</code> is a runtime value. Same final values (0, 1, 16), just baked at compile time.</li>
         <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 · cb_clip_coef_clamped lifecycle: Bulk + Scalar.</b> Held scalar across the whole loop. <code>window_1d&lt;Scalar&gt;</code> collapses Bulk's window to 1 tile, so the chain emits exactly <code>cb_wait_front(1)</code> at the head and <code>cb_pop_front(1)</code> at the tail — no external scaffolding needed. The old <code>feedback_bulk_scalar_overwait</code> gotcha was fixed in <code>14a5a61e462</code>; <code>CallerManaged</code> would also work but forces the caller to keep the wait/pop, which this version removes (review feedback from the initial migration in <code>98c5ebb783b</code>).</li>
@@ -459,17 +533,50 @@
 <script>
   const STORAGE_KEY = 'eltwise_migration_reviews_v1';
 
-  // Sidebar tab switch.
+  // Sidebar tab switch — also clears any active focus when switching kernels.
   document.querySelectorAll('.sidebar .tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.sidebar .tab-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      clearFocus();
       const tab = btn.dataset.tab;
       const target = document.getElementById('panel-' + tab);
       if (target) target.classList.add('active');
       else document.getElementById('panel-empty').classList.add('active');
     });
+  });
+
+  // Focus button handler. Pressing "Focus 2" sets body[data-focus="2"] which
+  // dims all .dz spans EXCEPT data-d="2" (CSS), then scrolls each code pane
+  // (Before + After) so its first matching .dz is centred. "Show all" clears.
+  function clearFocus() {
+    delete document.body.dataset.focus;
+    document.querySelectorAll('.focus-toolbar button').forEach(b => b.classList.remove('active'));
+  }
+  function applyFocus(panel, decisionId) {
+    document.body.dataset.focus = decisionId;
+    panel.querySelectorAll('.focus-toolbar button').forEach(b => {
+      b.classList.toggle('active', b.dataset.focusId === decisionId);
+    });
+    // Scroll each `pre.code` so its first matching .dz is in view.
+    panel.querySelectorAll('pre.code').forEach(pre => {
+      const target = pre.querySelector('.dz[data-d="' + decisionId + '"]');
+      if (!target) return;
+      // offsetTop is relative to pre (since pre is position-static and target is inside it).
+      const top = target.offsetTop - pre.clientHeight / 2 + target.offsetHeight / 2;
+      pre.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    });
+  }
+  document.querySelectorAll('.focus-toolbar').forEach(bar => {
+    const panel = bar.closest('.panel');
+    bar.querySelectorAll('button[data-focus-id]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.classList.contains('active')) { clearFocus(); return; }
+        applyFocus(panel, btn.dataset.focusId);
+      });
+    });
+    bar.querySelector('.show-all')?.addEventListener('click', clearFocus);
   });
 
   // ===== Review boxes =====
