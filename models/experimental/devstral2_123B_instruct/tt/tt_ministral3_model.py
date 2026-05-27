@@ -150,7 +150,12 @@ class TtMinistral3Model:
         prefill_rope_tables: Optional[Sequence[ttnn.Tensor]] = None,
     ) -> ttnn.Tensor:
         act_mem = self.args.get_activation_mem_config(mode, self.mesh_device)
-        hidden_states = self.embed_tokens(input_ids, memory_config=act_mem)
+        batch_size = int(input_ids.shape[0])
+        seq_len = 1 if mode == "decode" else int(input_ids.shape[-1])
+        embed_mem = self.args.get_embedding_output_mem_config(
+            mode, self.mesh_device, batch_size=batch_size, seq_len=seq_len
+        )
+        hidden_states = self.embed_tokens(input_ids, memory_config=embed_mem)
         hidden_states = self._reshape_embeddings(hidden_states, input_ids, mode=mode)
         for layer in self.layers:
             hidden_states = layer(

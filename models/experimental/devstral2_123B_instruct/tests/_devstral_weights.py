@@ -47,6 +47,7 @@ def _skip_download_failure(what: str, exc: BaseException) -> NoReturn:
         f"Could not download {what} from {DEVSTRAL2_LARGE_REPO_ID} "
         f"(set HF_TOKEN if gated, or pre-cache weights). Error: {exc}"
     )
+    raise AssertionError("unreachable")  # pytest.skip always raises; satisfies static analysis
 
 
 def require_text_config() -> Ministral3Config:

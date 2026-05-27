@@ -240,10 +240,23 @@ class Devstral2Args:
         return self.head_dim**-0.5
 
     def get_activation_mem_config(self, mode: str, mesh_device) -> ttnn.MemoryConfig:
-        """Prefill: L1 interleaved (DRAM on BH). Decode: L1 width-sharded (see ``mem_config``)."""
+        """Interleaved L1 activations for matmuls (embedding output may use a separate mem config)."""
         from models.experimental.devstral2_123B_instruct.tt.mem_config import get_activation_mem_config
 
         return get_activation_mem_config(self, mode, mesh_device)
+
+    def get_embedding_output_mem_config(
+        self,
+        mode: str,
+        mesh_device,
+        *,
+        batch_size: int = 1,
+        seq_len: int = 1,
+    ) -> ttnn.MemoryConfig:
+        """WIDTH-sharded L1 embed on prefill (same layout as width-sharded RMSNorm); decode stays L1 interleaved."""
+        from models.experimental.devstral2_123B_instruct.tt.mem_config import get_embedding_output_mem_config
+
+        return get_embedding_output_mem_config(self, mode, mesh_device, batch_size=batch_size, seq_len=seq_len)
 
     def get_ccl_output_mem_config(self, mode: str, mesh_device) -> ttnn.MemoryConfig:
         """Where all-reduce should leave activations."""
