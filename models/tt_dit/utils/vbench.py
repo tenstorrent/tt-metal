@@ -62,6 +62,6 @@ def assert_vbench_quality(
             continue
         if scores[metric] < minimum:
             msg = f"VBench {metric} = {scores[metric]:.4f} < {minimum:.4f}"
-            raise Exception(msg)  # noqa: TRY002
+            raise AssertionError(msg)
 
     return scores
