@@ -196,33 +196,13 @@ void kernel_main() {
             uint32_t rope_cos_tile_in_head = 0;
             uint32_t rope_sin_tile_in_head = 0;
 
-            // Phase 9 post: with packed AG the writer scattered the gathered
-            // packed pages into row 0 of stats_gathered_cb tiles. Transpose
-            // each of the ring_size tiles for this row back to col 0 so the
-            // existing reduce<AVG,REDUCE_ROW> chain runs unchanged.
-            if constexpr (packed_ag_enabled != 0) {
-                const uint32_t row_base_tiles = r * stats_tiles_cols;
-                cb_reserve_back(stats_transposed_gathered_cb, stats_tiles_cols);
-                reconfig_data_format_srca(stats_gathered_cb);
-                pack_reconfig_data_format(stats_transposed_gathered_cb);
-                transpose_wh_init_short(stats_gathered_cb);
-                for (uint32_t d = 0; d < stats_tiles_cols; d++) {
-                    tile_regs_acquire();
-                    transpose_wh_tile(stats_gathered_cb, row_base_tiles + d, 0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(0, stats_transposed_gathered_cb);
-                    tile_regs_release();
-                    cb_push_back(stats_transposed_gathered_cb, 1);
-                }
-            }
-
-            // Reduce gathered TP partials. For TP=1 (stats_tiles_cols==1), this
-            // is effectively a pass-through (single tile averaged with itself).
-            // With packed AG enabled the source is stats_transposed_gathered_cb
-            // (col-0 stats); otherwise it's stats_gathered_cb directly.
+            // Phase 9 post: writer scattered the gathered packed pages
+            // directly into COL 0 of stats_gathered_cb tiles (strided stores),
+            // so reduce<AVG,REDUCE_ROW> runs on stats_gathered_cb unchanged.
+            // No compute post-transpose needed — col-0 is the natural stat
+            // tile layout that reduce<AVG,REDUCE_ROW> expects.
             compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
-                stats_reduce_src_cb,
+                stats_gathered_cb,
                 reduce_scalar_avg_cb,
                 reduce_result_cb,
                 compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));
