@@ -272,8 +272,7 @@ void validate_matmul_reuse_work_split(
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
     const MatmulMultiCoreReuseProgramConfig& program_config,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& core_range_set) {
+    const tt::tt_metal::MemoryConfig& output_mem_config) {
     const uint32_t B = ttnn::get_batch_size(a_shape_padded);
     const uint32_t Mt = get_M_dim(a_shape_padded, in0_tile, false);
     const uint32_t Nt = get_N_dim(b_shape_padded, in1_tile);
@@ -305,9 +304,6 @@ void validate_matmul_reuse_work_split(
     uint32_t num_cores = 0;
     if (shard_spec.has_value()) {
         num_cores = shard_spec->grid.num_cores();
-    } else if (core_range_set.has_value()) {
-        std::tie(num_cores, std::ignore, std::ignore, std::ignore, std::ignore, std::ignore) =
-            tt::tt_metal::split_work_to_cores(core_range_set.value(), num_output_blocks_total);
     } else {
         const tt::tt_metal::CoreCoord grid = program_config.compute_with_storage_grid_size;
         std::tie(num_cores, std::ignore, std::ignore, std::ignore, std::ignore, std::ignore) =

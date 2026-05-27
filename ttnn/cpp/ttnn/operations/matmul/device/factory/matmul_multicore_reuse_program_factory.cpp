@@ -26,8 +26,7 @@ namespace ttnn::prim {
 ProgramDescriptor MatmulMultiCoreReuseProgramFactory::create_descriptor(
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value,
-    const std::optional<CoreRangeSet>& /*core_range_set*/) {
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     TT_FATAL(operation_attributes.bcast_batch.has_value(), "Error: bcast_batch field should have been populated");
     bool bcast_batch = operation_attributes.bcast_batch.value();
 

@@ -337,8 +337,7 @@ void validate_matmul_reuse_work_split(
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
     const MatmulMultiCoreReuseProgramConfig& program_config,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& core_range_set = std::nullopt);
+    const tt::tt_metal::MemoryConfig& output_mem_config);
 
 }  // namespace ttnn::operations::matmul::utilities
 

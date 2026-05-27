@@ -27,8 +27,7 @@ namespace ttnn::prim {
 ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value,
-    const std::optional<CoreRangeSet>& /*core_range_set*/) {
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     if (!tensor_args.optional_input_tensors.empty()) {
         TT_FATAL(!tensor_args.optional_input_tensors[0].has_value(), "Bias is not supported for matmul multi core");
     }

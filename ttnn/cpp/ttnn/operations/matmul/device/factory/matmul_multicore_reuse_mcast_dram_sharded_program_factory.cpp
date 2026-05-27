@@ -887,8 +887,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
 ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_descriptor(
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value,
-    const std::optional<CoreRangeSet>& /*core_range_set*/) {
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     const auto& input_tensors = tensor_args.input_tensors;
     const auto& optional_input_tensors = tensor_args.optional_input_tensors;
     const auto& output_tensors = tensor_return_value;

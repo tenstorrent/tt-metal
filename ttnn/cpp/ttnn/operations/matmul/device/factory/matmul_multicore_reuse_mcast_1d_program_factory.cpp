@@ -5169,8 +5169,7 @@ void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
 ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value,
-    const std::optional<CoreRangeSet>& /*core_range_set*/) {
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     using namespace tt;
     using namespace operations::matmul::utilities;
 

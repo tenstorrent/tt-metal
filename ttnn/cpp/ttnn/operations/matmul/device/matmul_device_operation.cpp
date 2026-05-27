@@ -1531,8 +1531,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             in0_tile,
             in1_tile,
             std::get<operations::matmul::MatmulMultiCoreReuseProgramConfig>(chosen_program_config),
-            attributes.output_mem_config,
-            std::nullopt);
+            attributes.output_mem_config);
     }
 }
 
