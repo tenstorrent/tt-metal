@@ -146,7 +146,7 @@ struct KernelSpec {
     // Named RTAs/CRTAs: referenced by name in kernel code via `args::<name>`.
     // (Currently, only uint32_t type is supported.)
     //
-    // For vararg-style positional RTAs/CRTAs, see KernelSpecAdvancedOptions.
+    // For vararg-style positional RTAs/CRTAs, see KernelAdvancedOptions.
     struct RuntimeArgSchema {
         // Named RTAs: names in declaration order. Must be unique valid C++ identifiers.
         std::vector<std::string> named_runtime_args;
@@ -165,7 +165,7 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////////////////
     // Advanced options (see advanced_options.hpp)
     //////////////////////////////////////////////////////////////////////////////
-    std::optional<KernelSpecAdvancedOptions> advanced_options = std::nullopt;
+    std::optional<KernelAdvancedOptions> advanced_options = std::nullopt;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

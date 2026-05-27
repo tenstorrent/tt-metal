@@ -93,7 +93,7 @@ struct DataflowBufferSpec {
     //////////////////////////////
     // Advanced options (see advanced_options.hpp)
     //////////////////////////////
-    std::optional<DFBSpecAdvancedOptions> advanced_options = std::nullopt;
+    std::optional<DFBAdvancedOptions> advanced_options = std::nullopt;
 };
 
 // NOTE: Remote DataflowBuffer is not yet supported!

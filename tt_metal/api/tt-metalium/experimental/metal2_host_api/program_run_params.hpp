@@ -51,7 +51,7 @@ struct ProgramRunParams {
         std::unordered_map<std::string, uint32_t> named_common_runtime_args;
 
         // Advanced options (see advanced_options.hpp).
-        // Companion to KernelSpecAdvancedOptions on the schema side; holds
+        // Companion to KernelAdvancedOptions on the schema side; holds
         // unnamed-vararg RTA/CRTA values.
         std::optional<AdvancedKernelRunParams> advanced_options = std::nullopt;
     };

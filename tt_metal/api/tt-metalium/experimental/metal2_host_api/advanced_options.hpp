@@ -37,7 +37,7 @@ using DFBSpecName = std::string;
 // main Spec, NOT here.
 //
 // The std::optional wrapper + explicit type name at the use site
-// (e.g. `.advanced_options = KernelSpecAdvancedOptions{.foo = bar}`) is
+// (e.g. `.advanced_options = KernelAdvancedOptions{.foo = bar}`) is
 // intentional: it puts a small ergonomic speed bump in front of reaching into
 // this bucket on autopilot.
 //
@@ -66,7 +66,7 @@ struct DFBComputeSelfLoopScope {
     // the inter-thread communication pattern here.
 };
 
-struct KernelSpecAdvancedOptions {
+struct KernelAdvancedOptions {
     // (Optional) Per-node thread count specification.
     // The default threading is KernelSpec::num_threads. However, you may override
     // this on a per-node basis.
@@ -104,7 +104,7 @@ struct KernelSpecAdvancedOptions {
     std::optional<NumVarargsPerNode> num_runtime_varargs_per_node = std::nullopt;
 };
 
-struct DFBSpecAdvancedOptions {
+struct DFBAdvancedOptions {
     // Alias two or more DFBs.
     // Aliased DFBs are logically distinct, but physically share the same backing memory.
     // Aliased DFBs offer NO guarantees against data clobbering; kernel logic must ensure safety.
@@ -119,7 +119,7 @@ struct DFBSpecAdvancedOptions {
 
 struct AdvancedKernelRunParams {
     // Unnamed runtime argument "varargs" (companion to the vararg schema declared
-    // on KernelSpecAdvancedOptions). Specified per-node; length can vary per-node.
+    // on KernelAdvancedOptions). Specified per-node; length can vary per-node.
     // (Slated for eventual removal in favor of typed array runtime args.)
     struct NodeVarargs {
         NodeCoord node;

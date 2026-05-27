@@ -2631,7 +2631,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // addr_crta_offset; SetProgramRunParameters uses BOTH to assemble the per-enqueue CRTA buffer.
         runtime_schema.named_common_runtime_args = user_named_crtas;
 
-        // Varargs schema now lives on KernelSpecAdvancedOptions.
+        // Varargs schema now lives on KernelAdvancedOptions.
         const size_t num_runtime_varargs =
             kernel_spec.advanced_options.has_value() ? kernel_spec.advanced_options->num_runtime_varargs : 0;
         const size_t num_common_runtime_varargs =

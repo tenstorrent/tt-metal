@@ -140,7 +140,7 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
         .compiler_options = {.defines = dm_defines},
         .config_spec = dm_cfg,
         .advanced_options =
-            experimental::metal2_host_api::KernelSpecAdvancedOptions{
+            experimental::metal2_host_api::KernelAdvancedOptions{
                 .num_runtime_varargs = num_unique_rt_args,
                 .num_common_runtime_varargs = common_rtas ? num_unique_rt_args : 0u,
             },
@@ -221,7 +221,7 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
                     .gen2_data_movement_config =
                         experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
             .advanced_options =
-                experimental::metal2_host_api::KernelSpecAdvancedOptions{
+                experimental::metal2_host_api::KernelAdvancedOptions{
                     .num_runtime_varargs = num_runtime_args,
                     .num_common_runtime_varargs = common_rtas ? static_cast<size_t>(num_runtime_args) : size_t{0},
                 },

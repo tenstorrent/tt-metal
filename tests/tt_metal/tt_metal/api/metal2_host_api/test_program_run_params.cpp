@@ -61,7 +61,7 @@ using test_helpers::ScopedSlowDispatchOverride;
 
 // Shorthand for the per-node-override vararg type (needed at call sites because
 // std::optional<T> can't be brace-init from an initializer-list of T's elements).
-using NumVarargsPerNode = KernelSpecAdvancedOptions::NumVarargsPerNode;
+using NumVarargsPerNode = KernelAdvancedOptions::NumVarargsPerNode;
 
 // ============================================================================
 // Test Fixtures
@@ -103,8 +103,8 @@ inline ProgramSpec MakeSpecWithRTAs(const NodeCoord& /*node*/, size_t num_per_no
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Set the RTA schema on the dm_kernel (first kernel)
-    spec.kernels[0].advanced_options = KernelSpecAdvancedOptions{
-        .num_runtime_varargs = num_per_node_rtas, .num_common_runtime_varargs = num_common_rtas};
+    spec.kernels[0].advanced_options =
+        KernelAdvancedOptions{.num_runtime_varargs = num_per_node_rtas, .num_common_runtime_varargs = num_common_rtas};
 
     // compute_kernel has no RTAs (defaults: 0 / 0)
 
@@ -121,11 +121,11 @@ inline ProgramSpec MakeSpecWithBothKernelRTAs(
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // dm_kernel RTAs
-    spec.kernels[0].advanced_options = KernelSpecAdvancedOptions{
-        .num_runtime_varargs = dm_per_node_rtas, .num_common_runtime_varargs = dm_common_rtas};
+    spec.kernels[0].advanced_options =
+        KernelAdvancedOptions{.num_runtime_varargs = dm_per_node_rtas, .num_common_runtime_varargs = dm_common_rtas};
 
     // compute_kernel RTAs
-    spec.kernels[1].advanced_options = KernelSpecAdvancedOptions{
+    spec.kernels[1].advanced_options = KernelAdvancedOptions{
         .num_runtime_varargs = compute_per_node_rtas, .num_common_runtime_varargs = compute_common_rtas};
 
     return spec;
@@ -558,7 +558,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_MultiNodeKernel) {
     auto consumer = MakeMinimalDMKernel("consumer");
 
     // Throw in some varargs (the normal kind, not the weird per-node override kind)
-    producer.advanced_options = KernelSpecAdvancedOptions{.num_runtime_varargs = 2, .num_common_runtime_varargs = 1};
+    producer.advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 2, .num_common_runtime_varargs = 1};
 
     // consumer has no varargs (defaults)
 
@@ -783,7 +783,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyMultiNodeDifferingCountsSucceeds) {
     spec.program_id = "vararg_differing_counts";
     auto kernel = MakeMinimalDMKernel("dm_kernel");
     kernel.advanced_options.emplace().num_runtime_varargs_per_node =
-        KernelSpecAdvancedOptions::NumVarargsPerNode{{node_a, 2}, {node_b, 5}};
+        KernelAdvancedOptions::NumVarargsPerNode{{node_a, 2}, {node_b, 5}};
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", nodes, {"dm_kernel"})};
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
@@ -818,7 +818,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargPerNodeOverrideMixedEntryTypesSucceeds)
     // Nodes a and b share count 3 (declared via a NodeRangeSet entry).
     // Node c has count 5 (declared via a NodeCoord entry).
     kernel.advanced_options.emplace().num_runtime_varargs_per_node =
-        KernelSpecAdvancedOptions::NumVarargsPerNode{{ab, 3}, {node_c, 5}};
+        KernelAdvancedOptions::NumVarargsPerNode{{ab, 3}, {node_c, 5}};
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", all_nodes, {"dm_kernel"})};
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
@@ -848,10 +848,10 @@ TEST_F(ProgramRunParamsTestQuasar, VarargScalarDefaultWithSparseOverrideSucceeds
     ProgramSpec spec;
     spec.program_id = "vararg_scalar_with_sparse_override";
     auto kernel = MakeMinimalDMKernel("dm_kernel");
-    kernel.advanced_options = KernelSpecAdvancedOptions{
+    kernel.advanced_options = KernelAdvancedOptions{
         .num_runtime_varargs = 2,  // default for unlisted nodes
         .num_runtime_varargs_per_node =
-            KernelSpecAdvancedOptions::NumVarargsPerNode{{node_c, 5}},  // node_c is the exception
+            KernelAdvancedOptions::NumVarargsPerNode{{node_c, 5}},  // node_c is the exception
     };
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", all_nodes, {"dm_kernel"})};
@@ -885,10 +885,10 @@ TEST_F(ProgramRunParamsTestQuasar, VarargSparseOverrideZeroErasesScalarDefault) 
     ProgramSpec spec;
     spec.program_id = "vararg_zero_override";
     auto kernel = MakeMinimalDMKernel("dm_kernel");
-    kernel.advanced_options = KernelSpecAdvancedOptions{
+    kernel.advanced_options = KernelAdvancedOptions{
         .num_runtime_varargs = 3,
         .num_runtime_varargs_per_node =
-            KernelSpecAdvancedOptions::NumVarargsPerNode{{node_b, 0}},  // node_b: no varargs despite scalar default
+            KernelAdvancedOptions::NumVarargsPerNode{{node_b, 0}},  // node_b: no varargs despite scalar default
     };
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", both, {"dm_kernel"})};
@@ -911,10 +911,8 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyAcrossMultipleKernelsSucceeds) {
     // migration where nothing has been upgraded to named args yet.
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].advanced_options =
-        KernelSpecAdvancedOptions{.num_runtime_varargs = 3, .num_common_runtime_varargs = 1};
-    spec.kernels[1].advanced_options =
-        KernelSpecAdvancedOptions{.num_runtime_varargs = 2, .num_common_runtime_varargs = 2};
+    spec.kernels[0].advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 3, .num_common_runtime_varargs = 1};
+    spec.kernels[1].advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 2, .num_common_runtime_varargs = 2};
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunParams params;
@@ -1183,8 +1181,8 @@ protected:
 inline ProgramSpec MakeGen1SpecWithRTAs(const NodeCoord& /*node*/, size_t num_per_node_rtas, size_t num_common_rtas) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
-    spec.kernels[0].advanced_options = KernelSpecAdvancedOptions{
-        .num_runtime_varargs = num_per_node_rtas, .num_common_runtime_varargs = num_common_rtas};
+    spec.kernels[0].advanced_options =
+        KernelAdvancedOptions{.num_runtime_varargs = num_per_node_rtas, .num_common_runtime_varargs = num_common_rtas};
 
     // kernels[1] has no varargs (defaults)
 

@@ -1531,7 +1531,7 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelInterScopeFails) {
     spec.program_id = "self_loop_inter";
 
     auto compute = MakeMinimalComputeKernel("compute");
-    compute.advanced_options = KernelSpecAdvancedOptions{
+    compute.advanced_options = KernelAdvancedOptions{
         .dfb_compute_self_loop_scopes = {{.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTER}}};
 
     auto dfb = MakeMinimalDFB("dfb");
@@ -1558,7 +1558,7 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnDMKernelFails) {
 
     auto producer = MakeMinimalDMKernel("producer");
     // Misapplied: self-loop scope entries are valid only on compute kernels.
-    producer.advanced_options = KernelSpecAdvancedOptions{
+    producer.advanced_options = KernelAdvancedOptions{
         .dfb_compute_self_loop_scopes = {{.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTRA}}};
     auto consumer = MakeMinimalDMKernel("consumer");
 
@@ -1583,7 +1583,7 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeReferencingUnknownDFBFails) {
 
     auto compute = MakeMinimalComputeKernel("compute");
     // Misapplied: there is no DFB named "ghost" in the spec.
-    compute.advanced_options = KernelSpecAdvancedOptions{
+    compute.advanced_options = KernelAdvancedOptions{
         .dfb_compute_self_loop_scopes = {{.dfb_spec_name = "ghost", .scope = DFBComputeSelfLoopScope::Scope::INTRA}}};
 
     auto dfb = MakeMinimalDFB("dfb");
@@ -1609,7 +1609,7 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnNonSelfLoopedDFBFails) {
 
     auto compute = MakeMinimalComputeKernel("compute");
     // Misapplied: the kernel only produces; it does not self-loop the DFB.
-    compute.advanced_options = KernelSpecAdvancedOptions{
+    compute.advanced_options = KernelAdvancedOptions{
         .dfb_compute_self_loop_scopes = {{.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTRA}}};
     auto dm_consumer = MakeMinimalDMKernel("dm_consumer");
 
@@ -1636,7 +1636,7 @@ TEST_F(ProgramSpecTestQuasar, DuplicateSelfLoopScopeEntriesFails) {
 
     auto compute = MakeMinimalComputeKernel("compute");
     // Two entries for the same DFB on the same kernel.
-    compute.advanced_options = KernelSpecAdvancedOptions{
+    compute.advanced_options = KernelAdvancedOptions{
         .dfb_compute_self_loop_scopes =
             {
                 {.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTRA},
@@ -1712,7 +1712,7 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelExplicitIntraSucceeds) {
     spec.program_id = "self_loop_explicit_intra";
 
     auto compute = MakeMinimalComputeKernel("compute");
-    compute.advanced_options = KernelSpecAdvancedOptions{
+    compute.advanced_options = KernelAdvancedOptions{
         .dfb_compute_self_loop_scopes = {{.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTRA}}};
 
     auto dfb = MakeMinimalDFB("dfb");
@@ -1885,8 +1885,7 @@ TEST_F(ProgramSpecTestQuasar, RuntimeArgsSchemaSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Add runtime args schema
-    spec.kernels[0].advanced_options =
-        KernelSpecAdvancedOptions{.num_runtime_varargs = 3, .num_common_runtime_varargs = 2};
+    spec.kernels[0].advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 3, .num_common_runtime_varargs = 2};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -1901,9 +1900,9 @@ TEST_F(ProgramSpecTestQuasar, VarargPerNodeOverlapFails) {
     ProgramSpec spec;
     spec.program_id = "vararg_overlap_test";
     auto kernel = MakeMinimalDMKernel("dm_kernel");
-    kernel.advanced_options = KernelSpecAdvancedOptions{
+    kernel.advanced_options = KernelAdvancedOptions{
         .num_runtime_varargs_per_node =
-            KernelSpecAdvancedOptions::NumVarargsPerNode{{both, 3}, {node_a, 3}},  // node_a listed twice
+            KernelAdvancedOptions::NumVarargsPerNode{{both, 3}, {node_a, 3}},  // node_a listed twice
     };
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", both, {"dm_kernel"})};
@@ -2354,7 +2353,7 @@ TEST(AggregateSpecTypes, WorkUnitSpecDesignatedInitializers) {
 
 TEST(AggregateSpecTypes, RuntimeArgSchemaDesignatedInitializers) {
     // Named RTAs + CRTAs via designated initializers; vararg counts now live on
-    // KernelSpecAdvancedOptions (see VarargCountsOnAdvancedOptions below).
+    // KernelAdvancedOptions (see VarargCountsOnAdvancedOptions below).
     KernelSpec::RuntimeArgSchema schema{
         .named_runtime_args = {"input_ptr", "output_ptr"},
         .named_common_runtime_args = {"tile_count"},
@@ -2365,8 +2364,8 @@ TEST(AggregateSpecTypes, RuntimeArgSchemaDesignatedInitializers) {
 }
 
 TEST(AggregateSpecTypes, VarargCountsOnAdvancedOptions) {
-    // Scalar vararg counts via designated initializers on KernelSpecAdvancedOptions.
-    KernelSpecAdvancedOptions adv{
+    // Scalar vararg counts via designated initializers on KernelAdvancedOptions.
+    KernelAdvancedOptions adv{
         .num_runtime_varargs = 4,
         .num_common_runtime_varargs = 2,
     };
@@ -2378,8 +2377,8 @@ TEST(AggregateSpecTypes, VarargCountsOnAdvancedOptions) {
 
 TEST(AggregateSpecTypes, VarargPerNodeOverrideOnAdvancedOptions) {
     // Per-node override path (advanced): ensure designated-init through std::optional works.
-    using NumVarargsPerNode = KernelSpecAdvancedOptions::NumVarargsPerNode;
-    KernelSpecAdvancedOptions adv{
+    using NumVarargsPerNode = KernelAdvancedOptions::NumVarargsPerNode;
+    KernelAdvancedOptions adv{
         .num_runtime_varargs_per_node = NumVarargsPerNode{{NodeCoord{0, 0}, 4}, {NodeCoord{1, 0}, 7}},
     };
 
@@ -3235,8 +3234,8 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnMismatchedTotalSize) {
     // DFB_A: 512 * 8 = 4096 bytes, DFB_B: 256 * 8 = 2048 bytes — different totals → TT_FATAL
     auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
     auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/256, /*num_entries=*/8);
-    dfb_a.advanced_options = DFBSpecAdvancedOptions{.alias_with = {"dfb_b"}};
-    dfb_b.advanced_options = DFBSpecAdvancedOptions{.alias_with = {"dfb_a"}};
+    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_b"}};
+    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_a"}};
 
     const NodeCoord node{0, 0};
     auto spec = MakeAliasProgramSpec(node, dfb_a, dfb_b);
@@ -3251,7 +3250,7 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnAsymmetricDeclaration) {
     // DFB_A lists DFB_B but DFB_B does not list DFB_A — clique violation → TT_FATAL
     auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
     auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/256, /*num_entries=*/16);
-    dfb_a.advanced_options = DFBSpecAdvancedOptions{.alias_with = {"dfb_b"}};
+    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_b"}};
     // dfb_b.alias_with intentionally left empty
 
     const NodeCoord node{0, 0};
@@ -3277,8 +3276,8 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBMatmulStyleSucceeds) {
 
     auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
     auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/512, /*num_entries=*/8);
-    dfb_a.advanced_options = DFBSpecAdvancedOptions{.alias_with = {"dfb_b"}};
-    dfb_b.advanced_options = DFBSpecAdvancedOptions{.alias_with = {"dfb_a"}};
+    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_b"}};
+    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_a"}};
 
     KernelSpec producer = MakeMinimalDMKernel("producer_kernel");
     KernelSpec consumer = MakeMinimalDMKernel("consumer_kernel");
@@ -3307,8 +3306,8 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnDifferentNodeCoverage) {
 
     auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
     auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/512, /*num_entries=*/8);
-    dfb_a.advanced_options = DFBSpecAdvancedOptions{.alias_with = {"dfb_b"}};
-    dfb_b.advanced_options = DFBSpecAdvancedOptions{.alias_with = {"dfb_a"}};
+    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_b"}};
+    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_a"}};
 
     KernelSpec producer_a = MakeMinimalDMKernel("producer_a");
     KernelSpec consumer_a = MakeMinimalDMKernel("consumer_a");
@@ -3339,8 +3338,8 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnInconsistentBorrowedFrom) {
 
     auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/16, /*num_entries=*/2);
     auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/16, /*num_entries=*/2);
-    dfb_a.advanced_options = DFBSpecAdvancedOptions{.alias_with = {"dfb_b"}};
-    dfb_b.advanced_options = DFBSpecAdvancedOptions{.alias_with = {"dfb_a"}};
+    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_b"}};
+    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_a"}};
     dfb_a.borrowed_from = "borrowed_tensor";
     // dfb_b.borrowed_from intentionally left unset
 

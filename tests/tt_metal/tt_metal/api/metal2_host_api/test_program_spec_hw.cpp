@@ -240,7 +240,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     producer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_producer.cpp";
     producer.runtime_arguments_schema.named_runtime_args = {"src_addr"};
     producer.runtime_arguments_schema.named_common_runtime_args = {"num_entries"};
-    producer.advanced_options = KernelSpecAdvancedOptions{.num_runtime_varargs = 3, .num_common_runtime_varargs = 1};
+    producer.advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 3, .num_common_runtime_varargs = 1};
     producer.compile_time_arg_bindings = {{"bank_id", 0}, {"entry_size", entry_size}};
 
     // Consumer: NCRISC reads DFB → DRAM. Uses default `args` namespace, 1 named RTA,
@@ -250,7 +250,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_consumer.cpp";
     consumer.runtime_arguments_schema.named_runtime_args = {"dst_addr"};
     consumer.runtime_arguments_schema.named_common_runtime_args = {"num_entries"};
-    consumer.advanced_options = KernelSpecAdvancedOptions{.num_runtime_varargs = 2, .num_common_runtime_varargs = 1};
+    consumer.advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 2, .num_common_runtime_varargs = 1};
     consumer.compile_time_arg_bindings = {{"bank_id", 0}, {"entry_size", entry_size}};
 
     auto dfb = MakeMinimalDFB("loopback_dfb", entry_size, num_entries_in_dfb);
@@ -366,7 +366,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/named_args_loopback_compute.cpp";
     compute.runtime_arguments_schema.named_runtime_args = {"input_offset"};
     compute.runtime_arguments_schema.named_common_runtime_args = {"num_tiles"};
-    compute.advanced_options = KernelSpecAdvancedOptions{.num_runtime_varargs = 2, .num_common_runtime_varargs = 1};
+    compute.advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 2, .num_common_runtime_varargs = 1};
     compute.compile_time_arg_bindings = {{"magic", 0xCAFE0001u}, {"entry_size", entry_size}};
 
     // Consumer: NCRISC reads out_dfb → DRAM. Reuses dfb_accessor_loopback_consumer.cpp

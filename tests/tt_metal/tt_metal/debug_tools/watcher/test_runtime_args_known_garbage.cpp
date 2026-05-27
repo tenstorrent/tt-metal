@@ -276,7 +276,7 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
         .num_threads = is_quasar ? static_cast<uint8_t>(num_dms_) : uint8_t{1},
         .config_spec = dm_cfg,
         .advanced_options =
-            experimental::metal2_host_api::KernelSpecAdvancedOptions{
+            experimental::metal2_host_api::KernelAdvancedOptions{
                 .num_runtime_varargs = default_rtas.size(),
                 .num_common_runtime_varargs = default_crtas.size(),
             },
@@ -394,7 +394,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
 
     // RTA test reads index == default_rtas.size() (one past the end), so the kernel must declare
     // exactly default_rtas.size() varargs to make that access OOB.
-    experimental::metal2_host_api::KernelSpecAdvancedOptions adv_opts;
+    experimental::metal2_host_api::KernelAdvancedOptions adv_opts;
     if (params.test_rta) {
         adv_opts.num_runtime_varargs = default_rtas.size();
     } else {
@@ -488,7 +488,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
         .advanced_options =
-            experimental::metal2_host_api::KernelSpecAdvancedOptions{
+            experimental::metal2_host_api::KernelAdvancedOptions{
                 .num_runtime_varargs = default_rtas.size(),
             },
     };
