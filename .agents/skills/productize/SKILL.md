@@ -25,10 +25,10 @@ Use the single decoder implementation from the latest stage as your starting poi
 ## When porting a new model
 
 1. Read and understand the source decoder + supporting modules under `models/autoports/<model_name>/`.
-2. `<model_dir>/tt/generator.py` implementing the `models.common.readiness_check.contract.Generator` contract.
+2. `<model_dir>/tt/generator.py` implementing the `models.common.readiness_check.contract.Generator` ABC.
 3. `<model_dir>/tt/generator_vllm.py` — thin delegate for tt-transformers-family models; thick (custom prefill/decode) for DeepSeek-style. See the SKILL.md for the vLLM plugin contract.
 4. Reference file generated via `python -m models.common.readiness_check.generate ...`, saved under `models/common/readiness_check/references/<model_name>.refpt`.
-5. Verify via `python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/<model_name> --reference ...`.
+5. Verify via the three readiness checks: `run_prefill_check` and `run_teacher_forcing` (both scored numerically as top-1 / top-5 / top-100 hit rates against the HF reference), plus `run_autoregressive` (free-running side-by-side completion against the HF reference — no programmatic check; you read both completions and judge whether the ported model's output looks reasonable).
 
 The shared readiness check expects **single-prompt, greedy/argmax** semantics for deterministic top-K hit-rate comparison against the HF teacher.
 
@@ -60,7 +60,7 @@ Avoid TTNN weight caching (from_torch is now fast enough).
 
 ## Generator
 
-`tt/generator.py` is the load-bearing file. It should expose `build_generator(model_dir, mesh_device, **kwargs)` and a class that inherits from `models.common.readiness_check.contract.Generator`.
+`tt/generator.py` is the load-bearing file. It should expose `build_generator(model_dir, mesh_device, **kwargs)` and a concrete class that subclasses `models.common.readiness_check.contract.Generator` (the ABC).
 
 Implement both API levels:
 
@@ -90,6 +90,7 @@ Use the shared model-readiness check:
 python -m models.common.readiness_check.generate ...
 python -m models.common.readiness_check.run_prefill_check ...
 python -m models.common.readiness_check.run_teacher_forcing ...
+python -m models.common.readiness_check.run_autoregressive ...
 ```
 
 You will need to provide the readiness check with the correct mesh device shape to match the decoder and your model.
@@ -106,7 +107,7 @@ python -m models.common.readiness_check.generate \
   --output models/common/readiness_check/references/<model>.refpt
 ```
 
-Run both complementary readiness checks:
+Run the complementary readiness checks:
 
 ```bash
 python -m models.common.readiness_check.run_prefill_check \
@@ -118,7 +119,14 @@ python -m models.common.readiness_check.run_teacher_forcing \
   --model-dir models/autoports/<model_name> \
   --reference models/common/readiness_check/references/<model>.refpt \
   --mesh-device <N150|N300|T3K|TG>
+
+python -m models.common.readiness_check.run_autoregressive \
+  --model-dir models/autoports/<model_name> \
+  --hf-model <hf-model-id-or-local-path> \
+  --mesh-device <N150|N300|T3K|TG>
 ```
+
+The first two are scored numerically (top-1 / top-5 / top-100). The third — `run_autoregressive` — has both the HF reference and the ported model generate a completion to the same prompt (loaded from `models/common/readiness_check/autoregressive_prompt.txt`) and writes `hf_completion.txt` and `tt_completion.txt` side by side under `<model_dir>/readiness_autoregressive/`. There is **no programmatic check** — you must read both completions yourself and judge whether the ported model's output is reasonable given the reference. Expect minor lexical drift from bf8 quantization; you're looking for coherent, on-topic continuation, not token-exact match. Severe divergence (incoherent text, immediate repetition, wrong language, runs of identical tokens) means the model is broken even if teacher-forcing top-100 looks healthy. Include the verdict — and a short excerpt from each — in the work log.
 
 ## Two-level Generator API
 
@@ -155,6 +163,8 @@ models/autoports/<model>/doc/productize/README.md
 | Readiness reference generator | `models/common/readiness_check/generate.py` |
 | Batch prefill readiness runner | `models/common/readiness_check/run_prefill_check.py` |
 | Teacher-forcing readiness runner | `models/common/readiness_check/run_teacher_forcing.py` |
+| Autoregressive side-by-side runner | `models/common/readiness_check/run_autoregressive.py` |
+| Autoregressive prompt | `models/common/readiness_check/autoregressive_prompt.txt` |
 | tt_transformers model wrapper | `models/tt_transformers/tt/model.py::Transformer` |
 | Paged KV allocation pattern | `models/tt_transformers/tt/attention.py::init_kv_cache` |
 | tt_transformers generator | `models/tt_transformers/tt/generator.py` |
