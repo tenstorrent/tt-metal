@@ -609,23 +609,8 @@ jobs:
           run_pass row
           rc_row=$?
           set -e
-
-          # Fail only when both passes failed, or when the one that ran
-          # produced a hard error (exit code > 1).  Exit code 1 from
-          # generic_ops_tracer means "0 trace files" which is expected
-          # when a given axis partition has no vectors for this batch.
-          # The combined TRACE_OUT file accumulates across both passes,
-          # so a successful col pass + empty row pass still produces a
-          # valid trace file.
-          if [[ $rc_col -ne 0 && $rc_row -ne 0 ]]; then
-            echo "[two-pass] both passes failed (col=$rc_col, row=$rc_row)"
-            exit 1
-          fi
-          if [[ $rc_col -gt 1 ]]; then echo "[two-pass] col pass hard-failed ($rc_col)"; exit $rc_col; fi
-          if [[ $rc_row -gt 1 ]]; then echo "[two-pass] row pass hard-failed ($rc_row)"; exit $rc_row; fi
-          if [[ $rc_col -eq 1 && $rc_row -eq 0 ]] || [[ $rc_col -eq 0 && $rc_row -eq 1 ]]; then
-            echo "[two-pass] one pass produced 0 traces (col=$rc_col, row=$rc_row) — OK, other pass succeeded"
-          fi
+          if [[ $rc_col -ne 0 ]]; then echo "[two-pass] col pass exited $rc_col"; exit $rc_col; fi
+          if [[ $rc_row -ne 0 ]]; then echo "[two-pass] row pass exited $rc_row"; exit $rc_row; fi
 
       - name: Upload sweep traces
         if: always()
