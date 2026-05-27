@@ -30,7 +30,7 @@ import os
 import sys
 import wave
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -55,10 +55,6 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model impor
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
 T2ST_WAV = OUTPUT_DIR / "t2st_hindi_speech.wav"
-# The speech encoder uses a DRAM residual/LN path above ``_LONG_AUDIO_RES_DRAM_THRESHOLD``
-# (1024 mel frames ≈ 20 s) and falls back to uncached relative-position tables above 32 MB —
-# both unlock the full ~43 s T2ST audio for the chain tasks (matches HF semantics, no trim).
-MAX_CHAIN_AUDIO_SEC: Optional[float] = None
 S2ST_WAV = OUTPUT_DIR / "s2st_spanish_speech.wav"
 
 # ---------------------------------------------------------------------------
@@ -322,6 +318,7 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         inter_para_silence = np.zeros(int(sample_rate * 0.4), dtype=np.float32)
         chunk_texts: list[str] = []
         chunk_wavs: list[np.ndarray] = []
+        per_para_wavs: list[np.ndarray] = []  # paragraph audio (no silence) — reused by tasks 3-5
         total_text_tokens = 0
         total_unit_frames = 0
         for idx, para in enumerate(paragraphs):
@@ -338,7 +335,9 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
             if not isinstance(t2st_out, TTSeamlessM4Tv2GenerationOutput):
                 raise TypeError(f"T2ST expected TTSeamlessM4Tv2GenerationOutput, got {type(t2st_out)}")
             chunk_texts.append(_decode(tokenizer, t2st_out.sequences))
-            chunk_wavs.append(_waveform_to_mono_fp32(t2st_out.waveform, t2st_out.waveform_lengths))
+            para_wav = _waveform_to_mono_fp32(t2st_out.waveform, t2st_out.waveform_lengths)
+            chunk_wavs.append(para_wav)
+            per_para_wavs.append(para_wav)
             if idx < len(paragraphs) - 1:
                 chunk_wavs.append(inter_para_silence)
             total_text_tokens += _tt_row_length(t2st_out.sequences)
@@ -357,39 +356,35 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         tt_model.clear_runtime_program_cache()
         ttnn.synchronize_device(device)
 
-        # Tasks 3–5 reuse the full T2ST audio (matches HF demo). The speech encoder's long-audio
-        # path keeps residuals / LN in DRAM and uses an uncached relative-position table above
-        # _LONG_AUDIO_RES_DRAM_THRESHOLD, so >22 s mel inputs no longer L1-clash on BH.
-        hindi_wav_chain = hindi_wav_np
-        if MAX_CHAIN_AUDIO_SEC is not None:
-            max_chain_samples = int(sample_rate * MAX_CHAIN_AUDIO_SEC)
-            if hindi_wav_np.size > max_chain_samples:
-                hindi_wav_chain = hindi_wav_np[:max_chain_samples]
-                print(
-                    f"  Note: S2TT/S2ST/ASR use first {MAX_CHAIN_AUDIO_SEC:.0f}s of T2ST audio "
-                    f"({max_chain_samples} samples)."
-                )
-
-        # The Hindi speech from T2ST becomes the input for tasks 3-5.
-        audio_inputs = processor(audios=hindi_wav_chain, sampling_rate=sample_rate, return_tensors="pt")
-        input_features = audio_inputs["input_features"]
-        input_speech_attn = audio_inputs["attention_mask"]
+        # Tasks 3-5 process the T2ST output per paragraph. The decoder in S2TT/S2ST/ASR emits EOS
+        # at sentence boundaries (same root cause as T2TT/T2ST truncation), so feeding the full
+        # multi-paragraph audio in a single call still yields only the first 1-2 sentences. Per-
+        # paragraph chunks (~10-15 s each) also stay well under the speech encoder's ~43 s ceiling.
+        def _audio_inputs_for_chain(wav: np.ndarray):
+            a = processor(audios=wav, sampling_rate=sample_rate, return_tensors="pt")
+            return a["input_features"], a["attention_mask"]
 
         # =========================================================================
         # 3. S2TT — Speech-to-Text Translation (Hindi speech → English text)
         # =========================================================================
         _print_header(3, "Speech-to-Text Translation", "S2TT", tgt_translate, tgt_back_text)
         print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
-        s2tt_out = tt_model.generate(
-            input_features=torch_feats_to_ttnn(device, input_features),
-            attention_mask=torch_ids_to_ttnn(device, input_speech_attn),
-            generate_speech=False,
-            tgt_lang=tgt_back_text,
-            **gen_common,
-        )
-        if not isinstance(s2tt_out, TTSeamlessM4Tv2GreedySearchOutput):
-            raise TypeError(f"S2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(s2tt_out)}")
-        print(f"  Output text ({tgt_back_text}): {_decode(tokenizer, s2tt_out.sequences)}")
+        s2tt_chunks: list[str] = []
+        for para_wav in per_para_wavs:
+            in_feats, in_attn = _audio_inputs_for_chain(para_wav)
+            s2tt_out = tt_model.generate(
+                input_features=torch_feats_to_ttnn(device, in_feats),
+                attention_mask=torch_ids_to_ttnn(device, in_attn),
+                generate_speech=False,
+                tgt_lang=tgt_back_text,
+                **gen_common,
+            )
+            if not isinstance(s2tt_out, TTSeamlessM4Tv2GreedySearchOutput):
+                raise TypeError(f"S2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(s2tt_out)}")
+            s2tt_chunks.append(_decode(tokenizer, s2tt_out.sequences))
+            ttnn.deallocate(s2tt_out.sequences)
+        s2tt_joined = "\n\n".join(s2tt_chunks)
+        print(f"  Output text ({tgt_back_text}): {s2tt_joined}")
 
         tt_model.clear_runtime_program_cache()
         ttnn.synchronize_device(device)
@@ -399,19 +394,28 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         # =========================================================================
         _print_header(4, "Speech-to-Speech Translation", "S2ST", tgt_translate, tgt_speech_other)
         print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
-        s2st_out = tt_model.generate(
-            input_features=torch_feats_to_ttnn(device, input_features),
-            attention_mask=torch_ids_to_ttnn(device, input_speech_attn),
-            generate_speech=True,
-            return_intermediate_token_ids=True,
-            tgt_lang=tgt_speech_other,
-            speaker_id=0,
-            **gen_common,
-        )
-        if not isinstance(s2st_out, TTSeamlessM4Tv2GenerationOutput):
-            raise TypeError(f"S2ST expected TTSeamlessM4Tv2GenerationOutput, got {type(s2st_out)}")
-        print(f"  Intermediate text ({tgt_speech_other}): {_decode(tokenizer, s2st_out.sequences)}")
-        spanish_wav_np = _waveform_to_mono_fp32(s2st_out.waveform, s2st_out.waveform_lengths)
+        s2st_texts: list[str] = []
+        s2st_wavs: list[np.ndarray] = []
+        for idx, para_wav in enumerate(per_para_wavs):
+            in_feats, in_attn = _audio_inputs_for_chain(para_wav)
+            s2st_out = tt_model.generate(
+                input_features=torch_feats_to_ttnn(device, in_feats),
+                attention_mask=torch_ids_to_ttnn(device, in_attn),
+                generate_speech=True,
+                return_intermediate_token_ids=True,
+                tgt_lang=tgt_speech_other,
+                speaker_id=0,
+                **gen_common,
+            )
+            if not isinstance(s2st_out, TTSeamlessM4Tv2GenerationOutput):
+                raise TypeError(f"S2ST expected TTSeamlessM4Tv2GenerationOutput, got {type(s2st_out)}")
+            s2st_texts.append(_decode(tokenizer, s2st_out.sequences))
+            s2st_wavs.append(_waveform_to_mono_fp32(s2st_out.waveform, s2st_out.waveform_lengths))
+            if idx < len(per_para_wavs) - 1:
+                s2st_wavs.append(inter_para_silence)
+        s2st_text_joined = "\n\n".join(s2st_texts)
+        print(f"  Intermediate text ({tgt_speech_other}): {s2st_text_joined}")
+        spanish_wav_np = np.concatenate(s2st_wavs) if s2st_wavs else np.zeros(0, dtype=np.float32)
         _save_wav(S2ST_WAV, spanish_wav_np, sample_rate=sample_rate)
         print(f"  Output audio ({tgt_speech_other}, {sample_rate} Hz, {spanish_wav_np.size} samples)")
         print(f"  Saved to: {S2ST_WAV}")
@@ -428,16 +432,22 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         gen_common_asr = {**gen_common, "repetition_penalty": 1.0}
         _print_header(5, "Automatic Speech Recognition", "ASR", tgt_translate, tgt_asr)
         print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
-        asr_out = tt_model.generate(
-            input_features=torch_feats_to_ttnn(device, input_features),
-            attention_mask=torch_ids_to_ttnn(device, input_speech_attn),
-            generate_speech=False,
-            tgt_lang=tgt_asr,
-            **gen_common_asr,
-        )
-        if not isinstance(asr_out, TTSeamlessM4Tv2GreedySearchOutput):
-            raise TypeError(f"ASR expected TTSeamlessM4Tv2GreedySearchOutput, got {type(asr_out)}")
-        print(f"  Output text ({tgt_asr}): {_decode(tokenizer, asr_out.sequences)}")
+        asr_chunks: list[str] = []
+        for para_wav in per_para_wavs:
+            in_feats, in_attn = _audio_inputs_for_chain(para_wav)
+            asr_out = tt_model.generate(
+                input_features=torch_feats_to_ttnn(device, in_feats),
+                attention_mask=torch_ids_to_ttnn(device, in_attn),
+                generate_speech=False,
+                tgt_lang=tgt_asr,
+                **gen_common_asr,
+            )
+            if not isinstance(asr_out, TTSeamlessM4Tv2GreedySearchOutput):
+                raise TypeError(f"ASR expected TTSeamlessM4Tv2GreedySearchOutput, got {type(asr_out)}")
+            asr_chunks.append(_decode(tokenizer, asr_out.sequences))
+            ttnn.deallocate(asr_out.sequences)
+        asr_joined = "\n\n".join(asr_chunks)
+        print(f"  Output text ({tgt_asr}): {asr_joined}")
 
         print()
         print("=" * 78)
