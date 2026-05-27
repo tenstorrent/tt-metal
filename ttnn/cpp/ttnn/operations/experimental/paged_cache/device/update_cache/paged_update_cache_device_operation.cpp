@@ -243,6 +243,20 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
             "Only ROW_MAJOR sharding is supported");
+        // The program factory dispatches one user per core (cores[i] is assigned update_idxs[i]
+        // and reads a shard whose height is exactly one user's worth of kv-heads). A grid with
+        // num_cores != num_users splits or duplicates a user's data across cores and silently
+        // corrupts the cache (issue #44923). Canonical layout is a {num_users, 1} grid, but any
+        // grid with num_cores == num_users works.
+        const uint32_t num_users = input_tensor.padded_shape()[1];
+        const uint32_t input_num_shards = input_tensor.shard_spec().value().grid.num_cores();
+        TT_FATAL(
+            input_num_shards == num_users,
+            "Input tensor shard grid must have num_cores ({}) equal to the number of users / "
+            "batch ({}). The kernel dispatches one user per core; use a {{num_users, 1}} grid "
+            "(or any CoreRangeSet whose num_cores == num_users).",
+            input_num_shards,
+            num_users);
     }
 
     // Data type validation
