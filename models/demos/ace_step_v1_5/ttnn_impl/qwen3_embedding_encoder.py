@@ -600,7 +600,7 @@ class _TtQwen3EncoderLayer:
         if sdpa_d > self.dh:
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (b, H, s, self.dh))
 
-        # [b,H,s,Dh] -> [b,1,s,H*Dh] via fused nlp_concat_heads (single kernel vs permute+reshape)
+        # [b,H,s,Dh] -> [b,1,s,H*Dh] (permute + reshape view)
         ctx = ace_step_nlp_concat_heads(ttnn, ctx)
         ctx = self._l1_activation(ctx)
         lin_o = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=q_dim_o, out_dim=hsz)
