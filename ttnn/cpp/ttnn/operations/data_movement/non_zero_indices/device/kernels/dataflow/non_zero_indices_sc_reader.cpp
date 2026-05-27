@@ -12,7 +12,6 @@ void kernel_main() {
     uint32_t input_addr = get_arg_val<uint32_t>(0);
     uint32_t output_addr_0 = get_arg_val<uint32_t>(1);
     uint32_t output_addr_1 = get_arg_val<uint32_t>(2);
-    // arg[3] = aligned_output_bytes (number of bytes in the output indices page, same for both paths)
     uint32_t aligned_output_bytes = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
@@ -30,6 +29,7 @@ void kernel_main() {
     CircularBuffer output_cb_0(output_cb_index_0);
     CircularBuffer output_cb_1(output_cb_index_1);
 
+    // Reserve the full output_1 page up front — used as a write buffer for indices.
     output_cb_1.reserve_back(1);
     uint32_t indices_l1_addr = output_cb_1.get_write_ptr();
     volatile tt_l1_ptr uint32_t* indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(indices_l1_addr);
@@ -49,7 +49,8 @@ void kernel_main() {
     uint32_t logical_last_dim = get_arg_val<uint32_t>(7);
     uint32_t pages_per_bank = get_arg_val<uint32_t>(8);
     uint32_t grid_w = get_arg_val<uint32_t>(9);
-    // arg[10] = logical_N, arg[11] = logical_H (reserved for future multi-dim index output)
+    uint32_t logical_N = get_arg_val<uint32_t>(10);
+    uint32_t logical_H = get_arg_val<uint32_t>(11);
     uint32_t grid_h = get_arg_val<uint32_t>(12);
     uint32_t is_col_major = get_arg_val<uint32_t>(13);
 
@@ -64,20 +65,27 @@ void kernel_main() {
     const uint32_t input_ta_page_size = input_is_sharded ? (last_dim * NUM_BYTES) : aligned_page_size;
     const auto s0 = TensorAccessor(src0_args, input_addr, input_ta_page_size);
 
-    // Iterate in logical row-major order so that flat indices are emitted in strictly increasing
-    // order. For INTERLEAVED/HEIGHT_SHARDED (grid_w=1, pages_per_bank=1), this reduces to a
-    // simple sequential page scan. For WIDTH/BLOCK_SHARDED (grid_w>1), each logical row r is
-    // split across grid_w column shards whose TensorAccessor page_ids are interleaved in
-    // bank-major order — the formula below reconstructs the correct page_id for each shard piece.
+    // Iterate in logical row-major order so that (b,n,h,c) index tuples are emitted in
+    // strictly increasing order, matching torch.nonzero() output. Row r decomposes as:
+    //   h = r % logical_H, n = (r / logical_H) % logical_N, b = r / (logical_H * logical_N)
+    // For INTERLEAVED/HEIGHT_SHARDED (grid_w=1, pages_per_bank=1) this reduces to a simple
+    // sequential page scan. For WIDTH/BLOCK_SHARDED (grid_w>1), each logical row r is split
+    // across grid_w column shards whose TensorAccessor page_ids are interleaved in bank-major
+    // order — the formula below reconstructs the correct page_id for each shard piece.
     const uint32_t total_rows = num_pages / grid_w;
     for (uint32_t r = 0; r < total_rows; ++r) {
+        const uint32_t h = r % logical_H;
+        const uint32_t n = (r / logical_H) % logical_N;
+        const uint32_t b = r / (logical_H * logical_N);
+
         const uint32_t core_row_idx = r / pages_per_bank;
         const uint32_t bank_page_idx = r % pages_per_bank;
         for (uint32_t core_col = 0; core_col < grid_w; ++core_col) {
+            // ROW_MAJOR: banks are ordered left-to-right across rows (row * grid_w + col).
+            // COL_MAJOR: banks are ordered top-to-bottom across columns (col * grid_h + row).
             const uint32_t bank =
                 is_col_major ? (core_col * grid_h + core_row_idx) : (core_row_idx * grid_w + core_col);
             const uint32_t page_id = bank * pages_per_bank + bank_page_idx;
-            const uint32_t flat_start = r * logical_last_dim + core_col * last_dim;
 
             input_cb.reserve_back(1);
             noc.async_read(s0, input_cb, aligned_page_size, {.page_id = page_id}, {.offset_bytes = 0});
@@ -94,7 +102,10 @@ void kernel_main() {
 #endif
             for (uint32_t i = 0; i < last_dim; ++i) {
                 if (input_ptr[i] != 0) {
-                    indices_ptr[num_non_zero] = flat_start + i;
+                    indices_ptr[num_non_zero * 4 + 0] = b;
+                    indices_ptr[num_non_zero * 4 + 1] = n;
+                    indices_ptr[num_non_zero * 4 + 2] = h;
+                    indices_ptr[num_non_zero * 4 + 3] = core_col * last_dim + i;
                     ++num_non_zero;
                 }
             }
@@ -126,8 +137,8 @@ void kernel_main() {
     const uint32_t tiles_per_slice = num_tile_rows * num_tile_cols;
 
     // Iterate in logical row-major order: for each tile row th, iterate each logical row within
-    // it first, and for each logical row visit all tile columns tc.  This ensures flat indices are
-    // emitted in strictly increasing order, matching torch.nonzero() output.  The trade-off is
+    // it first, and for each logical row visit all tile columns tc.  This ensures (b,n,h,c) tuples
+    // are emitted in strictly increasing order, matching torch.nonzero() output.  The trade-off is
     // that each tile is loaded once per logical row it contributes (up to TILE_H re-reads per tile).
     for (uint32_t b = 0; b < B; ++b) {
         for (uint32_t n = 0; n < N; ++n) {
@@ -142,14 +153,16 @@ void kernel_main() {
                     }
 
                     for (uint32_t tc = 0; tc < num_tile_cols; ++tc) {
+                        // Determine the valid col range within this tile column.
                         const uint32_t abs_col_start = tc * TILE_W;
-                        const uint32_t valid_cols =
-                            (abs_col_start + TILE_W <= logical_C) ? TILE_W : (logical_C - abs_col_start);
+                        const uint32_t abs_col_end =
+                            (abs_col_start + TILE_W < logical_C) ? abs_col_start + TILE_W : logical_C;
 
-                        const uint32_t page_id = (b * N + n) * tiles_per_slice + th * num_tile_cols + tc;
+                        const uint32_t tile_page_id =
+                            b * (N * tiles_per_slice) + n * tiles_per_slice + th * num_tile_cols + tc;
 
                         input_cb.reserve_back(1);
-                        noc.async_read(s0, input_cb, tile_page_size, {.page_id = page_id}, {.offset_bytes = 0});
+                        noc.async_read(s0, input_cb, tile_page_size, {.page_id = tile_page_id}, {.offset_bytes = 0});
                         noc.async_read_barrier();
                         input_cb.push_back(1);
 
@@ -162,47 +175,48 @@ void kernel_main() {
 #elif NUM_BYTES == 1
                         volatile tt_l1_ptr char* tile_ptr = reinterpret_cast<volatile tt_l1_ptr char*>(tile_l1_addr);
 #endif
-                        // Face layout: 4 faces of 16×16 (TL=0, TR=1, BL=2, BR=3).
-                        const uint32_t face_row = tile_row / FACE_H;
-                        const uint32_t within_face_r = tile_row % FACE_H;
+                        // Map logical (tile_row, tile_col) → face-layout offset.
+                        // face 0=top-left, 1=top-right, 2=bottom-left, 3=bottom-right.
+                        for (uint32_t tile_col = 0; tile_col < TILE_W; ++tile_col) {
+                            const uint32_t abs_col = abs_col_start + tile_col;
+                            if (abs_col >= abs_col_end) {
+                                break;  // remaining cols in this tile column are W-padding
+                            }
 
-                        for (uint32_t hc = 0; hc < valid_cols; ++hc) {
-                            const uint32_t face_col = hc / FACE_W;
-                            const uint32_t within_face_c = hc % FACE_W;
-                            const uint32_t face_idx = face_row * 2 + face_col;
-                            const uint32_t mem_offset = face_idx * FACE_SIZE + within_face_r * FACE_W + within_face_c;
+                            // face_idx: bit 1 = row-half (0=top, 1=bottom), bit 0 = col-half (0=left, 1=right)
+                            const uint32_t face_idx = ((tile_row >> 4) << 1) | (tile_col >> 4);
+                            const uint32_t face_row = tile_row & (FACE_H - 1);
+                            const uint32_t face_col = tile_col & (FACE_W - 1);
+                            const uint32_t m = face_idx * FACE_SIZE + face_row * FACE_W + face_col;
 
-                            if (tile_ptr[mem_offset] != 0) {
-                                const uint32_t flat =
-                                    ((b * N + n) * logical_H + abs_row) * logical_C + abs_col_start + hc;
-                                indices_ptr[num_non_zero] = flat;
+                            if (tile_ptr[m] != 0) {
+                                indices_ptr[num_non_zero * 4 + 0] = b;
+                                indices_ptr[num_non_zero * 4 + 1] = n;
+                                indices_ptr[num_non_zero * 4 + 2] = abs_row;
+                                indices_ptr[num_non_zero * 4 + 3] = abs_col;
                                 ++num_non_zero;
                             }
                         }
+
                         input_cb.pop_front(1);
                     }
                 }
             }
         }
     }
-
 #endif  // INPUT_IS_TILE
 
+    // ── Write count (output_0) ────────────────────────────────────────────────
     output_cb_0.reserve_back(1);
-    uint32_t output_l1_addr = output_cb_0.get_write_ptr();
-    volatile tt_l1_ptr uint32_t* output_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_l1_addr);
-    output_addr_ptr[0] = num_non_zero;
-    // Use WRITE_PTR since data was written via get_write_ptr()
+    uint32_t count_l1_addr = output_cb_0.get_write_ptr();
+    volatile tt_l1_ptr uint32_t* count_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(count_l1_addr);
+    count_ptr[0] = num_non_zero;
     noc.async_write(
-        use<CircularBuffer::AddrSelector::WRITE_PTR>(output_cb_0),
-        out0,
-        32,
-        {.offset_bytes = 0},
-        {.page_id = 0});
+        use<CircularBuffer::AddrSelector::WRITE_PTR>(output_cb_0), out0, 32, {.offset_bytes = 0}, {.page_id = 0});
     noc.async_write_barrier();
     output_cb_0.push_back(1);
 
-    // Use WRITE_PTR since data was written via get_write_ptr()
+    // ── Write indices (output_1) ──────────────────────────────────────────────
     noc.async_write(
         use<CircularBuffer::AddrSelector::WRITE_PTR>(output_cb_1),
         out1,

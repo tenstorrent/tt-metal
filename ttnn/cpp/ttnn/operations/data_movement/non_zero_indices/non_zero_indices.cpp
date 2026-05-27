@@ -10,7 +10,8 @@ namespace ttnn {
 
 std::vector<Tensor> nonzero(
     const Tensor& input_tensor, const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
-    // Default to DRAM INTERLEAVED: output is variable-length, cannot be sharded.
+    // Default to DRAM INTERLEAVED — do NOT inherit the input memory config because the input
+    // may be sharded, and the output is always variable-length (precludes sharding).
     const tt::tt_metal::MemoryConfig default_mc{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     auto [output_0, output_1] = ttnn::prim::nonzero(input_tensor, memory_config.value_or(default_mc));

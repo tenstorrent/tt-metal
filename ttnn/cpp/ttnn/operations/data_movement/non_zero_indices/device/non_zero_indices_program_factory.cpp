@@ -30,12 +30,19 @@ uint32_t compute_geometry(
 
     if (!is_tile) {
         // Use the buffer's physical page size so TensorAccessor gets the correct page size for
-        // all layouts (interleaved, HEIGHT/WIDTH/BLOCK sharded).
+        // all layouts (interleaved, HEIGHT/WIDTH/BLOCK sharded). For HEIGHT_SHARDED this equals
+        // last_dim * elem_size; for WIDTH/BLOCK_SHARDED it equals shard_width * elem_size.
         const uint32_t phys_page_bytes = input.buffer()->page_size();
         const uint32_t elements_per_page = phys_page_bytes / input.element_size();
+        // Use num_dev_pages() directly: avoids recomputing from volume/page_size and correctly
+        // handles any rounding the allocator may apply.
         const uint32_t num_pages = input.buffer()->num_dev_pages();
+        // Use the buffer's allocator-aligned page size for the NOC transfer and interleaved
+        // TensorAccessor stride, matching the buffer's actual per-page footprint in DRAM/L1.
         const uint32_t aligned_page_size = input.buffer()->aligned_page_size();
 
+        // For WIDTH/BLOCK_SHARDED, TensorAccessor visits pages bank-by-bank, which differs from
+        // logical row-major order. The kernel needs these three values to reconstruct flat_start.
         const uint32_t logical_last_dim = lshape[3];
         const uint32_t grid_w = (elements_per_page < logical_last_dim) ? (logical_last_dim / elements_per_page) : 1;
 
@@ -43,11 +50,14 @@ uint32_t compute_geometry(
         uint32_t is_col_major = 0;
         const auto mem_layout = input.memory_config().memory_layout();
         if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED || mem_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            // shard_spec.shape[0] is shard height = number of rows per core; each ROW_MAJOR row is one page.
             const auto& shard_spec = input.memory_config().shard_spec().value();
             pages_per_bank = shard_spec.shape[0];
             is_col_major = (shard_spec.orientation == ShardOrientation::COL_MAJOR) ? 1u : 0u;
         }
-
+        // grid_h = number of core rows in the shard grid.
+        // For COL_MAJOR sharding the bank formula is: core_col * grid_h + core_row_idx.
+        // For non-sharded / HEIGHT_SHARDED grid_w=1 so grid_h is never used in the hot path.
         const uint32_t total_rows = num_pages / grid_w;
         const uint32_t grid_h = (pages_per_bank > 0) ? (total_rows / pages_per_bank) : 1;
 
@@ -59,24 +69,23 @@ uint32_t compute_geometry(
             logical_last_dim,
             pages_per_bank,
             grid_w,
-            lshape[1],  // logical_N: N-dimension for (b,n,h,c) index decomposition
-            lshape[2],  // logical_H: H-dimension for (b,n,h,c) index decomposition
-            grid_h,     // number of core rows (needed for COL_MAJOR bank ordering)
-            is_col_major};
+            lshape[1],      // logical_N: N-dimension for (b,n,h,c) index decomposition
+            lshape[2],      // logical_H: H-dimension for (b,n,h,c) index decomposition
+            grid_h,         // number of core rows (needed for COL_MAJOR bank ordering)
+            is_col_major};  // 1 if shard orientation is COL_MAJOR, 0 otherwise
         return aligned_page_size;
-    } else {
-        const uint32_t tile_page_size = input.buffer()->aligned_page_size();
-
-        const uint32_t B = lshape[0];
-        const uint32_t N = lshape[1];
-        const uint32_t logical_H = lshape[2];
-        const uint32_t logical_C = lshape[3];
-        const uint32_t num_tile_rows = pshape[2] / TILE_H;
-        const uint32_t num_tile_cols = pshape[3] / TILE_W;
-
-        geom_args = {aligned_output_bytes, B, N, logical_H, logical_C, num_tile_rows, num_tile_cols, tile_page_size};
-        return tile_page_size;
     }
+    const uint32_t tile_page_size = input.buffer()->aligned_page_size();
+
+    const uint32_t B = lshape[0];
+    const uint32_t N = lshape[1];
+    const uint32_t logical_H = lshape[2];
+    const uint32_t logical_C = lshape[3];
+    const uint32_t num_tile_rows = pshape[2] / TILE_H;
+    const uint32_t num_tile_cols = pshape[3] / TILE_W;
+
+    geom_args = {aligned_output_bytes, B, N, logical_H, logical_C, num_tile_rows, num_tile_cols, tile_page_size};
+    return tile_page_size;
 }
 
 }  // namespace
@@ -105,7 +114,7 @@ ProgramDescriptor NonZeroIndicesProgramFactory::create_descriptor(
 
     ProgramDescriptor desc;
 
-    // Input CB: single-buffered (barrier after each read; no double-buffering benefit)
+    // Input CB: single-buffered (barrier is issued after each read, no overlap benefit from double-buffering)
     desc.cbs.push_back(CBDescriptor{
         .total_size = input_page_size,
         .core_ranges = core_ranges,
@@ -127,7 +136,7 @@ ProgramDescriptor NonZeroIndicesProgramFactory::create_descriptor(
         }}},
     });
 
-    // Output CB 1: indices staging buffer (worst case: all elements non-zero → volume * 4 * 4 bytes)
+    // Output CB 1: indices staging buffer (worst case: all elements non-zero → volume × 4 × 4 bytes)
     desc.cbs.push_back(CBDescriptor{
         .total_size = 2 * aligned_output_bytes,
         .core_ranges = core_ranges,
