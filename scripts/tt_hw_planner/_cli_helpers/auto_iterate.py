@@ -2136,6 +2136,7 @@ def _run_auto_iterate_loop(
             not skip_agent_patch
             and op_synth_unchanged
             and iter_target_component in op_synth_unchanged
+            and not stub_changed_any
             and it < max_iters
         ):
             banner(
