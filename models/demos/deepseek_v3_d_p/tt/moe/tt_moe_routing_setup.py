@@ -251,19 +251,15 @@ class TtMoERoutingSetup(LightweightModule):
             ttnn_top_k_experts_indices, self.experts_in_dispatch_group, num_routed_experts, num_experts_per_tok
         )
 
-        # offset_cumsum outputs (global_dispatch_offsets, total_counts_per_expert,
-        # expert_region_offsets) are placed in DRAM, NOT L1. The prior L1
-        # placement conflicts with the unified routed-expert FFN's static CB
-        # region on the 256-expert configuration (L1 buffer sitting at an
-        # address the FFN program's CB allocator expects to be free), causing
-        # an L1-overflow at program create. DRAM has plenty of room for these
-        # tiny UINT32 vectors and the downstream ops read them device-side
-        # via DRAM access — no perf delta from the move.
+        # offset_cumsum outputs are tiny UINT32 vectors placed in DRAM
+        # (downstream ops read device-side, no perf impact). L1 placement
+        # clashes with the unified routed-expert FFN's static CB region on
+        # the 256-expert / 32-per-chip configuration.
         #
         # Contract: expert_region_offsets entries are TOKEN rows, tile-aligned
         # (multiples of TILE_HEIGHT=32). The unified routed-expert FFN's
-        # reader/writer kernels divide by 32 to derive start_tile_row; the
-        # kernels ASSERT this alignment.
+        # reader/writer kernels divide by 32 to derive start_tile_row and
+        # ASSERT this alignment.
         (
             global_dispatch_offsets,
             total_counts_per_expert,
