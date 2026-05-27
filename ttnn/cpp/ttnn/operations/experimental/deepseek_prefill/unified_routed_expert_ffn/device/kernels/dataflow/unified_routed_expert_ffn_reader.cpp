@@ -76,13 +76,9 @@ void kernel_main() {
     const uint32_t act_ready_sem_addr = get_semaphore(act_ready_sem_id);
     const uint32_t act_valid_sem_addr = get_semaphore(act_valid_sem_id);
 
-    // local_expert_id: per-core runtime arg so 32 experts share one cached
-    // program. Kernel indexes idx_table[local_expert_id] for global expert id.
-    const uint32_t local_expert_id = get_arg_val<uint32_t>(31);
-
-    // M-row NoC coord table: GRID_X (x, y) pairs starting at runtime arg 32.
+    // M-row NoC coord table: GRID_X (x, y) pairs starting at runtime arg 31.
     // Used to resolve the sender's NoC addr per phase-4 K-block kb (= gx).
-    constexpr uint32_t M_ROW_NOC_RT_OFFSET = 32;
+    constexpr uint32_t M_ROW_NOC_RT_OFFSET = 31;
 
     // -------------------------- compile-time args -------------------------
     constexpr uint32_t cb_in0_x = get_compile_time_arg_val(0);
@@ -93,21 +89,22 @@ void kernel_main() {
     constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(5);
     constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(6);
 
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(7);
-    constexpr uint32_t per_core_N_gu = get_compile_time_arg_val(8);
-    constexpr uint32_t per_core_N_d = get_compile_time_arg_val(9);
-    constexpr uint32_t K_gate_tiles = get_compile_time_arg_val(10);
-    constexpr uint32_t K_down_tiles = get_compile_time_arg_val(11);
-    constexpr uint32_t in0_block_w_gu = get_compile_time_arg_val(12);
-    constexpr uint32_t in0_block_w_d = get_compile_time_arg_val(13);
-    constexpr uint32_t N_gate_tiles_full = get_compile_time_arg_val(14);
-    constexpr uint32_t N_down_tiles_full = get_compile_time_arg_val(15);
-    constexpr uint32_t M_tiles_full = get_compile_time_arg_val(16);
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(17);
-    constexpr uint32_t chunk_M_tiles = get_compile_time_arg_val(18);
-    constexpr uint32_t cb_activated = get_compile_time_arg_val(19);
-    constexpr uint32_t GRID_X_NOC = get_compile_time_arg_val(20);  // M-row mcast group size
-    constexpr uint32_t K_down_tiles_padded = get_compile_time_arg_val(21);
+    constexpr uint32_t local_expert_id = get_compile_time_arg_val(7);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
+    constexpr uint32_t per_core_N_gu = get_compile_time_arg_val(9);
+    constexpr uint32_t per_core_N_d = get_compile_time_arg_val(10);
+    constexpr uint32_t K_gate_tiles = get_compile_time_arg_val(11);
+    constexpr uint32_t K_down_tiles = get_compile_time_arg_val(12);
+    constexpr uint32_t in0_block_w_gu = get_compile_time_arg_val(13);
+    constexpr uint32_t in0_block_w_d = get_compile_time_arg_val(14);
+    constexpr uint32_t N_gate_tiles_full = get_compile_time_arg_val(15);
+    constexpr uint32_t N_down_tiles_full = get_compile_time_arg_val(16);
+    constexpr uint32_t M_tiles_full = get_compile_time_arg_val(17);
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(18);
+    constexpr uint32_t chunk_M_tiles = get_compile_time_arg_val(19);
+    constexpr uint32_t cb_activated = get_compile_time_arg_val(20);
+    constexpr uint32_t GRID_X_NOC = get_compile_time_arg_val(21);  // M-row mcast group size
+    constexpr uint32_t K_down_tiles_padded = get_compile_time_arg_val(22);
 
     constexpr uint32_t g_in0_block_num_tiles = per_core_M * in0_block_w_gu;
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
@@ -116,7 +113,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 22;
+    constexpr uint32_t x_accessor_offset = 23;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
 

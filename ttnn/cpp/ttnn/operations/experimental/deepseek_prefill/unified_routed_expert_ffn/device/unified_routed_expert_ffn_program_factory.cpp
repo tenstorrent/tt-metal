@@ -309,6 +309,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         CB_IN0_DOWN_FULL,
         CB_COUNTS_SCRATCH,
         CB_IDX_SCRATCH,
+        op.local_expert_id,
         per_core_M,
         per_core_N_gu,
         per_core_N_d,
@@ -362,13 +363,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // device-side count read: writer also waits on the reader's push
         // and bounds its cb_out drain loop by effective_chunks so it does
         // not wait forever on chunks compute never pushes.
-        CB_COUNTS_SCRATCH,  // 13
-        CB_IDX_SCRATCH,     // 14
+        CB_COUNTS_SCRATCH,   // 13
+        CB_IDX_SCRATCH,      // 14
+        op.local_expert_id,  // 15
         // M_tiles_full: needed for the writer to skip OOB output writes when
         // M_tiles_full doesn't divide chunk_M_tiles. The last chunk runs
         // chunk_M_tiles rows per core, of which only those < M_tiles_full
         // correspond to real output rows in the tensor.
-        M_tiles_full,  // 15
+        M_tiles_full,  // 16
     };
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
 
@@ -418,10 +420,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         d_out_block_num_tiles,
         // chunk loop control
         num_chunks,
-        // device-side count read: chunk_M_tiles (in tiles) lets compute
-        // convert count -> effective_chunks and bound the loop. The
-        // local_expert_id index is supplied as a runtime arg so all 32
-        // per-chip experts share one cached compute program.
+        // device-side count read: local_expert_id + chunk_M_tiles (in tiles)
+        // let compute convert count -> effective_chunks and bound the loop.
+        op.local_expert_id,
         chunk_M_tiles,
     };
     std::unordered_map<std::string, uint32_t> compute_named_args = {
@@ -525,8 +526,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         //  19..28: in0 multicast args
         //  29: act_ready_sem_id
         //  30: act_valid_sem_id
-        //  31: local_expert_id
-        //  32+: M-row NoC coord table (GRID_X pairs of x, y)
+        //  31+: M-row NoC coord table (GRID_X pairs of x, y)
         std::vector<uint32_t> reader_args = {
             x_buffer->address(),
             gate_buffer->address(),
@@ -559,7 +559,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             in0_sender_ny,
             act_ready_sem_id,
             act_valid_sem_id,
-            op.local_expert_id,
         };
         // M-row NoC coord table: for our M-row (gy=my_mt), the NoC (x, y) of
         // each of the GRID_X cores (gx=0..GRID_X-1). Reader uses this per
@@ -576,18 +575,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         //   0: output_addr
         //   1: my_mt
         //   2: my_nt_d
-        //   3: local_expert_id
         std::vector<uint32_t> writer_args = {
             out_buffer->address(),
             my_mt,
             my_nt_d,
-            op.local_expert_id,
         };
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
-
-        // Compute runtime arg layout (must match fused_swiglu.cpp):
-        //   0: local_expert_id
-        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, {op.local_expert_id});
     }
 
     return cached_program_t{
@@ -601,13 +594,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
 
 void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const UnifiedRoutedExpertFfnParams& op,
+    const UnifiedRoutedExpertFfnParams& /*op*/,
     const UnifiedRoutedExpertFfnInputs& t,
     Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     const auto reader_id = cached_program.shared_variables.reader_kernel_id;
     const auto writer_id = cached_program.shared_variables.writer_kernel_id;
-    const auto compute_id = cached_program.shared_variables.compute_kernel_id;
     const auto& cores = cached_program.shared_variables.cores;
 
     const uint32_t x_addr = t.x.buffer()->address();
@@ -617,10 +609,6 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
     const uint32_t counts_addr = t.counts.buffer()->address();
     const uint32_t idx_addr = t.global_expert_idx_table.buffer()->address();
     const uint32_t out_addr = tensor_return_value.buffer()->address();
-    // local_expert_id is a per-core runtime arg (not an attribute), so the
-    // same cached program serves every expert id; we have to re-write it
-    // on every program-cache hit.
-    const uint32_t local_expert_id = op.local_expert_id;
 
     for (const auto& core : cores) {
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, reader_id, core);
@@ -630,18 +618,9 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
         reader_args[3] = down_addr;
         reader_args[4] = counts_addr;
         reader_args[5] = idx_addr;
-        // index 31 = local_expert_id (must stay in sync with create() layout
-        // and consumed by unified_routed_expert_ffn_reader.cpp).
-        reader_args[31] = local_expert_id;
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_id, core);
         writer_args[0] = out_addr;
-        // index 3 = local_expert_id (unified_routed_expert_ffn_writer.cpp).
-        writer_args[3] = local_expert_id;
-
-        auto& compute_args = tt::tt_metal::GetRuntimeArgs(program, compute_id, core);
-        // index 0 = local_expert_id (fused_swiglu.cpp).
-        compute_args[0] = local_expert_id;
     }
 }
 
