@@ -79,6 +79,38 @@ def voxtral_text_high_accuracy_optimizations(model_args):
     return DecodersPrecision(model_args.n_layers, model_args.model_name, opt)
 
 
+def voxtral_text_hf_matched_optimizations(model_args):
+    """BFP8 weights + HiFi2 matmuls + HiFi4_FP32 SDPA — matches HF bf16 compute path end-to-end.
+
+    BFP8 + HiFi2 approximates HF's bf16×bf16 matmul precision; HiFi4_FP32 for SDPA
+    matches HF's fp32 softmax promotion (dst_full_sync_en=False). This combination
+    minimises hidden-state divergence across the autoregressive decode loop for best
+    end-to-end waveform PCC against the CPU reference.
+    """
+    opt = ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+                TensorGroup.WQKV: PrecisionSetting.BFP8,
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                TensorGroup.WO: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
+                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4_FP32,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4_FP32,
+            },
+        }
+    )
+    return DecodersPrecision(model_args.n_layers, model_args.model_name, opt)
+
+
 # Backward-compatible alias used by text-model PCC tests.
 voxtral_text_logits_pcc_optimizations = voxtral_text_high_accuracy_optimizations
 
