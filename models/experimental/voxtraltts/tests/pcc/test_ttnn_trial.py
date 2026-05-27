@@ -35,7 +35,7 @@ try:
 except ModuleNotFoundError:
     use_signpost = False
 
-FINAL_WAVEFORM_PCC = 0.93
+FINAL_WAVEFORM_PCC = 0.99
 
 _DEMO_TEXT = (
     "Voxtral is a four billion parameter open weight text to speech model "

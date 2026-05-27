@@ -190,6 +190,25 @@ class VoxtralTTSPipeline:
         )
         return emb.squeeze(0).to(dtype=torch.bfloat16)
 
+    def _audio_codes_to_mm_embed_tt(self, audio_codes_1_37: torch.Tensor) -> ttnn.Tensor:
+        """``[1, 37]`` codes → ``[1, 1, 1, dim]`` MM embedding on device (ttnn tile, DRAM).
+
+        Converts the CPU embedding from ``_audio_codes_to_mm_embed`` into a ttnn tensor
+        ready for ``text.decode_step_from_embeds_tt`` (which handles memory-config placement).
+        """
+        emb = self._audio_codes_to_mm_embed(audio_codes_1_37)
+        dim = int(emb.shape[0])
+        x_4d = emb.reshape(1, 1, 1, dim).contiguous()
+        mesh_device = self.text.inner.mesh_device
+        return ttnn.from_torch(
+            x_4d,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
     # @torch.no_grad()
     # def forward(
     #     self,
