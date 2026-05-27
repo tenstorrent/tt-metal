@@ -27,6 +27,8 @@ using namespace ckernel;
 #endif
 #endif
 
+#include "api/debug/dprint.h"
+
 namespace deepseek_b1_ops {
 
 // ============================================================================
@@ -151,6 +153,16 @@ struct MatmulExpertCompressedSRAM {
             constexpr uint32_t num_tiles_k = CTArgs::num_tiles_k;
             constexpr uint32_t out_w = CTArgs::out_w;
             constexpr uint32_t fmt_l1_addr_base = CTArgs::fmt_l1_addr;
+            // BSPM-SRAM diag: print the per-core CT arg values the kernel sees.
+            // The DPRINT runtime auto-tags output with (device, core), so we
+            // just emit the values. Compare against host-side
+            // sram_*_l1_addr_per_device dump — mismatch means
+            // PerCoreCompileTimeDescriptor collapsed to a uniform default
+            // instead of routing per-(device, core) values.
+            UNPACK(({
+                DPRINT << "[SRAM-CT-arg cb_in1=" << cb_in1 << "] fmt=0x" << HEX() << fmt_l1_addr_base << " base=0x"
+                       << HEX() << CTArgs::sram_base_addrs_l1_addr << ENDL();
+            }));
             // k_for_mm: K tiles for the matmul loop (may be < num_tiles_k when K-sliced).
             // Defaults to num_tiles_k when sram_k_per_core is not set by the caller.
             constexpr uint32_t k_for_mm = CTArgs::sram_k_per_core;

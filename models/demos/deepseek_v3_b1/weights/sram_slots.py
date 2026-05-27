@@ -29,7 +29,6 @@ This module ties the two together with the on-device allocator.
 
 from __future__ import annotations
 
-import hashlib
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -40,20 +39,13 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
-from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, SourceTensorSelection, SramCompressedTensorTarget
-from models.demos.deepseek_v3_b1.weights.cache.sram_compressed_cache import (
-    assigner_fingerprint,
-    get_or_create_sram_compressed_expert,
-    to_canonical_mesh_mapper,
-)
+from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
+from models.demos.deepseek_v3_b1.weights.cache import CacheConfig
 from models.demos.deepseek_v3_b1.weights.overlap.spec import _core_list
-from models.demos.deepseek_v3_b1.weights.transforms.moe import preprocess_gate_up, shared_down_torch_for_cache
 from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import (
     SramExpertCoreGrids,
-    _MemoryConfigSpec,
     _predict_expert_per_core_bytes,
-    sram_projection_specs,
+    reduce_per_device_max,
 )
 
 
@@ -244,158 +236,6 @@ def per_core_l1_lowest_addr_on_cores(
 # ---------------------------------------------------------------------------
 
 
-def _route_l1_compressed_tensor(
-    weight: torch.Tensor,
-    *,
-    memory_config,
-    per_core_allocation: bool,
-    mesh_mapper_config,
-    assigner: CompressedTensorAssigner | None = None,
-    assignment: np.ndarray | None = None,
-    device,
-    tile_hw: int,
-    cache_config: CacheConfig | None,
-    sram_cache_target_name: str | None,
-    sram_cache_source_keys: tuple[str, ...] | None,
-) -> CompressedTensor:
-    """Build one per-core L1 CompressedTensor, optionally routing through the SRAM disk cache.
-
-    When ``cache_config`` is a :class:`TensorCache`-backed config and a
-    cache target name + source keys are provided, the call is dispatched to
-    :func:`get_or_create_sram_compressed_expert` — warm runs hydrate the
-    CompressedTensor from a content-addressed object on disk and skip the
-    BFP pack pipeline entirely.  Otherwise, falls back to the legacy direct
-    construction (``CompressedTensor.from_torch`` / ``from_bspm``) so
-    behaviour is unchanged when no cache is wired in.
-    """
-    assert (assigner is None) != (assignment is None), "Provide exactly one of assigner / assignment"
-    use_cache = cache_config is not None and sram_cache_target_name is not None and sram_cache_source_keys is not None
-    if not use_cache:
-        # Direct cold construction — preserves pre-cache behaviour for
-        # callers that don't wire in a CacheConfig (unit tests, ephemeral
-        # paths).  Mirrors the original ``_build_l1_compressed_tensor*``
-        # branches; the BSPM path here historically does **not** request
-        # ``per_core_allocation`` / ``mesh_mapper_config`` (TP=1 only),
-        # so we keep that quirk here.
-        if assigner is not None:
-            return CompressedTensor.from_torch(
-                weight.float(),
-                assigner,
-                device=device,
-                memory_config=memory_config,
-                per_core_allocation=per_core_allocation,
-                mesh_mapper_config=mesh_mapper_config,
-            )
-        return CompressedTensor.from_bspm(
-            weight.float(),
-            assignment,
-            device=device,
-            memory_config=memory_config,
-        )
-
-    target = SramCompressedTensorTarget(
-        name=sram_cache_target_name,
-        tensor_shape=tuple(int(d) for d in weight.shape),
-        tile_hw=tile_hw,
-        memory_config=memory_config,
-        per_core_allocation=per_core_allocation,
-        mesh_mapper_config=to_canonical_mesh_mapper(mesh_mapper_config),
-        assigner_fingerprint=assigner_fingerprint(assigner) if assigner is not None else "",
-        assignment_hash=hashlib.sha256(np.ascontiguousarray(assignment).tobytes()).hexdigest()[:16]
-        if assignment is not None
-        else "",
-    )
-    fp = cache_config.context.fingerprint(
-        source=SourceTensorSelection(names=tuple(sram_cache_source_keys)),
-        target=target,
-    )
-    return get_or_create_sram_compressed_expert(
-        cache_config.cache,
-        fp,
-        device,
-        weight_provider=lambda w=weight: w,
-        assigner=assigner,
-        assignment=assignment,
-        memory_config=memory_config,
-        per_core_allocation=per_core_allocation,
-        mesh_mapper_config=mesh_mapper_config,
-        tile_hw=tile_hw,
-    )
-
-
-def _build_l1_compressed_tensor(
-    weight: torch.Tensor,
-    spec: _MemoryConfigSpec,
-    *,
-    assigner: CompressedTensorAssigner | None = None,
-    assignment: np.ndarray | None = None,
-    device=None,
-    mesh_mapper_config=None,
-    tile_hw: int = 32,
-    cache_config: CacheConfig | None = None,
-    sram_cache_target_name: str | None = None,
-    sram_cache_source_keys: tuple[str, ...] | None = None,
-) -> CompressedTensor:
-    """Create a single per-core L1 CompressedTensor for one expert projection.
-
-    The ``(layout, core_range_set, shard_shape)`` decision lives on
-    ``spec``: WIDTH_SHARDED with auto-derived ``(K, N // num_cores)`` for
-    the TP=1 fallback (legacy gate/up/down), HEIGHT_SHARDED with explicit
-    ``(sh, sw)`` for the shared-expert TP>1 gate/up after
-    :func:`preprocess_gate_up`, and WIDTH_SHARDED with explicit
-    ``(K_per_dev, N_per_core)`` for the shared-expert TP>1 down after
-    :func:`shared_down_torch_for_cache`.  Exactly one of *assigner* or
-    *assignment* must be provided.
-
-    Args:
-        weight: Float weight tensor.  Shape varies with ``spec``:
-                * WIDTH_SHARDED auto-derive (``shard_shape=None``):
-                  ``(K, N)`` (2D) or
-                  ``(mesh_rows, mesh_cols, K_per_device, N_per_device)``
-                  (4D, mesh-pre-sharded).
-                * Explicit shard shape: 2D per-device tensor whose dims
-                  match the upstream preprocess (e.g. ``(num_cores * sh,
-                  sw)`` after :func:`preprocess_gate_up`, or
-                  ``(K_per_dev, N_down)`` after
-                  :func:`shared_down_torch_for_cache`).
-        spec: ``_MemoryConfigSpec`` describing the on-device layout.
-        assigner: ``CompressedTensorAssigner`` (mutually exclusive with *assignment*).
-        assignment: Pre-computed BSPM tile-level assignment array (mutually
-                    exclusive with *assigner*).
-        device: Device / mesh to allocate on (``None`` keeps host-only).
-        mesh_mapper_config: ``ttnn.MeshMapperConfig`` for multi-device.
-                            Only honoured on the assigner path; the BSPM
-                            path historically does not request multi-device
-                            sharding (TP=1 only).
-        tile_hw: Tile dimension for alignment check (default 32).
-    """
-    assert (assigner is None) != (assignment is None), "Provide exactly one of assigner or assignment"
-
-    mem_config = spec.materialize(weight, tile_hw=tile_hw)
-
-    return _route_l1_compressed_tensor(
-        weight,
-        memory_config=mem_config,
-        # per_core_allocation is on for the assigner path (mixed-precision
-        # needs per-core sizing) and off for the BSPM path (legacy
-        # single-device behaviour).
-        per_core_allocation=(assigner is not None),
-        mesh_mapper_config=mesh_mapper_config if assigner is not None else None,
-        assigner=assigner,
-        assignment=assignment,
-        device=device,
-        tile_hw=tile_hw,
-        cache_config=cache_config,
-        sram_cache_target_name=sram_cache_target_name,
-        sram_cache_source_keys=sram_cache_source_keys,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Address-based trim helpers
-# ---------------------------------------------------------------------------
-
-
 def _compute_sram_trim_budget(
     device,
     persistent_tensors: list,
@@ -467,9 +307,171 @@ def _refresh_lowest_addr_from_alloc(
                 curr_addr[c_xy] = new_addr
 
 
+def build_sram_routed_proj_cts(
+    mesh_device,
+    sram_expert_ids: list,
+    full_torch_weights_per_device: dict,
+    core_grid: ttnn.CoreRangeSet,
+    num_tiles_k: int,
+    n_parallel: int,
+    per_core_N: int,
+    *,
+    tile_w: int = 32,
+    assignment_per_expert: dict | None = None,
+) -> list[CompressedTensor]:
+    """Batch wrapper around :func:`build_sram_routed_proj_ct` for a list of experts.
+
+    Each slot's CT is built via :func:`build_sram_routed_proj_ct` with
+    ``is_cb_backing_expert=(slot_idx == 0)``.  When ``assignment_per_expert`` is
+    ``None``, every (expert, device) gets a uniform-BFP4 constant assignment
+    (BFP4 = index 1 in COMPRESSED_FORMATS); otherwise the per-(expert, device)
+    arrays come from the caller (e.g. BSPM file).
+    """
+    moe_tp = mesh_device.shape[0] * mesh_device.shape[1]
+    cts: list[CompressedTensor] = []
+    for slot_idx, eid in enumerate(sram_expert_ids):
+        weights = full_torch_weights_per_device[eid]
+        if assignment_per_expert is None:
+            per_dev_asgn = [
+                np.full((weights[d].shape[0] // tile_w, weights[d].shape[1] // tile_w), 1, dtype=np.int8)
+                for d in range(moe_tp)
+            ]
+        else:
+            per_dev_asgn = assignment_per_expert[eid]
+        cts.append(
+            build_sram_routed_proj_ct(
+                mesh_device=mesh_device,
+                full_torch_weight_per_device=weights,
+                core_grid=core_grid,
+                num_tiles_k=num_tiles_k,
+                n_parallel=n_parallel,
+                per_core_N=per_core_N,
+                is_cb_backing_expert=(slot_idx == 0),
+                bspm_assignment_per_device=per_dev_asgn,
+                tile_w=tile_w,
+            )
+        )
+    return cts
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
+
+
+def build_sram_routed_proj_ct(
+    *,
+    mesh_device,
+    full_torch_weight_per_device: list[torch.Tensor],
+    core_grid: ttnn.CoreRangeSet,
+    num_tiles_k: int,
+    n_parallel: int,
+    per_core_N: int,
+    is_cb_backing_expert: bool,
+    bspm_assignment_per_device: list[np.ndarray],
+    tile_w: int = 32,
+) -> CompressedTensor:
+    """Build one per-expert, per-projection SRAM L1 CompressedTensor.
+
+    Assignment-based: caller provides per-(device) tile assignment.  For
+    uniform-BFP4 the assignment is a constant array filled with the BFP4 format
+    index (= 1 in COMPRESSED_FORMATS); for BSPM the assignment comes from a
+    .bspm file.
+
+    Layout decision:
+      * ``k_parallel_factor = num_cores // n_parallel == 1`` → WIDTH_SHARDED
+        (down projection at TP8).
+      * else → HEIGHT_SHARDED with per-core shards stacked along H in row-major
+        ``(k_idx, n_idx)`` order (gate/up at TP8).
+    """
+    assert bspm_assignment_per_device is not None, "assignment required"
+    num_sram_cores = len(ttnn.corerange_to_cores(core_grid))
+    assert num_sram_cores % n_parallel == 0
+    mesh_shape = mesh_device.shape
+    mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
+    num_devices = mesh_rows * mesh_cols
+    assert len(full_torch_weight_per_device) == num_devices
+
+    k_parallel_factor = num_sram_cores // n_parallel
+    is_width_sharded = k_parallel_factor == 1
+
+    if is_width_sharded:
+        sram_b_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                core_grid,
+                [num_tiles_k * tile_w, per_core_N * tile_w],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+    else:
+        sram_b_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                core_grid,
+                [num_tiles_k * tile_w, per_core_N * tile_w],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+    per_dev_shards = []
+    for dev_idx in range(num_devices):
+        b_full = full_torch_weight_per_device[dev_idx]
+        if is_width_sharded:
+            per_dev_shards.append(b_full)
+        else:
+            shards = []
+            for i in range(num_sram_cores):
+                k_idx = i // n_parallel
+                n_idx = i % n_parallel
+                k_start = k_idx * num_tiles_k * tile_w
+                k_end = k_start + num_tiles_k * tile_w
+                n_start = n_idx * per_core_N * tile_w
+                n_end = n_start + per_core_N * tile_w
+                shards.append(b_full[k_start:k_end, n_start:n_end])
+            per_dev_shards.append(torch.cat(shards, dim=0))
+
+    if is_width_sharded:
+        b_4d = torch.stack(per_dev_shards).reshape(
+            mesh_rows, mesh_cols, num_tiles_k * tile_w, num_sram_cores * per_core_N * tile_w
+        )
+    else:
+        b_4d = torch.stack(per_dev_shards).reshape(
+            mesh_rows, mesh_cols, num_sram_cores * num_tiles_k * tile_w, per_core_N * tile_w
+        )
+
+    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)])
+    _bfp4_tile_size = 576
+    min_shard_bytes = _bfp4_tile_size if is_cb_backing_expert else 1
+
+    # Shuffle per-device assignment to match the per-core layout above.
+    shuffled = []
+    for asg_per_dev in bspm_assignment_per_device:
+        if is_width_sharded:
+            shuffled.append(asg_per_dev)
+        else:
+            parts = []
+            for i in range(num_sram_cores):
+                k_idx = i // n_parallel
+                n_idx = i % n_parallel
+                k_start = k_idx * num_tiles_k
+                k_end = k_start + num_tiles_k
+                n_start = n_idx * per_core_N
+                n_end = n_start + per_core_N
+                parts.append(asg_per_dev[k_start:k_end, n_start:n_end])
+            shuffled.append(np.concatenate(parts, axis=0))
+    full_assignment = np.concatenate(shuffled, axis=0)
+    return CompressedTensor(
+        b_4d,
+        full_assignment,
+        device=mesh_device,
+        memory_config=sram_b_mem,
+        per_core_allocation=True,
+        mesh_mapper_config=mesh_mapper_config,
+        min_shard_bytes=min_shard_bytes,
+    )
 
 
 def _key(layer_idx: int, suffix: str) -> str:
@@ -496,113 +498,17 @@ def _shard_for_mesh(w: torch.Tensor, mesh_rows: int, mesh_cols: int) -> torch.Te
     return w.reshape(mesh_rows, K // mesh_rows, mesh_cols, N // mesh_cols).permute(0, 2, 1, 3).contiguous()
 
 
-@dataclass(frozen=True)
-class _ProjBuildPlan:
-    """Per-projection build inputs for one expert in ``prepare_compressed_sram_slots``.
-
-    Bundles the ``(weight, spec, cache identity)`` tuple driving one
-    :func:`_build_l1_compressed_tensor` call.  :func:`_expert_build_plans`
-    returns three plans per expert (gate, up, down), hiding the TP>1 vs TP=1
-    layout split behind a single uniform call shape — the loop body in
-    :func:`prepare_compressed_sram_slots` no longer has to fork on layout.
-
-    Fields:
-      proj_idx: 0=gate, 1=up, 2=down — also the index ``assignment_provider``
-        is keyed on under TP=1.
-      weight: Already preprocessed for the chosen layout (``preprocess_gate_up``
-        output under TP>1 gate/up; ``shared_down_torch_for_cache`` output under
-        TP>1 down; ``_shard_for_mesh`` output under TP=1).
-      spec: :class:`_MemoryConfigSpec` describing the on-device layout
-        (``(layout, core_range_set, shard_shape)``).
-      cache_name / source_key: Per-projection cache identity (target name
-        plus the single HF state-dict key it consumes).
-      use_assignment_provider: When ``True`` and an ``assignment_provider`` is
-        wired into :func:`prepare_compressed_sram_slots`, that provider
-        supplies the assignment for this plan; otherwise the call falls back
-        to the shared ``assigner``.  Currently ``True`` only on the TP=1
-        fallback.
-    """
-
-    proj_idx: int
-    weight: torch.Tensor
-    spec: _MemoryConfigSpec
-    cache_name: str
-    source_key: str
-    use_assignment_provider: bool = False
-
-
-def _expert_build_plans(
-    *,
-    layer_idx: int,
-    expert_idx: int,
-    gate_full: torch.Tensor,
-    up_full: torch.Tensor,
-    down_raw: torch.Tensor,
-    gate_key: str,
-    up_key: str,
-    down_key: str,
-    grids: SramExpertCoreGrids,
-    use_shared_expert_layout: bool,
-    moe_tp: int,
-    mesh_rows: int,
-    mesh_cols: int,
-) -> tuple[_ProjBuildPlan, _ProjBuildPlan, _ProjBuildPlan]:
-    """Build the (gate, up, down) :class:`_ProjBuildPlan` triple for one expert.
-
-    The per-projection layout decision (``_MemoryConfigSpec`` per name) is
-    delegated to :func:`sram_projection_specs` -- single source of truth
-    shared with the cost predictor in
-    :mod:`models.demos.deepseek_v3_b1.weights.transforms.sram_experts`.
-    Weight preprocessing branches on TP layout: under TP>1 gate/up ride
-    :func:`preprocess_gate_up`'s reshuffle output and down rides
-    :func:`shared_down_torch_for_cache`; under TP=1 all three use the
-    :func:`_shard_for_mesh` mesh-presharding pre-pass.
-    """
-
-    def name(proj: str) -> str:
-        return f"sram_layer{layer_idx}_expert{expert_idx}_{proj}_proj"
-
-    specs = sram_projection_specs(grids, (mesh_rows, mesh_cols))
-    keys = {"gate": gate_key, "up": up_key, "down": down_key}
-
-    if use_shared_expert_layout:
-        pp = preprocess_gate_up(gate_full, up_full, moe_tp, mesh_rows, mesh_cols)
-        down_pp = shared_down_torch_for_cache(down_raw, moe_tp, (mesh_rows, mesh_cols))
-        weights = {"gate": pp["shared_gate_proj"], "up": pp["shared_up_proj"], "down": down_pp}
-        use_provider = False
-    else:
-        weights = {
-            "gate": _shard_for_mesh(gate_full, mesh_rows, mesh_cols),
-            "up": _shard_for_mesh(up_full, mesh_rows, mesh_cols),
-            "down": _shard_for_mesh(down_raw, mesh_rows, mesh_cols),
-        }
-        use_provider = True
-
-    return tuple(
-        _ProjBuildPlan(
-            proj_idx=i,
-            weight=weights[proj],
-            spec=specs[proj],
-            cache_name=name(proj),
-            source_key=keys[proj],
-            use_assignment_provider=use_provider,
-        )
-        for i, proj in enumerate(("gate", "up", "down"))
-    )
-
-
 def prepare_compressed_sram_slots(
     device,
     state_dict: dict[str, torch.Tensor],
     layer_idx: int,
     initial_expert_indices: list[int],
     core_grids: SramExpertCoreGrids,
-    assigner: CompressedTensorAssigner | None = None,
     *,
+    assignment_provider: Callable[[int, int], np.ndarray],
     boundary_addr: int,
     initial_lowest_addr: dict[tuple[int, int], int],
     l1_top_addr: int,
-    assignment_provider: Callable[[int, int], np.ndarray] | None = None,
     move_to_device: bool = True,
     tile_hw: int = 32,
     cache_config: CacheConfig | None = None,
@@ -665,7 +571,7 @@ def prepare_compressed_sram_slots(
         move_to_device: Whether to place tensors on device.
         tile_hw: Tile dimension for cost prediction (default 32).
     """
-    assert (assigner is None) != (assignment_provider is None), "Provide exactly one of assigner or assignment_provider"
+    assert assignment_provider is not None, "assignment_provider required"
     assert l1_top_addr > boundary_addr, f"l1_top_addr ({l1_top_addr}) must be > boundary_addr ({boundary_addr})"
     # Per-core L1 CompressedTensors cannot be host-staged; they must be
     # allocated directly on device.  Catch this early to surface a clear
@@ -708,11 +614,10 @@ def prepare_compressed_sram_slots(
     # cores which would need per_core_N=16 (not tile-aligned) for gate/up.
     # See sram_experts_plan.md (phase 2) for the full rationale.
     #
-    # Single-device tests (e.g. `test_prepare_compressed_sram_slots` with
-    # synthetic K=N=256 weights) don't match the shared expert's
-    # (7168, 256)-per-device geometry, so we keep the old WIDTH_SHARDED path
-    # there.  Real deployment is TP8 so this branch is exercised end-to-end.
-    use_shared_expert_gate_up = moe_tp > 1
+    # TP=1 path was removed (test_compressed_sram_slots single-device tests
+    # deleted).  Only TP>1 (shared-expert HEIGHT_SHARDED gate/up + WIDTH_SHARDED
+    # down) is supported now.
+    assert moe_tp > 1, "prepare_compressed_sram_slots requires TP>1 (mesh allocation)"
 
     # Address-boundary trim state: only tracks per-core lowest occupied L1
     # address (bootstrapped from real allocator state via the attention prep).
@@ -736,19 +641,25 @@ def prepare_compressed_sram_slots(
         # memcpy was previously paid twice (predict arg + build site).
         down_raw = state_dict[down_key].T.contiguous()
 
-        # Predict the next expert's per-core L1 cost (host-side, one-step
-        # lookahead) so we can stop *before* an over-budget allocation.
-        predicted_delta = _predict_expert_per_core_bytes(
+        # Predict the next expert's per-device per-core L1 cost (host-side,
+        # one-step lookahead) so we can stop *before* an over-budget
+        # allocation.  Reduce via max-over-devices so the chosen expert
+        # count fits the worst-case device under BSPM (where different
+        # devices receive different tile-format slabs).  Under uniform BFP4
+        # the reduction is a no-op (every device has identical per-core
+        # bytes).
+        predicted_delta_per_device = _predict_expert_per_core_bytes(
             expert_idx,
             gate_full,
             up_full,
             down_raw,
             grids,
-            assigner=assigner,
+            assigner=None,
             assignment_provider=assignment_provider,
             tile_hw=tile_hw,
             mesh_shape=mesh_shape_for_predict,
         )
+        predicted_delta = reduce_per_device_max(predicted_delta_per_device)
         # Cores untouched so far are assumed empty: their next allocation
         # would land just below ``l1_top_addr`` (top-down growth).
         overflow_core = next(
@@ -770,58 +681,107 @@ def prepare_compressed_sram_slots(
             )
             break
 
-        # Per-projection SRAM disk-cache identity, layout decision, and
-        # weight preprocessing all live in ``_expert_build_plans``: under
-        # TP>1 each projection rides the shared-expert pipeline
-        # (HEIGHT_SHARDED gate/up via ``preprocess_gate_up``,
-        # WIDTH_SHARDED shared-down via ``shared_down_torch_for_cache``);
-        # under TP=1 all three use the WIDTH_SHARDED legacy fallback.
-        #
-        # Caveat (activation K mismatch under TP>1): routed expert
-        # activations arrive at ``K_dev=512`` (from the TP8 gate/up
-        # outputs), but the down layout expects ``K_dev=256`` inputs.
-        # Bridging that mismatch (extra K-slab reshuffle on activations,
-        # or per-core ``sram_k_offsets`` indirection) is a Phase 4 /
-        # kernel-side concern.  See sram_experts_plan.md "Risks/caveats"
-        # for details.
-        plans = _expert_build_plans(
-            layer_idx=layer_idx,
-            expert_idx=expert_idx,
-            gate_full=gate_full,
-            up_full=up_full,
-            down_raw=down_raw,
-            gate_key=gate_key,
-            up_key=up_key,
-            down_key=down_key,
-            grids=grids,
-            use_shared_expert_layout=use_shared_expert_gate_up,
-            moe_tp=moe_tp,
-            mesh_rows=mesh_rows,
-            mesh_cols=mesh_cols,
+        # Per-projection layout & per-slot CT construction.  At TP>1 (shared
+        # expert layout) we ALWAYS go through :func:`build_sram_routed_proj_ct`
+        # — uses ``build_sram_expert_weights``-style direct
+        # ``CompressedTensor`` construction.
+        _is_cb_backing = len(selected_experts) == 0
+        # Per-projection layout params for routed experts at TP8.
+        #   gate/up: 64 cores, k_parallel=8 N-slices stacked H-wise.
+        #   down: 112 cores, WIDTH_SHARDED (k_parallel=1, n_parallel=112).
+        # Derived from weight shape + grid count.
+        gate_full_kn = gate_full.reshape(gate_full.shape[0], gate_full.shape[1])
+        up_full_kn = up_full.reshape(up_full.shape[0], up_full.shape[1])
+        down_full_kn = down_raw.reshape(down_raw.shape[0], down_raw.shape[1])
+        K_gate, N_gate_full = gate_full_kn.shape
+        K_up, N_up_full = up_full_kn.shape
+        K_down_full, N_down = down_full_kn.shape
+        N_gate_per_dev = N_gate_full // moe_tp
+        N_up_per_dev = N_up_full // moe_tp
+        K_down_per_dev = K_down_full // moe_tp
+        gate_per_dev = [
+            gate_full_kn[:, d * N_gate_per_dev : (d + 1) * N_gate_per_dev].contiguous() for d in range(moe_tp)
+        ]
+        up_per_dev = [up_full_kn[:, d * N_up_per_dev : (d + 1) * N_up_per_dev].contiguous() for d in range(moe_tp)]
+        down_per_dev = [
+            down_full_kn[d * K_down_per_dev : (d + 1) * K_down_per_dev, :].contiguous() for d in range(moe_tp)
+        ]
+        # gate/up params (HEIGHT_SHARDED on 64 cores at TP8).
+        num_gate_cores = len(ttnn.corerange_to_cores(grids.gate))
+        num_up_cores = len(ttnn.corerange_to_cores(grids.up))
+        num_down_cores = len(ttnn.corerange_to_cores(grids.down))
+        # n_parallel = sqrt(num_cores) for k_parallel == n_parallel layout (8x8=64).
+        # Derived as: per_core_N = N_per_dev / (n_parallel * tile_w) with the
+        # constraint num_cores = k_parallel * n_parallel.  At TP8 routed gate/up
+        # we use 8x8.  Hardcoded here to avoid divisor ambiguity.
+        gate_n_parallel = 8 if num_gate_cores == 64 else num_gate_cores
+        up_n_parallel = 8 if num_up_cores == 64 else num_up_cores
+        gate_k_parallel = num_gate_cores // gate_n_parallel
+        up_k_parallel = num_up_cores // up_n_parallel
+        gate_num_tiles_k = K_gate // tile_hw // gate_k_parallel
+        up_num_tiles_k = K_up // tile_hw // up_k_parallel
+        gate_per_core_N = N_gate_per_dev // tile_hw // gate_n_parallel
+        up_per_core_N = N_up_per_dev // tile_hw // up_n_parallel
+        # down params (WIDTH_SHARDED on 112 cores at TP8): n_parallel = num_cores.
+        down_n_parallel = num_down_cores
+        down_num_tiles_k = K_down_per_dev // tile_hw
+        down_per_core_N = N_down // tile_hw // num_down_cores
+
+        def _bspm_per_dev(proj_idx: int, full_assignment) -> list[np.ndarray]:
+            """Slice the full BSPM assignment along the per-TP-device shard axis."""
+            if full_assignment is None:
+                return None
+            if proj_idx in (0, 1):
+                # gate/up: column-shard N across devices.
+                n_tiles_per_dev = full_assignment.shape[1] // moe_tp
+                return [
+                    np.ascontiguousarray(full_assignment[:, d * n_tiles_per_dev : (d + 1) * n_tiles_per_dev])
+                    for d in range(moe_tp)
+                ]
+            # down: row-shard K across devices.
+            k_tiles_per_dev = full_assignment.shape[0] // moe_tp
+            return [
+                np.ascontiguousarray(full_assignment[d * k_tiles_per_dev : (d + 1) * k_tiles_per_dev, :])
+                for d in range(moe_tp)
+            ]
+
+        gate_assignment_full = assignment_provider(expert_idx, 0)
+        up_assignment_full = assignment_provider(expert_idx, 1)
+        down_assignment_full = assignment_provider(expert_idx, 2)
+
+        gate_ct = build_sram_routed_proj_ct(
+            mesh_device=device_for_torch,
+            full_torch_weight_per_device=gate_per_dev,
+            core_grid=grids.gate,
+            num_tiles_k=gate_num_tiles_k,
+            n_parallel=gate_n_parallel,
+            per_core_N=gate_per_core_N,
+            is_cb_backing_expert=_is_cb_backing,
+            bspm_assignment_per_device=_bspm_per_dev(0, gate_assignment_full),
         )
-        out_lists = (gate_cts, up_cts, down_cts)
-        for plan, out in zip(plans, out_lists):
-            if plan.use_assignment_provider and assignment_provider is not None:
-                # TP=1 + BSPM provider: precomputed tile assignment per (expert, projection).
-                # The builder's own asserter still enforces "exactly one of assigner/assignment".
-                assigner_arg = None
-                assignment_arg = assignment_provider(expert_idx, plan.proj_idx)
-            else:
-                assigner_arg = assigner
-                assignment_arg = None
-            out.append(
-                _build_l1_compressed_tensor(
-                    plan.weight,
-                    plan.spec,
-                    assigner=assigner_arg,
-                    assignment=assignment_arg,
-                    device=device_for_torch,
-                    mesh_mapper_config=mesh_mapper_config,
-                    cache_config=cache_config,
-                    sram_cache_target_name=plan.cache_name,
-                    sram_cache_source_keys=(plan.source_key,),
-                )
-            )
+        up_ct = build_sram_routed_proj_ct(
+            mesh_device=device_for_torch,
+            full_torch_weight_per_device=up_per_dev,
+            core_grid=grids.up,
+            num_tiles_k=up_num_tiles_k,
+            n_parallel=up_n_parallel,
+            per_core_N=up_per_core_N,
+            is_cb_backing_expert=_is_cb_backing,
+            bspm_assignment_per_device=_bspm_per_dev(1, up_assignment_full),
+        )
+        down_ct = build_sram_routed_proj_ct(
+            mesh_device=device_for_torch,
+            full_torch_weight_per_device=down_per_dev,
+            core_grid=grids.down,
+            num_tiles_k=down_num_tiles_k,
+            n_parallel=down_n_parallel,
+            per_core_N=down_per_core_N,
+            is_cb_backing_expert=_is_cb_backing,
+            bspm_assignment_per_device=_bspm_per_dev(2, down_assignment_full),
+        )
+        gate_cts.append(gate_ct)
+        up_cts.append(up_ct)
+        down_cts.append(down_ct)
         selected_experts.append(expert_idx)
         logger.debug("  SRAM slot {} ← expert {} prepared", slot_idx, expert_idx)
 
