@@ -68,6 +68,8 @@ def _largest_divisor_le(value: int, limit: int) -> int:
 # decode/prefill back to eager-mode dispatch (per-op kernel launches), which
 # in TP2 makes decode 4x slower than the trace-replay path.
 _VISION_MATMUL_PC_CACHE: dict = {}
+_VISION_MATMUL_BS_MEM_CACHE: dict = {}
+_VISION_O_PROJ_BS_PC_CACHE: dict = {}
 
 
 def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int):
@@ -232,6 +234,72 @@ def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int):
         fuse_batch=False,
     )
     _VISION_MATMUL_PC_CACHE[cache_key] = pc
+    return pc
+
+
+def _vision_block_sharded_mem(device, m_dim: int, wid_dim: int):
+    """Cached L1 BLOCK_SHARDED MemoryConfig splitting m_dim across grid_y rows and wid_dim across grid_x columns.
+
+    Returns None if either dimension is not evenly divisible by the grid extents.
+    """
+    if device is None:
+        return None
+    grid = device.compute_with_storage_grid_size()
+    grid_x, grid_y = int(grid.x), int(grid.y)
+    if m_dim % grid_y != 0 or wid_dim % grid_x != 0:
+        return None
+    cache_key = (grid_x, grid_y, m_dim, wid_dim)
+    if cache_key in _VISION_MATMUL_BS_MEM_CACHE:
+        return _VISION_MATMUL_BS_MEM_CACHE[cache_key]
+    shard_h = m_dim // grid_y
+    shard_w = wid_dim // grid_x
+    core_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
+    result = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_set, [shard_h, shard_w], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    _VISION_MATMUL_BS_MEM_CACHE[cache_key] = result
+    return result
+
+
+def _vision_o_proj_bs_program_config(device):
+    """Program config for o_proj with L1-interleaved in0 and L1 BLOCK_SHARDED output (12288×1536×1536).
+
+    matmul_device_operation.cpp:841 requires out_subblock_w == per_core_N OR
+    out_subblock_h == 1 whenever the output is sharded. The generic
+    _vision_matmul_program_config returns out_subblock_h=8 / out_subblock_w=1 for this
+    shape (area=8, optimal for DRAM output) which violates the constraint for sharded
+    output. Force out_subblock_h=1, out_subblock_w=6 (= per_core_N).
+    out_block_h=6 keeps the static CB region below the model's pre-allocated L1 shard
+    address (~552 KB). Empirically: ob_h=48→1366 KB, ob_h=16→683 KB, so
+    cb_end ≈ 325 KB + 22 KB×ob_h; need cb_end < 552 KB → ob_h ≤ 10 → use ob_h=6.
+    Returns None when the device grid is smaller than 8×8.
+    """
+    if device is None:
+        return None
+    grid = device.compute_with_storage_grid_size()
+    grid_x, grid_y = int(grid.x), int(grid.y)
+    if grid_x < 8 or grid_y < 8:
+        _VISION_O_PROJ_BS_PC_CACHE[(grid_x, grid_y)] = None
+        return None
+    cache_key = (grid_x, grid_y)
+    if cache_key in _VISION_O_PROJ_BS_PC_CACHE:
+        return _VISION_O_PROJ_BS_PC_CACHE[cache_key]
+    pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=8,
+        out_subblock_h=1,
+        out_subblock_w=6,
+        out_block_h=6,
+        out_block_w=6,
+        per_core_M=48,
+        per_core_N=6,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+    _VISION_O_PROJ_BS_PC_CACHE[cache_key] = pc
     return pc
 
 
@@ -766,7 +834,7 @@ class TTNNDotsVisionMLP(TTNNModule):
             self.tt_fc2_weight,
             bias=self.tt_fc2_bias,
             dtype=ttnn.bfloat8_b,
-            memory_config=mem,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             program_config=down_pc,
         )
@@ -1077,28 +1145,11 @@ class TTNNDotsVisionAttention(TTNNModule):
         )
 
     def _concat_heads(self, ctx: ttnn.Tensor) -> ttnn.Tensor:
-        """Gather head slices back into a single sequence-major tensor.
-
-        ``nlp_concat_heads`` supports interleaved DRAM or L1 inputs (see
-        ``tests/tt_eager/.../test_nlp_concat_heads.py``). SDPA often leaves
-        ``[B,H,S,D]`` on DRAM in BF8; call the concat kernel directly instead
-        of staging through L1 + extra typecasts.
-        """
-        out_mem = ttnn.DRAM_MEMORY_CONFIG
-        buf = ctx.memory_config().buffer_type
-        dt = ctx.dtype
-
-        if buf == ttnn.BufferType.L1:
-            return ttnn.experimental.nlp_concat_heads(ctx, memory_config=out_mem)
-
-        if buf == ttnn.BufferType.DRAM and dt in (ttnn.bfloat8_b, ttnn.bfloat16):
-            return ttnn.experimental.nlp_concat_heads(ctx, memory_config=out_mem)
-
-        ctx_l1 = ttnn.typecast(ctx, ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(ctx)
-        ctx_gathered = ttnn.experimental.nlp_concat_heads(ctx_l1, memory_config=out_mem)
-        ttnn.deallocate(ctx_l1)
-        return ttnn.typecast(ctx_gathered, ttnn.bfloat16, memory_config=out_mem)
+        # Output L1 interleaved so o_proj reads activation from L1 instead of DRAM.
+        # nlp_concat_heads supports L1 interleaved output for BFP8/BF16 inputs from
+        # either DRAM or L1. True sharding of V is not possible (sdpa_device_operation.cpp:44
+        # forbids sharded Q/K/V), so L1 interleaved here is the closest option.
+        return ttnn.experimental.nlp_concat_heads(ctx, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     def _get_sdpa_program_config(self, seq_len: int):
         """Chunked SDPA program config for the vision tower.
@@ -1177,10 +1228,11 @@ class TTNNDotsVisionAttention(TTNNModule):
             mapper = ttnn.ReplicateTensorToMesh(self.device) if num_dev > 1 else None
             attn_mask = ttnn.from_torch(
                 m,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 mesh_mapper=mapper,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             if attn_mask.dtype != q.dtype:
                 attn_mask = ttnn.typecast(attn_mask, q.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1197,10 +1249,13 @@ class TTNNDotsVisionAttention(TTNNModule):
             compute_kernel_config=self.sdpa_compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
         if owns_attn_mask:
             ttnn.deallocate(attn_mask)
         if slice_to_logical and pad > 0:
-            ctx = ttnn.slice(ctx, (0, 0, 0, 0), (1, h, logical_seq_len, d))
+            ctx = ttnn.slice(ctx, (0, 0, 0, 0), (1, h, logical_seq_len, d), memory_config=ttnn.L1_MEMORY_CONFIG)
         return ctx
 
     def forward(
@@ -1288,6 +1343,39 @@ class TTNNDotsVisionAttention(TTNNModule):
         # plus SDPA's static circular buffers exceed the per-core L1 budget --
         # keep these tensors on DRAM.
 
+        # o_proj: in0 is L1 interleaved (nlp_concat_heads writes to L1); output goes to
+        # L1 BLOCK_SHARDED so the downstream residual add reads from L1 instead of DRAM.
+        # A separate program config is required for BLOCK_SHARDED output because
+        # matmul_device_operation.cpp:841 constrains out_subblock_w/h when output is sharded.
+        o_k = int(self.tt_o_proj_weight.shape[-2])
+        o_n = int(self.tt_o_proj_weight.shape[-1])
+        o_pc = _vision_matmul_program_config(self.device, qkv_m, o_k, o_n)
+        out_bs = _vision_block_sharded_mem(self.device, qkv_m, o_n)
+        o_bs_pc = _vision_o_proj_bs_program_config(self.device)
+
+        def _run_o_proj(ctx: ttnn.Tensor) -> ttnn.Tensor:
+            ctx = self._concat_heads(ctx)
+            # BFP8 output keeps the post-attn residual on the BFP8 stream.
+            if out_bs is not None and o_bs_pc is not None:
+                return ttnn.linear(
+                    ctx,
+                    self.tt_o_proj_weight,
+                    bias=self.tt_o_proj_bias,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=out_bs,
+                    compute_kernel_config=self.compute_kernel_config,
+                    program_config=o_bs_pc,
+                )
+            return ttnn.linear(
+                ctx,
+                self.tt_o_proj_weight,
+                bias=self.tt_o_proj_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=mem,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=o_pc,
+            )
+
         if cu_seqlens is None:
             logical_s = int(attention_logical_seq_len) if attention_mask is not None else s
             ctx = self._sdpa_padded_with_key_mask(
@@ -1298,24 +1386,7 @@ class TTNNDotsVisionAttention(TTNNModule):
                 attn_mask=attention_mask,
                 slice_to_logical=attention_mask is None,
             )
-            ctx = self._concat_heads(ctx)
-            o_m = int(ctx.shape[0]) * int(ctx.shape[1]) * int(ctx.shape[2])
-            o_k = int(self.tt_o_proj_weight.shape[-2])
-            o_n = int(self.tt_o_proj_weight.shape[-1])
-            o_pc = _vision_matmul_program_config(self.device, o_m, o_k, o_n)
-            # BFP8 output keeps the post-attn residual on the BFP8 stream.
-            # The previous BF16 here forced the residual ``ttnn.add`` below
-            # to upcast its BFP8 input back to BF16, doubling the residual
-            # tensor footprint and silently making norm2 read BF16.
-            return ttnn.linear(
-                ctx,
-                self.tt_o_proj_weight,
-                bias=self.tt_o_proj_bias,
-                dtype=ttnn.bfloat8_b,
-                memory_config=mem,
-                compute_kernel_config=self.compute_kernel_config,
-                program_config=o_pc,
-            )
+            return _run_o_proj(ctx)
 
         cu_host = self._cu_seqlens_to_list(cu_seqlens, s)
 
@@ -1340,21 +1411,7 @@ class TTNNDotsVisionAttention(TTNNModule):
 
             ctx = ttnn.concat(ctx_segments, dim=2) if len(ctx_segments) > 1 else ctx_segments[0]
 
-        ctx = self._concat_heads(ctx)
-        o_m = int(ctx.shape[0]) * int(ctx.shape[1]) * int(ctx.shape[2])
-        o_k = int(self.tt_o_proj_weight.shape[-2])
-        o_n = int(self.tt_o_proj_weight.shape[-1])
-        o_pc = _vision_matmul_program_config(self.device, o_m, o_k, o_n)
-        # Same BFP8 rationale as the no-cu_seqlens branch above.
-        return ttnn.linear(
-            ctx,
-            self.tt_o_proj_weight,
-            bias=self.tt_o_proj_bias,
-            dtype=ttnn.bfloat8_b,
-            memory_config=mem,
-            compute_kernel_config=self.compute_kernel_config,
-            program_config=o_pc,
-        )
+        return _run_o_proj(ctx)
 
     def _cu_seqlens_to_list(self, cu_seqlens, expected_total: int) -> list[int]:
         if isinstance(cu_seqlens, list):
