@@ -186,6 +186,15 @@ def _load_audio_prompt(audio_path: Path | None) -> torch.Tensor | None:
     )
 
 
+def _resolve_audio_prompt(
+    audio_path: Path | None,
+    audio_prompt_tensor: torch.Tensor | None,
+) -> torch.Tensor | None:
+    if audio_prompt_tensor is not None:
+        return audio_prompt_tensor
+    return _load_audio_prompt(audio_path)
+
+
 def _make_cross_attn_cond(multi_out: dict) -> torch.Tensor:
     """Concatenate per-conditioner embeds along the sequence dim, in the
     order AudioX uses: ``video_prompt``, ``text_prompt``, ``audio_prompt``."""
@@ -202,13 +211,20 @@ def run_demo(
     video_path: Path | None = None,
     image_path: Path | None = None,
     audio_path: Path | None = None,
+    video_prompt_tensor: torch.Tensor | None = None,
+    audio_prompt_tensor: torch.Tensor | None = None,
     steps: int = 100,
     seed: int = 0,
     device: str = "cpu",
-) -> Path:
+    return_details: bool = False,
+) -> Path | dict:
     """Generate one stereo audio clip for ``prompt`` and save to ``output``.
     Returns the output path on success."""
     torch.manual_seed(seed)
+    if video_prompt_tensor is not None and (video_path is not None or image_path is not None):
+        raise ValueError("pass either a visual path or video_prompt_tensor, not both")
+    if audio_prompt_tensor is not None and audio_path is not None:
+        raise ValueError("pass either an audio path or audio_prompt_tensor, not both")
 
     # Load checkpoint and split into per-module state dicts.
     raw_sd = load_audiox_checkpoint(checkpoint)
@@ -219,7 +235,7 @@ def run_demo(
     # Build modules and load weights. Conditioners get only the matching id;
     # T5/CLIP HF visual encoder weights live outside state_dict, so missing
     # keys for them are expected.
-    audio_prompt = _load_audio_prompt(audio_path)
+    audio_prompt = _resolve_audio_prompt(audio_path, audio_prompt_tensor)
     audio_pretransform = _build_audio_pretransform() if audio_prompt is not None else None
     if audio_pretransform is not None:
         load_into(audio_pretransform, encoder_sd, label="encoder")
@@ -240,14 +256,14 @@ def run_demo(
     decoder = decoder.to(device)
 
     # Build cross-attn context once per generation.
-    visual_prompt = _load_visual_prompt(video_path, image_path)
+    visual_prompt = video_prompt_tensor if video_prompt_tensor is not None else _load_visual_prompt(video_path, image_path)
     cond_out = multi(
         _build_metadata_batch_with_inputs(prompt=prompt, video_prompt=visual_prompt, audio_prompt=audio_prompt),
         device,
     )
     cross_attn_cond = _make_cross_attn_cond(cond_out)
 
-    # 10s @ 44.1 kHz / 2048 downsample = 216 latent frames; round up to upstream's 237 to match.
+    # 10s @ 44.1 kHz / 2048 downsample = 216 latent frames.
     samples = _HF_CONFIG["sample_rate"] * _HF_CONFIG["duration_seconds"]
     t_latent = -(-samples // _HF_CONFIG["downsample"])  # ceil division
     noise = torch.randn(1, _HF_CONFIG["io_channels"], t_latent, device=device)
@@ -266,6 +282,14 @@ def run_demo(
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     torchaudio.save(str(output), audio[0], _HF_CONFIG["output_sample_rate"])
+    if return_details:
+        return {
+            "output_path": output,
+            "latent": latent.detach().cpu(),
+            "cross_attn_cond": cross_attn_cond.detach().cpu(),
+            "conditioning_tokens": int(cross_attn_cond.shape[1]),
+            "t_latent": int(t_latent),
+        }
     return output
 
 

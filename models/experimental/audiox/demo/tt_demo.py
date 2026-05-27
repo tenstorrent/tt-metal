@@ -32,9 +32,9 @@ from models.experimental.audiox.demo.demo import (
     _build_decoder,
     _build_dit,
     _build_metadata_batch_with_inputs,
-    _load_audio_prompt,
     _load_visual_prompt,
     _make_cross_attn_cond,
+    _resolve_audio_prompt,
 )
 from models.experimental.audiox.demo.media import resample_output_audio
 from models.experimental.audiox.tt.dit import TtDiffusionTransformer
@@ -87,13 +87,20 @@ def run_tt_demo(
     video_path: Path | None = None,
     image_path: Path | None = None,
     audio_path: Path | None = None,
+    video_prompt_tensor: torch.Tensor | None = None,
+    audio_prompt_tensor: torch.Tensor | None = None,
     steps: int = 100,
     seed: int = 0,
-) -> Path:
+    return_details: bool = False,
+) -> Path | dict:
     """Generate one stereo audio clip on TT and save to ``output``.
 
     Conditioners run on CPU; DiT + decoder run on ``device``."""
     torch.manual_seed(seed)
+    if video_prompt_tensor is not None and (video_path is not None or image_path is not None):
+        raise ValueError("pass either a visual path or video_prompt_tensor, not both")
+    if audio_prompt_tensor is not None and audio_path is not None:
+        raise ValueError("pass either an audio path or audio_prompt_tensor, not both")
 
     # 1. Load checkpoint and split per module.
     raw_sd = load_audiox_checkpoint(checkpoint)
@@ -102,7 +109,7 @@ def run_tt_demo(
     decoder_sd = remap_oobleck_decoder_state_dict(raw_sd, n_blocks=len(_HF_CONFIG["decoder_c_mults"]))
 
     # 2. Conditioners on CPU. Build CPU reference modules and load weights.
-    audio_prompt = _load_audio_prompt(audio_path)
+    audio_prompt = _resolve_audio_prompt(audio_path, audio_prompt_tensor)
     audio_pretransform = _build_audio_pretransform() if audio_prompt is not None else None
     if audio_pretransform is not None:
         load_into(audio_pretransform, encoder_sd, label="encoder")
@@ -112,7 +119,7 @@ def run_tt_demo(
         cond_sd = remap_conditioner_state_dict(raw_sd, conditioner_id=cid)
         load_into(multi.conditioners[cid], cond_sd, label=f"cond:{cid}")
 
-    visual_prompt = _load_visual_prompt(video_path, image_path)
+    visual_prompt = video_prompt_tensor if video_prompt_tensor is not None else _load_visual_prompt(video_path, image_path)
     cond_out = multi(
         _build_metadata_batch_with_inputs(prompt=prompt, video_prompt=visual_prompt, audio_prompt=audio_prompt),
         "cpu",
@@ -158,12 +165,13 @@ def run_tt_demo(
         return tt_dit(x, t, cross_attn_cond=tt_cond)
 
     tt_latent = tt_sample_rf(model_fn, tt_noise, mesh_device=device, steps=steps)
+    tt_latent_torch = ttnn.to_torch(tt_latent).detach().cpu()
 
     # 6. Decode on device. tt_decoder expects [B, T, 1, C].
     tt_audio_nhwc = tt_decoder(_nct_to_nhwc(tt_latent))
 
     # 7. Pull audio back to CPU, drop the H=1 dim, transpose [B, T, 1, C] -> [B, C, T].
-    audio = ttnn.to_torch(tt_audio_nhwc).squeeze(2).transpose(1, 2).clamp(-1.0, 1.0).detach().cpu()
+    audio = ttnn.to_torch(tt_audio_nhwc).squeeze(2).transpose(1, 2).clamp(-1.0, 1.0).detach().float().cpu()
     audio = resample_output_audio(
         audio,
         input_sample_rate=_HF_CONFIG["sample_rate"],
@@ -171,6 +179,14 @@ def run_tt_demo(
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     torchaudio.save(str(output), audio[0], _HF_CONFIG["output_sample_rate"])
+    if return_details:
+        return {
+            "output_path": output,
+            "latent": tt_latent_torch,
+            "cross_attn_cond": cross_attn_cond_torch.detach().cpu(),
+            "conditioning_tokens": int(cross_attn_cond_torch.shape[1]),
+            "t_latent": int(t_latent),
+        }
     return output
 
 

@@ -17,6 +17,31 @@ import ttnn
 from models.experimental.audiox.tt.common import to_tt
 
 
+_LONG_SEQUENCE_THRESHOLD = 131072
+_LONG_SEQUENCE_CHUNK = 32768
+
+
+def _debug_decoder(message: str) -> None:
+    import os
+
+    if os.environ.get("AUDIOX_TT_DEBUG_DECODER") == "1":
+        print(f"[audiox-tt-decoder] {message}", flush=True)
+
+
+def _slice_time(x: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
+    return ttnn.slice(x, (0, start, 0, 0), (x.shape[0], end, x.shape[2], x.shape[3]))
+
+
+def _slice_width(x: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
+    return ttnn.slice(x, (0, 0, start, 0), (x.shape[0], x.shape[1], end, x.shape[3]))
+
+
+def _concat_time(chunks: list[ttnn.Tensor]) -> ttnn.Tensor:
+    if len(chunks) == 1:
+        return chunks[0]
+    return ttnn.concat(chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
 def reconstruct_wn_weight(state_dict: dict, prefix: str) -> torch.Tensor:
     """Rebuild a weight_norm-parameterized Conv1d weight from g and v.
 
@@ -46,9 +71,19 @@ class TtSnakeBeta:
         self.inv_beta = to_tt(inv_beta, mesh_device)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        s = ttnn.sin(ttnn.multiply(x, self.alpha))
-        s = ttnn.multiply(s, s)
-        return ttnn.add(x, ttnn.multiply(s, self.inv_beta))
+        if x.shape[1] < _LONG_SEQUENCE_THRESHOLD:
+            s = ttnn.sin(ttnn.multiply(x, self.alpha))
+            s = ttnn.multiply(s, s)
+            return ttnn.add(x, ttnn.multiply(s, self.inv_beta))
+
+        chunks = []
+        for start in range(0, x.shape[1], _LONG_SEQUENCE_CHUNK):
+            end = min(start + _LONG_SEQUENCE_CHUNK, x.shape[1])
+            x_chunk = _slice_time(x, start, end)
+            s = ttnn.sin(ttnn.multiply(x_chunk, self.alpha))
+            s = ttnn.multiply(s, s)
+            chunks.append(ttnn.add(x_chunk, ttnn.multiply(s, self.inv_beta), memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        return _concat_time(chunks)
 
 
 def _conv1d(
@@ -63,10 +98,65 @@ def _conv1d(
     padding: int,
     batch_size: int,
     input_length: int,
+    label: str = "",
 ):
     """Wrapper around ``ttnn.conv1d`` that returns an interleaved TILE
     tensor of shape ``[B, L_out, 1, C_out]`` so the next pointwise op can
     consume it directly."""
+    conv_config = ttnn.Conv1dConfig(
+        weights_dtype=ttnn.bfloat8_b,
+        deallocate_activation=True,
+        reallocate_halo_output=True,
+        config_tensors_in_dram=True,
+        act_block_h_override=32,
+    )
+    _debug_decoder(
+        f"conv1d {label} in_ch={in_channels} out_ch={out_channels} k={kernel_size} "
+        f"dil={dilation} pad={padding} batch={batch_size} input_length={input_length}"
+    )
+    if input_length >= _LONG_SEQUENCE_THRESHOLD:
+        x_4d = ttnn.reshape(x, (batch_size, 1, input_length, in_channels))
+        weight_4d = ttnn.reshape(weight, (out_channels, in_channels, 1, kernel_size))
+        dram_slice_config = ttnn.Conv2dSliceConfig(
+            slice_type=ttnn.Conv2dDRAMSliceWidth,
+            num_slices=256,
+        )
+        out, [_, out_length] = ttnn.conv2d(
+            input_tensor=x_4d,
+            weight_tensor=weight_4d,
+            bias_tensor=bias,
+            device=device,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            batch_size=batch_size,
+            input_height=1,
+            input_width=input_length,
+            kernel_size=(1, kernel_size),
+            stride=(1, 1),
+            padding=(0, padding),
+            dilation=(1, dilation),
+            groups=1,
+            conv_config=conv_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+            slice_config=dram_slice_config,
+            return_output_dim=True,
+            return_weights_and_bias=False,
+        )
+        if out.is_sharded():
+            out = ttnn.sharded_to_interleaved(out)
+        if out_length < _LONG_SEQUENCE_THRESHOLD:
+            out = ttnn.permute(out, (0, 2, 1, 3))
+            return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+
+        chunks = []
+        for start in range(0, out_length, _LONG_SEQUENCE_CHUNK):
+            end = min(start + _LONG_SEQUENCE_CHUNK, out_length)
+            out_chunk = _slice_width(out, start, end)
+            chunks.append(ttnn.permute(out_chunk, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        out = _concat_time(chunks)
+        return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+
     out, out_length = ttnn.conv1d(
         input_tensor=x,
         weight_tensor=weight,
@@ -81,10 +171,13 @@ def _conv1d(
         padding=padding,
         dilation=dilation,
         groups=1,
+        conv_config=conv_config,
+        dtype=ttnn.bfloat8_b,
         return_output_dim=True,
         return_weights_and_bias=False,
     )
-    out = ttnn.sharded_to_interleaved(out)
+    if out.is_sharded():
+        out = ttnn.sharded_to_interleaved(out)
     out = ttnn.reshape(out, (batch_size, out_length, 1, out_channels))
     return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
 
@@ -134,6 +227,7 @@ class TtResidualUnit:
             padding=self.padding,
             batch_size=batch_size,
             input_length=input_length,
+            label=f"resunit[d={self.dilation}].conv7",
         )
 
         h = self.act2(h)
@@ -150,9 +244,19 @@ class TtResidualUnit:
             padding=0,
             batch_size=batch_size,
             input_length=input_length,
+            label=f"resunit[d={self.dilation}].conv1",
         )
 
-        return ttnn.add(x, h)
+        if x.shape[1] < _LONG_SEQUENCE_THRESHOLD:
+            return ttnn.add(x, h)
+
+        chunks = []
+        for start in range(0, x.shape[1], _LONG_SEQUENCE_CHUNK):
+            end = min(start + _LONG_SEQUENCE_CHUNK, x.shape[1])
+            x_chunk = _slice_time(x, start, end)
+            h_chunk = _slice_time(h, start, end)
+            chunks.append(ttnn.add(x_chunk, h_chunk, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        return _concat_time(chunks)
 
 
 def _conv_transpose1d(
@@ -167,6 +271,7 @@ def _conv_transpose1d(
     padding: int,
     batch_size: int,
     input_length: int,
+    label: str = "",
 ):
     """Emulate ConvTranspose1d via ``ttnn.conv_transpose2d`` over ``[B, T, 1, C]``.
 
@@ -174,6 +279,21 @@ def _conv_transpose1d(
     a no-op (``kW=1``, ``sW=1``, ``pW=0``). Input is RM, output is converted
     back to interleaved TILE for the next pointwise op."""
     out_length = (input_length - 1) * stride - 2 * padding + kernel_size
+    conv_config = ttnn.Conv2dConfig(
+        weights_dtype=ttnn.bfloat8_b,
+        deallocate_activation=True,
+        reallocate_halo_output=True,
+        act_block_h_override=32,
+    )
+    conv_config.config_tensors_in_dram = True
+    _debug_decoder(
+        f"conv_transpose1d {label} in_ch={in_channels} out_ch={out_channels} "
+        f"k={kernel_size} stride={stride} pad={padding} batch={batch_size} input_length={input_length}"
+    )
+    dram_slice_config = ttnn.Conv2dSliceConfig(
+        slice_type=ttnn.Conv2dDRAMSliceHeight,
+        num_slices=128,
+    )
     # No return flags -> single-tensor return. We compute out_length ourselves
     # from the standard ConvTranspose1d formula.
     out = ttnn.conv_transpose2d(
@@ -189,8 +309,12 @@ def _conv_transpose1d(
         batch_size=batch_size,
         input_height=input_length,
         input_width=1,
+        conv_config=conv_config,
+        dtype=ttnn.bfloat8_b,
+        dram_slice_config=dram_slice_config,
     )
-    out = ttnn.sharded_to_interleaved(out)
+    if out.is_sharded():
+        out = ttnn.sharded_to_interleaved(out)
     out = ttnn.reshape(out, (batch_size, out_length, 1, out_channels))
     return ttnn.to_layout(out, ttnn.TILE_LAYOUT), out_length
 
@@ -242,6 +366,7 @@ class TtDecoderBlock:
             padding=self.padding,
             batch_size=batch_size,
             input_length=input_length,
+            label=f"decoder_block[stride={self.stride}].upsample",
         )
         h = self.res1(h)
         h = self.res2(h)
@@ -316,6 +441,7 @@ class TtOobleckDecoder:
             padding=3,
             batch_size=batch_size,
             input_length=input_length,
+            label="decoder.in_conv",
         )
 
         for block in self.blocks:
@@ -336,4 +462,5 @@ class TtOobleckDecoder:
             padding=3,
             batch_size=batch_size,
             input_length=out_length,
+            label="decoder.out_conv",
         )

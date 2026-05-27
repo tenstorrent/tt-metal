@@ -37,6 +37,25 @@ def prepare_video_prompt(frames_tchw: torch.Tensor, *, target_frames: int, image
     return frames_tchw.unsqueeze(0).contiguous()
 
 
+def make_synthetic_video_prompt(
+    *,
+    target_frames: int,
+    image_size: int = 224,
+    seed: int = 0,
+) -> torch.Tensor:
+    """Build a deterministic RGB clip for validation without external media deps."""
+    g = torch.Generator().manual_seed(seed)
+    base = torch.rand(3, image_size, image_size, generator=g)
+    frames = []
+    for idx in range(target_frames):
+        shift = idx % max(1, image_size // 8)
+        frame = torch.roll(base, shifts=(shift, 2 * shift), dims=(1, 2))
+        # Add a moving brightness ramp so CLIP sees non-empty temporal change.
+        frame = (frame + (idx / max(1, target_frames - 1)) * 0.15).clamp(0.0, 1.0)
+        frames.append(frame)
+    return prepare_video_prompt(torch.stack(frames, dim=0), target_frames=target_frames, image_size=image_size)
+
+
 def prepare_audio_prompt(
     waveform_ct: torch.Tensor,
     *,

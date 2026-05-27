@@ -43,6 +43,12 @@ def test_metadata_batch_preserves_provided_audio_prompt():
     assert batch[0]["text_prompt"] == "hello"
 
 
+def test_resolve_audio_prompt_prefers_direct_tensor():
+    audio = torch.randn(1, 2, 32)
+    resolved = demo_mod._resolve_audio_prompt(None, audio)
+    assert resolved is audio
+
+
 def test_make_cross_attn_cond_concats_in_audiox_order():
     """Order matters for cross-attn cond: video, text, audio (AudioX uses this)."""
     multi_out = {

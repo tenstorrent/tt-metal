@@ -206,7 +206,7 @@ class CLIPConditioner(Conditioner):
 
             hf_id = "openai/" + self.clip_model_name
             self.__dict__["visual_encoder_model"] = (
-                CLIPVisionModelWithProjection.from_pretrained(hf_id).eval().requires_grad_(False)
+                CLIPVisionModelWithProjection.from_pretrained(hf_id, use_safetensors=True).eval().requires_grad_(False)
             )
 
     def forward(
