@@ -44,6 +44,36 @@ Each PR gets exactly one initial disable batch.
 - After the first disable batch is committed to that PR, do not add new disables to that PR.
 - Exception: removal is allowed. If revalidation on `main` shows a previously disabled test is fixed, remove that disable (add the test back).
 
+## Session Scope (Up to Three PRs)
+
+Each automation session is scoped to **up to three focus PRs**, matching the three-dispatch session cap. Focus-PR selection is NOT a "look at the inbox and skip everything" pass — it is a fill operation. The session ends with up to three focus PRs OR a recorded reason why fewer were possible.
+
+### Focus-PR selection (fill semantics — REQUIRED)
+
+The agent fills focus slots in priority order:
+
+1. **First pass — existing open draft PRs that are actionable.** An open draft PR is actionable when ANY of the following are true (the 4-hour throttle does NOT apply to these — see "Automation Efficiency Guardrails" carve-outs):
+   - lifecycle `new` (no disable batch committed yet)
+   - lifecycle `batch-committed` and no verification has been dispatched yet for the PR
+   - lifecycle `verification-inconclusive` (retry-eligible by definition)
+   - behind `main` and needs a rebase
+   - has an in-flight verification run that has completed since the previous session (state transition needs log analysis)
+
+2. **Second pass — new disable PRs to fill remaining slots.** If after the first pass the agent has fewer than 3 focus PRs, it MUST fill each remaining slot by creating a NEW disable PR for an uncovered non-Galaxy single-card workflow. New-PR creation is a **first-class fill action**, not a low-priority fallback.
+
+The session may NOT end with 0 focus PRs UNLESS one of the following is true:
+
+- Every uncovered non-Galaxy single-card workflow already has an open draft PR associated with it, AND every open draft PR is in a terminal state (`verified-pass`, `verified-fail`, `merged`), OR
+- The agent already created 3 new PRs in this session (cap reached).
+
+"Consider creating a new PR if context allows" is NOT acceptable. New-PR creation is the **default** fill action when fewer than 3 actionable existing focus PRs are available.
+
+### Per-session caps (unchanged)
+
+- At most THREE new workflow dispatches per session (counted across all PRs combined).
+- At most THREE new PRs created per session (one per remaining focus slot).
+- The per-PR "exactly one verification run" budget (excluding infra-inconclusive retries) and the per-PR "exactly one initial disable batch" budget are PER PR, NOT per session.
+
 ## Session Start Rebase + Revalidation (Mandatory)
 
 At the beginning of each active session for a pipeline branch:
@@ -83,6 +113,18 @@ The agent MUST NOT silently substitute a SHA-mismatched run just to "get reuse w
    Record the reason ("no SHA-matching successful source run for <workflow>") in the
    PR comment and disabling-work-so-far.md.
 ```
+
+### Worked example: a pipeline whose `main` runs have been failing for days
+
+**A target workflow whose recent `main` post-commit runs have been failing (e.g. the BH post-commit pipeline's consecutive artifact-expiry / build-failure streak that lasts for days) is NOT a verification blocker.** The correct response is unambiguous:
+
+- Take step 4 of the Decision flow above: dispatch the verification workflow WITHOUT `use-artifacts-from-run` (fresh build).
+- The verification run still validates whether previously-passing jobs regress on the PR branch. The only thing the fresh-build path changes is build time — the regression check itself is intact.
+- Record the reason ("no SHA-matching successful source run for <workflow> — main has been failing since <date>; dispatching fresh build per policy") in the PR comment and `disabling-work-so-far.md`.
+
+**Treating "no recent successful main run" as "waiting for main to recover" is wrong.** Waiting consumes sessions without producing information. Fresh build is always a valid dispatch path; the artifact-reuse optimization is genuinely optional. The Decision flow's step 4 is the answer; it is NOT a fallback to apologize for.
+
+The only scenario in which the agent should refrain from dispatching is when the PR's per-PR verification-run budget is already consumed by a non-inconclusive prior run (see "PR Verification Budget" above) — that is unrelated to whether `main` happens to be passing.
 
 ### When reuse IS chosen: required YAML edits
 
@@ -275,6 +317,8 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
 
 ## Operating Procedure (One Run Per PR)
 
+> Focus-PR selection (which PRs the session acts on at all) is governed by "Session Scope (Up to Three PRs)" above — the agent fills up to three focus slots, falling back to creating new disable PRs when fewer than three existing-PR slots are actionable. The steps below describe the per-PR mechanics once a PR is in focus.
+
 1. Identify deterministic failures from completed runs on `main` and confirm each candidate has the same error signature across at least 3 consecutive `main` runs.
 2. Before any verification run, build exactly one initial disable batch from those `main`-proven failures and commit it to the PR branch.
 3. Do not use PR-branch verification to discover or add new disables; verification is not a disable-discovery pass.
@@ -287,13 +331,32 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
 
 ## Automation Efficiency Guardrails
 
-- Do not perform deep re-analysis for draft PRs updated less than 4 hours ago.
-- For those recently updated draft PRs, allow only lightweight checks unless an exception applies.
-- Lightweight checks include:
+The 4-hour throttle exists to prevent thrash on PRs that have already had recent heavy work (a verification was just dispatched, a deep log analysis was just performed). It is NOT a license to idle, and it is NOT a blanket skip for every PR whose `updatedAt` is recent.
+
+### Default throttle
+
+- Do not perform deep re-analysis for draft PRs updated less than 4 hours ago, EXCEPT when one of the carve-outs below applies.
+- For draft PRs that are throttled (recent updatedAt AND no carve-out applies), allow only lightweight checks:
   - detecting active -> completed run state transitions
   - confirming explicit blocker resolution
   - handling a PR selected as the current focus item because its run just completed
-- In each automation cycle, perform heavy log/deep failure analysis for at most three focus PRs (matching the three-dispatch session cap). See `Session Scope (Up to Three PRs)` above.
+
+### Throttle carve-outs (MUST NOT be throttled, regardless of updatedAt)
+
+The throttle MUST NOT apply to a PR in any of the following lifecycle states. These PRs are eligible to be selected as focus PRs and acted on, even if `updatedAt` is under 4 hours old:
+
+- **`new`** — no disable batch has been committed to the PR yet. The next step is committing the initial disable batch; the throttle has nothing to throttle.
+- **`batch-committed` with no verification ever dispatched** — the PR is sitting in the "waiting to be verified" state. Dispatching its first verification is exactly the work the session should be doing.
+- **`verification-inconclusive`** — these PRs are retry-eligible by policy (see "Interpreting Verification Results"). Throttling them would make them sit forever.
+- **PR is behind `main` and needs a rebase** — rebase + push is allowed regardless of `updatedAt`. (Note: a session-start rebase that itself pushes a merge commit will set the PR's `updatedAt` to "now" — that is precisely the kind of self-bump the throttle must not be tricked by.)
+
+### Why the carve-outs matter
+
+The automation pushes a state-log commit and may merge `main` into each PR at session start. Both of those actions bump `updatedAt`. Without carve-outs, the throttle becomes a self-inflicted starvation loop: every session bumps `updatedAt` to "now", and the next session skips every PR for being <4h old, and the session ends with zero work. The carve-outs above are how the throttle stays scoped to its real purpose (prevent thrash on recently-verified or recently-analyzed PRs) instead of freezing the entire pipeline.
+
+### Focus-PR deep analysis budget
+
+- In each automation cycle, perform heavy log / deep failure analysis for at most three focus PRs (matching the three-dispatch session cap). See "Session Scope (Up to Three PRs)" above.
 - Keep all non-focus PRs on lightweight status checks only.
 
 ## Safety Constraints
@@ -304,6 +367,25 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
 - Keep PRs as draft until final validation.
 - Do not include temporary workflow-pruning edits in the final PR branch.
 - After every workflow dispatch, immediately share the run URL in the status update.
+
+## Anti-Paralysis
+
+A session that ends with **0 focus PRs, 0 new dispatches, and 0 new PRs created** is treated as a **paralysis failure mode**, not a normal completion. Empty sessions are bugs.
+
+When the agent finds itself about to terminate with zero actions, it MUST do one of the following before ending the session:
+
+- Dispatch a fresh-build verification on any PR that is eligible (lifecycle `new`/`batch-committed`/`verification-inconclusive`, or a previous infra-inconclusive run pending retry). "No recent successful `main` run" is not a reason to skip — fresh build is always a valid path (see "Worked example: a pipeline whose `main` runs have been failing for days").
+- Create a new disable PR for an uncovered non-Galaxy single-card workflow, up to the per-session new-PR cap.
+- Perform a removal-only rebase / revalidation pass that actually changes PR state (a state-log push by itself is NOT progress — it must be paired with a real action above).
+
+The agent MUST trace which guardrail caused an apparently-empty session and override it where the carve-outs (throttle exceptions, fresh-build fallback, first-class new-PR fill) allow.
+
+**The only acceptable zero-action session is one in which BOTH of these are true:**
+
+1. Every open draft PR is already in a terminal state (`verified-pass`, `verified-fail`, `merged`), AND
+2. Every non-Galaxy single-card workflow already has an associated draft PR (no uncovered workflow remains).
+
+When in doubt between "skip due to throttle" and "do something useful", do something useful. The throttle is a guard against thrash, not a license to idle. Treating BH-artifact-expiry, "main is broken", or "all PRs <4h old" as session-ending blockers is the failure mode this section exists to prevent.
 
 ## Draft PR / Issue / Status File Management (Mandatory)
 
