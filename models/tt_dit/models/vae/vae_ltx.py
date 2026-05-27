@@ -28,20 +28,24 @@ from loguru import logger
 import ttnn
 
 from ...layers.module import Module, ModuleList, Parameter
-from ...utils.conv3d import _ntuple, aligned_channels, get_conv3d_config
+from ...parallel.config import VaeHWParallelConfig
+from ...parallel.manager import CCLManager
+from ...utils.conv3d import ConvDims, _ntuple, aligned_channels, get_conv3d_config
 
 
 class LTXCausalConv3d(Module):
     """
-    LTX-2 CausalConv3d using ttnn.experimental.conv3d.
+    LTX-2 CausalConv3d using ``ttnn.experimental.conv3d`` with halo exchange.
 
-    Temporal padding: repeats the first frame (kernel_t - 1) times before conv.
-    Spatial padding: symmetric (kernel_h//2, kernel_w//2), handled internally by conv3d op.
+    Mirrors ``WanCausalConv3d``: H and W are sharded across the mesh and the
+    border rows/cols are exchanged via ``ccl_manager.neighbor_pad_persistent_buffer``
+    before the conv. Temporal padding (repeat first frame ``kernel_t - 1`` times)
+    is handled externally on every device — T is not sharded.
 
-    This is simpler than Wan's WanCausalConv3d:
-    - No cache mechanism (processes full video)
-    - No halo exchange (no mesh-parallel spatial sharding for VAE)
-    - Simpler temporal padding (repeat first frame vs explicit cache)
+    LTX-specific differences vs Wan's conv:
+    - No cache mechanism (processes full video, no chunked streaming).
+    - Temporal pad is *frame repeat* (causal=True front-only, causal=False
+      symmetric front+back) rather than the zero-pad Wan uses.
     """
 
     def __init__(
@@ -51,9 +55,11 @@ class LTXCausalConv3d(Module):
         *,
         kernel_size: int = 3,
         stride: Sequence[int] | int = 1,
-        spatial_padding_mode: str = "zeros",
         mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        conv_dims: ConvDims | None = None,
     ) -> None:
         super().__init__()
 
@@ -67,30 +73,44 @@ class LTXCausalConv3d(Module):
         self.kernel_size = _ntuple(kernel_size, 3)
         self.stride = _ntuple(stride, 3)
         self.mesh_device = mesh_device
+        self.parallel_config = parallel_config
+        self.ccl_manager = ccl_manager
         self.dtype = dtype
-        self.spatial_padding_mode = spatial_padding_mode
 
-        # Temporal padding: repeat first frame (kernel_t - 1) times
+        # Temporal padding: ``time_pad`` first-frame copies prepended (causal) or
+        # split front/back (non-causal). T is replicated, so this is local.
         self.time_pad = self.kernel_size[0] - 1
 
-        # Spatial padding amounts
-        self.pad_h = self.kernel_size[1] // 2
-        self.pad_w = self.kernel_size[2] // 2
-
-        # For reflect mode, we do manual padding and pass (0,0,0) to conv3d
-        # For zeros mode, let conv3d handle it internally
-        if spatial_padding_mode == "reflect":
-            self.internal_padding = (0, 0, 0)
+        # Spatial padding split (Wan pattern): when H/W is sharded we do the
+        # padding externally via neighbor_pad (halo exchange); otherwise internal
+        # padding inside conv3d handles it.
+        pad_h = self.kernel_size[1] // 2
+        pad_w = self.kernel_size[2] // 2
+        external_padding = [0, pad_h, pad_w]
+        internal_padding = [0, pad_h, pad_w]
+        if self.parallel_config.height_parallel.factor > 1:
+            internal_padding[1] = 0
         else:
-            self.internal_padding = (0, self.pad_h, self.pad_w)
+            external_padding[1] = 0
+        if self.parallel_config.width_parallel.factor > 1:
+            internal_padding[2] = 0
+        else:
+            external_padding[2] = 0
+        self.external_padding = tuple(external_padding)
+        self.internal_padding = tuple(internal_padding)
 
-        # Get conv3d config (blocking)
+        dims_T, dims_H, dims_W = (conv_dims.T, conv_dims.H, conv_dims.W) if conv_dims is not None else (0, 0, 0)
         self.conv_config = get_conv3d_config(
             self.in_channels,
             self.out_channels,
             self.kernel_size,
             dtype,
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            h_factor=self.parallel_config.height_parallel.factor,
+            w_factor=self.parallel_config.width_parallel.factor,
+            T=dims_T,
+            H=dims_H,
+            W=dims_W,
         )
 
         from models.common.utility_functions import is_blackhole
@@ -127,7 +147,6 @@ class LTXCausalConv3d(Module):
                 if bias is not None:
                     bias = torch.nn.functional.pad(bias, (0, self.out_channels - self.unpadded_out_channels))
 
-            # New API: prepare weights via ttnn tensor + C_in_block
             weight_tt = ttnn.from_torch(weight, dtype=self.dtype, pad_value=0)
             prepared = ttnn.experimental.prepare_conv3d_weights(
                 weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
@@ -139,24 +158,21 @@ class LTXCausalConv3d(Module):
     def forward(self, x_BTHWC: ttnn.Tensor, causal: bool = True) -> ttnn.Tensor:
         """
         Args:
-            x_BTHWC: (B, T, H, W, C) in ROW_MAJOR layout
-            causal: If True, pad temporally at front only (causal).
-                    If False, pad symmetrically at front and back.
+            x_BTHWC: (B, T, H_per_device, W_per_device, C) ROW_MAJOR, H/W fractured on the mesh
+            causal: True = causal temporal pad (front only). False = symmetric.
 
         Returns:
-            (B, T_out, H_out, W_out, C_out) in ROW_MAJOR layout
+            (B, T_out, H_per_device, W_per_device, C_out) ROW_MAJOR.
         """
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
 
-        # Temporal padding
+        # Temporal padding (T is not sharded — local op on every device).
         if self.time_pad > 0:
             first_frame = x_BTHWC[:, :1, :, :, :]
             if causal:
-                # Causal: repeat first frame at front only
                 padding_frames = [first_frame] * self.time_pad
                 x_BTHWC = ttnn.concat([*padding_frames, x_BTHWC], dim=1)
             else:
-                # Symmetric: repeat first frame at front, last frame at back
                 last_frame = x_BTHWC[:, -1:, :, :, :]
                 front_pad = self.time_pad // 2
                 back_pad = self.time_pad // 2
@@ -165,18 +181,45 @@ class LTXCausalConv3d(Module):
                 parts = front_frames + [x_BTHWC] + back_frames
                 x_BTHWC = ttnn.concat(parts, dim=1)
 
-        # Reflect spatial padding: manually pad H and W dims before conv
-        if self.spatial_padding_mode == "reflect" and (self.pad_h > 0 or self.pad_w > 0):
-            if self.pad_h > 0:
-                # Reflect pad H: front=reversed slice from index 1, back=reversed slice from index -2
-                front_h = x_BTHWC[:, :, 1 : self.pad_h + 1, :, :]
-                back_h = x_BTHWC[:, :, -(self.pad_h + 1) : -1, :, :]
-                x_BTHWC = ttnn.concat([front_h, x_BTHWC, back_h], dim=2)
-            if self.pad_w > 0:
-                # Reflect pad W
-                front_w = x_BTHWC[:, :, :, 1 : self.pad_w + 1, :]
-                back_w = x_BTHWC[:, :, :, -(self.pad_w + 1) : -1, :]
-                x_BTHWC = ttnn.concat([front_w, x_BTHWC, back_w], dim=3)
+        # Halo exchange on H/W when sharded. ``external_padding`` is non-zero
+        # only on the dimensions that have ``factor > 1``.
+        h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
+        w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
+
+        if h_pad_needed or w_pad_needed:
+            dims, pad_left, pad_right = [], [], []
+            axes, neighbor_sems, links = [], [], []
+            if h_pad_needed:
+                dims.append(2)
+                pad_left.append(self.external_padding[1])
+                pad_right.append(self.external_padding[1])
+                axes.append(self.parallel_config.height_parallel.mesh_axis)
+                neighbor_sems.append(
+                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.height_parallel.mesh_axis)
+                )
+                links.append(_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2))
+            if w_pad_needed:
+                dims.append(3)
+                pad_left.append(self.external_padding[2])
+                pad_right.append(self.external_padding[2])
+                axes.append(self.parallel_config.width_parallel.mesh_axis)
+                neighbor_sems.append(
+                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)
+                )
+                links.append(_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
+
+            x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
+                x_BTHWC,
+                dims=dims,
+                pad_left=pad_left,
+                pad_right=pad_right,
+                padding_mode="zeros",
+                axes=axes,
+                neighbor_sems=neighbor_sems,
+                num_links=links,
+                logical_h=0,
+                t_front_pad=0,
+            )
 
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
@@ -193,6 +236,14 @@ class LTXCausalConv3d(Module):
         )
 
         return x_BTHWC
+
+
+def _neighbor_pad_num_links(ccl_manager: CCLManager, input_tensor: ttnn.Tensor, dim: int) -> int:
+    """Neighbor pad uses at most the product of upper dims as link count."""
+    upper_dims = 1
+    for i in range(dim):
+        upper_dims *= input_tensor.shape[i]
+    return min(upper_dims, ccl_manager.num_links)
 
 
 class LTXPixelNorm(Module):
@@ -231,7 +282,10 @@ class LTXResnetBlock3D(Module):
         out_channels: int | None = None,
         eps: float = 1e-6,
         mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        conv_dims: ConvDims | None = None,
     ) -> None:
         super().__init__()
 
@@ -239,21 +293,28 @@ class LTXResnetBlock3D(Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
 
+        conv_kwargs = dict(
+            mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
+            dtype=dtype,
+        )
+
         self.norm1 = LTXPixelNorm()
         self.conv1 = LTXCausalConv3d(
-            in_channels, out_channels, kernel_size=3, stride=1, mesh_device=mesh_device, dtype=dtype
+            in_channels, out_channels, kernel_size=3, stride=1, conv_dims=conv_dims, **conv_kwargs
         )
 
         self.norm2 = LTXPixelNorm()
         self.conv2 = LTXCausalConv3d(
-            out_channels, out_channels, kernel_size=3, stride=1, mesh_device=mesh_device, dtype=dtype
+            out_channels, out_channels, kernel_size=3, stride=1, conv_dims=conv_dims, **conv_kwargs
         )
 
         self.has_shortcut = in_channels != out_channels
         if self.has_shortcut:
             # 1x1x1 conv for channel projection (no spatial/temporal change)
             self.conv_shortcut = LTXCausalConv3d(
-                in_channels, out_channels, kernel_size=1, stride=1, mesh_device=mesh_device, dtype=dtype
+                in_channels, out_channels, kernel_size=1, stride=1, conv_dims=conv_dims, **conv_kwargs
             )
             # norm3 is GroupNorm(1) in PyTorch = LayerNorm over channels
             # We store the learned weight/bias as Parameters and apply manually
@@ -328,14 +389,23 @@ class LTXUNetMidBlock3D(Module):
         in_channels: int,
         num_layers: int,
         mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        conv_dims: ConvDims | None = None,
     ) -> None:
         super().__init__()
         self.res_blocks = ModuleList()
         for _ in range(num_layers):
             self.res_blocks.append(
                 LTXResnetBlock3D(
-                    in_channels=in_channels, out_channels=in_channels, mesh_device=mesh_device, dtype=dtype
+                    in_channels=in_channels,
+                    out_channels=in_channels,
+                    mesh_device=mesh_device,
+                    parallel_config=parallel_config,
+                    ccl_manager=ccl_manager,
+                    dtype=dtype,
+                    conv_dims=conv_dims,
                 )
             )
 
@@ -362,9 +432,11 @@ class LTXDepthToSpaceUpsample(Module):
         stride: tuple[int, int, int],
         out_channels_reduction_factor: int = 1,
         residual: bool = False,
-        spatial_padding_mode: str = "zeros",
         mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        conv_dims: ConvDims | None = None,
     ) -> None:
         super().__init__()
         import math
@@ -380,9 +452,11 @@ class LTXDepthToSpaceUpsample(Module):
             conv_out_channels,
             kernel_size=3,
             stride=1,
-            spatial_padding_mode=spatial_padding_mode,
             mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
             dtype=dtype,
+            conv_dims=conv_dims,
         )
 
     def _depth_to_space_bthwc(self, x: ttnn.Tensor, B: int, T: int, H: int, W: int) -> ttnn.Tensor:
@@ -446,7 +520,10 @@ class LTXSpaceToDepthDownsample(Module):
         out_channels: int,
         stride: tuple[int, int, int],
         mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        conv_dims: ConvDims | None = None,
     ) -> None:
         super().__init__()
         import math
@@ -456,7 +533,15 @@ class LTXSpaceToDepthDownsample(Module):
 
         conv_out_channels = out_channels // math.prod(stride)
         self.conv = LTXCausalConv3d(
-            in_channels, conv_out_channels, kernel_size=3, stride=1, mesh_device=mesh_device, dtype=dtype
+            in_channels,
+            conv_out_channels,
+            kernel_size=3,
+            stride=1,
+            mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
+            dtype=dtype,
+            conv_dims=conv_dims,
         )
 
     def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
@@ -495,6 +580,93 @@ class LTXSpaceToDepthDownsample(Module):
         pass
 
 
+def _compute_ltx_decoder_dims(
+    *,
+    decoder_blocks: list[tuple[str, dict]],
+    in_channels: int,
+    base_channels: int,
+    patch_size: int,
+    num_frames: int | None,
+    height: int | None,
+    width: int | None,
+    h_factor: int,
+    w_factor: int,
+) -> list[ConvDims] | None:
+    """Walk the decoder graph to produce one ``ConvDims`` per construction site.
+
+    Returns a list in the exact construction order used by ``LTXVideoDecoder.__init__``:
+    ``[conv_in_dims, *(up_block_dims for up_block in reversed(decoder_blocks)), conv_out_dims]``.
+    Returns ``None`` when any of ``num_frames``/``height``/``width`` is ``None`` —
+    the caller falls back to channel-only blocking lookup.
+
+    Convention (matches Wan ``compute_decoder_dims``):
+    - ``T = current_T + (kernel_t - 1)`` — value the conv3d kernel actually sees
+      after the external temporal pad. For LTX kernel_t=3, that's ``cur_T + 2``.
+    - ``H`` / ``W`` = per-device unpadded spatial dim (after H/W sharding).
+    """
+    if num_frames is None or height is None or width is None:
+        return None
+
+    # Spatial latent geometry. Match pipeline: latent_h = height // 32 / h_factor,
+    # latent_w = width // 32 / w_factor. Both must divide evenly for these dims to
+    # be valid; otherwise we punt to the channel-only fallback path.
+    spatial_compression = 32
+    full_lat_h = height // spatial_compression
+    full_lat_w = width // spatial_compression
+    if full_lat_h % h_factor != 0 or full_lat_w % w_factor != 0:
+        return None
+    cur_H = full_lat_h // h_factor
+    cur_W = full_lat_w // w_factor
+
+    # Latent T = (num_frames - 1) // 8 + 1 (temporal compression factor 8 in the decoder).
+    cur_T = (num_frames - 1) // 8 + 1
+
+    feature_channels = base_channels * 8
+
+    def k3_dims(c_in: int, c_out: int) -> ConvDims:
+        return ConvDims(T=cur_T + 2, H=cur_H, W=cur_W)
+
+    dims: list[ConvDims] = []
+
+    # conv_in: in_channels → feature_channels, kernel=(3,3,3)
+    dims.append(k3_dims(in_channels, feature_channels))
+
+    ch = feature_channels
+    for block_name, block_params in reversed(decoder_blocks):
+        block_config = {"num_layers": block_params} if isinstance(block_params, int) else block_params
+
+        if block_name in ("compress_all", "compress_space", "compress_time"):
+            stride_map = {
+                "compress_all": (2, 2, 2),
+                "compress_space": (1, 2, 2),
+                "compress_time": (2, 1, 1),
+            }
+            p1, p2, p3 = stride_map[block_name]
+            multiplier = block_config.get("multiplier", 1)
+            # conv inside the upsample runs at the PRE-upsample shape
+            dims.append(k3_dims(ch, ch * p1 * p2 * p3 // multiplier))
+            # Post-upsample shape: depth-to-space expands H,W by p2,p3 and T by p1,
+            # then for p1==2 the first frame is removed.
+            cur_H = cur_H * p2
+            cur_W = cur_W * p3
+            cur_T = cur_T * p1 - (1 if p1 == 2 else 0)
+            ch = ch // multiplier
+        elif block_name == "res_x_y":
+            multiplier = block_config.get("multiplier", 2)
+            dims.append(k3_dims(ch, ch // multiplier))
+            ch = ch // multiplier
+        elif block_name == "res_x":
+            dims.append(k3_dims(ch, ch))
+            # shape unchanged
+        else:
+            raise ValueError(f"Unknown decoder block: {block_name}")
+
+    # conv_out: ch → out_channels * patch_size**2
+    dims.append(k3_dims(ch, 1))  # c_out unused; only T/H/W matter
+
+    return dims
+
+
 class LTXVideoDecoder(Module):
     """
     LTX-2 Video VAE Decoder (TTNN).
@@ -520,30 +692,61 @@ class LTXVideoDecoder(Module):
         base_channels: int = 128,
         causal: bool = True,
         mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        num_frames: int | None = None,
+        height: int | None = None,
+        width: int | None = None,
     ) -> None:
         super().__init__()
 
         self.patch_size = patch_size
         self.causal = causal
         self.mesh_device = mesh_device
+        self.parallel_config = parallel_config
+        self.ccl_manager = ccl_manager
         out_channels_with_patch = out_channels * patch_size**2  # 3 * 16 = 48
 
         feature_channels = base_channels * 8  # 1024
 
-        # Per-channel statistics (learned mean/std for denormalization)
+        # Per-channel statistics (learned mean/std for denormalization). Replicated
+        # across H/W shards — applied as a per-channel bias/scale, which is local
+        # to each device.
         self.per_channel_mean = Parameter(total_shape=[1, in_channels], device=mesh_device, dtype=ttnn.float32)
         self.per_channel_std = Parameter(total_shape=[1, in_channels], device=mesh_device, dtype=ttnn.float32)
 
-        # conv_in: 128 → 1024
+        dims_list = _compute_ltx_decoder_dims(
+            decoder_blocks=decoder_blocks,
+            in_channels=in_channels,
+            base_channels=base_channels,
+            patch_size=patch_size,
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            h_factor=parallel_config.height_parallel.factor,
+            w_factor=parallel_config.width_parallel.factor,
+        )
+        dims_iter = list(dims_list) if dims_list is not None else None
+
+        def _pop_dims() -> ConvDims | None:
+            return dims_iter.pop(0) if dims_iter else None
+
+        conv_kwargs = dict(
+            mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
+            dtype=dtype,
+        )
+
+        # conv_in: in_channels → 1024
         self.conv_in = LTXCausalConv3d(
             in_channels,
             feature_channels,
             kernel_size=3,
             stride=1,
-            spatial_padding_mode="reflect",
-            mesh_device=mesh_device,
-            dtype=dtype,
+            conv_dims=_pop_dims(),
+            **conv_kwargs,
         )
 
         # Up blocks (decoder_blocks reversed)
@@ -567,9 +770,8 @@ class LTXVideoDecoder(Module):
                         stride=stride_map[block_name],
                         out_channels_reduction_factor=multiplier,
                         residual=residual,
-                        spatial_padding_mode="reflect",
-                        mesh_device=mesh_device,
-                        dtype=dtype,
+                        conv_dims=_pop_dims(),
+                        **conv_kwargs,
                     )
                 )
                 ch = new_ch
@@ -577,13 +779,23 @@ class LTXVideoDecoder(Module):
                 multiplier = block_config.get("multiplier", 2)
                 new_ch = ch // multiplier
                 self.up_blocks.append(
-                    LTXResnetBlock3D(in_channels=ch, out_channels=new_ch, mesh_device=mesh_device, dtype=dtype)
+                    LTXResnetBlock3D(
+                        in_channels=ch,
+                        out_channels=new_ch,
+                        conv_dims=_pop_dims(),
+                        **conv_kwargs,
+                    )
                 )
                 ch = new_ch
             elif block_name == "res_x":
                 num_layers = block_config.get("num_layers", 1)
                 self.up_blocks.append(
-                    LTXUNetMidBlock3D(in_channels=ch, num_layers=num_layers, mesh_device=mesh_device, dtype=dtype)
+                    LTXUNetMidBlock3D(
+                        in_channels=ch,
+                        num_layers=num_layers,
+                        conv_dims=_pop_dims(),
+                        **conv_kwargs,
+                    )
                 )
                 # ch stays the same (in == out for mid block)
             else:
@@ -596,9 +808,8 @@ class LTXVideoDecoder(Module):
             out_channels_with_patch,
             kernel_size=3,
             stride=1,
-            spatial_padding_mode="reflect",
-            mesh_device=mesh_device,
-            dtype=dtype,
+            conv_dims=_pop_dims(),
+            **conv_kwargs,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -632,38 +843,53 @@ class LTXVideoDecoder(Module):
         Returns:
             (B, 3, F, H, W) torch tensor (pixel space)
         """
-        B, C, T, H, W = sample_BCTHW.shape
+        from ...utils.tensor import fast_device_to_host, typed_tensor_2dshard
 
-        # Denormalize using per-channel statistics
-        mean = self.per_channel_mean.data  # (1, C) on device
-        std = self.per_channel_std.data
-
-        # Convert to BTHWC and push to device
+        # Convert to BTHWC and shard across H (dim 2) and W (dim 3) on the mesh.
         sample = sample_BCTHW.permute(0, 2, 3, 4, 1)  # (B, T, H, W, C)
-        sample_tt = ttnn.from_torch(sample, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+        sample_tt = typed_tensor_2dshard(
+            sample,
+            self.mesh_device,
+            shard_mapping={
+                self.parallel_config.height_parallel.mesh_axis: 2,
+                self.parallel_config.width_parallel.mesh_axis: 3,
+            },
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+        )
 
-        # Denormalize: x = x * std + mean
+        # Denormalize: x = x * std + mean. Per-channel stats are replicated on the
+        # mesh — applies elementwise per device.
+        mean = self.per_channel_mean.data
+        std = self.per_channel_std.data
         sample_tt = ttnn.add(ttnn.multiply(sample_tt, std), mean)
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
 
-        # conv_in
+        # conv_in → up_blocks → norm → silu → conv_out, all fractured on H/W.
         sample_tt = self.conv_in(sample_tt, causal=self.causal)
-
-        # Up blocks
         for up_block in self.up_blocks:
             sample_tt = up_block(sample_tt, causal=self.causal)
 
-        # Output: PixelNorm → SiLU → conv_out
         sample_tt = self.norm_out(sample_tt)
         sample_tt = ttnn.silu(sample_tt)
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
         sample_tt = self.conv_out(sample_tt, causal=self.causal)
 
-        # Convert back to host (take device 0's copy — output is replicated)
-        result = ttnn.to_torch(ttnn.get_device_tensors(sample_tt)[0])  # (B, T_out, H_out, W_out, C_out)
+        # Gather fractured (B, T, H_per_device, W_per_device, C_out) back to a
+        # single torch tensor. fast_device_to_host concatenates along the dims
+        # we mapped each mesh axis to.
+        concat_dims = [None, None]
+        concat_dims[self.parallel_config.height_parallel.mesh_axis] = 2
+        concat_dims[self.parallel_config.width_parallel.mesh_axis] = 3
+        result = fast_device_to_host(
+            sample_tt,
+            self.mesh_device,
+            concat_dims,
+            ccl_manager=self.ccl_manager,
+        )  # (B, T_out, H_out, W_out, C_out)
 
-        # Unpatchify: (B, T, H/4, W/4, 48) → (B, T, H, W, 3) via depth-to-space
-        result = result.permute(0, 4, 1, 2, 3)  # (B, C, T, H, W) — 48 channels
+        # Unpatchify: (B, T, H/4, W/4, 48) → (B, 3, T, H, W) via depth-to-space.
+        result = result.permute(0, 4, 1, 2, 3)
         from einops import rearrange
 
         result = rearrange(

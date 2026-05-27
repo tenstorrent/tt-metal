@@ -130,7 +130,7 @@ class LTXAVPipeline(LTXPipeline):
         gc.collect()
 
         t0 = time.time()
-        self._prepare_vae()
+        self._prepare_vae(num_frames=num_frames, height=height, width=width)
         logger.info(f"VAE loaded in {time.time() - t0:.0f}s")
 
         latent_frames = (num_frames - 1) // 8 + 1
