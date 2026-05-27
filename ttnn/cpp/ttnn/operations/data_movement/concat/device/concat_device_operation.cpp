@@ -8,6 +8,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/core/core.hpp"  // for to_layout
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
