@@ -423,9 +423,7 @@ class T5Attention(Module):
         scores = ttnn.matmul(q, k)
 
         scores = scores + position_bias
-        attn_weights = ttnn.softmax(
-            scores, dim=-1, numeric_stable=False, compute_kernel_config=self.layer_norm.compute_kernel_config
-        )
+        attn_weights = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.layer_norm.compute_kernel_config)
         attn_output = ttnn.matmul(attn_weights, v)
         attn_output = ttnn.transformer.concatenate_heads(attn_output)
 
