@@ -68,15 +68,16 @@ inline TensorSpec make_alias_l1_tensor_spec(uint32_t entry_size, uint32_t num_en
 // producer = DM RISC 0, consumer = DM RISC 1 (valid on WH/BH and Quasar).
 inline dfb::DataflowBufferConfig make_1sx1s_config(uint32_t entry_size, uint32_t num_entries) {
     return dfb::DataflowBufferConfig{
-        .entry_size         = entry_size,
-        .num_entries        = num_entries,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
         .producer_risc_mask = 0x1,
-        .num_producers      = 1,
-        .pap                = dfb::AccessPattern::STRIDED,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x2,
-        .num_consumers      = 1,
-        .cap                = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false,
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false,
     };
 }
 
@@ -114,31 +115,31 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
 
     // DM kernel configs (Gen1 + Gen2 variants so the same spec runs everywhere).
     const DataMovementConfiguration producer_cfg{
-        .gen1_data_movement_config = DataMovementConfiguration::Gen1DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0},
-        .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
+        .gen1_data_movement_config =
+            DataMovementConfiguration::Gen1DataMovementConfig{.processor = DataMovementProcessor::RISCV_0},
+        .gen2_data_movement_config =
+            DataMovementConfiguration::Gen2DataMovementConfig{.disable_implicit_sync_for = {"dfb_a", "dfb_b"}},
     };
     const DataMovementConfiguration consumer_cfg{
-        .gen1_data_movement_config = DataMovementConfiguration::Gen1DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1},
-        .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
+        .gen1_data_movement_config =
+            DataMovementConfiguration::Gen1DataMovementConfig{.processor = DataMovementProcessor::RISCV_1},
+        .gen2_data_movement_config =
+            DataMovementConfiguration::Gen2DataMovementConfig{.disable_implicit_sync_for = {"dfb_a", "dfb_b"}},
     };
 
     DataflowBufferSpec dfb_a{
-        .unique_id        = "dfb_a",
-        .entry_size       = entry_size_a,
-        .num_entries      = num_entries_a,
+        .unique_id = "dfb_a",
+        .entry_size = entry_size_a,
+        .num_entries = num_entries_a,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .alias_with       = {"dfb_b"},
-        .disable_implicit_sync = true,
+        .alias_with = {"dfb_b"},
     };
     DataflowBufferSpec dfb_b{
-        .unique_id        = "dfb_b",
-        .entry_size       = entry_size_b,
-        .num_entries      = num_entries_b,
+        .unique_id = "dfb_b",
+        .entry_size = entry_size_b,
+        .num_entries = num_entries_b,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .alias_with       = {"dfb_a"},
-        .disable_implicit_sync = true,
+        .alias_with = {"dfb_a"},
     };
 
     KernelSpec producer{
@@ -315,34 +316,36 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
         *mesh_device, make_alias_l1_tensor_spec(entry_size, num_entries), TensorTopology{});
 
     const DataMovementConfiguration producer_cfg{
-        .gen1_data_movement_config = DataMovementConfiguration::Gen1DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0},
-        .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
+        .gen1_data_movement_config =
+            DataMovementConfiguration::Gen1DataMovementConfig{.processor = DataMovementProcessor::RISCV_0},
+        .gen2_data_movement_config =
+            DataMovementConfiguration::Gen2DataMovementConfig{
+                .disable_implicit_sync_for = {"dfb_borrowed", "dfb_alias"}},
     };
     const DataMovementConfiguration consumer_cfg{
-        .gen1_data_movement_config = DataMovementConfiguration::Gen1DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1},
-        .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
+        .gen1_data_movement_config =
+            DataMovementConfiguration::Gen1DataMovementConfig{.processor = DataMovementProcessor::RISCV_1},
+        .gen2_data_movement_config =
+            DataMovementConfiguration::Gen2DataMovementConfig{
+                .disable_implicit_sync_for = {"dfb_borrowed", "dfb_alias"}},
     };
 
     // dfb_borrowed: backed by ring_tensor (L1)
     DataflowBufferSpec dfb_borrowed{
-        .unique_id             = "dfb_borrowed",
-        .entry_size            = entry_size,
-        .num_entries           = num_entries,
-        .data_format_metadata  = tt::DataFormat::Float16_b,
-        .borrowed_from         = "ring_tensor",
-        .alias_with            = {"dfb_alias"},
-        .disable_implicit_sync = true,
+        .unique_id = "dfb_borrowed",
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .borrowed_from = "ring_tensor",
+        .alias_with = {"dfb_alias"},
     };
     DataflowBufferSpec dfb_alias_spec{
-        .unique_id             = "dfb_alias",
-        .entry_size            = entry_size,
-        .num_entries           = num_entries,
-        .data_format_metadata  = tt::DataFormat::Float16_b,
-        .borrowed_from         = "ring_tensor",
-        .alias_with            = {"dfb_borrowed"},
-        .disable_implicit_sync = true,
+        .unique_id = "dfb_alias",
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .borrowed_from = "ring_tensor",
+        .alias_with = {"dfb_borrowed"},
     };
 
     KernelSpec producer{

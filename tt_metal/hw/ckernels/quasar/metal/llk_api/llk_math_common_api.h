@@ -84,6 +84,19 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
 inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {}
 
 /**
+ * @brief Returns the effective math fidelity for an eltwise binary operation.
+ * Math fidelity only applies to ELWMUL; for all other binary ops (ELWADD/ELWSUB), LoFi is used.
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam math_fidelity: The requested math fidelity
+ * @return The requested math_fidelity for ELWMUL, MathFidelity::LoFi otherwise.
+ */
+template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity>
+inline constexpr MathFidelity get_effective_math_fidelity() {
+    return (eltwise_binary_type == EltwiseBinaryType::ELWMUL) ? math_fidelity : MathFidelity::LoFi;
+}
+
+/**
  * @brief Sets the dest dvalid for FPU/SFPU
  *
  * @tparam SET_DEST_DVALID: which client to set data valid for, values = p_cleardvalid::FPU/SFPU

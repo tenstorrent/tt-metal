@@ -1511,7 +1511,7 @@ RING_JOINT_PERF_CHECK_CONFIGS = [
     # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
     # 4-device ring (QuietBox)
     ("wan2_2_1xGLX", 288, 512, 4, 68.9),
-    ("mla_100k", 160, 320, 4, 63.0),
+    ("mla_100k", 160, 320, 4, 63.2),
 ]
 
 
