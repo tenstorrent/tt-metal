@@ -507,6 +507,10 @@ void kernel_main() {
                             noc_async_posted_writes_flushed();
                             prefetcher_finalize_block</*skip_ptr_update=*/true>(
                                 iface, t_page_bytes_per_recv, num_receivers, noc_index);
+                        } else {
+                            // The ping-pong DMA can reuse this stage slot two chunks later.
+                            // Make sure all posted writes sourced from it have departed first.
+                            noc_async_posted_writes_flushed();
                         }
 
                         // Advance counters to next chunk.
