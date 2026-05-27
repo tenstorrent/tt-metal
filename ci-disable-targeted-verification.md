@@ -17,6 +17,8 @@ Run only the previously failing jobs unless there is a reason to re-expand scope
 Each PR gets exactly one targeted verification run total.
 
 - Never dispatch a second verification run for the same PR.
+- The single run exists only to confirm no regressions in jobs that were passing on `main`.
+- Do not use PR-branch verification output to discover, justify, or add new disables.
 - Plan and scope that one run carefully before dispatch.
 - Keep existing artifact-reuse/no-rebuild requirements for that one run.
 
@@ -24,6 +26,8 @@ Each PR gets exactly one targeted verification run total.
 
 Each PR gets exactly one initial disable batch.
 
+- Before any PR-branch verification run, commit the single allowed initial disable batch based only on deterministic failures already observed on `main`.
+- Eligibility for that initial batch requires the same error signature across at least 3 consecutive completed runs on `main`.
 - After the first disable batch is committed to that PR, do not add new disables to that PR.
 - Exception: removal is allowed. If revalidation on `main` shows a previously disabled test is fixed, remove that disable (add the test back).
 
@@ -84,14 +88,14 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
 
 ## Operating Procedure (One Run Per PR)
 
-1. Identify failing jobs from the latest relevant completed run on `main`.
-2. Build one initial disable batch and commit it to the PR branch.
-3. Build the target job set from those failures for a single pruned verification pass.
-4. Create a temporary verification branch from the current feature branch.
-5. In the temporary branch, modify workflow/job selection so only target jobs run.
-6. Dispatch exactly one targeted verification run for the PR.
-7. Inspect results and apply deterministic disable/fix decisions on the real feature branch.
-8. After that run, do not run another verification pass for the same PR.
+1. Identify deterministic failures from completed runs on `main` and confirm each candidate has the same error signature across at least 3 consecutive `main` runs.
+2. Before any verification run, build exactly one initial disable batch from those `main`-proven failures and commit it to the PR branch.
+3. Do not use PR-branch verification to discover or add new disables; verification is not a disable-discovery pass.
+4. Build the one-run target job set only for regression confirmation in jobs that were passing on `main`.
+5. Create a temporary verification branch from the current feature branch.
+6. In the temporary branch, modify workflow/job selection so only target jobs run.
+7. Dispatch exactly one targeted verification run for the PR.
+8. After that run, do not add new disables and do not run another verification pass for the same PR.
 9. Subsequent PR updates are removal-only when latest `main` proves a previously disabled test is fixed.
 
 ## Automation Efficiency Guardrails
