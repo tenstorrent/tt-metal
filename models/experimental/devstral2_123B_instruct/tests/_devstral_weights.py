@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import json
 import os
+from typing import NoReturn
+
 import pytest
 import torch
 from transformers import AutoConfig
@@ -40,7 +42,7 @@ def _hf_local_files_only() -> bool:
     return os.getenv("DEVSTRAL2_HF_LOCAL_ONLY", "").lower() in ("1", "true", "yes")
 
 
-def _skip_download_failure(what: str, exc: BaseException) -> None:
+def _skip_download_failure(what: str, exc: BaseException) -> NoReturn:
     pytest.skip(
         f"Could not download {what} from {DEVSTRAL2_LARGE_REPO_ID} "
         f"(set HF_TOKEN if gated, or pre-cache weights). Error: {exc}"

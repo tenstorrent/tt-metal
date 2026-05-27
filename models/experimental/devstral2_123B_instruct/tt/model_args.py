@@ -274,10 +274,12 @@ def is_blackhole_mesh(mesh_device) -> bool:
         if mesh_device is not None and hasattr(mesh_device, "arch"):
             return mesh_device.arch() == ttnn.device.Arch.BLACKHOLE
     except Exception:
+        # Fall through to alternate Blackhole detection probes below.
         pass
     try:
         return ttnn.device.is_blackhole(mesh_device)
     except Exception:
+        # Fall through to models.common.utility_functions.is_blackhole().
         pass
     from models.common.utility_functions import is_blackhole
 

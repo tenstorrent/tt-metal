@@ -490,7 +490,7 @@ def _generate(
             for chunk_idx in range(1, num_prefill_chunks):
                 chunk_start = chunk_idx * kv_block_size
                 chunk_tokens = input_ids_padded[:, chunk_start : chunk_start + kv_block_size]
-                chunk_page_table = _update_prefill_trace_buffers(
+                _update_prefill_trace_buffers(
                     rotary_emb=rotary_emb,
                     mesh_device=mesh_device,
                     prefill_chunk_dev=prefill_chunk_dev,
@@ -533,7 +533,6 @@ def _generate(
             local_pos = (prompt_len - 1) - last_chunk_start
             next_token = int(logits_torch[local_pos].argmax().item())
             prefill_trace_logits.deallocate(True)
-            prefill_trace_logits = None
             logger.info(f"Chunked prefill ({num_prefill_chunks} chunk(s)): {(time.time() - t_prefill) * 1000:.0f}ms")
 
         assert next_token is not None
