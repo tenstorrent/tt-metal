@@ -28,8 +28,10 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
 _VOCODER_EXPAND_MATMUL_CHUNK = TILE
 # HiFi-GAN conv_pre input length per chunk (upsample L1 grows quickly on BH).
 _HIFIGAN_MEL_CHUNK = 384
-# Chunk long ``ttnn.conv1d`` along time (resblock after upsample can exceed mel chunk length).
-_VOCODER_CONV1D_CHUNK_ROWS = MATMUL_1D_SEQ_THRESHOLD
+# Max upsampled time for a single ``ttnn.conv1d`` on BH (above this, use fixed-window chunks).
+_HIFIGAN_MAX_CONV1D_TLEN = 4096
+# Interior time rows per conv chunk; halo uses same-padding overlap for correct stitching.
+_VOCODER_CONV1D_INTERIOR = 512
 
 
 def _vocoder_dram_slice_count(input_length: int) -> int:
@@ -96,16 +98,13 @@ def _vocoder_conv1d_config(
         weights_dtype=ttnn.bfloat8_b,
         shard_layout=None,
         deallocate_activation=True,
-        enable_weights_double_buffer=True,
-        enable_act_double_buffer=True,
+        enable_weights_double_buffer=False,
+        enable_act_double_buffer=False,
     )
     if fused_post_activation is not None:
         conv_kwargs["activation"] = fused_post_activation
     if int(input_length) > 64 or int(in_channels) >= 512:
         conv_kwargs["act_block_h_override"] = 32
-    if int(input_length) > 256:
-        conv_kwargs["enable_act_double_buffer"] = False
-        conv_kwargs["enable_weights_double_buffer"] = False
     return ttnn.Conv1dConfig(**conv_kwargs)
 
 
@@ -604,7 +603,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
             rm_buf = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x_in = rm_buf
 
-        if seq <= _VOCODER_CONV1D_CHUNK_ROWS:
+        # Below this length one conv1d fits BH l1_small (double-buffer off). Only chunk above it.
+        if seq <= _HIFIGAN_MAX_CONV1D_TLEN:
             return self._conv1d_run(
                 x_in,
                 weight=weight,
@@ -622,15 +622,34 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 deallocate_input=rm_buf is not None,
             )
 
-        chunk_size = 256 if in_channels >= 512 else _VOCODER_CONV1D_CHUNK_ROWS
+        # HF stores symmetric same-padding per layer; that is the overlap needed between chunks.
         halo = int(padding)
+        interior = _VOCODER_CONV1D_INTERIOR
+        fixed_in = interior + 2 * halo
+        if seq <= fixed_in:
+            return self._conv1d_run(
+                x_in,
+                weight=weight,
+                bias=bias,
+                batch=batch,
+                input_length=seq,
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                groups=groups,
+                dilation=dilation,
+                fused_post_activation=fused_post_activation,
+                deallocate_input=rm_buf is not None,
+            )
+
         chunks: list[ttnn.Tensor] = []
-        for start in range(0, seq, chunk_size):
-            end = min(start + chunk_size, seq)
+        for start in range(0, seq, interior):
+            end = min(start + interior, seq)
             chunk_rows = end - start
             in_start = max(0, start - halo)
             in_end = min(seq, end + halo)
-            win_len = in_end - in_start
             x_win = ttnn.slice(
                 x_in,
                 [0, in_start, 0],
@@ -638,12 +657,24 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 (1, 1, 1),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            win_len = in_end - in_start
+            if win_len < fixed_in:
+                pad_rows = fixed_in - win_len
+                pad = ttnn.zeros(
+                    (batch, pad_rows, in_channels),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                x_win = ttnn.concat([x_win, pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(pad)
             out_win, _ = self._conv1d_run(
                 x_win,
                 weight=weight,
                 bias=bias,
                 batch=batch,
-                input_length=win_len,
+                input_length=fixed_in,
                 in_channels=in_channels,
                 out_channels=out_channels,
                 kernel_size=kernel_size,
@@ -655,17 +686,14 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 deallocate_input=True,
             )
             out_start = start - in_start
-            if out_start > 0 or chunk_rows < int(out_win.shape[1]):
-                out_chunk = ttnn.slice(
-                    out_win,
-                    [0, out_start, 0],
-                    [batch, out_start + chunk_rows, out_channels],
-                    (1, 1, 1),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                ttnn.deallocate(out_win)
-            else:
-                out_chunk = out_win
+            out_chunk = ttnn.slice(
+                out_win,
+                [0, out_start, 0],
+                [batch, out_start + chunk_rows, out_channels],
+                (1, 1, 1),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(out_win)
             chunks.append(out_chunk)
 
         if rm_buf is not None:
@@ -913,31 +941,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
         return x_nlc
 
     def _hifi_gan(self, x_nlc: ttnn.Tensor, hg: Any, *, batch: int, tlen: int) -> ttnn.Tensor:
-        """HiFi-GAN stack; time-chunked when ``tlen`` exceeds BH upsample L1 budget."""
-        if tlen <= _HIFIGAN_MEL_CHUNK:
-            return self._hifi_gan_once(x_nlc, hg, batch=batch, tlen=tlen)
-
-        channels = int(x_nlc.shape[2])
-        wav_parts: list[ttnn.Tensor] = []
-        pos = 0
-        while pos < tlen:
-            end = min(pos + _HIFIGAN_MEL_CHUNK, tlen)
-            span = end - pos
-            x_sl = ttnn.slice(
-                x_nlc,
-                [0, pos, 0],
-                [batch, end, channels],
-                (1, 1, 1),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            wav_sl = self._hifi_gan_once(x_sl, hg, batch=batch, tlen=span)
-            ttnn.deallocate(x_sl)
-            wav_parts.append(wav_sl)
-            pos = end
-        ttnn.deallocate(x_nlc)
-        if len(wav_parts) == 1:
-            return wav_parts[0]
-        return ttnn.concat(wav_parts, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        """HiFi-GAN stack; long ``conv1d`` timelines are chunked inside ``_conv1d`` (not mel splits)."""
+        return self._hifi_gan_once(x_nlc, hg, batch=batch, tlen=tlen)
 
     def _hifi_gan_once(self, x_nlc: ttnn.Tensor, hg: Any, *, batch: int, tlen: int) -> ttnn.Tensor:
         cp = hg.conv_pre
