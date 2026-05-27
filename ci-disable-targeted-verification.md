@@ -151,15 +151,44 @@ REQUIREMENT 4 — Merge Gate is only acceptable when build intent demonstrably m
 - Before using a Merge Gate run, confirm its build intent matches the target workflow's `build-artifact` `with:` block field-by-field.
 - If unsure, fall back to Requirement 3 (same workflow's main runs).
 
-REQUIREMENT 5 — Commit alignment is NOT required:
-- The downloader fetches artifacts by name from the source run; it does not require the source run to be on the same commit as the verification branch.
-- BUT the source run should be reasonably recent so the downloaded build is compatible with the test code on the verification branch. Prefer a source run on a commit no more than a few days older than the verification branch's base.
+REQUIREMENT 5 — Source run's head SHA MUST equal the feature branch's rebase base on `main` (HARD REQUIREMENT):
+- The source run's `head_sha` (with `head_branch == main`) MUST equal the exact `main` commit that the feature branch is currently rebased on. Tracy / build-type / platform matching alone is NOT sufficient — commit-SHA parity is the hard requirement.
+- Determine the feature branch's rebase base with:
+  ```bash
+  git fetch origin main
+  FEATURE_BASE=$(git merge-base origin/main <feature-branch>)
+  ```
+  After the mandatory session-start rebase (see "Session Start Rebase + Revalidation"), `FEATURE_BASE` should equal the `origin/main` HEAD that was used for the rebase.
+- Confirm the candidate source run with:
+  ```bash
+  gh run view <candidate-source-run-id> --json headSha,headBranch,event,conclusion,workflowName
+  ```
+  The returned `headSha` MUST equal `FEATURE_BASE`, `headBranch` MUST be `main`, and `conclusion` MUST be `success`.
+- If no successful run on the exact rebase-base commit exists for the target workflow, the agent MUST do one of:
+  (a) rebase the feature branch onto a slightly older `main` commit that DOES have a matching successful run for the target workflow (then re-run the session-start revalidation), OR
+  (b) skip the verification dispatch this session and record the reason (no SHA-matching source run available) in `disabling-work-so-far.md`.
+- The agent MUST NOT silently fall back to a "close enough" / "recent successful" / "tracy matches" source run on a different commit. A SHA mismatch is a hard failure of this requirement, not a soft preference.
+
+Rationale: when the source run was built from a different `main` commit than the feature branch's base, the downloaded build artifacts encode different source code than the tests being executed on the verification branch. The resulting test diffs cannot be cleanly attributed to the disable change — they may instead reflect drift between the build SHA and the test SHA. Agents have repeatedly picked "successful and tracy-matching" runs on a different commit and produced misleading verification results; SHA parity eliminates that failure mode.
 
 PRE-DISPATCH SANITY CHECK (DO THIS EVERY TIME):
 Before dispatching, verify all of the following about the chosen source run:
 1. `conclusion == "success"` — confirmed via API.
 2. Same workflow as target OR build intent confirmed to match field-by-field.
 3. Required artifacts present (build tarball; wheel if target needs one). You can list the source run's artifacts via the API and look for the expected name patterns.
+4. `headSha` equals the feature branch's rebase base (Requirement 5). Run the exact check below and abort the dispatch on mismatch:
+   ```bash
+   git fetch origin main
+   FEATURE_BASE=$(git merge-base origin/main <feature-branch>)
+   SOURCE_SHA=$(gh run view <candidate-source-run-id> --json headSha --jq .headSha)
+   if [ "$FEATURE_BASE" = "$SOURCE_SHA" ]; then
+     echo "OK — source run head SHA matches feature branch base: $FEATURE_BASE"
+   else
+     echo "MISMATCH — do not use this run. FEATURE_BASE=$FEATURE_BASE SOURCE_SHA=$SOURCE_SHA"
+     exit 1
+   fi
+   ```
+   `tracy` / `build-type` / `platform` matching alone is NOT sufficient — if this check prints `MISMATCH`, pick a different source run (or follow Requirement 5's (a)/(b) options).
 
 If any check fails, pick a different source run. Do NOT proceed with a dispatch that has even one mismatch — the resulting infra-inconclusive run wastes a dispatch slot for no information.
 
@@ -168,6 +197,7 @@ COMMON FAILURE SIGNATURES AND THEIR CAUSES:
 - `ERROR: Could not find build artifact matching expected pattern` with `TRACY_ENABLED (requested): true` and the source was built tracy=false → Tracy mismatch (Requirement 2 violated). Pick a source built with the same tracy setting, or fall back to Requirement 3.
 - `ERROR: No ttm_any.tar.zst or ttm_any.tar found after download` → Source run's build job did not publish the expected build artifact. Pick a different source.
 - Test job fails at "Initialize containers" / artifact download → Build intent mismatch or missing artifacts in source. See above.
+- Tests on the verification branch report unexpected diffs (failures or new passes) in jobs that were stable on `main` immediately before the disable change → Likely Requirement 5 violated (source run's `head_sha` ≠ feature branch's rebase base). The downloaded build encodes different source code than the tests being executed, so the diffs cannot be cleanly attributed to the disable patch. Re-pick a source run whose `headSha` matches the feature branch's `git merge-base origin/main <feature-branch>` and re-dispatch (subject to the per-session dispatch cap). Do NOT accept a "tracy and build-type matched, must be fine" justification — SHA parity is the hard requirement.
 
 ### Verifying the patch worked before dispatch
 
@@ -176,6 +206,8 @@ After committing the workflow edits on the temporary branch, you can sanity-chec
 If either is missing, the dispatch will run a fresh build instead of reusing artifacts.
 
 ### End-of-session verification of dispatched runs (mandatory)
+
+This section is the post-dispatch counterpart of "Source run selection rules (STRICT)" above. See those rules — and in particular Requirement 5 — for the same-commit (head-SHA == feature-branch rebase base) requirement that MUST already be satisfied *before* dispatch; the checks below only confirm the artifact step landed cleanly after a properly-selected source run.
 
 Before the agent ends its session, for every targeted verification run it dispatched during that session, the agent MUST poll the run until its artifact-acquisition step is no longer queued or in progress. The agent is NOT allowed to end the session by simply reporting "verification dispatched" — it must confirm the artifact step reached a terminal state and report that state.
 
