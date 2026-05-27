@@ -405,20 +405,11 @@ _BLOCKINGS = {
     # Production target: 121 frames @ 512x768, latent (1, 16, 16, 24, 128).
     # Per-device (H,W) after h=2/w=4 shard: lat(8,6) up0(8,6) up1(16,12)
     # up2(32,24) up3(64,48). T grows 16 → 31 → 61 → 121 across upsamples.
-    # Initial blockings hand-picked from nearest-shape Wan analogues
-    # (target T_block≤7, H*W≈32, C_in_block ≤ 256). Refine via sweep — see
-    # wiki/VAE_BLOCKING_SWEEP_LTX.md.
+    # Initial entries deliberately omitted: first hand-picks (Cout_block=128
+    # with K=27*256 patch) blew the BH L1 budget (~1.7MB weight CB > 1.5MB).
+    # Channel-only fallback handles correctness; sweep refinement to land
+    # performant entries is tracked in wiki/VAE_BLOCKING_SWEEP_LTX.md.
     # ===================================================================
-    (2, 4, 128, 1024, (3, 3, 3), 18, 8, 6): (128, 128, 7, 4, 4),  # conv_in
-    (2, 4, 1024, 1024, (3, 3, 3), 18, 8, 6): (256, 128, 7, 4, 4),  # mid res_x
-    (2, 4, 1024, 4096, (3, 3, 3), 18, 8, 6): (256, 128, 1, 4, 4),  # compress_all m=2 conv
-    (2, 4, 512, 512, (3, 3, 3), 33, 16, 12): (256, 128, 7, 4, 8),  # res_x post-up0
-    (2, 4, 512, 4096, (3, 3, 3), 33, 16, 12): (256, 128, 1, 4, 8),  # compress_all m=1 conv
-    (2, 4, 512, 512, (3, 3, 3), 63, 32, 24): (256, 128, 7, 4, 8),  # res_x + compress_time
-    (2, 4, 256, 256, (3, 3, 3), 123, 32, 24): (256, 128, 7, 4, 8),  # res_x post-compress_time
-    (2, 4, 256, 512, (3, 3, 3), 123, 32, 24): (256, 128, 7, 4, 8),  # compress_space conv
-    (2, 4, 128, 128, (3, 3, 3), 123, 64, 48): (128, 128, 7, 4, 8),  # final res_x
-    (2, 4, 128, 48, (3, 3, 3), 123, 64, 48): (128, 32, 7, 4, 8),  # conv_out
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.

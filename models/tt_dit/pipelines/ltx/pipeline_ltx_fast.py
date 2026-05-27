@@ -268,8 +268,10 @@ class LTXFastPipeline(LTXAVPipeline):
         v_embeds = results[0].video_encoding.float()
         a_embeds = results[0].audio_encoding.float()
 
+        t0 = time.time()
         self._prepare_transformer()
         gc.collect()
+        logger.info(f"Transformer prepare (S1): {time.time() - t0:.1f}s")
 
         logger.info(f"Stage 1: {s1_height}x{s1_width}, {len(DISTILLED_SIGMA_VALUES) - 1} steps")
         t0 = time.time()
@@ -282,7 +284,7 @@ class LTXFastPipeline(LTXAVPipeline):
             sigma_values=DISTILLED_SIGMA_VALUES,
             seed=seed,
         )
-        logger.info(f"Stage 1: {time.time() - t0:.1f}s")
+        logger.info(f"Stage 1 denoise: {time.time() - t0:.1f}s")
 
         if os.environ.get("LTX_DECODE_S1_AUDIO", "").lower() in ("1", "true", "yes"):
             s1_path = output_path.replace(".mp4", "_s1.wav")
@@ -301,13 +303,17 @@ class LTXFastPipeline(LTXAVPipeline):
         latent_frames = (num_frames - 1) // 8 + 1
         s1_h, s1_w = s1_height // 32, s1_width // 32
         s1_spatial = s1_video.reshape(1, latent_frames, s1_h, s1_w, 128).permute(0, 4, 1, 2, 3)
+        t0 = time.time()
         upsampled = self._upsample_latent_reference(s1_spatial, upsampler_path)
+        logger.info(f"Latent upsample: {time.time() - t0:.1f}s")
         upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
             1, latent_frames * (height // 32) * (width // 32), 128
         )
 
+        t0 = time.time()
         self._prepare_transformer()
         gc.collect()
+        logger.info(f"Transformer prepare (S2): {time.time() - t0:.1f}s")
 
         logger.info(f"Stage 2: {height}x{width}, {len(STAGE_2_DISTILLED_SIGMA_VALUES) - 1} steps")
         t0 = time.time()
@@ -322,20 +328,33 @@ class LTXFastPipeline(LTXAVPipeline):
             initial_video_latent=upsampled_flat,
             initial_audio_latent=s1_audio.unsqueeze(0) if s1_audio.dim() == 2 else s1_audio,
         )
-        logger.info(f"Stage 2: {time.time() - t0:.1f}s")
+        logger.info(f"Stage 2 denoise: {time.time() - t0:.1f}s")
 
         # Free transformer device memory before loading VAE. Unlike the inter-
         # stage destroy that was just removed, this one is safe because no
         # second cache load follows — the next cache.load_model is for the VAE
         # under a different subfolder/model.
+        t0 = time.time()
         self.transformer = None
         gc.collect()
+        logger.info(f"Transformer free: {time.time() - t0:.1f}s")
 
+        t0 = time.time()
         self._prepare_vae(num_frames=num_frames, height=height, width=width)
+        logger.info(f"VAE prepare: {time.time() - t0:.1f}s")
+
         latent_h, latent_w = height // 32, width // 32
+        t0 = time.time()
         video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w)
+        logger.info(f"VAE decode (forward): {time.time() - t0:.1f}s — {tuple(video_pixels.shape)}")
+
+        t0 = time.time()
         audio_obj = self.decode_audio_reference(s2_audio, num_frames, fps=fps)
+        logger.info(f"Audio decode: {time.time() - t0:.1f}s")
+
+        t0 = time.time()
         self.export_video(video_pixels, output_path, fps=fps, audio=audio_obj)
+        logger.info(f"Video export: {time.time() - t0:.1f}s")
 
         logger.info(f"Total: {time.time() - total_t0:.1f}s | Output: {output_path}")
         return output_path
