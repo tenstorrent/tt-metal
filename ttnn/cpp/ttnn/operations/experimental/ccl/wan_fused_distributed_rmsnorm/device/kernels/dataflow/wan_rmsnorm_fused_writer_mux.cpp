@@ -76,16 +76,19 @@ constexpr uint32_t num_targets_forward = get_compile_time_arg_val(9);
 constexpr uint32_t num_targets_backward = get_compile_time_arg_val(10);
 constexpr uint32_t chunk_size_rows = get_compile_time_arg_val(11);
 constexpr uint32_t num_chunks_per_device = get_compile_time_arg_val(12);
+// See wan_rmsnorm_fused_writer.cpp for the output_tile_idx mapping rationale.
+constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(13);
+constexpr uint32_t total_num_tile_rows = get_compile_time_arg_val(14);
 
 // MUX CT args (5, in canonical order — matches ccl::fabric_mux_connection_ct_args).
 // Same for forward and backward MUX (we use the same FabricMuxConfig for both).
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(13);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(14);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(15);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(16);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(17);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(15);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(16);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(17);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(18);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(19);
 
-constexpr auto output_args = TensorAccessorArgs<18>();
+constexpr auto output_args = TensorAccessorArgs<20>();
 // Packed-page DRAM scratch accessor.
 constexpr auto stats_dram_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
@@ -446,16 +449,19 @@ void kernel_main() {
         // because over-pushed garbage slots never drain.
         for (uint32_t r = 0; r < rows_in_chunk; r++) {
             const uint32_t tile_row = tile_row_start + row_processed + r;
-            uint32_t output_tile_idx = tile_row * num_tile_cols;
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 const uint32_t tiles_in_block =
                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
                 cb_wait_front(output_cb, block_size);
                 uint32_t output_rd_ptr = get_read_ptr(output_cb);
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
+                    const uint32_t c = col_tile + i;
+                    const uint32_t h = c / head_dim_tiles;
+                    const uint32_t t_col = c - h * head_dim_tiles;
+                    const uint32_t output_tile_idx =
+                        h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
                     noc_async_write_tile(output_tile_idx, output_accessor, output_rd_ptr);
                     output_rd_ptr += output_tile_bytes;
-                    output_tile_idx++;
                 }
                 // Use _flushed (write request committed to NoC) instead of
                 // _barrier (round-trip ACK) — composite post_allgather pattern.

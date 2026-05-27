@@ -579,6 +579,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             device_index,
             num_targets_forward,
             num_targets_backward,
+            head_dim_tiles,
+            num_tile_rows,
         };
         TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
@@ -613,6 +615,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             num_targets_backward,
             chunk_size_rows,
             num_chunks_per_device,
+            head_dim_tiles,
+            num_tile_rows,
         };
         // Each link's MUX has num_workers_per_link clients; the writer kernel's
         // num_mux_clients CT arg uses this per-link count (termination master

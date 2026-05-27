@@ -628,20 +628,7 @@ def test_wan_fused_distributed_rmsnorm_perf_tp8_ring_native(
         pytest.param(32, 256, 1, False, id="N32_H256_1head_bcast"),
         pytest.param(32, 512, 4, False, id="N32_H512_4heads_bcast"),
         pytest.param(32, 512, 4, True, id="N32_H512_4heads_perhead"),
-        # Per-head RoPE with multi-tile-row chunks (num_tile_rows=2) + many
-        # heads (num_heads=8) drops PCC to ~12% (close to 1/num_heads),
-        # suggesting only one head's cos/sin is being applied per col-tile in
-        # the kernel for the larger config. Needs further kernel debug; xfail
-        # until then. The single-row 4-head case above exercises the
-        # per-head code path and passes at >99.999% PCC.
-        pytest.param(
-            64,
-            1024,
-            8,
-            True,
-            id="N64_H1024_8heads_perhead",
-            marks=pytest.mark.xfail(reason="per-head RoPE breaks at num_heads=8 with multi-row chunks; see commit"),
-        ),
+        pytest.param(64, 1024, 8, True, id="N64_H1024_8heads_perhead"),
     ],
 )
 def test_wan_fused_distributed_rmsnorm_tp1_rope(
