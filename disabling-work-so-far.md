@@ -25,7 +25,8 @@ Last updated: **2026-05-27T13:20 UTC** (session: PR #45306 (T3K unit tests): add
 | [#45112](https://github.com/tenstorrent/tt-metal/pull/45112) | `(Blackhole) e2e tests` | `verified-pass` | [26508072188](https://github.com/tenstorrent/tt-metal/actions/runs/26508072188) **success** | Yes | Rebased onto main `aa2de19b`; verification passed; awaiting human review |
 | [#45114](https://github.com/tenstorrent/tt-metal/pull/45114) | `(Blackhole) Demo tests` | `out-of-scope` | — | N/A | **Disable REMOVED 2026-05-27**: test fixed on main since May 26. PR should be closed. |
 | [#45306](https://github.com/tenstorrent/tt-metal/pull/45306) | `(T3K) T3000 unit tests` | `verifying` | [26513061621](https://github.com/tenstorrent/tt-metal/actions/runs/26513061621) in progress | No (verifying) | Verification dispatched 2026-05-27 13:09 UTC; build in progress; 3 disables: DPrint/Watcher (t3k_ttmetal), DistributedTensorOp/Matmul (t3k_ttnn), test_tt_fabric T3K 2x2 (multiprocess) |
-| [#44860](https://github.com/tenstorrent/tt-metal/pull/44860) | `tt-metal-l2-tests` | `out-of-scope` | — | N/A | Separate agent |
+
+> **Scope note (2026-05-27):** L2 pipeline (`tt-metal-l2-tests`) is back in scope — prior work scrapped, automation may pick it up again. PR #44860 and the prior `## PR #44860 — tt-metal-l2-tests` section have been removed from this state log so the automation will see L2 as uncovered and create a fresh disable PR for it.
 
 ---
 
@@ -198,25 +199,6 @@ Last updated: **2026-05-27T13:20 UTC** (session: PR #45306 (T3K unit tests): add
 - `QueryOpConstraints/MatmulOpIfTest.Matmul/2`
 
 **Session note:** 15+ consecutive failures on `main` (since at least 2026-05-26 05:25 UTC). Evidence in runs 26507885931 (May 27 11:17), 26502247809 (May 27 09:14), 26497476274 (May 27 07:33), 26492864186 (May 27 05:33), and 11+ earlier. Disable mechanism: gtest_filter negative patterns in `tests/scripts/t3000/run_t3000_unit_tests.sh`. Third failing job (`t3k_tt_metal_multiprocess_tests`) crashes with SIGABRT — harder to identify specific tests; deferred to next session after investigation.
-
----
-
-## PR #44860 — tt-metal-l2-tests
-
-| Field | Value |
-|-------|-------|
-| PR | [#44860](https://github.com/tenstorrent/tt-metal/pull/44860) |
-| Disable issue | unknown |
-| Timeout issue | unknown |
-| Branch | unknown |
-| Workflow file | `tt-metal-l2-tests` |
-| Lifecycle stage | `out-of-scope` |
-| Last rebase | unknown |
-| Last revalidation | unknown |
-| Verification run | unknown |
-| Readiness | **N/A** |
-
-**Notes:** Separate agent scope (Nightly L2 tests).
 
 ---
 
