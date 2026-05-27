@@ -46,12 +46,6 @@ Tensor ZeroCacheRangeOperation::create_output_tensors(
     return tensor_args.cache;
 }
 
-tt::tt_metal::operation::Hash ZeroCacheRangeOperation::compute_program_hash(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    // Hash only on cache tensor spec, not page range (page range is runtime args only).
-    return tt::tt_metal::operation::hash_operation<ZeroCacheRangeOperation>(std::vector<Tensor>{tensor_args.cache});
-}
-
 Tensor zero_cache_range(const Tensor& cache, const uint32_t start_page, const uint32_t end_page) {
     return ttnn::device_operation::launch<ZeroCacheRangeOperation>(
         ZeroCacheRangeParams{

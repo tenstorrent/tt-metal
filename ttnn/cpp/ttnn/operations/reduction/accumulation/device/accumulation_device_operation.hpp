@@ -61,7 +61,6 @@ struct AccumulationDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 ttnn::Tensor accumulation(

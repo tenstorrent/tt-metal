@@ -236,34 +236,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     }
 }
 
-tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
-    log_trace(tt::LogOp, "AllGatherAsync::compute_program_hash is called");
-
-    const ttnn::Tensor& input_tensor = input_tensors[0];
-
-    return tt::tt_metal::operation::hash_operation<AllGatherAsync>(
-        this->dim,
-        this->num_links,
-        this->ring_size,
-        this->output_mem_config,
-        this->topology,
-        this->cluster_axis,
-        this->sub_device_id.has_value(),
-        this->sub_device_id.has_value()
-            ? input_tensors[0].device()->worker_cores(
-                  tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
-            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
-        this->barrier_semaphore.has_value(),
-        this->using_persistent_buffers,
-        this->chunks_per_sync,
-        this->num_workers_per_link,
-        this->num_buffers_per_channel,
-        this->use_all_gather_async_llama_sharded,
-        this->use_optimal_ccl_for_llama,
-        this->reverse_order,
-        input_tensor);
-}
-
 namespace operations::experimental::ccl {
 
 namespace {

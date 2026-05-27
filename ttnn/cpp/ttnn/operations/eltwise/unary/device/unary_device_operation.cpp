@@ -143,48 +143,6 @@ Tensor UnaryDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    TT_FATAL(
-        tt::tt_metal::is_device_tensor(input_tensor), "Unary: Unexpected tensor type {}", input_tensor.storage_type());
-
-    const auto output_spec = compute_output_specs(attributes, tensor_args);
-    const auto shard_specs = get_shard_specs(input_tensor.tensor_spec(), output_spec);
-    std::optional<uint32_t> src_shard_vol = std::nullopt;
-    std::optional<uint32_t> dst_shard_vol = std::nullopt;
-    if (shard_specs.has_value()) {
-        const auto tile_hw = input_tensor.tensor_spec().tile().get_tile_hw();
-        if (input_tensor.is_sharded()) {
-            src_shard_vol = shard_specs->input_shard_spec.numel() / tile_hw;
-        }
-        const auto out_tile_hw = output_spec.tile().get_tile_hw();
-        dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
-    }
-
-    // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
-    // different widths get separate cache entries. Consider hashing only the last
-    // dimension to allow cache reuse when only height differs
-    if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        return operation::hash_operation<UnaryDeviceOperation>(
-            attributes,
-            input_tensor.dtype(),
-            input_tensor.layout(),
-            input_tensor.memory_config(),
-            input_tensor.padded_shape(),
-            src_shard_vol,
-            dst_shard_vol);
-    }
-
-    return operation::hash_operation<UnaryDeviceOperation>(
-        attributes,
-        input_tensor.dtype(),
-        input_tensor.layout(),
-        input_tensor.memory_config(),
-        src_shard_vol,
-        dst_shard_vol);
-}
-
 bool UnaryDeviceOperation::skip_launch(
     const operation_attributes_t& /*attributes*/,
     const tensor_args_t& /*tensor_args*/,

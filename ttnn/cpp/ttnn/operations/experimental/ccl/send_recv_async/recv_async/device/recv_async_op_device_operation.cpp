@@ -31,13 +31,6 @@ RecvAsyncDeviceOperation::tensor_return_value_t RecvAsyncDeviceOperation::create
     return {tensor_args};
 }
 
-ttsl::hash::hash_t RecvAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "RecvAsyncDeviceOperation::compute_program_hash is called");
-    const ttnn::Tensor& output_tensor = tensor_args;
-    return tt::tt_metal::operation::hash_operation<RecvAsyncDeviceOperation>(args.mesh_socket, output_tensor);
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

@@ -83,20 +83,6 @@ Matmul_RS::tensor_return_value_t Matmul_RS::create_output_tensors(
     return {matmul_output_tensor, rs_output_tensor};
 }
 
-ttsl::hash::hash_t Matmul_RS::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tt::tt_metal::operation::hash_operation<Matmul_RS>(
-        operation_attributes.rs_op.dim,
-        operation_attributes.rs_op.cluster_axis,
-        operation_attributes.rs_op.ring_devices,
-        operation_attributes.rs_op.num_links,
-        operation_attributes.rs_op.topology,
-        operation_attributes.rs_op.use_noc1_only,
-        tensor_args.rs.input_tensor.dtype(),
-        tensor_args.rs.input_tensor.memory_config(),
-        tensor_args.rs.input_tensor.device()->id());
-}
-
 }  // namespace ttnn::operations::experimental::ccl
 
 namespace ttnn::prim {

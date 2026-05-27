@@ -155,28 +155,6 @@ tt::tt_metal::operation::ProgramWithCallbacks RingAttentionAllGatherAsync::creat
         this->sub_device_id);
 }
 
-tt::tt_metal::operation::Hash RingAttentionAllGatherAsync::compute_program_hash(
-    const std::vector<Tensor>& input_tensors) const {
-    log_trace(tt::LogOp, "RingAttentionAllGatherAsync::compute_program_hash is called");
-
-    const ttnn::Tensor& input_tensor = input_tensors[0];
-
-    auto subdevice_id = this->sub_device_id;
-    auto* mesh_device = input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    return tt::tt_metal::operation::hash_operation<RingAttentionAllGatherAsync>(
-        this->dim,
-        this->num_links,
-        this->ring_size,
-        this->output_mem_config,
-        this->topology,
-        this->cluster_axis,
-        subdevice_core_range_set,
-        input_tensor);
-}
-
 namespace operations::experimental::ccl {
 
 namespace {

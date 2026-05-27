@@ -308,31 +308,6 @@ ExpRingJointSDPAResult ExpRingJointSDPADeviceOperation::create_output_tensors(
     };
 }
 
-tt::stl::hash::hash_t ExpRingJointSDPADeviceOperation::compute_program_hash(
-    const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
-    const std::vector<Tensor> input_tensors = {
-        tensor_args.input_q,
-        tensor_args.input_k,
-        tensor_args.input_v,
-        tensor_args.joint_q,
-        tensor_args.joint_k,
-        tensor_args.joint_v,
-        tensor_args.gathered_k,
-        tensor_args.gathered_v,
-    };
-    return tt::tt_metal::operation::hash_operation<ExpRingJointSDPADeviceOperation>(
-        input_tensors,
-        args.joint_strategy,
-        args.scale,
-        args.logical_n,
-        args.ring_size,
-        args.compute_kernel_config,
-        args.program_config,
-        args.dim,
-        args.num_links,
-        args.cluster_axis);
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> ExpRingJointSDPADeviceOperation::create_op_performance_model(
     const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args, ExpRingJointSDPAResult& output_tensors) {
     Tensors input_tensors = {
