@@ -13,7 +13,7 @@ Run manually::
     export MISTRAL4_DECODE_N_LAYERS=2        # optional; default 2
     export MISTRAL4_DECODE_PREFILL_LEN=4     # optional; default 4
     export MISTRAL4_DECODE_N_STEPS=5         # optional; default 5
-    export MESH_DEVICE=P150x4                # optional
+    export MESH_DEVICE=P150x8                # optional
     pytest models/experimental/mistral_small_4_119b/tests/test_text_decode_smoke.py -v -s --timeout=0
 """
 
@@ -137,12 +137,22 @@ def test_mistral_small_4_text_decode_smoke(reset_seeds, mesh_device):
     logger.info(f"First decode token (greedy from prefill): {next_token}")
     logger.info(f"On-device decode argmax mode: {_ON_DEVICE_ARGMAX}")
 
-    # Step 0 is the JIT-compile pass (slow). Steps after the signpost are
-    # the perf-measured iterations. Wall-clock is logged for each step so
-    # we can see steady-state decode latency.
+    # Step 0 is the JIT-compile pass (slow).
+    # Step 1 captures the decode trace so steps 2+ replay it (fast path).
+    # Steps after the Tracy signpost are the perf-measured iterations.
+    _CAPTURE_TRACE = _ON_DEVICE_ARGMAX  # trace only wired for on-device-argmax path
     decode_times = []
     profile_start_step = max(1, _N_STEPS - _PROFILE_STEPS)
     for step in range(_N_STEPS):
+        if step == 1 and _CAPTURE_TRACE:
+            # After one JIT-compile step, capture the trace so all subsequent
+            # steps replay it.  Capture happens here (not at step 0) because
+            # step 0 triggers kernel compilation; step 1 runs with compiled kernels.
+            ttnn.synchronize_device(mesh_device)
+            logger.info("Capturing decode trace…")
+            model.capture_decode_trace()
+            logger.info("Decode trace captured.")
+
         if step == profile_start_step:
             ttnn.synchronize_device(mesh_device)
             signpost("Performance pass")

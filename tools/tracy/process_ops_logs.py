@@ -580,11 +580,27 @@ def _enrich_ops_from_perf_csv(
         # Build a lookup that matches the C++ ProgramExecutionUID structure:
         # (GLOBAL CALL COUNT, METAL TRACE ID) -> list of perf rows (one per replay session, or one for non-trace)
         perf_rows_by_key: Dict[Tuple[int, Optional[int]], List[Dict[str, Any]]] = {}
+        valid_op_ids: Set[int] = set()
         for (op_id, trace_id, session_id), row in device_perf_by_device[device_id].items():
             perf_rows_by_key.setdefault((op_id, trace_id), []).append(row)
+            valid_op_ids.add(op_id)
 
+        # Pre-filter: skip host ops with no device perf data (e.g. metadata-only ops that
+        # dispatch zero device kernels — SliceDeviceOperation on TILE tensors,
+        # TilizeWithValPaddingDeviceOperation on already-compatible tensors, etc.)
+        original_op_count = len(host_ops_by_device[device_id])
+        host_ops = [op for op in host_ops_by_device[device_id] if int(op.get("global_call_count", -1)) in valid_op_ids]
+        skipped_count = original_op_count - len(host_ops)
+        if skipped_count:
+            logger.debug(
+                f"Device {device_id}: pre-filtered {skipped_count}/{original_op_count} host ops "
+                f"with no device kernel records (zero-kernel ops excluded from report)."
+            )
+
+        _MAX_MISSING_WARNINGS = 5
+        missing_device_data_count = 0
         enriched_ops = []
-        for host_op in host_ops_by_device[device_id]:
+        for host_op in host_ops:
             op_id = int(host_op["global_call_count"])
             host_trace_id = host_op.get("metal_trace_id")
             # Normalize host_trace_id: it may be None, "", or already an int
@@ -603,10 +619,18 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                # Op passed pre-filter (op_id in valid_op_ids) but trace_id mismatch —
+                # warn and skip rather than crash.
+                missing_device_data_count += 1
+                if missing_device_data_count <= _MAX_MISSING_WARNINGS:
+                    op_name = host_op.get("op_type", "?")
+                    logger.warning(
+                        f"Device data missing: Op {op_id} ({op_name}) not found in "
+                        f"{PROFILER_CPP_DEVICE_PERF_REPORT} for device {device_id} "
+                        f"(trace_id={host_trace_id}). Skipping."
+                    )
+                continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
@@ -630,6 +654,12 @@ def _enrich_ops_from_perf_csv(
 
                 enriched_op["_device_perf_row"] = perf_row
                 enriched_ops.append(enriched_op)
+
+        if missing_device_data_count > _MAX_MISSING_WARNINGS:
+            logger.warning(
+                f"Device {device_id}: {missing_device_data_count - _MAX_MISSING_WARNINGS} more ops "
+                f"(total {missing_device_data_count}) had trace_id mismatches and were excluded from report."
+            )
 
         host_ops_by_device[device_id] = enriched_ops
     return host_ops_by_device
