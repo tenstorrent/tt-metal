@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Minimal single-device, single-expert test for TtRoutedExpert profiling.
+GPT-OSS single-device, single-expert PCC test for TtRoutedExpert.
 
-The simplest scenario: 1 chip, 1 expert, minimal dimensions.
+Mirrors test_single_routed_expert.py but with GPT-OSS dimensions
+(emb_dim = hidden_dim = 2880). Lives in its own file so the DeepSeek
+test stays untouched.
 """
 
 import pytest
@@ -14,6 +16,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_config import GptOssConfig
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -22,32 +25,22 @@ from tests.ttnn.utils_for_testing import comp_pcc
 @pytest.mark.parametrize(
     "num_tokens, emb_dim, hidden_dim",
     [
-        (1024, 7168, 2048),  # DeepSeek V3 dims, 1K tokens
-        (1600, 7168, 2048),  # DeepSeek V3 dims, 1.6K tokens
-        (2048, 7168, 2048),  # DeepSeek V3 dims, 2K tokens
-        (3200, 7168, 2048),  # DeepSeek V3 dims, 3.2K tokens
-        (4096, 7168, 2048),  # DeepSeek V3 dims, 4K tokens
-        (5120, 7168, 2048),  # DeepSeek V3 dims, 5K tokens
-        (6144, 7168, 2048),  # DeepSeek V3 dims, 6K tokens
-        (8192, 7168, 2048),  # DeepSeek V3 dims, 8K tokens
-        (16384, 7168, 2048),  # DeepSeek V3 dims, 16K tokens
-        (25600, 7168, 2048),  # DeepSeek V3 dims, 25K tokens,
-        (2048, 2880, 2880),  # gpt-oss, 2K tokens
-        (4096, 2880, 2880),  # gpt-oss, 4K tokens
+        (1024, GptOssConfig.EMB_SIZE, GptOssConfig.MOE_INTERMEDIATE_SIZE),
+        (2048, GptOssConfig.EMB_SIZE, GptOssConfig.MOE_INTERMEDIATE_SIZE),
+        (3200, GptOssConfig.EMB_SIZE, GptOssConfig.MOE_INTERMEDIATE_SIZE),
+        (4096, GptOssConfig.EMB_SIZE, GptOssConfig.MOE_INTERMEDIATE_SIZE),
+        (8192, GptOssConfig.EMB_SIZE, GptOssConfig.MOE_INTERMEDIATE_SIZE),
+        (16384, GptOssConfig.EMB_SIZE, GptOssConfig.MOE_INTERMEDIATE_SIZE),
+        (25600, GptOssConfig.EMB_SIZE, GptOssConfig.MOE_INTERMEDIATE_SIZE),
     ],
     ids=[
-        "ds-v3-1k",
-        "ds-v3-1.6k",
-        "ds-v3-2k",
-        "ds-v3-3.2k",
-        "ds-v3-4k",
-        "ds-v3-5k",
-        "ds-v3-6k",
-        "ds-v3-8k",
-        "ds-v3-16k",
-        "ds-v3-25k",
+        "gpt-oss-1k",
         "gpt-oss-2k",
+        "gpt-oss-3.2k",
         "gpt-oss-4k",
+        "gpt-oss-8k",
+        "gpt-oss-16k",
+        "gpt-oss-25k",
     ],
 )
 @pytest.mark.parametrize(
@@ -61,26 +54,21 @@ from tests.ttnn.utils_for_testing import comp_pcc
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_single_routed_expert(
+def test_single_routed_expert_gpt_oss(
     mesh_device,
     device_params,
     num_tokens: int,
     emb_dim: int,
     hidden_dim: int,
 ):
-    """
-    Simplest test: 1 chip, 1 expert.
-
-    Perfect for profiling the core FFN computation without any mesh complexity.
-    """
+    """Simplest test for GPT-OSS dims: 1 chip, 1 expert."""
     experts_per_chip = 1
 
-    signpost(f"SingleRoutedExpert {num_tokens=} {emb_dim=} {hidden_dim=}")
+    signpost(f"SingleRoutedExpertGptOss {num_tokens=} {emb_dim=} {hidden_dim=}")
 
-    logger.debug(f"Testing single routed expert: {num_tokens=}, {emb_dim=}, {hidden_dim=}")
+    logger.debug(f"Testing GPT-OSS single routed expert: {num_tokens=}, {emb_dim=}, {hidden_dim=}")
     logger.debug(f"Mesh: {mesh_device.shape}, num_devices={mesh_device.get_num_devices()}")
 
-    # Create random weights
     torch.manual_seed(42)
     weights = {
         "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
@@ -88,20 +76,12 @@ def test_single_routed_expert(
         "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
     }
 
-    # Create torch reference
     torch_expert = TorchExpert(emb_dim, hidden_dim, weights)
-
-    # 2D input (num_tokens, emb_dim) — the single expert's dispatch buffer.
     torch_input = torch.randn(num_tokens, emb_dim, dtype=torch.float32)
-    logger.debug(f"Input shape: {torch_input.shape}")
 
-    # Run torch reference
-    logger.debug("Running torch reference...")
     with torch.no_grad():
         torch_output = torch_expert(torch_input)
-    logger.debug(f"Torch output shape: {torch_output.shape}")
 
-    # Create TTNN input: 2D (num_tokens, emb_dim), replicated across the 1-device mesh.
     tt_input = ttnn.from_torch(
         torch_input,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -109,12 +89,7 @@ def test_single_routed_expert(
         device=mesh_device,
         dtype=ttnn.bfloat8_b,
     )
-    logger.debug(f"TTNN input shape: {tt_input.shape}")
 
-    # Single-expert auxiliaries (1D, length 1, UINT32 ROW_MAJOR DRAM):
-    #   - global_expert_idx_table[0] = 0   (local 0 -> global 0)
-    #   - expert_token_counts[0]     = num_tokens
-    #   - expert_region_offsets[0]   = 0   (expert's slice starts at row 0)
     def _make_idx_tensor(values):
         return ttnn.from_torch(
             torch.tensor(values, dtype=torch.int32),
@@ -127,8 +102,6 @@ def test_single_routed_expert(
     expert_token_counts_tt = _make_idx_tensor([num_tokens])
     expert_region_offsets_tt = _make_idx_tensor([0])
 
-    # Create TtRoutedExpert
-    logger.debug("Creating TtRoutedExpert...")
     tt_expert = TtRoutedExpert(
         mesh_device=mesh_device,
         experts_per_chip=experts_per_chip,
@@ -136,29 +109,21 @@ def test_single_routed_expert(
         emb_dim=emb_dim,
         hidden_dim=hidden_dim,
         max_tokens=num_tokens,
-        torch_weights=[weights],  # List with single expert weights
+        torch_weights=[weights],
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
     )
 
-    # Run TTNN forward
-    logger.debug("Running TTNN forward...")
     tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
-    logger.debug(f"TTNN output shape: {tt_output.shape}")
 
-    # Convert back to torch for comparison. For a 1-device replicated tensor,
-    # ConcatMeshToTensor(dim=0) with 1 slice is a no-op that returns the tensor.
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
     )
-    logger.debug(f"TTNN output (torch) shape: {tt_output_torch.shape}")
 
-    # Compare PCC
     _, pcc = comp_pcc(torch_output, tt_output_torch)
     logger.debug(f"PCC: {pcc:.6f}")
 
-    # Validate
     pcc_threshold = 0.97
     assert pcc >= pcc_threshold, f"PCC {pcc:.6f} below threshold {pcc_threshold}"
     assert not torch.isnan(tt_output_torch).any(), "Output contains NaN"
@@ -170,18 +135,18 @@ def test_single_routed_expert(
 @pytest.mark.parametrize(
     "allocated_tokens, active_tokens, emb_dim, hidden_dim",
     [
-        (4096, 2048, 7168, 2048),
-        (25 * 1024, 2048, 7168, 2048),
-        (25 * 1024, 4096, 7168, 2048),
-        (16384, 2048, 7168, 2048),
-        (16384, 4096, 7168, 2048),
+        (4096, 2048, GptOssConfig.EMB_SIZE, GptOssConfig.MOE_INTERMEDIATE_SIZE),
+        (25 * 1024, 2048, GptOssConfig.EMB_SIZE, GptOssConfig.MOE_INTERMEDIATE_SIZE),
+        (25 * 1024, 4096, GptOssConfig.EMB_SIZE, GptOssConfig.MOE_INTERMEDIATE_SIZE),
+        (16384, 2048, GptOssConfig.EMB_SIZE, GptOssConfig.MOE_INTERMEDIATE_SIZE),
+        (16384, 4096, GptOssConfig.EMB_SIZE, GptOssConfig.MOE_INTERMEDIATE_SIZE),
     ],
     ids=[
-        "ds-v3-4k-alloc-2k-active",
-        "ds-v3-25k-alloc-2k-active",
-        "ds-v3-25k-alloc-4k-active",
-        "ds-v3-16k-alloc-2k-active",
-        "ds-v3-16k-alloc-4k-active",
+        "gpt-oss-4k-alloc-2k-active",
+        "gpt-oss-25k-alloc-2k-active",
+        "gpt-oss-25k-alloc-4k-active",
+        "gpt-oss-16k-alloc-2k-active",
+        "gpt-oss-16k-alloc-4k-active",
     ],
 )
 @pytest.mark.parametrize(
@@ -195,7 +160,7 @@ def test_single_routed_expert(
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_single_routed_expert_faked_token_count(
+def test_single_routed_expert_faked_token_count_gpt_oss(
     mesh_device,
     device_params,
     allocated_tokens: int,
@@ -204,17 +169,12 @@ def test_single_routed_expert_faked_token_count(
     hidden_dim: int,
 ):
     """
-    Verifies the unified kernel honors expert_token_counts and skips work on
-    inactive padding rows.
-
-    Dispatch buffer sized for ``allocated_tokens`` but only the first
-    ``active_tokens`` rows hold real data; the rest is zero padding. The
-    kernel must (a) produce correct output on the active slice and (b) not
-    do matmuls on the inactive padding rows (device-side count sparsity).
+    Same dispatch-buffer/count-sparsity check as the DeepSeek variant,
+    but with GPT-OSS dims.
     """
     experts_per_chip = 1
 
-    signpost(f"SingleRoutedExpertFaked {allocated_tokens=} {active_tokens=} {emb_dim=} {hidden_dim=}")
+    signpost(f"SingleRoutedExpertFakedGptOss {allocated_tokens=} {active_tokens=} {emb_dim=} {hidden_dim=}")
 
     torch.manual_seed(42)
     weights = {
@@ -263,7 +223,6 @@ def test_single_routed_expert_faked_token_count(
         weights_dtype=ttnn.bfloat4_b,
     )
 
-    # Time 5 iters (iter0 includes JIT compile; iter1-4 are steady-state).
     import time as _time
 
     for _i in range(5):
@@ -272,6 +231,7 @@ def test_single_routed_expert_faked_token_count(
         ttnn.synchronize_device(mesh_device)
         _dt_ms = (_time.time() - _t0) * 1000
         logger.warning(f"  faked iter {_i}: {_dt_ms:.2f} ms (alloc={allocated_tokens}, active={active_tokens})")
+
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),

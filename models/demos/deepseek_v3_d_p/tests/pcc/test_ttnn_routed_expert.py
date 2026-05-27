@@ -18,6 +18,7 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_config import GptOssConfig
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
@@ -102,11 +103,15 @@ def run_torch_routed_experts(
     "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
         # fmt: off
-        (320, 1024, 512, 64, 2, 9, True),
-        (3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 3, False),
+        pytest.param(320, 1024, 512, 64, 2, 9, True, id="small-dims-validate-pcc"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 3, False, id="deepseek-v3-dims-skip-pcc"),
+        # PCC variant uses a small seq + minimum buffer factor so the post-forward host gather
+        # (dispatch_group_size * seq * factor * emb * num_devices bytes) fits in the test timeout
+        # on 32-device meshes. factor=2 / seq=320 yields ~30MB/chip ⇒ ~1GB across mesh-8x4.
+        pytest.param(1600, GptOssConfig.EMB_SIZE, GptOssConfig.MOE_INTERMEDIATE_SIZE, GptOssConfig.NUM_ROUTED_EXPERTS // 4, GptOssConfig.NUM_EXPERTS_PER_TOKEN, 2, True, marks=pytest.mark.timeout(900), id="gpt-oss-dims-validate-pcc"),
+        pytest.param(3200, GptOssConfig.EMB_SIZE, GptOssConfig.MOE_INTERMEDIATE_SIZE, GptOssConfig.NUM_ROUTED_EXPERTS, GptOssConfig.NUM_EXPERTS_PER_TOKEN, 3, False, id="gpt-oss-dims-skip-pcc"),
         # fmt: on
     ],
-    ids=["small-dims-validate-pcc", "deepseek-v3-dims-skip-pcc"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -140,6 +145,12 @@ def run_torch_routed_experts(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
             id="mesh-2x4",
         ),
+        # pytest.param(
+        #     (8, 4),
+        #     {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        #     marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        #     id="mesh-8x4",
+        # ),
     ],
     indirect=["mesh_device", "device_params"],
 )

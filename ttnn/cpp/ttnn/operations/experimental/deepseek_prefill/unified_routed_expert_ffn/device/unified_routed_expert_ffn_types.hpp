@@ -40,11 +40,25 @@ struct UnifiedRoutedExpertFfnParams {
     // with allocated L1 buffers at program create.
     bool use_region_offsets = true;
 
+    // Compute grid shape. Defaults are the Blackhole layout (11x8 = 88 cores).
+    // The Wormhole variant uses an 8x8 = 64-core layout because WH worker
+    // grid is 8x8 (compute_with_storage_grid_size).
+    uint32_t grid_x = 11;
+    uint32_t grid_y = 8;
+    // K-dimension inner block tile count for the gate/up matmuls. Must divide
+    // K_gate_tiles (= emb / TILE). The Blackhole layout uses 16; the WH path
+    // selects the largest divisor of K_gate_tiles that fits L1 (e.g. 10 for
+    // emb=2880 -> K_gate_tiles=90).
+    uint32_t in0_block_w_gu = 16;
+
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("chunk_M_tiles", "local_expert_id", "use_region_offsets");
-    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id, use_region_offsets); }
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "chunk_M_tiles", "local_expert_id", "use_region_offsets", "grid_x", "grid_y", "in0_block_w_gu");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            chunk_M_tiles, local_expert_id, use_region_offsets, grid_x, grid_y, in0_block_w_gu);
+    }
 };
 
 // Tensors fed into the op.

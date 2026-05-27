@@ -106,6 +106,9 @@ ttnn::Tensor unified_routed_expert_ffn(
     uint32_t local_expert_id,
     uint32_t chunk_M_tiles,
     bool use_region_offsets,
+    uint32_t grid_x,
+    uint32_t grid_y,
+    uint32_t in0_block_w_gu,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output) {
     using OperationType =
@@ -115,6 +118,9 @@ ttnn::Tensor unified_routed_expert_ffn(
             .chunk_M_tiles = chunk_M_tiles,
             .local_expert_id = local_expert_id,
             .use_region_offsets = use_region_offsets,
+            .grid_x = grid_x,
+            .grid_y = grid_y,
+            .in0_block_w_gu = in0_block_w_gu,
             .compute_kernel_config = compute_kernel_config},
         OperationType::tensor_args_t{
             .x = x,

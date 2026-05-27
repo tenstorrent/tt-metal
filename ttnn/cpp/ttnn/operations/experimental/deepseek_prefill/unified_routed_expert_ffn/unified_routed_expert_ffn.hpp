@@ -51,6 +51,23 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& output = std::nullopt);
 
+// Wormhole 8x8 = 64-core variant. Same contract as the Blackhole op above
+// but built for the WH worker-grid shape and dimensions whose K is not a
+// multiple of 16 (e.g. emb=2880 -> K_gate_tiles=90). in0_block_w_gu is
+// auto-selected as the largest divisor of K_gate_tiles <= 16.
+ttnn::Tensor unified_routed_expert_ffn_wh(
+    const ttnn::Tensor& x,
+    const ttnn::Tensor& gate_proj,
+    const ttnn::Tensor& up_proj,
+    const ttnn::Tensor& down_proj,
+    const ttnn::Tensor& counts,
+    const ttnn::Tensor& global_expert_idx_table,
+    const ttnn::Tensor& expert_region_offsets,
+    uint32_t local_expert_id,
+    bool use_region_offsets = true,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& output = std::nullopt);
+
 // MoE-level composite op: takes the dispatched buffer + ALL experts' weights
 // and loops experts_per_chip times INSIDE the op, calling
 //   extract -> unified_routed_expert_ffn -> insert
@@ -68,9 +85,24 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t max_dispatched_tokens_per_expert,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
+// Wormhole variant of unified_routed_expert_moe — same as the BH op but the
+// per-expert FFN call uses the 8x8 = 64-core WH layout.
+ttnn::Tensor unified_routed_expert_moe_wh(
+    const ttnn::Tensor& dispatched_buffer,
+    const ttnn::Tensor& expert_region_offsets,
+    const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& global_expert_idx_table,
+    const std::vector<ttnn::Tensor>& gate_projs,
+    const std::vector<ttnn::Tensor>& up_projs,
+    const std::vector<ttnn::Tensor>& down_projs,
+    uint32_t max_dispatched_tokens_per_expert,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 
 namespace ttnn {
 using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::unified_routed_expert_ffn;
+using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::unified_routed_expert_ffn_wh;
 using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::unified_routed_expert_moe;
+using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::unified_routed_expert_moe_wh;
 }  // namespace ttnn

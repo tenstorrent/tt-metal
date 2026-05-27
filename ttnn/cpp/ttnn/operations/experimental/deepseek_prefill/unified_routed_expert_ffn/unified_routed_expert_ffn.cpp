@@ -13,6 +13,45 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
 
+namespace {
+
+// Picks chunk_M_tiles such that per_core_M = chunk_M_tiles / grid_y is in
+// [2, per_core_M_max] and ceil(M_tiles_full / chunk) is minimized. On tie,
+// prefers smaller waste (= padding past M_tiles_full).
+uint32_t pick_chunk_M_tiles(uint32_t M_tiles_full, uint32_t grid_y, uint32_t per_core_M_max) {
+    const uint32_t min_chunk = 2 * grid_y;
+    const uint32_t max_chunk = per_core_M_max * grid_y;
+    uint32_t best = max_chunk;
+    uint32_t best_num_chunks = (M_tiles_full + min_chunk - 1) / min_chunk + 1;
+    uint32_t best_waste = max_chunk + 1;
+    for (uint32_t cand = min_chunk; cand <= max_chunk; cand += grid_y) {
+        const uint32_t num_chunks = (M_tiles_full + cand - 1) / cand;
+        const uint32_t rem = M_tiles_full % cand;
+        const uint32_t waste = (rem == 0) ? 0 : (cand - rem);
+        const bool better = (num_chunks < best_num_chunks) || (num_chunks == best_num_chunks && waste < best_waste);
+        if (better) {
+            best_num_chunks = num_chunks;
+            best_waste = waste;
+            best = cand;
+        }
+    }
+    return best;
+}
+
+// Largest divisor of K_gate_tiles that is <= max_block. The WH variant uses
+// this to choose in0_block_w_gu when K is not a multiple of 16 (e.g. 90 for
+// emb=2880). Falls back to 1 if no divisor is found (always safe).
+uint32_t pick_in0_block_w(uint32_t K_gate_tiles, uint32_t max_block) {
+    for (uint32_t d = max_block; d >= 1; --d) {
+        if (K_gate_tiles % d == 0) {
+            return d;
+        }
+    }
+    return 1;
+}
+
+}  // namespace
+
 ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
@@ -25,45 +64,14 @@ ttnn::Tensor unified_routed_expert_ffn(
     bool use_region_offsets,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& output) {
-    // Single-op fused routed-expert FFN. One device Program runs gate matmul,
-    // up matmul, silu, multiply, down matmul as four phases inside the same
-    // kernel. The kernel reads counts[global_expert_idx_table[local_expert_id]]
-    // device-side at entry and bounds its chunk loop to
-    // ceil(count / chunk_M_tiles) — chunks past the actual token count are
-    // skipped entirely (no matmul, no mcast). All MANDATORY (per user):
-    // device-side count sparsity, no host-side count read, no op2op gap from
-    // per-chunk dispatch.
-    //
-    // chunk_M_tiles: any value in {16, 24, 32, 40, 48, 56, 64} (per_core_M =
-    // chunk_M_tiles / GRID_Y, must be >= 2 and <= 8). M_tiles_full does NOT
-    // need to be a multiple of chunk_M_tiles — the kernel runs
-    // ceil(M_tiles_full / chunk_M_tiles) chunks, reader zero-fills L1 rows
-    // past M_tiles_full in the last chunk, writer skips OOB output writes.
-    //
-    // Picker minimizes the number of chunks first (= ceil(M / chunk)). Each
-    // chunk pays ~25 K-block handshakes (14 gate/up + 11 down) regardless of
-    // per_core_M, so fewer chunks wins more than waste hurts compute. On tie
-    // (same num_chunks), prefers smaller waste = closer to-aligned. For
-    // DS-V3 this picks 64 for nearly all sizes; 5k → 64 (3 chunks, was 40
-    // with 4 chunks); 25k → 64 (13 chunks, was 40 with 20 chunks).
+    // Blackhole 11x8 = 88-core fused routed-expert FFN. See header for the
+    // full math/contract. Picker uses GRID_Y = 8 and a max per_core_M of 8.
+    constexpr uint32_t kGridX = 11;
     constexpr uint32_t kGridY = 8;
-    constexpr uint32_t kMinChunkMTiles = 16;  // per_core_M >= 2
-    constexpr uint32_t kMaxChunkMTiles = 64;  // per_core_M <= 8 (L1 cap)
+    constexpr uint32_t kIn0BlockWGu = 16;
+    constexpr uint32_t kPerCoreMMax = 8;
     const uint32_t M_tiles_full = x.padded_shape()[-2] / 32;
-    uint32_t chunk_M_tiles = kMaxChunkMTiles;
-    uint32_t best_num_chunks = (M_tiles_full + kMinChunkMTiles - 1) / kMinChunkMTiles + 1;
-    uint32_t best_waste = kMaxChunkMTiles + 1;
-    for (uint32_t cand = kMinChunkMTiles; cand <= kMaxChunkMTiles; cand += kGridY) {
-        const uint32_t num_chunks = (M_tiles_full + cand - 1) / cand;
-        const uint32_t rem = M_tiles_full % cand;
-        const uint32_t waste = (rem == 0) ? 0 : (cand - rem);
-        const bool better = (num_chunks < best_num_chunks) || (num_chunks == best_num_chunks && waste < best_waste);
-        if (better) {
-            best_num_chunks = num_chunks;
-            best_waste = waste;
-            chunk_M_tiles = cand;
-        }
-    }
+    const uint32_t chunk_M_tiles = pick_chunk_M_tiles(M_tiles_full, kGridY, kPerCoreMMax);
 
     return ttnn::prim::unified_routed_expert_ffn(
         x,
@@ -76,12 +84,80 @@ ttnn::Tensor unified_routed_expert_ffn(
         local_expert_id,
         chunk_M_tiles,
         use_region_offsets,
+        kGridX,
+        kGridY,
+        kIn0BlockWGu,
         compute_kernel_config.has_value() ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
                                           : std::nullopt,
         output);
 }
 
-ttnn::Tensor unified_routed_expert_moe(
+ttnn::Tensor unified_routed_expert_ffn_wh(
+    const ttnn::Tensor& x,
+    const ttnn::Tensor& gate_proj,
+    const ttnn::Tensor& up_proj,
+    const ttnn::Tensor& down_proj,
+    const ttnn::Tensor& counts,
+    const ttnn::Tensor& global_expert_idx_table,
+    const ttnn::Tensor& expert_region_offsets,
+    uint32_t local_expert_id,
+    bool use_region_offsets,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& output) {
+    // Wormhole 8x8 = 64-core variant of the fused routed-expert FFN. The WH
+    // worker grid is 8x8, so we cannot use the BH 11-column layout. The K
+    // dim of the gate/up matmuls (K_gate_tiles = emb / TILE) is also no
+    // longer required to be a multiple of 16 — we pick the largest divisor
+    // of K_gate_tiles that fits L1 (capped at 10). per_core_M is capped at 4
+    // because per-core L1 is tighter with the 8-wide N split.
+    //
+    // Why kIn0BlockWMax = 10 and not 16: the in1 (gate/up) double-buffered
+    // mcast block has size in0_block_w_gu * per_core_N_gu * tile_size. With
+    // the WH per_core_N_gu = 12 (vs BH's 6), in0_block_w_gu=15 (e.g. for
+    // emb=2880, K_gate_tiles=90) produces a 180-tile block per CB slot and
+    // the gate/up matmul outputs were observed to be non-deterministically
+    // corrupt on the FIRST program invocation (PCC oscillating 0.93–0.98
+    // across cold-cache runs, deterministic 0.98 after one warm-up).
+    // Capping at 10 (in0_block_w_gu * per_core_N_gu = 120 tiles per slot)
+    // gives stable PCC 0.98 on cold and warm runs and matches the in1 block
+    // size envelope of the working BH 11x8 path (in0_block_w_gu=16 *
+    // per_core_N_gu=6 = 96 tiles per slot).
+    constexpr uint32_t kGridX = 8;
+    constexpr uint32_t kGridY = 8;
+    constexpr uint32_t kPerCoreMMax = 4;
+    constexpr uint32_t kIn0BlockWMax = 10;
+    const uint32_t K_gate_tiles = x.padded_shape()[-1] / 32;
+    const uint32_t in0_block_w_gu = pick_in0_block_w(K_gate_tiles, kIn0BlockWMax);
+    const uint32_t M_tiles_full = x.padded_shape()[-2] / 32;
+    const uint32_t chunk_M_tiles = pick_chunk_M_tiles(M_tiles_full, kGridY, kPerCoreMMax);
+
+    return ttnn::prim::unified_routed_expert_ffn(
+        x,
+        gate_proj,
+        up_proj,
+        down_proj,
+        counts,
+        global_expert_idx_table,
+        expert_region_offsets,
+        local_expert_id,
+        chunk_M_tiles,
+        use_region_offsets,
+        kGridX,
+        kGridY,
+        in0_block_w_gu,
+        compute_kernel_config.has_value() ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
+                                          : std::nullopt,
+        output);
+}
+
+namespace {
+
+// Common MoE-level dispatch loop. Calls `ffn` (either the BH or WH variant)
+// per expert. Identical structure to the prior unified_routed_expert_moe;
+// extracted here so we don't duplicate the path-selection logic for the WH
+// op.
+template <typename FfnFn>
+ttnn::Tensor unified_routed_expert_moe_impl(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& expert_region_offsets,
     const ttnn::Tensor& expert_token_counts,
@@ -90,7 +166,8 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& up_projs,
     const std::vector<ttnn::Tensor>& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    FfnFn&& ffn) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -100,28 +177,10 @@ ttnn::Tensor unified_routed_expert_moe(
     const uint32_t experts_per_chip = static_cast<uint32_t>(gate_projs.size());
     TT_FATAL(experts_per_chip > 0, "Need at least one expert per chip");
 
-    // Path selection based on num_routed_experts. The fused extract+insert
-    // path piggybacks expert_region_offsets onto CB_IDX_SCRATCH's L1 page
-    // (page_size = idx_page + region_offsets_page). On the high-expert
-    // configurations (num_routed_experts > 64, e.g. 256 experts with
-    // experts_per_chip=32) the region_offsets page is large enough
-    // (1024 bytes) to push the FFN's static CB region past a per-core L1
-    // buffer placed by the L1 allocator, producing:
-    //     "Statically allocated CBs ... clash with L1 buffers"
-    // Falling back to the unfused extract -> FFN -> insert path for that
-    // case avoids the issue (CB sizes shrink back to their pre-task-#37
-    // values) at the cost of the extract+insert op2op gaps.
     const uint32_t num_routed_experts = static_cast<uint32_t>(expert_token_counts.logical_shape()[-1]);
     const bool use_fused_path = (num_routed_experts <= 64);
 
     if (use_fused_path) {
-        // Fused extract + FFN + insert: the unified FFN kernel reads
-        // region_offsets[global_expert_id] device-side and applies the
-        // offset to DRAM tile indices for both x reads and output writes.
-        // expert_outputs allocated with dispatched_buffer's shape/dtype;
-        // each per-expert FFN call writes its [start_row,
-        // start_row+ceil_tile(count)) slice. Slices non-overlapping per
-        // expert_region_offsets / expert_token_counts contract.
         auto expert_outputs = ttnn::empty(
             dispatched_buffer.logical_shape(),
             dispatched_buffer.dtype(),
@@ -130,7 +189,7 @@ ttnn::Tensor unified_routed_expert_moe(
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
 
         for (uint32_t local_expert = 0; local_expert < experts_per_chip; ++local_expert) {
-            (void)unified_routed_expert_ffn(
+            (void)ffn(
                 dispatched_buffer,
                 gate_projs[local_expert],
                 up_projs[local_expert],
@@ -146,18 +205,6 @@ ttnn::Tensor unified_routed_expert_moe(
         return expert_outputs;
     }
 
-    // Fallback: unfused extract -> FFN -> insert per expert. Used for
-    // num_routed_experts > 64 (e.g. 256 experts). `tokens` from extract is
-    // a per-expert (max_dispatched_tokens_per_expert, emb) tensor with
-    // rows starting at 0 — region_offsets do NOT apply to it. Pass
-    // use_region_offsets=false so the FFN kernel:
-    //   (a) uses start_tile_row=0 for x reads and output writes (correctness
-    //       — otherwise the kernel would OOB-read past the small `tokens`
-    //       buffer), and
-    //   (b) drops the region_offsets slot from CB_IDX_SCRATCH and reduces
-    //       CB_OUT staging (L1 budget — the combined-page CB pushes the
-    //       static CB region past the L1 allocator's buffer placement on
-    //       the 256-expert / 32-per-chip case at large M).
     auto expert_outputs = dispatched_buffer;
     for (uint32_t local_expert = 0; local_expert < experts_per_chip; ++local_expert) {
         auto tokens = ttnn::extract(
@@ -167,22 +214,70 @@ ttnn::Tensor unified_routed_expert_moe(
             global_expert_idx_table,
             local_expert,
             max_dispatched_tokens_per_expert);
-        auto ffn_out = unified_routed_expert_ffn(
-            tokens,
-            gate_projs[local_expert],
-            up_projs[local_expert],
-            down_projs[local_expert],
-            expert_token_counts,
-            global_expert_idx_table,
-            expert_region_offsets,
-            local_expert,
-            /*use_region_offsets=*/false,
-            compute_kernel_config,
-            std::nullopt);
+        auto ffn_out =
+            ffn(tokens,
+                gate_projs[local_expert],
+                up_projs[local_expert],
+                down_projs[local_expert],
+                expert_token_counts,
+                global_expert_idx_table,
+                expert_region_offsets,
+                local_expert,
+                /*use_region_offsets=*/false,
+                compute_kernel_config,
+                std::nullopt);
         expert_outputs = ttnn::insert(
             expert_outputs, ffn_out, expert_region_offsets, expert_token_counts, global_expert_idx_table, local_expert);
     }
     return expert_outputs;
+}
+
+}  // namespace
+
+ttnn::Tensor unified_routed_expert_moe(
+    const ttnn::Tensor& dispatched_buffer,
+    const ttnn::Tensor& expert_region_offsets,
+    const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& global_expert_idx_table,
+    const std::vector<ttnn::Tensor>& gate_projs,
+    const std::vector<ttnn::Tensor>& up_projs,
+    const std::vector<ttnn::Tensor>& down_projs,
+    uint32_t max_dispatched_tokens_per_expert,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    return unified_routed_expert_moe_impl(
+        dispatched_buffer,
+        expert_region_offsets,
+        expert_token_counts,
+        global_expert_idx_table,
+        gate_projs,
+        up_projs,
+        down_projs,
+        max_dispatched_tokens_per_expert,
+        compute_kernel_config,
+        &unified_routed_expert_ffn);
+}
+
+ttnn::Tensor unified_routed_expert_moe_wh(
+    const ttnn::Tensor& dispatched_buffer,
+    const ttnn::Tensor& expert_region_offsets,
+    const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& global_expert_idx_table,
+    const std::vector<ttnn::Tensor>& gate_projs,
+    const std::vector<ttnn::Tensor>& up_projs,
+    const std::vector<ttnn::Tensor>& down_projs,
+    uint32_t max_dispatched_tokens_per_expert,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    return unified_routed_expert_moe_impl(
+        dispatched_buffer,
+        expert_region_offsets,
+        expert_token_counts,
+        global_expert_idx_table,
+        gate_projs,
+        up_projs,
+        down_projs,
+        max_dispatched_tokens_per_expert,
+        compute_kernel_config,
+        &unified_routed_expert_ffn_wh);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn

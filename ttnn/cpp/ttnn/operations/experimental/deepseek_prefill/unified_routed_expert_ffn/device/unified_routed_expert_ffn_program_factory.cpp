@@ -64,17 +64,18 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t K_down_tiles = down_shape[-2] / TILE;         // = hidden / TILE
     const uint32_t N_down_tiles_full = down_shape[-1] / TILE;    // = emb / TILE
 
-    // v2 layout: 11x8 = 88 compute cores. N-axis is rounded UP to a multiple
-    // of GRID_X via ceil_div per_core_N. Phantom tiles past the actual tensor
-    // dims (col 64-65 of hidden, col 224-230 of emb) are zero-padded in the
-    // reader (zero-fill L1 instead of DRAM read). Compute runs uniform
+    // Grid is now parameterized via op.grid_x / op.grid_y. Defaults are the
+    // Blackhole 11x8 = 88-core layout; the Wormhole entrypoint selects 8x8 =
+    // 64 cores. N-axis is rounded UP to a multiple of GRID_X via ceil_div
+    // per_core_N. Phantom tiles past the actual tensor dims are zero-padded
+    // in the reader (zero-fill L1 instead of DRAM read). Compute runs uniform
     // per_core_N; writer skips DRAM writes past actual_N. K dim of the down
     // matmul is also padded to N_gate_padded so the activated L1 mcast (one
     // sender per K-block, sender = gx == kb) covers exactly per_core_N_gu
     // cols per step; activated cols past actual_hidden are 0 (gate/up weight
     // OOB zero-fill propagates through silu and multiply).
-    constexpr uint32_t GRID_X = 11;
-    constexpr uint32_t GRID_Y = 8;
+    const uint32_t GRID_X = op.grid_x;
+    const uint32_t GRID_Y = op.grid_y;
     const uint32_t chunk_M_tiles = op.chunk_M_tiles;
     const uint32_t per_core_M = chunk_M_tiles / GRID_Y;
     TT_FATAL(
@@ -94,10 +95,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t N_gate_tiles_padded = per_core_N_gu * GRID_X;
     const uint32_t K_down_tiles_padded = N_gate_tiles_padded;  // down K = gate N
 
-    // With 11x8 = 88 cores, per_core_N_gu (= 6) and per_core_N_d (= 21) are
-    // smaller than in v1 (8x8), freeing ~250KB of L1 per core. Use it to
-    // double in0_block_w_gu, halving the gate / up K-loop iteration count.
-    const uint32_t in0_block_w_gu = 16;
+    // in0_block_w_gu comes from op-attrs now: defaults to 16 for the BH 11x8
+    // layout; the WH 8x8 path picks the largest divisor of K_gate_tiles that
+    // fits L1 (e.g. 10 for emb=2880 -> K_gate_tiles=90). in0_block_w_d stays
+    // tied to per_core_N_gu so the phase-4 mcast rotation (sender = gx == kb)
+    // covers exactly per_core_N_gu cols per step.
+    const uint32_t in0_block_w_gu = op.in0_block_w_gu;
     const uint32_t in0_block_w_d = per_core_N_gu;
     TT_FATAL(
         K_gate_tiles % in0_block_w_gu == 0,

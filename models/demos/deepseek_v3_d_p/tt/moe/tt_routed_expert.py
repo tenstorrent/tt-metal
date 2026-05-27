@@ -12,6 +12,7 @@ Unlike TtSharedExpert, this module:
 - Each device holds weights for `experts_per_chip` local experts
 """
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -28,6 +29,25 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )
+
+
+def _use_wh_routed_expert_op(mesh_device, emb_dim: int) -> bool:
+    """Pick the Wormhole (8x8 = 64-core) unified routed-expert op when:
+    * the device is a Wormhole board, OR
+    * ``TT_UNIFIED_RE_FORCE_WH=1`` is set (testing the WH path on a
+      Blackhole box), OR
+    * ``emb_dim`` is not a multiple of 16*32 = 512 — the Blackhole op
+      requires ``in0_block_w_gu = 16`` to divide ``emb / 32`` (gpt-oss
+      emb=2880 -> 90 tiles fails 90 % 16). The WH op picks
+      ``in0_block_w_gu`` per-call as the largest divisor of ``emb / 32``,
+      so it handles non-multiples-of-512 emb dims.
+    """
+    if os.environ.get("TT_UNIFIED_RE_FORCE_WH", "") == "1":
+        return True
+    if mesh_device.arch() == ttnn.Arch.WORMHOLE_B0:
+        return True
+    # Auto-fallback when the Blackhole op's K-block divisor constraint fails.
+    return (emb_dim // 32) % 16 != 0
 
 
 class TtRoutedExpert(LightweightModule):
@@ -416,7 +436,12 @@ class TtRoutedExpert(LightweightModule):
         padded_m = ((original_m + alignment - 1) // alignment) * alignment
         if padded_m != original_m:
             x = ttnn.pad(x, [(0, 0)] * (x.padded_shape.rank - 2) + [(0, padded_m - original_m), (0, 0)], value=0)
-        y = ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn(
+        ffn_op = (
+            ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn_wh
+            if _use_wh_routed_expert_op(self.mesh_device, self.emb_dim)
+            else ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn
+        )
+        y = ffn_op(
             x,
             gate_proj,
             up_proj,
@@ -469,12 +494,18 @@ class TtRoutedExpert(LightweightModule):
             dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
 
         # All per-expert work — extract, FFN, insert — runs C++-side inside
-        # ttnn.experimental.deepseek_prefill.unified_routed_expert_moe. The
-        # FFN's reader/compute/writer kernels read the device-resident
+        # ttnn.experimental.deepseek_prefill.unified_routed_expert_moe (BH)
+        # or unified_routed_expert_moe_wh (WH 8x8 = 64 cores). The FFN's
+        # reader/compute/writer kernels read the device-resident
         # `expert_token_counts` and `global_expert_idx_table` to bound their
         # chunk loops. No host-device sync per forward; no Python per-expert
         # loop.
-        expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+        moe_op = (
+            ttnn.experimental.deepseek_prefill.unified_routed_expert_moe_wh
+            if _use_wh_routed_expert_op(self.mesh_device, self.emb_dim)
+            else ttnn.experimental.deepseek_prefill.unified_routed_expert_moe
+        )
+        expert_outputs = moe_op(
             dispatched_buffer,
             expert_region_offsets,
             expert_token_counts,

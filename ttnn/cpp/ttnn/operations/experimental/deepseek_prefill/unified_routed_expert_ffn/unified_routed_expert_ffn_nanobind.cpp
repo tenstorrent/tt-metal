@@ -96,6 +96,47 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("max_dispatched_tokens_per_expert"),
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none());
+
+    ttnn::bind_function<"unified_routed_expert_ffn_wh", "ttnn.experimental.deepseek_prefill.">(
+        mod,
+        R"doc(
+        Wormhole variant of unified_routed_expert_ffn — same fused SwiGLU
+        kernel as the Blackhole op but built for the 8x8 = 64-core WH
+        worker grid. ``in0_block_w_gu`` is selected as the largest divisor
+        of ``K_gate_tiles`` (<=16) so dimensions where K is not a multiple
+        of 16 (e.g. emb=2880, K_gate_tiles=90) are supported.
+        )doc",
+        &unified_routed_expert_ffn_wh,
+        nb::arg("x").noconvert(),
+        nb::arg("gate_proj").noconvert(),
+        nb::arg("up_proj").noconvert(),
+        nb::arg("down_proj").noconvert(),
+        nb::arg("counts").noconvert(),
+        nb::arg("global_expert_idx_table").noconvert(),
+        nb::arg("expert_region_offsets").noconvert(),
+        nb::arg("local_expert_id"),
+        nb::arg("use_region_offsets") = true,
+        nb::kw_only(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("output") = nb::none());
+
+    ttnn::bind_function<"unified_routed_expert_moe_wh", "ttnn.experimental.deepseek_prefill.">(
+        mod,
+        R"doc(
+        Wormhole variant of unified_routed_expert_moe — calls
+        unified_routed_expert_ffn_wh per local expert.
+        )doc",
+        &unified_routed_expert_moe_wh,
+        nb::arg("dispatched_buffer").noconvert(),
+        nb::arg("expert_region_offsets").noconvert(),
+        nb::arg("expert_token_counts").noconvert(),
+        nb::arg("global_expert_idx_table").noconvert(),
+        nb::arg("gate_projs").noconvert(),
+        nb::arg("up_projs").noconvert(),
+        nb::arg("down_projs").noconvert(),
+        nb::arg("max_dispatched_tokens_per_expert"),
+        nb::kw_only(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail
