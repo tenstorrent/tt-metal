@@ -499,9 +499,18 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype);
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
 
+        // The PACK_RELU fast path applies ZERO_RELU via the packer config set once at the top
+        // of the compute kernel.  Subtile-broadcast kernels do an intermediate
+        // `pack_tile(0, cb_llk_post)` followed by `pack_reconfig_data_format(cb_llk_post, cb_out)`
+        // per iteration, which clears the packer's ZERO_RELU state, so the final pack to
+        // `cb_out` no longer clips negatives and RELU is silently dropped.  Restrict the
+        // PACK_RELU optimization to the non-broadcast case and fall through to the SFPU
+        // activation path (used by every other unary post-activation) for broadcast cases.
+        const bool is_subtile_broadcast = operation_attributes.subtile_broadcast_type != SubtileBroadcastType::NONE;
+
         if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1) {
             compute_kernel_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
-            if (post_activations[0].type() == unary::UnaryOpType::RELU) {
+            if (post_activations[0].type() == unary::UnaryOpType::RELU && !is_subtile_broadcast) {
                 compute_kernel_defines["PACK_RELU"] = "1";
                 unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
             } else if (post_activations[0].type() == unary::UnaryOpType::ZERO_POINT) {
