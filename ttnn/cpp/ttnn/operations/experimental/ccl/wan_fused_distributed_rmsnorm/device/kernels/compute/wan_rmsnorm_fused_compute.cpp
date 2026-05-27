@@ -314,9 +314,10 @@ void kernel_main() {
                     cb_wait_front(intermediate_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                        const uint32_t cos_idx = (per_head_rope != 0) ? (col_tile + i) : rope_cos_tile_in_head;
-                        mul_tiles(intermediate_cb, rope_cos_cb, i, cos_idx, i);
-                        if constexpr (per_head_rope == 0) {
+                        if constexpr (per_head_rope != 0) {
+                            mul_tiles(intermediate_cb, rope_cos_cb, i, col_tile + i, i);
+                        } else {
+                            mul_tiles(intermediate_cb, rope_cos_cb, i, rope_cos_tile_in_head, i);
                             rope_cos_tile_in_head++;
                             if (rope_cos_tile_in_head == head_dim_tiles) {
                                 rope_cos_tile_in_head = 0;
@@ -349,9 +350,10 @@ void kernel_main() {
                     cb_wait_front(rotated_input_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                        const uint32_t sin_idx = (per_head_rope != 0) ? (col_tile + i) : rope_sin_tile_in_head;
-                        mul_tiles(rotated_input_cb, rope_sin_cb, i, sin_idx, i);
-                        if constexpr (per_head_rope == 0) {
+                        if constexpr (per_head_rope != 0) {
+                            mul_tiles(rotated_input_cb, rope_sin_cb, i, col_tile + i, i);
+                        } else {
+                            mul_tiles(rotated_input_cb, rope_sin_cb, i, rope_sin_tile_in_head, i);
                             rope_sin_tile_in_head++;
                             if (rope_sin_tile_in_head == head_dim_tiles) {
                                 rope_sin_tile_in_head = 0;
