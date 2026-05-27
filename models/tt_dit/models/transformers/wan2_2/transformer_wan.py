@@ -714,6 +714,9 @@ class WanCheckpoint:
     def subfolder(self) -> str:
         return self._subfolder
 
+    def state_dict(self) -> dict[str, torch.Tensor]:
+        return dict(self._state_dict)
+
     def build(
         self,
         *,
