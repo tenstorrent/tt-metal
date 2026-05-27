@@ -55,7 +55,15 @@ void kernel_main() {
     constexpr uint32_t my_device_index = get_compile_time_arg_val(8);
     constexpr uint32_t num_targets_forward = get_compile_time_arg_val(9);
     constexpr uint32_t num_targets_backward = get_compile_time_arg_val(10);
-    constexpr auto output_args = TensorAccessorArgs<11>();
+    // Output tensor has shape [1, num_heads_per_device, N, head_dim]; the
+    // compute kernel processes the input as if it were [1, 1, N, H_full] where
+    // H_full = num_heads_per_device * head_dim. The two tile-page layouts
+    // only agree when total_num_tile_rows == 1. Otherwise the writer must
+    // map (tile_row, col_tile) → (head, t_row, t_col_in_head) to address the
+    // right page in the 4D output.
+    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(11);
+    constexpr uint32_t total_num_tile_rows = get_compile_time_arg_val(12);
+    constexpr auto output_args = TensorAccessorArgs<13>();
 
     // ---------- runtime args ----------
     // size_t arg_idx (not uint32_t) so it can bind to FabricConnectionManager::build_from_args
@@ -171,8 +179,14 @@ void kernel_main() {
     }
 
     // =================== Drain output_cb to DRAM ===================
+    // Output page index for [1, num_heads, N, head_dim] tile (h, t_row, t_col):
+    //   page = h * total_num_tile_rows * head_dim_tiles + t_row * head_dim_tiles + t_col
+    // The kernel produces tile (tile_row, col_tile + i) where
+    //   h = (col_tile + i) / head_dim_tiles
+    //   t_col = (col_tile + i) % head_dim_tiles
+    // For num_heads_per_device == 1 (head_dim_tiles == num_tile_cols), this
+    // collapses to tile_row * num_tile_cols + col_tile + i.
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
-        uint32_t output_tile_idx = tile_row * num_tile_cols;
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
             const uint32_t tiles_in_block =
                 ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
@@ -184,9 +198,13 @@ void kernel_main() {
             uint32_t output_rd_ptr = get_read_ptr(output_cb);
 
             for (uint32_t i = 0; i < tiles_in_block; i++) {
+                const uint32_t c = col_tile + i;
+                const uint32_t h = c / head_dim_tiles;
+                const uint32_t t_col = c - h * head_dim_tiles;
+                const uint32_t output_tile_idx =
+                    h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
                 noc_async_write_tile(output_tile_idx, output_accessor, output_rd_ptr);
                 output_rd_ptr += output_tile_bytes;
-                output_tile_idx++;
             }
             // _flushed (write request committed to NoC) instead of _barrier
             // (round-trip ACK). L1 source can be reused once the write has
