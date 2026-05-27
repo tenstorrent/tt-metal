@@ -331,10 +331,13 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
         // Reader run-time args
         uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
         if (use_block_reader) {
-            reader_run_time_args = {
-                src0_buffer->address(),
-                num_input_blocks_to_process,
-            };
+            reader_ref.emplace_runtime_args(
+                core,
+                {
+                    src0_buffer,
+                    i,
+                    num_input_blocks_to_process,
+                });
         } else if (input_is_sharded) {
             reader_ref.emplace_runtime_args(core, {num_tiles_to_read});
         } else {
