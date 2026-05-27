@@ -10,11 +10,27 @@ from typing import Optional
 
 import ttnn
 
-from models.experimental.ops.descriptors.op_descriptor import (
-    OpDescriptor,
-    LazyOutputList,
-    core_range_set_fusion_key,
-    extend_branch_program_cache_key,
+from models.experimental.ops.descriptors._generic import expose
+from models.experimental.ops.descriptors.op_descriptor import core_range_set_fusion_key
+
+
+def _layernorm_extra_cache_key(**kw):
+    cr_arg = kw.get("_core_range_arg")
+    if cr_arg is not None:
+        return (core_range_set_fusion_key(kw["_core_range_set"]),)
+    return ()
+
+
+def _layernorm_factory_override(fct, params, inputs, out, **extra_kw):
+    return fct.create_descriptor(params, inputs, out, extra_kw.get("_core_range_arg"))
+
+
+_layernorm_descriptor = expose(
+    ttnn.LayerNormDeviceOperation,
+    name="layernorm_inner",
+    required_inputs=["input"],
+    extra_cache_key_fn=_layernorm_extra_cache_key,
+    factory_call_override=_layernorm_factory_override,
 )
 
 
@@ -35,13 +51,11 @@ def _create_layernorm_op_descriptor(
     Always receives real tensors — the ``@OpDescriptor.create`` decorator on
     the public wrapper (``rms_norm``, ``layer_norm``) handles persistent mode.
     """
-    device = input_tensor.device()
-
     if core_range_set is None:
         if input_tensor.is_sharded():
             core_range_set = input_tensor.memory_config().shard_spec.grid
         else:
-            core_range_set = ttnn.LayerNormMultiCoreProgramFactory.default_core_range(device)
+            core_range_set = ttnn.LayerNormMultiCoreProgramFactory.default_core_range(input_tensor.device())
 
     if compute_kernel_config is None:
         raise ValueError("compute_kernel_config is required")
@@ -58,59 +72,32 @@ def _create_layernorm_op_descriptor(
             W = input_tensor.memory_config().shard_spec.shape[1]
         else:
             W = input_tensor.shape[-1]
-        recip_tensor = ttnn.create_layer_norm_reciprocals(device, core_range_set, W)
+        recip_tensor = ttnn.create_layer_norm_reciprocals(input_tensor.device(), core_range_set, W)
 
-    # Build C++ params + tensor_args for the factory (captured by closure)
-    operation_params = ttnn.LayerNormParams()
-    operation_params.norm_type = norm_type
-    operation_params.distributed_norm_stage = ttnn.DistributedLayerNormStage.NOT_DISTRIBUTED
-    operation_params.eps = epsilon
-    operation_params.output_mem_config = output_mem_config
-    operation_params.program_config = program_config
-    operation_params.compute_kernel_config = compute_kernel_config
-
-    tensor_args = ttnn.LayerNormInputs(input_tensor)
-    if residual_input_tensor is not None:
-        tensor_args.residual_input_tensor = residual_input_tensor
-    if weight is not None:
-        tensor_args.weight = weight
-    if bias is not None:
-        tensor_args.bias = bias
-    if recip_tensor is not None:
-        tensor_args.recip_tensor = recip_tensor
-
-    h = ttnn.LayerNormDeviceOperation.compute_program_hash(operation_params, tensor_args)
-    base_key = int(h) & ((1 << 64) - 1)
-    if input_tensor.is_sharded():
-        program_cache_key = base_key
-    else:
-        program_cache_key = extend_branch_program_cache_key(base_key, core_range_set_fusion_key(core_range_set))
-
-    # Build input dict (auto-converts to list + _input_names in OpDescriptor)
-    inputs = {"input_tensor": input_tensor}
-    if residual_input_tensor is not None:
-        inputs["residual_input_tensor"] = residual_input_tensor
-    if weight is not None:
-        inputs["weight"] = weight
-    if bias is not None:
-        inputs["bias"] = bias
-    if recip_tensor is not None:
-        inputs["recip_tensor"] = recip_tensor
-
-    def _alloc_outputs(slots):
-        slots[0] = ttnn.LayerNormDeviceOperation.create_output_tensors(operation_params, tensor_args)
-
-    outputs = LazyOutputList([None], _alloc_outputs)
     cr_arg = None if input_tensor.is_sharded() else core_range_set
 
-    def _run_factory():
-        out = outputs[0]
-        factory = ttnn.LayerNormDeviceOperation.select_program_factory(operation_params, tensor_args)
-        return factory.create_descriptor(operation_params, tensor_args, out, cr_arg)
-
-    return OpDescriptor(
-        factory_fn=_run_factory,
-        input_tensors=inputs,
-        output_tensors=outputs,
-        program_cache_key=program_cache_key,
+    desc = _layernorm_descriptor(
+        input=input_tensor,
+        weight=weight,
+        bias=bias,
+        residual_input_tensor=residual_input_tensor,
+        recip_tensor=recip_tensor,
+        norm_type=norm_type,
+        distributed_norm_stage=ttnn.DistributedLayerNormStage.NOT_DISTRIBUTED,
+        eps=epsilon,
+        output_mem_config=output_mem_config,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        _core_range_arg=cr_arg,
+        _core_range_set=core_range_set,
     )
+
+    # Remap C++ field name 'input' → 'input_tensor' so the outer
+    # @OpDescriptor.create wrapper (rms_norm / layer_norm) can match
+    # keyword update() calls using the Python parameter name.
+    # Rebuild the dict to preserve insertion order (pop+insert would
+    # move the new key to the end, breaking _gather_inputs ordering).
+    if desc._input_names and "input" in desc._input_names:
+        desc._input_names = {("input_tensor" if k == "input" else k): v for k, v in desc._input_names.items()}
+
+    return desc

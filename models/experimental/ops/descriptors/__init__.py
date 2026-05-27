@@ -8,9 +8,10 @@ Operation descriptors module.
 Provides operation descriptors for creating and composing parallel operations.
 """
 
+from ._generic import expose
 from .normalization.rms_norm import rms_norm
 from .normalization.layer_norm import layer_norm
 from .matmul import matmul
 from .data_movement.slice import slice
 
-__all__ = ["rms_norm", "layer_norm", "matmul", "slice"]
+__all__ = ["expose", "rms_norm", "layer_norm", "matmul", "slice"]
