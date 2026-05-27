@@ -55,14 +55,18 @@ REQUIRED_ENV_VARS = (
 )
 
 
-# `(*batch_dims, M, K, N)` — last 3 entries are matmul dims. Progression below
-# stays in the TTNN-tested narrow-tall regime (M small, K=N large) so we avoid
-# the fused-activation kwarg's broken square-shape fallback path.
+# `(*batch_dims, M, K, N)` — last 3 entries are matmul dims.
+# Reference shapes (square M=K=N) from
+# /localdev/dnijemcevic/kernels/Tenstorrent/references/matmul_fused_activation.py
+# plus their batch-fused-into-M "unfolded" equivalents (same FMA count, b is 2D
+# so TTNN's in-kernel fused-activation path accepts them).
 README_SHAPES = [
-    (32, 1024, 1024),
-    (64, 1024, 1024),
-    (32, 2048, 2048),
-    (64, 2048, 2048),
+    (32, 32, 32),
+    (128, 128, 128),
+    (4, 1024, 1024, 1024),
+    (4096, 1024, 1024),
+    (2, 1, 2048, 2048, 2048),
+    (4096, 2048, 2048),
 ]
 
 
@@ -109,31 +113,47 @@ def _load_makora_module(category: str, name: str):
     return mod
 
 
+def _b_is_batched(b) -> bool:
+    """b has effective batch dims (rank > 2 with any leading dim > 1)?"""
+    shape = list(b.shape)
+    return len(shape) > 2 and any(d > 1 for d in shape[:-2])
+
+
 def _ttnn_matmul_silu(a, b):
     """Apples-to-apples vs Makora's fused matmul+silu.
 
     bf16 in/out, DRAM-interleaved output, HiFi2 + fp32_dest_acc_en.
 
-    `core_grid=device.core_grid` is the trigger that switches matmul.cpp's
-    activation handling from the 2-program post-op `unary_chain` fallback
-    (line 294) to the in-kernel fused path: matmul.cpp:320 sets
-    `user_core_coord` from `core_grid`, which bypasses the fallback, and the
-    chosen program factory then compiles bmm_large_block_zm_fused_bias_activation.cpp
-    with SFPU_ACTIVATION=1 so the SiLU is computed in-kernel between the
-    matmul and the pack — single device program.
+    Routing:
+      - If b is NOT batched: pass `core_grid=device.core_grid` to trigger
+        the in-kernel fused path (single device program, SiLU applied on
+        DST between matmul accumulate and pack via
+        bmm_large_block_zm_fused_bias_activation.cpp with SFPU_ACTIVATION=1).
+      - If b IS batched: TTNN's in-kernel fused activation refuses
+        (matmul_program_config.cpp:454: !fused_activation when batched B);
+        omit core_grid so matmul.cpp:294 falls through to the 2-program
+        post-op path (matmul then unary_chain SiLU, DRAM round-trip
+        between).
     """
     cfg = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         fp32_dest_acc_en=True,
     )
-    return ttnn.matmul(
-        a,
-        b,
+    kwargs = dict(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         activation="silu",
-        core_grid=a.device().core_grid,
         compute_kernel_config=cfg,
     )
+    if not _b_is_batched(b):
+        kwargs["core_grid"] = a.device().core_grid
+    return ttnn.matmul(a, b, **kwargs)
+
+
+def _path_label(shape) -> str:
+    """Which TTNN dispatch path will be taken for this shape's b tensor?"""
+    if len(shape) > 3 and any(d > 1 for d in shape[:-3]):
+        return "kwarg"
+    return "fused"
 
 
 def _make_inputs(shape, device, seed: int = 0):
@@ -219,6 +239,31 @@ def _check_numerics(t_a: ttnn.Tensor, t_b: ttnn.Tensor) -> tuple[float, float]:
     return (pcc, diff)
 
 
+_WORMHOLE_CORES = 64  # full 8×8 compute grid
+_FLOPS_PER_CYCLE_PER_CORE = 2048  # HiFi2: 4096 base / 2 (FMAs counted as 2 FLOPs)
+_CLOCK_GHZ = 1.0  # Wormhole_b0
+
+
+def _math_utilization_pct(shape, duration_ns: float) -> float:
+    """SDPA-style math util: matmul FLOPs / (active_cores × cycles × FLOPs/cycle).
+
+    Active cores capped at min(output_tiles, full grid) — once every core has
+    at least one output tile, more output tiles just stack onto the same cores.
+    """
+    if duration_ns <= 0:
+        return 0.0
+    M, K, N = shape[-3], shape[-2], shape[-1]
+    batch = 1
+    for d in shape[:-3]:
+        batch *= d
+    mm_flops = 2 * batch * M * K * N
+    output_tiles = batch * (M // 32) * (N // 32)
+    active_cores = min(output_tiles, _WORMHOLE_CORES)
+    cycles = duration_ns * _CLOCK_GHZ
+    peak_flops = active_cores * cycles * _FLOPS_PER_CYCLE_PER_CORE
+    return (mm_flops / peak_flops) * 100.0 if peak_flops > 0 else 0.0
+
+
 def _run_one_shape(shape, iters: int, warmup: int, device) -> dict:
     makora = _load_makora_module("new", "matmul_silu")
     (a_dev, b_dev), _torch_inputs = _make_inputs(shape, device)
@@ -245,21 +290,26 @@ def _run_one_shape(shape, iters: int, warmup: int, device) -> dict:
     makora_med = statistics.median(makora_durs)
     return {
         "shape": shape,
+        "path": _path_label(shape),
         "ttnn_median_ns": ttnn_med,
         "makora_median_ns": makora_med,
         "speedup": ttnn_med / makora_med if makora_med else float("inf"),
         "pcc": pcc,
         "max_abs_diff": max_abs_diff,
+        "ttnn_util_pct": _math_utilization_pct(shape, ttnn_med),
+        "makora_util_pct": _math_utilization_pct(shape, makora_med),
     }
 
 
 def _print_row(r):
     print(
-        f"  matmul_silu   shape={str(r['shape']):<28} "
+        f"  matmul_silu  shape={str(r['shape']):<28} "
+        f"path={r['path']:<5}  "
         f"ttnn={int(r['ttnn_median_ns']):>8d} ns  "
-        f"makora={int(r['makora_median_ns']):>8d} ns  "
+        f"makora={int(r['makora_median_ns']):>9d} ns  "
         f"speedup={r['speedup']:>5.2f}x  "
-        f"pcc={r['pcc']:.4f}  max_abs_diff={r['max_abs_diff']:.2e}"
+        f"pcc={r['pcc']:.4f}  max_abs_diff={r['max_abs_diff']:.2e}  "
+        f"ttnn_util={r['ttnn_util_pct']:>5.2f}%  makora_util={r['makora_util_pct']:>5.2f}%"
     )
 
 
@@ -295,7 +345,7 @@ def main():
         ttnn.deallocate(warm)
 
         print(f"Op: matmul_silu  iters={args.iters}  warmup={args.warmup}")
-        speedups, ttnn_meds, makora_meds = [], [], []
+        speedups, ttnn_meds, makora_meds, ttnn_utils, makora_utils = [], [], [], [], []
         for shape in shapes:
             try:
                 r = _run_one_shape(shape, args.iters, args.warmup, device)
@@ -303,6 +353,8 @@ def main():
                 speedups.append(r["speedup"])
                 ttnn_meds.append(r["ttnn_median_ns"])
                 makora_meds.append(r["makora_median_ns"])
+                ttnn_utils.append(r["ttnn_util_pct"])
+                makora_utils.append(r["makora_util_pct"])
             except Exception as e:
                 print(f"  matmul_silu   shape={str(shape):<28} ERROR: {e}")
 
@@ -310,11 +362,16 @@ def main():
             gmean_speedup = statistics.geometric_mean(speedups)
             gmean_ttnn = statistics.geometric_mean(ttnn_meds)
             gmean_makora = statistics.geometric_mean(makora_meds)
+            # Arithmetic mean for util (geometric mean of percentages is misleading).
+            mean_ttnn_util = statistics.mean(ttnn_utils)
+            mean_makora_util = statistics.mean(makora_utils)
             print(
                 f"  matmul_silu   GMEAN over {len(speedups)} shapes:"
                 f"            ttnn={int(gmean_ttnn):>8d} ns  "
                 f"makora={int(gmean_makora):>8d} ns  "
                 f"speedup={gmean_speedup:>5.2f}x"
+                f"                                       "
+                f"ttnn_util={mean_ttnn_util:>5.2f}%  makora_util={mean_makora_util:>5.2f}%"
             )
     finally:
         ttnn.close_device(device)
