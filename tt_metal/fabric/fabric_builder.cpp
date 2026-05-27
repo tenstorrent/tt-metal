@@ -20,8 +20,9 @@ FabricBuilder::FabricBuilder(
     program_(program),
     fabric_context_(fabric_context),
     builder_context_(fabric_context.get_builder_context()),
-    local_node_(tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
-        device->id())),
+    local_node_(
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
+            device->id())),
     wrap_around_mesh_(fabric_context_.is_wrap_around_mesh(local_node_.mesh_id)) {
     // Determine if this device has tunneling dispatch
     auto mmio_device_id =
@@ -94,6 +95,15 @@ void FabricBuilder::create_routers() {
                 .is_dispatch_link = is_dispatch,
             };
 
+#ifdef TT_UMD_BUILD_SIMULATION
+            {
+                const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+                auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+                cluster.register_sim_fabric_endpoint_direction(
+                    device_->id(), eth_chan, control_plane.routing_direction_to_eth_direction(direction));
+            }
+#endif  // TT_UMD_BUILD_SIMULATION
+
             auto router_builder = FabricRouterBuilder::create(device_, program_, local_node_, location);
             routers_.insert({eth_chan, std::move(router_builder)});
         }
@@ -137,12 +147,13 @@ std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_conne
         uint32_t num_links = std::min(chans_dir1.size(), chans_dir2.size());
 
         for (uint32_t link = 0; link < num_links; link++) {
-            pairs.push_back(RouterConnectionPair{
-                .chan1 = chans_dir1[link],
-                .chan2 = chans_dir2[link],
-                .link_idx = link,
-                .num_links = num_links,
-            });
+            pairs.push_back(
+                RouterConnectionPair{
+                    .chan1 = chans_dir1[link],
+                    .chan2 = chans_dir2[link],
+                    .link_idx = link,
+                    .num_links = num_links,
+                });
         }
     };
 
