@@ -795,8 +795,10 @@ def run_ring_joint_sdpa(
 # ============================================================================
 # CHUNKED-PREFILL VALIDATION
 # ============================================================================
-CHUNKED_PREFILL_TOTAL_SEQ = 25 * 1024
-CHUNKED_PREFILL_CHUNK_SIZE = 5 * 1024
+CHUNKED_PREFILL_PER_DEVICE_CHUNK = 640
+CHUNKED_PREFILL_N_CHUNKS = 11  # Last chunk: prefix K = 10 * chunk_size (=25k @ sp=4), current = chunk_size (=2.5k).
+CHUNKED_PREFILL_CHUNK_SIZE = CHUNKED_PREFILL_PER_DEVICE_CHUNK * MESH_CONFIG.sp_size
+CHUNKED_PREFILL_TOTAL_SEQ = CHUNKED_PREFILL_CHUNK_SIZE * CHUNKED_PREFILL_N_CHUNKS
 CHUNKED_PREFILL_PCC_THRESHOLD = 0.99
 CHUNKED_PREFILL_SEED = 1234
 
@@ -1137,14 +1139,16 @@ def run_ring_joint_sdpa_chunked(
                 if reference_outputs is None:
                     reference_outputs = iter_outputs
                 else:
+                    diffs = []
                     for i, (ref, cur) in enumerate(zip(reference_outputs, iter_outputs)):
                         if not torch.equal(ref, cur):
                             num_diffs = (ref != cur).sum().item()
                             max_diff = (ref - cur).abs().max().item()
-                            pytest.fail(
-                                f"Chunked prefill output at iter {it}, chunk {i} differs from iter 0: "
-                                f"{num_diffs} differing elements, max diff = {max_diff}"
-                            )
+                            diffs.append((i, num_diffs, max_diff))
+                            logger.warning(f"  iter {it} chunk {i}: {num_diffs} diffs, max={max_diff}")
+                    if diffs:
+                        details = "; ".join(f"chunk {i}: {n} diffs, max={m}" for i, n, m in diffs)
+                        pytest.fail(f"Chunked prefill determinism failed at iter {it}: {details}")
 
         if num_iterations > 1:
             logger.info(
@@ -1625,14 +1629,35 @@ def test_ring_joint_attention_perf_check(model_name, q_chunk_size, k_chunk_size,
 
 
 # === TEST 6: CHUNKED-PREFILL ACCURACY ===
-CHUNKED_PREFILL_MODELS = [m for m in ("mla_100k",) if m in MODEL_CONFIGS]
+# Chunked-prefill tests use a kimi-K2.6-style MLA config (16 Q heads, single KV head,
+# DeepSeek V3 dims) kept separate from the global MODEL_CONFIGS so the kimi parameters
+# don't leak into the non-chunked sweep/perf/determinism tests.
+CHUNKED_PREFILL_MODEL_CONFIGS = {
+    "kimi_100k": ModelConfig(
+        name="kimi_100k",
+        nhq=16,
+        nhk=1,
+        nhv=16,
+        d_q=576,
+        d_k=576,
+        d_v=128,
+        is_causal=True,
+        is_balanced=True,
+        q_dtype=ttnn.bfloat16,
+        kv_dtype=ttnn.bfloat8_b,
+        q_chunk_sizes=[96],
+        k_chunk_sizes=[128, 256, 320],
+        seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
+    ),
+}
+CHUNKED_PREFILL_MODELS = list(CHUNKED_PREFILL_MODEL_CONFIGS.keys())
 
 
 def _generate_chunked_configs():
     configs = []
     ids = []
     for model_name in CHUNKED_PREFILL_MODELS:
-        model = MODEL_CONFIGS[model_name]
+        model = CHUNKED_PREFILL_MODEL_CONFIGS[model_name]
         for q, k in product(model.q_chunk_sizes, model.k_chunk_sizes):
             configs.append((model_name, q, k))
             ids.append(f"{model_name}-q{q}-k{k}")
@@ -1653,12 +1678,9 @@ def test_ring_joint_attention_sdpa_chunked_accuracy(model_name, q_chunk_size, k_
     """Validate ring joint SDPA chunked prefill against a full-sequence oracle."""
     mesh_config = MESH_CONFIG
 
-    if model_name not in MODEL_CONFIGS:
-        pytest.skip(f"Model {model_name} not available for current mesh config")
-
     run_ring_joint_sdpa_chunked(
         mesh_config,
-        MODEL_CONFIGS[model_name],
+        CHUNKED_PREFILL_MODEL_CONFIGS[model_name],
         chunk_size=chunk_size,
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
@@ -1677,12 +1699,9 @@ def test_ring_joint_attention_sdpa_chunked_determinism(model_name, q_chunk_size,
     """Replay ring joint SDPA chunked prefill 3 times and require bit-exact per-chunk outputs."""
     mesh_config = MESH_CONFIG
 
-    if model_name not in MODEL_CONFIGS:
-        pytest.skip(f"Model {model_name} not available for current mesh config")
-
     run_ring_joint_sdpa_chunked(
         mesh_config,
-        MODEL_CONFIGS[model_name],
+        CHUNKED_PREFILL_MODEL_CONFIGS[model_name],
         chunk_size=chunk_size,
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
@@ -1713,10 +1732,8 @@ def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size
 
     if ring_size < 2:
         pytest.skip(f"Ring joint chunked prefill requires at least 2 devices, got {ring_size}")
-    if model_name not in MODEL_CONFIGS:
-        pytest.skip(f"Model {model_name} not available for current mesh config")
 
-    model = MODEL_CONFIGS[model_name]
+    model = CHUNKED_PREFILL_MODEL_CONFIGS[model_name]
     total_seq = CHUNKED_PREFILL_TOTAL_SEQ
     n_chunks = total_seq // chunk_size
 
