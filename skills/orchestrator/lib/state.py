@@ -63,6 +63,11 @@ DEFAULT_CONFIG = {
     "tick_interval_sec": 60,
 }
 
+# SPEC.md bounds the on-disk tick_log to the last N entries; full history
+# lives in git via per-tick commits. Any mutator that appends to tick_log
+# must call _trim_tick_log afterwards.
+_MAX_TICK_LOG_ENTRIES = 100
+
 
 class SchemaError(Exception):
     """Raised when a state dict fails schema validation."""
@@ -345,6 +350,30 @@ def _next_tick_number(state: dict) -> int:
     return max((entry.get("tick", 0) for entry in state["tick_log"]), default=0) + 1
 
 
+def _trim_tick_log(state: dict) -> None:
+    """Trim tick_log to the last _MAX_TICK_LOG_ENTRIES entries.
+
+    Called after any mutation that appends a tick_log entry. The SPEC
+    bounds the on-disk log to the last N entries; full history lives
+    in git via per-tick commits.
+    """
+    log = state["tick_log"]
+    if len(log) > _MAX_TICK_LOG_ENTRIES:
+        state["tick_log"] = log[-_MAX_TICK_LOG_ENTRIES:]
+
+
+def _format_action(verb: str, block: str, phase: str) -> str:
+    """Format a tick_log action string.
+
+    Convention: ``"<verb>[<block>:<phase>]"``. Verb is the orchestrator
+    operation (``redo``, ``skip``, ``architecture``, ``reference``, ``ttnn``,
+    ``debug``, ``optimization``). Block and phase are not escaped — callers
+    are expected to use canonical block/phase names that do not contain
+    ``[``, ``]``, or ``:`` characters.
+    """
+    return f"{verb}[{block}:{phase}]"
+
+
 def _find_component(state: dict, block: str) -> dict:
     """Return the component dict whose ``name`` matches ``block``.
 
@@ -389,10 +418,11 @@ def redo(state: dict, block: str, phase: str) -> dict:
         {
             "tick": _next_tick_number(state),
             "ts": now,
-            "action": f"redo[{block}:{phase}]",
+            "action": _format_action("redo", block, phase),
             "result": "ok",
         }
     )
+    _trim_tick_log(state)
     state["updated_at"] = now
     return state
 
@@ -437,9 +467,10 @@ def skip(state: dict, block: str, phase: str, justify: str, reference_link: str)
         {
             "tick": _next_tick_number(state),
             "ts": now,
-            "action": f"skip[{block}:{phase}]",
+            "action": _format_action("skip", block, phase),
             "result": f"host_resident: {justify}",
         }
     )
+    _trim_tick_log(state)
     state["updated_at"] = now
     return state

@@ -721,3 +721,69 @@ def test_skip_then_render_log_shows_host_resident():
     assert "models/foo/decoder.py" in hr_section
     # And the _None._ placeholder must NOT appear in that section.
     assert "_None._" not in hr_section
+
+
+def test_redo_trims_tick_log_to_100():
+    """tick_log is bounded to last 100 entries per SPEC; redo trims overflow."""
+    state = _state_with_component()
+    # Seed with 105 dummy entries
+    state["tick_log"] = [
+        {"tick": i, "ts": "2026-05-27T14:00:00Z", "action": f"dummy[{i}]", "result": "ok"} for i in range(1, 106)
+    ]
+    redo(state, "Attention", "ttnn")
+    # Original 105 + 1 new = 106, trimmed to 100
+    assert len(state["tick_log"]) == 100
+    # The newest entry must be present (it's the redo we just did)
+    assert state["tick_log"][-1]["action"] == "redo[Attention:ttnn]"
+    # Entries 1..6 should have been dropped; entries 7..105 + new redo retained
+    first_ticks = [e["tick"] for e in state["tick_log"][:5]]
+    assert 1 not in first_ticks
+    assert 7 in first_ticks
+
+
+def test_skip_accepts_whitespace_only_justify():
+    """Whitespace-only justify is currently accepted; tightening this would
+    be a contract change and should require an explicit decision."""
+    state = _state_with_component()
+    out = skip(state, "Attention", "ttnn", "   ", "models/foo/decoder.py")
+    comp = out["components"][0]
+    assert comp["host_resident"]["allowed"] is True
+    assert comp["host_resident"]["justification"] == "   "
+
+
+def test_skip_overwrites_existing_host_resident():
+    """skip overwrites a pre-existing host_resident block with allowed=False.
+
+    Pins behavior in case a future worker (e.g. architecture) stamps a default
+    ``host_resident`` block onto components at bootstrap time.
+    """
+    state = _state_with_component()
+    # Simulate a previously-stamped host_resident block with allowed=False
+    state["components"][0]["host_resident"] = {
+        "allowed": False,
+        "justification": None,
+        "reference_link": None,
+    }
+    skip(state, "Attention", "ttnn", "Conv too large", "models/foo/decoder.py")
+    hr = state["components"][0]["host_resident"]
+    assert hr["allowed"] is True
+    assert hr["justification"] == "Conv too large"
+    assert hr["reference_link"] == "models/foo/decoder.py"
+
+
+def test_redo_then_render_log_shows_pending_row():
+    """After redo(), the rendered Block Status row shows status=pending, attempts=0.
+
+    Integration counterpart to test_skip_then_render_log_shows_host_resident:
+    proves redo's state mutation flows through to the renderer.
+    """
+    state = _state_with_component()  # Attention.ttnn was failing
+    redo(state, "Attention", "ttnn")
+    output = render_log(state)
+    # The table row for Attention/ttnn should now report status 'pending' and 0 attempts.
+    # Find a line that contains both "Attention" and "ttnn" cells.
+    lines = [ln for ln in output.splitlines() if "Attention" in ln and "ttnn" in ln]
+    assert lines, "no Attention/ttnn row in rendered output"
+    row = lines[0]
+    assert "pending" in row
+    assert " 0 " in row  # attempts column
