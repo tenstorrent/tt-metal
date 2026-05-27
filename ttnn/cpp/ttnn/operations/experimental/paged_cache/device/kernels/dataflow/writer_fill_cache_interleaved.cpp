@@ -128,7 +128,7 @@ void kernel_main() {
             row_within_batch = row_id;
         }
         const uint32_t cur_head = row_within_batch / num_blocks_of_work_per_head;
-        const uint32_t seq_tile_id = row_within_batch % num_blocks_of_work_per_head;
+        uint32_t seq_tile_id = row_within_batch % num_blocks_of_work_per_head;
 
         // Drop the early-prefill tiles whose final slot would be overwritten by a
         // later iteration anyway. The input CB still has to be drained so the
@@ -152,6 +152,7 @@ void kernel_main() {
             noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
             noc_async_read_barrier();
             cached_batch = batch_idx;
+        }
 
         // Bounded sliding-window cache: wrap the virtual tile index into the bounded
         // capacity before the page_table lookup. capacity_t is a multiple of
