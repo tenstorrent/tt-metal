@@ -31,13 +31,36 @@ from models.common.sampling.generator import SamplingGenerator, SamplingParams, 
 
 from ...config import MeshConfig, ModeConfig
 from ...tests.test_factory import compare_tensors, get_pcc_threshold, parametrize_mesh_with_fabric
-from ...tt.model import _compute_per_device_vocab
+from ...tt.model import Gemma4Model, _compute_per_device_vocab
 
 LOG_PROBS_SUPPORTED_DEVICE_COUNTS = (8, 32)
 
 VOCAB_SIZE = 262144
 BATCH_SIZE = 32  # TTSampling minimum
 MAX_TOP_K = 32
+
+
+def test_gemma4_make_sampling_args_sets_sampling_dp_from_mesh_rows():
+    """Regression test for row-sharded sampling contract.
+
+    `_get_sampling_contract` reads `model.sampling_dp`; Gemma4 must set it
+    consistently with the mesh row count so DP=4 (4x8) can use sampling_dp=4.
+    This test is pure-Python and does not require hardware.
+    """
+
+    class _FakeMeshDevice:
+        def __init__(self, shape):
+            self.shape = shape
+
+        def get_num_devices(self):
+            return self.shape[0] * self.shape[1]
+
+    class _FakeConfig:
+        vocab_size = VOCAB_SIZE
+
+    mesh = _FakeMeshDevice((4, 8))
+    args = Gemma4Model._make_sampling_args(_FakeConfig(), mesh, tp=mesh.shape[1])
+    assert args.sampling_dp == 4
 
 
 def _make_sampling_args(mesh_device, *, use_topk_logprobs=False):
@@ -58,6 +81,8 @@ def _make_sampling_args(mesh_device, *, use_topk_logprobs=False):
     args.padded_vocab_size = per_device_vocab * tp
     args.cluster_shape = tuple(mesh_device.shape)
     args.sampling_all_gather_axis = 1
+    # Keep these unit tests in non-row-sharded mode. Row-sharded sampling
+    # (sampling_dp > 1) is exercised separately at the Generator/vLLM contract level.
     args.sampling_dp = 1
     args.num_devices = mesh_device.get_num_devices()
     args.is_galaxy = mesh_device.shape[0] > 1

@@ -18,6 +18,7 @@ Compatible with tt_transformers Generator interface.
 
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
@@ -26,6 +27,15 @@ from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
+
+# Tracy signpost headers — paired begin/end with the same name. The
+# ``models/tt_transformers/scripts/op_perf_results.py --signpost <NAME>``
+# tool consumes these to filter the op CSV to a single region. Targets
+# from issue #44953: lm_head + sampling ≤ 10% of decode step time and
+# sampling alone < 5%. On-device sampling itself runs in the
+# tt_transformers Generator (the model returns logits in sampling layout),
+# so it is profiled there / by op name (SamplingDeviceOperation, TopK).
+LM_HEAD_SIGNPOST = "gemma4_lm_head"
 
 
 def _compute_per_device_vocab(vocab_size, num_tp):
@@ -469,6 +479,13 @@ class Gemma4Model:
             mesh_config=mesh_config,
         )
 
+        # sampling_dp: number of independent sampling groups (one per mesh row).
+        # This is 1 for standard TP-only meshes (e.g. 1x8), and >1 for multi-row
+        # meshes where each row samples users independently (e.g. Galaxy 4x8).
+        #
+        # tt_transformers' Generator reads this attribute via _get_sampling_contract.
+        self.sampling_dp = mesh_device.shape[0] if is_mesh else 1
+
         # On-device sampling (greedy/top-k/top-p) — avoids reading full vocab logits to CPU
         self.sampling = None
         if is_mesh and tp > 1:
@@ -498,7 +515,7 @@ class Gemma4Model:
         args.padded_vocab_size = per_device_vocab * tp
         args.cluster_shape = tuple(mesh_device.shape)
         args.sampling_all_gather_axis = 1  # gather across TP (column) axis
-        args.sampling_dp = 1
+        args.sampling_dp = mesh_device.shape[0]
         args.num_devices = mesh_device.get_num_devices()
         args.is_galaxy = mesh_device.shape[0] > 1
         args.model_config = {}
@@ -824,6 +841,13 @@ class Gemma4Model:
         - The sharded vocab is all-gathered back to full width, except in decode
           on-device sampling (the sampling module consumes sharded logits).
         """
+        # Bracket the lm_head matmul + softcap with a Tracy signpost so the
+        # op_perf_results.py --signpost gemma4_lm_head filter sums just this
+        # region (issue #44953 — measure LM head dispatch share of decode step).
+        # Gated on is_decode so prefill last-token calls don't mix into the
+        # decode region totals.
+        if is_decode:
+            signpost(header=LM_HEAD_SIGNPOST)
         if self.lm_head_weight is not None:
             lm_head_pc = _get_lm_head_program_config(
                 self.mesh_device,
@@ -841,6 +865,8 @@ class Gemma4Model:
             logits = ttnn.mul(logits, 1.0 / cap)
             logits = ttnn.tanh(logits)
             logits = ttnn.mul(logits, cap)
+        if is_decode:
+            signpost(header=LM_HEAD_SIGNPOST)
 
         if self.mesh_config is not None and self.mesh_config.tp > 1 and self.lm_head_weight is not None:
             if self.sampling is not None and is_decode:
