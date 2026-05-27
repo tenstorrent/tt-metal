@@ -12,6 +12,7 @@
 namespace tt::tt_metal {
 
 struct DispatchTelemetryInfo {
+    uint8_t cq_id = 0;
     bool prefetch_waiting = false;
     uint64_t prefetch_blocked_count_since_last_read = 0;
     uint64_t prefetch_command_count_since_last_read = 0;
@@ -37,10 +38,10 @@ public:
     /**
      * @brief Read the dispatch telemetry info from the device.
      *
-     * @return The dispatch telemetry info on success, or std::nullopt if the telemetry buffer fails
-     *         signature/version validation (a warning is logged in that case).
+     * @return Dispatch telemetry info for each command queue. If there is an issue reading telemetry
+     *         from a command queue, a warrnign is logged and that entry is absent.
      */
-    std::optional<DispatchTelemetryInfo> read_info();
+    std::vector<DispatchTelemetryInfo> read_info();
 
 private:
     class Impl;

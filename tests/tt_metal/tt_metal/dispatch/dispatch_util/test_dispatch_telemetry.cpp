@@ -202,6 +202,7 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchProgramCountIncrementsAfterProgramR
     IDevice* device = this->device();
     auto& cq = devices_.at(0)->mesh_command_queue();
     const CoreCoord worker_core{0, 0};
+    constexpr size_t total_runs = 10;
     constexpr size_t num_blank_programs = 4;
 
     DispatchTelemetry telemetry(*device);
@@ -216,16 +217,19 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchProgramCountIncrementsAfterProgramR
     ASSERT_TRUE(after_one.has_value());
     EXPECT_EQ(after_one->dispatch_program_count_since_last_read, 1);
 
-    for (size_t i = 0; i < num_blank_programs; ++i) {
-        distributed::MeshWorkload workload;
-        workload.add_program(device_range_, create_blank_program(worker_core));
-        distributed::EnqueueMeshWorkload(cq, workload, false);
-    }
-    Finish(cq);
+    // Multiple runs to ensure the delta is calculated correctly
+    for (size_t run = 0; run < total_runs; ++run) {
+        for (size_t i = 0; i < num_blank_programs; ++i) {
+            distributed::MeshWorkload workload;
+            workload.add_program(device_range_, create_blank_program(worker_core));
+            distributed::EnqueueMeshWorkload(cq, workload, false);
+        }
+        Finish(cq);
 
-    auto after_many = telemetry.read_info();
-    ASSERT_TRUE(after_many.has_value());
-    EXPECT_EQ(after_many->dispatch_program_count_since_last_read, num_blank_programs);
+        auto after_many = telemetry.read_info();
+        ASSERT_TRUE(after_many.has_value());
+        EXPECT_EQ(after_many->dispatch_program_count_since_last_read, num_blank_programs);
+    }
 }
 
 TEST_F(DispatchTelemetryReadApiTest, PrefetchCommandCountAdvancesForEveryEnqueuedProgram) {

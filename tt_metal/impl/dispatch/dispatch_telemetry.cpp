@@ -79,11 +79,8 @@ struct CoreEntry {
     uint8_t cq_id;
 };
 
-std::vector<CoreEntry> collect_telemetry_cores(const IDevice& device) {
-    std::vector<CoreEntry> entries;
-    uint8_t num_prefetch_cores = 0;
-    uint8_t num_dispatch_cores = 0;
-    uint8_t num_dispatch_s_cores = 0;
+std::vector<std::vector<CoreEntry>> collect_telemetry_cores(const IDevice& device) {
+    std::vector<std::vector<CoreEntry>> entries;
 
     auto& dcm = MetalContext::instance().get_dispatch_core_manager();
     const auto& cluster = MetalContext::instance().get_cluster();
@@ -93,6 +90,7 @@ std::vector<CoreEntry> collect_telemetry_cores(const IDevice& device) {
     const CoreType core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
 
     for (uint8_t cq = 0; cq < num_cqs; ++cq) {
+        std::vector<CoreEntry> cq_entries;
         if (dcm.is_prefetcher_core_allocated(chip, channel, cq)) {
             CoreEntry entry{};
             entry.role = CoreRole::PREFETCH;
@@ -100,8 +98,7 @@ std::vector<CoreEntry> collect_telemetry_cores(const IDevice& device) {
             entry.virtual_core =
                 device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
             entry.cq_id = cq;
-            entries.push_back(entry);
-            num_prefetch_cores++;
+            cq_entries.push_back(entry);
         }
         if (dcm.is_prefetcher_d_core_allocated(chip, channel, cq)) {
             CoreEntry entry{};
@@ -110,8 +107,7 @@ std::vector<CoreEntry> collect_telemetry_cores(const IDevice& device) {
             entry.virtual_core =
                 device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
             entry.cq_id = cq;
-            entries.push_back(entry);
-            num_prefetch_cores++;
+            cq_entries.push_back(entry);
         }
         if (dcm.is_dispatcher_core_allocated(chip, channel, cq)) {
             CoreEntry entry{};
@@ -120,8 +116,7 @@ std::vector<CoreEntry> collect_telemetry_cores(const IDevice& device) {
             entry.virtual_core =
                 device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
             entry.cq_id = cq;
-            entries.push_back(entry);
-            num_dispatch_cores++;
+            cq_entries.push_back(entry);
         }
         if (dcm.is_dispatcher_d_core_allocated(chip, channel, cq)) {
             CoreEntry entry{};
@@ -130,8 +125,7 @@ std::vector<CoreEntry> collect_telemetry_cores(const IDevice& device) {
             entry.virtual_core =
                 device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
             entry.cq_id = cq;
-            entries.push_back(entry);
-            num_dispatch_cores++;
+            cq_entries.push_back(entry);
         }
         if (dcm.is_dispatcher_s_core_allocated(chip, channel, cq)) {
             CoreEntry entry{};
@@ -140,20 +134,18 @@ std::vector<CoreEntry> collect_telemetry_cores(const IDevice& device) {
             entry.virtual_core =
                 device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
             entry.cq_id = cq;
-            entries.push_back(entry);
-            num_dispatch_s_cores++;
+            cq_entries.push_back(entry);
         }
+        entries.push_back(cq_entries);
     }
-    TT_FATAL(num_prefetch_cores <= 1, "Expected no more than 1 prefetch core, found {}\n", num_prefetch_cores);
-    TT_FATAL(num_dispatch_cores <= 1, "Expected no more than 1 dispatch core, found {}\n", num_dispatch_cores);
-    TT_FATAL(num_dispatch_s_cores <= 1, "Expected no more than 1 dispatch_s core, found {}\n", num_dispatch_s_cores);
+
     return entries;
 }
 
 // Takes into consideration rollover
 uint32_t calc_delta(uint32_t current, uint32_t last) {
     if (current < last) {
-        return current + (UINT32_MAX - last);
+        return current + (UINT32_MAX - last + 1);
     }
     return current - last;
 }
@@ -183,47 +175,61 @@ public:
 
     uint32_t version() const { return DISPATCH_TELEMETRY_VERSION; }
 
-    std::optional<DispatchTelemetryInfo> read_info() {
-        DispatchTelemetryInfo info{};
-        bool found_prefetch_core = false;
-        bool found_dispatch_core = false;
+    std::vector<DispatchTelemetryInfo> read_info() {
+        std::vector<DispatchTelemetryInfo> infos;
 
-        for (const auto& core : telemetry_cores_) {
-            if (core.role == CoreRole::PREFETCH || core.role == CoreRole::PREFETCH_D) {
-                auto telemetry = read_prefetch_core_telemetry(chip_, core.virtual_core);
-                if (telemetry) {
-                    info.prefetch_waiting = (telemetry->upstream_blocked_count != telemetry->upstream_unblocked_count);
-                    info.prefetch_blocked_count_since_last_read = calc_delta(
-                        telemetry->upstream_blocked_count, last_read_info_.prefetch_blocked_count_since_last_read);
-                    info.prefetch_command_count_since_last_read =
-                        calc_delta(telemetry->command_count, last_read_info_.prefetch_command_count_since_last_read);
-                    found_prefetch_core = true;
+        for (const auto& cq_entries : telemetry_cores_) {
+            DispatchTelemetryInfo info{};
+            info.cq_id = cq_entries.front().cq_id;
+            bool found_prefetch_core = false;
+            bool found_dispatch_core = false;
+
+            for (const auto& core : cq_entries) {
+                if (core.role == CoreRole::PREFETCH || core.role == CoreRole::PREFETCH_D) {
+                    auto telemetry = read_prefetch_core_telemetry(chip_, core.virtual_core);
+                    if (telemetry) {
+                        info.prefetch_waiting =
+                            (telemetry->upstream_blocked_count != telemetry->upstream_unblocked_count);
+                        info.prefetch_blocked_count_since_last_read = calc_delta(
+                            telemetry->upstream_blocked_count,
+                            last_read_prefetch_core_telemetry_.upstream_blocked_count);
+                        info.prefetch_command_count_since_last_read =
+                            calc_delta(telemetry->command_count, last_read_prefetch_core_telemetry_.command_count);
+                        found_prefetch_core = true;
+                    }
+                    last_read_prefetch_core_telemetry_ = telemetry;
+                }
+                if (core.role == CoreRole::DISPATCH || core.role == CoreRole::DISPATCH_D) {
+                    auto telemetry = read_dispatch_core_telemetry(chip_, core.virtual_core);
+                    if (telemetry) {
+                        info.dispatch_waiting =
+                            (telemetry->upstream_blocked_count != telemetry->upstream_unblocked_count);
+                        info.dispatch_blocked_count_since_last_read = calc_delta(
+                            telemetry->upstream_blocked_count,
+                            last_read_dispatch_core_telemetry_.upstream_blocked_count);
+                        info.dispatch_program_count_since_last_read =
+                            calc_delta(telemetry->program_count, last_read_dispatch_core_telemetry_.program_count);
+                        found_dispatch_core = true;
+                    }
+                    last_read_dispatch_core_telemetry_ = telemetry;
                 }
             }
-            if (core.role == CoreRole::DISPATCH || core.role == CoreRole::DISPATCH_D) {
-                auto telemetry = read_dispatch_core_telemetry(chip_, core.virtual_core);
-                if (telemetry) {
-                    info.dispatch_waiting = (telemetry->upstream_blocked_count != telemetry->upstream_unblocked_count);
-                    info.dispatch_blocked_count_since_last_read = calc_delta(
-                        telemetry->upstream_blocked_count, last_read_info_.dispatch_blocked_count_since_last_read);
-                    info.dispatch_program_count_since_last_read =
-                        calc_delta(telemetry->program_count, last_read_info_.dispatch_program_count_since_last_read);
-                    found_dispatch_core = true;
-                }
+            if (!found_prefetch_core || !found_dispatch_core) {
+                TT_WARN("Failed to read dispatch telemetry from core(s)\n");
+                TT_WARN("Prefetch core: {}\n", found_prefetch_core ? "found" : "not found");
+                TT_WARN("Dispatch core: {}\n", found_dispatch_core ? "found" : "not found");
+                continue;
             }
         }
-        if (!found_prefetch_core || !found_dispatch_core) {
-            return std::nullopt;
-        }
-        last_read_info_ = info;
         return info;
     }
 
 private:
     ChipId chip_;
     CoreType dispatch_core_type_;
-    std::vector<CoreEntry> telemetry_cores_;
-    DispatchTelemetryInfo last_read_info_{};
+    std::vector<std::vector<CoreEntry>> telemetry_cores_;
+    DispatchCoreTelemetry last_read_dispatch_core_telemetry_{};
+    PrefetchCoreTelemetry last_read_prefetch_core_telemetry_{};
 };
 
 DispatchTelemetry::DispatchTelemetry(const IDevice& device) : impl_(std::make_unique<Impl>(device)) {}

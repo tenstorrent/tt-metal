@@ -29,7 +29,7 @@ constexpr uint32_t PREFETCH_CORE_TELEMETRY_SIGNATURE = detail::pack("PREF");
 // Used to invalidate the telemetry buffer
 constexpr uint32_t INVALID_TELEMETRY_SIGNATURE = 0;
 
-struct __attribute__((packed)) PrefetchCoreTelemetry {
+struct __attribute__((packed, aligned(4))) PrefetchCoreTelemetry {
     uint32_t version = DISPATCH_TELEMETRY_VERSION;
     uint32_t signature = PREFETCH_CORE_TELEMETRY_SIGNATURE;
     uint32_t upstream_blocked_count = 0;
@@ -37,7 +37,7 @@ struct __attribute__((packed)) PrefetchCoreTelemetry {
     uint32_t command_count = 0;
 };
 
-struct __attribute__((packed)) DispatchCoreTelemetry {
+struct __attribute__((packed, aligned(4))) DispatchCoreTelemetry {
     uint32_t version = DISPATCH_TELEMETRY_VERSION;
     uint32_t signature = DISPATCH_CORE_TELEMETRY_SIGNATURE;
     uint32_t upstream_blocked_count = 0;

@@ -170,7 +170,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // TODO: Inspect device while it runs an indepenedent workload instead of launching our own
+    // TODO: Inspect device while it runs an independent workload instead of launching our own
     //       once the SMC/ARC region supports sharing dispatch core locations.
     issue_workloads(mesh_device.get(), num_programs);
 
