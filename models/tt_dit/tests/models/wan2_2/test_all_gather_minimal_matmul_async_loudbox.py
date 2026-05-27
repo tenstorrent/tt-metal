@@ -62,7 +62,11 @@ LOUDBOX_MESH_CONFIG = {
     ids=["m1024_k6144_n768", "m512_k6144_n768", "ltx"],
 )
 @pytest.mark.parametrize("use_non_fused", [False, True], ids=["fused", "separate"])
-@pytest.mark.parametrize("enable_trace,num_iters", [(False, 1)], ids=["check"])
+@pytest.mark.parametrize(
+    "enable_trace,num_iters",
+    [(False, 1), (True, 2)],
+    ids=["check", "perf"],
+)
 def test_linear_loudbox(
     mesh_device,
     M,
