@@ -6,18 +6,42 @@ import os
 import signal
 from pathlib import Path
 
+import torch
 from loguru import logger
 from transformers import AutoConfig
 
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
 from models.demos.deepseek_v3_d_p.tt.runners.migration_setup import INVALID_SLOT_ID
 from models.demos.deepseek_v3_d_p.tt.tt_deepseek_prefill_pipeline import (
     TtDeepSeekPrefillPipeline,
     TtPrefillPipelineConfig,
+)
+
+# Sync-op worker core. Single core suffices: the kernel only copies the
+# backing tensor's pages into a fresh output, no per-core parallelism needed.
+H2D_SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
+
+# Inline metadata payload — packed by the producer per-iter, surfaced by the
+# kernel via h2d_socket_sync's optional metadata output. Layout (4 × int32):
+#   [0] actual_isl
+#   [1] slot_id
+#   [2] dst_slot
+#   [3] reserved (currently 0)
+H2D_METADATA_SIZE_BYTES = 16
+
+# Per-iter mesh distribution for the token input. Used by both the H2D service
+# (its internal mapper) and any host-side `_tokens_to_host_tensor()` callers
+# (the producer process, which builds an equivalent mapper from MeshShape).
+# `Shard(0)` shards the leading axis across mesh rows (SP); `Replicate()`
+# duplicates across mesh cols (TP).
+H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(
+    placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()],
 )
 
 _sp = int(os.environ.get("PREFILL_SP", 8))
@@ -93,67 +117,156 @@ def _resolve_weight_cache_path() -> Path | None:
     return path
 
 
-def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
-    """Run a single prefill from a JSON file (no C++ server / SHM required).
+def _build_h2d_service(mesh_device: ttnn.MeshDevice) -> ttnn.H2DStreamService:
+    """Construct an H2DStreamService whose per-shard backing tensor matches
+    what `TtDeepSeekPrefillPipeline._prepare_input_tensor` would have produced.
 
-    Reads PREFILL_STANDALONE_INPUT (default: standalone_input.json next to this
-    script).  File format:
-        {
-            "task_id": <int>,
-            "token_ids": [<int>, ...],
-        }
-    Prints the first generated token to stdout.
+    Per-shard target: `(1, 1, isl_per_chip)` uint32 ROW_MAJOR DRAM.
+    Achieved by setting global_spec.shape = `(sp_factor, 1, isl_per_chip)` and
+    mapping `[Shard(0), Replicate]` on a `(sp, tp)` mesh — first axis of the
+    tensor is sharded across mesh rows (sp), nothing else is split.
+
+    No `worker_cores`, no metadata: Mode 1 only. Per-iter usage is
+    `forward_to_tensor_bytes(...) -> barrier() -> consume the backing tensor
+    via the standard FD-dispatched embedding op` (see run_standalone_loop).
     """
-    import json
-    import time as _time
+    sp_factor, tp_factor = GLOBAL_MESH_SHAPE
+    assert MAX_SEQ_LEN % sp_factor == 0, f"MAX_SEQ_LEN={MAX_SEQ_LEN} must be divisible by sp_factor={sp_factor}"
+    isl_per_chip = MAX_SEQ_LEN // sp_factor
+    per_chip_bytes = isl_per_chip * 4  # uint32
 
-    default_path = Path(__file__).parent / "standalone_input.json"
-    input_path = Path(os.environ.get("PREFILL_STANDALONE_INPUT", default_path))
-
-    logger.info(f"[standalone] Reading input from {input_path}")
-    with open(input_path) as f:
-        data = json.load(f)
-
-    task_id = data["task_id"]
-    token_ids = list(data["token_ids"])
-
+    global_spec = _make_global_spec()
+    mapper = ttnn.create_mesh_mapper(
+        mesh_device,
+        H2D_MAPPER_CONFIG,
+    )
+    # worker_cores set so the service-core kernel multicasts a data-ready inc
+    # after each transfer; h2d_socket_sync() waits on that on-device, which
+    # avoids the host-side barrier() round-trip per iteration.
+    # metadata_size_bytes set so the producer can ship per-iter control bytes
+    # (actual_isl, slot_id, dst_slot) inline with the token push.
+    service = ttnn.H2DStreamService(
+        mesh_device=mesh_device,
+        global_spec=global_spec,
+        fifo_size_bytes=8 * per_chip_bytes,  # 8 in-flight pages of headroom
+        scratch_cb_size_bytes=per_chip_bytes,  # one page; service requires >= page_size
+        mapper=mapper,
+        worker_cores=H2D_SYNC_WORKER_CORES,
+        metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
+    )
     logger.info(
-        f"[standalone] task_id={task_id} num_tokens={len(token_ids)} " f"first5={token_ids[:5]} last5={token_ids[-5:]}"
+        f"[h2d] H2DStreamService built: global_shape=({sp_factor},1,{isl_per_chip}) "
+        f"uint32 ROW_MAJOR DRAM, per_chip_bytes={per_chip_bytes}, "
+        f"worker_cores={H2D_SYNC_WORKER_CORES}"
+    )
+    return service
+
+
+def _make_global_spec() -> ttnn.TensorSpec:
+    """Per-iter input spec shared by `_build_h2d_service` (sets the service's
+    global tensor shape) and `_tokens_to_host_tensor` (matches the host
+    tensor's distributed-spec to the service's per-shard expectation).
+    Shape `(sp_factor, 1, isl_per_chip)` uint32 ROW_MAJOR DRAM."""
+    sp_factor = GLOBAL_MESH_SHAPE[0]
+    isl_per_chip = MAX_SEQ_LEN // sp_factor
+    return ttnn.TensorSpec(
+        shape=ttnn.Shape([sp_factor, 1, isl_per_chip]),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
     )
 
-    if len(token_ids) > MAX_SEQ_LEN:
-        tail_preview = token_ids[MAX_SEQ_LEN : MAX_SEQ_LEN + 10]
-        tail_suffix = "..." if len(token_ids) > MAX_SEQ_LEN + 10 else ""
-        raise ValueError(
-            f"task_id={task_id} prompt has {len(token_ids)} tokens but "
-            f"MAX_SEQ_LEN={MAX_SEQ_LEN}. Bump SEQ_LEN in the launcher. "
-            f"Dropped tail tokens would have been: {tail_preview}{tail_suffix}"
-        )
 
-    actual_isl = len(token_ids)
-    if len(token_ids) < MAX_SEQ_LEN:
-        token_ids = token_ids + [1] * (MAX_SEQ_LEN - len(token_ids))
+def _tokens_to_host_tensor(token_ids: list[int], mapper) -> ttnn.Tensor:
+    """Build the pre-distributed host tensor consumed by `service.forward_to_tensor`.
+
+    Applies the `is_balanced` chunk reorder host-side, reshapes to
+    `(sp_factor, 1, isl_per_chip)`, then runs `ttnn.from_torch` with the
+    supplied mapper to produce a multi-device-host tensor whose per-shard
+    spec equals `H2DStreamService.get_per_shard_spec()`. The service streams
+    each shard's bytes directly to its target coord — no bytes round-trip,
+    no internal mapper invocation.
+    """
+    sp_factor = GLOBAL_MESH_SHAPE[0]
+    assert len(token_ids) == MAX_SEQ_LEN, f"token_ids must be padded to MAX_SEQ_LEN={MAX_SEQ_LEN}, got {len(token_ids)}"
+    isl_per_chip = MAX_SEQ_LEN // sp_factor
+
+    if IS_BALANCED:
+        chunk_order = create_balanced_chunk_order(sp_factor)
+        t = torch.tensor(token_ids, dtype=torch.int64).unsqueeze(0).unsqueeze(0).unsqueeze(-1)
+        t = reorder_tensor_chunks(t, chunk_order, seq_dim=2)
+        token_ids_sharded = t.squeeze(0).squeeze(-1).reshape(sp_factor, 1, isl_per_chip)
+    else:
+        token_ids_sharded = torch.tensor(token_ids, dtype=torch.int64).reshape(sp_factor, 1, isl_per_chip)
+
+    # uint32 bit pattern is what the device sees; int32 carries the same bits
+    # for any non-negative token id (DeepSeek vocab fits in 18 bits anyway).
+    return ttnn.from_torch(
+        token_ids_sharded.to(torch.int32),
+        spec=_make_global_spec(),
+        mesh_mapper=mapper,
+    )
+
+
+def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DStreamService) -> None:
+    """External-producer standalone loop.
+
+    Token IDs are pushed into the H2D service by a separate process running
+    `prefill_h2d_producer.py`. The producer also packs per-iter control
+    metadata (`actual_isl`, `slot_id`, `dst_slot`) — `h2d_socket_sync` returns
+    both the tokens tensor and the metadata tensor; we decode the metadata
+    and pass the real values to `pipeline.prefill`.
+    """
+    import time as _time
 
     num_iterations = int(os.environ.get("PREFILL_STANDALONE_ITERS", "1"))
+    logger.info(
+        f"[standalone] external-producer mode: waiting on h2d_socket_sync for "
+        f"{num_iterations} iters; per-iter control via H2D metadata channel"
+    )
+
     iter_times_ms = []
     first_token = None
     for i in range(num_iterations):
         _t0 = _time.perf_counter()
-        first_token = pipeline.prefill(token_ids=token_ids, slot_id=0, actual_isl=actual_isl)
+        # Device-side sync: workers wait on data_ready_sem (set by the service
+        # core after the producer's push lands), copy backing -> fresh output,
+        # ack consumed_counter. Returns a tensor independent of the backing.
+        tt_tokens, tt_metadata = h2d_socket_sync(
+            h2d_service,
+            H2D_SYNC_WORKER_CORES,
+            metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
+        )
+        # Decode per-iter metadata: 4 × int32 = [actual_isl, slot_id, dst_slot, reserved].
+        # Replicated across the mesh — take the first device's view.
+        meta_host = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
+        actual_isl = int(meta_host[0])
+        slot_id = int(meta_host[1])
+        dst_slot = int(meta_host[2])
+        logger.info(f"[standalone] iter={i} metadata: actual_isl={actual_isl} slot_id={slot_id} dst_slot={dst_slot}")
+        first_token = pipeline.prefill(
+            input_tensor=tt_tokens,
+            slot_id=slot_id,
+            actual_isl=actual_isl,
+            dst_slot=dst_slot if dst_slot != INVALID_SLOT_ID else None,
+        )
         _dt_ms = (_time.perf_counter() - _t0) * 1000.0
         iter_times_ms.append(_dt_ms)
         logger.info(
-            f"[prefill timing] task_id={task_id} iter={i} num_tokens={len(token_ids)} "
-            f"pipeline.prefill() = {_dt_ms:.2f} ms"
+            f"[prefill timing] iter={i} num_tokens={MAX_SEQ_LEN} "
+            f"pipeline.prefill() = {_dt_ms:.2f} ms first_token={first_token}"
         )
     logger.info(f"[iter timing summary] per-iter ms = {[round(t,2) for t in iter_times_ms]}")
 
     # stdout, not a log line: callers (tests / orchestrators) parse this.
     print(f"[standalone] first_token={first_token}")
-    logger.info(f"Sent token {first_token} for task {task_id}")
 
 
-def run_request_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
+def run_request_loop(
+    pipeline: TtDeepSeekPrefillPipeline,
+    h2d_service: ttnn.H2DStreamService,
+    mesh_device: ttnn.MeshDevice,
+) -> None:
     """Read prefill requests from SHM, run pipeline.prefill, write tokens back.
 
     SharedMemory lives in the C++ inference server's tree at
@@ -178,6 +291,9 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
 
     logger.info(f"Opening SHM C2P={c2p_name} P2C={p2c_name}")
     import time as _time
+
+    # Build the input mapper once; reused on every push via _tokens_to_host_tensor.
+    h2d_mapper = ttnn.create_mesh_mapper(mesh_device, H2D_MAPPER_CONFIG)
 
     with SharedMemory(c2p_name, max_token_ids=PREFILL_MAX_TOKEN_IDS, is_shutdown=_is_shutdown) as c2p, SharedMemory(
         p2c_name, max_token_ids=1, is_shutdown=_is_shutdown
@@ -213,8 +329,11 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
                 token_ids = token_ids + [1] * (MAX_SEQ_LEN - len(token_ids))
 
             _t0 = _time.perf_counter()
+            host_tokens = _tokens_to_host_tensor(token_ids, h2d_mapper)
+            h2d_service.forward_to_tensor(host_tokens)
+            tt_tokens = h2d_socket_sync(h2d_service, H2D_SYNC_WORKER_CORES)
             first_token = pipeline.prefill(
-                token_ids=token_ids,
+                input_tensor=tt_tokens,
                 slot_id=0,
                 actual_isl=actual_isl,
                 dst_slot=dst_slot,
@@ -252,6 +371,7 @@ def _print_config() -> None:
         ("PREFILL_STANDALONE_ITERS", os.environ.get("PREFILL_STANDALONE_ITERS", "1")),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
         ("PREFILL_DEBUG", os.environ.get("PREFILL_DEBUG", "0")),
+        ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
     ]
 
     sep = "=" * 70
@@ -332,6 +452,20 @@ def main() -> None:
     if PREFILL_DEBUG:
         probe_dram_allocatable_base(mesh_device, "after-compile")
 
+    h2d_service = _build_h2d_service(mesh_device)
+    if PREFILL_DEBUG:
+        probe_dram_allocatable_base(mesh_device, "after-h2d-service")
+
+    # Dump the descriptor to /dev/shm so the producer process can attach via
+    # `H2DStreamService.connect(service_id)` and push tokens in. The standalone
+    # loop below blocks on `h2d_socket_sync` waiting for those pushes.
+    service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
+    descriptor_path = h2d_service.export_descriptor(service_id)
+    logger.info(
+        f"[h2d] exported descriptor service_id={service_id!r} -> {descriptor_path}; "
+        f"run prefill_h2d_producer.py in another process to drive token pushes."
+    )
+
     if enable_migration:
         from models.demos.deepseek_v3_d_p.tt.runners.migration_setup import DECODE_EP_ID, setup_prefill_migration
 
@@ -347,9 +481,9 @@ def main() -> None:
 
     logger.info("Setup complete, entering request loop")
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
-        run_standalone_loop(pipeline)
+        run_standalone_loop(pipeline, h2d_service)
     else:
-        run_request_loop(pipeline)
+        run_request_loop(pipeline, h2d_service, mesh_device)
 
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     ttnn.close_mesh_device(mesh_device)
