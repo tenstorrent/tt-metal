@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import wave
 from pathlib import Path
 from typing import Any
@@ -280,10 +281,12 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
 
     try:
         tt_model = make_tt_model(device, model, cfg, t2u_cfg)
+        task_times: dict[str, float] = {}
 
         # =========================================================================
         # 1. T2TT — Text-to-Text Translation (English → Hindi)
         # =========================================================================
+        _t0 = time.perf_counter()
         _print_header(1, "Text-to-Text Translation", "T2TT", "eng", tgt_translate)
         print(f"  Input text  ({src_lang}): {src_text}")
         chunk_outputs: list[str] = []
@@ -302,6 +305,7 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
             ttnn.deallocate(t2tt_out.sequences)
         joined = "\n\n".join(chunk_outputs)
         print(f"  Output text ({tgt_translate}): {joined}")
+        task_times["T2TT"] = time.perf_counter() - _t0
 
         # T2TT compiles many text-decoder programs; clear before T2ST so vocoder conv1d fits in L1.
         tt_model.clear_runtime_program_cache()
@@ -311,6 +315,7 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         # 2. T2ST — Text-to-Speech Translation (English text → Hindi speech)
         # =========================================================================
         # Same EOS truncation as T2TT — chunk by paragraph and concatenate waveforms.
+        _t0 = time.perf_counter()
         _print_header(2, "Text-to-Speech Translation", "T2ST", "eng", tgt_translate)
         print(f"  Input text  ({src_lang}): {src_text}")
         t2u_pad = int(t2u_cfg.pad_token_id)
@@ -352,34 +357,49 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
             f"audio={hindi_wav_np.size} samples ({hindi_wav_np.size / sample_rate:.2f}s)"
         )
         print(f"  Saved to: {T2ST_WAV}")
+        task_times["T2ST"] = time.perf_counter() - _t0
 
         tt_model.clear_runtime_program_cache()
         ttnn.synchronize_device(device)
 
-        # Tasks 3-5 process the T2ST output per paragraph. The decoder in S2TT/S2ST/ASR emits EOS
-        # at sentence boundaries (same root cause as T2TT/T2ST truncation), so feeding the full
-        # multi-paragraph audio in a single call still yields only the first 1-2 sentences. Per-
-        # paragraph chunks (~10-15 s each) also stay well under the speech encoder's ~43 s ceiling.
+        # ---- Pre-encode all paragraph audios once, reuse across S2TT / S2ST / ASR ----
+        _t0 = time.perf_counter()
+
+        # Speech encoder conv programs do not coexist with decoder / T2U / vocoder JIT in the same L1
+        # budget — the original demo ran the speech encoder per paragraph per task (12 forwards). Here
+        # we encode each paragraph audio exactly once and cache the encoder hidden states + attention
+        # mask in DRAM, then run all three speech tasks against those cached encodings (4 forwards).
+        # The cached enc_tt is reused inside ``generate(generate_speech=True)`` via the text-input
+        # branch of the post-decode T2U path (input_features=None → first-pass enc_tt is reused).
         def _audio_inputs_for_chain(wav: np.ndarray):
             a = processor(audios=wav, sampling_rate=sample_rate, return_tensors="pt")
             return a["input_features"], a["attention_mask"]
 
+        para_encs: list[tuple[ttnn.Tensor, ttnn.Tensor, bool]] = []
+        for para_wav in per_para_wavs:
+            in_feats, in_attn = _audio_inputs_for_chain(para_wav)
+            in_feats_tt = torch_feats_to_ttnn(device, in_feats)
+            in_attn_tt = torch_ids_to_ttnn(device, in_attn)
+            enc_tt_i, enc_attn_tt_i, attn_owned_i = tt_model._encode_speech(in_feats_tt, in_attn_tt)
+            ttnn.deallocate(in_feats_tt)
+            ttnn.deallocate(in_attn_tt)
+            para_encs.append((enc_tt_i, enc_attn_tt_i, attn_owned_i))
+        # Drop the speech-encoder conv programs so the decoder / T2U / vocoder JITs can claim L1.
+        tt_model.clear_runtime_program_cache()
+        ttnn.synchronize_device(device)
+        task_times["speech_encode"] = time.perf_counter() - _t0
+
         # =========================================================================
         # 3. S2TT — Speech-to-Text Translation (Hindi speech → English text)
         # =========================================================================
+        _t0 = time.perf_counter()
         _print_header(3, "Speech-to-Text Translation", "S2TT", tgt_translate, tgt_back_text)
         print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
         s2tt_chunks: list[str] = []
-        for para_wav in per_para_wavs:
-            in_feats, in_attn = _audio_inputs_for_chain(para_wav)
-            # Hold references and explicitly deallocate — ``generate`` doesn't free its inputs,
-            # and ``torch_feats_to_ttnn`` allocates in L1. Across 4 chunks per task × 3 tasks the
-            # leaked input tensors fragment single-core L1 enough to clash with later op CBs.
-            in_feats_tt = torch_feats_to_ttnn(device, in_feats)
-            in_attn_tt = torch_ids_to_ttnn(device, in_attn)
+        for enc_tt_i, enc_attn_tt_i, _ in para_encs:
             s2tt_out = tt_model.generate(
-                input_features=in_feats_tt,
-                attention_mask=in_attn_tt,
+                encoder_hidden_states=enc_tt_i,
+                encoder_attention_mask=enc_attn_tt_i,
                 generate_speech=False,
                 tgt_lang=tgt_back_text,
                 **gen_common,
@@ -388,10 +408,9 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
                 raise TypeError(f"S2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(s2tt_out)}")
             s2tt_chunks.append(_decode(tokenizer, s2tt_out.sequences))
             ttnn.deallocate(s2tt_out.sequences)
-            ttnn.deallocate(in_feats_tt)
-            ttnn.deallocate(in_attn_tt)
         s2tt_joined = "\n\n".join(s2tt_chunks)
         print(f"  Output text ({tgt_back_text}): {s2tt_joined}")
+        task_times["S2TT"] = time.perf_counter() - _t0
 
         tt_model.clear_runtime_program_cache()
         ttnn.synchronize_device(device)
@@ -399,17 +418,15 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         # =========================================================================
         # 4. S2ST — Speech-to-Speech Translation (Hindi speech → Spanish speech)
         # =========================================================================
+        _t0 = time.perf_counter()
         _print_header(4, "Speech-to-Speech Translation", "S2ST", tgt_translate, tgt_speech_other)
         print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
         s2st_texts: list[str] = []
         s2st_wavs: list[np.ndarray] = []
-        for idx, para_wav in enumerate(per_para_wavs):
-            in_feats, in_attn = _audio_inputs_for_chain(para_wav)
-            in_feats_tt = torch_feats_to_ttnn(device, in_feats)
-            in_attn_tt = torch_ids_to_ttnn(device, in_attn)
+        for idx, (enc_tt_i, enc_attn_tt_i, _) in enumerate(para_encs):
             s2st_out = tt_model.generate(
-                input_features=in_feats_tt,
-                attention_mask=in_attn_tt,
+                encoder_hidden_states=enc_tt_i,
+                encoder_attention_mask=enc_attn_tt_i,
                 generate_speech=True,
                 return_intermediate_token_ids=True,
                 tgt_lang=tgt_speech_other,
@@ -420,16 +437,15 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
                 raise TypeError(f"S2ST expected TTSeamlessM4Tv2GenerationOutput, got {type(s2st_out)}")
             s2st_texts.append(_decode(tokenizer, s2st_out.sequences))
             s2st_wavs.append(_waveform_to_mono_fp32(s2st_out.waveform, s2st_out.waveform_lengths))
-            if idx < len(per_para_wavs) - 1:
+            if idx < len(para_encs) - 1:
                 s2st_wavs.append(inter_para_silence)
-            ttnn.deallocate(in_feats_tt)
-            ttnn.deallocate(in_attn_tt)
         s2st_text_joined = "\n\n".join(s2st_texts)
         print(f"  Intermediate text ({tgt_speech_other}): {s2st_text_joined}")
         spanish_wav_np = np.concatenate(s2st_wavs) if s2st_wavs else np.zeros(0, dtype=np.float32)
         _save_wav(S2ST_WAV, spanish_wav_np, sample_rate=sample_rate)
         print(f"  Output audio ({tgt_speech_other}, {sample_rate} Hz, {spanish_wav_np.size} samples)")
         print(f"  Saved to: {S2ST_WAV}")
+        task_times["S2ST"] = time.perf_counter() - _t0
 
         tt_model.clear_runtime_program_cache()
         ttnn.synchronize_device(device)
@@ -440,17 +456,15 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         # ASR is same-language transcription; ``repetition_penalty`` biases the decoder away from
         # already-emitted tokens, which pushes a Hindi target toward the alternative-language
         # vocabulary (output drifts to English). Disable penalty just for this task.
+        _t0 = time.perf_counter()
         gen_common_asr = {**gen_common, "repetition_penalty": 1.0}
         _print_header(5, "Automatic Speech Recognition", "ASR", tgt_translate, tgt_asr)
         print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
         asr_chunks: list[str] = []
-        for para_wav in per_para_wavs:
-            in_feats, in_attn = _audio_inputs_for_chain(para_wav)
-            in_feats_tt = torch_feats_to_ttnn(device, in_feats)
-            in_attn_tt = torch_ids_to_ttnn(device, in_attn)
+        for enc_tt_i, enc_attn_tt_i, _ in para_encs:
             asr_out = tt_model.generate(
-                input_features=in_feats_tt,
-                attention_mask=in_attn_tt,
+                encoder_hidden_states=enc_tt_i,
+                encoder_attention_mask=enc_attn_tt_i,
                 generate_speech=False,
                 tgt_lang=tgt_asr,
                 **gen_common_asr,
@@ -459,16 +473,28 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
                 raise TypeError(f"ASR expected TTSeamlessM4Tv2GreedySearchOutput, got {type(asr_out)}")
             asr_chunks.append(_decode(tokenizer, asr_out.sequences))
             ttnn.deallocate(asr_out.sequences)
-            ttnn.deallocate(in_feats_tt)
-            ttnn.deallocate(in_attn_tt)
         asr_joined = "\n\n".join(asr_chunks)
         print(f"  Output text ({tgt_asr}): {asr_joined}")
+        task_times["ASR"] = time.perf_counter() - _t0
+
+        # Cached per-paragraph speech encodings are no longer needed after ASR.
+        for enc_tt_i, enc_attn_tt_i, attn_owned_i in para_encs:
+            ttnn.deallocate(enc_tt_i)
+            if attn_owned_i:
+                ttnn.deallocate(enc_attn_tt_i)
+        para_encs.clear()
 
         print()
         print("=" * 78)
         print("  ok — all five tasks completed")
         print("=" * 78)
         print(f"  Audio outputs saved under: {OUTPUT_DIR}")
+        print()
+        print("  Per-task wall-clock (seconds):")
+        for name in ("T2TT", "T2ST", "speech_encode", "S2TT", "S2ST", "ASR"):
+            if name in task_times:
+                print(f"    {name:<14} {task_times[name]:>8.2f} s")
+        print(f"    {'total':<14} {sum(task_times.values()):>8.2f} s")
 
     finally:
         if original_default is not None:

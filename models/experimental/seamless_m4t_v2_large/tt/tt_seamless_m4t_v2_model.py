@@ -1583,15 +1583,29 @@ class TTSeamlessM4Tv2Model:
         speaker_id: int = 0,
         generate_speech: bool = True,
         text_sequences: Optional[ttnn.Tensor] = None,
+        encoder_hidden_states: Optional[ttnn.Tensor] = None,
+        encoder_attention_mask: Optional[ttnn.Tensor] = None,
         **kwargs: Any,
     ) -> Union[TTSeamlessM4Tv2GreedySearchOutput, TTSeamlessM4Tv2GenerationOutput, Tuple[ttnn.Tensor, ttnn.Tensor]]:
         """Greedy (``num_beams=1``, ``do_sample=False``) analog of HF ``SeamlessM4Tv2Model.generate``.
 
         Returns ``ttnn.Tensor`` outputs only. For text modality, the first-pass encoder output is
         reused in the speech generation path, matching HF's ``text_generation_output.encoder_hidden_states[-1]``.
+
+        ``encoder_hidden_states`` / ``encoder_attention_mask`` short-circuit the encode step: when both
+        are provided the model skips ``_encode_text`` / ``_encode_speech`` and decodes straight from
+        the caller's pre-computed encoder output. The caller retains ownership and must deallocate
+        these tensors after ``generate()`` returns. ``input_ids`` / ``input_features`` may be omitted
+        in that case. This is the path the demo uses to encode the full source once and then run
+        per-paragraph decode loops against sliced encoder hidden states.
         """
-        if input_ids is None and input_features is None:
-            raise ValueError("Provide one of `input_ids` or `input_features`.")
+        precomputed_encoder = encoder_hidden_states is not None and encoder_attention_mask is not None
+        if (encoder_hidden_states is None) ^ (encoder_attention_mask is None):
+            raise ValueError("Pass `encoder_hidden_states` and `encoder_attention_mask` together, or neither.")
+        if not precomputed_encoder and input_ids is None and input_features is None:
+            raise ValueError("Provide `input_ids`, `input_features`, or precomputed encoder hidden states.")
+        if precomputed_encoder and (input_ids is not None or input_features is not None):
+            raise ValueError("`encoder_hidden_states` is mutually exclusive with `input_ids` / `input_features`.")
         if generate_speech and tgt_lang is None:
             raise ValueError("`tgt_lang` is required when `generate_speech=True`.")
         if tgt_lang is not None:
@@ -1621,7 +1635,10 @@ class TTSeamlessM4Tv2Model:
             eos_ids |= _eos_id_set(getattr(self.generation_config, "eos_token_id", None))
         attn_tt_text = kwargs_text.get("attention_mask")
 
-        batch_size = int((input_features if input_features is not None else input_ids).shape[0])
+        if precomputed_encoder:
+            batch_size = int(encoder_hidden_states.shape[0])
+        else:
+            batch_size = int((input_features if input_features is not None else input_ids).shape[0])
         if batch_size != 1:
             raise NotImplementedError("TT generate supports batch_size=1.")
 
@@ -1639,7 +1656,14 @@ class TTSeamlessM4Tv2Model:
                     raise ValueError(f"`tgt_lang={tgt_lang}` missing from generation_config.{key}.")
 
         # ---- First encode ----
-        if input_features is not None:
+        # When the caller passes ``encoder_hidden_states`` / ``encoder_attention_mask`` they already
+        # ran the encoder externally (the demo encodes the full source once and slices per paragraph).
+        # ``enc_attn_owned=False`` so the cleanup at the bottom doesn't deallocate the caller's mask.
+        if precomputed_encoder:
+            enc_tt = encoder_hidden_states
+            enc_attn_tt = encoder_attention_mask
+            enc_attn_owned = False
+        elif input_features is not None:
             # Speech encoder conv programs do not coexist with vocoder/T2U JIT in the same L1 budget.
             self.clear_runtime_program_cache()
             enc_tt, enc_attn_tt, enc_attn_owned = self._encode_speech(input_features, attn_tt_text)
@@ -1828,7 +1852,8 @@ class TTSeamlessM4Tv2Model:
 
         # ---- Text-only generation: return tokens ----
         if not generate_speech:
-            ttnn.deallocate(enc_tt)
+            if not precomputed_encoder:
+                ttnn.deallocate(enc_tt)
             if enc_attn_owned:
                 ttnn.deallocate(enc_attn_tt)
             return TTSeamlessM4Tv2GreedySearchOutput(sequences=sequences_tt)
@@ -1852,9 +1877,13 @@ class TTSeamlessM4Tv2Model:
             if enc_attn_owned:
                 ttnn.deallocate(enc_attn_tt)
             enc_tt2, enc_attn_tt2, enc_attn_owned2 = self._encode_speech(input_features, attn_enc)
+            enc_owned2 = True
         else:
-            # Text path reuses the first-pass encoder output (HF parity).
+            # Text path reuses the first-pass encoder output (HF parity). When the caller passed
+            # ``encoder_hidden_states`` we don't own it, so neither flag flips here and the cleanup
+            # below keeps the caller's tensors alive.
             enc_tt2, enc_attn_tt2, enc_attn_owned2 = enc_tt, enc_attn_tt, enc_attn_owned
+            enc_owned2 = not precomputed_encoder
 
         # T2U decoder hidden states come from running text-decoder on ``sequences[:, :-1]`` (HF
         # trims the final EOS). Use logical ``seq_host`` length (not tile-padded tensor width).
@@ -1862,7 +1891,8 @@ class TTSeamlessM4Tv2Model:
         dec_in_tt = ttnn.slice(sequences_tt, [0, 0], [batch_size, logical_seq_len - 1], (1, 1))
         dec_hidden_padded, padded_dec_seq = self._decoder_hidden(enc_tt2, enc_attn_tt2, dec_in_tt)
         ttnn.deallocate(dec_in_tt)
-        ttnn.deallocate(enc_tt2)
+        if enc_owned2:
+            ttnn.deallocate(enc_tt2)
         if enc_attn_owned2:
             ttnn.deallocate(enc_attn_tt2)
 
