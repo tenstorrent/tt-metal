@@ -206,7 +206,7 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchProgramCountIncrementsAfterProgramR
     constexpr size_t num_blank_programs = 4;
 
     DispatchTelemetry telemetry(*device);
-    ASSERT_TRUE(telemetry.read_info().has_value());
+    ASSERT_FALSE(telemetry.read_info().empty());
 
     distributed::MeshWorkload workload;
     workload.add_program(device_range_, create_blank_program(worker_core));
@@ -214,8 +214,8 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchProgramCountIncrementsAfterProgramR
     Finish(cq);
 
     auto after_one = telemetry.read_info();
-    ASSERT_TRUE(after_one.has_value());
-    EXPECT_EQ(after_one->dispatch_program_count_since_last_read, 1);
+    ASSERT_FALSE(after_one.empty());
+    EXPECT_EQ(after_one.front().dispatch_program_count_since_last_read, 1);
 
     // Multiple runs to ensure the delta is calculated correctly
     for (size_t run = 0; run < total_runs; ++run) {
@@ -227,8 +227,8 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchProgramCountIncrementsAfterProgramR
         Finish(cq);
 
         auto after_many = telemetry.read_info();
-        ASSERT_TRUE(after_many.has_value());
-        EXPECT_EQ(after_many->dispatch_program_count_since_last_read, num_blank_programs);
+        ASSERT_FALSE(after_many.empty());
+        EXPECT_EQ(after_many.front().dispatch_program_count_since_last_read, num_blank_programs);
     }
 }
 
@@ -239,7 +239,7 @@ TEST_F(DispatchTelemetryReadApiTest, PrefetchCommandCountAdvancesForEveryEnqueue
     constexpr size_t num_blank_programs = 4;
 
     DispatchTelemetry telemetry(*device);
-    ASSERT_TRUE(telemetry.read_info().has_value());
+    ASSERT_FALSE(telemetry.read_info().empty());
 
     for (size_t i = 0; i < num_blank_programs; ++i) {
         distributed::MeshWorkload workload;
@@ -249,8 +249,8 @@ TEST_F(DispatchTelemetryReadApiTest, PrefetchCommandCountAdvancesForEveryEnqueue
     Finish(cq);
 
     auto after = telemetry.read_info();
-    ASSERT_TRUE(after.has_value());
-    EXPECT_GE(after->prefetch_command_count_since_last_read, num_blank_programs);
+    ASSERT_FALSE(after.empty());
+    EXPECT_GE(after.front().prefetch_command_count_since_last_read, num_blank_programs);
 }
 
 TEST_F(DispatchTelemetryHostL1WaitTest, WorkerWaitReportsUpstreamBlockedState) {
@@ -258,16 +258,16 @@ TEST_F(DispatchTelemetryHostL1WaitTest, WorkerWaitReportsUpstreamBlockedState) {
     auto& cq = devices_.at(0)->mesh_command_queue();
 
     DispatchTelemetry telemetry(*device);
-    ASSERT_TRUE(telemetry.read_info().has_value());
+    ASSERT_FALSE(telemetry.read_info().empty());
 
     distributed::EnqueueMeshWorkload(cq, waiting_workload_, false);
     EXPECT_TRUE(worker_reached_l1_wait(device, worker_core_, started_addr_, started_value_));
 
     auto while_waiting = telemetry.read_info();
-    EXPECT_TRUE(while_waiting.has_value());
-    if (while_waiting.has_value()) {
-        EXPECT_TRUE(while_waiting->prefetch_waiting);
-        EXPECT_TRUE(while_waiting->dispatch_waiting);
+    EXPECT_FALSE(while_waiting.empty());
+    if (!while_waiting.empty()) {
+        EXPECT_TRUE(while_waiting.front().prefetch_waiting);
+        EXPECT_TRUE(while_waiting.front().dispatch_waiting);
     }
 
     constexpr size_t num_blank_programs = 4;
@@ -278,19 +278,19 @@ TEST_F(DispatchTelemetryHostL1WaitTest, WorkerWaitReportsUpstreamBlockedState) {
     }
 
     auto after_enqueue = telemetry.read_info();
-    EXPECT_TRUE(after_enqueue.has_value());
-    if (after_enqueue.has_value()) {
-        EXPECT_FALSE(after_enqueue->prefetch_waiting);
-        EXPECT_FALSE(after_enqueue->dispatch_waiting);
+    EXPECT_FALSE(after_enqueue.empty());
+    if (!after_enqueue.empty()) {
+        EXPECT_FALSE(after_enqueue.front().prefetch_waiting);
+        EXPECT_FALSE(after_enqueue.front().dispatch_waiting);
     }
 
     release_worker_and_finish();
 
     auto after_finish = telemetry.read_info();
-    EXPECT_TRUE(after_finish.has_value());
-    if (after_finish.has_value()) {
-        EXPECT_TRUE(after_finish->prefetch_waiting);
-        EXPECT_TRUE(after_finish->dispatch_waiting);
+    EXPECT_FALSE(after_finish.empty());
+    if (!after_finish.empty()) {
+        EXPECT_TRUE(after_finish.front().prefetch_waiting);
+        EXPECT_TRUE(after_finish.front().dispatch_waiting);
     }
 }
 

@@ -73,7 +73,7 @@ bool require_supported_kernel() {
 }
 
 bool print_snapshot(IDevice* device, DispatchTelemetry& telemetry) {
-    auto info = telemetry.read_info();
+    auto infos = telemetry.read_info();
     fmt::print(
         "dispatch_telemetry_dump  chip={}  num_hw_cqs={}  telemetry_api_version={}  ts={}s\n",
         device->id(),
@@ -81,25 +81,34 @@ bool print_snapshot(IDevice* device, DispatchTelemetry& telemetry) {
         telemetry.version(),
         std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 
-    if (!info) {
+    if (infos.empty()) {
         fmt::print(stderr, "Failed to read dispatch telemetry info; see log warnings for validation details.\n");
         return false;
     }
 
     fmt::print(
-        "{:<9} {:>8} {:>26} {:>24}\n", "component", "waiting", "blocked_since_last_read", "work_since_last_read");
-    fmt::print(
-        "{:<9} {:>8} {:>26} {:>24}\n",
-        "prefetch",
-        info->prefetch_waiting ? "yes" : "no",
-        info->prefetch_blocked_count_since_last_read,
-        info->prefetch_command_count_since_last_read);
-    fmt::print(
-        "{:<9} {:>8} {:>26} {:>24}\n",
-        "dispatch",
-        info->dispatch_waiting ? "yes" : "no",
-        info->dispatch_blocked_count_since_last_read,
-        info->dispatch_program_count_since_last_read);
+        "{:>3} {:<9} {:>8} {:>26} {:>24}\n",
+        "cq",
+        "component",
+        "waiting",
+        "blocked_since_last_read",
+        "work_since_last_read");
+    for (const auto& info : infos) {
+        fmt::print(
+            "{:>3} {:<9} {:>8} {:>26} {:>24}\n",
+            info.cq_id,
+            "prefetch",
+            info.prefetch_waiting ? "yes" : "no",
+            info.prefetch_blocked_count_since_last_read,
+            info.prefetch_command_count_since_last_read);
+        fmt::print(
+            "{:>3} {:<9} {:>8} {:>26} {:>24}\n",
+            info.cq_id,
+            "dispatch",
+            info.dispatch_waiting ? "yes" : "no",
+            info.dispatch_blocked_count_since_last_read,
+            info.dispatch_program_count_since_last_read);
+    }
     std::cout.flush();
     return true;
 }
@@ -164,7 +173,7 @@ int main(int argc, char** argv) {
     IDevice* device = mesh_device->get_devices().front();
 
     DispatchTelemetry telemetry(*device);
-    if (!telemetry.read_info()) {
+    if (telemetry.read_info().empty()) {
         fmt::print(
             stderr, "Failed to read initial dispatch telemetry info; see log warnings for validation details.\n");
         return 1;

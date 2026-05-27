@@ -167,7 +167,9 @@ public:
     Impl(const IDevice& device) :
         chip_(device.id()),
         dispatch_core_type_(MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type()),
-        telemetry_cores_(collect_telemetry_cores(device)) {
+        telemetry_cores_(collect_telemetry_cores(device)),
+        last_read_dispatch_core_telemetry_(telemetry_cores_.size()),
+        last_read_prefetch_core_telemetry_(telemetry_cores_.size()) {
         TT_FATAL(!telemetry_cores_.empty(), "No dispatch telemetry cores found on device\n");
     }
 
@@ -178,7 +180,13 @@ public:
     std::vector<DispatchTelemetryInfo> read_info() {
         std::vector<DispatchTelemetryInfo> infos;
 
-        for (const auto& cq_entries : telemetry_cores_) {
+        for (size_t cq = 0; cq < telemetry_cores_.size(); ++cq) {
+            const auto& cq_entries = telemetry_cores_[cq];
+            if (cq_entries.empty()) {
+                log_warning(tt::LogMetal, "No dispatch telemetry cores found for CQ {}", cq);
+                continue;
+            }
+
             DispatchTelemetryInfo info{};
             info.cq_id = cq_entries.front().cq_id;
             bool found_prefetch_core = false;
@@ -192,12 +200,12 @@ public:
                             (telemetry->upstream_blocked_count != telemetry->upstream_unblocked_count);
                         info.prefetch_blocked_count_since_last_read = calc_delta(
                             telemetry->upstream_blocked_count,
-                            last_read_prefetch_core_telemetry_.upstream_blocked_count);
+                            last_read_prefetch_core_telemetry_[cq].upstream_blocked_count);
                         info.prefetch_command_count_since_last_read =
-                            calc_delta(telemetry->command_count, last_read_prefetch_core_telemetry_.command_count);
+                            calc_delta(telemetry->command_count, last_read_prefetch_core_telemetry_[cq].command_count);
                         found_prefetch_core = true;
+                        last_read_prefetch_core_telemetry_[cq] = *telemetry;
                     }
-                    last_read_prefetch_core_telemetry_ = telemetry;
                 }
                 if (core.role == CoreRole::DISPATCH || core.role == CoreRole::DISPATCH_D) {
                     auto telemetry = read_dispatch_core_telemetry(chip_, core.virtual_core);
@@ -206,30 +214,31 @@ public:
                             (telemetry->upstream_blocked_count != telemetry->upstream_unblocked_count);
                         info.dispatch_blocked_count_since_last_read = calc_delta(
                             telemetry->upstream_blocked_count,
-                            last_read_dispatch_core_telemetry_.upstream_blocked_count);
+                            last_read_dispatch_core_telemetry_[cq].upstream_blocked_count);
                         info.dispatch_program_count_since_last_read =
-                            calc_delta(telemetry->program_count, last_read_dispatch_core_telemetry_.program_count);
+                            calc_delta(telemetry->program_count, last_read_dispatch_core_telemetry_[cq].program_count);
                         found_dispatch_core = true;
+                        last_read_dispatch_core_telemetry_[cq] = *telemetry;
                     }
-                    last_read_dispatch_core_telemetry_ = telemetry;
                 }
             }
             if (!found_prefetch_core || !found_dispatch_core) {
-                TT_WARN("Failed to read dispatch telemetry from core(s)\n");
-                TT_WARN("Prefetch core: {}\n", found_prefetch_core ? "found" : "not found");
-                TT_WARN("Dispatch core: {}\n", found_dispatch_core ? "found" : "not found");
+                log_warning(tt::LogMetal, "Failed to read dispatch telemetry from core(s)");
+                log_warning(tt::LogMetal, "Prefetch core: {}", found_prefetch_core ? "found" : "not found");
+                log_warning(tt::LogMetal, "Dispatch core: {}", found_dispatch_core ? "found" : "not found");
                 continue;
             }
+            infos.push_back(info);
         }
-        return info;
+        return infos;
     }
 
 private:
     ChipId chip_;
     CoreType dispatch_core_type_;
     std::vector<std::vector<CoreEntry>> telemetry_cores_;
-    DispatchCoreTelemetry last_read_dispatch_core_telemetry_{};
-    PrefetchCoreTelemetry last_read_prefetch_core_telemetry_{};
+    std::vector<DispatchCoreTelemetry> last_read_dispatch_core_telemetry_;
+    std::vector<PrefetchCoreTelemetry> last_read_prefetch_core_telemetry_;
 };
 
 DispatchTelemetry::DispatchTelemetry(const IDevice& device) : impl_(std::make_unique<Impl>(device)) {}
@@ -238,6 +247,6 @@ DispatchTelemetry::~DispatchTelemetry() = default;
 
 uint32_t DispatchTelemetry::version() const { return impl_->version(); }
 
-std::optional<DispatchTelemetryInfo> DispatchTelemetry::read_info() { return impl_->read_info(); }
+std::vector<DispatchTelemetryInfo> DispatchTelemetry::read_info() { return impl_->read_info(); }
 
 }  // namespace tt::tt_metal

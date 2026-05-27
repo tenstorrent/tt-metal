@@ -4,9 +4,10 @@
 
 #pragma once
 
-#include <memory>
-#include <optional>
 #include <cstdint>
+#include <memory>
+#include <vector>
+
 #include <tt-metalium/device.hpp>
 
 namespace tt::tt_metal {
@@ -39,7 +40,7 @@ public:
      * @brief Read the dispatch telemetry info from the device.
      *
      * @return Dispatch telemetry info for each command queue. If there is an issue reading telemetry
-     *         from a command queue, a warrnign is logged and that entry is absent.
+     *         from a command queue, a warning is logged and that entry is absent.
      */
     std::vector<DispatchTelemetryInfo> read_info();
 
