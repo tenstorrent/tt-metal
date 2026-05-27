@@ -185,6 +185,7 @@ def test_pipeline_inference(
             "background_consistency": 0.94,
             "motion_smoothness": 0.96,
             "dynamic_degree": 1.0,
+            "imaging_quality": 0.70,
         },
     ):
         if int(ttnn.distributed_context_get_rank()) == 0:
