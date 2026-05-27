@@ -119,6 +119,14 @@ targets:
         - resnet50_3
         - segmentation_5
       trace: [91, 92, 93, 94, 95]
+
+    # BH p100a models (traces 96-99, blackhole p100a 1-card)
+    - model:
+        - llama-3.1-8b-instruct
+        - whisper_4
+        - informer
+        - resnet50_3
+      trace: [96, 97, 98, 99]
 registry:
   - trace_id: 1
     status: draft
