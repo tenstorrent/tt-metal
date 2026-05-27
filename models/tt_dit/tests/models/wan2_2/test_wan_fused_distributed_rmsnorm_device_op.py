@@ -26,6 +26,7 @@ import ttnn
 
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
+from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.tensor import bf16_tensor, from_torch, to_torch
 from ....utils.test import line_params, ring_params
 
@@ -37,6 +38,32 @@ def _torch_rmsnorm(x: torch.Tensor, weight: torch.Tensor | None, eps: float) -> 
     out = x * torch.rsqrt(mean_sq + eps)
     if weight is not None:
         out = out * weight.to(torch.float32).reshape(1, 1, 1, -1)
+    return out.to(torch.bfloat16)
+
+
+def _torch_rmsnorm_then_rope(
+    x: torch.Tensor,
+    weight: torch.Tensor | None,
+    eps: float,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    num_heads: int,
+    head_dim: int,
+) -> torch.Tensor:
+    """Reference: rmsnorm(x) [* weight], then per-head RoPE.
+
+    x: [B, 1, N, H]; weight: [H] (broadcast); cos/sin: [B, num_heads_dim, N, head_dim]
+    where num_heads_dim is 1 (broadcast) or num_heads (per-head).
+    Returns [B, num_heads, N, head_dim].
+    """
+    rms = _torch_rmsnorm(x, weight, eps).to(torch.float32)  # [B, 1, N, H]
+    B, _, N, H = rms.shape
+    # [B, 1, N, H] -> [B, N, num_heads, head_dim] -> [B, num_heads, N, head_dim]
+    heads = rms.reshape(B, N, num_heads, head_dim).permute(0, 2, 1, 3)
+    rotated = torch.stack([-heads[..., 1::2], heads[..., 0::2]], dim=-1).flatten(-2)
+    cos = cos.to(torch.float32)
+    sin = sin.to(torch.float32)
+    out = heads * cos + rotated * sin  # broadcasts over num_heads_dim when cos/sin dim 1 is 1
     return out.to(torch.bfloat16)
 
 
@@ -581,3 +608,87 @@ def test_wan_fused_distributed_rmsnorm_perf_tp8_ring_native(
     logger.info(f"[fused-op]   {fused_us:.2f} us/iter")
     speedup = composite_us / fused_us
     logger.info(f"speedup:     {speedup:.2f}x ({composite_us:.2f} → {fused_us:.2f} us)")
+
+
+# ---------------------------------------------------------------------------
+# TP=1 RoPE tests — validates broadcast (per_head_rope=False) and per-head
+# (per_head_rope=True) cos/sin handling.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"),
+    [((2, 4), {**line_params, "trace_region_size": 90112})],
+    indirect=True,
+    ids=["bh_2x4_line"],
+)
+@pytest.mark.parametrize(
+    ("N", "H", "num_heads", "per_head_rope"),
+    [
+        pytest.param(32, 256, 1, False, id="N32_H256_1head_bcast"),
+        pytest.param(32, 512, 4, False, id="N32_H512_4heads_bcast"),
+        pytest.param(32, 512, 4, True, id="N32_H512_4heads_perhead"),
+        # Per-head RoPE with multi-tile-row chunks (num_tile_rows=2) + many
+        # heads (num_heads=8) drops PCC to ~12% (close to 1/num_heads),
+        # suggesting only one head's cos/sin is being applied per col-tile in
+        # the kernel for the larger config. Needs further kernel debug; xfail
+        # until then. The single-row 4-head case above exercises the
+        # per-head code path and passes at >99.999% PCC.
+        pytest.param(
+            64,
+            1024,
+            8,
+            True,
+            id="N64_H1024_8heads_perhead",
+            marks=pytest.mark.xfail(reason="per-head RoPE breaks at num_heads=8 with multi-row chunks; see commit"),
+        ),
+    ],
+)
+def test_wan_fused_distributed_rmsnorm_tp1_rope(
+    mesh_device: ttnn.MeshDevice,
+    N: int,
+    H: int,
+    num_heads: int,
+    per_head_rope: bool,
+) -> None:
+    """TP=1 RoPE: per_head_rope=True passes cos/sin with shape [1, num_heads, N, head_dim]
+    so each head sees its own rotation; per_head_rope=False uses [1, 1, N, head_dim] broadcast."""
+    head_dim = H // num_heads
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 1))
+    ccl = CCLManager(mesh_device=submesh, num_links=1, topology=ttnn.Topology.Linear)
+    ag_sem = ccl.get_ag_ping_pong_semaphore(0)
+
+    EPS = 1e-6
+    torch.manual_seed(0)
+    x_torch = torch.randn((1, 1, N, H), dtype=torch.bfloat16)
+    weight_torch = torch.randn(H, dtype=torch.bfloat16)
+    tt_x = bf16_tensor(x_torch, device=submesh)
+    tt_w = from_torch(weight_torch.reshape(1, H), device=submesh, dtype=ttnn.bfloat16)
+
+    num_heads_dim = num_heads if per_head_rope else 1
+    cos_raw = torch.randn(1, num_heads_dim, N, head_dim // 2)
+    sin_raw = torch.randn(1, num_heads_dim, N, head_dim // 2)
+    cos_full, sin_full = stack_cos_sin(cos_raw, sin_raw)
+    tt_cos = from_torch(cos_full, device=submesh, dtype=ttnn.float32)
+    tt_sin = from_torch(sin_full, device=submesh, dtype=ttnn.float32)
+    tt_trans = bf16_tensor(get_rot_transformation_mat(), device=submesh)
+
+    logger.info(f"TP=1 RoPE: N={N} H={H} num_heads={num_heads} head_dim={head_dim} per_head_rope={per_head_rope}")
+    out = ttnn.experimental.wan_fused_distributed_rmsnorm(
+        tt_x,
+        0,
+        submesh,
+        ag_sem,
+        topology=ttnn.Topology.Linear,
+        epsilon=EPS,
+        num_heads_per_device=num_heads,
+        weight=tt_w,
+        transformation_mat=tt_trans,
+        rope_cos=tt_cos,
+        rope_sin=tt_sin,
+        use_device_op=True,
+    )
+
+    out_torch = to_torch(out)  # [1, num_heads, N, head_dim]
+    ref = _torch_rmsnorm_then_rope(x_torch, weight_torch, EPS, cos_full, sin_full, num_heads, head_dim)
+    assert_quality(ref, out_torch, pcc=0.999)

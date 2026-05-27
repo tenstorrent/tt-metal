@@ -60,6 +60,23 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
         !rope_present || rope_complete,
         "RoPE requires transformation_mat, rope_cos, and rope_sin all to be provided together");
 
+    // RoPE cos/sin shape: [B, num_heads_dim, N, head_dim] where num_heads_dim is
+    // either 1 (broadcast across heads — same cos/sin for every head) or
+    // num_heads_per_device (per-head cos/sin). Both rope_cos and rope_sin must
+    // match.
+    if (rope_complete) {
+        const auto& cos_shape = rope_cos->logical_shape();
+        const auto& sin_shape = rope_sin->logical_shape();
+        TT_FATAL(
+            cos_shape == sin_shape, "rope_cos and rope_sin must have the same shape ({} vs {})", cos_shape, sin_shape);
+        TT_FATAL(cos_shape.rank() == 4, "rope_cos must be 4D, got rank {}", cos_shape.rank());
+        TT_FATAL(
+            cos_shape[1] == 1 || cos_shape[1] == args.num_heads_per_device,
+            "rope_cos dim 1 ({}) must be 1 (broadcast across heads) or num_heads_per_device ({})",
+            cos_shape[1],
+            args.num_heads_per_device);
+    }
+
     TT_FATAL(args.ring_size >= 1, "ring_size must be >= 1");
     TT_FATAL(args.num_links >= 1, "num_links must be >= 1");
     TT_FATAL(args.cluster_axis < 2, "cluster_axis must be 0 or 1");
