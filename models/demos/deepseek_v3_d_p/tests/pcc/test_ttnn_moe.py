@@ -10,6 +10,7 @@ This validates the full MoE pipeline:
 Gate → Dispatch → Routed Experts → Combine → Split → Add Shared.
 """
 
+import gc
 import random
 from pathlib import Path
 
@@ -457,15 +458,18 @@ def test_ttnn_moe(
             logger.error(f"[{name}] FAILED - PCC: {pcc:.6f} below threshold {threshold}")
             all_passed = False
 
+    del torch_moe
+    gc.collect()
+
     if gate_fallback_mode == GateComputeMode.HOST_ALL:
         # Sparse tensor validation using slot-aware comparisons
         # fmt: off
         sparse_checks = [
-            ("dispatched_buffer", tt_intermediates.dispatched_buffer, torch_intermediates.dispatched_buffer,
+            ("dispatched_buffer", "dispatched_buffer", tt_intermediates.dispatched_buffer, torch_intermediates.dispatched_buffer,
             get_ep_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer, {}),
-            ("dispatch_metadata", tt_intermediates.metadata, torch_intermediates.metadata,
+            ("dispatch_metadata", "metadata", tt_intermediates.metadata, torch_intermediates.metadata,
             get_ep_mesh_composer(mesh_device), None, validate_dispatch_metadata, {}),
-            ("expert_outputs", tt_intermediates.expert_outputs, torch_intermediates.expert_outputs,
+            ("expert_outputs", "expert_outputs", tt_intermediates.expert_outputs, torch_intermediates.expert_outputs,
             get_ep_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer_pcc, {"pcc_threshold": 0.95}),
         ]
         # fmt: on
@@ -473,7 +477,9 @@ def test_ttnn_moe(
         expert_token_counts = torch_intermediates.expert_token_counts
         expert_region_offsets = torch_intermediates.expert_region_offsets
 
-        for name, tt_tensor, torch_tensor, composer, dtype, validate_fn, extra_kwargs in sparse_checks:
+        for i, (name, torch_field, tt_tensor, torch_tensor, composer, dtype, validate_fn, extra_kwargs) in enumerate(
+            sparse_checks
+        ):
             if tt_tensor is None or torch_tensor is None:
                 logger.warning(f"[{name}] validation SKIPPED")
                 continue
@@ -503,6 +509,11 @@ def test_ttnn_moe(
                 logger.error(f"[{name}] FAILED - {result.matches}/{result.total} slots matched")
                 result.log_mismatches(limit=5)
                 all_passed = False
+
+            del tt_host, torch_ref, tt_tensor, torch_tensor
+            sparse_checks[i] = None
+            setattr(torch_intermediates, torch_field, None)
+            gc.collect()
 
         # Validate combined_output (before reduce step)
         if tt_intermediates.combined_output is not None and torch_intermediates.combined_output is not None:
