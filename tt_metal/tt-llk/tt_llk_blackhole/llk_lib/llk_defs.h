@@ -133,7 +133,7 @@ enum InstrModLoadStore
     HI16_ONLY     = 15
 };
 
-template <DataFormat format>
+template <DataFormat format, bool is_fp32_dest_acc_en>
 constexpr InstrModLoadStore GetSfpLoadStoreInstrMod()
 {
     switch (format)
@@ -163,7 +163,7 @@ constexpr InstrModLoadStore GetSfpLoadStoreInstrMod()
         case DataFormat::UInt8:
             return InstrModLoadStore::INT8; // spec value 5: int8 format
         case DataFormat::UInt16:
-            return InstrModLoadStore::LO16; // spec value 6: unsigned int16 format
+            return is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16; // spec value 6: unsigned int16 format
         case DataFormat::Int32:
             return InstrModLoadStore::INT32; // spec value 4: int32 format
         case DataFormat::UInt32:

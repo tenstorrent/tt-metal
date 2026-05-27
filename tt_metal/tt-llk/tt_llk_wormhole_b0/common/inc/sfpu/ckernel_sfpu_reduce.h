@@ -929,7 +929,7 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
  * @tparam format The data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b)
  * @param block_ct_dim Block dimension (used for MAX reduction to specify number of columns, default is 1 for single tile)
  */
-template <PoolType pool_type, DataFormat format>
+template <PoolType pool_type, DataFormat format, bool is_fp32_dest_accum_en>
 inline void _init_reduce_(std::uint32_t block_ct_dim = 1)
 {
     static_assert(is_supported_reduce_format(format), "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
@@ -968,7 +968,7 @@ inline void _init_reduce_(std::uint32_t block_ct_dim = 1)
  * @note Constraints (unable to static assert for block_rt_dim runtime parameter)
  *       - MAX/MIN with Int32 format only supports block_rt_dim == 1 (single tile)
  */
-template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format>
+template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format, bool is_fp32_dest_accum_en>
 inline void _calculate_reduce_(std::uint32_t block_ct_dim = 1, std::uint32_t block_rt_dim = 1)
 {
     static_assert(
