@@ -340,3 +340,85 @@ def test_validator_worker_sender(device, K, N, dtype, recv_per_bank, num_layers)
     finally:
         device.clear_loaded_sub_device_manager()
         device.remove_sub_device_manager(sub_device_manager)
+
+
+def _bank_receivers_strided(bank_idx: int, recv_per_bank: int, num_dram_banks: int, ring_cols: int):
+    """Strided receivers matching BufferDistributionSpec round-robin placement:
+    bank b -> ring positions [b, b + num_dram_banks, b + 2*num_dram_banks, ...].
+    """
+    cores = []
+    for s in range(recv_per_bank):
+        ring_pos = bank_idx + s * num_dram_banks
+        col = ring_pos % ring_cols
+        row = ring_pos // ring_cols
+        cores.append(ttnn.CoreRange(ttnn.CoreCoord(col, row), ttnn.CoreCoord(col, row)))
+    return ttnn.CoreRangeSet(cores)
+
+
+def _setup_weight_and_gcb_recv_contig(device, K, N, dtype, recv_per_bank, num_layers):
+    """Build a DRAM-sender GCB + NdShardSpec-allocated weight for the
+    receiver-contiguous DRAM-core path. num_shards = ring_size > num_dram_banks
+    triggers the manager's recv-contig detection."""
+    tile_bytes = _TILE_BYTES_BF16 if dtype == ttnn.bfloat16 else _TILE_BYTES_BF8
+    num_dram_banks = device.dram_grid_size().x
+    ring_size = num_dram_banks * recv_per_bank
+    ring_cols = max(c for c in range(min(num_dram_banks, ring_size), 0, -1) if ring_size % c == 0)
+
+    K_padded = _round_up(K, ring_size * ttnn.TILE_SIZE)
+    k_tiles = K_padded // ttnn.TILE_SIZE
+    k_block_w_tiles = k_tiles // ring_size
+    n_per_recv_tiles = N // ring_size // ttnn.TILE_SIZE
+    n_per_recv = n_per_recv_tiles * ttnn.TILE_SIZE
+    push_page_size = k_block_w_tiles * n_per_recv_tiles * tile_bytes
+
+    torch.manual_seed(0xC0FFEE)
+    pt_weight = torch.zeros(1, 1, K_padded, N)
+    pt_weight[:, :, :K, :] = torch.randn(1, 1, K, N)
+
+    dram_core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
+    )
+    nd_shard = ttnn.NdShardSpec(
+        ttnn.Shape([K_padded, n_per_recv]),
+        dram_core_range_set,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    weight_mem_config = ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard)
+    tt_weight = ttnn.as_tensor(
+        pt_weight, device=device, dtype=dtype, memory_config=weight_mem_config, layout=ttnn.TILE_LAYOUT
+    )
+
+    bank_to_receivers = [
+        (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
+        for b in range(num_dram_banks)
+    ]
+    gcb_size = _GCB_DEPTH_PAGES * push_page_size
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+    num_iters_total = num_layers * ring_size
+    return tt_weight, gcb, num_iters_total, push_page_size, ring_size
+
+
+@pytest.mark.parametrize(
+    "K,N,dtype,recv_per_bank,num_layers",
+    [
+        (2048, 3584, ttnn.bfloat8_b, 2, 1),  # ring=16, num_shards=16 > num_banks=8
+        (4096, 14336, ttnn.bfloat8_b, 8, 1),  # FF1 ring=64
+    ],
+    ids=["multi_ksub", "ff1"],
+)
+def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, num_layers):
+    tt_weight, gcb, num_iters_total, push_page_size, ring_size = _setup_weight_and_gcb_recv_contig(
+        device, K, N, dtype, recv_per_bank, num_layers
+    )
+    ttnn.experimental.start_dram_core_prefetcher(device)
+    ttnn.experimental.queue_dram_core_prefetcher_request(device, [tt_weight], num_layers=num_layers, global_cb=gcb)
+    ttnn.experimental.test_dram_prefetcher_validator(
+        device,
+        tt_weight,
+        num_layers=num_layers,
+        print_stride=max(1, ring_size // 4),
+        global_cb=gcb,
+    )
+    ttnn.experimental.stop_dram_core_prefetcher(device)
+    ttnn.synchronize_device(device)
