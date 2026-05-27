@@ -82,6 +82,7 @@ struct WanFusedDistributedRmsnormParams {
 struct WanFusedDistributedRmsnormInputs {
     Tensor input;
     std::optional<const Tensor> weight;
+    std::optional<const Tensor> bias;
     std::optional<const Tensor> transformation_mat;
     std::optional<const Tensor> rope_cos;
     std::optional<const Tensor> rope_sin;

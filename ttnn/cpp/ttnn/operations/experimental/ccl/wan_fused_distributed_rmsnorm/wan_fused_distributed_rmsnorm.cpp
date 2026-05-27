@@ -20,6 +20,7 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
     const float epsilon,
     const uint32_t num_heads_per_device,
     const std::optional<const ttnn::Tensor>& weight,
+    const std::optional<const ttnn::Tensor>& bias,
     const std::optional<const ttnn::Tensor>& transformation_mat,
     const std::optional<const ttnn::Tensor>& rope_cos,
     const std::optional<const ttnn::Tensor>& rope_sin,
@@ -41,6 +42,7 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
             epsilon,
             num_heads_per_device,
             weight,
+            bias,
             transformation_mat,
             rope_cos,
             rope_sin,
@@ -51,6 +53,8 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
             memory_config,
             compute_kernel_config);
     }
+
+    TT_FATAL(!bias.has_value(), "bias is only supported with use_device_op=true");
 
     // Stage 1: per-row partial stats (sum of squares) in fp32.
     ttnn::Tensor stats = ttnn::experimental::wan_fused_rmsnorm_pre_allgather(

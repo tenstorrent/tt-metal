@@ -38,6 +38,7 @@ void bind_wan_fused_distributed_rmsnorm(nb::module_& mod) {
         nb::arg("epsilon") = 1e-5,
         nb::arg("num_heads_per_device") = 1,
         nb::arg("weight") = nb::none(),
+        nb::arg("bias") = nb::none(),
         nb::arg("transformation_mat") = nb::none(),
         nb::arg("rope_cos") = nb::none(),
         nb::arg("rope_sin") = nb::none(),

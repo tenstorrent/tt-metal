@@ -24,7 +24,6 @@
 #include "api/debug/assert.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
-#include <tt-metalium/constants.hpp>
 
 void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
@@ -45,15 +44,19 @@ void kernel_main() {
     constexpr uint32_t chunk_size_rows = get_compile_time_arg_val(15);
     constexpr uint32_t per_head_rope = get_compile_time_arg_val(16);
     constexpr uint32_t rope_seqlen_tiles = get_compile_time_arg_val(17);
-    constexpr auto input_args = TensorAccessorArgs<18>();
+    constexpr uint32_t bias_cb = get_compile_time_arg_val(18);
+    constexpr uint32_t has_bias = get_compile_time_arg_val(19);
+    constexpr auto input_args = TensorAccessorArgs<20>();
     constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    constexpr auto transformation_mat_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
+    constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
+    constexpr auto transformation_mat_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     constexpr auto rope_cos_args = TensorAccessorArgs<transformation_mat_args.next_compile_time_args_offset()>();
     constexpr auto rope_sin_args = TensorAccessorArgs<rope_cos_args.next_compile_time_args_offset()>();
 
     uint32_t arg_idx = 0;
     const uint32_t input_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t weight_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t bias_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t transformation_mat_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t rope_cos_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t rope_sin_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -62,18 +65,16 @@ void kernel_main() {
 
     const uint32_t input_tile_bytes = get_tile_size(input_cb);
     const uint32_t weight_tile_bytes = get_tile_size(weight_cb);
+    const uint32_t bias_tile_bytes = get_tile_size(bias_cb);
     const uint32_t rope_cos_tile_bytes = get_tile_size(rope_cos_cb);
     const uint32_t rope_sin_tile_bytes = get_tile_size(rope_sin_cb);
 
     const auto input_accessor = TensorAccessor(input_args, input_addr);
     const auto weight_accessor = TensorAccessor(weight_args, weight_addr);
+    const auto bias_accessor = TensorAccessor(bias_args, bias_addr);
     const auto transformation_mat_accessor = TensorAccessor(transformation_mat_args, transformation_mat_addr);
     const auto rope_cos_accessor = TensorAccessor(rope_cos_args, rope_cos_addr);
     const auto rope_sin_accessor = TensorAccessor(rope_sin_args, rope_sin_addr);
-
-    constexpr uint32_t bf16_datum_size_bytes = 2;
-    constexpr uint32_t face_row_bytes = tt::constants::FACE_WIDTH * bf16_datum_size_bytes;
-    constexpr uint32_t face_bytes = tt::constants::FACE_HW * bf16_datum_size_bytes;
 
     // Generate reduce scalars (SUM for pre uses 1.0, AVG for post uses 1/H_full)
     // and the eps tile.
@@ -96,12 +97,13 @@ void kernel_main() {
         cb_push_back(transformation_mat_cb, 1);
     }
 
-    // Weight is consumed in the POST phase (sub-phase 2) which only starts
-    // after chunk 0's AG completes. So the weight read can be deferred until
-    // chunk 0's input rows are all pushed — the read latency then hides behind
-    // chunk 0's pre compute + fabric mcast + fabric wait. Issued in
+    // Weight + bias are consumed in the POST phase (sub-phases 2 / 2.5) which
+    // only start after chunk 0's AG completes. So both reads can be deferred
+    // until chunk 0's input rows are all pushed — the latency then hides
+    // behind chunk 0's pre compute + fabric mcast + fabric wait. Issued in
     // `block_size`-sized pushes so the compute kernel can consume cumulatively.
     bool weight_pushed = (has_weight == 0);
+    bool bias_pushed = (has_bias == 0);
 
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         uint32_t input_tile_idx = tile_row * num_tile_cols;
@@ -172,28 +174,43 @@ void kernel_main() {
         }
 
         // After chunk 0's rows are pushed (or at end-of-worker if the worker
-        // has fewer rows than chunk_size_rows), issue the weight read.
-        if (!weight_pushed) {
-            const uint32_t rows_pushed = tile_row + 1 - tile_row_start;
-            const bool first_chunk_done = (rows_pushed >= chunk_size_rows);
-            const bool last_row = (tile_row + 1 == tile_row_end);
-            if (first_chunk_done || last_row) {
-                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                    const uint32_t tiles_in_block =
-                        ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
-                    cb_reserve_back(weight_cb, tiles_in_block);
-                    uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
-                    for (uint32_t i = 0; i < tiles_in_block; i++) {
-                        uint64_t weight_noc_addr = get_noc_addr(col_tile + i, weight_accessor);
-                        noc_async_read(weight_noc_addr, weight_wr_ptr, face_row_bytes);
-                        noc_async_read(weight_noc_addr + face_bytes, weight_wr_ptr + face_bytes, face_row_bytes);
-                        weight_wr_ptr += weight_tile_bytes;
-                    }
-                    noc_async_read_barrier();
-                    cb_push_back(weight_cb, tiles_in_block);
+        // has fewer rows than chunk_size_rows), issue the weight + bias reads.
+        // Weight comes first because the compute kernel consumes it first
+        // (sub-phase 2: x_rms * weight). Bias is consumed in sub-phase 2.5
+        // (+ bias) immediately after.
+        const uint32_t rows_pushed = tile_row + 1 - tile_row_start;
+        const bool first_chunk_done = (rows_pushed >= chunk_size_rows);
+        const bool last_row = (tile_row + 1 == tile_row_end);
+        const bool should_issue_side_inputs = first_chunk_done || last_row;
+        if (!weight_pushed && should_issue_side_inputs) {
+            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                const uint32_t tiles_in_block =
+                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                cb_reserve_back(weight_cb, tiles_in_block);
+                uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
+                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                    noc_async_read_tile(col_tile + i, weight_accessor, weight_wr_ptr);
+                    weight_wr_ptr += weight_tile_bytes;
                 }
-                weight_pushed = true;
+                noc_async_read_barrier();
+                cb_push_back(weight_cb, tiles_in_block);
             }
+            weight_pushed = true;
+        }
+        if (!bias_pushed && should_issue_side_inputs) {
+            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                const uint32_t tiles_in_block =
+                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                cb_reserve_back(bias_cb, tiles_in_block);
+                uint32_t bias_wr_ptr = get_write_ptr(bias_cb);
+                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                    noc_async_read_tile(col_tile + i, bias_accessor, bias_wr_ptr);
+                    bias_wr_ptr += bias_tile_bytes;
+                }
+                noc_async_read_barrier();
+                cb_push_back(bias_cb, tiles_in_block);
+            }
+            bias_pushed = true;
         }
     }
 }

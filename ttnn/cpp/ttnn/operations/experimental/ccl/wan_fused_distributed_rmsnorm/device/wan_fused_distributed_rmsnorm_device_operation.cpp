@@ -22,6 +22,7 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const auto& weight = tensor_args.weight;
+    const auto& bias = tensor_args.bias;
     const auto& trans_mat = tensor_args.transformation_mat;
     const auto& rope_cos = tensor_args.rope_cos;
     const auto& rope_sin = tensor_args.rope_sin;
@@ -51,6 +52,17 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             weight->padded_shape()[-1] == padded[3],
             "Weight last dim ({}) must equal input H per device ({})",
             weight->padded_shape()[-1],
+            padded[3]);
+    }
+
+    if (bias.has_value()) {
+        TT_FATAL(weight.has_value(), "bias requires weight to also be provided");
+        TT_FATAL(bias->layout() == Layout::TILE, "Bias layout must be TILE");
+        TT_FATAL(bias->dtype() == DataType::BFLOAT16, "Bias dtype must be BFLOAT16");
+        TT_FATAL(
+            bias->padded_shape()[-1] == padded[3],
+            "Bias last dim ({}) must equal input H per device ({})",
+            bias->padded_shape()[-1],
             padded[3]);
     }
 
@@ -172,6 +184,7 @@ Tensor wan_fused_distributed_rmsnorm(
     float epsilon,
     uint32_t num_heads_per_device,
     const std::optional<const Tensor>& weight,
+    const std::optional<const Tensor>& bias,
     const std::optional<const Tensor>& transformation_mat,
     const std::optional<const Tensor>& rope_cos,
     const std::optional<const Tensor>& rope_sin,
@@ -208,6 +221,7 @@ Tensor wan_fused_distributed_rmsnorm(
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
         .weight = weight,
+        .bias = bias,
         .transformation_mat = transformation_mat,
         .rope_cos = rope_cos,
         .rope_sin = rope_sin,
