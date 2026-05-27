@@ -67,13 +67,17 @@ class OldParallelConfig(NamedTuple):
 
 
 def vae_all_gather(
-    ccl_manager, x: ttnn.Tensor, cluster_axis: int = 1, dim: int = 3, reshape: bool = True
+    ccl_manager,
+    x: ttnn.Tensor,
+    cluster_axis: int = 1,
+    dim: int = 3,
+    reshape: bool = True,
+    use_barrier: bool = True,
 ) -> ttnn.Tensor:
     if x.device().shape[cluster_axis] == 1:
         return x
 
     global_semaphores = ccl_manager.get_ag_ping_pong_semaphore(cluster_axis)
-    barrier_semaphore = ccl_manager.get_barrier_semaphore(cluster_axis)
 
     if reshape:
         # reshape to b,1,h*w,c. This was tested to be faster. Need to verify overhead. TODO: Cleanup
@@ -89,6 +93,14 @@ def vae_all_gather(
     # barrier_semaphore is required for correctness on repeated all_gathers (prevents
     # cross-dispatch races where fast devices start a new all_gather while slow devices
     # are still processing the previous one).
+    # However, barrier_semaphore causes hangs in some pipelines (e.g. SD3.5 large).
+    # Those callers pass use_barrier=False and rely on synchronize_device instead.
+    if use_barrier:
+        barrier_semaphore = ccl_manager.get_barrier_semaphore(cluster_axis)
+    else:
+        barrier_semaphore = None
+        ttnn.synchronize_device(x.device())
+
     x_g = ttnn.experimental.all_gather_async(
         input_tensor=x,
         dim=dim,
