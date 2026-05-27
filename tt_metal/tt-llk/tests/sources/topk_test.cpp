@@ -249,7 +249,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr int start_phase         = 0;
     constexpr int end_step            = 0;
     constexpr int start_step          = 0;
-    constexpr int vector_mode         = (int)VectorMode::RC_custom;
+    constexpr VectorMode vector_mode  = VectorMode::RC_custom;
 
     const std::uint32_t math_data_types[NUM_STAGES] = {formats.math, ckernel::to_underlying(DataFormat::UInt16)};
 
