@@ -60,6 +60,7 @@ class ResnetBlock(Module):
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
+            use_barrier=False,
         )
         self.conv2 = Conv2d(
             out_channels,
@@ -69,6 +70,7 @@ class ResnetBlock(Module):
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
+            use_barrier=False,
         )
         self.conv_shortcut = (
             Conv2d(
@@ -79,6 +81,7 @@ class ResnetBlock(Module):
                 mesh_device=mesh_device,
                 out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
+                use_barrier=False,
             )
             if in_channels != out_channels
             else None
@@ -140,6 +143,7 @@ class Upsample2D(Module):
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
+            use_barrier=False,
         )
 
     # Fix to align with constructor
@@ -412,6 +416,7 @@ class VAEDecoder(Module):
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
+            use_barrier=False,
         )
         self.mid_block = UnetMidBlock2D(
             in_channels=block_out_channels[-1],
