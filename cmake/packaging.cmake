@@ -3,10 +3,8 @@ set(CPACK_PACKAGE_CONTACT "support@tenstorrent.com")
 set(CMAKE_PROJECT_HOMEPAGE_URL "https://tenstorrent.com")
 set(CPACK_PACKAGE_NAME tt)
 
-# CPackDeb (CMake 4.3+) rejects an empty package summary; set a default for the meta package.
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Tenstorrent Metalium and TT-NN runtime and SDK packages")
-# nanobind installs some artifacts under COMPONENT "Development"; CPackDeb needs a summary for that .deb.
-set(CPACK_DEBIAN_DEVELOPMENT_DESCRIPTION "Nanobind and related development files for Python bindings")
+# Suppress the summary so that we can have per-component summaries
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "")
 set(CPACK_DEBIAN_METALIUM_PACKAGE_SECTION "libs")
 set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_SECTION "devel")
 set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SECTION "libs")
