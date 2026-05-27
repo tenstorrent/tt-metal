@@ -13,80 +13,14 @@
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
+#include <tt-metalium/experimental/metal2_host_api/compute_configuration.hpp>
+#include <tt-metalium/experimental/metal2_host_api/data_movement_configuration.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/base_types.hpp>    // For MathFidelity, UnpackToDestMode (global scope)
-#include <tt-metalium/kernel_types.hpp>  // For DataMovementProcessor, NOC, etc.
 
 namespace tt::tt_metal::experimental::metal2_host_api {
-
-struct ComputeConfiguration {
-    // Tensix hardware resource configuration for compute kernels.
-    // Gen1 and Gen2 configurations are identical.
-    //
-    // The Tensix Engine is a 3-stage pipeline (Unpack → Math → Pack).
-    // There are two math engines:
-    //  - FPU reads operands from the SrcA / SrcB register files (~19-bit),
-    //    writes to the Dest register file (16- or 32-bit, configurable).
-    //  - SFPU runs SIMD transcendentals. It can only access Dest.
-    // The fields below configure this pipeline.
-
-    // Number of multiply passes the FPU runs to use more mantissa bits
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
-
-    // Configure Dest register to hold 32-bit elements (instead of the default 16-bit)
-    bool fp32_dest_acc_en = false;
-
-    // Dest register sync mode:
-    //   false (Half) — Dest is split in half; math and pack pipeline (double-buffered)
-    //   true  (Full) — Dest is one buffer; twice the capacity, no math/pack overlap
-    bool dst_full_sync_en = false;
-
-    // Pack-side precision tweak for the Bfp8 block-float format.
-    // (Affects how exponents are reconciled when converting Dest contents to Bfp8)
-    bool bfp8_pack_precise = false;
-
-    // Select fast-and-approximate vs slow-and-precise variants of SFPU transcendentals
-    bool math_approx_mode = false;
-
-    // Per-DFB choice of how the unpacker delivers data into the math stage:
-    //   Default          — unpack via SrcA/B regs (~19-bit elements; full FPU access)
-    //   UnpackToDestFp32 — unpack via Dest regs with full FP32 precision (SFPU only)
-    //
-    // This choice matters only when ALL of the following hold for the DFB binding:
-    //   1. The kernel is the consumer endpoint (unpacking data into the kernel)
-    //   2. The DFB's data format is Float32.
-    //   3. fp32_dest_acc_en is true (Dest must be 32-bit-wide to hold FP32).
-    //
-    // You MUST provide an unpack_to_dest_mode entry for the DFB if these conditions hold;
-    // failing to do so will trigger an error. Otherwise, supplying an entry is optional
-    // and only Default is accepted.
-    using UnpackToDestModeEntry = std::pair<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
-    std::vector<UnpackToDestModeEntry> unpack_to_dest_mode;
-};
-
-struct DataMovementConfiguration {
-    // The DM configuration is different for Gen1 and Gen2.
-
-    struct Gen1DataMovementConfig {
-        tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
-        tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;
-        tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
-    };
-    std::optional<Gen1DataMovementConfig> gen1_data_movement_config = std::nullopt;
-
-    struct Gen2DataMovementConfig {
-        // Opt-out of DFB implicit sync (on a per-DFB basis)
-        //  - Implicit sync enables streamlined kernel-side syntax, but triggers ISR handling.
-        //  - Use this control to revert to legacy explicit sync APIs (for specific bound DFBs).
-        //  - This feature is mainly for debug purposes, or for backwards-compatible code style.
-        // Any bound DFB not listed here will use implicit sync by default.
-        std::vector<DFBSpecName> disable_implicit_sync_for;
-    };
-    std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
-};
 
 // A name identifying a KernelSpec within a ProgramSpec.
 using KernelSpecName = std::string;
