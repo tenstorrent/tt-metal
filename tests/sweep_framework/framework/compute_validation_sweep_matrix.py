@@ -199,7 +199,7 @@ def compute_validation_matrix(
                 runner_batches = chunk_modules(sorted_modules, batch_size)
                 total_batches = len(runner_batches)
                 mesh_label = f".{mesh_str}" if mesh_str else ""
-    
+
                 for index, batch in enumerate(runner_batches, start=1):
                     entry = {
                         **runner_config,
