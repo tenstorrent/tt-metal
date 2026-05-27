@@ -238,14 +238,18 @@ void kernel_main() {
             if constexpr (has_weight) {
                 // ----- Sub-phase 2: (x * 1/rms) * weight → mul_weight_result_cb -----
                 // weight is row-broadcast (same per col), pushed to weight_cb by
-                // the reader once on the worker's first row. cb_wait_front it
-                // here at row granularity; pop happens at end of kernel.
+                // the reader once on the worker's first chunk. cb_wait_front
+                // cumulatively per col-block so compute can start as soon as
+                // the first block of weight is in (reader pushes in block_size
+                // chunks). Pop happens at end of kernel.
                 reconfig_data_format(mul_rms_result_cb, weight_cb);
                 pack_reconfig_data_format(mul_weight_result_cb);
                 mul_bcast_rows_init_short(mul_rms_result_cb, weight_cb);
-                cb_wait_front(weight_cb, num_tile_cols);
 
                 for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                    const uint32_t tiles_in_block =
+                        (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
+                    cb_wait_front(weight_cb, col_tile + tiles_in_block);
                     cb_wait_front(mul_rms_result_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
@@ -287,11 +291,17 @@ void kernel_main() {
                 }
 
                 // ----- Sub-phase 3b: intermediate * cos → intermediate (in-place) -----
+                // Cumulative wait on rope_cos_cb so compute can start as soon
+                // as the first cos tiles arrive. rope_cos_tile_in_head wraps
+                // at head_dim_tiles, so we never need more than head_dim_tiles
+                // tiles in CB.
                 reconfig_data_format(intermediate_cb, rope_cos_cb);
                 pack_reconfig_data_format(intermediate_cb);
                 mul_tiles_init(intermediate_cb, rope_cos_cb);
-                cb_wait_front(rope_cos_cb, head_dim_tiles);
                 for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                    const uint32_t cos_tiles_needed =
+                        ((col_tile + block_size) < head_dim_tiles) ? (col_tile + block_size) : head_dim_tiles;
+                    cb_wait_front(rope_cos_cb, cos_tiles_needed);
                     cb_wait_front(intermediate_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
@@ -313,11 +323,14 @@ void kernel_main() {
                 }
 
                 // ----- Sub-phase 3c: rotated * sin → rotated (in-place) -----
+                // Cumulative wait on rope_sin_cb (same pattern as rope_cos).
                 reconfig_data_format(rotated_input_cb, rope_sin_cb);
                 pack_reconfig_data_format(rotated_input_cb);
                 mul_tiles_init(rotated_input_cb, rope_sin_cb);
-                cb_wait_front(rope_sin_cb, head_dim_tiles);
                 for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                    const uint32_t sin_tiles_needed =
+                        ((col_tile + block_size) < head_dim_tiles) ? (col_tile + block_size) : head_dim_tiles;
+                    cb_wait_front(rope_sin_cb, sin_tiles_needed);
                     cb_wait_front(rotated_input_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
