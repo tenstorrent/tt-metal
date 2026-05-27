@@ -102,10 +102,27 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
 
     if (tensor_args.batch_idx_tensor_opt.has_value()) {
         const auto& tensor = tensor_args.batch_idx_tensor_opt.value();
-        TT_FATAL(tensor.physical_volume() == 1, "Batch idx tensor must have a single element");
+        const auto input_batch = input_shape[0];
+        TT_FATAL(
+            tensor.physical_volume() == input_batch,
+            "Batch idx tensor must have input_tensor batch dim ({}) elements, got {}",
+            input_batch,
+            tensor.physical_volume());
         TT_FATAL(
             tensor.dtype() == DataType::UINT32 || tensor.dtype() == DataType::INT32,
             "Batch idx tensor must be an integer type");
+        // The writer kernel reads the tensor as a single contiguous noc page
+        // via TensorAccessor::get_noc_addr(0). That only resolves correctly for
+        // a ROW_MAJOR, INTERLEAVED, DRAM-resident buffer; sharded or L1-resident
+        // tensors would have batch_idx values scattered across NoC locations
+        // the single read won't cover.
+        TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Batch idx tensor must be in ROW_MAJOR layout");
+        TT_FATAL(
+            tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Batch idx tensor must have INTERLEAVED memory layout");
+        TT_FATAL(
+            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "Batch idx tensor must be DRAM-resident");
     }
 }
 
