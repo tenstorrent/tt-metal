@@ -54,16 +54,19 @@ ProgramRunParams::KernelRunParams make_run_params(
     const KernelSpecName& kernel_name, const NodeCoord& node, const ScratchLayout& layout, uint32_t rounds, uint32_t skew_iters) {
     return ProgramRunParams::KernelRunParams{
         .kernel_spec_name = kernel_name,
-        .runtime_varargs =
-            {{node,
-              {
-                  layout.arrivals_addr,
-                  layout.observed_addr,
-                  layout.post_addr,
-                  rounds,
-                  skew_iters,
-                  layout.total_words,
-              }}},
+        .advanced_options =
+            KernelRunParamsAdvancedOptions{
+                .runtime_varargs =
+                    {{node,
+                      {
+                          layout.arrivals_addr,
+                          layout.observed_addr,
+                          layout.post_addr,
+                          rounds,
+                          skew_iters,
+                          layout.total_words,
+                      }}},
+            },
     };
 }
 

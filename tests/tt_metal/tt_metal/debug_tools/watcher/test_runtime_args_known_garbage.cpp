@@ -303,14 +303,19 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
         experimental::metal2_host_api::ProgramRunParams params;
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams krp{
             .kernel_spec_name = DM_KERNEL_NAME,
-            .common_runtime_varargs = default_crtas,
+            .advanced_options =
+                experimental::metal2_host_api::KernelRunParamsAdvancedOptions{
+                    .common_runtime_varargs = default_crtas,
+                },
         };
         for (const auto& c : core_range1) {
-            krp.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, default_rtas});
+            krp.advanced_options->runtime_varargs.push_back(
+                {experimental::metal2_host_api::NodeCoord{c}, default_rtas});
         }
         if (!is_quasar) {
             for (const auto& c : core_range2) {
-                krp.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, rtas_range2});
+                krp.advanced_options->runtime_varargs.push_back(
+                    {experimental::metal2_host_api::NodeCoord{c}, rtas_range2});
             }
         }
         params.kernel_run_params = {krp};
@@ -438,12 +443,14 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
 
     experimental::metal2_host_api::ProgramRunParams params_m2;
     experimental::metal2_host_api::ProgramRunParams::KernelRunParams krp{.kernel_spec_name = OOB_KERNEL_NAME};
+    krp.advanced_options.emplace();
     if (params.test_rta) {
         for (const auto& c : core_range) {
-            krp.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, default_rtas});
+            krp.advanced_options->runtime_varargs.push_back(
+                {experimental::metal2_host_api::NodeCoord{c}, default_rtas});
         }
     } else {
-        krp.common_runtime_varargs = default_crtas;
+        krp.advanced_options->common_runtime_varargs = default_crtas;
     }
     params_m2.kernel_run_params = {krp};
     experimental::metal2_host_api::SetProgramRunParameters(program, params_m2);
@@ -499,8 +506,9 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
 
     experimental::metal2_host_api::ProgramRunParams params;
     experimental::metal2_host_api::ProgramRunParams::KernelRunParams krp{.kernel_spec_name = MULTI_DM_KERNEL_NAME};
+    krp.advanced_options.emplace();
     for (const auto& c : core_range) {
-        krp.runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, default_rtas});
+        krp.advanced_options->runtime_varargs.push_back({experimental::metal2_host_api::NodeCoord{c}, default_rtas});
     }
     params.kernel_run_params = {krp};
     experimental::metal2_host_api::SetProgramRunParameters(program, params);
