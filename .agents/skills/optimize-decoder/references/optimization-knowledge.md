@@ -10,6 +10,9 @@ Use this reference while optimizing a functional TTNN decoder. It captures repo-
 - `models/common/modules/attention/attention_1d.py`: reusable attention configs with BFP8 attention weights, BFP8 KV cache, DRAM-sharded decode matmuls, SDPA configs, and L1-sharded decode residual paths.
 - `models/common/modules/mlp/mlp_1d.py`: decode/prefill MLP split, DRAM-sharded decode matmuls, sharded outputs, and precision knobs.
 - `models/common/tensor_utils.py`: helpers to serialize program and compute-kernel configs for artifact reporting.
+- `ttnn/ttnn/_experimental/moe_compute_utils.py`: packed W0/W1/W2 layouts, DRAM-sharded weight memory configs, shared-expert helpers, and bias variants for `ttnn.experimental.moe_compute`.
+- `models/demos/deepseek_v3/tt/moe_optimized.py`, `tests/nightly/tg/ccl/moe/test_all_to_all_dispatch_metadata_6U.py`, and `tests/nightly/tg/ccl/moe/test_moe_compute_6U.py`: current routed MoE decode examples using `all_to_all_dispatch_metadata` and `moe_compute`.
+- `models/common/modules/moe/tt_moe_decode.py`: preferred common MoE decode wrapper when present in the checkout.
 - `models/demos/gpt_oss/tt/`, `models/demos/gemma4/tt/`, and `models/demos/deepseek_v3/tt/`: model-specific examples where common modules do not fully fit.
 
 ## Core Optimization Rules
@@ -22,7 +25,7 @@ Use this reference while optimizing a functional TTNN decoder. It captures repo-
 - Explicitly configure `memory_config`, `program_config`, and `compute_kernel_config` for important ops. Defaults are often correct but suboptimal.
 - Choose shard specs and core grids that divide tensor dimensions cleanly into tiles. Padding in sharded paths is a common source of bugs or wasted work.
 - For DRAM-sharded decode matmul, weights should be width-sharded in DRAM and activations/outputs width-sharded in L1 on the matching core grid.
-- Keep the optimization target single-user prefill/decode. For MoE decoders, preserve gate-selected active-expert execution and optimize loading/running only the active experts, using TTNN sparse matmul or the closest model-local active-expert path. Dense all-expert execution is a debug baseline, not the optimized target.
+- Keep the optimization target single-user prefill/decode. For MoE decoders, preserve gate-selected active-expert execution and prefer the `all_to_all_dispatch_metadata` -> `moe_compute` -> model-appropriate combine/reduce pipeline. Dense all-expert execution is a debug baseline, not the optimized target.
 
 ## Matmul Choices
 
