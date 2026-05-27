@@ -11,11 +11,11 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/constants.hpp>
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
@@ -168,8 +168,8 @@ inline void compute_single_stage_noc_addrs(
  */
 template <typename T, typename Block>
 inline void read_block_to_cb(
-    experimental::Noc& noc,
-    experimental::CircularBuffer& cb,
+    Noc& noc,
+    CircularBuffer& cb,
     const T& addr,
     const uint32_t tile_bytes,
     const uint32_t offset,
@@ -197,8 +197,8 @@ inline void read_block_to_cb(
  */
 template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
 inline void read_row_major_block_to_cb(
-    experimental::Noc& noc,
-    experimental::CircularBuffer& cb_in_rm,
+    Noc& noc,
+    CircularBuffer& cb_in_rm,
     const T& src_a,
     const uint32_t curr_tile_row,
     const uint32_t num_valid_rows,
@@ -228,8 +228,8 @@ inline void read_row_major_block_to_cb(
  */
 template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
 inline void write_row_major_block_from_cb(
-    experimental::Noc& noc,
-    experimental::CircularBuffer& cb_out_rm,
+    Noc& noc,
+    CircularBuffer& cb_out_rm,
     const T& dst_a,
     const uint32_t abs_row_base,
     const uint32_t num_valid_rows,
@@ -247,7 +247,7 @@ inline void write_row_major_block_from_cb(
 
     for (uint32_t r = 0; r < num_valid_rows; r++) {
         noc.async_write(
-            experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(cb_out_rm),
+            use<CircularBuffer::AddrSelector::READ_PTR>(cb_out_rm),
             dst_a,
             valid_bytes,
             {.offset_bytes = r * block_row_stride_bytes},
@@ -266,8 +266,8 @@ inline void write_row_major_block_from_cb(
  */
 template <typename T, uint32_t TILE_W, uint32_t TILE_H>
 inline void push_row_major_blocks_to_cb(
-    experimental::Noc& noc,
-    experimental::CircularBuffer& cb_in_rm,
+    Noc& noc,
+    CircularBuffer& cb_in_rm,
     const T& src_a,
     const uint32_t Wt,
     const uint32_t block_size,

@@ -10,6 +10,7 @@ import ttnn
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, tt_dtype_to_torch_dtype
 
 
 TILE_SIZE = ttnn.TILE_SIZE
@@ -537,3 +538,69 @@ def test_distributed_dit_layernorm_program_cache(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         )
+
+
+@pytest.mark.parametrize(
+    "inp_shape",
+    [(1, 1, 32, 128), (1, 1, 32, 1024)],
+)
+@pytest.mark.parametrize(
+    "inp_dtype, stats_dtype",
+    [
+        (ttnn.bfloat16, ttnn.bfloat16),
+        (ttnn.float32, ttnn.float32),
+    ],
+    ids=["bf16_inp_bf16_stats", "fp32_inp_fp32_stats"],
+)
+def test_distributed_dit_pre_allgather_welford_precision(device, inp_shape, inp_dtype, stats_dtype, reset_seeds):
+    """DiT pre_allgather (welford) per-row mean and var vs torch reference.
+
+    The fp32 tolerance is tight enough to catch e.g. welford finalize buffer (cb_x2)
+    being held in bfloat16 rather than float32 when fp32_dest_acc_en is set; the bf16
+    tolerance is loosened to the bf16 noise floor.
+    """
+    torch.manual_seed(0)
+    w = inp_shape[-1]
+    torch_dtype = tt_dtype_to_torch_dtype[inp_dtype]
+    torch_inp = torch.randn(inp_shape, dtype=torch_dtype)
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    tt_inp = ttnn.from_torch(
+        torch_inp,
+        dtype=inp_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    recip_tensor = create_recip_tensor_for_welford(device, w)
+
+    tt_stats = ttnn.experimental.dit_layernorm_pre_allgather(
+        tt_inp, recip_tensor, compute_kernel_config=compute_kernel_config, dtype=stats_dtype
+    )
+    out = ttnn.to_torch(tt_stats)
+
+    # DiT welford output layout: per-row mean lives in tile 0 column 0,
+    # per-row variance in tile 1 column 0 (= overall column 32).
+    torch_inp_fp32 = torch_inp.float()
+    torch_mean = torch_inp_fp32.mean(dim=-1, keepdim=False)
+    torch_var = torch_inp_fp32.var(dim=-1, keepdim=False, unbiased=False)
+    tt_mean = out[..., 0]
+    tt_var = out[..., 32]
+
+    if stats_dtype == ttnn.float32:
+        atol = 0.002
+        rtol = 0.002
+        pcc = 0.9999
+    else:
+        atol = 0.01
+        rtol = 0.01
+        pcc = 0.999
+    assert_numeric_metrics(torch_mean, tt_mean, rtol=rtol, atol=atol, pcc_threshold=pcc)
+    assert_numeric_metrics(torch_var, tt_var, rtol=rtol, atol=atol, pcc_threshold=pcc)

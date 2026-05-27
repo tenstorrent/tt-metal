@@ -49,10 +49,10 @@ class Packer(BasePacker):
         num_faces = operation.output.tile_shape.total_num_faces()
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         return (
-            f"    _llk_pack_init_<false, false>(\n"
+            f"    _llk_pack_init_<PackMode::Default, false /* zero_output */>(\n"
             f"        {config.sentinel.pack_dst_format}, {face_r_dim}, {num_faces}\n"
             f"    );\n"
-            f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc}, false>();\n"
+            f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc}, PackMode::Default>();\n"
         )
 
     def pack(
@@ -65,4 +65,4 @@ class Packer(BasePacker):
         dest_acc = config.dest_acc.cpp_enum_value
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         buffer = operation.output.cpp_name
-        return f"_llk_pack_<{dest_sync}, {dest_acc}, false>({block.tile_id_block}, L1_ADDRESS({buffer}[{block.tile_id_global}]));\n"
+        return f"_llk_pack_<{dest_sync}, {dest_acc}, ckernel::PackMode::Default>({block.tile_id_block}, L1_ADDRESS({buffer}[{block.tile_id_global}]));\n"

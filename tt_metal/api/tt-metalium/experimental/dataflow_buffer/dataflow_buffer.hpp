@@ -40,11 +40,23 @@ struct DataflowBufferConfig {
     uint16_t consumer_risc_mask = 0x0;  // bits 0-7 = DM riscs, bits 8-15 = Tensix riscs
     uint8_t num_consumers = 1;
     AccessPattern cap = AccessPattern::STRIDED;
-    bool enable_implicit_sync = false;
+
+    // Implicit sync — per-side opt-in to the streamlined ISR-driven credit posting.
+    // (Only applies to DM riscs; Tensix riscs always require explicit sync.)
+    // Setting the two sides asymmetrically is a niche debug knob for isolating sync bugs;
+    // typical usage sets both to the same value.
+    bool enable_producer_implicit_sync = false;
+    bool enable_consumer_implicit_sync = false;
+
+    // Data format and tile formats for LLKs
     DataFormat data_format = tt::DataFormat::Float16_b;
     std::optional<Tile> tile = std::nullopt;
     // Set only when both producer and consumer are the same compute kernel
     std::optional<TensixScope> tensix_scope = std::nullopt;
+    // When true, the DFB borrows L1 memory from an externally managed buffer
+    // instead of allocating its own L1 region. The actual base address must be
+    // supplied before launch via DataflowBufferImpl::set_borrowed_memory_base_addr.
+    bool borrows_memory = false;
 };
 
 // Note: This API and the DataflowBufferConfig are placeholder only, the final DataflowBuffer APIs will conform with

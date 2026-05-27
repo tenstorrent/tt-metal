@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -62,9 +62,9 @@ void kernel_main() {
     constexpr auto in1_args = TensorAccessorArgs<19>();
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in1(cb_id_in1);
-    experimental::CircularBuffer cb_out(cb_id_out0);
+    Noc noc;
+    CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_out(cb_id_out0);
 
 #ifdef IN1_SHARDED
     const uint32_t in1_num_tiles = batch * num_blocks * in1_block_h * in1_block_w;
@@ -89,7 +89,7 @@ void kernel_main() {
 
 #ifdef INTERMEDIATE_CB_READ
             constexpr uint32_t in1_intermediate_cb_index = get_named_compile_time_arg_val("cb_in1_intermediate");
-            experimental::CircularBuffer cb_helper(in1_intermediate_cb_index);
+            CircularBuffer cb_helper(in1_intermediate_cb_index);
             cb_helper.reserve_back(one_tile);
 #endif  // INTERMEDIATE_CB_READ
 
@@ -156,7 +156,7 @@ void kernel_main() {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                     for (uint32_t w = 0; w < out_subblock_w; ++w) {
                         noc.async_write(
-                            experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(cb_out),
+                            use<CircularBuffer::AddrSelector::READ_PTR>(cb_out),
                             s,
                             output_single_tile_size_bytes,
                             {.offset_bytes = out_read_offset},

@@ -16,7 +16,7 @@ inline void llk_math_eltwise_binary_sfpu_rsub_int_init() {
 
 template <bool APPROXIMATE, DataFormat DATA_FORMAT, int ITERATIONS = 8>
 inline void llk_math_eltwise_binary_sfpu_rsub_int(
-    uint32_t dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
+    uint32_t dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     static_assert(
         DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format for rsub_int. Supported data formats are: Int32, UInt32, UInt16");

@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t stick_size_padded = get_compile_time_arg_val(0);
@@ -21,9 +21,9 @@ void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
 
-    // Create experimental CircularBuffers for Device 2.0 API
-    experimental::CircularBuffer cb_in(cb_in0);
-    experimental::CircularBuffer cb_out(cb_out0);
+    // Create CircularBuffers for Device 2.0 API
+    CircularBuffer cb_in(cb_in0);
+    CircularBuffer cb_out(cb_out0);
 
     cb_out.reserve_back(num_sticks_unpadded);
     uint32_t l1_read_addr = cb_in.get_write_ptr();

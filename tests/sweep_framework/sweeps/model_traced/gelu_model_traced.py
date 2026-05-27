@@ -2,23 +2,24 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
 from functools import partial
+
+import torch
+
+import ttnn
+from models.common.utility_functions import torch_random
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
-    mesh_tensor_to_torch,
     get_mesh_composer,
+    get_model_traced_mesh_shape,
+    mesh_tensor_to_torch,
     reconcile_golden_to_actual,
 )
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
-
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 TIMEOUT = 300
 
@@ -65,16 +66,20 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    # Restore output memory_config for the op if present in traced kwargs
+    # Only restore memory_config if the master trace actually recorded it.
+    # Do NOT add it from output_memory_config when master didn't have it —
+    # that creates an extra_key diff in validation.
+    absent_keys = set(kwargs.get("__absent_keys__") or [])
     traced_memory_config = kwargs.get("memory_config")
-    if traced_memory_config is not None and traced_memory_config != "__ABSENT__" and "memory_config" not in op_kwargs:
-        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
-
+    if (
+        "memory_config" not in absent_keys
+        and traced_memory_config is not None
+        and traced_memory_config != "__ABSENT__"
+        and "memory_config" not in op_kwargs
+    ):
         parsed_mc = parse_dict_value("memory_config", traced_memory_config)
         if parsed_mc is not None:
             op_kwargs["memory_config"] = parsed_mc
-    elif output_memory_config is not None and "memory_config" not in op_kwargs:
-        op_kwargs["memory_config"] = output_memory_config
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 

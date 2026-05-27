@@ -111,6 +111,20 @@ ttnn::Tensor composite_reduce_scatter(
         native_rs_output_memory_config = input_tensor.memory_config();
     }
 
+    // BFLOAT8_B + TILE inputs are unsafe through the composite split→pad→concat below: intermediate ops
+    // can leave per-chunk tensors with inconsistent dtypes, tripping ttnn::concat's dtype-equality check.
+    // Mirror composite_all_to_all: typecast BF8 → BF16 here, run in BF16, typecast back at the end.
+    // Placed AFTER the sharded→interleaved conversion above so the typecast always runs on an interleaved
+    // tensor (sharded-typecast is more expensive and less battle-tested). Guard on layout+dtype only —
+    // use_composite_reduce_scatter dispatches on per-device output, so every BF8 + TILE input reaching
+    // here is unsafe. Temporarily doubles tensor footprint for the composite path.
+    const ttnn::DataType original_input_dtype = input_tensor.dtype();
+    const bool convert_to_bfloat16_for_composite =
+        input_tensor.layout() == ttnn::Layout::TILE && original_input_dtype == ttnn::DataType::BFLOAT8_B;
+    if (convert_to_bfloat16_for_composite) {
+        input_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
+    }
+
     // split the input tensor so we can insert internal padding
     std::vector<ttnn::Tensor> split_tensors =
         ttnn::split(input_tensor, output_shape[scatter_dim], scatter_dim, input_tensor.memory_config());
@@ -170,10 +184,20 @@ ttnn::Tensor composite_reduce_scatter(
             ttnn::slice(padded_native_rs_output_tensor, sbegins, sends, ssteps, native_rs_output_memory_config);
     }
 
+    // Restore the original dtype before any (optional) sharded reshard: typecast on an interleaved
+    // BFLOAT16 tensor is cheaper than typecast on a sharded one, and the sharded-typecast path is less
+    // battle-tested.
+    if (convert_to_bfloat16_for_composite) {
+        ttnn::Tensor bfloat8_output = ttnn::typecast(rs_output_tensor, original_input_dtype);
+        rs_output_tensor.deallocate();
+        rs_output_tensor = bfloat8_output;
+    }
+
     // if the output is sharded, do the conversion
     if (output_memory_config.is_sharded()) {
         rs_output_tensor = ttnn::to_memory_config(rs_output_tensor, output_memory_config);
     }
+
     return rs_output_tensor;
 }
 
@@ -257,13 +281,7 @@ bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const 
     return false;
 }
 
-bool use_composite_all_gather(
-    const ttnn::Tensor& input_tensor, const int32_t dim, const std::optional<ttnn::MemoryConfig>& memory_config) {
-    auto is_true_2d_mesh = [](const ttnn::Tensor& t) {
-        const auto mesh_shape = t.device()->shape();
-        return mesh_shape.dims() >= 2 && mesh_shape[0] > 1 && mesh_shape[1] > 1;
-    };
-
+bool use_composite_all_gather(const ttnn::Tensor& input_tensor, const int32_t dim) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -273,12 +291,6 @@ bool use_composite_all_gather(
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
-    auto input_memory_config = input_tensor.memory_config();
-    auto output_memory_config = memory_config.value_or(input_memory_config);
-
-    if (tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D && is_true_2d_mesh(input_tensor)) {
-        return true;
-    }
     // Use composite for row-major tensors
     if (input_tensor.layout() == ttnn::Layout::ROW_MAJOR) {
         return true;

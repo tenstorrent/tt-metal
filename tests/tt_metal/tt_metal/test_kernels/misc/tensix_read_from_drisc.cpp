@@ -9,9 +9,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "noc_nonblocking_api.h"
-#include "experimental/noc.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     constexpr uint32_t tensix_dst_addr = get_compile_time_arg_val(0);
@@ -31,15 +31,15 @@ void kernel_main() {
 #ifdef MODE_TENSIX_STREAM_REG_TO_DRISC
     // Stream register round trip test
     // Write to the DRISC stream register from Tensix inline reg
-    experimental::UnicastEndpoint src;
-    experimental::Noc noc;
+    UnicastEndpoint src;
+    Noc noc;
     uint32_t reg_addr = STREAM_REG_ADDR(stream_id, stream_reg);
-    noc.inline_dw_write<experimental::Noc::TxnIdMode::DISABLED, InlineWriteDst::REG>(
+    noc.inline_dw_write<Noc::TxnIdMode::DISABLED, InlineWriteDst::REG>(
         src, value_to_write, {.noc_x = drisc_noc_x, .noc_y = drisc_noc_y, .addr = reg_addr});
     noc.async_write_barrier();
 
     // Read back from the DRISC stream register into Tensix L1.
-    experimental::CoreLocalMem<uint32_t> dst(tensix_dst_addr);
+    CoreLocalMem<uint32_t> dst(tensix_dst_addr);
     noc.async_read(src, dst, sizeof(uint32_t), {.noc_x = drisc_noc_x, .noc_y = drisc_noc_y, .addr = reg_addr}, {});
     noc.async_read_barrier();
 #else

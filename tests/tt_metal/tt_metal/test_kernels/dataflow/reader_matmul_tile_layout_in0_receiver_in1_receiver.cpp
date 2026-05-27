@@ -4,8 +4,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "hostdevcommon/common_values.hpp"
 
 void kernel_main() {
@@ -58,17 +58,17 @@ void kernel_main() {
     uint32_t in1_mcast_sender_semaphore_id = get_arg_val<uint32_t>(33);
     uint32_t in1_mcast_receiver_semaphore_id = get_arg_val<uint32_t>(34);
 
-    experimental::Noc noc;
+    Noc noc;
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in1(cb_id_in1);
 
-    experimental::Semaphore in0_mcast_sender_semaphore(in0_mcast_sender_semaphore_id);
-    experimental::Semaphore in0_mcast_receiver_semaphore(in0_mcast_receiver_semaphore_id);
-    experimental::Semaphore in1_mcast_sender_semaphore(in1_mcast_sender_semaphore_id);
-    experimental::Semaphore in1_mcast_receiver_semaphore(in1_mcast_receiver_semaphore_id);
+    Semaphore in0_mcast_sender_semaphore(in0_mcast_sender_semaphore_id);
+    Semaphore in0_mcast_receiver_semaphore(in0_mcast_receiver_semaphore_id);
+    Semaphore in1_mcast_sender_semaphore(in1_mcast_sender_semaphore_id);
+    Semaphore in1_mcast_receiver_semaphore(in1_mcast_receiver_semaphore_id);
 
     for (uint32_t b = 0; b < num_blocks; b++) {
         // Operand 0

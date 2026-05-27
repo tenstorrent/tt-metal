@@ -168,7 +168,7 @@ void kernel_main() {
 
     MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
     PACK(ckernel::t6_semaphore_init(ckernel::SFPU_FPU, 0, 1));
-    if constexpr (SamplingComputeCTArgs::topk_k == 32) {
+    if constexpr (SamplingComputeCTArgs::topk_k <= 32) {
         deepseek_compute_kernel_hw_startup<true>(
             SamplingComputeCTArgs::topk_in_scores_cb,
             SamplingComputeCTArgs::topk_in_scores_cb,

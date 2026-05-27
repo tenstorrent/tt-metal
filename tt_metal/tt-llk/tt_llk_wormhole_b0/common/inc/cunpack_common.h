@@ -800,7 +800,9 @@ inline void configure_unpack_AB(
     {
         tile_descriptor.val[i] = 0;
     }
-    tile_descriptor.f.in_data_format = unpA_src_format;
+    // in_data_format is a 4-bit bitfield. masked_data_format() drops the high bits so e.g. UInt8 (=30)
+    // becomes INT8 (=14) at the register. Signedness lives separately in ALU_FORMAT_SPEC_REG0_SrcA/BUnsigned.
+    tile_descriptor.f.in_data_format = masked_data_format(unpA_src_format);
     tile_descriptor.f.uncompressed   = 1; // Input tile is uncompressed
     tile_descriptor.f.x_dim          = 0; // Not used for unpA as value is overridden by per context x_dim set below. Used for unpB
     tile_descriptor.f.y_dim          = 1;
@@ -811,7 +813,7 @@ inline void configure_unpack_AB(
     {
         cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + i] = tile_descriptor.val[i];
     }
-    tile_descriptor.f.in_data_format = row_pool ? to_underlying(DataFormat::Float32) : unpB_src_format;
+    tile_descriptor.f.in_data_format = row_pool ? to_underlying(DataFormat::Float32) : masked_data_format(unpB_src_format);
     tile_descriptor.f.x_dim          = unpB_face_r_dim * FACE_C_DIM;
     tile_descriptor.f.z_dim          = unpB_num_faces;
     for (std::uint32_t i = 0; i < TILE_DESC_SIZE; i++)
@@ -825,7 +827,7 @@ inline void configure_unpack_AB(
     {
         config.val[i] = 0;
     }
-    config.f.out_data_format = unpA_dst_format;
+    config.f.out_data_format = masked_data_format(unpA_dst_format);
     config.f.throttle_mode   = 2;
     config.f.context_count   = 0;
     config.f.haloize_mode    = transpose_xy_srca_en ? 1 : 0;
@@ -841,7 +843,7 @@ inline void configure_unpack_AB(
         cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + i] = config.val[i];
     }
 
-    config.f.out_data_format = row_pool ? (to_underlying(DataFormat::Float16) | (exp_width << 2)) : unpB_dst_format;
+    config.f.out_data_format = row_pool ? (to_underlying(DataFormat::Float16) | (exp_width << 2)) : masked_data_format(unpB_dst_format);
     config.f.haloize_mode    = 0;
 
     for (std::uint32_t i = 0; i < CONFIG_SIZE; i++)

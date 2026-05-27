@@ -6,7 +6,8 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
+from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
 
 
 @pytest.mark.parametrize(
@@ -99,7 +100,7 @@ def test_interleaved_to_dram_height_sharded(
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
     ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
 
-    assert_with_pcc(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_quality(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), dtype)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -138,7 +139,7 @@ def test_interleaved_to_dram_width_sharded(
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
     ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
 
-    assert_with_pcc(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_quality(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), dtype)
 
 
 @pytest.mark.parametrize(
@@ -180,7 +181,8 @@ def test_interleaved_to_dram_sharded_convert_dtype(
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
     ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config, out_dtype)
 
-    assert_with_pcc(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    effective_dtype = ttnn.bfloat8_b if (in_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b) else out_dtype
+    assert_quality(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), effective_dtype)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.float32])
@@ -221,7 +223,7 @@ def test_interleaved_to_dram_sharded_via_to_memory_layout(
     )
     ttnn_output_tensor = ttnn.to_memory_config(ttnn_input_tensor, output_mem_config)
 
-    assert_with_pcc(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_quality(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), dtype)
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])

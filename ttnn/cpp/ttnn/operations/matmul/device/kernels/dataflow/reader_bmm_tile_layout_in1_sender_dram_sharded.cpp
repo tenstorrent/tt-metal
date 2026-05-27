@@ -6,10 +6,10 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -59,12 +59,12 @@ void kernel_main() {
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in1(cb_id_in1);
-    experimental::CircularBuffer cb_out(cb_id_out);
-    experimental::CircularBuffer cb_out_reshard(cb_id_out_reshard);
+    Noc noc;
+    CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_out(cb_id_out);
+    CircularBuffer cb_out_reshard(cb_id_out_reshard);
 #ifdef FUSE_BIAS
-    experimental::CircularBuffer cb_in3(cb_id_in3);
+    CircularBuffer cb_in3(cb_id_in3);
 #endif
 
     //  READER
@@ -72,8 +72,8 @@ void kernel_main() {
     uint32_t l1_read_addr_in1 = 0;
     constexpr DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_bank;
-    noc.set_async_read_state<experimental::Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+    AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+    noc.set_async_read_state<Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
         dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, vc);
 
 #ifdef ARCH_GRAYSKULL
@@ -83,9 +83,9 @@ void kernel_main() {
         l1_write_addr_in1 = cb_in1.get_write_ptr();
 
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
-            noc.async_read_with_state<experimental::Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+            noc.async_read_with_state<Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
                 dram_bank,
-                experimental::CoreLocalMem<uint32_t>(l1_write_addr_in1),
+                CoreLocalMem<uint32_t>(l1_write_addr_in1),
                 in1_page_size,
                 {.bank_id = dram_bank_id, .addr = in1_tensor_addr + l1_read_addr_in1},
                 {},
@@ -110,9 +110,9 @@ void kernel_main() {
     l1_write_addr_in1 = l1_write_addr_in1_start;
     for (uint32_t block = 0; block < num_blocks; ++block) {
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
-            noc.async_read<experimental::Noc::TxnIdMode::ENABLED, NOC_MAX_BURST_SIZE>(
+            noc.async_read<Noc::TxnIdMode::ENABLED, NOC_MAX_BURST_SIZE>(
                 dram_bank,
-                experimental::CoreLocalMem<uint32_t>(l1_write_addr_in1),
+                CoreLocalMem<uint32_t>(l1_write_addr_in1),
                 in1_page_size,
                 {.bank_id = dram_bank_id, .addr = in1_tensor_addr + l1_read_addr_in1},
                 {},
@@ -123,7 +123,7 @@ void kernel_main() {
         }
 
         if (num_free_blocks_in_buffer == 2) {
-            noc.async_read_barrier<experimental::Noc::BarrierMode::TXN_ID>(block_trid_to_wait);
+            noc.async_read_barrier<Noc::BarrierMode::TXN_ID>(block_trid_to_wait);
             cb_in1.push_back(in1_block_num_tiles);
             // wait for next block trid
             block_trid_to_wait = block_trid_to_wait == 3 ? 1 : (block_trid_to_wait + 1);
@@ -143,7 +143,7 @@ void kernel_main() {
         l1_write_addr_in1 = l1_write_addr_in1_start + l1_write_addr_in1_offset;
     }
     // last block to wait
-    noc.async_read_barrier<experimental::Noc::BarrierMode::TXN_ID>(block_trid_to_wait);
+    noc.async_read_barrier<Noc::BarrierMode::TXN_ID>(block_trid_to_wait);
     cb_in1.push_back(in1_block_num_tiles);
 #endif
 
@@ -153,13 +153,13 @@ void kernel_main() {
     uint32_t l1_write_addr_in3 = cb_in3.get_write_ptr();
     uint32_t l1_read_addr_in3 = 0;
 
-    noc.set_async_read_state<experimental::Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+    noc.set_async_read_state<Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
         dram_bank, in3_page_size, {.bank_id = dram_bank_id, .addr = in3_tensor_addr}, vc);
 
     for (uint32_t h = 0; h < in3_num_pages; ++h) {
-        noc.async_read_with_state<experimental::Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+        noc.async_read_with_state<Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
             dram_bank,
-            experimental::CoreLocalMem<uint32_t>(l1_write_addr_in3),
+            CoreLocalMem<uint32_t>(l1_write_addr_in3),
             in3_page_size,
             {.bank_id = dram_bank_id, .addr = in3_tensor_addr + l1_read_addr_in3},
             {},
@@ -188,12 +188,12 @@ void kernel_main() {
             l1_write_addr_out_reshard += reshard_tensor_start_offset;
         }
 
-        experimental::UnicastEndpoint dst_ep;
+        UnicastEndpoint dst_ep;
         uint32_t reshard_dest_local_addr = l1_write_addr_out_reshard;
 
         for (uint32_t h = 0; h < per_core_M; ++h) {
             noc.async_write(
-                experimental::CoreLocalMem<uint32_t>(l1_read_addr_out),
+                CoreLocalMem<uint32_t>(l1_read_addr_out),
                 dst_ep,
                 per_core_N_reshard_bytes[index_offset],
                 {},

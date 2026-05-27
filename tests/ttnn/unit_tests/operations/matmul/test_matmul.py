@@ -304,7 +304,7 @@ def test_matmul_reuse_config_sharded_fd_column(
 @pytest.mark.parametrize("m", [256])
 @pytest.mark.parametrize("k", [256])
 @pytest.mark.parametrize("n", [256])
-@pytest.mark.parametrize("tile_h", [16, 32])
+@pytest.mark.parametrize("tile_h", [4, 8, 16, 32])
 @pytest.mark.parametrize("tile_w", [16, 32])
 @pytest.mark.parametrize("in0_sharded", [True, False])
 @pytest.mark.parametrize("in1_sharded", [True, False])
@@ -3452,6 +3452,86 @@ def test_matmul_on_subdevice_1d_mcast(device, m_size, k_size, n_size):
         _teardown_subdevice(device, sub_device_manager)
 
 
+@skip_for_slow_dispatch()
+@pytest.mark.parametrize(
+    "sd_start, sd_end",
+    [
+        ((2, 3), (5, 7)),  # 4x5 offset in both x and y: trips old helper's available-cores undercount (20 vs 6)
+        ((1, 4), (6, 5)),  # 6x2 wide-short rect: y-offset 4 >= rect height 2 trips old start.y bounds assertion
+        ((6, 1), (7, 4)),  # 2x4 right-edge rect: x-offset 6 >= rect width 2 trips old start.x bounds assertion
+        ((3, 3), (6, 6)),  # 4x4 square rect mid-device: another available-cores undercount case (16 vs 1)
+        ((3, 2), (3, 6)),  # 1x5 single-column rect: exercises the grid.x==1 branch of receiver_start_core
+        (None, None),  # device-sized full-width y-offset rect (0,1)->(cols-1,rows-1): the original #43900 repro
+    ],
+    ids=["2,3-5,7", "1,4-6,5", "6,1-7,4", "3,3-6,6", "3,2-3,6", "full_width_offset"],
+)
+@pytest.mark.parametrize("mcast_in0", [True, False], ids=["mcast_in0", "mcast_in1"])
+def test_matmul_on_subdevice_1d_mcast_full_grid(device, sd_start, sd_end, mcast_in0):
+    """Regression for issue #43900: 1-D multicast matmul over an offset
+    worker rectangle.  Each parametrized shape would trip a TT_FATAL inside
+    the old (0, 0)-anchored core-range helper (either an undercount of
+    available cores or a start-core-out-of-grid assertion); the fix
+    switches the factory to the sub-core-grid-aware helper so any
+    rectangular sub-device whose bounding box fits the device is accepted.
+    """
+    grid = device.compute_with_storage_grid_size()
+    if sd_start is None:
+        if grid.y < 3:
+            pytest.skip("Need at least 3 rows for the full-width offset sub-device case")
+        sd_start, sd_end = (0, 1), (grid.x - 1, grid.y - 1)
+    if sd_end[0] >= grid.x or sd_end[1] >= grid.y:
+        pytest.skip(f"Device grid {grid.x}x{grid.y} too small for sub-device ending at {sd_end}")
+
+    worker_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*sd_start), ttnn.CoreCoord(*sd_end))})
+    worker_sub_device = ttnn.SubDevice([worker_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_manager = device.create_sub_device_manager([worker_sub_device], 0)
+    device.load_sub_device_manager(sub_device_manager)
+    device.set_sub_device_stall_group([worker_sub_device_id])
+    try:
+        sub_grid = ttnn.CoreCoord(sd_end[0] - sd_start[0] + 1, sd_end[1] - sd_start[1] + 1)
+        num_cores = sub_grid.x * sub_grid.y
+        tile = 32
+        m_size, n_size = (tile, tile * num_cores) if mcast_in0 else (tile * num_cores, tile)
+        k_size = 1024
+
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=sub_grid,
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            fuse_batch=False,
+            mcast_in0=mcast_in0,
+            fused_activation=None,
+        )
+
+        torch.manual_seed(0)
+        torch_input_a = torch.randn((1, 1, m_size, k_size), dtype=torch.bfloat16)
+        torch_input_b = torch.randn((1, 1, k_size, n_size), dtype=torch.bfloat16)
+        torch_output = torch_input_a @ torch_input_b
+
+        kwargs = dict(
+            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        input_a = ttnn.from_torch(torch_input_a, **kwargs)
+        input_b = ttnn.from_torch(torch_input_b, **kwargs)
+
+        output = ttnn.matmul(input_a, input_b, program_config=program_config, sub_device_id=worker_sub_device_id)
+        output = ttnn.to_torch(output)
+        assert_numeric_metrics(
+            torch_output,
+            output,
+            atol=0.004 * k_size,
+            rtol=0.79 * k_size,
+            frobenius_threshold=0.001 * k_size,
+            pcc_threshold=0.999,
+        )
+    finally:
+        _teardown_subdevice(device, sub_device_manager)
+
+
 @pytest.mark.parametrize(
     "weight_dtype, pcc_threshold",
     [
@@ -3617,3 +3697,107 @@ def test_from_torch_col_tilize_batched(weight_dtype, shape):
 
     assert result_col.shape == result_manual.shape
     assert_with_pcc(result_manual, result_col, pcc=0.98)
+
+
+# Tests for the contract that callers of MatmulDeviceOperation's static API
+# (compute_output_specs / create_output_tensors / the program-factory helpers) must populate
+# allowed_worker_cores on program_config variants that support the field. ttnn::prim::matmul()
+# normalizes its attributes before launch, but direct callers (e.g. ttnn.experimental.all_gather_matmul_async)
+# must invoke normalize_program_config themselves before reaching these entry points.
+#
+# Originally tracked the "bad optional access" crash from #44529. After the fix, the same code
+# path now produces a clear TT_FATAL when the contract is violated.
+def _make_matmul_inputs(device, grid_size, with_allowed_worker_cores, output_memory_layout, config_kind):
+    num_cores = grid_size[0] * grid_size[1]
+    if config_kind == "mcast_1d":
+        # 1D mcast: width-sharded output, single row of cores, N is split across all cores.
+        m, k, n = 32, 8192, 1024
+        in0_block_w = k // num_cores // 32
+        per_core_M = m // 32
+        per_core_N = n // num_cores // 32
+    else:
+        # 2D reuse: block-sharded output. compute_output_specs derives num_blocks_y from
+        # M/per_core_M and num_blocks_x from N/per_core_N, and the shard layout must fit
+        # the allowed_worker_cores grid in COL_MAJOR orientation
+        # (num_blocks_y <= grid.x, num_blocks_x <= grid.y).
+        m, k, n = 32 * grid_size[0], 8192, 32 * grid_size[1]
+        in0_block_w = k // num_cores // 32
+        per_core_M = m // 32 // grid_size[0]
+        per_core_N = n // 32 // grid_size[1]
+    out_subblock_h, out_subblock_w, _ = find_max_subblock(per_core_M, per_core_N)
+
+    in0 = torch.randn(1, 1, m, k).bfloat16().float()
+    in1 = torch.randn(1, 1, k, n).bfloat16().float()
+    in0_t = ttnn.from_torch(
+        in0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    in1_t = ttnn.from_torch(
+        in1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    allowed = (
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))])
+        if with_allowed_worker_cores
+        else None
+    )
+
+    if config_kind == "mcast_1d":
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+            allowed_worker_cores=allowed,
+        )
+    else:
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            allowed_worker_cores=allowed,
+        )
+
+    out_mem_config = ttnn.MemoryConfig(memory_layout=output_memory_layout, buffer_type=ttnn.BufferType.L1)
+    parameters = ttnn.MatmulParams()
+    parameters.program_config = program_config
+    parameters.output_mem_config = out_mem_config
+    parameters.output_dtype = ttnn.bfloat16
+    attributes = ttnn.create_matmul_attributes(in0_t, in1_t, parameters, [])
+
+    tensor_args = ttnn.MatmulInputs()
+    tensor_args.input_tensors = [in0_t, in1_t]
+    return attributes, tensor_args
+
+
+@pytest.mark.parametrize(
+    "config_kind, output_memory_layout, grid_size",
+    [
+        ("mcast_1d", ttnn.TensorMemoryLayout.WIDTH_SHARDED, (8, 1)),
+        ("reuse_2d", ttnn.TensorMemoryLayout.BLOCK_SHARDED, (4, 2)),
+    ],
+    ids=["mcast_1d_width_sharded", "reuse_2d_block_sharded"],
+)
+@pytest.mark.parametrize("with_allowed_worker_cores", [True, False], ids=["with_awc", "without_awc"])
+def test_matmul_compute_output_specs_with_allowed_worker_cores(
+    device, config_kind, output_memory_layout, grid_size, with_allowed_worker_cores
+):
+    # Today missing allowed_worker_cores triggers a warning and auto-populates from
+    # compute_with_storage_grid_size. This is temporary while CCL callers are migrated; it will
+    # become a hard error in a future release (see #44529).
+    attributes, tensor_args = _make_matmul_inputs(
+        device,
+        grid_size,
+        with_allowed_worker_cores=with_allowed_worker_cores,
+        output_memory_layout=output_memory_layout,
+        config_kind=config_kind,
+    )
+    output_specs = ttnn.MatmulDeviceOperation.compute_output_specs(attributes, tensor_args)
+    assert len(output_specs) >= 1

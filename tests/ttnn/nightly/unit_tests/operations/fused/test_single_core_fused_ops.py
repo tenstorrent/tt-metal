@@ -8,7 +8,7 @@ from loguru import logger
 
 import ttnn
 
-from models.common.utility_functions import pad_by_zero
+from models.common.utility_functions import torch2tt_tensor
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42
@@ -47,8 +47,8 @@ def test_layernorm(shape, device):
 
     xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
     xt = ttnn.fill_implicit_tile_padding(xt, TEST_PADDING_VALUE)
-    gammat = pad_by_zero(gamma, device)[0]
-    betat = pad_by_zero(beta, device)[0]
+    gammat = torch2tt_tensor(gamma, device)
+    betat = torch2tt_tensor(beta, device)
 
     xtt = ttnn.layer_norm(xt, epsilon=1e-5, weight=gammat, bias=betat)
 

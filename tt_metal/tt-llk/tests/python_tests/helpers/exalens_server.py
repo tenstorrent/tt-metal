@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import time
+from pathlib import Path
 from typing import Optional
 
 import pytest
@@ -35,6 +36,7 @@ class ExalensServer:
         self._started_before = False
 
     def start(self) -> None:
+        self._kill_stale_servers()
         self._emu_logs_baseline = set(glob.glob(self.EMU_LOG_PATTERN))
         if not os.path.isdir(self._simulator_path):
             logger.error(
@@ -276,3 +278,62 @@ class ExalensServer:
     @property
     def ever_started(self) -> bool:
         return self._started_before
+
+    def _kill_stale_servers(self) -> None:
+        """Kill any orphaned tt-exalens processes left over from previous runs on the same port.
+        These can be missed by a simple ps command because the tt-exalens process is in a new session.
+        In the normal case (no orphans) this is just a quick pgrep that returns empty.
+        """
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", "tt-exalens"],
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return
+
+        if result.returncode != 0 or not result.stdout.strip():
+            return
+
+        my_pid = os.getpid()
+        port_arg = f"--port={self._port}"
+        stale_pids = []
+        for line in result.stdout.strip().splitlines():
+            try:
+                pid = int(line.strip())
+            except ValueError:
+                continue
+            if pid == my_pid:
+                continue
+            try:
+                cmdline_args = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\x00")
+                if port_arg.encode() not in cmdline_args:
+                    continue
+            except OSError:
+                continue
+            stale_pids.append(pid)
+
+        if not stale_pids:
+            return
+
+        logger.warning(
+            "Found {} stale tt-exalens process(es) on port {}: {}. Killing...",
+            len(stale_pids),
+            self._port,
+            stale_pids,
+        )
+
+        for pid in stale_pids:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (OSError, ProcessLookupError):
+                pass
+
+        time.sleep(0.5)
+
+        for pid in stale_pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                pass

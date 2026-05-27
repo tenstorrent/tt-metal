@@ -16,11 +16,7 @@ inline void _calculate_sqrt_sfp_rows_()
 {
     TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0); // load from dest into lreg[0], uses ADDR_MOD_7 (set to all zeroes)
 
-    // SFPARECIP, approx version of sqrt
-    if constexpr (APPROXIMATION_MODE)
-    {
-        TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::SQRT_MODE); // Read value from lreg[0], approximate sqrt, load back into lreg[1]
-    }
+    TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::SQRT_MODE); // Read value from lreg[0], approximate sqrt, load back into lreg[1]
 
     // Store from lreg[1] into dest register
     TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0, 0);

@@ -59,7 +59,7 @@ inline void calculate_erf() {
         sfpi::vFloat ax = sfpi::setsgn(x, 0);
         sfpi::vFloat threshold = 10.0f;
         sfpi::vec_min_max(ax, threshold);
-        x = sfpi::setsgn(ax, x);
+        x = sfpi::copysgn(ax, x);
         sfpi::vFloat result = piecewise_rational_eval<
             ERF_NUM_DEGREE,
             ERF_DEN_DEGREE,

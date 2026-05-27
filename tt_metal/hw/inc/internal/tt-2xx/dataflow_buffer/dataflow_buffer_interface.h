@@ -24,7 +24,7 @@ extern thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS];
 #ifndef COMPILE_FOR_TRISC
 // TODO: make this a constant when we clean up number of txn ids
 extern volatile TxnDFBDescriptor g_txn_dfb_descriptor[32];
-extern RemapperAPI g_remapper_configurator;
+extern overlay::RemapperAPI g_remapper_configurator;
 #endif
 
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
