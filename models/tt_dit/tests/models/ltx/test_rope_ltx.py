@@ -123,3 +123,135 @@ def test_ltx_rope_interleaved(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axi
     # Compare
     assert_quality(output_ref, tt_output_torch, pcc=0.99)
     logger.info("PASSED: LTX interleaved RoPE matches PyTorch reference")
+
+
+# ============================================================================================
+# RoPE cos/sin format regression guards.
+#
+# Walks the LTX-2 cos/sin chain step by step and asserts each step has the format it's
+# *supposed* to have, per the documented contract:
+#
+#     Step 1. position created with .float()             → fp32
+#     Step 2. position enters precompute_freqs_cis       → fp32
+#     Step 3. frequency table built                      → fp32
+#     Step 4. angles = position × freq                   → fp32
+#     Step 5. cos/sin of angles                          → fp32
+#     Step 6. precompute_freqs_cis returns               → fp32
+#
+# Bug history: a `.bfloat16()` cast on positions in pipeline_ltx.py once produced grainy/
+# robotic audio in LTX-2 generation. These tests guard against the same bug class returning.
+# ============================================================================================
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True, ids=["2x4"])
+def test_rope_format_steps_1_to_6_pipeline(mesh_device: ttnn.MeshDevice):
+    """Steps 1-6 in the actual pipeline_ltx.py code path.
+
+    Stands up a minimal LTXPipeline (bypassing weight loading) and calls all three RoPE
+    prep methods (_prepare_rope, _prepare_audio_rope, _prepare_av_cross_pe). The four
+    cos/sin helpers (generate_freq_grid, generate_freqs, split_freqs_cis,
+    precompute_freqs_cis) are patched to assert fp32 at every step the pipeline triggers.
+
+    Catches the original bug class: a `.bfloat16()` cast in pipeline_ltx.py that silently
+    destroys positions' precision in the RoPE chain. Also catches anyone refactoring the
+    helpers to use lower precision internally.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from models.tt_dit.models.transformers.ltx import rope_ltx
+    from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
+
+    # Bypass __init__ to avoid loading model weights — we only need the attributes the three
+    # RoPE prep methods actually read.
+    pipe = LTXPipeline.__new__(LTXPipeline)
+    pipe.mesh_device = mesh_device
+    pipe.inner_dim = 4096
+    pipe.positional_embedding_theta = 10000.0
+    pipe.positional_embedding_max_pos = [20, 2048, 2048]
+    pipe.num_attention_heads = 32
+    pipe.parallel_config = SimpleNamespace(
+        sequence_parallel=SimpleNamespace(mesh_axis=0),
+        tensor_parallel=SimpleNamespace(mesh_axis=1),
+    )
+
+    counts = {"freq_grid": 0, "freqs": 0, "split_cis": 0, "precompute": 0}
+
+    orig_grid = rope_ltx.generate_freq_grid
+    orig_freqs = rope_ltx.generate_freqs
+    orig_split = rope_ltx.split_freqs_cis
+    orig_precompute = rope_ltx.precompute_freqs_cis
+
+    def checked_grid(*args, **kwargs):
+        # Step 3: frequency table built → fp32
+        result = orig_grid(*args, **kwargs)
+        counts["freq_grid"] += 1
+        assert (
+            result.dtype == torch.float32
+        ), f"[Step 3 FAIL] generate_freq_grid returned {result.dtype}, expected fp32."
+        return result
+
+    def checked_freqs(indices, indices_grid, *args, **kwargs):
+        # Step 4: angles = position × freq → fp32
+        assert (
+            indices.dtype == torch.float32
+        ), f"[Step 4 FAIL] generate_freqs got freq table as {indices.dtype}, expected fp32."
+        assert (
+            indices_grid.dtype == torch.float32
+        ), f"[Step 4 FAIL] generate_freqs got positions as {indices_grid.dtype}, expected fp32."
+        result = orig_freqs(indices, indices_grid, *args, **kwargs)
+        counts["freqs"] += 1
+        assert (
+            result.dtype == torch.float32
+        ), f"[Step 4 FAIL] generate_freqs returned angles as {result.dtype}, expected fp32."
+        return result
+
+    def checked_split(freqs, *args, **kwargs):
+        # Step 5: cos/sin of angles → fp32
+        assert (
+            freqs.dtype == torch.float32
+        ), f"[Step 5 FAIL] split_freqs_cis got angles as {freqs.dtype}, expected fp32."
+        cos, sin = orig_split(freqs, *args, **kwargs)
+        counts["split_cis"] += 1
+        assert cos.dtype == torch.float32, f"[Step 5 FAIL] split_freqs_cis cos is {cos.dtype}, expected fp32."
+        assert sin.dtype == torch.float32, f"[Step 5 FAIL] split_freqs_cis sin is {sin.dtype}, expected fp32."
+        return cos, sin
+
+    def checked_precompute(indices_grid, *args, **kwargs):
+        # Steps 1+2: pipeline created positions with .float() and passed them in as fp32
+        assert indices_grid.dtype == torch.float32, (
+            f"[Step 1-2 FAIL] Pipeline passed {indices_grid.dtype} positions to "
+            f"precompute_freqs_cis. Check for a .bfloat16() call on positions in pipeline_ltx.py."
+        )
+        cos, sin = orig_precompute(indices_grid, *args, **kwargs)
+        counts["precompute"] += 1
+        # Step 6: precompute_freqs_cis returns → fp32
+        assert cos.dtype == torch.float32, (
+            f"[Step 6 FAIL] precompute_freqs_cis returned cos as {cos.dtype}, expected fp32. "
+            f"Check the out_dtype argument at the call site."
+        )
+        assert (
+            sin.dtype == torch.float32
+        ), f"[Step 6 FAIL] precompute_freqs_cis returned sin as {sin.dtype}, expected fp32."
+        return cos, sin
+
+    with patch.object(rope_ltx, "generate_freq_grid", checked_grid), patch.object(
+        rope_ltx, "generate_freqs", checked_freqs
+    ), patch.object(rope_ltx, "split_freqs_cis", checked_split), patch.object(
+        rope_ltx, "precompute_freqs_cis", checked_precompute
+    ):
+        pipe._prepare_rope(5, 16, 28)
+        pipe._prepare_audio_rope(64, 32)
+        pipe._prepare_av_cross_pe(5, 16, 28, 64, 32)
+
+    # Sanity: confirm the patches actually fired so we know we exercised the pipeline RoPE paths
+    assert counts["precompute"] >= 4, (
+        f"Expected ≥4 calls to precompute_freqs_cis (1 video self + 1 audio self + 2 cross), "
+        f"got {counts['precompute']}. Test may not be exercising all RoPE paths in the pipeline."
+    )
+
+    logger.info(
+        f"PASS: steps 1-6 are fp32 throughout the actual pipeline "
+        f"({counts['precompute']} precompute, {counts['freqs']} freqs, "
+        f"{counts['split_cis']} split_cis, {counts['freq_grid']} freq_grid calls)"
+    )
