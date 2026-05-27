@@ -159,8 +159,7 @@ template <
     bool FAST_MODE      = false,
     bool STABLE_SORT    = false,
     bool CLAMP_NEGATIVE = false>
-void call_unary_sfpu_operation(
-    std::uint32_t dst_index, std::uint32_t math_format = 0, float fill_const_value = 5.0f, int vector_mode = static_cast<int>(VectorMode::None))
+void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_format = 0, float fill_const_value = 5.0f, VectorMode vector_mode = VectorMode::None)
 {
     if constexpr (OPERATION == SfpuType::abs)
     {
@@ -229,7 +228,7 @@ void call_unary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _calculate_exponential_,
-            (APPROX_MODE, false /* scale_en */, ITERATIONS, CLAMP_NEGATIVE),
+            (APPROX_MODE, false /* scale_en */, ITERATIONS, CLAMP_NEGATIVE, DST_ACCUM_MODE),
             dst_index,
             vector_mode,
             p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
@@ -473,7 +472,7 @@ void call_binary_sfpu_operation(
     const std::uint32_t dst_index_in0 = 0,
     const std::uint32_t dst_index_in1 = 1,
     const std::uint32_t dst_index_out = 0,
-    int vector_mode                   = static_cast<int>(VectorMode::RC))
+    ckernel::VectorMode vector_mode   = ckernel::VectorMode::RC)
 {
     // NOTE: The functions invoked via SFPU_BINARY_CALL below run inside
     // _llk_math_eltwise_binary_sfpu_params_, which already loops over 4 faces
@@ -553,7 +552,7 @@ void call_binary_sfpu_operation(
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
-            static_cast<int>(VectorMode::RC_custom));
+            ckernel::VectorMode::RC_custom);
     }
     else
     {

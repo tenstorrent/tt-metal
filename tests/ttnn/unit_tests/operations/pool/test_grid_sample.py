@@ -11,6 +11,8 @@ import ttnn
 from ttnn.operations.pool import golden_grid_sample
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize(
     "input_shape, grid_shape",

@@ -9,6 +9,7 @@
 #include <vector>
 #include <cctype>
 #include <cstdio>
+#include <enchantum/enchantum.hpp>
 #include <fmt/core.h>
 #include <fmt/ranges.h>
 
@@ -23,6 +24,7 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "llrt/hal.hpp"
+#include "internal/tt-2xx/quasar/error_handling.h"
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 
 namespace tt::tt_metal {
@@ -137,11 +139,20 @@ inline std::string get_debug_assert_message(
         case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
         case dev_msgs::DebugAssertHwFault:
-            return fmt::format(
-                "hardware fault occurred at PC 0x{:x}. Cause: 0x{:x}, faulting address or instruction: 0x{:08x}",
-                line_num,
-                hw_fault_info & 0xffffffff,
-                (hw_fault_info >> 32) & 0xffffffff);
+            if ((hw_fault_info & 0xffffffff) <= 7) {
+                return fmt::format(
+                    "hardware fault occurred at PC 0x{:x}. Cause: {}, faulting address or instruction: 0x{:08x}",
+                    line_num,
+                    enchantum::to_string(static_cast<DmErrors>(hw_fault_info & 0xffffffff)),
+                    (hw_fault_info >> 32) & 0xffffffff);
+            } else {
+                return fmt::format(
+                    "hardware fault occurred with cause: {}, additional code: 0x{:08x}, faulting address or "
+                    "instruction: 0x{:08x}",
+                    enchantum::to_string(static_cast<TriscErrors>((hw_fault_info >> 8) & 0x3f)),
+                    hw_fault_info & 0xff,
+                    (hw_fault_info >> 32) & 0xffffffff);
+            }
         default: return "";
     }
 }

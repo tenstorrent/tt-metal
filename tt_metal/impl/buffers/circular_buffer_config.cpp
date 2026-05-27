@@ -48,8 +48,16 @@ CircularBufferConfig::CircularBufferConfig(
 }
 
 CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : total_size_(descriptor.total_size) {
-    if (descriptor.buffer) {
-        this->set_globally_allocated_address(*descriptor.buffer);
+    TT_FATAL(
+        !(descriptor.buffer && descriptor.tensor),
+        "CBDescriptor cannot specify both buffer and tensor as the globally-allocated backing storage");
+
+    const Buffer* backing_buffer = descriptor.buffer;
+    if (!backing_buffer && descriptor.tensor) {
+        backing_buffer = descriptor.tensor->mesh_buffer().get_reference_buffer();
+    }
+    if (backing_buffer) {
+        this->set_globally_allocated_address(*backing_buffer);
         if (descriptor.address_offset != 0) {
             uint32_t l1_alignment = hal::get_l1_alignment();
             TT_FATAL(
