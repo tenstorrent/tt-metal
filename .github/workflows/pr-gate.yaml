@@ -381,10 +381,6 @@ jobs:
         # NOTE: only resolves when ALL are fixed
         auto_resolve_conversations: true
 
-  # Full clang-tidy scan using the same checks enforced at (former) merge gate.
-  # Shim-based incremental analysis via Ninja dep graph — header changes propagate
-  # correctly. This is the blocking gate; violations here are exactly what would
-  # previously have caused a merge queue eviction.
   code-analysis:
     needs: [build-docker-images]
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft
