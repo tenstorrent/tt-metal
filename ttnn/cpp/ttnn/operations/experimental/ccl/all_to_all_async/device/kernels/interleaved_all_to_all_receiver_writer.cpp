@@ -55,7 +55,7 @@ void kernel_main() {
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     uint32_t col_tile = out_col_id + j;
                     uint32_t tile_id = out_row_id * out_col_tiles + col_tile;
-                    noc_async_write_tile(tile_id, output_tensor_addrgen, l1_read_addr);
+                    noc_async_write_page(tile_id, output_tensor_addrgen, l1_read_addr);
 
                     l1_read_addr += payload_size_bytes;
                 }
@@ -79,7 +79,7 @@ void kernel_main() {
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     uint32_t col_tile = out_col_id + j;
                     uint32_t tile_id = out_row_id * out_col_tiles + col_tile;
-                    noc_async_write_tile(tile_id, output_tensor_addrgen, l1_read_addr);
+                    noc_async_write_page(tile_id, output_tensor_addrgen, l1_read_addr);
                     l1_read_addr += page_size;
                 }
                 noc_async_writes_flushed();

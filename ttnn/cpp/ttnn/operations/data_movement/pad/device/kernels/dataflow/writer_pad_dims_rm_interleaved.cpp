@@ -37,7 +37,7 @@ void kernel_main() {
                 // DPRINT("WR: w={} z={} y={}\n", w, z, y);
                 cb.wait_front(1);
                 uint32_t l1_addr = cb.get_read_ptr();
-                uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s1, dst_stick_offset);
+                uint64_t dst_noc_addr = s1.get_noc_addr(dst_stick_id, dst_stick_offset);
                 noc_async_write(l1_addr, dst_noc_addr, padded_X_nbytes);
                 noc_async_write_barrier();
                 ++dst_stick_id;
