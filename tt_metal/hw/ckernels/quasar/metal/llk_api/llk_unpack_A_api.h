@@ -13,27 +13,12 @@
 
 /**
  *
- * @brief Initialize selected unpacker to unpack a single tile
- *
- * @tparam TRANSPOSE_EN: Enables transpose of a tile, supported for SrcA and SrcB
- * @tparam IS_32b_DEST_EN: Enable using Math destination Register in 32-bit mode
- * @param operand: The input operand circular buffer
- *
- * This function initializes unpacker0 to unpack a single tile
- * from the input circular buffer to srcA/dest register.
- */
-template <bool TRANSPOSE_EN, bool IS_32b_DEST_EN>
-inline void llk_unpack_A_init(const std::uint32_t operand) {
-    const std::uint32_t operand_id = get_operand_id(operand);
-
-    _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32b_DEST_EN>(operand_id);
-}
-
-/**
- *
  * @brief Initialize unpacker0 with dest reuse support
  *
- * Overload matching Blackhole/Wormhole API signature to support binary dest reuse operations.
+ * @tparam IS_32b_DEST_EN: Enable using Math destination Register in 32-bit mode
+ * @tparam BType, acc_to_dest, binary_reuse_dest, unpack_to_dest used to overload
+ * matching Blackhole/Wormhole API signature to support binary dest reuse operations.
+ * @param operand: The input operand circular buffer
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
@@ -54,39 +39,26 @@ inline void llk_unpack_A_init(
     // transpose_of_faces and within_face_16x16_transpose values
 
     // For Quasar, the unp_sel field is ignored if binary_reuse_dest != EltwiseBinaryReuseDestType::NONE
-    _llk_unpack_unary_operand_init_<
-        p_unpacr::UNP_A,
-        false /* TRANSPOSE_EN */,
-        false /* IS_32b_DEST_EN */,
-        binary_reuse_dest>(operand_id);
-}
-
-/**
- *
- * @brief Unpacks a single operand, unpacker0 is used
- *
- * @param operand: The logical dataflow buffer id
- * @param tile_index: The index in the input CB to read from
- *
- * This function unpacks a single operand from the input circular buffer to srcA/dest register.
- */
-inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
-    const std::uint32_t operand_id = get_operand_id(operand);
-    // Number of tiles the read pointer has advanced from DFB base
-    const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
-    const std::uint32_t l1_tile_index =
-        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx + tile_index;
-
-    WAYPOINT("UPAW");
-    _llk_unpack_unary_operand_<p_unpacr::UNP_A>(l1_tile_index);
-    WAYPOINT("UPAD");
+    if (transpose_of_faces && within_face_16x16_transpose) { /* TRANSPOSE_EN */
+        _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true /* TRANSPOSE_EN */, DST_ACCUM_MODE, binary_reuse_dest>(
+            operand_id);
+    } else {
+        LLK_ASSERT(
+            transpose_of_faces == within_face_16x16_transpose,
+            "Quasar unpack unary operand only supports full or no transpose.");
+        _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false /* TRANSPOSE_EN */, DST_ACCUM_MODE, binary_reuse_dest>(
+            operand_id);
+    }
 }
 
 /**
  *
  * @brief Unpacks a single operand with dest reuse support
  *
- * Overload matching Blackhole/Wormhole API signature to support binary dest reuse operations.
+ * @tparam BType, acc_to_dest, binary_reuse_dest, unpack_to_dest used to overload
+ * matching Blackhole/Wormhole API signature to support binary dest reuse operations.
+ * @param operand: The logical dataflow buffer id
+ * @param tile_index: The index in the input CB to read from
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
@@ -95,8 +67,9 @@ template <
     bool unpack_to_dest = false>
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
     const std::uint32_t operand_id = get_operand_id(operand);
+    const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
     const std::uint32_t l1_tile_index =
-        g_dfb_interface[operand_id].tc_slots[g_dfb_interface[operand_id].tc_idx].rd_entry_idx + tile_index;
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx + tile_index;
 
     static_assert(unpack_to_dest == false, "unpack_to_dest is not yet supported on Quasar");
     static_assert(acc_to_dest == false, "acc_to_dest is not yet supported on Quasar");
