@@ -129,7 +129,9 @@
       "test_attention_prefill[blackhole-seq1024-global-1x8]": 0.97,
       "test_attention_prefill[blackhole-seq4096-global-1x8]": 0.97,
       "test_full_model[wormhole_b0-1x8]": 0.98,
-      "test_full_model[blackhole-1x8]": 0.97
+      "test_full_model[blackhole-1x8]": 0.97,
+      "test_lm_head[1x8]": 0.999,
+      "test_lm_head_decode_batch32[1x8]": 0.999
     }
   }
 }
