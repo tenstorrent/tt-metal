@@ -1,0 +1,460 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Shared helpers for the pplx-embed-v1-0.6B perf entry points.
+
+pplx-embed-v1-0.6B is a bidirectional Qwen3-0.6B derivative from Perplexity AI
+with identical core dimensions (1024 hidden, 28 layers, 16/8 heads) but two
+key differences from Qwen3-Embedding-0.6B:
+
+  1. **Bidirectional attention** (is_causal=False) — handled by
+     PplxBidirectionalAttention in tt/attention.py.
+  2. **Mean-token pooling** — instead of last-token extraction, all non-padding
+     token hidden states are averaged.
+
+The same Qwen3-style precision knobs apply (identical architecture).
+"""
+
+import math
+import os
+import time
+
+import torch
+from loguru import logger
+
+import ttnn
+from models.demos.blackhole.pplx_embed_0_6b.tt.attention import PplxBidirectionalAttention
+from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len
+from models.tt_transformers.tt.generator import Generator
+from models.tt_transformers.tt.model import Transformer
+from models.tt_transformers.tt.model_config import (
+    DecodersPrecision,
+    MathFidelitySetting,
+    ModelArgs,
+    OpGroup,
+    PrecisionSetting,
+    TensorGroup,
+    determine_device_name,
+)
+
+try:
+    from tracy import signpost as _tracy_signpost
+except ModuleNotFoundError:
+
+    def _tracy_signpost(*_args, **_kwargs):
+        pass
+
+
+MODEL_NAME = "perplexity-ai/pplx-embed-v1-0.6b"
+BLOCK_SIZE = 32
+
+
+# ---------------------------------------------------------------------------
+# ModelArgs subclass for pplx-embed (trust_remote_code + AutoModel)
+# ---------------------------------------------------------------------------
+
+
+class PplxModelArgs(ModelArgs):
+    """ModelArgs variant that enables ``trust_remote_code`` for the custom
+    ``bidirectional_pplx_qwen3`` HuggingFace model type and loads weights
+    directly from safetensors to avoid the custom modeling.py requiring
+    a newer transformers version.
+    """
+
+    def _set_hf_params(self, checkpoint_dir):
+        self.trust_remote_code_hf = True
+        return super()._set_hf_params(checkpoint_dir)
+
+    def get_max_prefill_chunk_size(self):
+        """Same as Qwen3-Embedding-0.6B (identical architecture)."""
+        chunk_sizes = {
+            "N150": 4,
+            "N300": 64,
+            "T3K": 128,
+            "TG": 128,
+            "P150": 128,
+            "P300": 128,
+            "P150x4": 128,
+            "P150x8": 128,
+        }
+        div1024 = chunk_sizes.get(self.device_name, 4)
+        return div1024 * 1024
+
+    def get_trace_prefill_supported_seq_lens(self):
+        """Same ISL sweep range as Qwen3-Embedding-0.6B."""
+        return [128, 256, 512, 1024, 2048, 4096, 8192]
+
+    def load_state_dict(self):
+        """Load weights from safetensors, bypassing AutoModel/AutoModelForCausalLM.
+
+        pplx-embed's custom HF modeling.py imports ``TransformersKwargs``
+        which may not exist in the installed transformers.  Since the model
+        weights are standard Qwen3 format, we load them directly from the
+        safetensors file and add the ``model.`` prefix that the downstream
+        ``standardize_hf_keys`` / ``convert_hf_to_meta`` pipeline expects.
+        """
+        if self.dummy_weights:
+            return super().load_state_dict()
+
+        from huggingface_hub import hf_hub_download
+        from safetensors.torch import load_file
+
+        logger.info(f"Loading pplx-embed weights from {self.CKPT_DIR} via safetensors...")
+        safetensor_path = hf_hub_download(
+            self.CKPT_DIR,
+            "model.safetensors",
+            local_files_only=os.getenv("CI") == "true",
+        )
+        raw_sd = load_file(safetensor_path)
+
+        # Add ``model.`` prefix so the state dict matches what
+        # ``AutoModelForCausalLM.from_pretrained().state_dict()`` would
+        # produce. Also create ``lm_head.weight`` from tied embeddings.
+        state_dict = {f"model.{k}": v for k, v in raw_sd.items()}
+        if "model.embed_tokens.weight" in state_dict:
+            state_dict["lm_head.weight"] = state_dict["model.embed_tokens.weight"]
+
+        from models.tt_transformers.tt.load_checkpoints import (
+            convert_hf_to_meta,
+            convert_hf_to_meta_no_qkv_permute,
+            standardize_hf_keys,
+        )
+
+        self.fuse_qkv = any("qkv" in k for k in state_dict)
+        self.fuse_mlp = any("gate_up" in k for k in state_dict)
+        state_dict = standardize_hf_keys(state_dict)
+        if self.use_hf_rope:
+            state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+        else:
+            state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+
+        keys_dict = list(state_dict.keys())[:]
+        remv = [f"layers.{i}." for i in range(self.n_layers, self.full_model_n_layers)]
+        for k in keys_dict:
+            if any(r in k for r in remv):
+                state_dict.pop(k)
+
+        return state_dict
+
+
+# ---------------------------------------------------------------------------
+# Environment / optimizations
+# ---------------------------------------------------------------------------
+
+
+def apply_recommended_env(batched_l1: bool) -> None:
+    """Set the recommended optimization env vars (same Qwen3 architecture).
+
+    Aggressive precision: for embedding workloads accuracy is measured by
+    cosine similarity — even BFP4 + LOFI everywhere maintains >0.99 cos-sim
+    on Qwen3-0.6B derivatives, so we push every knob.
+    """
+    os.environ.setdefault("HF_MODEL", MODEL_NAME)
+    # Weight precision — all BFP4
+    os.environ.setdefault("QWEN_QKV_BFP4", "1")
+    os.environ.setdefault("QWEN_WO_BFP4", "1")
+    os.environ.setdefault("QWEN_FF2_BFP4", "1")
+    # Activation precision
+    os.environ.setdefault("QWEN_FF13_OUT_BFP8", "1")
+    os.environ.setdefault("QWEN_FFNORM_IN_BFP8", "1")
+    os.environ.setdefault("QWEN_RESIDUAL_BFP8", "1")
+    # Architecture-level TM optimizations
+    os.environ.setdefault("QWEN_NLP_CREATE_HEADS_HEAD_SPLIT", "1")
+    os.environ.setdefault("QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT", "1")
+    os.environ.setdefault("QWEN_ROPE_PREFILL_L1", "1")
+    os.environ.setdefault("QWEN_LN_BLOCK_SHARDED", "1")
+    # Embedding-specific: skip KV cache fill (no decode)
+    os.environ.setdefault("TT_SKIP_KV_CACHE_FILL", "1")
+    # SDPA bigger chunks for bs=1 — more work per SDPA launch
+    os.environ.setdefault("QWEN_SDPA_BIG_CHUNK_BS1", "1")
+    if batched_l1:
+        os.environ.setdefault("TT_BATCHED_L1_PREFILL", "1")
+
+
+def pplx_optimizations(model_args):
+    """Aggressive performance precision for pplx-embed embedding workloads.
+
+    All weights BFP4, all matmuls LOFI, SDPA LOFI (safe for embedding
+    models — cosine similarity is robust to low-precision attention).
+    """
+    base = DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
+
+    promote_ff2 = os.getenv("QWEN_FF2_BFP4", "0") == "1"
+    promote_qkv = os.getenv("QWEN_QKV_BFP4", "0") == "1"
+    promote_wo = os.getenv("QWEN_WO_BFP4", "0") == "1"
+
+    seen = set()
+    for decoder_id in range(model_args.n_layers):
+        opt = base.decoder_optimizations[decoder_id]
+        if id(opt) in seen:
+            continue
+        seen.add(id(opt))
+        tp = opt._opt_settings["TensorPrecision"]
+        of = opt._opt_settings["OpFidelity"]
+        if promote_ff2:
+            tp[TensorGroup.FF2] = PrecisionSetting.BFP4
+            of[OpGroup.LI_FF2] = MathFidelitySetting.LOFI
+        if promote_qkv:
+            tp[TensorGroup.WQKV] = PrecisionSetting.BFP4
+            of[OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.LOFI
+            of[OpGroup.LI_QKV_DECODE] = MathFidelitySetting.LOFI
+        if promote_wo:
+            tp[TensorGroup.WO] = PrecisionSetting.BFP4
+            of[OpGroup.LI_O_PREFILL] = MathFidelitySetting.LOFI
+            of[OpGroup.LI_O_DECODE] = MathFidelitySetting.LOFI
+        # SDPA LOFI — safe for embedding (cosine similarity insensitive)
+        of[OpGroup.SDPA_PREFILL] = MathFidelitySetting.LOFI
+        of[OpGroup.SDPA_DECODE] = MathFidelitySetting.LOFI
+        # MLP LOFI across the board (FF1/FF3 already LOFI from performance base)
+        of[OpGroup.LI_FF1_FF3] = MathFidelitySetting.LOFI
+    base._update_full_name()
+    return base
+
+
+# ---------------------------------------------------------------------------
+# Model build / inputs
+# ---------------------------------------------------------------------------
+
+
+def _page_params_for(batch_size: int, seq_len: int) -> dict:
+    if batch_size == 1:
+        return {"page_block_size": BLOCK_SIZE, "page_max_num_blocks": 512}
+    if batch_size == 8:
+        return {"page_block_size": BLOCK_SIZE, "page_max_num_blocks": 1024}
+    page_max = max(512, math.ceil(seq_len / BLOCK_SIZE) * batch_size * 2)
+    return {"page_block_size": BLOCK_SIZE, "page_max_num_blocks": page_max}
+
+
+def build_single_device_model(mesh_device, batch_size: int, seq_len: int):
+    """Build one pplx-embed model instance + Generator + page table."""
+    page_params = _page_params_for(batch_size, seq_len)
+    paged_attention_config = PagedAttentionConfig(
+        block_size=page_params["page_block_size"],
+        max_num_blocks=page_params["page_max_num_blocks"],
+    )
+
+    padded_seq_len = get_padded_prefill_len(seq_len)
+
+    model_args = PplxModelArgs(
+        mesh_device,
+        instruct=False,
+        max_batch_size=batch_size,
+        optimizations=pplx_optimizations,
+        max_seq_len=padded_seq_len,
+        prefetcher=None,
+    )
+
+    state_dict = model_args.load_state_dict()
+
+    model = Transformer(
+        args=model_args,
+        mesh_device=mesh_device,
+        dtype=ttnn.bfloat8_b,
+        state_dict=state_dict,
+        weight_cache_path=model_args.weight_cache_path(ttnn.bfloat8_b),
+        paged_attention_config=paged_attention_config,
+        attention_class=PplxBidirectionalAttention,
+    )
+
+    kv_caches = [[layer.attention.layer_past for layer in model.layers]]
+    generator = Generator(
+        [model],
+        [model_args],
+        mesh_device,
+        tokenizer=model_args.tokenizer,
+    )
+
+    permutation = torch.randperm(paged_attention_config.max_num_blocks)
+    reverse_permutation = torch.argsort(permutation)
+    page_table = reverse_permutation.reshape(batch_size, paged_attention_config.max_num_blocks // batch_size)
+
+    return generator, model_args, kv_caches, page_table
+
+
+def generate_synthetic_inputs(tokenizer, batch_size: int, seq_len: int):
+    """Random tokens of exactly ``seq_len``."""
+    vocab_size = tokenizer.vocab_size
+    high = min(vocab_size, 50000)
+    input_ids = torch.randint(100, high, (batch_size, seq_len), dtype=torch.long)
+    prompt_lens = [seq_len] * batch_size
+    return input_ids, prompt_lens
+
+
+# ---------------------------------------------------------------------------
+# Top-level runner
+# ---------------------------------------------------------------------------
+
+
+def run_perf(
+    mesh_device,
+    batch_size: int,
+    seq_len: int,
+    num_iterations: int,
+    *,
+    emit_signposts: bool,
+    is_ci_env: bool = False,
+):
+    """Build, compile, and benchmark pplx-embed-v1-0.6B."""
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+    tt_device_name = determine_device_name(mesh_device)
+
+    logger.info(f"Building pplx-embed-v1-0.6B: bs={batch_size}, seq_len={seq_len}, device={tt_device_name}")
+
+    profiler.start("build_model")
+    generator, model_args, kv_caches, page_table = build_single_device_model(
+        mesh_device, batch_size=batch_size, seq_len=seq_len
+    )
+    profiler.end("build_model")
+    logger.info(f"Built in {profiler.get_duration('build_model'):.1f}s")
+
+    input_ids, prompt_lens = generate_synthetic_inputs(model_args.tokenizer, batch_size, seq_len)
+    total_input_tokens = sum(prompt_lens)
+
+    logger.info("Compiling (first prefill captures hardware trace + runs warmup)...")
+    profiler.start("compile_prefill")
+    _ = generator.prefill_forward_text(
+        input_ids,
+        page_table=page_table,
+        kv_cache=kv_caches,
+        prompt_lens=prompt_lens,
+        enable_trace=True,
+        return_hidden_states=True,
+        warmup_prefill=True,
+    )
+    profiler.end("compile_prefill")
+    logger.info(f"Compile prefill: {profiler.get_duration('compile_prefill'):.2f}s")
+
+    # Locate the captured trace for direct replay — bypasses the Generator's
+    # per-iteration Python overhead (page table reset, prefill_forward_text
+    # loop, process_hidden_states_after_prefill_trace, D2H copy). This gives
+    # us pure device-execution + sync latency.
+    trace_key = f"{seq_len}_0_{batch_size}"
+    trace_id = generator.trace_id_prefill.get(trace_key)
+    use_direct_trace = trace_id is not None
+
+    if use_direct_trace:
+        logger.info(f"Running {num_iterations} iterations via direct trace replay (key={trace_key})...")
+    else:
+        logger.info(f"Running {num_iterations} iterations via generator (no direct trace)...")
+
+    iteration_times = []
+    last_iter_idx = num_iterations - 1
+    for i in range(num_iterations):
+        sig = emit_signposts and i == last_iter_idx
+
+        profiler.start(f"inference_prefill_{i}")
+        if sig:
+            _tracy_signpost("start")
+        try:
+            if use_direct_trace:
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+            else:
+                generator.prev_page_table = None
+                generator.prefill_forward_text(
+                    input_ids,
+                    page_table=page_table,
+                    kv_cache=kv_caches,
+                    prompt_lens=prompt_lens,
+                    enable_trace=True,
+                    return_hidden_states=True,
+                    warmup_prefill=False,
+                )
+                ttnn.synchronize_device(mesh_device)
+        finally:
+            if sig:
+                _tracy_signpost("stop")
+        profiler.end(f"inference_prefill_{i}")
+
+        t = profiler.get_duration(f"inference_prefill_{i}")
+        iteration_times.append(t)
+        logger.info(f"  Iteration {i}: {t * 1000:.1f}ms")
+
+    avg_t = sum(iteration_times) / len(iteration_times)
+    best_t = min(iteration_times)
+    measurements = {
+        "compile_prefill": profiler.get_duration("compile_prefill"),
+        "avg_prefill_time": avg_t,
+        "best_prefill_time": best_t,
+        "embeddings/s_avg": batch_size / avg_t,
+        "embeddings/s_best": batch_size / best_t,
+        "prefill_t/s_avg": total_input_tokens / avg_t,
+        "prefill_t/s_best": total_input_tokens / best_t,
+        "build_model_time": profiler.get_duration("build_model"),
+        "batch_size": batch_size,
+        "input_seq_len": seq_len,
+        "total_input_tokens": total_input_tokens,
+    }
+
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info(f"  pplx-embed-v1-0.6B Performance  ({tt_device_name})")
+    logger.info("=" * 60)
+    logger.info(f"  Batch size:           {batch_size}")
+    logger.info(f"  Input seq length:     {seq_len}")
+    logger.info(f"  Total input tokens:   {total_input_tokens}")
+    logger.info(f"  Iterations:           {num_iterations}")
+    logger.info("-" * 60)
+    logger.info(f"  Model build time:     {measurements['build_model_time']:.1f}s")
+    logger.info(f"  Compile (1st run):    {measurements['compile_prefill']:.2f}s")
+    logger.info("-" * 60)
+    logger.info(f"  Avg prefill time:     {avg_t * 1000:.1f}ms")
+    logger.info(f"  Best prefill time:    {best_t * 1000:.1f}ms")
+    logger.info(f"  Avg embeddings/s:     {measurements['embeddings/s_avg']:.1f}")
+    logger.info(f"  Best embeddings/s:    {measurements['embeddings/s_best']:.1f}")
+    logger.info(f"  Avg tokens/s:         {measurements['prefill_t/s_avg']:.0f}")
+    logger.info(f"  Best tokens/s:        {measurements['prefill_t/s_best']:.0f}")
+    logger.info("=" * 60)
+
+    profiler.end("run")
+
+    if is_ci_env:
+        benchmark_data = create_benchmark_data(profiler, measurements, {}, {})
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type=f"{tt_device_name}-demo",
+            ml_model_name="pplx-embed-v1-0.6B",
+            ml_model_type="embedding",
+            num_layers=model_args.n_layers,
+            batch_size=batch_size,
+            config_params={"data_parallel": 1, "tensor_parallel": 1},
+            input_sequence_length=seq_len,
+            output_sequence_length=0,
+        )
+
+    return measurements
+
+
+# ---------------------------------------------------------------------------
+# Standalone (no-pytest) entry point
+# ---------------------------------------------------------------------------
+
+
+def standalone_main(batch_size: int, seq_len: int, iterations: int, device_id: int = 0) -> None:
+    """`python <entry_file>` path — opens its own device, no pytest fixture."""
+    apply_recommended_env(batched_l1=batch_size > 1)
+
+    logger.info(f"Opening device {device_id}...")
+    device = ttnn.open_device(
+        device_id=device_id,
+        l1_small_size=32768,
+        trace_region_size=200_000_000,
+        num_command_queues=1,
+    )
+    try:
+        t0 = time.perf_counter()
+        run_perf(
+            device,
+            batch_size=batch_size,
+            seq_len=seq_len,
+            num_iterations=iterations,
+            emit_signposts=False,
+        )
+        logger.info(f"Total wall time: {time.perf_counter() - t0:.1f}s")
+    finally:
+        ttnn.close_device(device)
