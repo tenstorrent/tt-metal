@@ -682,6 +682,65 @@ def build_ln_sharded_config(
     return cached
 
 
+def all_reduce_sum_replicate(
+    x: ttnn.Tensor,
+    mesh_device: ttnn.Device,
+    *,
+    cluster_axis: int = 1,
+    memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    """Sum-reduce TP partial results across devices on ``cluster_axis``; result replicated.
+
+    For TP=1 (single device) returns ``x`` unchanged.  For TP>1, ``all_gather``
+    concatenates partial sums along the last tensor dimension, then the tp chunks
+    are summed to produce the full all-reduce result.
+
+    Each device starts with ``[..., H]`` (a partial sum for the full output
+    dimension), and after the all_reduce every device holds the full ``[..., H]``.
+    """
+    num_devices = 1
+    if hasattr(mesh_device, "get_num_devices"):
+        try:
+            num_devices = int(mesh_device.get_num_devices())
+        except Exception:
+            num_devices = 1
+    if num_devices <= 1:
+        return x
+
+    # all_gather concatenates along last dim: [B, S, H] → [B, S, tp*H]
+    H = int(x.shape[-1])
+    rank = len(x.shape)
+    gathered = ttnn.all_gather(
+        x,
+        dim=rank - 1,
+        num_links=1,
+        cluster_axis=cluster_axis,
+        mesh_device=mesh_device,
+        memory_config=memory_config,
+    )
+
+    # Sum tp slices: each slice [B, S, H] contributes to the full output.
+    tp = num_devices
+    acc: Optional[ttnn.Tensor] = None
+    for i in range(tp):
+        begins = [0] * rank
+        ends = list(gathered.shape)
+        begins[-1] = i * H
+        ends[-1] = (i + 1) * H
+        strides = [1] * rank
+        chunk = ttnn.slice(gathered, begins, ends, strides, memory_config=memory_config)
+        if acc is None:
+            acc = chunk
+        else:
+            new_acc = ttnn.add(acc, chunk, memory_config=memory_config)
+            ttnn.deallocate(acc)
+            ttnn.deallocate(chunk)
+            acc = new_acc
+
+    ttnn.deallocate(gathered)
+    return acc  # type: ignore[return-value]
+
+
 def sdpa_program_config(
     device: ttnn.Device,
     seq_q: int,
