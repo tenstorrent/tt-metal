@@ -24,6 +24,8 @@ Production defaults (PCC + perf + E2E — no env toggle):
   (embedding tables / norm scales / conv kernels stay BF16 unless noted)
 - **L1 interleaved** activations via :func:`ace_step_linear_l1_memory_config` /
   :func:`ace_step_ensure_l1_activation` / :func:`ace_step_ensure_cond_activation`
+- Long clips: ``ACE_STEP_DIT_MAX_FUSED_M`` (default 16) caps 1D-mcast ``per_core_M``;
+  ``ACE_STEP_DIT_FORCE_L1_MATMUL=1`` keeps L1 in0/out (A/B; validate PCC on submodule first)
 
 Remaining **DRAM ``in0``** buckets in Tracy (``perf_dit_4`` / conditioning) may still appear for:
 
@@ -117,8 +119,25 @@ def ace_step_dit_lofi_bfloat8_enabled() -> bool:
     return ace_step_lofi_bfloat8_enabled()
 
 
+def ace_step_use_manual_concat_heads() -> bool:
+    """Use permute+reshape instead of fused ``nlp_concat_heads`` (A/B only — fused is faster on DiT traces)."""
+    return os.environ.get("ACE_STEP_MANUAL_CONCAT_HEADS", "").lower() in ("1", "true", "yes")
+
+
+def ace_step_use_nlp_create_qkv_heads() -> bool:
+    """Opt-in ``nlp_create_qkv_heads`` (default off — manual reshape+permute is faster on DiT traces)."""
+    return os.environ.get("ACE_STEP_USE_NLP_CREATE_QKV_HEADS", "").lower() in ("1", "true", "yes")
+
+
+def ace_step_use_bfloat4_weights() -> bool:
+    """Opt-in ``bfloat4_b`` linear weights (validate PCC on submodule before full DiT)."""
+    return os.environ.get("ACE_STEP_DIT_BFLOAT4_WEIGHTS", "").lower() in ("1", "true", "yes")
+
+
 def ace_step_linear_weight_dtype(ttnn: Any, default_dtype: Any) -> Any:
     """Weight storage dtype for **linear** projections (activations stay ``default_dtype``, usually BF16)."""
+    if ace_step_use_bfloat4_weights():
+        return getattr(ttnn, "bfloat4_b", None) or getattr(ttnn, "bfloat8_b", None) or default_dtype
     if ace_step_lofi_bfloat8_enabled():
         return getattr(ttnn, "bfloat8_b", None) or default_dtype
     return default_dtype
@@ -551,14 +570,27 @@ def ace_step_dit_linear_l1_memory_config(ttnn: Any):
     return ace_step_linear_l1_memory_config(ttnn)
 
 
+def ace_step_dit_force_l1_matmul() -> bool:
+    """Keep DiT matmul ``in0``/output in L1 even when fused-M exceeds the default CB cap (A/B only)."""
+    return os.environ.get("ACE_STEP_DIT_FORCE_L1_MATMUL", "").lower() in ("1", "true", "yes")
+
+
+def ace_step_dit_max_fused_m_tiles() -> int:
+    """Max fused batch×seq tile rows for 1D-mcast matmul (``ACE_STEP_DIT_MAX_FUSED_M``, default 16)."""
+    try:
+        return max(1, int(os.environ.get("ACE_STEP_DIT_MAX_FUSED_M", "16")))
+    except ValueError:
+        return 16
+
+
 def ace_step_linear_kwargs_memory_config(
     program_config: Any | None,
     *,
     linear_out_l1: Any | None,
     dram: Any | None,
 ) -> Any | None:
-    """L1 linear outputs when a tuned 1D/2D mcast program is active; DRAM matmul must not use L1."""
-    if program_config is not None and linear_out_l1 is not None:
+    """L1 linear outputs when a 1D/2D-mcast program is active, or when ``ACE_STEP_DIT_FORCE_L1_MATMUL=1``."""
+    if linear_out_l1 is not None and (program_config is not None or ace_step_dit_force_l1_matmul()):
         return linear_out_l1
     return dram
 
@@ -585,33 +617,127 @@ def ace_step_add_one(ttnn: Any, tensor: Any, **kwargs: Any) -> Any:
     return ttnn.add(tensor, 1.0, **kwargs)
 
 
-def ace_step_nlp_concat_heads(ttnn: Any, ctx: Any, *, l1_mc: Any | None = None) -> Any:
-    """Replace output permute+reshape with ``ttnn.experimental.nlp_concat_heads``.
+def _ace_step_split_q_bhsd_manual(
+    ttnn: Any,
+    q_b1sd: Any,
+    *,
+    b: int,
+    s_q: int,
+    h: int,
+    dh: int,
+    l1_mc: Any | None,
+) -> Any:
+    _sr = ace_step_reshape_kwargs(ttnn)
+    _pk = ace_step_permute_kwargs(ttnn)
+    _kw = {"memory_config": l1_mc} if l1_mc is not None else {}
+    q = ttnn.reshape(q_b1sd, (b, s_q, h, dh), **_sr)
+    return ttnn.permute(q, (0, 2, 1, 3), **_pk)
 
-    Converts ``[B, H, S, Dh]`` → ``[B, 1, S, H*Dh]`` in a single device kernel,
-    eliminating one permute (~360 μs) and one non-view reshape (~405 μs) per attention block.
 
-    SDPA may leave ``ctx`` in DRAM when ``memory_config`` is omitted; move to L1 first so Tracy
-    does not bucket this op as ``in0:dram_interleaved`` (~10 ms in DiT perf traces).
+def _ace_step_split_kv_bhsd_manual(
+    ttnn: Any,
+    kv_b1sd: Any,
+    *,
+    b: int,
+    s_k: int,
+    kv_h: int,
+    dh: int,
+    l1_mc: Any | None,
+) -> tuple[Any, Any]:
+    _sr = ace_step_reshape_kwargs(ttnn)
+    _pk = ace_step_permute_kwargs(ttnn)
+    kv_dim = kv_h * dh
+    k4 = ttnn.slice(kv_b1sd, (0, 0, 0, 0), (b, 1, s_k, kv_dim))
+    v4 = ttnn.slice(kv_b1sd, (0, 0, 0, kv_dim), (b, 1, s_k, 2 * kv_dim))
+    k = ttnn.reshape(k4, (b, s_k, kv_h, dh), **_sr)
+    v = ttnn.reshape(v4, (b, s_k, kv_h, dh), **_sr)
+    k = ttnn.permute(k, (0, 2, 1, 3), **_pk)
+    v = ttnn.permute(v, (0, 2, 1, 3), **_pk)
+    return k, v
 
-    Falls back to the original permute+reshape path if the op is unavailable.
+
+def ace_step_split_qkv_heads_bhsd(
+    ttnn: Any,
+    q_b1sd: Any,
+    kv_b1sd: Any,
+    *,
+    num_heads: int,
+    num_kv_heads: int,
+    l1_mc: Any | None = None,
+    transpose_k_heads: bool = False,
+) -> tuple[Any, Any, Any]:
+    """``[B,1,S,*]`` linear outputs → ``q,k,v`` each ``[B,H,S,Dh]`` (or ``[B,kv_h,S_k,Dh]``).
+
+    **Default:** slice (K/V) + ``reshape`` + ``permute`` with L1 ``memory_config`` — cheaper than
+    ``NlpCreateHeadsDeviceOperation`` on ACE-Step denoise traces (~7% device time at 96 calls).
+
+    Set ``ACE_STEP_USE_NLP_CREATE_QKV_HEADS=1`` only for A/B (self-attn requires ``S_q == S_k``;
+    cross-attn always uses the manual K/V path).
     """
-    experimental = getattr(ttnn, "experimental", None)
-    nlp_concat = getattr(experimental, "nlp_concat_heads", None) if experimental is not None else None
     mc = l1_mc if l1_mc is not None else ace_step_linear_l1_memory_config(ttnn)
-    # SDPA without ``SDPAProgramConfig`` leaves interleaved L1; skip sharded→interleaved copy.
-    if mc is not None and hasattr(ctx, "memory_config") and hasattr(ttnn, "to_memory_config"):
-        if ctx.memory_config() != mc:
-            ctx = ace_step_ensure_l1_activation(ttnn, ctx, mc)
-    if nlp_concat is not None:
-        kw = {"memory_config": mc} if mc is not None else {}
-        return nlp_concat(ctx, **kw)
-    # Fallback: original two-op path.
-    B, H, S, Dh = int(ctx.shape[0]), int(ctx.shape[1]), int(ctx.shape[2]), int(ctx.shape[3])
-    _kw = {"memory_config": mc} if mc is not None else {}
-    ctx = ttnn.permute(ctx, (0, 2, 1, 3), **_kw)
-    ctx = ttnn.reshape(ctx, (B, 1, S, H * Dh), **_kw)
-    return ctx
+    h = int(num_heads)
+    kv_h = int(num_kv_heads)
+    b = int(q_b1sd.shape[0])
+    s_q = int(q_b1sd.shape[2])
+    s_k = int(kv_b1sd.shape[2])
+    dh = int(q_b1sd.shape[3]) // h
+
+    if ace_step_use_nlp_create_qkv_heads():
+        experimental = getattr(ttnn, "experimental", None)
+        nlp = getattr(experimental, "nlp_create_qkv_heads", None) if experimental is not None else None
+        if nlp is not None:
+            kw = {"memory_config": mc} if mc is not None else {}
+            if s_q == s_k:
+                return nlp(
+                    q_b1sd,
+                    kv_b1sd,
+                    num_heads=h,
+                    num_kv_heads=kv_h,
+                    transpose_k_heads=transpose_k_heads,
+                    **kw,
+                )
+            q, _, _ = nlp(
+                q_b1sd,
+                q_b1sd,
+                num_heads=h,
+                num_kv_heads=kv_h,
+                transpose_k_heads=transpose_k_heads,
+                **kw,
+            )
+            k, v = _ace_step_split_kv_bhsd_manual(ttnn, kv_b1sd, b=b, s_k=s_k, kv_h=kv_h, dh=dh, l1_mc=mc)
+            return q, k, v
+
+    q = _ace_step_split_q_bhsd_manual(ttnn, q_b1sd, b=b, s_q=s_q, h=h, dh=dh, l1_mc=mc)
+    k, v = _ace_step_split_kv_bhsd_manual(ttnn, kv_b1sd, b=b, s_k=s_k, kv_h=kv_h, dh=dh, l1_mc=mc)
+    return q, k, v
+
+
+def ace_step_nlp_concat_heads(ttnn: Any, ctx: Any, *, l1_mc: Any | None = None) -> Any:
+    """``[B,H,S,Dh]`` → ``[B,1,S,H*Dh]`` for the output projection linear.
+
+    **Default:** ``ttnn.experimental.nlp_concat_heads`` (~3.9% device time, faster than manual
+    permute+reshape on ACE-Step denoise traces).
+
+    Set ``ACE_STEP_MANUAL_CONCAT_HEADS=1`` to force permute+reshape (view ops only).
+    """
+    mc = l1_mc if l1_mc is not None else ace_step_linear_l1_memory_config(ttnn)
+
+    if not ace_step_use_manual_concat_heads():
+        experimental = getattr(ttnn, "experimental", None)
+        nlp_concat = getattr(experimental, "nlp_concat_heads", None) if experimental is not None else None
+        if nlp_concat is not None:
+            if mc is not None and hasattr(ctx, "memory_config") and hasattr(ttnn, "to_memory_config"):
+                if ctx.memory_config() != mc:
+                    ctx = ace_step_ensure_l1_activation(ttnn, ctx, mc)
+            kw = {"memory_config": mc} if mc is not None else {}
+            return nlp_concat(ctx, **kw)
+
+    b, h, s, dh = (int(ctx.shape[0]), int(ctx.shape[1]), int(ctx.shape[2]), int(ctx.shape[3]))
+    out_shape = (b, 1, s, h * dh)
+    _pk = ace_step_permute_kwargs(ttnn)
+    _sr = ace_step_reshape_kwargs(ttnn)
+    ctx = ttnn.permute(ctx, (0, 2, 1, 3), **_pk)
+    return ttnn.reshape(ctx, out_shape, **_sr)
 
 
 def ace_step_try_nlp_qkv_heads_split(
@@ -689,19 +815,37 @@ def ace_step_dit_fused_m_tiles(*, batch_size: int, seq_len: int, tile: int = 32)
     return max(1, int(batch_size)) * s_tiles
 
 
-def ace_step_dit_prefers_dram_activations(*, batch_size: int, seq_len: int, max_fused_m: int = 16) -> bool:
-    """True when DiT should keep activations in DRAM (long clips; avoids L1/DRAM mixing noise)."""
-    return ace_step_dit_fused_m_tiles(batch_size=int(batch_size), seq_len=int(seq_len)) > int(max_fused_m)
+def ace_step_dit_prefers_dram_activations(
+    *,
+    batch_size: int,
+    seq_len: int,
+    max_fused_m: int | None = None,
+) -> bool:
+    """True when DiT should keep activations in DRAM (long clips; avoids L1 CB overflow).
+
+    Set ``ACE_STEP_DIT_FORCE_L1_MATMUL=1`` to keep L1 in0 + DRAM weights on long clips
+    (raise ``ACE_STEP_DIT_MAX_FUSED_M`` if 1D-mcast program config is still needed).
+    """
+    if ace_step_dit_force_l1_matmul():
+        return False
+    cap = ace_step_dit_max_fused_m_tiles() if max_fused_m is None else int(max_fused_m)
+    return ace_step_dit_fused_m_tiles(batch_size=int(batch_size), seq_len=int(seq_len)) > cap
 
 
-def ace_step_dit_body_trace_safe(*, batch_size: int, patch_seq_len: int, max_fused_m: int = 16) -> bool:
+def ace_step_dit_body_trace_safe(
+    *,
+    batch_size: int,
+    patch_seq_len: int,
+    max_fused_m: int | None = None,
+) -> bool:
     """Return False when DiT body trace replay is known to drift vs eager (audible noise).
 
     Long clips fall back to DRAM matmul (``per_core_M`` > 16) with ``to_memory_config`` in the
     graph; body trace capture/replay is not bit-accurate in that regime (same class of issue as
     traced VAE tiles / ``DitCfgPrepTrace``).
     """
-    return ace_step_dit_fused_m_tiles(batch_size=int(batch_size), seq_len=int(patch_seq_len)) <= int(max_fused_m)
+    cap = ace_step_dit_max_fused_m_tiles() if max_fused_m is None else int(max_fused_m)
+    return ace_step_dit_fused_m_tiles(batch_size=int(batch_size), seq_len=int(patch_seq_len)) <= cap
 
 
 def ace_step_matmul_activation(
@@ -712,8 +856,8 @@ def ace_step_matmul_activation(
     l1_fn,
     dram_mc: Any | None = None,
 ) -> Any:
-    """Place matmul ``in0`` in L1 when a 1D-mcast program is active, else DRAM."""
-    if "program_config" in linear_kwargs:
+    """Place matmul ``in0`` in L1 when 1D-mcast (or force-L1) is active; weights stay DRAM."""
+    if "program_config" in linear_kwargs or ace_step_dit_force_l1_matmul():
         return l1_fn(tensor)
     return ace_step_ensure_dram_activation(ttnn, tensor, dram_mc)
 
@@ -784,7 +928,11 @@ def ace_step_init_hifi4_linear_compute_kernel_config(device: Any):
 
 
 def ace_step_init_lofi_linear_compute_kernel_config(device: Any):
-    """LoFi linear config for DiT throughput (paired with ``bfloat8_b`` weights)."""
+    """LoFi linear config for DiT throughput (paired with ``bfloat8_b`` weights).
+
+    Matches matrix-engine guidance: ``math_approx_mode=True``, ``fp32_dest_acc_en=False``,
+    ``packer_l1_acc=False`` (HiFi paths may use ``packer_l1_acc=True``).
+    """
     import ttnn
 
     init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
@@ -1021,7 +1169,7 @@ def _mcast_1d_linear_program_config(
     in0_block_w_cap: int = 2,
     out_subblock_h_cap: int = 4,
     out_subblock_w: int = 1,
-    max_per_core_m: int = 16,
+    max_per_core_m: int | None = None,
 ):
     """Shared 1D mcast matmul program config builder for ACE-Step linears.
 
@@ -1053,8 +1201,9 @@ def _mcast_1d_linear_program_config(
     # Guard against L1 CB overflow on WH cores (~1.5 MB each).
     # Static CBs grow ~28 KB per per_core_M tile row; at per_core_M=48 they reach 1339 KB,
     # leaving no room for L1 activation tensors (observed clash at 865 KB with duration=30).
-    # per_core_M<=16 is safe for short clips (~10s, fused_M<=16). Longer clips use DRAM matmul.
-    if per_core_m > int(max_per_core_m):
+    # per_core_M cap avoids L1 CB overflow on WH (~1.5 MB/core). Override via ACE_STEP_DIT_MAX_FUSED_M.
+    _m_cap = ace_step_dit_max_fused_m_tiles() if max_per_core_m is None else int(max_per_core_m)
+    if per_core_m > _m_cap:
         return None
 
     k = max(tile, int(in_dim))
@@ -1203,6 +1352,49 @@ def ace_step_cond_mlp_gate_up_linear_program_config(
         in0_block_w_cap=_ace_step_cond_in0_block_w_cap(intermediate_size=intermediate_size),
         out_subblock_h_cap=2 if short else 4,
         out_subblock_w=2 if short else 1,
+    )
+
+
+def ace_step_dit_fused_qwkv_linear_program_config(
+    device: Any,
+    *,
+    seq_len: int,
+    in_dim: int,
+    hidden_size: int,
+    fused_kv_dim: int,
+    batch_size: int = 1,
+):
+    """Program config for fused self-attn ``q`` + ``wkv`` (one matmul vs two)."""
+    return _mcast_1d_linear_program_config(
+        device,
+        seq_len=seq_len,
+        in_dim=in_dim,
+        out_dim=int(hidden_size) + int(fused_kv_dim),
+        batch_size=batch_size,
+        in0_block_w_cap=2,
+        out_subblock_h_cap=4,
+        out_subblock_w=1,
+    )
+
+
+def ace_step_dit_mlp_fused_gate_up_linear_program_config(
+    device: Any,
+    *,
+    seq_len: int,
+    hidden_size: int,
+    intermediate_size: int,
+    batch_size: int = 1,
+):
+    """Program config for fused MLP ``gate_proj`` + ``up_proj`` (``2×intermediate`` output)."""
+    return _mcast_1d_linear_program_config(
+        device,
+        seq_len=seq_len,
+        in_dim=hidden_size,
+        out_dim=2 * int(intermediate_size),
+        batch_size=batch_size,
+        in0_block_w_cap=2,
+        out_subblock_h_cap=4,
+        out_subblock_w=1,
     )
 
 

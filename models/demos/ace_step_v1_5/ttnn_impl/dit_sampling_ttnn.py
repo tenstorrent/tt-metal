@@ -473,15 +473,21 @@ def _sum_keepdim(x: ttnn.Tensor, dim: int, *, dram: Any) -> ttnn.Tensor:
 
 
 def momentum_step_apg(buf: TtnnMomentumBufferApg, diff: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
+    """Update APG momentum state and return a **new** tensor for downstream ops.
+
+    ``running_tt`` must outlive the returned ``diff`` (norm clamp / projection may deallocate it).
+    """
     if buf.running_tt is None:
         buf.running_tt = ttnn.clone(diff)
+        out = ttnn.clone(buf.running_tt)
         ttnn.deallocate(diff)
-        return buf.running_tt
+        return out
     scaled = ttnn.multiply(buf.running_tt, float(buf.momentum), memory_config=dram)
     merged = ttnn.add(diff, scaled, memory_config=dram)
     ttnn.deallocate(scaled)
+    ttnn.deallocate(diff)
     ttnn.deallocate(buf.running_tt)
-    buf.running_tt = merged
+    buf.running_tt = ttnn.clone(merged)
     return merged
 
 
@@ -548,12 +554,16 @@ def apg_guidance_velocity_ttnn(
         rss = _sum_keepdim(ttnn.multiply(diff, diff, memory_config=dram), dim, dram=dram)
         diff_norm = ttnn.sqrt(ttnn.add(rss, 1e-20, memory_config=dram), memory_config=dram)
         ttnn.deallocate(rss)
-        ratio = ttnn.div(float(norm_threshold), ttnn.add(diff_norm, 1e-20, memory_config=dram))
+        diff_denom = ttnn.add(diff_norm, 1e-20, memory_config=dram)
+        ttnn.deallocate(diff_norm)
+        inv_denom = ttnn.div(ttnn.ones_like(diff_denom), diff_denom, memory_config=dram)
+        ratio = ttnn.multiply(inv_denom, float(norm_threshold), memory_config=dram)
+        ttnn.deallocate(diff_denom)
+        ttnn.deallocate(inv_denom)
         factor = ttnn.minimum(ratio, ttnn.ones_like(diff))
         scaled = ttnn.multiply(diff, factor, memory_config=dram)
         ttnn.deallocate(diff)
         ttnn.deallocate(ratio)
-        ttnn.deallocate(diff_norm)
         ttnn.deallocate(factor)
         diff = scaled
 
