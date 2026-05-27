@@ -30,7 +30,7 @@ def _valid_state() -> dict:
     }
 
 
-def test_load_validates_schema_version(tmp_path):
+def test_load_rejects_missing_schema_version(tmp_path):
     """A state file missing schema_version must raise SchemaError on load."""
     state = _valid_state()
     del state["schema_version"]
@@ -39,6 +39,22 @@ def test_load_validates_schema_version(tmp_path):
 
     with pytest.raises(SchemaError):
         load_state(path)
+
+
+def test_validate_reports_all_missing_keys(tmp_path):
+    """SchemaError message lists every missing key, not just the first."""
+    state = _valid_state()
+    del state["model_id"]
+    del state["device"]
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(state))
+
+    with pytest.raises(SchemaError) as excinfo:
+        load_state(path)
+
+    msg = str(excinfo.value)
+    assert "model_id" in msg
+    assert "device" in msg
 
 
 def test_load_rejects_wrong_schema_version(tmp_path):
@@ -105,3 +121,36 @@ def test_save_validates_before_writing(tmp_path):
     assert not path.exists(), "save_state must not create the file when validation fails"
     # And no leftover tmp either.
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_save_torn_write_preserves_previous_file(tmp_path, monkeypatch):
+    """If json.dump fails mid-write, the previously committed file is intact."""
+    p = tmp_path / "state.json"
+    # Establish a known-good baseline file.
+    baseline = _valid_state()
+    save_state(p, baseline)
+
+    # Make the next dump raise.
+    import json as _json
+
+    def boom(*a, **kw):
+        raise IOError("disk full")
+
+    monkeypatch.setattr(_json, "dump", boom)
+
+    new = _valid_state()
+    new["model_id"] = "different/model"
+    with pytest.raises(IOError):
+        save_state(p, new)
+
+    # Final path still contains the baseline — the failed write did not corrupt it.
+    assert load_state(p) == baseline
+    # No leftover tmp.
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_save_creates_parent_dirs(tmp_path):
+    """save_state creates intermediate parent directories as needed."""
+    p = tmp_path / "deep" / "nested" / "state.json"
+    save_state(p, _valid_state())
+    assert p.exists()

@@ -49,17 +49,18 @@ class SchemaError(Exception):
 def _validate(state: dict) -> None:
     """Validate top-level required keys and schema_version.
 
-    - Raises ``SchemaError`` for any missing required key.
-    - Raises ``SchemaError`` if ``schema_version`` is not 1.
+    - Raises ``SchemaError`` listing all missing required keys (sorted, so the
+      error message is deterministic).
+    - Raises ``SchemaError`` if ``schema_version`` is not ``_SCHEMA_VERSION``.
     - Emits a ``UserWarning`` (does not raise) for unknown top-level keys.
     """
-    for key in _REQUIRED_KEYS:
-        if key not in state:
-            raise SchemaError(f"missing key: {key}")
+    missing = sorted(_REQUIRED_KEYS - state.keys())
+    if missing:
+        raise SchemaError(f"missing required keys: {missing}")
 
     version = state["schema_version"]
     if version != _SCHEMA_VERSION:
-        raise SchemaError(f"schema_version must be 1, got {version!r}")
+        raise SchemaError(f"schema_version must be {_SCHEMA_VERSION}, got {version!r}")
 
     extras = set(state.keys()) - _REQUIRED_KEYS
     if extras:
@@ -96,7 +97,20 @@ def save_state(path: PathLike, state: dict) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
 
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
+    # Construct tmp via parent + name (not Path.with_suffix, which raises
+    # ValueError on paths with no suffix or trailing dots).
+    tmp = p.parent / (p.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+            f.write("\n")
+    except BaseException:
+        # On any failure during the JSON write, remove the partial tmp file
+        # so it cannot be mistaken for a valid state later. The final path
+        # is untouched because os.replace has not run yet.
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
     os.replace(tmp, p)
