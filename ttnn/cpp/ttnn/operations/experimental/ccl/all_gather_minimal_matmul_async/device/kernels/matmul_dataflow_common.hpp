@@ -72,7 +72,7 @@ using namespace tt::tt_fabric::linear::experimental;
 #endif
 
 #ifdef IS_IN0
-template <bool HasForwardTargets, bool HasBackwardTargets, bool IsLinear>
+template <bool IsLinear>
 void compute_actual_k_block(
     uint32_t k_block_iter,
     uint32_t total_k_block_count,
@@ -93,7 +93,7 @@ void compute_actual_k_block(
     uint32_t& k_left_start_tile,
     uint32_t& k_right_start_tile) {
 #else
-template <bool HasForwardTargets, bool HasBackwardTargets, bool IsLinear>
+template <bool IsLinear>
 void compute_actual_k_block(
     uint32_t k_block_iter,
     uint32_t total_k_block_count,
@@ -172,15 +172,12 @@ void compute_actual_k_block(
                     sem_target_forward += k_blocks_per_device;
                 }
             } else if (device_iter > 0) {
-                // Ring: both halves arrive simultaneously from both directions.
-                if constexpr (HasForwardTargets) {
-                    noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + in0_core_order_size);
-                    sem_target_forward += in0_core_order_size;
-                }
-                if constexpr (HasBackwardTargets) {
-                    noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + in0_core_order_size);
-                    sem_target_backward += in0_core_order_size;
-                }
+                // Ring: both halves arrive simultaneously from both directions
+                // (both neighbors always exist for Ring topology by construction).
+                noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + in0_core_order_size);
+                sem_target_forward += in0_core_order_size;
+                noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + in0_core_order_size);
+                sem_target_backward += in0_core_order_size;
             }
         }
     }

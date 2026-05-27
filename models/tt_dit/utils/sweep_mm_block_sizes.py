@@ -176,9 +176,6 @@ USE_CASE_CONFIGS = {
     },
 }
 
-# Block sweep range
-MAX_BLOCK = 64
-
 # Whether the sweep uses fp32 dest accumulator. With fp32 dest, the DEST tile
 # capacity is halved (4 tiles instead of 8), so only subblocks with h*w == 4
 # match peak compute throughput — and among those, 2x2 is strictly preferred
@@ -306,13 +303,6 @@ def estimate_l1_kb(m_blk, k_blk, n_blk, use_case="plain"):
     return kb
 
 
-def _subblock_for(m_block, k_blk, n_blk, explicit_subblocks):
-    """Pick subblock from explicit override if available, else fall back to pick_subblock."""
-    if explicit_subblocks and (k_blk, n_blk) in explicit_subblocks:
-        return explicit_subblocks[(k_blk, n_blk)]
-    return pick_subblock(m_block, n_blk)
-
-
 def pick_subblock(m_block, n_block, max_dest_volume=4):
     """Pick best valid (sb_h, sb_w) where sb_h|m_block, sb_w|n_block, sb_h*sb_w <= max_dest_volume.
 
@@ -333,32 +323,6 @@ def pick_subblock(m_block, n_block, max_dest_volume=4):
                 best = (h, w)
                 best_product = h * w
     return best
-
-
-def generate_subblock_combos(m_block, n_block, max_dest_volume=4):
-    """Generate (sb_h, sb_w) candidates to measure.
-
-    With fp32 dest (FP32_DEST_ACC_EN=True), only 2x2 is competitive — return
-    [(2, 2)] when both blocks are even; else the single pick_subblock fallback.
-    Either way the result has at most one combo, which makes the orchestrator's
-    pass-2 subblock sweep a no-op for the fp32-dest sweep.
-
-    Without fp32 dest, returns all valid (h, w) with h|m, w|n, h*w <= max_dest_volume.
-    """
-    if FP32_DEST_ACC_EN:
-        if m_block % 2 == 0 and n_block % 2 == 0 and 2 * 2 <= max_dest_volume:
-            return [(2, 2)]
-        return [pick_subblock(m_block, n_block, max_dest_volume)]
-    combos = []
-    for h in range(1, min(m_block, max_dest_volume) + 1):
-        if m_block % h != 0:
-            continue
-        for w in range(1, min(n_block, max_dest_volume) + 1):
-            if n_block % w != 0:
-                continue
-            if h * w <= max_dest_volume:
-                combos.append((h, w))
-    return combos
 
 
 def generate_kn_combos(K_per_device, N_per_core, m_block=1, use_case="plain"):
@@ -847,8 +811,7 @@ def test_mm_sweep(device_config, shape):
     Reads optional MM_SWEEP_EXPLICIT_COMBOS='[[m, k, n, sb_h, sb_w], ...]' to
     test a specific set; otherwise the worker auto-generates candidates from
     get_mn_block_candidates / generate_kn_combos. The subblock for each combo
-    is pick_subblock(...) (and for fp32 dest that's always (2, 2) when valid;
-    see generate_subblock_combos).
+    is pick_subblock(...) (and for fp32 dest that's always (2, 2) when valid).
     """
     from tracy.process_model_log import run_device_profiler
 

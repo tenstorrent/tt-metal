@@ -11,8 +11,6 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <algorithm>
-#include <cstdlib>
-#include <string>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tuple>
 #include <utility>
@@ -339,24 +337,34 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t in2_block_num_tiles = N_block_tiles;
 
     // Adaptive CB depth: maximize in0_cb depth (it hides chain mcast pipeline build-up,
-    // ~100us at depth 2), then opportunistically bump in1_cb. Budget is conservative
-    // (some L1 is reserved for kernels/firmware).
-    const uint32_t L1_BUDGET_BYTES = 1300 * 1024;
+    // ~100us at depth 2), then opportunistically bump in1_cb.
+    //
+    // Budget = (per-core L1) - (allocator base) - safety margin for non-CB
+    // allocations (kernel binaries, mux buffers, semaphores, runtime args).
+    // Capped at 1300 KB to preserve the depth choices validated on BH/WH 4x8 in
+    // the sweep — when actual usable L1 is larger, we don't speculatively pick
+    // deeper CBs that haven't been perf-validated.
+    const uint32_t l1_unreserved =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    constexpr uint32_t L1_NON_CB_MARGIN_BYTES = 256 * 1024;
+    constexpr uint32_t L1_BUDGET_CAP_BYTES = 1300 * 1024;
+    const uint32_t l1_for_cbs = l1_unreserved > L1_NON_CB_MARGIN_BYTES ? l1_unreserved - L1_NON_CB_MARGIN_BYTES : 0u;
+    const uint32_t L1_BUDGET_BYTES = std::min(L1_BUDGET_CAP_BYTES, l1_for_cbs);
     const uint32_t base_fixed_bytes = out_block_num_tiles * out_tile_size                      // out (single)
                                       + out_block_num_tiles * intermediate_tile_size           // intermediate (single)
                                       + (use_bias ? in2_block_num_tiles * in2_tile_size : 0);  // bias (single)
     const uint32_t in0_block_bytes = in0_block_num_tiles * in0_tile_size;
     const uint32_t in1_block_bytes = in1_block_num_tiles * in1_tile_size;
     // Start with in1 depth-2 (safe). Maximize in0_cb depth.
-    uint32_t in1_depth = 2;
-    uint32_t fixed_with_in1 = base_fixed_bytes + in1_block_bytes * in1_depth;
     uint32_t in0_depth = 2;
-    if (fixed_with_in1 + 2 * in0_block_bytes <= L1_BUDGET_BYTES) {
-        in0_depth = std::min(8u, (L1_BUDGET_BYTES - fixed_with_in1) / std::max(1u, in0_block_bytes));
+    const uint32_t fixed_with_in1_depth2 = base_fixed_bytes + in1_block_bytes * 2;
+    if (fixed_with_in1_depth2 + 2 * in0_block_bytes <= L1_BUDGET_BYTES) {
+        in0_depth = std::min(8u, (L1_BUDGET_BYTES - fixed_with_in1_depth2) / std::max(1u, in0_block_bytes));
         in0_depth = std::max(2u, in0_depth);
     }
     // Opportunistically bump in1 to depth 3 if there's room left.
-    if (fixed_with_in1 + in0_depth * in0_block_bytes + in1_block_bytes <= L1_BUDGET_BYTES) {
+    uint32_t in1_depth = 2;
+    if (fixed_with_in1_depth2 + in0_depth * in0_block_bytes + in1_block_bytes <= L1_BUDGET_BYTES) {
         in1_depth = 3;
     }
     uint32_t in0_cb_num_tiles = in0_block_num_tiles * in0_depth;
@@ -751,7 +759,6 @@ all_gather_minimal_matmul_async_factory_helper(
         ring_index,
         N_chunks,                         // N_chunks
         N_tiles_per_chunk,                // N_tiles_per_chunk
-        num_targets_forward,              // num_targets_forward_direction
         static_cast<uint32_t>(topology),  // topology
         K_tiles_per_device,
         K_block_tail_tiles,
@@ -794,7 +801,6 @@ all_gather_minimal_matmul_async_factory_helper(
         ring_index,
         N_chunks,                         // N_chunks
         N_tiles_per_chunk,                // N_tiles_per_chunk
-        num_targets_forward,              // num_targets_forward_direction
         static_cast<uint32_t>(topology),  // topology
         K_tiles_per_device,
         K_block_tail_tiles,

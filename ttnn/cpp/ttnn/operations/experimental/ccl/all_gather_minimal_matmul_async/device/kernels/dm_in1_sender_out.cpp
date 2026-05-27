@@ -31,11 +31,10 @@ void kernel_main() {
     constexpr uint32_t my_rank = get_compile_time_arg_val(17);
     constexpr uint32_t N_chunks = get_compile_time_arg_val(18);
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(19);
-    constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(20);
-    constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(21));
+    constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(20));
     constexpr bool is_linear = (topology == Topology::Linear);
-    constexpr uint32_t K_tiles_per_device = get_compile_time_arg_val(22);
-    constexpr uint32_t K_block_tail_tiles = get_compile_time_arg_val(23);
+    constexpr uint32_t K_tiles_per_device = get_compile_time_arg_val(21);
+    constexpr uint32_t K_block_tail_tiles = get_compile_time_arg_val(22);
 
     // Load common runtime args (same for all cores, updated in override_runtime_arguments)
     uint32_t cargidx = 0;
@@ -68,7 +67,7 @@ void kernel_main() {
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in1_args = TensorAccessorArgs<24>();
+    constexpr auto in1_args = TensorAccessorArgs<23>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr);
 
     // Always create tuple of output accessors (size = N_chunks) - addresses from common args
@@ -213,7 +212,7 @@ void kernel_main() {
                         k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
                         k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
                     }
-                    compute_actual_k_block<(num_targets_forward_direction > 0), true, is_linear>(
+                    compute_actual_k_block<is_linear>(
                         k_block_iter,
                         K_num_blocks,
                         my_rank,

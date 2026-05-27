@@ -15,9 +15,19 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     (device_config, shape, use_case), and prints the best (lowest duration)
     config per group.
     """
-    # Only activate if test_mm_sweep ran in this session.
+    # Only activate if test_mm_sweep / test_mm_sweep_worker ran in this session.
+    # Match on the function name segment (between "::" and "[" or end) so we
+    # don't false-trigger on unrelated tests with "test_mm_sweep" in the name.
+    sweep_fns = {"test_mm_sweep", "test_mm_sweep_worker"}
+
+    def _is_sweep_node(nodeid):
+        if not nodeid or "::" not in nodeid:
+            return False
+        fn = nodeid.rsplit("::", 1)[1].split("[", 1)[0]
+        return fn in sweep_fns
+
     sweep_ran = any(
-        "test_mm_sweep" in (item.nodeid or "")
+        _is_sweep_node(item.nodeid)
         for item in terminalreporter.stats.get("passed", []) + terminalreporter.stats.get("failed", [])
     )
     if not sweep_ran:

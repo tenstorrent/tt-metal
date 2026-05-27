@@ -346,10 +346,7 @@ void kernel_main() {
                     k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
                     k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
                 }
-                compute_actual_k_block<
-                    (num_targets_forward_direction > 0),
-                    (num_targets_backward_direction > 0),
-                    is_linear>(
+                compute_actual_k_block<is_linear>(
                     k_block_iter,
                     K_num_blocks,
                     my_rank,
