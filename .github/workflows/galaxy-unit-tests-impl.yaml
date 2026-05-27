@@ -149,6 +149,19 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           auto-triage: ${{ matrix.test-group.auto_triage != false }}
           hang-detection-timeout: ${{ matrix.test-group.hang_detection_timeout || 5.0 }}
+      - name: Galaxy system health pre-check
+        timeout-minutes: 5
+        run: |
+          set -e
+          BIN=./build/test/tt_metal/tt_fabric/test_system_health
+          if [ ! -x "$BIN" ]; then
+            echo "::warning::$BIN not found or not executable; skipping fabric connectivity pre-check."
+            exit 0
+          fi
+          if ! "$BIN"; then
+            echo "::error::test_system_health failed — Galaxy fabric connectivity is degraded (likely eth links not up after reset). See DEVINFRA-5407."
+            exit 1
+          fi
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
