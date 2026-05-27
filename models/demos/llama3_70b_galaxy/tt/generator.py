@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 import torch
 from loguru import logger
@@ -23,9 +25,45 @@ from models.common.llama_models import (
     CompletionPrediction,
 )
 
-from models.common.sampling import SamplingParams, format_sampling_params
+from models.common.sampling import SamplingParams, broadcast_sampling_params, format_sampling_params
 from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
+
+
+def _seed_debug_enabled() -> bool:
+    return os.getenv("TT_LLAMA_SEED_DEBUG", "").lower() in ("1", "true", "yes", "on")
+
+
+def _as_list(value):
+    if value is None:
+        return []
+    if isinstance(value, torch.Tensor):
+        return value.reshape(-1).tolist()
+    return value if isinstance(value, list) else [value]
+
+
+def _fill_inactive_params_from_active(params, active_slots, max_batch):
+    active_slots = [int(slot) for slot in active_slots if 0 <= int(slot) < max_batch]
+    if not active_slots:
+        return params
+    active_slot_set = set(active_slots)
+    source_slot = active_slots[-1]
+    updates = {}
+    for f in fields(params):
+        values = getattr(params, f.name)
+        if f.name == "seed" or not isinstance(values, list):
+            updates[f.name] = values
+            continue
+        values = list(values)
+        if not values:
+            updates[f.name] = values
+            continue
+        fill_value = values[source_slot] if source_slot < len(values) else values[-1]
+        for idx in range(min(max_batch, len(values))):
+            if idx not in active_slot_set:
+                values[idx] = fill_value
+        updates[f.name] = values
+    return replace(params, **updates)
 
 
 def get_prefill_warmup_sequence_lengths(max_seq_len: int) -> list[int]:
@@ -436,18 +474,25 @@ class Generator(WarmupForwardMixin):
         save_logits_to_host = tt_out_logits_all_users is not None
         do_device_sampling = (not return_logits) and (not save_logits_to_host)
 
-        def _sampling_values(value):
-            if value is None:
-                return []
-            return value if isinstance(value, list) else [value]
-
+        explicit_seeded_prefill = False
+        seed_values = []
         requires_slot_stable_prefill = False
         if do_device_sampling and sampling_params is not None:
-            seed_values = _sampling_values(getattr(sampling_params, "seed", None))
-            temperature_values = _sampling_values(getattr(sampling_params, "temperature", None))
-            requires_slot_stable_prefill = any(seed is not None for seed in seed_values) or any(
+            seed_values = _as_list(getattr(sampling_params, "seed", None))
+            temperature_values = _as_list(getattr(sampling_params, "temperature", None))
+            explicit_seeded_prefill = any(seed is not None for seed in seed_values)
+            requires_slot_stable_prefill = explicit_seeded_prefill or any(
                 float(temp) == 0.0 for temp in temperature_values if temp is not None
             )
+            if explicit_seeded_prefill and _seed_debug_enabled():
+                seed_slot_pairs = [
+                    (idx, int(slot), seed_values[idx] if idx < len(seed_values) else None)
+                    for idx, slot in enumerate(empty_slots[: len(seed_values)])
+                ]
+                logger.info(
+                    f"SeedDBG Galaxy prefill: empty_slots={empty_slots}, prompt_lens={prompt_lens}, "
+                    f"seed_slot_pairs={seed_slot_pairs}"
+                )
 
         # If batch >= 16 and padded prompt_lens are all 128, and no cached tokens, use batched prefill.
         # Seeded or greedy on-device sampling currently requires slot-stable logits, so use the
@@ -534,6 +579,8 @@ class Generator(WarmupForwardMixin):
                 prefill_seq_len = prefill_seq_lens[request_idx]
 
                 if prefill_seq_len not in self.model.tt_ccl.support_seqlens:
+                    user_enable_trace = False
+                if explicit_seeded_prefill:
                     user_enable_trace = False
 
             padded_batch = 32
@@ -653,29 +700,27 @@ class Generator(WarmupForwardMixin):
                         input_a=self.tt_logits_accumulated[fill_slot],
                         input_b=self.tt_logits_accumulated[slot],
                     )
+            if explicit_seeded_prefill:
+                ttnn.synchronize_device(self.mesh_device)
 
         prefill_log_probs = None
         # On-device sampling for prefill
         if do_device_sampling:
-            padded_batch = 32
+            max_batch = self.model_args.max_batch_size
 
             # Use batched list for batched prefill, persistent buffer for non-batched
             logits_source = self.tt_logits_accumulated_batched if use_batched_prefill else self.tt_logits_accumulated
 
-            # Concatenate along slot dimension -> [1, 1, 1[32], vocab_shard]
-            tt_logits_batch = ttnn.concat(logits_source, dim=2)
-            # Sample using the sampling module
-            # Logits are in sharded format (before all-gather), same as decode
-            # sampling_params are already padded to 32 by format_sampling_params
+            # Sample using the sampling module. Logits are in sharded format
+            # (before all-gather), same as decode.
             self.model.switch_mode("decode")
 
             # Setting sampling module up after switch to decode mode
-            sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
+            sampling_params = format_sampling_params(sampling_params, max_batch)
+            sampling_module = self.model.sampling
 
             # Reorder sampling params so values sit in their slot positions (except seed).
             def _scatter_params_to_slots(params, slots):
-                max_batch = self.model_args.max_batch_size
-
                 def _scatter_list(values):
                     if not isinstance(values, list):
                         return values
@@ -684,10 +729,10 @@ class Generator(WarmupForwardMixin):
                     if len(values) == 1 and len(slots) > 1:
                         values = values * len(slots)
                     user_vals = values[: len(slots)]
-                    filler = values[len(slots)] if len(values) > len(slots) else values[-1]
+                    filler = user_vals[-1] if user_vals else values[-1]
                     scattered = [filler for _ in range(max_batch)]
                     for val, slot_idx in zip(user_vals, slots):
-                        scattered[slot_idx] = val
+                        scattered[int(slot_idx)] = val
                     return scattered
 
                 updates = {}
@@ -699,37 +744,91 @@ class Generator(WarmupForwardMixin):
                     updates[f.name] = _scatter_list(getattr(params, f.name))
                 return replace(params, **updates)
 
-            sampling_params = _scatter_params_to_slots(sampling_params, empty_slots)
-            # print("sampling_params_scattered", sampling_params, "empty_slots", empty_slots)
-            sampling_module = self.model.sampling
+            if explicit_seeded_prefill:
+                # Seeded prefill must be independent of how vLLM happens to
+                # split concurrent request admission. Sample each request from a
+                # canonical row-0 view while advancing the real slot's seed
+                # counter, so decode continues from the correct per-slot state.
+                sampled_values = []
+                log_prob_values = []
+                slot_output_tokens = torch.full((max_batch, 1), -1, dtype=torch.int32)
+                for request_idx, slot in enumerate(empty_slots):
+                    slot = int(slot)
+                    single_params = broadcast_sampling_params(sampling_params, request_idx, max_batch)
+                    sampling_module.reset_sampling_params(single_params)
+                    if sampling_prompt_tokens is not None:
+                        single_prompt_tokens = sampling_prompt_tokens[slot : slot + 1].repeat(max_batch, 1)
+                    else:
+                        single_prompt_tokens = None
+                    sampling_module.reset_prompt_tokens(single_prompt_tokens)
+                    sampling_module.reset_output_state()
+                    sampling_module.seed_manager.reset_seed(single_params.seed, [slot])
+                    sampling_module.seed_manager.get_new_values([slot], replicate_seeds=True)
 
-            sampling_module.reset_sampling_params(sampling_params)
-            sampling_module.reset_prompt_tokens(
-                sampling_prompt_tokens if sampling_prompt_tokens is not None else prefill_ids
-            )
-            sampling_module.reset_output_state()
-            sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
-            sampling_module.seed_manager.get_new_values(empty_slots)
-            tt_sampled, tt_log_probs = sampling_module.sample(
-                tt_logits_batch,
-                tt_out_tok=None,
-                enable_trace=False,  # Don't trace prefill sampling
-            )
-            if isinstance(tt_sampled, tuple):
-                tt_sampled = tt_sampled[0]
-            if isinstance(tt_sampled, list):
-                tt_sampled = tt_sampled[0]
+                    single_logits_batch = ttnn.concat([logits_source[slot]] * max_batch, dim=2)
+                    tt_sampled, tt_log_probs = sampling_module.sample(
+                        single_logits_batch,
+                        tt_out_tok=None,
+                        enable_trace=False,  # Don't trace prefill sampling
+                    )
+                    if isinstance(tt_sampled, tuple):
+                        tt_sampled = tt_sampled[0]
+                    if isinstance(tt_sampled, list):
+                        tt_sampled = tt_sampled[0]
 
-            sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0]).to(torch.int32)
+                    sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0]).to(torch.int32)
+                    sampled_token = sampled_tokens[0, 0, 0, 0]
+                    sampled_values.append(sampled_token)
+                    slot_output_tokens[slot, 0] = sampled_token
 
-            # sampled_tokens has 32 entries ordered by slot.
-            sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
-            output_toks = sampled_tensor[empty_slots]
+                    if tt_log_probs is not None:
+                        log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0])
+                        log_prob_values.append(log_probs_torch[0, 0, 0, 0])
 
-            if tt_log_probs is not None:
-                tt_lp = tt_log_probs
-                log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_lp)[0])
-                prefill_log_probs = log_probs_torch[0, 0, 0, :][empty_slots]
+                    ttnn.deallocate(single_logits_batch)
+
+                output_toks = torch.stack(sampled_values).to(torch.int32)
+                if log_prob_values:
+                    prefill_log_probs = torch.stack(log_prob_values)
+
+                slot_sampling_params = _scatter_params_to_slots(sampling_params, empty_slots)
+                sampling_module.reset_sampling_params(slot_sampling_params)
+                if sampling_prompt_tokens is not None:
+                    sampling_module.reset_prompt_tokens(sampling_prompt_tokens)
+                sampling_module.reset_output_state(slot_output_tokens)
+            else:
+                # Concatenate along slot dimension -> [1, 1, 32, vocab_shard]
+                tt_logits_batch = ttnn.concat(logits_source, dim=2)
+                sampling_params = _scatter_params_to_slots(sampling_params, empty_slots)
+                # print("sampling_params_scattered", sampling_params, "empty_slots", empty_slots)
+
+                sampling_module.reset_sampling_params(sampling_params)
+                sampling_module.reset_prompt_tokens(
+                    sampling_prompt_tokens if sampling_prompt_tokens is not None else prefill_ids
+                )
+                sampling_module.reset_output_state()
+                sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
+                sampling_module.seed_manager.get_new_values(empty_slots)
+                tt_sampled, tt_log_probs = sampling_module.sample(
+                    tt_logits_batch,
+                    tt_out_tok=None,
+                    enable_trace=False,  # Don't trace prefill sampling
+                )
+                if isinstance(tt_sampled, tuple):
+                    tt_sampled = tt_sampled[0]
+                if isinstance(tt_sampled, list):
+                    tt_sampled = tt_sampled[0]
+
+                sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0]).to(torch.int32)
+
+                # sampled_tokens has 32 entries ordered by slot.
+                sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
+                output_toks = sampled_tensor[empty_slots]
+
+                if tt_log_probs is not None:
+                    tt_lp = tt_log_probs
+                    log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_lp)[0])
+                    prefill_log_probs = log_probs_torch[0, 0, 0, :][empty_slots]
 
         if return_logits:
             # TODO: the current solution runs the argmax even if we are returning logits
@@ -1215,15 +1314,51 @@ class Generator(WarmupForwardMixin):
         if reset_inputs and sampling_params is not None:
             # If we have new inputs, we need to set up the sampling module again
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
+            if active_seed_slots is not None:
+                seed_values = _as_list(getattr(sampling_params, "seed", None))
+                has_active_seed = any(
+                    slot < len(seed_values) and seed_values[slot] is not None for slot in active_seed_slots
+                )
+                if has_active_seed:
+                    sampling_params = _fill_inactive_params_from_active(
+                        sampling_params, active_seed_slots, self.model_args.max_batch_size
+                    )
 
             sampling_module = self.model.sampling
             sampling_module.reset_sampling_params(sampling_params)
             if reset_batch:
                 sampling_module.reset_prompt_tokens(prompt_tokens)
                 sampling_module.reset_output_state(output_tokens)
+        seed_manager = self.model.sampling.seed_manager
+        if sampling_params is not None and (active_seed_slots is None or active_seed_slots):
+            seed_values = getattr(sampling_params, "seed", None)
+            if _seed_debug_enabled():
+                debug_slots = (
+                    active_seed_slots
+                    if active_seed_slots is not None
+                    else list(range(seed_manager.max_batch_size))
+                )
+                seed_values_list = _as_list(seed_values)
+                seed_slot_pairs = [
+                    (
+                        slot,
+                        seed_values_list[slot] if slot < len(seed_values_list) else None,
+                        seed_manager.seeds[slot],
+                        seed_manager.seed_counters[slot],
+                    )
+                    for slot in debug_slots
+                ]
+                logger.info(
+                    f"SeedDBG Galaxy decode: reset_batch={reset_batch}, active_seed_slots={active_seed_slots}, "
+                    f"seed_slot_pairs={seed_slot_pairs}"
+                )
+            seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
+            if reset_inputs:
+                seed_manager.align_seed_counters_to_positions(seed_values, active_seed_slots, start_pos)
+
         # Advance seeds after parameter copies so seeded sampling observes
         # one ordered params/seed state for this token.
-        self.model.sampling.seed_manager.get_new_values(active_seed_slots)
+        seed_manager.get_new_values(active_seed_slots)
 
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved

@@ -130,6 +130,13 @@ class TTSampling(LightweightModule):
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self.sub_core_grid_topk = getattr(args, "sub_core_grid_topk", None)
         self.start_core = getattr(args, "start_core", ttnn.CoreCoord(0, 0))
+        self._sampling_sub_core_grids = (
+            ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core, self.max_batch_size, self.sub_core_grids, row_wise=True
+            )
+            if self.sub_core_grids is not None
+            else None
+        )
 
         # sampling_dp > 1 when multiple mesh groups each sample users independently
         # (e.g. GPT-OSS on [4,8]: 4 rows × 32 users; Llama Galaxy on [8,4]: 4 cols × 8 users)
@@ -588,7 +595,7 @@ class TTSampling(LightweightModule):
         ttnn.manual_seed(
             seeds=self.seeds_tt_tensor,
             user_ids=self.user_ids_tt_tensor,
-            sub_core_grids=self.sub_core_grids,
+            sub_core_grids=self._sampling_sub_core_grids,
         )
         # Perform the actual sampling with top-k, top-p, and temperature
         tt_out_tok = ttnn.sampling(
@@ -597,11 +604,7 @@ class TTSampling(LightweightModule):
             k=self.k_tensor,
             p=self.p_tensor,
             temp=self.temp_tensor,
-            sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                self.start_core, self.max_batch_size, self.sub_core_grids, row_wise=True
-            )
-            if self.sub_core_grids is not None
-            else None,
+            sub_core_grids=self._sampling_sub_core_grids,
             output_tensor=tt_out_tok,
         )
 

@@ -526,11 +526,14 @@ def broadcast_sampling_params(
     kwargs = {}
     for f in fields(formatted_sampling_params):
         value = getattr(formatted_sampling_params, f.name)
-        if isinstance(value, List):
+        value_is_list = isinstance(value, List)
+        if value_is_list:
             chosen = value[idx] if idx < len(value) else value[0]
         else:
             chosen = value
-        if chosen is None:
+        if value_is_list:
+            kwargs[f.name] = [chosen] * slot_len
+        elif chosen is None:
             kwargs[f.name] = None
         else:
             kwargs[f.name] = [chosen] * slot_len
@@ -625,6 +628,104 @@ class SeedManager:
         self.seed_counters[slot] += 1
         return device_seed
 
+    def _seed_from_slot_params(self, seeds, slot: int):
+        if seeds is None:
+            return None
+        if isinstance(seeds, torch.Tensor):
+            flat = seeds.reshape(-1)
+            if flat.numel() == 0:
+                return None
+            seed = flat[slot] if flat.numel() > slot else flat[0]
+        elif isinstance(seeds, list):
+            if not seeds:
+                return None
+            seed = seeds[slot] if len(seeds) > slot else seeds[0]
+        else:
+            seed = seeds
+
+        if seed is None:
+            return None
+        if isinstance(seed, torch.Tensor):
+            if seed.numel() == 0:
+                return None
+            seed = seed.reshape(-1)[0].item()
+        return int(seed)
+
+    def reset_seed_from_slots(self, seeds, user_ids):
+        """Reset decode seed state from slot-indexed sampling params."""
+        if user_ids is None:
+            user_ids = range(self.max_batch_size)
+        for user in user_ids:
+            slot = int(user)
+            seed = self._seed_from_slot_params(seeds, slot)
+            self.seeds[slot] = seed
+            self.seed_counters[slot] = 0
+            if seed is None:
+                self.rngs[slot].seed(self._next_unseeded_rng_seed())
+            else:
+                self.rngs[slot].seed(int(seed))
+        self._seed_active = any(s is not None for s in self.seeds)
+        self._reseted = True
+
+    def reset_seed_from_slots_if_needed(self, seeds, user_ids) -> bool:
+        """Reset only active slots whose slot-indexed seed changed."""
+        if user_ids is None:
+            user_ids = range(self.max_batch_size)
+        reset_slots = []
+        for user in user_ids:
+            slot = int(user)
+            if self._seed_from_slot_params(seeds, slot) != self.seeds[slot]:
+                reset_slots.append(slot)
+        if not reset_slots:
+            return False
+        self.reset_seed_from_slots(seeds, reset_slots)
+        return True
+
+    def align_seed_counters_to_positions(self, seeds, user_ids, positions, offset: int = 1):
+        """Make explicit-seed decode independent of persistent slot lifetime.
+
+        vLLM can temporarily remove running requests from the persistent batch
+        while admitting another prefill batch, then re-add them in different
+        slots. For explicit request seeds, deriving the per-token device seed
+        from the absolute decode position keeps the stream reproducible even
+        when the Python-side slot counter was reset or moved.
+        """
+        if positions is None:
+            return
+        if user_ids is None:
+            user_ids = range(self.max_batch_size)
+
+        if isinstance(positions, torch.Tensor):
+            flat_positions = positions.reshape(-1)
+
+            def _position(slot):
+                if flat_positions.numel() == 0:
+                    return None
+                pos = flat_positions[slot] if flat_positions.numel() > slot else flat_positions[0]
+                return int(pos.item())
+
+        elif isinstance(positions, list):
+
+            def _position(slot):
+                if not positions:
+                    return None
+                return int(positions[slot] if len(positions) > slot else positions[0])
+
+        else:
+
+            def _position(_slot):
+                return int(positions)
+
+        for user in user_ids:
+            slot = int(user)
+            seed = self._seed_from_slot_params(seeds, slot)
+            if seed is None:
+                continue
+            position = _position(slot)
+            if position is None or position < 0:
+                continue
+            self.seed_counters[slot] = max(0, position + offset)
+
     def has_active_request_seed(self) -> bool:
         return self._active_request_seed
 
@@ -662,12 +763,13 @@ class SeedManager:
         """Update RNG state for the given user slots after a prefill.
 
         Args:
-            seeds: List of seed values (int or None) in request order.
+            seeds: Seed values in request order. Accepts a list, tensor, scalar,
+                or None (treated as all unseeded).
             user_ids: Batch slot indices being prefilled.
         """
         for i, user in enumerate(user_ids):
             slot = int(user)
-            seed = seeds[i]
+            seed = self._seed_from_slot_params(seeds, i)
             self.seeds[slot] = seed
             self.seed_counters[slot] = 0
             if seed is None:
@@ -683,7 +785,9 @@ class SeedManager:
         **Seeded path** (``_seed_active=True``):
         Advances each active slot seed state and copies the new values to
         the device every step. Explicit request seeds produce slot-independent
-        device seeds derived from the request seed and per-slot sample count.
+        device seeds derived from the request seed and the slot counter. Some
+        decode callers align that counter to the absolute token position so
+        vLLM batch-layout changes cannot reset a request's random stream.
 
         **Unseeded path** (``_seed_active=False``):
         Uses a three-state machine to ensure each user gets a unique device
