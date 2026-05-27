@@ -435,11 +435,9 @@ protected:
                 mapped_asics.push_back(asic);
             }
         }
-        // ASSERT_* macros issue a void return, which is incompatible with non-void return types.
-        // Use EXPECT_* with an explicit early return on failure instead.
         EXPECT_FALSE(mapped_asics.empty()) << "No mapped ASICs for logical mesh " << logical_mesh.get();
         if (mapped_asics.empty()) {
-            return ::tt::tt_fabric::MeshId{0};
+            return ::tt::tt_fabric::MeshId{0};  // sentinel — test will already have failed
         }
         std::vector<::tt::tt_fabric::MeshId> candidates;
         for (const auto& [pm, graph] : physical.mesh_adjacency_graphs_) {
@@ -457,8 +455,8 @@ protected:
         }
         EXPECT_EQ(candidates.size(), 1u) << "Mapped ASICs for logical mesh " << logical_mesh.get()
                                          << " should lie in exactly one physical mesh subgraph";
-        if (candidates.empty()) {
-            return ::tt::tt_fabric::MeshId{0};
+        if (candidates.size() != 1u) {
+            return ::tt::tt_fabric::MeshId{0};  // sentinel — test will already have failed
         }
         return candidates.front();
     }
@@ -3989,8 +3987,8 @@ static tt::tt_metal::PhysicalSystemDescriptor create_psd_from_mock_cluster() {
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
-    return tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+    return tt::tt_metal::run_physical_system_discovery(
+        *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_SingleBHGalaxy) {

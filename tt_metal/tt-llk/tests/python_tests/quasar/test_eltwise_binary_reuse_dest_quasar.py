@@ -28,7 +28,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator_v2 import generate_stimuli_v2
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -158,7 +158,7 @@ def test_eltwise_binary_reuse_dest_quasar(
     input_tiles_in_block = inner_dim * output_tiles_in_block
     input_num_blocks = output_num_blocks
 
-    src_A, _, src_B, _ = generate_stimuli_v2(
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,

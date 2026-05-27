@@ -12,6 +12,8 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt_stl/assert.hpp>
 
 #include <algorithm>
@@ -97,20 +99,49 @@ ResolvedBindings resolve_bindings(
         }
     }
 
-    // Only resolve CB bindings when the factory actually opted into the fast path
-    // by declaring at least one runtime-arg buffer binding, whether via
-    // emplace_runtime_args() or emplace_common_runtime_args()
-    // (i.e. when !result.rt_args.empty()).
-    // Without this guard, sharded operations that use the old API (passing
-    // buffer->address() as uint32_t) would have non-empty resolved_bindings
-    // due to CB entries alone, causing the adapter to take the fast path and
-    // skip the full runtime-arg rebuild on cache hits.
-    if (!result.rt_args.empty()) {
+    // Resolve every `.buffer = ...` CB binding whose buffer comes from
+    // tensor_args / tensor_return_value, so the cache-hit fast path can patch
+    // it.  CB buffers that come from elsewhere (e.g. a GlobalCircularBuffer
+    // referenced by `operation_attributes`, or any other workload-scoped
+    // resource the factory injects directly into a CBDescriptor) are SKIPPED
+    // here rather than fatal:
+    //
+    //   - Such buffers have stable addresses across dispatches by design —
+    //     the caller owns the resource and keeps it alive for the cache
+    //     entry's lifetime.  Cache-hit patching would be a no-op.
+    //   - Fatalling would make `emplace_runtime_args(buffer)` and
+    //     `cbs[i].buffer = buffer` semantically asymmetric for the same buffer
+    //     and break legitimate factories (e.g. `dram_prefetcher`'s reader CB
+    //     pegged to a GlobalCircularBuffer's backing buffer).
+    //
+    // Runtime-arg buffer bindings stay strict (find_idx) above — they must
+    // map to a tensor_args/return slot because raw rt-args ARE the only
+    // mechanism by which input/output addresses can change between dispatches.
+    //
+    // The CB-resolution gate (whether to use the result on cache hit) lives
+    // in DescriptorMeshWorkloadAdapter::apply_descriptor and is contract-aware:
+    //   - contract 1: fast-path only when rt-arg bindings are present;
+    //     otherwise rebuild the descriptor.
+    //   - contract 2: always fast-path; no rebuild fallback.
+    {
         auto program_cbs = program.circular_buffers();
         for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
-            if (desc.cbs[ci].buffer) {
-                result.cbs.push_back(
-                    {program_cbs[ci]->id(), find_idx(desc.cbs[ci].buffer, "cbs"), desc.cbs[ci].address_offset});
+            const auto& cb_desc = desc.cbs[ci];
+            TT_FATAL(
+                !(cb_desc.buffer && cb_desc.tensor),
+                "CBDescriptor cannot specify both buffer and tensor as the globally-allocated backing storage");
+
+            Buffer* cb_buffer = cb_desc.buffer;
+            if (!cb_buffer && cb_desc.tensor) {
+                cb_buffer = cb_desc.tensor->mesh_buffer().get_reference_buffer();
+            }
+            if (cb_buffer) {
+                auto it = std::find(tensor_buffers.begin(), tensor_buffers.end(), cb_buffer);
+                if (it != tensor_buffers.end()) {
+                    result.cbs.push_back(
+                        {program_cbs[ci]->id(), static_cast<uint32_t>(it - tensor_buffers.begin()), cb_desc.address_offset});
+                }
+                // else: stable, non-tensor buffer; pegged at create time, no patching needed.
             }
         }
     }

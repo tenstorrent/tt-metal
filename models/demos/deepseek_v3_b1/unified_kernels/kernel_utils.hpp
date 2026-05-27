@@ -163,6 +163,20 @@ FORCE_INLINE uint32_t get_cb_rd_ptr(uint32_t cb_id) {
     return get_local_cb_interface(cb_id).fifo_rd_ptr << cb_addr_shift;
 }
 
+// Read a CB's static buffer base L1 address in bytes. Stable across per-expert
+// push/pop and loop iterations. LocalCBInterface stores fifo_limit and
+// fifo_size; init sets fifo_limit = fifo_addr + fifo_size (see
+// tt_metal/hw/inc/internal/circular_buffer_init.h), so base = fifo_limit - fifo_size.
+FORCE_INLINE uint32_t get_cb_buf_addr(uint32_t cb_id) {
+    auto& cb = get_local_cb_interface(cb_id);
+    return (cb.fifo_limit - cb.fifo_size) << cb_addr_shift;
+}
+
+// Read a CB's page size in bytes.
+FORCE_INLINE uint32_t get_cb_page_size(uint32_t cb_id) {
+    return get_local_cb_interface(cb_id).fifo_page_size << cb_addr_shift;
+}
+
 // Override a CB's read pointer to a byte address (converted to cb_addr_shift units).
 FORCE_INLINE void override_cb_rd_ptr(uint32_t cb_id, uint32_t byte_address) {
     get_local_cb_interface(cb_id).fifo_rd_ptr = byte_address >> cb_addr_shift;

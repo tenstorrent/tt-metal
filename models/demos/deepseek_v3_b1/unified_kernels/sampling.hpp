@@ -121,7 +121,7 @@ template <MathFidelity math_fidelity>
 ALWI void sampling_mul_tiles_bcast_scalar_init_short(
     uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init_with_operands<ELWMUL, BroadcastType::SCALAR, math_fidelity>(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, math_fidelity>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
 }
 
@@ -129,7 +129,7 @@ template <MathFidelity math_fidelity>
 ALWI void sampling_mul_tiles_bcast_scalar(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     MATH((llk_math_eltwise_binary<
-          ELWMUL,
+          EltwiseBinaryType::ELWMUL,
           BroadcastType::SCALAR,
           DST_ACCUM_MODE,
           math_fidelity,
@@ -140,7 +140,8 @@ ALWI void sampling_mul_tiles_bcast_scalar(
 template <MathFidelity math_fidelity>
 ALWI void sampling_mul_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init_with_operands<ELWMUL, BroadcastType::COL, math_fidelity>(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, math_fidelity>(
+        icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1)));
 }
 
@@ -165,12 +166,11 @@ ALWI void sampling_reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, 
         MATH((tensix_sync()));
         MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11)));
     }
-    PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>()));
 #else
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, math_fidelity>(icb)));
-    PACK((llk_pack_reduce_mask_config<reduce_dim>()));
 #endif
+    PACK((llk_pack_reduce_mask_config<reduce_dim, ckernel::PackMode::Default>()));
 }
 
 template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation, MathFidelity math_fidelity>
@@ -1616,7 +1616,7 @@ struct TopKSampling {
             // Matmul leaves the PACK MOP in block-contiguous mode; re-init to standard tile-by-tile
             // so that subsequent pack_tile() calls in run_top32_llk produce correct results.
             ckernel::pack_reconfig_data_format(CTArgs::topk_out_scores_cb);
-            PACK((llk_pack_init<false, false, false>(CTArgs::topk_out_scores_cb)));
+            PACK((llk_pack_init(CTArgs::topk_out_scores_cb)));
 
             // Phase 1: LLK top-32 sort (all active cores, k==32 only)
             if constexpr (IsActiveCore && CTArgs::topk_k <= 32) {

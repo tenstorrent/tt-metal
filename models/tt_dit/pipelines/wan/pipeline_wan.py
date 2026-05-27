@@ -699,7 +699,16 @@ class WanPipeline(PipelineAPIMixin):
         if output_type == "latent":
             return latents
 
-        return self._decode_latents(latents, output_type=output_type, on_event=on_event)
+        include_last_latent = output_type == "pt_with_last_latent"
+        if include_last_latent:
+            output_type = "pt"
+            last_latent_out = latents.detach().clone()
+
+        video = self._decode_latents(latents, output_type=output_type, on_event=on_event)
+
+        if include_last_latent:
+            return video, last_latent_out
+        return video
 
     def _decode_latents(
         self,

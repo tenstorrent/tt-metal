@@ -67,7 +67,7 @@ jobs:
       preflight-artifact-name: ${{ steps.set-artifact-names.outputs.preflight-artifact-name }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Display validation request
         env:
@@ -206,7 +206,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -321,7 +321,7 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
@@ -424,7 +424,7 @@ jobs:
     runs-on: ${{ matrix.runs_on }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -435,6 +435,12 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          # Sweep CI default of 5s is too aggressive for traced multi-device
+          # configs on Galaxy: linear/multiply/matmul with sharded I/O can
+          # exceed 5s during reshard + dispatch bring-up, producing false-
+          # positive op-timeouts. Raise to 30s for the whole sweep job so
+          # every op benefits without per-module env-var overrides.
+          hang-detection-timeout: 30
 
       - name: Download sweep vectors
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -453,6 +459,15 @@ jobs:
           arch = os.environ.get('ARCH_NAME', '').lower()
           arch_filter = 'wormhole' if 'wormhole' in arch else ('blackhole' if 'blackhole' in arch else '')
           is_galaxy = 'galaxy' in test_group
+          # Derive the hardware suffix from the test group name so we only
+          # scan vectors belonging to THIS runner's hardware group.
+          # e.g., test_group='wormhole-n150-sweeps' -> look for '_n150_' in filenames
+          #        test_group='wormhole-n300-sweeps' -> look for '_n300_' in filenames
+          hw_series_filter = ''
+          for series in ['n150', 'n300', 'p150b', 'p100a', 'galaxy']:
+              if series in test_group:
+                  hw_series_filter = series
+                  break
           for f in glob.glob('/work/tests/sweep_framework/vectors_export/*.json'):
               fname = os.path.basename(f).lower()
               if arch_filter and arch_filter not in fname:
@@ -461,6 +476,9 @@ jobs:
               if is_galaxy and 'galaxy' not in fname:
                   continue
               if not is_galaxy and 'galaxy' in fname:
+                  continue
+              # Filter by device series to avoid N300 vectors on N150 runners
+              if hw_series_filter and hw_series_filter not in fname:
                   continue
               with open(f) as fh:
                   data = json.load(fh)
@@ -617,7 +635,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Download master JSON artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -721,7 +739,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository (actions only)
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github/actions
