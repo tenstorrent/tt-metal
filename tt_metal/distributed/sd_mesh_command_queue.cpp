@@ -96,8 +96,8 @@ bool SDMeshCommandQueue::write_shard_to_device(
         return false;
     }
 
-    // host_data already points at the transfer start; region offset applies to the device buffer only.
-    auto payload = tt::stl::Span<const std::uint8_t>(static_cast<const std::uint8_t*>(src), region_value.size);
+    auto payload = tt::stl::Span<const std::uint8_t>(
+        static_cast<const std::uint8_t*>(src) + region_value.offset, region_value.size);
     if (logical_core_filter != nullptr) {
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
     } else {
