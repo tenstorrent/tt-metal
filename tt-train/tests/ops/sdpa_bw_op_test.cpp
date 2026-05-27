@@ -649,15 +649,16 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     ASSERT_EQ(sdpa_bw_dV.shape(), composite_dV.shape()) << "kernel_dV shape != composite_dV shape";
     ASSERT_EQ(sdpa_bw_dV.shape(), float_dV.shape()) << "kernel_dV shape != float_dV shape";
 
-    // float/composite must be finite (CPU reference).
+    // Check for NaN/Inf values
     EXPECT_TRUE(xt::all(xt::isfinite(float_dQ))) << "float_dQ contains NaN or Inf values";
     EXPECT_TRUE(xt::all(xt::isfinite(float_dK))) << "float_dK contains NaN or Inf values";
     EXPECT_TRUE(xt::all(xt::isfinite(float_dV))) << "float_dV contains NaN or Inf values";
     EXPECT_TRUE(xt::all(xt::isfinite(composite_dQ))) << "composite_dQ contains NaN or Inf values";
     EXPECT_TRUE(xt::all(xt::isfinite(composite_dK))) << "composite_dK contains NaN or Inf values";
     EXPECT_TRUE(xt::all(xt::isfinite(composite_dV))) << "composite_dV contains NaN or Inf values";
-    // Kernel dQ/dK/dV may contain NaN at fully-masked positions (new bf16 exp).
-    // Don't fail the test outright — the NaN-tolerant allclose below handles them.
+    EXPECT_TRUE(xt::all(xt::isfinite(sdpa_bw_dQ))) << "kernel_dQ contains NaN or Inf values";
+    EXPECT_TRUE(xt::all(xt::isfinite(sdpa_bw_dK))) << "kernel_dK contains NaN or Inf values";
+    EXPECT_TRUE(xt::all(xt::isfinite(sdpa_bw_dV))) << "kernel_dV contains NaN or Inf values";
 
     // ========== Comparisons ==========
     // Per-tensor max-abs / max-rel error — used to size tolerances.
@@ -702,9 +703,9 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const bool fw_intermediates_matches = xt::allclose(kernel_intermediates_cpu, float_intermediates, fw_rtol, fw_atol);
 
     // Backward pass checks
-    const bool kernel_dQ_matches_float = xt::allclose(dQ_clean, float_dQ, rtol, atol);
-    const bool kernel_dK_matches_float = xt::allclose(dK_clean, float_dK, rtol, atol);
-    const bool kernel_dV_matches_float = xt::allclose(dV_clean, float_dV, rtol, atol);
+    const bool kernel_dQ_matches_float = xt::allclose(sdpa_bw_dQ, float_dQ, rtol, atol);
+    const bool kernel_dK_matches_float = xt::allclose(sdpa_bw_dK, float_dK, rtol, atol);
+    const bool kernel_dV_matches_float = xt::allclose(sdpa_bw_dV, float_dV, rtol, atol);
     [[maybe_unused]] const bool composite_dQ_matches_float = xt::allclose(composite_dQ, float_dQ, rtol, atol);
     [[maybe_unused]] const bool composite_dK_matches_float = xt::allclose(composite_dK, float_dK, rtol, atol);
     [[maybe_unused]] const bool composite_dV_matches_float = xt::allclose(composite_dV, float_dV, rtol, atol);
@@ -738,6 +739,8 @@ TEST_F(SDPABackwardTest, DISABLED_SmallBatch) {
         .num_query_heads = 4U,
         .num_kv_heads = 4U,
         .dropout_prob = 0.0F,
+        .atol = 4e-2F,
+        .rtol = 4e-2F,
         .test_name = "SmallBatch (B=2, S=128, D=64, H=4)"};
     run_sdpa_backward_test(config);
 }
@@ -754,6 +757,8 @@ TEST_F(SDPABackwardTest, NIGHTLY_NanoGPTConfig) {
         .num_query_heads = 6U,
         .num_kv_heads = 6U,
         .dropout_prob = 0.0F,
+        .atol = 1e-1F,
+        .rtol = 1e-1F,
         .test_name = "NanoGPTConfig (B=64, S=256, D=128, H=6)"};
     run_sdpa_backward_test(config);
 }
@@ -784,6 +789,8 @@ TEST_F(SDPABackwardTest, DISABLED_GroupedQueryAttention) {
         .num_query_heads = 8U,
         .num_kv_heads = 2U,  // 4 query heads per kv head
         .dropout_prob = 0.0F,
+        .atol = 4e-2F,
+        .rtol = 4e-2F,
         .test_name = "GroupedQueryAttention (qH=8, kvH=2)"};
     run_sdpa_backward_test(config);
 }
@@ -811,6 +818,8 @@ TEST_F(SDPABackwardTest, DISABLED_TinyLlamaConfig) {
         .dropout_prob = 0.0F,
         .atol = 3e-2F,
         .rtol = 3e-2F,
+//        .atol = 7e-2F,
+//        .rtol = 7e-2F,
         .test_name = "TinyLlamaConfig (B=1, S=256, D=64, qH=32, kvH=4)"};
     run_sdpa_backward_test(config);
 }
@@ -827,6 +836,8 @@ TEST_F(SDPABackwardTest, DISABLED_CausalMask_MHA) {
         .num_query_heads = 4U,
         .num_kv_heads = 4U,
         .dropout_prob = 0.0F,
+        .atol = 2e-2F,
+        .rtol = 2e-2F,
         .test_name = "CausalMask_MHA (B=2, S=128, D=64, H=4)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);
@@ -845,6 +856,8 @@ TEST_F(SDPABackwardTest, DISABLED_CausalMask_GQA) {
         .num_query_heads = 8U,
         .num_kv_heads = 2U,  // GQA: 4 query heads per KV head
         .dropout_prob = 0.0F,
+        .atol = 2e-2F,
+        .rtol = 2e-2F,
         .test_name = "CausalMask_GQA (B=2, S=256, D=64, qH=8, kvH=2)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);
@@ -861,6 +874,8 @@ TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_NanoGPTConfig) {
         .num_query_heads = 6U,
         .num_kv_heads = 6U,
         .dropout_prob = 0.0F,
+        .atol = 6e-2F,
+        .rtol = 6e-2F,
         .test_name = "CausalMask_NanoGPTConfig (B=64, S=256, D=128, H=6)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);
@@ -876,6 +891,8 @@ TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_LargerSequence) {
         .num_query_heads = 8U,
         .num_kv_heads = 8U,
         .dropout_prob = 0.0F,
+        .atol = 5e-2F,
+        .rtol = 5e-2F,
         .test_name = "CausalMask_LargerSeq (B=4, S=1024, D=128, H=8)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);
@@ -894,6 +911,8 @@ TEST_F(SDPABackwardTest, DISABLED_DiffVDim_Causal_SmallV) {
         .num_query_heads = 4U,
         .num_kv_heads = 4U,
         .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
         .test_name = "DiffVDim_Causal_SmallV (qD=32, vD=16)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);
@@ -910,6 +929,8 @@ TEST_F(SDPABackwardTest, DISABLED_DiffVDim_Causal_LargeV) {
         .num_query_heads = 4U,
         .num_kv_heads = 4U,
         .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
         .test_name = "DiffVDim_Causal_LargeV (qD=16, vD=32)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);
@@ -926,6 +947,8 @@ TEST_F(SDPABackwardTest, DISABLED_DiffVDim_ArbitraryMask) {
         .num_query_heads = 4U,
         .num_kv_heads = 4U,
         .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
         .test_name = "DiffVDim_ArbitraryMask (qD=32, vD=16)",
         .mask_type = ttml::metal::AttentionMaskType::Arbitrary};
     run_sdpa_backward_test(config);
@@ -942,6 +965,8 @@ TEST_F(SDPABackwardTest, DISABLED_DiffVDim_GQA_Causal) {
         .num_query_heads = 8U,
         .num_kv_heads = 2U,
         .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
         .test_name = "DiffVDim_GQA_Causal (qD=8, vD=16, qH=8, kvH=2)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);
@@ -957,6 +982,8 @@ TEST_F(SDPABackwardTest, DiffVDim_SingleTile) {
         .num_query_heads = 2U,
         .num_kv_heads = 2U,
         .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
         .test_name = "DiffVDim_SingleTile (qD=32, vD=16, S=32)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);
@@ -973,6 +1000,8 @@ TEST_F(SDPABackwardTest, DISABLED_DiffVDim_MultiBatch) {
         .num_query_heads = 4U,
         .num_kv_heads = 4U,
         .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
         .test_name = "DiffVDim_MultiBatch (B=4, qD=32, vD=16)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);

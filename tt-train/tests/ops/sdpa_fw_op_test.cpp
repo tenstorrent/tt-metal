@@ -349,33 +349,6 @@ float compute_mse(const xt::xarray<float>& expected, const xt::xarray<float>& re
     return mse;
 }
 
-// Returns {max_abs_err, max_rel_err}. max_rel_err matches xt::allclose:
-//   |a - b| <= atol + rtol * |b|   ->   max_rel_err = max(|a-b| - atol_used, 0) / |b|
-// We just report max(|a-b| / max(|b|, eps)) as a stable relative-error metric.
-std::pair<float, float> compute_max_abs_rel(const xt::xarray<float>& a, const xt::xarray<float>& b) {
-    assert(a.shape() == b.shape());
-    xt::xarray<float> abs_diff = xt::abs(a - b);
-    float max_abs = xt::amax(abs_diff)();
-    constexpr float kRelEps = 1e-12F;
-    xt::xarray<float> rel = abs_diff / xt::maximum(xt::abs(b), kRelEps);
-    float max_rel = xt::amax(rel)();
-    return {max_abs, max_rel};
-}
-
-// Diagnostic: count elements where |a - b| > atol + rtol * |b|.
-// Mirrors xt::allclose's per-element criterion exactly.
-std::tuple<std::size_t, std::size_t, float> count_outliers(
-    const xt::xarray<float>& a, const xt::xarray<float>& b, double rtol, double atol) {
-    assert(a.shape() == b.shape());
-    xt::xarray<float> abs_diff = xt::abs(a - b);
-    xt::xarray<float> bound = static_cast<float>(atol) + static_cast<float>(rtol) * xt::abs(b);
-    xt::xarray<bool> over = abs_diff > bound;
-    std::size_t n_over = static_cast<std::size_t>(xt::sum(xt::cast<int>(over))());
-    std::size_t n_total = abs_diff.size();
-    float max_excess = xt::amax(xt::where(over, abs_diff - bound, xt::zeros_like(abs_diff)))();
-    return {n_over, n_total, max_excess};
-}
-
 // Wrapper around matmul to handle sharing of KV heads across groups of query
 // heads.
 // For e.g. Q @ V, there are two cases:
@@ -495,20 +468,10 @@ struct SDPATestConfig {
     uint32_t num_key_heads;
     ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal;  // default: causal mask
     float dropout_prob = 0.0F;
-    // Tolerances widened after the new bf16 exp landed: exp(0) is no longer
-    // exactly 1.0 in fp32 dest, which inflates LSE and the resulting softmax
-    // ratios. Training correctness is verified separately; these tolerances
-    // exist so the integration tests still flag wholesale regressions.
-    //
-    // Note: existing call sites pass these to xt::allclose as
-    // `allclose(a, b, result_atol, result_rtol)` — but xtensor's signature is
-    // `allclose(a, b, rtol, atol)`. So `*_atol` here is xtensor's rtol (scales
-    // with |b|), and `*_rtol` here is xtensor's atol (covers near-zero |b|).
-    // Names are kept to avoid churn at all call sites.
-    float result_atol = 2.0F;
-    float result_rtol = 1.0e2F;
-    float intermediate_atol = 3.0F;
-    float intermediate_rtol = 1.0e2F;
+    float result_atol = 2e-2F;
+    float result_rtol = 2e-2F;
+    float intermediate_atol = 2e-2F;
+    float intermediate_rtol = 2e-2F;
     std::string test_name = "SDPA Test";
 };
 
@@ -592,39 +555,6 @@ void run_sdpa_test(const SDPATestConfig& config) {
     float mse_composite_vs_float = compute_mse(composite_result_xtensor, float_result);
     float mse_kernel_vs_composite_interm = compute_mse(interm_xtensor, composite_interm_xtensor);
 
-    // Max abs/rel error — used to size tolerances.
-    auto [abs_kvc, rel_kvc] = compute_max_abs_rel(result_xtensor, composite_result_xtensor);
-    auto [abs_kvf, rel_kvf] = compute_max_abs_rel(result_xtensor, float_result);
-    auto [abs_cvf, rel_cvf] = compute_max_abs_rel(composite_result_xtensor, float_result);
-    auto [abs_interm_kvf, rel_interm_kvf] = compute_max_abs_rel(interm_xtensor, float_intermediates);
-    auto [abs_interm_kvc, rel_interm_kvc] = compute_max_abs_rel(interm_xtensor, composite_interm_xtensor);
-    // Element-count of outliers at current thresholds.
-    auto [n_over_iv, n_total_iv, excess_iv] =
-        count_outliers(interm_xtensor, float_intermediates, config.intermediate_atol, config.intermediate_rtol);
-    std::size_t n_nan_a = static_cast<std::size_t>(xt::sum(xt::cast<int>(xt::isnan(interm_xtensor)))());
-    std::size_t n_nan_b = static_cast<std::size_t>(xt::sum(xt::cast<int>(xt::isnan(float_intermediates)))());
-    std::size_t n_inf_a = static_cast<std::size_t>(xt::sum(xt::cast<int>(xt::isinf(interm_xtensor)))());
-    std::size_t n_inf_b = static_cast<std::size_t>(xt::sum(xt::cast<int>(xt::isinf(float_intermediates)))());
-
-    // The new bf16 exp produces NaN at fully-masked LSE positions (exp(0) drift +
-    // log(0) at masked rows). Substitute the float reference at NaN positions so
-    // allclose can still check the genuine LSE values. Training is verified
-    // separately; these NaN positions never feed into a loss because they
-    // correspond to fully-masked rows.
-    xt::xarray<float> interm_clean =
-        xt::eval(xt::where(xt::isnan(interm_xtensor), float_intermediates, interm_xtensor));
-
-    std::cout << "[SDPA_ERR " << config.test_name << "]\n"
-              << "  result      kernel_vs_composite: abs=" << abs_kvc << " rel=" << rel_kvc << "\n"
-              << "  result      kernel_vs_float    : abs=" << abs_kvf << " rel=" << rel_kvf << "\n"
-              << "  result      composite_vs_float : abs=" << abs_cvf << " rel=" << rel_cvf << "\n"
-              << "  intermed.   kernel_vs_float    : abs=" << abs_interm_kvf << " rel=" << rel_interm_kvf << "\n"
-              << "  intermed.   kernel_vs_composite: abs=" << abs_interm_kvc << " rel=" << rel_interm_kvc << "\n"
-              << "  intermed.   outliers           : " << n_over_iv << " / " << n_total_iv
-              << " over bound (excess up to " << excess_iv << ")\n"
-              << "  intermed.   nan/inf            : kernel nan=" << n_nan_a << " inf=" << n_inf_a
-              << "  float nan=" << n_nan_b << " inf=" << n_inf_b << std::endl;
-
     // Primary validation: Kernel vs Composite (most reliable - both use same implementation approach)
     EXPECT_TRUE(xt::allclose(result_xtensor, composite_result_xtensor, config.result_atol, config.result_rtol))
         << "Kernel vs Composite comparison failed in " << config.test_name << " (MSE: " << mse_kernel_vs_composite
@@ -644,14 +574,13 @@ void run_sdpa_test(const SDPATestConfig& config) {
             << "Composite vs Float result comparison failed in " << config.test_name
             << " (MSE: " << mse_composite_vs_float << ")";
 
-        EXPECT_TRUE(xt::allclose(interm_clean, float_intermediates, config.intermediate_atol, config.intermediate_rtol))
+        EXPECT_TRUE(
+            xt::allclose(interm_xtensor, float_intermediates, config.intermediate_atol, config.intermediate_rtol))
             << "Intermediate result comparison failed in " << config.test_name;
     } else {
         // Float implementation unreliable, compare intermediates between kernel and composite instead
-        xt::xarray<float> interm_clean_vs_composite =
-            xt::eval(xt::where(xt::isnan(interm_xtensor), composite_interm_xtensor, interm_xtensor));
-        EXPECT_TRUE(xt::allclose(
-            interm_clean_vs_composite, composite_interm_xtensor, config.intermediate_atol, config.intermediate_rtol))
+        EXPECT_TRUE(
+            xt::allclose(interm_xtensor, composite_interm_xtensor, config.intermediate_atol, config.intermediate_rtol))
             << "Kernel vs Composite intermediate result comparison failed in " << config.test_name
             << " (MSE: " << mse_kernel_vs_composite_interm << ")";
     }
@@ -741,12 +670,6 @@ TEST_F(SDPAForwardTest, DISABLED_SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
         .num_query_heads = 6U,
         .num_key_heads = 6U,
         .mask_type = ttml::metal::AttentionMaskType::Causal,
-        // Long-sequence causal mask + new bf16 exp amplifies LSE NaN at fully-masked
-        // diagonal rows; widen tolerances to flag only wholesale regressions.
-        .result_atol = 5.0F,
-        .result_rtol = 1.5e3F,
-        .intermediate_atol = 2.0F,
-        .intermediate_rtol = 5e1F,
         .test_name = "CausalMask_MHA_4B_256S_6H"};
     run_sdpa_test(config);
 }
@@ -764,11 +687,6 @@ TEST_F(SDPAForwardTest, DISABLED_SDPAForwardTest_CausalMask_GQA_Batch16_Seq512) 
         .num_query_heads = 8U,
         .num_key_heads = 4U,
         .mask_type = ttml::metal::AttentionMaskType::Causal,
-        // Same NaN-amplification story as MHA_4B_256S_6H, sequence is even longer.
-        .result_atol = 5.0F,
-        .result_rtol = 1.5e3F,
-        .intermediate_atol = 2.0F,
-        .intermediate_rtol = 5e1F,
         .test_name = "CausalMask_GQA_16B_512S_8Q_4KV"};
     run_sdpa_test(config);
 }
@@ -795,6 +713,12 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_SmallBatch_12Heads_6Group) {
         .num_query_heads = 12U,
         .num_key_heads = 6U,
         .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+        // bf16 exp polynomial widens result envelope at S=1024 with grouped heads.
+        .result_atol = 6e-2F,
+        .result_rtol = 6e-2F,
+        // logsumexp uses the bf16 exp; widen intermediate tolerance accordingly.
+        .intermediate_atol = 7e-2F,
+        .intermediate_rtol = 7e-2F,
         .test_name = "SmallBatch_12H_6KV_Grouped"};
     run_sdpa_test(config);
 }
@@ -808,6 +732,11 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
         .num_query_heads = 12U,
         .num_key_heads = 6U,
         .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+        // bf16 exp shifts numerical envelope; bump result + intermediate tolerances.
+        .result_atol = 7e-2F,
+        .result_rtol = 7e-2F,
+        .intermediate_atol = 7e-2F,
+        .intermediate_rtol = 7e-2F,
         .test_name = "Batch_16B_12H_6KV_Production"};
     run_sdpa_test(config);
 }
@@ -947,27 +876,15 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         std::vector<size_t> expected_interm_shape = {B, num_heads, S, kIntermediateWidth};
         EXPECT_EQ(interm_xtensor.shape(), expected_interm_shape) << "Intermediate shape should be (B, q_heads, S, 32)";
 
-        // Logsumexp at column 0 should be finite for the bulk of rows.
-        // The new bf16 exp produces NaN at fully-masked rows (exp(-inf) → 0,
-        // sum → 0, log(0) → -inf or NaN). Tolerate up to 5% NaN positions.
-        size_t lse_count = 0;
-        size_t lse_nan = 0;
+        // Verify logsumexp values at position 0 are finite
         for (size_t b_idx = 0; b_idx < B; ++b_idx) {
             for (size_t h_idx = 0; h_idx < num_heads; ++h_idx) {
                 for (size_t s_idx = 0; s_idx < S; ++s_idx) {
-                    ++lse_count;
-                    if (!std::isfinite(interm_xtensor(b_idx, h_idx, s_idx, 0))) {
-                        ++lse_nan;
-                    }
+                    float lse = interm_xtensor(b_idx, h_idx, s_idx, 0);
+                    EXPECT_TRUE(std::isfinite(lse)) << "logsumexp should be finite";
                 }
             }
         }
-        // bf16 exp can produce NaN at fully-masked rows; warn if >50%, fail if all.
-        if (lse_nan * 2U > lse_count) {
-            std::cout << "[WARN " << "IntermediateReturnModes] high logsumexp NaN ratio: " << lse_nan << " / "
-                      << lse_count << std::endl;
-        }
-        EXPECT_LT(lse_nan, lse_count) << "all logsumexp values are NaN — kernel is broken";
     }
 }
 
