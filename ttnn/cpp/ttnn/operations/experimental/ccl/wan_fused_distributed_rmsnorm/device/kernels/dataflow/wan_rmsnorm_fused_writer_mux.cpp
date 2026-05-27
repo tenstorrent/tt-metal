@@ -48,12 +48,13 @@ using namespace tt::tt_fabric::linear::experimental;
 constexpr uint32_t output_cb = get_compile_time_arg_val(0);
 constexpr uint32_t num_tile_cols = get_compile_time_arg_val(1);
 constexpr uint32_t block_size = get_compile_time_arg_val(2);
-// stats_transposed_local_cb : window_size post-transpose fp32 tiles produced
-// by the compute kernel. Real data lives in row 0 of each tile — two 64 B
-// spans at face_00[0..63] and face_01[0..63] (the inter-face gap is 960 B of
-// padding). The writer extracts those two spans per tile and packs them
-// contiguously into stats_packed_local_cb (next CB) for a single fabric mcast.
-constexpr uint32_t stats_transposed_local_cb = get_compile_time_arg_val(3);
+// stats_local_cb : window_size fp32 stat tiles produced by the compute kernel
+// (reduce<SUM,REDUCE_ROW> output). Real data lives in COL 0 — 32 fp32 values
+// stored at strided offsets within face_00 (col 0 of the top-left face) +
+// face_10 (col 0 of the bottom-left face). The other 31 cols are zero by
+// LLK design. The writer extracts col 0 via 32 strided L1 loads per tile and
+// packs them contiguously into stats_packed_local_cb for a single fabric mcast.
+constexpr uint32_t stats_local_cb = get_compile_time_arg_val(3);
 // stats_gathered_cb : window_size * ring_size fp32 tiles. After AG, the
 // writer scatters the gathered packed bytes back into row 0 of these tiles
 // (face_00[0..63] + face_01[0..63] per tile). Compute then transposes each
@@ -320,30 +321,32 @@ void kernel_main() {
         const uint32_t packed_gathered_base = get_write_ptr(stats_packed_gathered_cb);
         const uint32_t my_packed_gathered_addr = packed_gathered_base + my_device_index * page_size_bytes;
 
-        // Wait for compute to deliver `rows_in_chunk` post-transpose tiles
-        // (real data in row 0 of each tile). Extract row 0 from each tile
-        // and pack into stats_packed_local_cb at offset r * 128 B.
-        cb_wait_front(stats_transposed_local_cb, rows_in_chunk);
-        const uint32_t transposed_base = get_read_ptr(stats_transposed_local_cb);
+        // Wait for compute to deliver `rows_in_chunk` stat tiles (col-0
+        // form: 32 fp32 sums in col 0, rest zero). Extract col 0 via 32
+        // strided L1 loads per tile — local-to-local L1 loads run at RISC-V
+        // speed (~1 cycle each) without NoC overhead.
+        cb_wait_front(stats_local_cb, rows_in_chunk);
+        const uint32_t stats_local_base = get_read_ptr(stats_local_cb);
         for (uint32_t r = 0; r < rows_in_chunk; r++) {
-            const uint32_t tile_base = transposed_base + r * stats_tile_bytes;
-            const uint32_t dst_offset = r * kRowBytesPerTile;
-            // face_00 row 0 (cols 0-15) → packed[0..63]
-            const uint64_t src0 = safe_get_noc_addr(my_x[0], my_y[0], tile_base, 0);
-            noc_async_read(src0, packed_local_addr + dst_offset, kTileFaceRowBytes);
-            // face_01 row 0 (cols 16-31) → packed[64..127]
-            const uint64_t src1 = safe_get_noc_addr(my_x[0], my_y[0], tile_base + kTileFace01ByteOffset, 0);
-            noc_async_read(src1, packed_local_addr + dst_offset + kTileFaceRowBytes, kTileFaceRowBytes);
+            const volatile tt_l1_ptr uint32_t* tile_src =
+                reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(stats_local_base + r * stats_tile_bytes);
+            uint32_t* packed_dst = reinterpret_cast<uint32_t*>(packed_local_addr + r * kRowBytesPerTile);
+            // Face_00 col 0 (rows 0..15): uint32 indices 0, 16, ..., 240.
+            for (uint32_t i = 0; i < 16; i++) {
+                packed_dst[i] = tile_src[i * 16];
+            }
+            // Face_10 col 0 (rows 16..31): face_10 starts at byte 2048
+            // (uint32 idx 512), col 0 at indices 512, 528, ..., 752.
+            for (uint32_t i = 0; i < 16; i++) {
+                packed_dst[16 + i] = tile_src[512 + i * 16];
+            }
         }
-        noc_async_read_barrier();
-        cb_pop_front(stats_transposed_local_cb, rows_in_chunk);
+        cb_pop_front(stats_local_cb, rows_in_chunk);
 
-        // L1 copy of my own packed page into the gathered CB slot — skip
-        // the local-DRAM roundtrip (Phase 1.1 pattern). The fabric mcast
-        // reads packed_local_addr in parallel; both source the same data
-        // and don't conflict at the NoC level.
-        const uint64_t my_gathered_noc_addr = safe_get_noc_addr(my_x[0], my_y[0], my_packed_gathered_addr, 0);
-        noc_async_write(packed_local_addr, my_gathered_noc_addr, page_size_bytes);
+        // No L1 copy of my own page into stats_packed_gathered_cb. The
+        // scatter step below reads my own slot directly from packed_local
+        // (the source we just packed); other slots come from DRAM reads.
+        // Saves a 128 B NoC self-write per chunk.
 
         // Fabric mcast: the SAME page index lands at the same DRAM address
         // on every chip; my_device_index ensures my data goes to my pages.
@@ -424,7 +427,11 @@ void kernel_main() {
         const uint32_t stats_gathered_base = get_write_ptr(stats_gathered_cb);
         for (uint32_t r = 0; r < rows_in_chunk; r++) {
             for (uint32_t d = 0; d < ring_size; d++) {
-                const uint32_t packed_src = packed_gathered_base + d * page_size_bytes + r * kRowBytesPerTile;
+                // Own slot reads from packed_local (no L1 copy needed);
+                // remote slots come from packed_gathered (DRAM-read above).
+                const uint32_t packed_src = (d == my_device_index)
+                                                ? (packed_local_addr + r * kRowBytesPerTile)
+                                                : (packed_gathered_base + d * page_size_bytes + r * kRowBytesPerTile);
                 const uint32_t tile_dst = stats_gathered_base + (r * ring_size + d) * stats_tile_bytes;
                 volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_dst);
                 const uint32_t* src = reinterpret_cast<const uint32_t*>(packed_src);
