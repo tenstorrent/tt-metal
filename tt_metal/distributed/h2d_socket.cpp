@@ -413,9 +413,13 @@ void H2DSocket::push_bytes(uint32_t num_bytes) {
         write_ptr_ += num_bytes;
         bytes_sent_ += num_bytes;
     }
-    // Crash-safe persistence for the next driver process.
-    connector_state_->bytes_sent = bytes_sent_;
-    connector_state_->write_ptr = write_ptr_;
+    // Crash-safe persistence for the next driver process. The DramRecv socket
+    // (in-process prefetcher owner) skips connector-state setup — there's no
+    // separate connector that ever attaches — so the writes are guarded.
+    if (connector_state_) {
+        connector_state_->bytes_sent = bytes_sent_;
+        connector_state_->write_ptr = write_ptr_;
+    }
 }
 
 void H2DSocket::notify_receiver() {
@@ -439,10 +443,14 @@ void H2DSocket::set_page_size(uint32_t page_size) {
     write_ptr_ = next_fifo_wr_ptr;
     page_size_ = page_size;
     fifo_curr_size_ = fifo_page_aligned_size;
-    connector_state_->page_size = page_size_;
-    connector_state_->fifo_curr_size = fifo_curr_size_;
-    connector_state_->bytes_sent = bytes_sent_;
-    connector_state_->write_ptr = write_ptr_;
+    // DramRecv sockets skip the SHM connector-state region (no cross-process
+    // attach is supported on the DRISC path), so guard the writes.
+    if (connector_state_) {
+        connector_state_->page_size = page_size_;
+        connector_state_->fifo_curr_size = fifo_curr_size_;
+        connector_state_->bytes_sent = bytes_sent_;
+        connector_state_->write_ptr = write_ptr_;
+    }
 }
 
 void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) {
