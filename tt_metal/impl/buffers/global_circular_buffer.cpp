@@ -362,13 +362,13 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
 }  // namespace
 
 GlobalCircularBuffer CreateGlobalCircularBufferWithDramSenders(
-    distributed::MeshDevice* mesh_device,
+    distributed::MeshDevice& mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type) {
-    auto mapping = build_dram_sender_mapping(mesh_device, bank_to_receivers);
+    auto mapping = build_dram_sender_mapping(&mesh_device, bank_to_receivers);
     return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::make_dram_sender(
-        mesh_device, mapping, size, buffer_type);
+        &mesh_device, mapping, size, buffer_type);
 }
 
 SenderCoreType sender_core_type(const GlobalCircularBuffer& gcb) {

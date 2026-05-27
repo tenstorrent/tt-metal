@@ -19,8 +19,6 @@
 
 namespace tt::tt_metal {
 
-class IDevice;
-
 namespace distributed {
 class MeshDevice;
 }  // namespace distributed
@@ -47,7 +45,7 @@ enum class SenderCoreType : uint8_t {
 // MeshDevice-only: the arena that backs this GCB's pages_sent allocation lives on
 // MeshDeviceImpl, so a bare IDevice cannot construct one.
 GlobalCircularBuffer CreateGlobalCircularBufferWithDramSenders(
-    distributed::MeshDevice* mesh_device,
+    distributed::MeshDevice& mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type = BufferType::L1);
