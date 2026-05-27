@@ -63,9 +63,9 @@ static void run_pack_relu_test(
     constexpr const char* WRITER = "writer";
     constexpr const char* COMPUTE = "compute";
 
-    // Legacy DataflowBufferConfig used enable_implicit_sync = true on both DFBs;
-    // keep DataflowBufferSpec::disable_implicit_sync at its default (false) and
-    // set the program-level reservation flag below.
+    // Implicit sync is enabled by default for both DFBs (no DM kernel opts out
+    // via Gen2DataMovementConfig::disable_implicit_sync_for). The program-level
+    // reservation flag set below is independent of per-DFB sync mode.
     experimental::metal2_host_api::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
         .entry_size = single_tile_size,

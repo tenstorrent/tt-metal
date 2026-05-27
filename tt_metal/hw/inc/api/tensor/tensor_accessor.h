@@ -90,11 +90,24 @@ public:
     // The token instance is emitted by host codegen into kernel_bindings_generated.h,
     // based on the information in the user's host code (ProgramSpec).
     // Delegates to the legacy TensorAccessorArgs ctor.
+    //
+    // The binding's CRTA section is laid out as: [base_address_word, optional runtime
+    // accessor fields...]. The runtime accessor fields (used when the TensorParameter
+    // opts into a dynamic field like dynamic_tensor_shape) start at the word immediately
+    // following the address slot, so the TAA's CRTA_OFFSET is ADDR_CRTA_OFFSET/sizeof(u32)+1.
     template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
     TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) :
         TensorAccessor(
-            TensorAccessorArgs<CTA_OFFSET>{},
-            static_cast<size_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {}
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>{},
+            static_cast<size_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {
+        // ADDR_CRTA_OFFSET is the byte offset of the binding's base-address word. Host codegen
+        // produces it as `crta_word_index * sizeof(uint32_t)`, so it is word-aligned by
+        // construction. The conversions to a CRTA word index (`/sizeof(uint32_t)`) silently
+        // truncate otherwise — catch any future codegen change that violates the invariant.
+        static_assert(
+            ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0,
+            "TensorAccessorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
+    }
 
     constexpr const auto& dspec() const {
         if constexpr (DSpec::is_static) {
@@ -371,14 +384,17 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         aligned_page_size(page_size_in) {}
 
     // Construct TensorAccessor directly from a Metal 2.0 binding token.
-    // The token instance is emitted by host codegen into kernel_bindings_generated.h,
-    // based on the information in the user's host code (ProgramSpec).
-    // Delegates to the legacy TensorAccessorArgs ctor.
+    // See the sharded specialization for the binding's CRTA section layout and the
+    // alignment rationale.
     template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
     TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) :
         TensorAccessor(
-            TensorAccessorArgs<CTA_OFFSET>{},
-            static_cast<uint32_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {}
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>{},
+            static_cast<uint32_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {
+        static_assert(
+            ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0,
+            "TensorAccessorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
+    }
 
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
     constexpr explicit TensorAccessor(
@@ -493,33 +509,31 @@ TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t)
         /* IsDram */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_dram>>;
 
 // CTAD deduction guide for the Metal 2.0 binding-token ctor.
-// Mirrors the (args, size_t) guide above, using TensorAccessorArgs<CTA_OFFSET> as the static
-// layout source. So, the same DSpec (and same specialization) is selected.
-// NOTE: Currently Metal 2.0 tensor bindings only support CTA TensorAccessorArgs.
-//       This anticipates dynamic support (coming soon) and also maintains symmetry with the
-//       legacy API's deduction guide above.
+// Mirrors the (args, size_t) guide above. The token's ADDR_CRTA_OFFSET marks the
+// binding's base-address slot; any runtime accessor fields start at the next word,
+// so the TAA's CRTA_OFFSET is ADDR_CRTA_OFFSET/sizeof(u32)+1.
 template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
 TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>)
     -> TensorAccessor<tensor_accessor::DistributionSpec<
-        /* RankCT */ TensorAccessorArgs<CTA_OFFSET>::RankCT,
-        /* NumBanksCT */ TensorAccessorArgs<CTA_OFFSET>::NumBanksCT,
+        /* RankCT */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::RankCT,
+        /* NumBanksCT */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::NumBanksCT,
         /* TensorShapeWrapper */
         typename tensor_accessor::ArrayWrapperTypeSelectorU32<
-            !TensorAccessorArgs<CTA_OFFSET>::tensor_shape_is_crta,
-            TensorAccessorArgs<CTA_OFFSET>::TensorShapeCTAOffset,
-            TensorAccessorArgs<CTA_OFFSET>::RankCT>::type,
+            !TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::tensor_shape_is_crta,
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::TensorShapeCTAOffset,
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::RankCT>::type,
         /* ShardShapeWrapper */
         typename tensor_accessor::ArrayWrapperTypeSelectorU32<
-            !TensorAccessorArgs<CTA_OFFSET>::shard_shape_is_crta,
-            TensorAccessorArgs<CTA_OFFSET>::ShardShapeCTAOffset,
-            TensorAccessorArgs<CTA_OFFSET>::RankCT>::type,
+            !TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::shard_shape_is_crta,
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::ShardShapeCTAOffset,
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::RankCT>::type,
         /* BankCoordsWrapper */
         typename tensor_accessor::ArrayWrapperTypeSelectorPackedU16<
-            !TensorAccessorArgs<CTA_OFFSET>::bank_coords_is_crta,
-            TensorAccessorArgs<CTA_OFFSET>::BankCoordsCTAOffset,
-            TensorAccessorArgs<CTA_OFFSET>::NumBanksCT>::type,
-        /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET>::is_sharded,
-        /* IsDram */ TensorAccessorArgs<CTA_OFFSET>::is_dram>>;
+            !TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::bank_coords_is_crta,
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::BankCoordsCTAOffset,
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::NumBanksCT>::type,
+        /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_sharded,
+        /* IsDram */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_dram>>;
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)

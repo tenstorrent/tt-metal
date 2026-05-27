@@ -40,7 +40,15 @@ struct DataflowBufferConfig {
     uint16_t consumer_risc_mask = 0x0;  // bits 0-7 = DM riscs, bits 8-15 = Tensix riscs
     uint8_t num_consumers = 1;
     AccessPattern cap = AccessPattern::STRIDED;
-    bool enable_implicit_sync = false;
+
+    // Implicit sync — per-side opt-in to the streamlined ISR-driven credit posting.
+    // (Only applies to DM riscs; Tensix riscs always require explicit sync.)
+    // Setting the two sides asymmetrically is a niche debug knob for isolating sync bugs;
+    // typical usage sets both to the same value.
+    bool enable_producer_implicit_sync = false;
+    bool enable_consumer_implicit_sync = false;
+
+    // Data format and tile formats for LLKs
     DataFormat data_format = tt::DataFormat::Float16_b;
     std::optional<Tile> tile = std::nullopt;
     // Set only when both producer and consumer are the same compute kernel
