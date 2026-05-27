@@ -45,6 +45,7 @@ Tensor paged_fill_cache(
     const std::optional<Tensor>& batch_idx_tensor,
     uint32_t batch_idx_fallback,
     const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt,
-    std::optional<uint32_t> block_size_override = std::nullopt);
+    std::optional<uint32_t> block_size_override = std::nullopt,
+    std::optional<uint32_t> cache_position_modulo = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -116,6 +116,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/pool/test_global_avg_pool2d.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
   - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py
+  - tests/ttnn/unit_tests/operations/sdpa/test_bounded_sliding_kv_cache.py
   - tests/ttnn/unit_tests/operations/transformers/test_paged_cache_flexible_geometry.py
   - tests/ttnn/unit_tests/operations/transformers/test_paged_fused_update_cache.py
 
