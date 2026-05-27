@@ -9,8 +9,11 @@ Only re-run jobs that were failing before the change.
 
 ## Default Rule
 
-For each pipeline branch, do not run full workflow verification by default.
-Run only the previously failing jobs unless there is a reason to re-expand scope.
+For each pipeline PR, the single targeted verification run is a NON-REGRESSION CHECK:
+- Dispatch only the jobs that previously contained the disabled tests on `main`.
+- The goal is to confirm that tests which were passing on `main` in those jobs are still passing on the PR branch after the disable changes.
+- Do not run the full workflow matrix for verification.
+- Do not use the verification run to discover new disables.
 
 ## PR Verification Budget (Exactly One Run)
 
@@ -111,7 +114,8 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
 
 ## Safety Constraints
 
-- Never dispatch more than one workflow run at a time.
+- Each automation session may dispatch at most one new workflow run.
+- Multiple workflow runs may be in progress concurrently across PRs; the cap applies only to new dispatches per session.
 - Never dispatch unrelated workflows.
 - Keep PRs as draft until final validation.
 - Do not include temporary workflow-pruning edits in the final PR branch.
