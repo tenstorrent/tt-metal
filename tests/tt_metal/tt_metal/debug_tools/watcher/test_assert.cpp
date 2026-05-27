@@ -28,7 +28,6 @@
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "internal/tt-2xx/quasar/error_handling.h"
-#include <tt-metalium/experimental/host_api.hpp>
 #include "impl/debug/debug_helpers.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 

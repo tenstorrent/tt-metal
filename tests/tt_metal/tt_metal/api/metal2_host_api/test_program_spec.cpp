@@ -35,7 +35,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/host_api.hpp>  // for QuasarComputeConfig
+#include "impl/host_api/temp_quasar_api.hpp"  // for QuasarComputeConfig
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>  // for CompileProgram (JIT trigger)

@@ -27,7 +27,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>

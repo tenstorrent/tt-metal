@@ -39,8 +39,6 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 namespace tt::tt_metal {
