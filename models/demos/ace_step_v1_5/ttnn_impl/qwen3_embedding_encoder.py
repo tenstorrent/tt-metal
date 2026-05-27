@@ -35,6 +35,7 @@ from .math_perf_env import (
     ace_step_cond_linear_program_config,
     ace_step_cond_mlp_gate_up_linear_program_config,
     ace_step_cond_rms_norm_kwargs,
+    ace_step_ensure_dram_activation,
     ace_step_ensure_l1_activation,
     ace_step_ensure_tile_layout,
     ace_step_init_cond_linear_compute_kernel_config,
@@ -257,6 +258,8 @@ class TtQwen3EncoderMLP:
         self.mem = mem
         self.hidden_size = int(hidden_size)
         self.intermediate_size = int(intermediate_size)
+        # Activation dtype (BF16) used by this MLP.
+        self.dtype = dtype
         self._linear_ck = linear_compute_kernel_config
         self._act_l1 = activation_l1_memory_config
         self._linear_out_l1 = linear_output_l1_memory_config
@@ -364,15 +367,24 @@ class TtQwen3EncoderMLP:
         else:
             x = self._l1_activation(x)
         lin_gu = self._gate_up_linear_kwargs(batch_size=b_x, seq_len=s)
+        # Use LoFi linear weight dtype (bfloat8_b when available) for MLP matmuls as well.
+        _bf8 = getattr(ttnn, "bfloat8_b", None) or getattr(ttnn, "bfloat16", None)
+        _tc_kw = {"memory_config": self._linear_out_l1} if self._linear_out_l1 is not None else {}
+        x_bf8 = ttnn.typecast(x, dtype=_bf8, **_tc_kw)
         if self._fused_gate_up:
-            gu = ttnn.linear(x, self.w_gate_up, bias=None, transpose_b=True, **lin_gu)
+            gu_bf8 = ttnn.linear(x_bf8, self.w_gate_up, bias=None, transpose_b=True, dtype=_bf8, **lin_gu)
             inter = self.intermediate_size
-            gate = ttnn.slice(gu, (0, 0, 0, 0), (b_x, 1, s, inter))
-            up = ttnn.slice(gu, (0, 0, 0, inter), (b_x, 1, s, 2 * inter))
-            ace_step_safe_deallocate(ttnn, gu)
+            gate_bf8 = ttnn.slice(gu_bf8, (0, 0, 0, 0), (b_x, 1, s, inter))
+            up_bf8 = ttnn.slice(gu_bf8, (0, 0, 0, inter), (b_x, 1, s, 2 * inter))
+            ace_step_safe_deallocate(ttnn, gu_bf8)
+            gate = ttnn.typecast(gate_bf8, dtype=self.dtype, **_tc_kw)
+            up = ttnn.typecast(up_bf8, dtype=self.dtype, **_tc_kw)
         else:
-            gate = ttnn.linear(x, self.w_gate, bias=None, transpose_b=True, **lin_gu)
-            up = ttnn.linear(x, self.w_up, bias=None, transpose_b=True, **lin_gu)
+            gate_bf8 = ttnn.linear(x_bf8, self.w_gate, bias=None, transpose_b=True, dtype=_bf8, **lin_gu)
+            up_bf8 = ttnn.linear(x_bf8, self.w_up, bias=None, transpose_b=True, dtype=_bf8, **lin_gu)
+            gate = ttnn.typecast(gate_bf8, dtype=self.dtype, **_tc_kw)
+            up = ttnn.typecast(up_bf8, dtype=self.dtype, **_tc_kw)
+        ace_step_safe_deallocate(ttnn, x_bf8)
         _silu_mc = (self._linear_out_l1 if not self._mlp_keep_dram_activations else None) or getattr(
             ttnn, "DRAM_MEMORY_CONFIG", None
         )
@@ -385,7 +397,12 @@ class TtQwen3EncoderMLP:
         if not self._mlp_keep_dram_activations:
             h = self._l1_activation(h)
         lin_down = self._down_linear_kwargs(batch_size=b_x, seq_len=s)
-        return ttnn.linear(h, self.w_down, bias=None, transpose_b=True, **lin_down)
+        # Run down-proj matmul in BFP8 as well (BF16→BFP8 activations, BFP8 weights, BFP8 output),
+        # then cast back to the MLP activation dtype for the rest of the block.
+        h_bf8 = ttnn.typecast(h, dtype=_bf8, **_tc_kw)
+        out_bf8 = ttnn.linear(h_bf8, self.w_down, bias=None, transpose_b=True, dtype=_bf8, **lin_down)
+        ace_step_safe_deallocate(ttnn, h_bf8)
+        return ttnn.typecast(out_bf8, dtype=self.dtype, **_tc_kw)
 
 
 class _TtQwen3EncoderLayer:
@@ -533,8 +550,12 @@ class _TtQwen3EncoderLayer:
         kv_dim_o = int(kv_h * Dh)
         lin_q = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=hsz, out_dim=q_dim_o)
         lin_kv = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=hsz, out_dim=2 * kv_dim_o)
-        q = ttnn.linear(x, self.wq, bias=None, transpose_b=True, **lin_q)
-        kv = ttnn.linear(x, self.wkv, bias=None, transpose_b=True, **lin_kv)
+        _bf8 = self._proj_dtype
+        _tc_kw = {"memory_config": _l1_mc} if _l1_mc is not None else {}
+        x_bf8 = ttnn.typecast(x, dtype=_bf8, **_tc_kw)
+        q = ttnn.linear(x_bf8, self.wq, bias=None, transpose_b=True, dtype=_bf8, **lin_q)
+        kv = ttnn.linear(x_bf8, self.wkv, bias=None, transpose_b=True, dtype=_bf8, **lin_kv)
+        ace_step_safe_deallocate(ttnn, x_bf8)
 
         # BFP8 1D-mcast matmul can spill Q/KV to DRAM despite memory_config=L1; head-split
         # inherits that placement. Force L1 before SDPA (no-op when already L1).
@@ -587,7 +608,9 @@ class _TtQwen3EncoderLayer:
             v = ttnn.pad(v, padding=pad4, value=0.0)
 
         # ``attn_bias_b11ss`` is pre-expanded to ``[B, H, S, S]`` once in ``forward()`` (not per layer).
-        mask_tt = attn_bias_b11ss
+        mask_tt = ace_step_ensure_dram_activation(
+            ttnn, attn_bias_b11ss, ace_step_sdpa_mask_memory_config(ttnn) or self.mem
+        )
 
         sdpa_kw = dict(attn_mask=mask_tt, is_causal=False, scale=self.scale)
         if self._sdpa_compute_kernel_config is not None:
@@ -744,9 +767,12 @@ class TtQwen3EmbeddingEncoder:
             memory_config=self.mem,
             mesh_mapper=mapper,
         )
-        h = ttnn.embedding(ids_tt, weight=self.embed_weight, dtype=self.dtype)
-        ttnn.deallocate(ids_tt)
         l1_mc = ace_step_linear_l1_memory_config(ttnn)
+        _emb_mc_kw = {"memory_config": l1_mc} if l1_mc is not None else {}
+        h = ttnn.embedding(ids_tt, weight=self.embed_weight, dtype=self.dtype, **_emb_mc_kw)
+        ttnn.deallocate(ids_tt)
+        # ace_step_ensure_l1_activation is now a no-op (embedding already writes to L1);
+        # kept for safety when l1_mc is None.
         return ace_step_ensure_l1_activation(ttnn, h, l1_mc)
 
     def forward(self, input_ids: np.ndarray, attention_mask: Optional[np.ndarray] = None) -> ttnn.Tensor:
@@ -766,9 +792,11 @@ class TtQwen3EmbeddingEncoder:
             memory_config=self.mem,
             mesh_mapper=mapper,
         )
-        h = ttnn.embedding(ids_tt, weight=self.embed_weight, dtype=self.dtype)
-        ttnn.deallocate(ids_tt)
         l1_mc = ace_step_linear_l1_memory_config(ttnn)
+        _emb_mc_kw = {"memory_config": l1_mc} if l1_mc is not None else {}
+        h = ttnn.embedding(ids_tt, weight=self.embed_weight, dtype=self.dtype, **_emb_mc_kw)
+        ttnn.deallocate(ids_tt)
+        # embedding already writes to L1; ace_step_ensure_l1_activation is a no-op when l1_mc matches.
         h = ace_step_ensure_l1_activation(ttnn, h, l1_mc)
         h = ttnn.reshape(h, (b, 1, s, cfg.hidden_size), **_sr)
 
