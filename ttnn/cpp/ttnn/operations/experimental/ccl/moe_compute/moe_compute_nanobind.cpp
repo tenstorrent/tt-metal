@@ -263,5 +263,19 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("K"),
         nb::arg("w2_shard_map"),
         nb::arg("w0_w1_shard_map"));
+
+    ttnn::bind_function<"quantize_weights_via_host", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Round-trip a device tensor through host to change its dtype and
+        re-upload it under the supplied memory config. Used to quantize the
+        packed MoE weight tensors to ``bfloat4_b`` on the DRAM-sharded mem
+        config the kernel consumes.
+        )doc",
+        &ttnn::experimental::quantize_weights_via_host,
+        nb::arg("device_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("dtype"),
+        nb::arg("memory_config"));
 }
 }  // namespace ttnn::operations::experimental::ccl

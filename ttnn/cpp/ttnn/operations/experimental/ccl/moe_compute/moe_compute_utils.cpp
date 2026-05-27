@@ -15,6 +15,9 @@
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
@@ -110,6 +113,10 @@ ttnn::Tensor prepare_w2_no_n_pad(
     }
 
     auto reordered = ttnn::concat(each_shard, -1);
+    for (auto& s : each_shard) {
+        s.deallocate(/*force=*/true);
+    }
+    each_shard.clear();
     auto grouped_per_bank = reshape_to(
         reordered,
         {static_cast<int32_t>(L),
@@ -119,6 +126,7 @@ ttnn::Tensor prepare_w2_no_n_pad(
          static_cast<int32_t>(w2_groups_per_core),
          static_cast<int32_t>(4 * TILE_SIZE)});
     grouped_per_bank = permute_to(grouped_per_bank, {3, 0, 1, 4, 2, 5});
+    reordered.deallocate(/*force=*/true);
 
     auto n_grouped = reshape_to(
         grouped_per_bank,
@@ -174,12 +182,22 @@ ttnn::Tensor prepare_w2_no_n_pad(
                  static_cast<int32_t>(4 * TILE_SIZE)}));
         }
         per_core_shards.push_back(ttnn::concat(chunks, 4));
+        for (auto& c : chunks) {
+            c.deallocate(/*force=*/true);
+        }
+        core_slab.deallocate(/*force=*/true);
         // Rotate current_order by 1.
         std::rotate(current_order.begin(), current_order.begin() + (current_order.size() - 1), current_order.end());
     }
+    n_grouped.deallocate(/*force=*/false);
+    grouped_per_bank.deallocate(/*force=*/true);
 
     auto stacked = ttnn::concat(per_core_shards, 0);
-    return reshape_to(
+    for (auto& s : per_core_shards) {
+        s.deallocate(/*force=*/true);
+    }
+    per_core_shards.clear();
+    auto result = reshape_to(
         stacked,
         {static_cast<int32_t>(num_cores),
          static_cast<int32_t>(L),
@@ -187,6 +205,8 @@ ttnn::Tensor prepare_w2_no_n_pad(
          static_cast<int32_t>(w2_groups_per_core),
          static_cast<int32_t>(Nt * TILE_SIZE),
          static_cast<int32_t>(4 * TILE_SIZE)});
+    stacked.deallocate(/*force=*/false);
+    return result;
 }
 
 }  // namespace
@@ -199,9 +219,15 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> add_shared_expert_weights(
     const ttnn::Tensor& shared_w1,
     const ttnn::Tensor& shared_w2) {
     auto output_w0 = ttnn::concat({routed_w0, shared_w0}, 1);
+    auto tile_w0 = ttnn::to_layout(output_w0, ttnn::Layout::TILE);
+    output_w0.deallocate(/*force=*/true);
     auto output_w1 = ttnn::concat({routed_w1, shared_w1}, 1);
+    auto tile_w1 = ttnn::to_layout(output_w1, ttnn::Layout::TILE);
+    output_w1.deallocate(/*force=*/true);
     auto output_w2 = ttnn::concat({routed_w2, shared_w2}, 1);
-    return {output_w0, output_w1, output_w2};
+    auto tile_w2 = ttnn::to_layout(output_w2, ttnn::Layout::TILE);
+    output_w2.deallocate(/*force=*/true);
+    return {tile_w0, tile_w1, tile_w2};
 }
 
 ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
@@ -234,6 +260,7 @@ ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
         auto padding = zeros_like_dtype({L, E, Kp - K, N}, tt_w0);
         working_w0 = ttnn::concat({tt_w0, padding}, 2);
         working_w1 = ttnn::concat({tt_w1, padding}, 2);
+        padding.deallocate(/*force=*/true);
     }
 
     // (L, E, Kp, N) -> (L, E, Kp, Nt, TILE_SIZE)
@@ -254,6 +281,10 @@ ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
 
     // Stack along new axis 4 so w0/w1 alternate: (L, E, Kp, Nt, 2, TILE_SIZE).
     auto stacked = stack_along({w0_chunks, w1_chunks}, 4);
+    w0_chunks.deallocate(/*force=*/false);
+    w1_chunks.deallocate(/*force=*/false);
+    working_w0.deallocate(/*force=*/false);
+    working_w1.deallocate(/*force=*/false);
     auto interleaved = reshape_to(
         stacked,
         {static_cast<int32_t>(L),
@@ -264,6 +295,8 @@ ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
 
     // Move Nt before Kp: (L, E, Nt, Kp, 2*TILE_SIZE).
     auto permuted = permute_to(interleaved, {0, 1, 3, 2, 4});
+    interleaved.deallocate(/*force=*/false);
+    stacked.deallocate(/*force=*/true);
 
     // Validate shard distribution and pick the padded shard size.
     uint32_t max_shard_size = *std::max_element(shard_map.begin(), shard_map.end());
@@ -300,6 +333,11 @@ ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
     }
 
     auto reordered = ttnn::concat(each_shard, 2);
+    for (auto& s : each_shard) {
+        s.deallocate(/*force=*/true);
+    }
+    each_shard.clear();
+    permuted.deallocate(/*force=*/true);
 
     // (L, E, num_cores * max_shard_size, Kp, 2*TILE_SIZE) -> (num_cores, L, E, max_shard_size, Kp, 2*TILE_SIZE)
     auto all_groups = reshape_to(
@@ -311,6 +349,7 @@ ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
          static_cast<int32_t>(Kp),
          static_cast<int32_t>(2 * TILE_SIZE)});
     all_groups = permute_to(all_groups, {2, 0, 1, 3, 4, 5});
+    reordered.deallocate(/*force=*/true);
 
     // Pair adjacent (w0, w1) tiles into 4-wide trailing chunks:
     // (num_cores, L, E, groups_per_core, 2, Kp, 2*TILE_SIZE)
@@ -325,7 +364,8 @@ ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
          static_cast<int32_t>(Kp),
          static_cast<int32_t>(2 * TILE_SIZE)});
     paired = permute_to(paired, {0, 1, 2, 3, 5, 4, 6});
-    return reshape_to(
+    all_groups.deallocate(/*force=*/true);
+    auto packed = reshape_to(
         paired,
         {static_cast<int32_t>(num_cores),
          static_cast<int32_t>(L),
@@ -333,6 +373,10 @@ ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
          static_cast<int32_t>(groups_per_core),
          static_cast<int32_t>(Kp),
          static_cast<int32_t>(4 * TILE_SIZE)});
+    auto result = ttnn::to_layout(packed, ttnn::Layout::TILE);
+    packed.deallocate(/*force=*/false);
+    paired.deallocate(/*force=*/true);
+    return result;
 }
 
 ttnn::Tensor prepare_w2_tensor_for_moe_compute(
@@ -367,9 +411,16 @@ ttnn::Tensor prepare_w2_tensor_for_moe_compute(
     const uint32_t n_padding = n_padded_tiles * TILE_SIZE - N;
     if (n_padding > 0) {
         auto pad = zeros_like_dtype({num_cores, L, E, w2_groups_per_core, n_padding, 4 * TILE_SIZE}, tt_w2);
-        return ttnn::concat({n_reordered_no_pad, pad}, 4);
+        auto padded = ttnn::concat({n_reordered_no_pad, pad}, 4);
+        n_reordered_no_pad.deallocate(/*force=*/true);
+        pad.deallocate(/*force=*/true);
+        auto result = ttnn::to_layout(padded, ttnn::Layout::TILE);
+        padded.deallocate(/*force=*/true);
+        return result;
     }
-    return n_reordered_no_pad;
+    auto result = ttnn::to_layout(n_reordered_no_pad, ttnn::Layout::TILE);
+    n_reordered_no_pad.deallocate(/*force=*/true);
+    return result;
 }
 
 ttnn::Tensor prepare_w0_w1_tensor_with_bias(
@@ -401,11 +452,19 @@ ttnn::Tensor prepare_w0_w1_tensor_with_bias(
     auto pad_rows = zeros_like_dtype({L, E, TILE_SIZE - 1, N}, tt_b0);
     auto b0_tiled = ttnn::concat({b0_row, pad_rows}, 2);
     auto b1_tiled = ttnn::concat({b1_row, pad_rows}, 2);
+    b0_row.deallocate(/*force=*/false);
+    b1_row.deallocate(/*force=*/false);
+    pad_rows.deallocate(/*force=*/true);
 
     auto w0_b0 = ttnn::concat({tt_w0, b0_tiled}, 2);  // (L, E, K + TILE_SIZE, N)
     auto w1_b1 = ttnn::concat({tt_w1, b1_tiled}, 2);
+    b0_tiled.deallocate(/*force=*/true);
+    b1_tiled.deallocate(/*force=*/true);
 
-    return prepare_w0_w1_tensor_for_moe_compute(w0_b0, w1_b1, L, E, K_with_bias, N, shard_map);
+    auto result = prepare_w0_w1_tensor_for_moe_compute(w0_b0, w1_b1, L, E, K_with_bias, N, shard_map);
+    w0_b0.deallocate(/*force=*/true);
+    w1_b1.deallocate(/*force=*/true);
+    return result;
 }
 
 ttnn::Tensor prepare_w2_tensor_with_bias(
@@ -441,6 +500,8 @@ ttnn::Tensor prepare_w2_tensor_with_bias(
     auto b2_row = ttnn::unsqueeze(tt_b2, 2);  // (L, E, 1, K)
     auto pad_rows = zeros_like_dtype({L, E, TILE_SIZE - 1, K}, tt_b2);
     auto b2_tiled = ttnn::concat({b2_row, pad_rows}, 2);
+    b2_row.deallocate(/*force=*/false);
+    pad_rows.deallocate(/*force=*/true);
 
     std::vector<ttnn::Tensor> b2_each_shard;
     uint32_t start_col = 0;
@@ -471,6 +532,11 @@ ttnn::Tensor prepare_w2_tensor_with_bias(
     }
 
     auto b2_reordered = ttnn::concat(b2_each_shard, -1);
+    for (auto& s : b2_each_shard) {
+        s.deallocate(/*force=*/true);
+    }
+    b2_each_shard.clear();
+    b2_tiled.deallocate(/*force=*/true);
     auto b2_grouped = reshape_to(
         b2_reordered,
         {static_cast<int32_t>(L),
@@ -480,9 +546,12 @@ ttnn::Tensor prepare_w2_tensor_with_bias(
          static_cast<int32_t>(w2_groups_per_core),
          static_cast<int32_t>(4 * TILE_SIZE)});
     b2_grouped = permute_to(b2_grouped, {3, 0, 1, 4, 2, 5});
+    b2_reordered.deallocate(/*force=*/true);
 
     // 3) Concat bias row after weight tiles (NOT rotated).
     auto n_with_bias = ttnn::concat({n_reordered_no_pad, b2_grouped}, 4);
+    n_reordered_no_pad.deallocate(/*force=*/true);
+    b2_grouped.deallocate(/*force=*/true);
 
     // 4) Pad to BLOCK_TILES_H tile multiple along N.
     const uint32_t n_total_tiles = Nt + 1;
@@ -490,9 +559,24 @@ ttnn::Tensor prepare_w2_tensor_with_bias(
     const uint32_t n_padding = (n_target_tiles - n_total_tiles) * TILE_SIZE;
     if (n_padding > 0) {
         auto pad = zeros_like_dtype({num_cores, L, E, w2_groups_per_core, n_padding, 4 * TILE_SIZE}, tt_w2);
-        n_with_bias = ttnn::concat({n_with_bias, pad}, 4);
+        auto padded = ttnn::concat({n_with_bias, pad}, 4);
+        n_with_bias.deallocate(/*force=*/true);
+        pad.deallocate(/*force=*/true);
+        n_with_bias = padded;
     }
-    return n_with_bias;
+    auto result = ttnn::to_layout(n_with_bias, ttnn::Layout::TILE);
+    n_with_bias.deallocate(/*force=*/true);
+    return result;
+}
+
+ttnn::Tensor quantize_weights_via_host(
+    const ttnn::Tensor& device_tensor, ttnn::DataType dtype, const ttnn::MemoryConfig& memory_config) {
+    auto host_tensor = ttnn::from_device(device_tensor);
+    auto cast_tensor = ttnn::to_dtype(host_tensor, dtype);
+    host_tensor.deallocate(/*force=*/true);
+    auto result = ttnn::to_device(cast_tensor, device_tensor.device(), memory_config);
+    cast_tensor.deallocate(/*force=*/true);
+    return result;
 }
 
 }  // namespace ttnn::experimental

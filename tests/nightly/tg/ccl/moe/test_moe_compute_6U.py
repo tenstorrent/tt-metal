@@ -22,10 +22,6 @@ import ttnn
 from ttnn.operations.ccl import MoEActivationFunction
 
 from ttnn.experimental.moe_compute_utils import (
-    prepare_w0_w1_tensor_for_moe_compute,
-    prepare_w0_w1_tensor_with_bias,
-    prepare_w2_tensor_for_moe_compute,
-    prepare_w2_tensor_with_bias,
     auto_output_width_shard_dim,
     get_weight_core_shard_maps,
     get_weight_mem_configs,
@@ -678,9 +674,9 @@ def validate_matmul(
 
                 if not allclose_passed:
                     mask = (tt_layer_output - torch_layer_output).abs() > ATOL_THRESHOLD
-                    logger.warning(
-                        f"AllClose variation result: {tt_layer_output[mask]}, ref: {torch_layer_output[mask]} indices: {mask.nonzero(as_tuple=True)}"
-                    )
+                    # logger.warning(
+            #                         f"AllClose variation result: {tt_layer_output[mask]}, ref: {torch_layer_output[mask]} indices: {mask.nonzero(as_tuple=True)}"
+            #                     )
             else:
                 logger.info(
                     f"Layer {layer_id}, Expert {expert_id} (buffer {buffer_idx}): PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
@@ -728,7 +724,7 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
             logger.warning(f"Layer {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
             if not allclose_passed:
                 mask = (vals - refs).abs() > ATOL_THRESHOLD
-                logger.warning(f"AllClose variation result: {vals[mask]}, ref: {refs[mask]}")
+                # logger.warning(f"AllClose variation result: {vals[mask]}, ref: {refs[mask]}")
         else:
             logger.info(f"Combine, layer: {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
 
@@ -1638,68 +1634,90 @@ def run_moe_compute_test(
     )
 
     # ------------------------------------------------------------------------
-    # Prepare w0_w1 tensor (interleaved, padded, and reordered)
-    if has_bias:
-        torch_w0_w1_reordered = prepare_w0_w1_tensor_with_bias(
-            torch_w0, torch_w1, torch_b0, torch_b1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
-        )
-    else:
-        torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
-            torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
+    # Upload raw weights/biases to mesh (replicated, bfloat16, ROW_MAJOR) so the
+    # C++ ttnn.experimental.prepare_* helpers can do the layout transformation on
+    # device, then convert to the DRAM-sharded bfloat4_b TILE layout the kernel
+    # consumes.
+    def _upload_raw(t):
+        return ttnn.from_torch(
+            t,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-    # Create tt_w0_w1 tensor with DRAM sharding
-    tt_w0_w1 = ttnn.from_torch(
-        torch_w0_w1_reordered,
-        dtype=ttnn.bfloat4_b,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=w0_w1_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    tt_w0_raw = _upload_raw(torch_w0)
+    tt_w1_raw = _upload_raw(torch_w1)
+    tt_w2_raw = _upload_raw(torch_w2)
+    if has_bias:
+        tt_b0_raw = _upload_raw(torch_b0)
+        tt_b1_raw = _upload_raw(torch_b1)
+        tt_b2_raw = _upload_raw(torch_b2)
 
     # ------------------------------------------------------------------------
-    # Prepare w2 tensor (padded and reordered)
+    # Prepare w0_w1 tensor (interleaved, padded, and reordered) on device.
     if has_bias:
-        torch_w2_reordered = prepare_w2_tensor_with_bias(
-            torch_w2, torch_b2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
+        tt_w0_w1_prepped = ttnn.experimental.prepare_w0_w1_tensor_with_bias(
+            tt_w0_raw,
+            tt_w1_raw,
+            tt_b0_raw,
+            tt_b1_raw,
+            L=num_layers,
+            E=experts_per_device,
+            K=hidden_size,
+            N=N,
+            shard_map=w0_w1_shard_map,
         )
+        ttnn.deallocate(tt_b0_raw)
+        ttnn.deallocate(tt_b1_raw)
     else:
-        torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
-            torch_w2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
+        tt_w0_w1_prepped = ttnn.experimental.prepare_w0_w1_tensor_for_moe_compute(
+            tt_w0_raw,
+            tt_w1_raw,
+            L=num_layers,
+            E=experts_per_device,
+            K=hidden_size,
+            N=N,
+            shard_map=w0_w1_shard_map,
         )
+    ttnn.deallocate(tt_w0_raw)
+    ttnn.deallocate(tt_w1_raw)
 
-    if False:  # has_bias:
-        # Verify prepare_w2_tensor_with_bias correctness:
-        # The bias tile occupies element rows [N:N+TILE_SIZE] in the N dimension (tile Nt).
-        # It should be non-zero (bias was appended) and must NOT appear in the weight rows [0:N]
-        # (bias tile is at position Nt, after all ring-rotated weight tiles).
-        #
-        # Note: different cores receive different K-column slices, so bias row values
-        # differ per core. The invariant is positional: bias is at N, not ring-rotated
-        # into an earlier N position.
-        bias_rows = torch_w2_reordered[:, :, :, :, N : N + ttnn.TILE_SIZE, :]  # (12, L, E, 5, 32, 128)
-        assert bias_rows.abs().max() > 0.1, (
-            "W2 bias row (at N-dim position N:N+TILE_SIZE) appears to be all zeros — "
-            "bias may not have been appended at the correct position"
-        )
-        # Groups 0-3 (dim 3, indices 0:4) are fully populated from unpadded bias data for all
-        # 12 cores; group 4 may have trailing padding zeros for some cores, so exclude it.
-        first_four_groups = bias_rows[:, :, :, :4, :, :]  # (12, L, E, 4, 32, 128)
-        assert torch.isfinite(first_four_groups).all(), "W2 bias row groups 0-3 contain non-finite values"
-        assert (
-            first_four_groups.abs().max() > 1e-3
-        ), "W2 bias row groups 0-3 appear all-near-zero — bias may not be packed at N:N+TILE_SIZE"
-
-    # Create tt_w2 tensor with DRAM sharding
-    tt_w2 = ttnn.from_torch(
-        torch_w2_reordered,
-        dtype=ttnn.bfloat4_b,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=w2_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    tt_w0_w1 = ttnn.experimental.quantize_weights_via_host(
+        tt_w0_w1_prepped, dtype=ttnn.bfloat4_b, memory_config=w0_w1_mem_config
     )
+    ttnn.deallocate(tt_w0_w1_prepped)
+
+    # ------------------------------------------------------------------------
+    # Prepare w2 tensor (padded and reordered) on device.
+    if has_bias:
+        tt_w2_prepped = ttnn.experimental.prepare_w2_tensor_with_bias(
+            tt_w2_raw,
+            tt_b2_raw,
+            L=num_layers,
+            E=experts_per_device,
+            N=N,
+            K=hidden_size,
+            w2_shard_map=w2_shard_map,
+            w0_w1_shard_map=w0_w1_shard_map,
+        )
+        ttnn.deallocate(tt_b2_raw)
+    else:
+        tt_w2_prepped = ttnn.experimental.prepare_w2_tensor_for_moe_compute(
+            tt_w2_raw,
+            L=num_layers,
+            E=experts_per_device,
+            N=N,
+            K=hidden_size,
+            w2_shard_map=w2_shard_map,
+            w0_w1_shard_map=w0_w1_shard_map,
+        )
+    ttnn.deallocate(tt_w2_raw)
+
+    tt_w2 = ttnn.experimental.quantize_weights_via_host(
+        tt_w2_prepped, dtype=ttnn.bfloat4_b, memory_config=w2_mem_config
+    )
+    ttnn.deallocate(tt_w2_prepped)
 
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(
         mesh_device, output_height_shard_dim, output_width_shard_dim
