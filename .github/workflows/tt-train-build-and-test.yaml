@@ -18,14 +18,6 @@ on:
 permissions:
   packages: write
 
-concurrency:
-  group: >-
-    ${{ github.workflow }}-
-    ${{ (github.ref_protected && github.run_id)
-        || github.event.pull_request.number
-        || github.ref }}
-  cancel-in-progress: true
-
 jobs:
   build-artifact:
     if: ${{ !inputs.build-artifact-name }}
