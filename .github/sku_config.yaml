@@ -51,6 +51,55 @@ skus:
       - topology-6u
       - in-service
 
+  # ── Per-host wh_galaxy_perf SKUs (GPT-OSS 120B prefill_128 stress, branch
+  #    divanovic/gpt-oss-120b-prefill-128-stress). Each pins one Galaxy host
+  #    so we can pin-test for the intermittent ND hang in prefill (#44366).
+
+  # g05glx04
+  wh_galaxy_perf_g05glx04:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-perf
+      - topology-6u
+      - in-service
+      - g05glx04
+
+  # g14glx04 (NO TAG YET — ASK INFRA TO ADD LABEL; SKU listed for completeness)
+  wh_galaxy_perf_g14glx04:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-perf
+      - topology-6u
+      - in-service
+      - g14glx04
+
+  # g14glx03
+  wh_galaxy_perf_g14glx03:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-perf
+      - topology-6u
+      - in-service
+      - g14glx03
+
+  # g04glx01 (original reproducer machine)
+  wh_galaxy_perf_g04glx01:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-perf
+      - topology-6u
+      - in-service
+      - g04glx01
+
+  # g04glx03
+  wh_galaxy_perf_g04glx03:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-perf
+      - topology-6u
+      - in-service
+      - g04glx03
+
   # Temporary SKU separating UF machines
   wh_galaxy_perf_uf:
     runs_on:

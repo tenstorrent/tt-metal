@@ -454,6 +454,46 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
+# Stress-only branch: target one pytest nodeid (prefill_128) 5x inside the same
+# job, pinned to one Galaxy host per SKU. Used to chase the intermittent
+# non-deterministic hang seen during prefill on g04glx01 (and observed on a
+# scheduled main run last week). Each per-host SKU pins runs_on to that
+# specific machine; dispatch 3 separate runs per SKU for 15 invocations per
+# host total. See branch divanovic/gpt-oss-120b-prefill-128-stress.
+- name: GPT-OSS 120B prefill_128 stress (per-host)
+  cmd: |
+    uv pip install -r models/demos/gpt_oss/requirements.txt
+    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_MM_THROTTLE_PERF=2
+    SKIP_MODEL_LOAD="--skip-model-load"
+    [ "${MLPERF_READ_ONLY:-true}" = "false" ] && SKIP_MODEL_LOAD=""
+    overall_status=0
+    for i in 1 2 3 4 5; do
+      echo "===== Stress run ${i}/5 ====="
+      pytest --timeout 600 $SKIP_MODEL_LOAD \
+        "models/demos/gpt_oss/demo/text_demo.py::test_gpt_oss_demo[wormhole_b0-4x8-prefill_128]" \
+        || overall_status=$?
+    done
+    exit $overall_status
+  model: gpt-oss-120b-prefill-128-stress
+  skus:
+    wh_galaxy_perf_g05glx04:
+      timeout: 60
+      tier: 1
+    wh_galaxy_perf_g14glx04:
+      timeout: 60
+      tier: 1
+    wh_galaxy_perf_g14glx03:
+      timeout: 60
+      tier: 1
+    wh_galaxy_perf_g04glx01:
+      timeout: 60
+      tier: 1
+    wh_galaxy_perf_g04glx03:
+      timeout: 60
+      tier: 1
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+
 # ── Whisper ────────────────────────────────────────────────────────
 
 - name: Whisper e2e tests

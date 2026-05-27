@@ -18,6 +18,7 @@ on:
           - llama3.3-70b-galaxy
           - qwen3-32b-galaxy
           - gpt-oss-120b
+          - gpt-oss-120b-prefill-128-stress
           - whisper
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
@@ -84,7 +85,10 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_loudbox,bh_p300,bh_quietbox_2,bh_galaxy,bh_galaxy_perf"
+          # Stress branch: include per-host wh_galaxy_perf SKUs so dispatch
+          # with sku=all + model=gpt-oss-120b-prefill-128-stress fan-outs to
+          # one job per Galaxy host (see sku_config.yaml).
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,wh_galaxy_perf_g05glx04,wh_galaxy_perf_g14glx04,wh_galaxy_perf_g14glx03,wh_galaxy_perf_g04glx01,wh_galaxy_perf_g04glx03,bh_p150,bh_loudbox,bh_p300,bh_quietbox_2,bh_galaxy,bh_galaxy_perf"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"

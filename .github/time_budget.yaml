@@ -172,6 +172,12 @@ models:
     wh_n150: 100
     wh_n300: 15
     wh_galaxy_perf: 120
+    # GPT-OSS 120B prefill_128 per-host stress SKUs (stress branch).
+    wh_galaxy_perf_g05glx04: 60
+    wh_galaxy_perf_g14glx04: 60
+    wh_galaxy_perf_g14glx03: 60
+    wh_galaxy_perf_g04glx01: 60
+    wh_galaxy_perf_g04glx03: 60
     bh_p150b_civ2: 55
     bh_loudbox: 165
     bh_p150: 60
