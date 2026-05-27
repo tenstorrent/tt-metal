@@ -293,7 +293,7 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
   - detecting active -> completed run state transitions
   - confirming explicit blocker resolution
   - handling a PR selected as the current focus item because its run just completed
-- In each automation cycle, perform heavy log/deep failure analysis for at most one focus PR.
+- In each automation cycle, perform heavy log/deep failure analysis for at most three focus PRs (matching the three-dispatch session cap). See `Session Scope (Up to Three PRs)` above.
 - Keep all non-focus PRs on lightweight status checks only.
 
 ## Safety Constraints
