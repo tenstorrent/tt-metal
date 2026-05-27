@@ -231,3 +231,6 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
+
+# ---- X280 (L2CPU) baseline boot test ----
+add_subdirectory(x280)

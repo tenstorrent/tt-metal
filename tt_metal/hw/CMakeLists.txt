@@ -542,3 +542,82 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
         COMPONENT metalium-runtime
 )
+
+############################################################################################################################
+# X280 (L2CPU) baseline firmware build hook
+#
+# The bare-metal sources live in a sibling
+# repo (tt-blaze/x280/) with its own GNU Make build that auto-downloads a
+# RISC-V cross-toolchain — we just shell out to it and stage the .bin into
+# our runtime layout at runtime/hw/firmware/blackhole/x280/.
+############################################################################################################################
+if("blackhole" IN_LIST ARCHS)
+    set(TT_METAL_X280_SRC_DIR
+        "${PROJECT_SOURCE_DIR}/../x280"
+        CACHE PATH
+        "Path to x280 bare-metal sources (tt-blaze layout). Set empty or disable TT_METAL_BUILD_X280_FW to skip."
+    )
+    option(TT_METAL_BUILD_X280_FW "Build x280 idle firmware (lim-idle + idle) for tt-metal runtime X280 init" ON)
+
+    if(TT_METAL_BUILD_X280_FW)
+        if(EXISTS "${TT_METAL_X280_SRC_DIR}/Makefile")
+            set(X280_FW_OUT_DIR "${PROJECT_SOURCE_DIR}/runtime/hw/firmware/blackhole/x280")
+            # Two profiles ship side-by-side; experimental::x280::boot_idle
+            # picks one based on the caller's BootRegion. The LIM artifact is
+            # required (default). The DRAM artifact is optional at runtime
+            # (boot_idle warns and returns 0 if missing) but we build it here
+            # whenever the source is present so DRAM-mode callers just work.
+            set(X280_FW_LIM_STAGED "${X280_FW_OUT_DIR}/firmware-lim-idle.bin")
+            set(X280_FW_DRAM_STAGED "${X280_FW_OUT_DIR}/firmware-idle.bin")
+            set(X280_FW_LIM_SRC_BIN "${TT_METAL_X280_SRC_DIR}/build/firmware-lim-idle.bin")
+            set(X280_FW_DRAM_SRC_BIN "${TT_METAL_X280_SRC_DIR}/build/firmware-idle.bin")
+            add_custom_command(
+                OUTPUT
+                    ${X280_FW_LIM_STAGED}
+                    ${X280_FW_DRAM_STAGED}
+                COMMAND
+                    ${CMAKE_COMMAND} -E make_directory ${X280_FW_OUT_DIR}
+                COMMAND
+                    make -C ${TT_METAL_X280_SRC_DIR} lim-idle idle
+                COMMAND
+                    ${CMAKE_COMMAND} -E copy ${X280_FW_LIM_SRC_BIN} ${X280_FW_LIM_STAGED}
+                COMMAND
+                    ${CMAKE_COMMAND} -E copy ${X280_FW_DRAM_SRC_BIN} ${X280_FW_DRAM_STAGED}
+                DEPENDS
+                    ${TT_METAL_X280_SRC_DIR}/src/lim_idle.c
+                    ${TT_METAL_X280_SRC_DIR}/src/idle.c
+                    ${TT_METAL_X280_SRC_DIR}/boot/entry.S
+                    ${TT_METAL_X280_SRC_DIR}/ld/x280.ld
+                    ${TT_METAL_X280_SRC_DIR}/ld/x280-dram.ld
+                    ${TT_METAL_X280_SRC_DIR}/include/x280.h
+                    ${TT_METAL_X280_SRC_DIR}/Makefile
+                COMMENT "Building x280 firmware-lim-idle.bin + firmware-idle.bin -> runtime/hw/firmware/blackhole/x280/"
+                VERBATIM
+            )
+            add_custom_target(
+                x280_firmware
+                ALL
+                DEPENDS
+                    ${X280_FW_LIM_STAGED}
+                    ${X280_FW_DRAM_STAGED}
+            )
+
+            install(
+                FILES
+                    ${X280_FW_LIM_STAGED}
+                    ${X280_FW_DRAM_STAGED}
+                DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/runtime/hw/firmware/blackhole/x280
+                COMPONENT metalium-runtime
+            )
+        else()
+            message(
+                WARNING
+                "x280 source directory '${TT_METAL_X280_SRC_DIR}' not found; "
+                "x280 firmware will not be built. Set TT_METAL_X280_SRC_DIR or disable "
+                "TT_METAL_BUILD_X280_FW=OFF to suppress this warning. X280 cores will "
+                "be left in reset at runtime unless TT_METAL_INIT_X280=0 is set or the "
+                "X280 firmware is staged manually."
+            )
+        endif()
+    endif()
+endif()
