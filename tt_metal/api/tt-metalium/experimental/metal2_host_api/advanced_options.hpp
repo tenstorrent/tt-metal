@@ -4,8 +4,12 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
+
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
@@ -41,7 +45,15 @@ using DFBSpecName = std::string;
 // changes land.)
 
 struct KernelSpecAdvancedOptions {
-    // No fields yet — populated as features migrate in.
+    // (Optional) Per-node thread count specification.
+    // The default threading is KernelSpec::num_threads. However, you may override
+    // this on a per-node basis.
+    // NOTE: This feature is currently unsupported. It's an open question if we EVER
+    //       want to support it. Here as a placeholder; specifying it will trigger a
+    //       runtime error.
+    using NodeSpecificThreadCount = std::pair<Nodes, int>;  // {node_set, num_threads}
+    using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
+    std::optional<NodeSpecificThreadCounts> node_specific_thread_counts = std::nullopt;
 };
 
 struct DataflowBufferSpecAdvancedOptions {
