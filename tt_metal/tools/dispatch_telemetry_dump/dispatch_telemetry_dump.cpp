@@ -21,7 +21,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/experimental/dispatch_telemetry_api.hpp>
+#include <tt-metalium/experimental/dispatch_telemetry.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

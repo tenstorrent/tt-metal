@@ -6,7 +6,7 @@
 #include <vector>
 #include <optional>
 
-#include <tt-metalium/experimental/dispatch_telemetry_api.hpp>
+#include <tt-metalium/experimental/dispatch_telemetry.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/xy_pair.hpp>
 

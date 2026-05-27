@@ -99,14 +99,21 @@ constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
 constexpr uint32_t is_d_variant = IS_D_VARIANT;
 constexpr uint32_t is_h_variant = IS_H_VARIANT;
 
+// Read and store telemetry values via local variables to avoid L1 reads
+static uint32_t upstream_blocked_counter = 0;
+static uint32_t program_counter = 0;
+
 constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
 constexpr uint32_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
 constexpr uint32_t upstream_blocked_count_addr =
     dispatch_telemetry_base + offsetof(tt::tt_metal::DispatchCoreTelemetry, upstream_blocked_count);
 constexpr uint32_t upstream_unblocked_count_addr =
     dispatch_telemetry_base + offsetof(tt::tt_metal::DispatchCoreTelemetry, upstream_unblocked_count);
-using DispatchTelemetryBlockGuard =
-    TelemetryBlockGuard<upstream_blocked_count_addr, upstream_unblocked_count_addr, telemetry_enabled>;
+using DispatchTelemetryBlockGuard = TelemetryBlockGuard<
+    upstream_blocked_count_addr,
+    upstream_unblocked_count_addr,
+    &upstream_blocked_counter,
+    telemetry_enabled>;
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -1164,7 +1171,7 @@ void set_go_signal_noc_data() {
     cmd_ptr = round_up_pow2(reinterpret_cast<uintptr_t>(data_ptr), L1_ALIGNMENT);
 }
 
-static inline bool process_cmd_d(uintptr_t& cmd_ptr, uint32_t* l1_cache, uint32_t& program_counter) {
+static inline bool process_cmd_d(uintptr_t& cmd_ptr, uint32_t* l1_cache) {
     bool done = false;
 re_run_command:
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
@@ -1453,9 +1460,6 @@ void kernel_main() {
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
 
     init_telemetry<tt::tt_metal::DispatchCoreTelemetry, dispatch_telemetry_base, telemetry_enabled>();
-    // Read and store telemetry values via local variables to avoid L1 reads
-    uint32_t upstream_blocked_counter = 0;
-    uint32_t program_counter = 0;
 
     // Initialize local state of any additional nocs used instead of the default
     static_assert(my_noc_index != upstream_noc_index);
@@ -1530,13 +1534,12 @@ void kernel_main() {
     *get_dispatch_progress_ptr() = dispatch_progress;
 
     while (!done) {
-        dispatch_cb_reader.wait_for_available_data_and_release_old_pages<DispatchTelemetryBlockGuard>(
-            cmd_ptr, &upstream_blocked_counter);
+        dispatch_cb_reader.wait_for_available_data_and_release_old_pages<DispatchTelemetryBlockGuard>(cmd_ptr);
 
         DeviceZoneScopedN("CQ-DISPATCH");
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
 
-        done = is_d_variant ? process_cmd_d(cmd_ptr, l1_cache, program_counter) : process_cmd_h(cmd_ptr);
+        done = is_d_variant ? process_cmd_d(cmd_ptr, l1_cache) : process_cmd_h(cmd_ptr);
 
         // Increment dispatch progress counter and write to L1 memory
         dispatch_progress++;

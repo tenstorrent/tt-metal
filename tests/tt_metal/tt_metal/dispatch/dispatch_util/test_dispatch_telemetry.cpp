@@ -10,7 +10,7 @@
 #include <thread>
 #include <vector>
 
-#include <tt-metalium/experimental/dispatch_telemetry_api.hpp>
+#include <tt-metalium/experimental/dispatch_telemetry.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "command_queue_fixture.hpp"
@@ -260,13 +260,19 @@ TEST_F(DispatchTelemetryHostL1WaitTest, WorkerWaitReportsUpstreamBlockedState) {
     DispatchTelemetry telemetry(*device);
     ASSERT_FALSE(telemetry.read_info().empty());
 
+    // Enqueue kernel that waits on host write to complete
     distributed::EnqueueMeshWorkload(cq, waiting_workload_, false);
     EXPECT_TRUE(worker_reached_l1_wait(device, worker_core_, started_addr_, started_value_));
 
+    // Worker has the host blocked kernel in progress
+    // Dispatch queue is empty
+    // Prefetch queue is empty
     auto while_waiting = telemetry.read_info();
     EXPECT_FALSE(while_waiting.empty());
     if (!while_waiting.empty()) {
+        // Prefetch is waiting on upstream host for the next workload
         EXPECT_TRUE(while_waiting.front().prefetch_waiting);
+        // Dispatch is waiting on upstream prefetch for the next workload
         EXPECT_TRUE(while_waiting.front().dispatch_waiting);
     }
 
@@ -277,19 +283,29 @@ TEST_F(DispatchTelemetryHostL1WaitTest, WorkerWaitReportsUpstreamBlockedState) {
         distributed::EnqueueMeshWorkload(cq, workload, false);
     }
 
+    // Worker still has the host blocked kernel in progress
+    // Dispatch has the work load enqueued
+    // Prefetch has work load enqueued
     auto after_enqueue = telemetry.read_info();
     EXPECT_FALSE(after_enqueue.empty());
     if (!after_enqueue.empty()) {
+        // Prefetch is waiting on downstream dispatch to free up
         EXPECT_FALSE(after_enqueue.front().prefetch_waiting);
+        // Dispatch is waiting on downstreamworker to finish
         EXPECT_FALSE(after_enqueue.front().dispatch_waiting);
     }
 
     release_worker_and_finish();
 
+    // Worker is no longer blocked, it has finished processing all enqueued work loads
+    // Dispatch queue is empty
+    // Prefetch queue is empty
     auto after_finish = telemetry.read_info();
     EXPECT_FALSE(after_finish.empty());
     if (!after_finish.empty()) {
+        // Prefetch is waiting on upstream host for the next workload
         EXPECT_TRUE(after_finish.front().prefetch_waiting);
+        // Dispatch is waiting on upstream prefetch for the next workload
         EXPECT_TRUE(after_finish.front().dispatch_waiting);
     }
 }
