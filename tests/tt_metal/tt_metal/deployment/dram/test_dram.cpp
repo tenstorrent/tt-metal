@@ -756,15 +756,8 @@ static void log_galaxy_summary(const char* name, const DramGalaxySummary& s, std
     if (!s.pass) {
         log_critical(tt::LogTest, "write_err={} read_err={}", format_error_pct(write_pct), format_error_pct(read_pct));
         for (auto& c : s.chips) {
-            if (c.pass) {
-                continue;
-            }
-
             for (int i = 0; i < c.banks.size(); i++) {
                 auto& b = c.banks[i];
-                if (b.pass) {
-                    continue;
-                }
 
                 log_critical(
                     tt::LogTest,
