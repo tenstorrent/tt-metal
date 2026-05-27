@@ -758,6 +758,6 @@ def test_moreh_layer_norm_rstd_only_mean_none(device):
 
     actual_rstd = to_torch(npu_rstd, shape=mean_rstd_shape)
 
-    pass_rstd, out_rstd = comp_allclose(expected_rstd, actual_rstd, rtol=0.1, atol=0.1)
+    pass_rstd, out_rstd = comp_allclose(expected_rstd, actual_rstd, rtol=0.09, atol=0.06)
     logger.debug(f"rstd's {out_rstd}")
     assert pass_rstd
