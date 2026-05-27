@@ -44,36 +44,87 @@ Each PR gets exactly one initial disable batch.
 - After the first disable batch is committed to that PR, do not add new disables to that PR.
 - Exception: removal is allowed. If revalidation on `main` shows a previously disabled test is fixed, remove that disable (add the test back).
 
-## Session Scope (Up to Three PRs)
+## Session Scope (Two Lanes — Focus and Examining)
 
-Each automation session is scoped to **up to three focus PRs**, matching the three-dispatch session cap. Focus-PR selection is NOT a "look at the inbox and skip everything" pass — it is a fill operation. The session ends with up to three focus PRs OR a recorded reason why fewer were possible.
+Each automation session has TWO distinct work lanes: **Focus PRs** (dispatch lane) and **Examining PRs** (lightweight maintenance lane). A single PR is in at most one lane per session.
 
-### Focus-PR selection (fill semantics — REQUIRED)
+### Lane A — Examining PRs (lightweight, no dispatch)
 
-The agent fills focus slots in priority order:
+Cap: **up to 3 examining PRs per session.**
 
-1. **First pass — existing open draft PRs that are actionable.** An open draft PR is actionable when ANY of the following are true (the 4-hour throttle does NOT apply to these — see "Automation Efficiency Guardrails" carve-outs):
-   - lifecycle `new` (no disable batch committed yet)
-   - lifecycle `batch-committed` and no verification has been dispatched yet for the PR
-   - lifecycle `verification-inconclusive` (retry-eligible by definition)
-   - behind `main` and needs a rebase
-   - has an in-flight verification run that has completed since the previous session (state transition needs log analysis)
+Examining PRs are existing open draft disable PRs in a non-terminal lifecycle that need maintenance but should NOT consume a workflow-dispatch slot this session. For each examining PR, the agent performs ALL of:
 
-2. **Second pass — new disable PRs to fill remaining slots.** If after the first pass the agent has fewer than 3 focus PRs, it MUST fill each remaining slot by creating a NEW disable PR for an uncovered non-Galaxy single-card workflow. New-PR creation is a **first-class fill action**, not a low-priority fallback.
+- Rebase the PR branch onto the latest `origin/main` and push the merge.
+- Revalidate every currently-disabled test against the latest `main` runs; remove disables for tests that have been fixed on `main`.
+- **Log-analyze any verification run that completed since the previous session**, and transition the PR's lifecycle to `verified-pass`, `verified-fail`, or `verification-inconclusive` based on the result.
+- Comment on the PR with what changed this session.
+- Sync the disable-tracking issue with the current disable set.
+- Update the PR's entry in the state log (`disabling-work-so-far.md`).
 
-   **Same-session verification dispatch (REQUIRED).** Every newly created disable PR in this session MUST also receive its initial verification dispatch in this same session, subject to the existing 3-dispatch session cap and the existing artifact-reuse / fresh-build rules (see "Build Reuse (Optional, Strongly Preferred)" and "Operating Procedure (One Run Per PR)"). The dispatch is part of the PR-creation flow — it is NOT a deferred next-session action. Creating a new PR and ending the session without dispatching its first verification is a bug unless the 3-dispatch cap is already exhausted by other focus PRs (in which case the OUTPUT must explicitly state which PRs consumed the dispatch slots).
+**No workflow dispatches occur in the examining lane.** Dispatches happen only in the focus lane below.
 
-The session may NOT end with 0 focus PRs UNLESS one of the following is true:
+The 4-hour throttle's existing carve-outs apply unchanged — a PR in lifecycle `verification-inconclusive`, `behind-main-needs-rebase`, `new`, or `batch-committed`-with-no-verification is NEVER throttled out of the examining lane (see `Automation Efficiency Guardrails` → `Throttle carve-outs`).
 
-- Every uncovered non-Galaxy single-card workflow already has an open draft PR associated with it, AND every open draft PR is in a terminal state (`verified-pass`, `verified-fail`, `merged`), OR
-- The agent already created 3 new PRs in this session (cap reached).
+### Lane B — Focus PRs (dispatch lane)
 
-"Consider creating a new PR if context allows" is NOT acceptable. New-PR creation is the **default** fill action when fewer than 3 actionable existing focus PRs are available.
+Cap: **up to 3 focus PRs per session.** Each focus PR MUST result in exactly one workflow dispatch in the same session. The 3-dispatch session cap and the 3-focus-PR cap are the same budget viewed two ways.
 
-### Per-session caps (unchanged)
+Focus-slot fill priority (in this exact order):
 
-- At most THREE new workflow dispatches per session (counted across all PRs combined).
-- At most THREE new PRs created per session (one per remaining focus slot).
+1. **New PRs for uncovered non-Galaxy single-card workflows.** This is the default and the expected primary use of focus slots — the session target is 3 new PRs unless one of the carve-outs in "Fewer than 3 uncovered workflows" below applies.
+2. **Legacy `batch-committed` PRs that have never had a verification dispatch.** These predate the same-session-dispatch rule and get their first dispatch when a focus slot is available.
+3. **`verification-inconclusive` PRs needing a re-dispatch.**
+
+Per-focus-PR flow:
+
+- **New PR (priority 1):** commit the initial disable batch + push, then dispatch the verification run — same session.
+- **Legacy `batch-committed` PR (priority 2)** or **`verification-inconclusive` PR (priority 3):** rebase first (if applicable), then dispatch.
+
+The 3-dispatch session cap is the hard limit. A focus PR whose dispatch would exceed the cap MUST be deferred to the next session; the OUTPUT must explicitly name which other PRs consumed the dispatch slots.
+
+### Target: 3 new PRs per session
+
+The session target is **3 new PRs per session** unless either:
+
+(a) Fewer than 3 uncovered non-Galaxy single-card workflows remain, OR
+
+(b) Legacy `batch-committed` (priority 2) or `verification-inconclusive` (priority 3) PRs absorb focus slots first.
+
+### Fewer than 3 uncovered workflows
+
+When fewer than 3 uncovered non-Galaxy single-card workflows exist, create as many new PRs as there are uncovered workflows (0, 1, or 2). Fill any remaining focus slots from priorities 2 and 3 above if such PRs exist.
+
+If after filling priorities 1, 2, and 3 the agent has fewer than 3 focus PRs because (a) no uncovered workflows remain AND (b) no priority-2 / priority-3 PRs exist to fill the slots, STOP and record the reason in OUTPUT. This is **NOT** terminal state and **NOT** paralysis — it is a legitimate "not enough actionable work this session" outcome. Use the existing `New PR created: N` and `Total dispatches: N` fields with a short reason note, plus a new line:
+
+```
+Focus slots filled: N/3 (reason: <e.g. only 1 uncovered workflow remained, no priority-2/3 PRs available>)
+```
+
+Terminal state (every open draft PR `verified-pass` / `verified-fail` / `merged` AND every non-Galaxy single-card workflow covered) remains the only legitimate ZERO-action session — see `Terminal State (No More Work)` below.
+
+### Lane independence
+
+Examining PRs and focus PRs are **distinct sets** — a single PR is in at most one lane per session. Specifically:
+
+- A brand-new PR created in the focus lane does NOT also count as an examining PR (no rebase or revalidation needed; it's fresh).
+- A legacy `batch-committed` or `verification-inconclusive` PR being dispatched in the focus lane includes the rebase as part of the focus-lane work, but it does NOT also count against the examining-PR cap.
+
+### Order within a session
+
+1. Refresh state (policy + state log + open draft PR list).
+2. Compute examining-PR candidates (existing PRs in non-terminal lifecycle that need rebase / revalidate / log-analysis). Up to 3.
+3. Compute focus-PR candidates by priority (new PRs first, then legacy `batch-committed`, then `verification-inconclusive`). Up to 3.
+4. Execute examining-PR work (no dispatches).
+5. Execute focus-PR work (commit + push for new PRs, then dispatch each one).
+6. Update state log and PR comments.
+7. Anti-paralysis / terminal-state check before terminating.
+
+### Per-session caps (summary)
+
+- At most THREE new workflow dispatches per session (counted across all PRs combined). Equals the focus-PR cap.
+- At most THREE new disable PRs created per session (one per focus slot taken by priority 1).
+- At most THREE focus PRs per session.
+- At most THREE examining PRs per session.
 - The per-PR "exactly one verification run" budget (excluding infra-inconclusive retries) and the per-PR "exactly one initial disable batch" budget are PER PR, NOT per session.
 
 ## Session Start Rebase + Revalidation (Mandatory)
@@ -379,32 +430,40 @@ A session is in the legitimate **terminal state** when BOTH of the following are
 1. Every open draft disable PR is in a verification-completed lifecycle (`verified-pass`, `verified-fail`, or `merged`) — i.e. each PR has consumed its one verification run with a real (non-inconclusive) result.
 2. Every non-Galaxy single-card workflow in the active pipeline list is already covered by an open or merged draft disable PR.
 
-When the terminal state holds, the automation MUST stop without creating new PRs and without dispatching new runs, and MUST emit `"no more work left to do"` as its session-level status. This is the **only** exception to the "fill focus slots with new PRs" requirement in `Session Scope (Up to Three PRs)`.
+When the terminal state holds, the automation MUST stop without creating new PRs and without dispatching new runs, and MUST emit `"no more work left to do"` as its session-level status. This is the **only** exception to the "fill focus slots with new PRs" requirement in `Session Scope (Two Lanes — Focus and Examining)`. The separate "Fewer than 3 uncovered workflows" carve-out (`limited` outcome) covers the non-terminal sub-3-focus-PR case.
 
 Distinguish this from the existing paralysis failure mode (`Anti-Paralysis` below): paralysis = idled despite having actionable work; terminal = legitimately out of work. The OUTPUT FORMAT distinguishes them via the `Paralysis check` field (and the new top-line `Status: no more work left to do`) — see the canonical automation prompt.
 
 ## Anti-Paralysis
 
-A session that ends with **0 focus PRs, 0 new dispatches, and 0 new PRs created** is treated as a **paralysis failure mode**, not a normal completion. Empty sessions are bugs.
+A session that ends with **0 focus PRs AND 0 examining PRs** is treated as a **paralysis failure mode**, not a normal completion. Empty sessions are bugs unless the terminal-state or limited-work carve-outs below apply.
 
-When the agent finds itself about to terminate with zero actions, it MUST do one of the following before ending the session:
+The vocabulary distinguishes:
 
-- Dispatch a fresh-build verification on any PR that is eligible (lifecycle `new`/`batch-committed`/`verification-inconclusive`, or a previous infra-inconclusive run pending retry). "No recent successful `main` run" is not a reason to skip — fresh build is always a valid path (see "Worked example: a pipeline whose `main` runs have been failing for days").
-- Create a new disable PR for an uncovered non-Galaxy single-card workflow, up to the per-session new-PR cap.
-- Perform a removal-only rebase / revalidation pass that actually changes PR state (a state-log push by itself is NOT progress — it must be paired with a real action above).
+- **Focus PRs** = PRs that received a workflow dispatch this session (priority 1: new PRs for uncovered workflows; priority 2: legacy `batch-committed` PRs; priority 3: `verification-inconclusive` PRs). See `Session Scope (Two Lanes — Focus and Examining)`.
+- **Examining PRs** = PRs that received lightweight maintenance this session (rebase, revalidation, log analysis of a run that completed since the previous session, comment, issue sync, state-log update). NO dispatch.
 
-The agent MUST trace which guardrail caused an apparently-empty session and override it where the carve-outs (throttle exceptions, fresh-build fallback, first-class new-PR fill) allow.
+When the agent finds itself about to terminate with zero actions in either lane, it MUST do one of the following before ending the session:
 
-**The only acceptable zero-action session is one in which BOTH of these are true:**
+- Dispatch a focus-lane verification on any eligible PR (priority 2: legacy `batch-committed`-with-no-verification; priority 3: `verification-inconclusive`; priority 1: a brand-new PR for an uncovered non-Galaxy single-card workflow). "No recent successful `main` run" is not a reason to skip — fresh build is always a valid path (see "Worked example: a pipeline whose `main` runs have been failing for days").
+- Create a new disable PR for an uncovered non-Galaxy single-card workflow, up to the per-session focus-PR cap, with its same-session dispatch.
+- Examining-lane work on any open draft PR in non-terminal lifecycle: rebase, revalidate, log-analyze a completed verification run, comment, sync the issue, update the state log.
 
-1. Every open draft PR is already in a terminal state (`verified-pass`, `verified-fail`, `merged`), AND
-2. Every non-Galaxy single-card workflow already has an associated draft PR (no uncovered workflow remains).
+The agent MUST trace which guardrail caused an apparently-empty session and override it where the carve-outs (throttle exceptions, fresh-build fallback, first-class new-PR fill, the examining lane itself) allow.
 
-This "only acceptable zero-action session" wording defers to `## Terminal State (No More Work)` above — that section is the canonical definition and additionally requires the session to emit `"no more work left to do"` as its session-level status.
+### Paralysis-check outcomes
+
+The `Paralysis check` field in OUTPUT must use one of these exact prefixes:
+
+- **`passed: N focus PRs (each dispatched) + M examining PRs`** — normal completion. At least one lane produced work and every focus PR received its dispatch.
+- **`limited: N focus PRs (only K uncovered workflows + L priority-2/3 PRs available)`** — fewer than 3 focus slots filled because (a) fewer than 3 uncovered non-Galaxy single-card workflows existed AND (b) priority-2 / priority-3 PRs were not sufficient to fill the remaining slots. Acceptable; NOT a paralysis bug. See `Session Scope (Two Lanes — Focus and Examining)` → "Fewer than 3 uncovered workflows".
+- **`terminal: no more work left to do`** — both terminal-state conjuncts hold (every open draft PR `verified-pass` / `verified-fail` / `merged` AND every non-Galaxy single-card workflow covered). The top-line `Status: no more work left to do` MUST also be emitted. See `Terminal State (No More Work)`.
+- **`PARTIAL: created N focus PRs but only dispatched M (cap reason: …)`** — a focus PR was created but its dispatch was skipped despite the 3-dispatch cap NOT being exhausted by other focus PRs. This is a bug. Acceptable ONLY when the cap is provably exhausted, in which case the reason MUST explicitly name which PRs consumed the dispatch slots.
+- **`FAILED: <reason>`** — zero examining PRs AND zero focus PRs, no acceptable terminal-state or limited-work justification. Include an explicit guardrail-trace identifying which carve-out, fresh-build fallback, examining-lane action, or new-PR fill the agent failed to invoke. A FAILED paralysis check is a bug report on the automation prompt and should be escalated.
+
+The terminal state defined in `## Terminal State (No More Work)` above is the canonical zero-action session; the `limited` outcome above is the canonical sub-3-focus-PR-but-non-terminal session. Anything else with zero focus PRs and zero examining PRs is paralysis.
 
 When in doubt between "skip due to throttle" and "do something useful", do something useful. The throttle is a guard against thrash, not a license to idle. Treating BH-artifact-expiry, "main is broken", or "all PRs <4h old" as session-ending blockers is the failure mode this section exists to prevent.
-
-**Partial paralysis: new PR created but its verification deferred.** A session in which a new disable PR was created but its first verification dispatch was deferred to the next session is a paralysis bug WHENEVER the 3-dispatch session cap was not already exhausted by other focus PRs. Either dispatch this session, or — in OUTPUT — explicitly name which other PRs consumed the three dispatch slots. "PR created, dispatch deferred to next session" without a cap-exhaustion explanation is the same flow bug as a zero-action session.
 
 ## Draft PR / Issue / Status File Management (Mandatory)
 
