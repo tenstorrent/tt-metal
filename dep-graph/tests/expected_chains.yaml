@@ -519,7 +519,115 @@ chains:
         AND nd.kind IN ('method', 'function')
     expect_min: 130
 
+  # ─── Test coverage chains (Stage 3) ──────────────────────────────────
+
+  - name: "tests/ tree is indexed (C++ tests)"
+    description: >
+      With tests in scope, the C++ tests/ tree should contribute thousands
+      of nodes (gtest framework + fixtures + every test op).
+    query: |
+      SELECT COUNT(*) FROM nodes WHERE file LIKE '/workspace/tests/%'
+    expect_min: 10000
+
+  - name: "Python tests under models/*/tests/ are indexed"
+    description: >
+      models/ subtree's test files (pytest-based) should be present.
+    query: |
+      SELECT COUNT(*) FROM nodes WHERE language='python' AND file LIKE '%/tests/%'
+    expect_min: 5000
+
+  - name: "C++ tests exercise ttnn::add"
+    description: >
+      Locks the cross-test→op edge that proves test coverage is captured.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes ns ON ns.id = e.src
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE ns.file LIKE '/workspace/tests/%'
+        AND nd.qualified_name = 'ttnn::add'
+    expect_min: 5
+
+  - name: "Test-driven reverse-binding coverage improves"
+    description: >
+      Without tests, only ~38% of C++ binding targets were reachable from
+      Python. With tests adding more callers, expect this to climb past 60%.
+    query: |
+      SELECT (CAST(SUM(reached) AS REAL) * 100 / COUNT(*))
+      FROM (
+        SELECT b.cpp_node_id, MAX(CASE WHEN e.src IS NOT NULL THEN 1 ELSE 0 END) AS reached
+        FROM bindings b
+        LEFT JOIN edges e ON e.dst = b.cpp_node_id
+        LEFT JOIN nodes ns ON ns.id = e.src AND ns.language = 'python'
+        GROUP BY b.cpp_node_id
+      )
+    expect_min: 50
+
   # ─── Regression: D1 host→kernel launches edges ───────────────────────
+
+  - name: "Typed-method resolver: ttnn::MemoryConfig::is_sharded has incoming Python edges"
+    description: >
+      With Option 2 typed-method resolution, calls like
+      `memory_config.is_sharded()` (where memory_config: ttnn.MemoryConfig)
+      should resolve to tt::tt_metal::MemoryConfig::is_sharded. Before this
+      fix, those calls were silent.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes nd ON nd.id = e.dst
+      JOIN nodes ns ON ns.id = e.src
+      WHERE nd.qualified_name LIKE '%MemoryConfig::is_sharded'
+        AND ns.language = 'python'
+    expect_min: 1
+
+  - name: "Typed-method resolver fires for receiver_type"
+    description: >
+      via_helper starts with `receiver_type:` for edges produced by the
+      Option 2 resolver. Lock minimum count to detect regressions.
+    query: |
+      SELECT COUNT(*) FROM edges
+      WHERE via_helper LIKE 'receiver_type:%'
+    expect_min: 100
+
+  - name: "Module-level variables tracked as nodes"
+    description: >
+      `TILE_LAYOUT = Layout.TILE`, `bfloat16 = DataType.BFLOAT16`, etc. used
+      to be invisible (only FunctionDef/ClassDef were nodes). Adding
+      kind=module_var should produce thousands of new nodes.
+    query: |
+      SELECT COUNT(*) FROM nodes WHERE language='python' AND kind='module_var'
+    expect_min: 100
+
+  - name: "ttnn.TILE_LAYOUT resolves to its alias node"
+    description: >
+      `ttnn.TILE_LAYOUT` is defined at ttnn/ttnn/types.py:37 as a
+      module-level alias. Re-exported through ttnn/__init__.py. After
+      module-var tracking, refs should resolve to it.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE nd.qualified_name = 'ttnn.types.TILE_LAYOUT'
+    expect_min: 100
+
+  - name: "KernelDescriptor::kernel_source pattern produces launches"
+    description: >
+      Newer program factories use `descriptor.kernel_source = "path.cpp"`
+      (an `operator=` call) instead of `CreateKernel(...)`. Validation found
+      copy_default_tilized_program_factory.cpp had 3 such assignments and
+      ZERO launches edges before the fix.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      WHERE e.kind = 'launches'
+        AND e.via_helper = 'KernelDescriptor.kernel_source'
+        AND e.site_file LIKE '%copy_default_tilized_program_factory.cpp'
+    expect_min: 3
+
+  - name: "Total launches edges grew with KernelDescriptor support"
+    description: >
+      Before fix: 995 launches edges (CreateKernel only). With the
+      descriptor pattern caught too, expect substantial growth — the
+      survey found 235 files using `kernel_source = ...`.
+    query: |
+      SELECT COUNT(*) FROM edges WHERE kind = 'launches'
+    expect_min: 1500
 
   - name: "embedding RM program factory launches its kernel files"
     description: >

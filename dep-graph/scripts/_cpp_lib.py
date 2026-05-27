@@ -234,6 +234,7 @@ DEFAULT_IN_SCOPE_PREFIXES = (
     "/workspace/ttnn/api/",   # public ttnn headers (e.g. ttnn::Tensor alias)
     "/workspace/tt_metal/",
     "/workspace/tt_stl/",
+    "/workspace/tests/",      # tests now in scope (per user direction)
 )
 DEFAULT_OUT_OF_SCOPE_PREFIXES = (
     "/workspace/.cpmcache/",
@@ -242,8 +243,8 @@ DEFAULT_OUT_OF_SCOPE_PREFIXES = (
     "/workspace/tt_metal/third_party/",
     "/workspace/tt_metal/hw/",
     "/workspace/runtime/sfpi/",
-    "/workspace/tests/",
     "/workspace/.github/",
+    # Note: /workspace/tests/ used to be here but is now IN scope.
 )
 
 
@@ -699,6 +700,11 @@ class Indexer:
             self._extract_binding(call, callee_name, tu_path)
         if callee_name in KERNEL_LAUNCHERS:
             self._extract_kernel_launch(call, current_function, callee_name, tu_path)
+        # D1b: newer KernelDescriptor pattern. `desc.kernel_source = "path.cpp"`
+        # is an `operator=` call (because kernel_source is std::string_view /
+        # std::string with overloaded =). Detect by callee name + LHS member name.
+        if callee_name == "operator=":
+            self._maybe_extract_kernel_source(call, current_function, tu_path)
         # Tier 1 (3): class bindings via `nb::class_<T>(m, "Name")` AND via
         # tt-metal's `tt_serializable_class<T>(m, "Name", ...)` helper. Both
         # return a `class_<T>` (or `nb::class_<T>`) — detect structurally.
@@ -715,6 +721,18 @@ class Indexer:
             return
         if callee.kind not in FUNCTION_KINDS:
             return
+        # Template instantiations: libclang resolves a call like `ttnn::full(...)`
+        # to a FUNCTION_DECL whose USR includes the concrete template arguments
+        # (e.g. `c:@N@ttnn@F@full<#f>#...`), but `_record_function` only records
+        # the primary template node (USR has no concrete args). Redirect the
+        # callee to the primary template so the edge dst matches an indexed node.
+        primary = get_specialized_template(callee)
+        if primary is not None:
+            try:
+                if primary.kind in FUNCTION_KINDS:
+                    callee = primary
+            except ValueError:
+                pass
         src_file, _, _ = cursor_loc(current_function)
         callee_file, _, _ = cursor_loc(callee)
         if not (in_scope(src_file) and in_scope(callee_file)):
@@ -742,6 +760,128 @@ class Indexer:
     # ─── D1: kernel-launch extraction ──────────────────────────────────
 
     _KERNEL_PATH_SUFFIXES = (".cpp", ".hpp", ".h", ".cc", ".cxx")
+
+    # Fields on the descriptor types that bind a kernel source path. Add to
+    # this set if new descriptor variants surface. Survey result:
+    #   - `kernel_source` (std::string)         — KernelDescriptor (Program / ProgramDescriptor flow)
+    #   - `kernel_path`   (std::string)         — used by fabric / ccl edm kernels
+    _KERNEL_PATH_FIELDS = {"kernel_source", "kernel_path"}
+
+    @classmethod
+    def _resolve_string_value(cls, cursor: cindex.Cursor, depth: int = 0) -> str | None:
+        """Resolve a cursor to its effective string-literal value, if any.
+
+        Handles three shapes:
+          - direct STRING_LITERAL
+          - UNEXPOSED_EXPR / cast wrappers — descend
+          - DECL_REF_EXPR pointing at a constexpr/const `VAR_DECL` whose
+            initializer is a string literal (e.g. `constexpr const char* KERNEL_X = "...";`)
+
+        Returns the unquoted string, or None.
+        """
+        if depth > 8:
+            return None
+        try:
+            kind = cursor.kind
+        except ValueError:
+            return None
+        if kind == cindex.CursorKind.STRING_LITERAL:
+            sp = cursor.spelling
+            if sp and sp.startswith('"') and sp.endswith('"'):
+                return sp[1:-1]
+            return sp
+        if kind == cindex.CursorKind.DECL_REF_EXPR:
+            ref = cursor.referenced
+            if ref is not None:
+                try:
+                    rk = ref.kind
+                except ValueError:
+                    rk = None
+                if rk == cindex.CursorKind.VAR_DECL:
+                    try:
+                        children = list(ref.get_children())
+                    except ValueError:
+                        children = []
+                    for ch in children:
+                        r = cls._resolve_string_value(ch, depth + 1)
+                        if r is not None:
+                            return r
+            return None
+        if kind == cindex.CursorKind.LAMBDA_EXPR:
+            return None
+        try:
+            children = list(cursor.get_children())
+        except ValueError:
+            return None
+        for ch in children:
+            r = cls._resolve_string_value(ch, depth + 1)
+            if r is not None:
+                return r
+        return None
+
+    def _maybe_extract_kernel_source(
+        self,
+        call: cindex.Cursor,
+        current_function: cindex.Cursor | None,
+        tu_path: str,
+    ) -> None:
+        """Detect `descriptor.kernel_source = "path.cpp"` assignment patterns
+        (newer style, used by ProgramDescriptor-based program factories).
+
+        The cursor is a `CALL_EXPR` to `operator=` whose:
+          - arg 0 is a MEMBER_REF_EXPR with spelling in `_KERNEL_PATH_FIELDS`
+          - arg 1 is the RHS — either a STRING_LITERAL directly, or a
+            DECL_REF_EXPR to a constexpr `const char*` whose initializer is one.
+        """
+        if current_function is None:
+            return
+        try:
+            args = list(call.get_arguments())
+        except Exception:
+            return
+        if len(args) < 2:
+            return
+        lhs, rhs = args[0], args[1]
+        try:
+            if lhs.kind != cindex.CursorKind.MEMBER_REF_EXPR:
+                return
+        except ValueError:
+            return
+        if lhs.spelling not in self._KERNEL_PATH_FIELDS:
+            return
+        path = self._resolve_string_value(rhs)
+        if not path:
+            return
+        if not any(path.endswith(s) for s in self._KERNEL_PATH_SUFFIXES):
+            return
+        # Synthesize the kernel_file node (same shape as _extract_kernel_launch).
+        kernel_id = f"kernel:{path}"
+        if kernel_id not in self.nodes:
+            self.nodes[kernel_id] = Node(
+                id=kernel_id,
+                language="cpp",
+                kind="kernel_file",
+                name=path.rsplit("/", 1)[-1],
+                qualified_name=path,
+                file=path,
+                line_start=0,
+                line_end=0,
+                signature=path,
+                is_definition=False,
+                discovered_in=[tu_path],
+            )
+        elif tu_path not in self.nodes[kernel_id].discovered_in:
+            self.nodes[kernel_id].discovered_in.append(tu_path)
+        site_file = call.location.file.name if call.location and call.location.file else ""
+        site_line = call.location.line if call.location else 0
+        self.edges.append(Edge(
+            src=node_id(current_function),
+            dst=kernel_id,
+            kind="launches",
+            site_file=site_file,
+            site_line=site_line,
+            via="KernelDescriptor.kernel_source",
+        ))
 
     def _extract_kernel_launch(
         self,
@@ -1080,6 +1220,19 @@ class Indexer:
                         and not ref.spelling.startswith("operator")
                         and not ref.spelling.startswith("__builtin_")
                     ):
+                        # VAR_DECLs can be (a) static class members — legit
+                        # binding targets — or (b) function-local variables
+                        # like `const auto doc = "..."` that nanobind helpers
+                        # pass through to `bind_function<...>`. We only want
+                        # (a). Filter by semantic_parent: class-scoped vars
+                        # stay, function-scoped vars drop.
+                        if ref_kind == cindex.CursorKind.VAR_DECL:
+                            try:
+                                parent_kind = ref.semantic_parent.kind if ref.semantic_parent else None
+                            except ValueError:
+                                parent_kind = None
+                            if parent_kind not in CLASS_KINDS:
+                                continue
                         qn = qualified_name(ref)
                         if not any(qn.startswith(p) for p in FRAMEWORK_NAMESPACE_PREFIXES):
                             key = ref.get_usr() or qn

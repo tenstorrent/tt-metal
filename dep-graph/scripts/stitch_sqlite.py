@@ -267,6 +267,99 @@ def insert_py_nodes_and_refs(con: sqlite3.Connection, py_json: Path) -> dict:
     for row in con.execute("SELECT python_name, cpp_node_id, helper FROM bindings"):
         by_pyname_cpp.setdefault(row[0], []).append((row[1], row[2]))
 
+    # ─── Typed-method resolver (Option 2) ──────────────────────────────
+    # For each class binding (helper='class_'), collect its methods/fields
+    # keyed by python class name. Then for a ref like `["obj", "method"]`
+    # with receiver_type=["ttnn","MemoryConfig"], we can look up "MemoryConfig"
+    # → methods → find "method" → emit cross-language edge.
+    class_cpp_by_pyname: dict[str, list[str]] = {}  # MemoryConfig → [tt::tt_metal::MemoryConfig, ...]
+    for r in con.execute("SELECT python_name, cpp_qualified_name FROM bindings WHERE helper='class_'"):
+        class_cpp_by_pyname.setdefault(r[0], []).append(r[1])
+    # All non-class bindings keyed by (cpp_class_prefix, python_member_name) →
+    # list of cpp_node_id targets. Lookup: given a cpp class name + member name
+    # → list of bound method/field node ids.
+    cpp_class_members: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for r in con.execute(
+        "SELECT python_name, cpp_node_id, cpp_qualified_name, helper FROM bindings "
+        "WHERE helper != 'class_'"
+    ):
+        py_member_name, member_node_id, member_cpp_qn, helper = r
+        # Find the longest class-cpp-prefix among class bindings that matches.
+        # Cache for speed: build once mapping cpp_qn → class_cpp_qn.
+        for cpp_class_qn in class_cpp_by_pyname.values():
+            # iterate flat list of class cpp qns
+            pass
+    # Build the cpp_class → member map cleanly.
+    all_class_cpps = {cpp for cpps in class_cpp_by_pyname.values() for cpp in cpps}
+    # Sort by length desc so longest prefix wins.
+    sorted_class_cpps = sorted(all_class_cpps, key=len, reverse=True)
+    cpp_class_members.clear()
+    # First: explicit bindings (highest signal).
+    for r in con.execute(
+        "SELECT python_name, cpp_node_id, cpp_qualified_name FROM bindings WHERE helper != 'class_'"
+    ):
+        py_member_name, member_node_id, member_cpp_qn = r
+        for class_cpp in sorted_class_cpps:
+            prefix = class_cpp + "::"
+            if member_cpp_qn.startswith(prefix):
+                cpp_class_members.setdefault((class_cpp, py_member_name), []).append((member_node_id, "bound"))
+                break
+    # Second: raw cpp methods/fields. Many ttnn classes bind methods via
+    # `bind_function<"name">` template machinery our extractor doesn't unwrap,
+    # so we fall back to "method exists on the class" → match by prefix +
+    # trailing identifier. Tagged 'raw' so consumers can filter.
+    bound_pairs = set(cpp_class_members.keys())
+    for class_cpp in sorted_class_cpps:
+        prefix = class_cpp + "::"
+        cursor = con.execute(
+            "SELECT id, qualified_name FROM nodes "
+            "WHERE language='cpp' AND kind IN ('CXX_METHOD','FUNCTION_DECL','FIELD_DECL','VAR_DECL') "
+            "AND qualified_name LIKE ?",
+            (prefix + "%",),
+        )
+        for node_id, qn in cursor:
+            tail = qn[len(prefix):]
+            # Skip nested classes / parameterised tails — only direct members
+            # (no further `::` and no `<` template noise).
+            if "::" in tail or "<" in tail or "(" in tail:
+                continue
+            # Strip trailing overload signature (parens) — already filtered.
+            member_name = tail
+            if not member_name:
+                continue
+            key = (class_cpp, member_name)
+            if key in bound_pairs:
+                continue  # bound entry wins
+            cpp_class_members.setdefault(key, []).append((node_id, "raw"))
+
+    # Resolution helper bound to the maps above.
+    def resolve_via_receiver_type(receiver_type, member_name):
+        """Given ['ttnn','MemoryConfig'] and 'is_sharded', return list of
+        (cpp_node_id, helper_label) edge targets.
+
+        Filters by module prefix: only resolve when the receiver_type's
+        leading component names a module that exposes cpp bindings. Without
+        this, `torch.Tensor.reshape()` would be wrongly resolved to
+        `tt::tt_metal::Tensor::reshape` because both have last-component
+        'Tensor' (Flaw 4). Bare receivers (no prefix) are dropped — too
+        ambiguous to risk without import-context tracking.
+        """
+        if not receiver_type or len(receiver_type) < 2:
+            return []
+        if receiver_type[0] != "ttnn":
+            return []
+        py_class_name = receiver_type[-1]
+        cpp_classes = class_cpp_by_pyname.get(py_class_name, [])
+        if not cpp_classes:
+            return []
+        out = []
+        for cpp_class in cpp_classes:
+            hits = cpp_class_members.get((cpp_class, member_name), [])
+            for node_id, src in hits:
+                label = f"{py_class_name}/{src}" if src else py_class_name
+                out.append((node_id, label))
+        return out
+
     by_pyname_pyimpl: dict[str, list[tuple[str | None, list[str] | None, str | None]]] = {}
     for row in con.execute(
         "SELECT python_name, impl_node_id, impl_chain, decorator_label FROM py_registrations"
@@ -277,12 +370,31 @@ def insert_py_nodes_and_refs(con: sqlite3.Connection, py_json: Path) -> dict:
     unresolved = 0
     resolved_via_pyreg = 0
     resolved_via_binding = 0
+    resolved_via_receiver_type = 0
     for r in py["refs"]:
         chain = r["target_chain"]
+        kind = "binds" if r["kind"] == "attr_access" else "calls"
+
+        # 0. Typed-method resolution (Option 2). Fires for ANY ref with a
+        # known receiver type — chain[0] doesn't need to be `ttnn`. e.g.
+        # `memory_config.is_sharded()` where memory_config: ttnn.MemoryConfig.
+        receiver_type = r.get("receiver_type")
+        if receiver_type and chain and len(chain) >= 2:
+            member_name = chain[1]
+            type_hits = resolve_via_receiver_type(receiver_type, member_name)
+            if type_hits:
+                for cpp_id, label in type_hits:
+                    cross_rows.append((
+                        r["src"], cpp_id, kind,
+                        r["site_file"], int(r["site_line"]),
+                        1, None, f"receiver_type:{label}", None,
+                    ))
+                    resolved_via_receiver_type += 1
+                continue  # this ref handled; don't fall through
+
         if not chain or chain[0] != "ttnn" or len(chain) < 2:
             unresolved += 1
             continue
-        kind = "binds" if r["kind"] == "attr_access" else "calls"
 
         # 1. Prefer py_registrations matched on the FULL dotted name OR any
         # progressively-shorter prefix ending at chain[-1]. This catches
@@ -347,6 +459,7 @@ def insert_py_nodes_and_refs(con: sqlite3.Connection, py_json: Path) -> dict:
         "cross_edges": len(cross_rows),
         "resolved_via_pyreg": resolved_via_pyreg,
         "resolved_via_binding": resolved_via_binding,
+        "resolved_via_receiver_type": resolved_via_receiver_type,
         "unresolved": unresolved,
     }
 
@@ -383,7 +496,9 @@ def main() -> None:
     print(
         f"  py:  {pyres['py_n']} nodes, {pyres['py_e']} edges, "
         f"{pyres['registrations']} registrations, {pyres['cross_edges']} edges from refs "
-        f"(via_pyreg={pyres['resolved_via_pyreg']}, via_binding={pyres['resolved_via_binding']}), "
+        f"(via_pyreg={pyres['resolved_via_pyreg']}, "
+        f"via_binding={pyres['resolved_via_binding']}, "
+        f"via_receiver_type={pyres['resolved_via_receiver_type']}), "
         f"{pyres['unresolved']} unresolved",
         file=sys.stderr,
     )

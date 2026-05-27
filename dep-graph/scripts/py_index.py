@@ -82,6 +82,52 @@ def attr_chain(node: ast.AST) -> list[str] | None:
     return None
 
 
+def _peel_receiver_type(ann: ast.expr | None) -> list[str] | None:
+    """Extract a single dotted type chain from a (possibly wrapped) annotation.
+
+    Handles:
+        ttnn.MemoryConfig           → ["ttnn", "MemoryConfig"]
+        Optional[ttnn.Tensor]       → ["ttnn", "Tensor"]
+        Union[ttnn.Tensor, None]    → ["ttnn", "Tensor"]
+        ttnn.Tensor | None          → ["ttnn", "Tensor"]
+        list[ttnn.Tensor]           → None  (the var is a list, not Tensor)
+        str / int / object          → ["str"] etc. (caller filters externals)
+
+    Returns None when the annotation is something we can't reduce to a single
+    receiver type (Union of incompatibles, generics, callables, etc.).
+    """
+    if ann is None:
+        return None
+    chain = attr_chain(ann)
+    if chain:
+        return chain
+    # Subscript: Optional[X], Union[X, None], etc.
+    if isinstance(ann, ast.Subscript):
+        outer = attr_chain(ann.value)
+        if outer in (["Optional"], ["typing", "Optional"]):
+            return _peel_receiver_type(ann.slice)
+        if outer in (["Union"], ["typing", "Union"]):
+            slice_node = ann.slice
+            # ast.Tuple under Subscript for Union[X, Y, ...]
+            if isinstance(slice_node, ast.Tuple):
+                non_none = [e for e in slice_node.elts
+                            if not (isinstance(e, ast.Constant) and e.value is None)
+                            and attr_chain(e) != ["None"]]
+                if len(non_none) == 1:
+                    return _peel_receiver_type(non_none[0])
+        return None  # list[X], dict[K, V], Callable[...] etc. — not a method receiver
+    # PEP 604 BinOp: X | None
+    if isinstance(ann, ast.BinOp) and isinstance(ann.op, ast.BitOr):
+        left = _peel_receiver_type(ann.left)
+        right = _peel_receiver_type(ann.right)
+        if right == ["None"]:
+            return left
+        if left == ["None"]:
+            return right
+        return left  # ambiguous union of types — pick the first
+    return None
+
+
 def decorator_label(node: ast.expr) -> str:
     """Render a decorator AST as a string label."""
     if isinstance(node, ast.Call):
@@ -132,6 +178,12 @@ class PyRef:
     # being referenced). Needed for Jedi's line/col position queries — without
     # this, the resolver can't pinpoint `execute` in `cursor.execute(...)`.
     site_col: int = 0
+    # Type of the receiver (chain[0]) when it's a known annotated local /
+    # parameter — e.g. `memory_config: ttnn.MemoryConfig` makes this
+    # `["ttnn", "MemoryConfig"]`. The stitcher uses receiver_type[-1] to
+    # look up the receiver's class binding and resolve `chain[1]` as a
+    # method/field on that class. None when the receiver type isn't known.
+    receiver_type: list[str] | None = None
 
 
 @dataclass
@@ -246,6 +298,12 @@ class FileIndexer(ast.NodeVisitor):
         self.wildcard_imports: list[tuple[str, int]] = []
         # class node id → list of (base_chain, lineno) for B6 inherits resolution.
         self.class_base_chains: dict[str, list[tuple[list[str], int]]] = {}
+        # Stack of {local_name → type_chain} maps — pushed when entering a
+        # function/method scope, popped on exit. Populated from parameter
+        # annotations and AnnAssign at function scope. Used by visit_Call /
+        # visit_Attribute to attach `receiver_type` to refs so the stitcher
+        # can resolve `obj.method()` through C++ class bindings.
+        self.local_type_stack: list[dict[str, list[str]]] = []
 
     # ─ ids ─
 
@@ -333,6 +391,34 @@ class FileIndexer(ast.NodeVisitor):
                         decorator_label=label,
                     ))
                     self.nodes[nid].is_binding_caller = True
+        # Build the local-type table from parameter annotations BEFORE walking
+        # the body, so visit_Call / visit_Attribute can tag refs with
+        # receiver_type.
+        local_types: dict[str, list[str]] = {}
+        args = node.args
+        for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+            if arg.annotation is not None:
+                rt = _peel_receiver_type(arg.annotation)
+                if rt:
+                    local_types[arg.arg] = rt
+        if args.vararg and args.vararg.annotation is not None:
+            rt = _peel_receiver_type(args.vararg.annotation)
+            if rt:
+                local_types[args.vararg.arg] = rt
+        if args.kwarg and args.kwarg.annotation is not None:
+            rt = _peel_receiver_type(args.kwarg.annotation)
+            if rt:
+                local_types[args.kwarg.arg] = rt
+        # For methods, `self` resolves to the enclosing class.
+        if parent_is_class and args.args:
+            # Heuristic: first arg of a method is `self` (or `cls`).
+            first = args.args[0].arg
+            if first in ("self", "cls"):
+                # Use the class's bare name as the receiver type. The stitcher
+                # will look it up in class_methods_global by python class name.
+                cls_node = self.nodes[self.scope_stack[-1]]
+                local_types[first] = [cls_node.name]
+        self.local_type_stack.append(local_types)
         self.scope_stack.append(nid)
         self.qualname_stack.append(qualname)
         # Visit the function body for calls/refs.
@@ -362,6 +448,7 @@ class FileIndexer(ast.NodeVisitor):
             self.visit(dec)
         self.qualname_stack.pop()
         self.scope_stack.pop()
+        self.local_type_stack.pop()
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         parent_qual = self.qualname_stack[-1]
@@ -418,6 +505,13 @@ class FileIndexer(ast.NodeVisitor):
         if sig in self._seen_refs:
             return
         self._seen_refs.add(sig)
+        # Receiver-type tagging (Option 2 typed-method resolver). If chain[0]
+        # is a known annotated local in the current function scope, record
+        # the receiver's declared type so the stitcher can resolve chain[1]
+        # against the class's method/field bindings.
+        receiver_type: list[str] | None = None
+        if len(chain) >= 2 and self.local_type_stack:
+            receiver_type = self.local_type_stack[-1].get(chain[0])
         self.refs.append(PyRef(
             src=src,
             target_chain=chain,
@@ -425,6 +519,7 @@ class FileIndexer(ast.NodeVisitor):
             site_line=site_line,
             site_col=site_col,
             kind=kind,
+            receiver_type=receiver_type,
         ))
         if len(chain) >= 2 and chain[0] in ("ttnn", "tt_metal"):
             self.nodes[src].is_binding_caller = True
@@ -531,11 +626,16 @@ class FileIndexer(ast.NodeVisitor):
             )
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        # Only module-level `__all__ = [...]` / `__all__ = (...)` assignments
-        # count. Function-local or class-local assignments to a name `__all__`
-        # are not Python's export-list semantics.
         if len(self.scope_stack) == 1:
+            # Capture two kinds of module-level Assign:
+            #   (1) `__all__ = [...]` — drives wildcard-import expansion.
+            #   (2) `X = expr` — module-level variable / re-binding (e.g. `TILE_LAYOUT = Layout.TILE`,
+            #       `bfloat16 = DataType.BFLOAT16`). Without these, refs to
+            #       `ttnn.TILE_LAYOUT` are unresolved despite the value being
+            #       a well-defined module attribute. Record as a `module_var`
+            #       node so the bare-name + re-export resolver can find them.
             for tgt in node.targets:
+                # __all__ assignment
                 if isinstance(tgt, ast.Name) and tgt.id == "__all__":
                     if isinstance(node.value, (ast.List, ast.Tuple)):
                         names: list[str] = []
@@ -543,6 +643,48 @@ class FileIndexer(ast.NodeVisitor):
                             if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
                                 names.append(elt.value)
                         self.dunder_all = names
+                # Regular module-level variable assignment.
+                if isinstance(tgt, ast.Name) and tgt.id != "__all__":
+                    var_name = tgt.id
+                    nid = f"py:module_var:{self.module_dotted}.{var_name}:{node.lineno}"
+                    if nid not in self.nodes:
+                        self.nodes[nid] = Node(
+                            id=nid,
+                            language="python",
+                            kind="module_var",
+                            name=var_name,
+                            qualified_name=f"{self.module_dotted}.{var_name}",
+                            file=self.file_path,
+                            line_start=node.lineno,
+                            line_end=node.end_lineno or node.lineno,
+                        )
+                    # Last-binding-wins for resolver lookups.
+                    self.module_defs[var_name] = nid
+                # Tuple-unpacking `a, b = ...` is uncommon at module scope for
+                # exported constants; ignore for now.
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        """Annotated module-level assignment: `X: T = ...` or `X: T` (no value).
+
+        Treated the same as a plain `X = ...` for module-var node recording.
+        """
+        if len(self.scope_stack) == 1 and isinstance(node.target, ast.Name):
+            var_name = node.target.id
+            if var_name != "__all__":
+                nid = f"py:module_var:{self.module_dotted}.{var_name}:{node.lineno}"
+                if nid not in self.nodes:
+                    self.nodes[nid] = Node(
+                        id=nid,
+                        language="python",
+                        kind="module_var",
+                        name=var_name,
+                        qualified_name=f"{self.module_dotted}.{var_name}",
+                        file=self.file_path,
+                        line_start=node.lineno,
+                        line_end=node.end_lineno or node.lineno,
+                    )
+                self.module_defs[var_name] = nid
         self.generic_visit(node)
 
     # ─── post-pass: resolve intra-module Python edges ─────────────────────
@@ -738,7 +880,7 @@ def _expand_wildcard_imports(indexers: list["FileIndexer"]) -> int:
         # Module-level defs.
         for nid, n in fi.nodes.items():
             if (
-                n.kind in ("function", "class")
+                n.kind in ("function", "class", "module_var")
                 and n.qualified_name == f"{fi.module_dotted}.{n.name}"
                 and not n.name.startswith("_")
             ):
@@ -794,9 +936,9 @@ def _gather_files(args) -> list[Path]:
     for d in args.dir:
         root = Path(d).resolve()
         for p in root.rglob("*.py"):
-            # Skip tests + __pycache__ + venv etc.
+            # Skip transient / generated dirs only. tests/ is now in scope.
             sp = str(p)
-            if "/tests/" in sp or "/__pycache__/" in sp or "/.tox/" in sp:
+            if "/__pycache__/" in sp or "/.tox/" in sp or "/build/" in sp:
                 continue
             if p not in seen:
                 seen.add(p)
@@ -848,7 +990,7 @@ def main() -> None:
     module_defs_global: dict[tuple[str, str], str] = {}
     for fi in indexers:
         for nid, n in fi.nodes.items():
-            if n.kind in ("function", "class"):
+            if n.kind in ("function", "class", "module_var"):
                 # Only direct module-level defs — qualified_name shape is "<module_dotted>.<name>".
                 if n.qualified_name == f"{fi.module_dotted}.{n.name}":
                     module_defs_global[(fi.module_dotted, n.name)] = nid
