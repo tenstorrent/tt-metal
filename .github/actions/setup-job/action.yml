@@ -125,19 +125,22 @@ runs:
       if: ${{ inputs.enable-kernel-ccache == 'true' }}
       working-directory: ${{ inputs.path }}
       run: |
+        STORAGE="${{ inputs.redis-ccache-storage }}"
+        # Validate that the URL has a real host and port before enabling ccache.
+        # When secrets are unavailable (e.g. fork/cross-repo PRs), vars expand to
+        # empty strings producing a malformed URL like "redis://:@:|read-only="
+        # which ccache rejects with "Port '' is invalid". Skip cleanly instead.
+        if ! echo "$STORAGE" | grep -qE 'redis://[^@]*@[^:]+:[0-9]+'; then
+          echo "::warning::Kernel ccache skipped: Redis URL is missing host/port (secrets unavailable in this context)."
+          exit 0
+        fi
         echo "Enabling TT Metal kernel ccache"
         echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
         echo "CCACHE_REMOTE_ONLY=true" >> $GITHUB_ENV
         echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
         echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
         echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
-
-        if [ -z "${{ inputs.redis-ccache-storage }}" ]; then
-          echo "Redis ccache storage is missing. Did you forget to pass redis-ccache-storage?"
-          exit 1
-        fi
-        echo "CCACHE_REMOTE_STORAGE=${{ inputs.redis-ccache-storage }}" >> $GITHUB_ENV
-
+        echo "CCACHE_REMOTE_STORAGE=$STORAGE" >> $GITHUB_ENV
         mkdir -p /tmp/ccache
       shell: bash
 
