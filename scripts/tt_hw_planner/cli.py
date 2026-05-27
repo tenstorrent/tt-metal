@@ -7358,6 +7358,7 @@ def _cmd_up_core(args) -> int:
             allow_partial_cpu=getattr(args, "allow_partial_cpu", False),
             model_light=model_light,
             model_heavy=model_heavy,
+            parallel_agents=getattr(args, "parallel_agents", 1),
         )
         if _rc_loop == 0:
             _register_bringup_success(
@@ -7670,6 +7671,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             "spends all its iterations on a single hopeless component, and "
             "the demo always converges to an end-to-end-running state "
             "(mix of native TTNN + CPU fallback) within --auto-max-iters."
+        ),
+    )
+    pup.add_argument(
+        "--parallel-agents",
+        type=int,
+        default=1,
+        help=(
+            "Number of LLM agents to run concurrently per iter (default: 1, "
+            "serial). When >1, the loop picks N distinct ungraduated "
+            "components, builds a prompt for each, and spawns N concurrent "
+            "agent calls in the same worktree. After all return, the loop "
+            "continues with the normal apply + validation sweep. Lifts the "
+            "per-iter throughput from 1 to N at the cost of N concurrent "
+            "Anthropic API calls (mind rate limits)."
         ),
     )
     pup.add_argument(

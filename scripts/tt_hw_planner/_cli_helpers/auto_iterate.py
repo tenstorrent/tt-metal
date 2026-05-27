@@ -42,6 +42,7 @@ def _run_auto_iterate_loop(
     allow_partial_cpu: bool = False,
     model_light: Optional[str] = None,
     model_heavy: Optional[str] = None,
+    parallel_agents: int = 1,
 ) -> int:
     from ..cli import (
         REPO_ROOT,
@@ -1848,18 +1849,77 @@ def _run_auto_iterate_loop(
                 _expected_targets.append(_responses_dir / f"{_safe_id(iter_target_component)}.py")
             from .agent import _bringup_cwd as _bcwd
 
-            rc = _invoke_agent(
-                prompt,
-                provider=provider,
-                agent_bin=agent_bin,
-                cwd=_bcwd(),
-                model=_iter_model,
-                timeout_s=agent_timeout_s,
-                complexity_bonus=_iter_complexity_bonus,
-                iter_tag=f"iter_{it}_{_safe_id(iter_target_component)}" if iter_target_component else f"iter_{it}",
-                deliverable_dirs=[_responses_dir],
-                expected_deliverable_files=_expected_targets or None,
-            )
+            _parallel_extra_jobs = []
+            if parallel_agents > 1 and iter_target_component:
+                from .parallel_iterate import pick_n_distinct_targets, AgentJob, run_parallel_agents
+
+                _ungraduated_now, _ = _auto_iteration_blockers(MODEL)
+                _exclude = set([iter_target_component]) | set(permanently_skipped)
+                _extra_targets = pick_n_distinct_targets(
+                    _ungraduated_now, n=parallel_agents - 1, exclude=list(_exclude)
+                )
+                for _extra in _extra_targets:
+                    _extra_prompt = (
+                        prompt.replace(f"{iter_target_component}", _extra)
+                        if iter_target_component != _extra
+                        else prompt
+                    )
+                    _parallel_extra_jobs.append(
+                        AgentJob(
+                            component=_extra,
+                            prompt=_extra_prompt,
+                            cwd=_bcwd(),
+                            provider=provider,
+                            agent_bin=agent_bin,
+                            model=_iter_model,
+                            timeout_s=agent_timeout_s,
+                            complexity_bonus=_iter_complexity_bonus,
+                            iter_tag=f"iter_{it}_{_safe_id(_extra)}",
+                            deliverable_dirs=[_responses_dir],
+                            expected_deliverable_files=[_responses_dir / f"{_safe_id(_extra)}.py"],
+                        )
+                    )
+
+            if _parallel_extra_jobs:
+                from .parallel_iterate import AgentJob, run_parallel_agents
+
+                _all_jobs = [
+                    AgentJob(
+                        component=iter_target_component,
+                        prompt=prompt,
+                        cwd=_bcwd(),
+                        provider=provider,
+                        agent_bin=agent_bin,
+                        model=_iter_model,
+                        timeout_s=agent_timeout_s,
+                        complexity_bonus=_iter_complexity_bonus,
+                        iter_tag=f"iter_{it}_{_safe_id(iter_target_component)}",
+                        deliverable_dirs=[_responses_dir],
+                        expected_deliverable_files=_expected_targets or None,
+                    ),
+                    *_parallel_extra_jobs,
+                ]
+                _par_results = run_parallel_agents(_all_jobs, max_workers=parallel_agents)
+                rc = _par_results[0].rc if _par_results else 1
+                for _r in _par_results[1:]:
+                    if _r.rc != 0:
+                        print(
+                            f"  agent for {_r.component!r} returned non-zero " f"({_r.rc}); continuing to apply step.",
+                            file=sys.stderr,
+                        )
+            else:
+                rc = _invoke_agent(
+                    prompt,
+                    provider=provider,
+                    agent_bin=agent_bin,
+                    cwd=_bcwd(),
+                    model=_iter_model,
+                    timeout_s=agent_timeout_s,
+                    complexity_bonus=_iter_complexity_bonus,
+                    iter_tag=f"iter_{it}_{_safe_id(iter_target_component)}" if iter_target_component else f"iter_{it}",
+                    deliverable_dirs=[_responses_dir],
+                    expected_deliverable_files=_expected_targets or None,
+                )
             if rc != 0:
                 print(f"  agent invocation returned non-zero ({rc}); continuing to apply step.", file=sys.stderr)
             try:
