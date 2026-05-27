@@ -14,6 +14,7 @@
 
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn-nanobind/bind_descriptor_op.hpp"
 
 #include "slice.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
@@ -146,30 +147,9 @@ void bind_slice_descriptor(nb::module_& mod) {
         .def_rw("input", &ttnn::prim::SliceInputs::input)
         .def_rw("preallocated_output", &ttnn::prim::SliceInputs::preallocated_output);
 
-    nb::class_<ttnn::prim::SliceDeviceOperation>(mod, "SliceDeviceOperation")
-        .def_static(
-            "create_output_tensors",
-            &ttnn::prim::SliceDeviceOperation::create_output_tensors,
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"))
-        .def_static(
-            "compute_output_specs",
-            &ttnn::prim::SliceDeviceOperation::compute_output_specs,
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"));
-
-    nb::class_<ttnn::prim::SliceTileProgramFactory>(mod, "SliceTileProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::SliceParams& operation_attributes,
-               const ttnn::prim::SliceInputs& tensor_args,
-               Tensor& tensor_return_value) {
-                return ttnn::prim::SliceTileProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"));
+    ttnn::bind_device_op<ttnn::prim::SliceDeviceOperation>(mod, "SliceDeviceOperation");
+    ttnn::bind_factory<ttnn::prim::SliceTileProgramFactory, ttnn::prim::SliceDeviceOperation>(
+        mod, "SliceTileProgramFactory");
 }
 
 }  // namespace ttnn::operations::data_movement::detail

@@ -14,6 +14,7 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn-nanobind/bind_descriptor_op.hpp"
 #include "layernorm.hpp"
 #include "device/layernorm_device_operation.hpp"
 #include "device/layernorm_device_operation_types.hpp"
@@ -248,72 +249,7 @@ void bind_normalization_layernorm_params_and_inputs(nb::module_& mod) {
 }
 
 void bind_normalization_layernorm_device_operation(nb::module_& mod) {
-    nb::class_<ttnn::prim::LayerNormDeviceOperation>(mod, "LayerNormDeviceOperation")
-        .def_static(
-            "compute_program_hash",
-            [](const ttnn::prim::LayerNormParams& attrs, const ttnn::prim::LayerNormInputs& tensors) {
-                return ttnn::device_operation::detail::compute_program_hash<ttnn::prim::LayerNormDeviceOperation>(
-                    attrs, tensors);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            R"doc(
-            Compute the program hash from operation attributes and tensor metadata.
-            Same hash used by the C++ program cache.  Does not run the factory.
-            )doc")
-        .def_static(
-            "create_output_tensors",
-            &ttnn::prim::LayerNormDeviceOperation::create_output_tensors,
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            R"doc(
-            Creates output tensors for the layer norm operation.
-
-            This creates appropriately configured output tensors based on the operation
-            attributes and input tensors. For sharded operations with inplace=True,
-            returns the input tensor.
-
-            Args:
-                operation_attributes (LayerNormParams): Operation parameters.
-                tensor_args (LayerNormInputs): Input tensors.
-
-            Returns:
-                ttnn.Tensor: The output tensor for the layer norm operation.
-            )doc")
-        .def_static(
-            "compute_output_specs",
-            &ttnn::prim::LayerNormDeviceOperation::compute_output_specs,
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            R"doc(
-            Computes the output tensor specification for the layer norm operation.
-
-            Args:
-                operation_attributes (LayerNormParams): Operation parameters.
-                tensor_args (LayerNormInputs): Input tensors.
-
-            Returns:
-                ttnn.TensorSpec: The output tensor specification.
-            )doc")
-        .def_static(
-            "select_program_factory",
-            &ttnn::prim::LayerNormDeviceOperation::select_program_factory,
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            R"doc(
-            Selects the appropriate program factory based on input tensor's memory layout.
-
-            Returns LayerNormShardedProgramFactory for sharded inputs,
-            LayerNormMultiCoreProgramFactory for non-sharded inputs.
-
-            Args:
-                operation_attributes (LayerNormParams): Operation parameters.
-                tensor_args (LayerNormInputs): Input tensors.
-
-            Returns:
-                Union[LayerNormMultiCoreProgramFactory, LayerNormShardedProgramFactory]:
-                    The appropriate program factory for the input tensor.
-            )doc");
+    ttnn::bind_device_op<ttnn::prim::LayerNormDeviceOperation>(mod, "LayerNormDeviceOperation");
 }
 
 void bind_normalization_layernorm_program_factory(nb::module_& mod) {

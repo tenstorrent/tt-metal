@@ -18,8 +18,8 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
-#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn-nanobind/bind_descriptor_op.hpp"
 #include "ttnn-nanobind/json_class.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
@@ -1179,116 +1179,27 @@ void py_module(nb::module_& mod) {
         .def_rw("optional_input_tensors", &ttnn::prim::MatmulInputs::optional_input_tensors)
         .def_rw("optional_output_tensors", &ttnn::prim::MatmulInputs::optional_output_tensors);
 
-    // Bind MatmulDeviceOperation for descriptor-based operations
-    nb::class_<ttnn::prim::MatmulDeviceOperation>(mod, "MatmulDeviceOperation")
-        .def_static(
-            "create_output_tensors",
-            &ttnn::prim::MatmulDeviceOperation::create_output_tensors,
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"))
-        .def_static(
-            "compute_output_specs",
-            &ttnn::prim::MatmulDeviceOperation::compute_output_specs,
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"));
+    ttnn::bind_device_op<ttnn::prim::MatmulDeviceOperation>(mod, "MatmulDeviceOperation");
 
-    // Bind MatmulMultiCoreReuseOptimizedProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory>(
+    ttnn::bind_factory<ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory, ttnn::prim::MatmulDeviceOperation>(
         mod, "MatmulMultiCoreReuseOptimizedProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::MatmulParams& operation_attributes,
-               const ttnn::prim::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value) {
-                return ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"))
         .def_static(
             "default_core_range",
             &ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory::default_core_range,
             nb::arg("device"));
 
-    // Bind MatmulMultiCoreProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::MatmulMultiCoreProgramFactory>(mod, "MatmulMultiCoreProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::MatmulParams& operation_attributes,
-               const ttnn::prim::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value) {
-                return ttnn::prim::MatmulMultiCoreProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"));
-
-    // Bind MatmulMultiCoreReuseMcast1DProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory>(mod, "MatmulMultiCoreReuseMcast1DProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::MatmulParams& operation_attributes,
-               const ttnn::prim::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value) {
-                return ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"));
-
-    // Bind MatmulMultiCoreReuseMcast2DProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory>(mod, "MatmulMultiCoreReuseMcast2DProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::MatmulParams& operation_attributes,
-               const ttnn::prim::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value) {
-                return ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"));
-
-    // Bind MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory>(
-        mod, "MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::MatmulParams& operation_attributes,
-               const ttnn::prim::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value) {
-                return ttnn::prim::MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"));
-
-    // Bind MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory>(
-        mod, "MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::MatmulParams& operation_attributes,
-               const ttnn::prim::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value) {
-                return ttnn::prim::MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"));
-
-    // Bind select_program_factory for Python-side factory dispatch
-    mod.def(
-        "matmul_select_program_factory",
-        &ttnn::prim::MatmulDeviceOperation::select_program_factory,
-        nb::arg("operation_attributes"),
-        nb::arg("tensor_args"));
+    ttnn::bind_factory<ttnn::prim::MatmulMultiCoreProgramFactory, ttnn::prim::MatmulDeviceOperation>(
+        mod, "MatmulMultiCoreProgramFactory");
+    ttnn::bind_factory<ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory, ttnn::prim::MatmulDeviceOperation>(
+        mod, "MatmulMultiCoreReuseMcast1DProgramFactory");
+    ttnn::bind_factory<ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory, ttnn::prim::MatmulDeviceOperation>(
+        mod, "MatmulMultiCoreReuseMcast2DProgramFactory");
+    ttnn::bind_factory<
+        ttnn::prim::MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory,
+        ttnn::prim::MatmulDeviceOperation>(mod, "MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory");
+    ttnn::bind_factory<
+        ttnn::prim::MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory,
+        ttnn::prim::MatmulDeviceOperation>(mod, "MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory");
 
     // Bind create_matmul_attributes helper
     mod.def(
