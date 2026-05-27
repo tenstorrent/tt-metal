@@ -187,7 +187,7 @@ def _run_sfpu_binary_test(
     # SFPU reads from DEST directly, so we use UnpDest to load operands there —
     # no need to route through SRC registers and the FPU.
     configuration = TestConfig(
-        "sources/quasar/sfpu_binary_div_quasar_test.cpp",
+        "sources/quasar/sfpu_binary_float_quasar_test.cpp",
         formats,
         templates=[
             MATH_OP(mathop=mathop),
