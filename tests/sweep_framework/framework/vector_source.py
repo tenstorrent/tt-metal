@@ -202,11 +202,18 @@ class VectorExportSource(VectorSource):
 
     @staticmethod
     def _get_grouping_kind(module_name: str) -> str | None:
-        """Classify a manifest module name by shared suffix parsing rules."""
+        """Classify a manifest module name by shared suffix parsing rules.
+        
+        When both hw and mesh suffixes are present (e.g. .hw_..._1c.mesh_4x8),
+        return 'hw' since that is the primary grouping mode. The mesh suffix
+        is a sub-grouping within the hw group.
+        """
+        # Check hw first: strip_mesh_suffix removes .mesh_NxM so parse_hardware_suffix
+        # can find the .hw_ pattern that was hidden behind the mesh suffix.
+        if parse_hardware_suffix(strip_mesh_suffix(module_name)) is not None:
+            return "hw"
         if parse_mesh_suffix(module_name) is not None:
             return "mesh"
-        if parse_hardware_suffix(module_name) is not None:
-            return "hw"
         return None
 
     def _manifest_entry_matches_module(
