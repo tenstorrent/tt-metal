@@ -580,7 +580,15 @@ class MochiTransformer3DModel(Module):
         logger.info(f"valid prompt length: {valid_prompt_length}")
         prompt_shape = list(tt_prompt_1BLP.shape)
         prompt_shape[2] = valid_prompt_length
-        tt_prompt_1BLP = ttnn.reshape(tt_prompt_1BLP, ttnn.Shape(prompt_shape), tt_prompt_1BLP.padded_shape)
+        # Explicit memory_config: opt into the input layout for the output so the reshape's
+        # shard-spec derivation honors it as-is when valid (matches the layout downstream
+        # ops are tuned for; falls back to derivation if the input spec doesn't fit).
+        tt_prompt_1BLP = ttnn.reshape(
+            tt_prompt_1BLP,
+            ttnn.Shape(prompt_shape),
+            tt_prompt_1BLP.padded_shape,
+            memory_config=tt_prompt_1BLP.memory_config(),
+        )
 
         if valid_prompt_length < text_embeds.shape[-2]:
             logger.warning("Attention mask is not all ones. Truncating prompt")

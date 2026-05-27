@@ -6,7 +6,9 @@ import torch
 import pytest
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
+
+_bf16_max = torch.finfo(torch.bfloat16).max
 
 pytestmark = pytest.mark.use_module_device
 
@@ -177,7 +179,7 @@ def test_binary_max_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    tt_result = ttnn.maximum(tt_in_a, tt_in_b, use_legacy=None)
+    tt_result = ttnn.maximum(tt_in_a, tt_in_b)
     output_tensor = ttnn.to_torch(tt_result).to(torch.int32)
     assert torch.equal(golden, output_tensor)
 
@@ -390,7 +392,7 @@ def test_binary_max_fill_val_bf16(input_shapes, input_a_val, input_b_val, device
     tt_result = ttnn.maximum(tt_in_a, tt_in_b)
 
     result = ttnn.to_torch(tt_result)
-    assert_with_pcc(golden, result, 0.999)
+    assert_equal(golden, result)
 
 
 @pytest.mark.parametrize(
@@ -405,14 +407,14 @@ def test_binary_max_fill_val_bf16(input_shapes, input_a_val, input_b_val, device
     "low_a, high_a, low_b, high_b",
     [
         (-100, 100, -300, 300),
-        (-3.0 * 10**38, 3.0 * 10**38, -3.3 * 10**38, 3.3 * 10**38),
+        (-_bf16_max, _bf16_max, -_bf16_max, _bf16_max),
     ],
 )
 def test_binary_max_bf16(input_shapes, low_a, high_a, low_b, high_b, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
-    torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.bfloat16)
+    torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.float64).to(torch.bfloat16)
     torch_input_a = torch_input_a[:num_elements].reshape(input_shapes)
-    torch_input_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.bfloat16)
+    torch_input_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.float64).to(torch.bfloat16)
     torch_input_b = torch_input_b[:num_elements].reshape(input_shapes)
 
     golden_function = ttnn.get_golden_function(ttnn.maximum)
@@ -436,7 +438,7 @@ def test_binary_max_bf16(input_shapes, low_a, high_a, low_b, high_b, device):
 
     tt_result = ttnn.maximum(tt_in_a, tt_in_b)
     result = ttnn.to_torch(tt_result)
-    assert_with_pcc(golden, result, 0.999)
+    assert_equal(golden, result)
 
 
 @pytest.mark.parametrize(
@@ -481,7 +483,7 @@ def test_binary_max_fp32_bcast(input_shape_a, input_shape_b, low_a, high_a, low_
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    tt_result = ttnn.maximum(tt_in_a, tt_in_b, use_legacy=None)
+    tt_result = ttnn.maximum(tt_in_a, tt_in_b)
     comp_pass = compare_equal([tt_result], [golden])
     assert comp_pass
 
@@ -499,16 +501,16 @@ def test_binary_max_fp32_bcast(input_shape_a, input_shape_b, low_a, high_a, low_
     "low_a, high_a, low_b, high_b",
     [
         (-100, 100, -300, 300),
-        (-1.0 * 10**38, 1.0 * 10**38, -1.7 * 10**38, 1.7 * 10**38),
+        (-_bf16_max, _bf16_max, -_bf16_max, _bf16_max),
     ],
 )
 def test_binary_max_bf16_bcast(input_shape_a, input_shape_b, low_a, high_a, low_b, high_b, device):
     num_elements = max(int(torch.prod(torch.tensor(input_shape_a)).item()), 1)
-    torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.bfloat16)
+    torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.float64).to(torch.bfloat16)
     torch_input_a = torch_input_a[:num_elements].reshape(input_shape_a)
 
     num_elements = max(int(torch.prod(torch.tensor(input_shape_b)).item()), 1)
-    torch_input_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.bfloat16)
+    torch_input_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.float64).to(torch.bfloat16)
     torch_input_b = torch_input_b[:num_elements].reshape(input_shape_b)
 
     golden_function = ttnn.get_golden_function(ttnn.maximum)
@@ -529,9 +531,9 @@ def test_binary_max_bf16_bcast(input_shape_a, input_shape_b, low_a, high_a, low_
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    tt_result = ttnn.maximum(tt_in_a, tt_in_b, use_legacy=None)
+    tt_result = ttnn.maximum(tt_in_a, tt_in_b)
     result = ttnn.to_torch(tt_result)
-    assert_with_pcc(golden, result, 0.999)
+    assert_equal(golden, result)
 
 
 @pytest.mark.parametrize(

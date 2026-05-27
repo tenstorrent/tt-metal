@@ -5,19 +5,49 @@
 #pragma once
 
 #include <optional>
+#include <variant>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation_types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"
-#include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_interleaved.hpp"
-#include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_sharded.hpp"
-#include "ttnn/operations/pool/upsample/device/upsample_nearest_float_program_factory.hpp"
+#include <utility>
+#include <vector>
 
 namespace ttnn::prim {
+
+struct UpsampleBilinearProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor);
+};
+
+struct UpsampleMultiCoreInterleavedProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor);
+};
+
+struct UpsampleMultiCoreShardedProgramFactory {
+    // create_workload_descriptor() uploads the per-core halo lookup config
+    // tensor and parks its backing MeshBuffer on the returned
+    // WorkloadDescriptor (held by the program cache) so its lifetime
+    // outlives the cached programs.
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+        const UpsampleParams& operation_attributes,
+        const Tensor& input_tensor,
+        Tensor& output_tensor,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
+};
+
+struct UpsampleNearestFloatProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor);
+};
 
 struct UpsampleOperation {
     using operation_attributes_t = UpsampleParams;

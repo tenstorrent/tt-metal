@@ -18,6 +18,7 @@ from models.demos.gemma4.tt.experts import Gemma4ExpertConfig, Gemma4Experts
 from ...tests.test_factory import (
     TestFactory,
     compare_tensors,
+    get_pcc_threshold,
     parametrize_batch_seq,
     parametrize_mesh_with_fabric,
     skip_if_not_moe,
@@ -26,10 +27,8 @@ from ...tests.test_factory import (
 
 @skip_if_not_moe
 @parametrize_mesh_with_fabric()
-@parametrize_batch_seq(
-    configs=[(1, 1), (1, 32), (1, 128), (1, 1024)], ids=["decode", "prefill_32", "prefill_128", "prefill_1024"]
-)
-def test_experts(batch_size, seq_len, mesh_device):
+@parametrize_batch_seq()
+def test_experts(batch_size, seq_len, mesh_device, reset_seeds, request):
     """Test MoE experts against HF reference.
 
     1x1: Uses reduced experts (8) and bfloat16 weights for fast single-card test.
@@ -118,6 +117,5 @@ def test_experts(batch_size, seq_len, mesh_device):
         .float()[:seq_len]
     )
 
-    pcc_thresh = 0.85 if tp > 1 else 0.90
-    passing, pcc_msg = compare_tensors(tt_out_torch, ref_output, pcc_threshold=pcc_thresh)
+    passing, pcc_msg = compare_tensors(tt_out_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, f"Experts (tp={tp}) PCC too low: {pcc_msg}"

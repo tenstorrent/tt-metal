@@ -59,6 +59,8 @@ namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_DRISC_MAILBOX_BASE)->x))
 #elif defined(ARCH_QUASAR)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))->x))
+// Cached alias of the mailbox region. Needed for atomics.
+#define GET_MAILBOX_ADDRESS_DEV_CACHED(x) (&(((mailboxes_t tt_l1_ptr*)MEM_MAILBOX_BASE)->x))
 #else
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_MAILBOX_BASE)->x))
 #endif
@@ -158,10 +160,7 @@ struct kernel_config_msg_t {
     volatile uint8_t brisc_noc_mode;
     volatile uint8_t min_remote_cb_start_index;
     volatile uint8_t exit_erisc_kernel;
-    // 32 bit program/launch_msg_id used by the performance profiler
-    // [9:0]: physical device id
-    // [30:10]: program id
-    // [31:31]: 0 (specifies that this id corresponds to a program running on device)
+    // 32 bit program/launch_msg_id used by the performance profiler.
     volatile uint32_t host_assigned_id;
     // bit i set => processor i enabled
     volatile uint32_t enables;
@@ -277,6 +276,7 @@ enum debug_assert_type_t {
     DebugAssertRtaOutOfBounds = 8,
     DebugAssertCrtaOutOfBounds = 9,
     DebugAssertHwFault = 10,
+    DebugAssertNCriscNOCPacketTagClearedTripped = 11,
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };

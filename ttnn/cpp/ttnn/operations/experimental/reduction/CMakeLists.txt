@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_reduction ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Reduction ALIAS ttnn_op_experimental_reduction)
 
@@ -15,6 +17,7 @@ file(
     GLOB_RECURSE kernels
     deepseek_grouped_gate/device/kernels/*
     deepseek_moe_fast_reduce_nc/device/kernels/*
+    deepseek_moe_fast_reduce_nc_fused/device/kernels/*
     fast_reduce_nc/device/kernels/*
     integral_image/device/kernels/*
 )
@@ -25,32 +28,23 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_EXPERIMENTAL_REDUCTION_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        fast_reduce_nc/device/fast_reduce_nc_device_operation.cpp
-        fast_reduce_nc/device/fast_reduce_nc_program_factory.cpp
-        fast_reduce_nc/fast_reduce_nc.cpp
-        deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_device_operation.cpp
-        deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_program_factory.cpp
-        deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc.cpp
-        integral_image/device/intimg_device_operation.cpp
-        integral_image/device/intimg_program_factory.cpp
-        integral_image/intimg.cpp
-        deepseek_grouped_gate/deepseek_grouped_gate.cpp
-        deepseek_grouped_gate/device/deepseek_grouped_gate_device_operation.cpp
-        deepseek_grouped_gate/device/deepseek_grouped_gate_program_factory.cpp
+        ${TTNN_OP_EXPERIMENTAL_REDUCTION_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_reduction PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
     ttnn_op_experimental_reduction
+    PUBLIC
+        TTNN::Core
     PRIVATE
         TT::Metalium
-        TTNN::Core
+        TTNN::Ops::Reduction
 )
 
 install(
@@ -62,4 +56,4 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_experimental_reduction LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_experimental_reduction FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

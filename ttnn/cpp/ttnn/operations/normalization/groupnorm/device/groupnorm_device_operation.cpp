@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/normalization/groupnorm/groupnorm_grid_utils.hpp"
+#include "ttnn/operations/normalization/shard_spec_validation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -16,7 +17,7 @@ GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_pro
     const auto& input = tensor_args.input;
 
     if (input.is_sharded()) {
-        return GroupNormShardedProgramFactory{};
+        return GroupNormDeviceOperation::GroupNormShardedProgramFactory{};
     }
 
     // For non-sharded: determine if we need mcast or no-mcast based on batch vs virtual rows
@@ -38,9 +39,9 @@ GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_pro
     uint32_t num_virtual_rows = (grid_size.x / num_virtual_cols) * num_actual_rows;
 
     if (batch >= num_virtual_rows) {
-        return GroupNormNoMcastProgramFactory{};
+        return GroupNormDeviceOperation::GroupNormNoMcastProgramFactory{};
     }
-    return GroupNormMcastProgramFactory{};
+    return GroupNormDeviceOperation::GroupNormMcastProgramFactory{};
 }
 
 void GroupNormDeviceOperation::validate_on_program_cache_miss(
@@ -66,6 +67,12 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         a.padded_shape()[2],
         tile_height);
 
+    if (a.is_sharded()) {
+        const auto program_grid =
+            std::visit([](const auto& config) { return config.compute_with_storage_grid_size; }, args.program_config);
+        ttnn::operations::normalization::detail::validate_sharded_input(
+            a, program_grid, /*require_shard_width_tile_aligned=*/false);
+    }
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
             TT_FATAL(

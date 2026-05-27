@@ -407,7 +407,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
         new_value = cached_routing_fields.route_buffer[0];
 
 // Shift buffer left
-#pragma unroll
+#pragma GCC unroll 16
         for (uint32_t i = 0; i < EXT - 1; i++) {
             const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[i] =
                 cached_routing_fields.route_buffer[i + 1];
@@ -415,7 +415,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
         const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[EXT - 1] = 0;
     } else {
 // No refill needed - just copy buffer as-is
-#pragma unroll
+#pragma GCC unroll 16
         for (uint32_t i = 0; i < EXT; i++) {
             const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[i] =
                 cached_routing_fields.route_buffer[i];

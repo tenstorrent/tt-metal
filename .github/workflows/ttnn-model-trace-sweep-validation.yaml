@@ -1,14 +1,28 @@
 name: "ttnn - model trace sweep validation"
 
 run-name: >-
-  ttnn - model trace sweep validation
+  ${{
+    github.event_name == 'schedule' && 'ttnn - model trace sweep validation (scheduled)' ||
+    'ttnn - model trace sweep validation'
+  }}
 
 on:
+  schedule:
+    - cron: "0 5 * * *"  # Daily at 5:00 AM UTC (after sweep runs complete)
   workflow_dispatch:
     inputs:
+      scope-targets:
+        type: choice
+        description: "Which target group to validate. 'auto' (default) runs whatever is populated in the registry. Override to force just lead_models or just model_traced. Ignored when models-filter is provided (models-filter searches all scopes)."
+        required: false
+        default: "auto"
+        options:
+          - auto
+          - lead_models
+          - model_traced
       models-filter:
         type: string
-        description: "Comma-separated list of models to validate (e.g. 'efficientnetb0' or 'efficientnetb0,whisper'). Leave empty to validate all models in the registry."
+        description: "Comma-separated list of models to validate (e.g. 'efficientnetb0' or 'efficientnetb0,whisper'). Overrides scope-targets when provided — searches all scopes for the listed models. Leave empty to validate all models in the registry."
         required: false
         default: ""
       allow-partial-hash-changes:
@@ -16,6 +30,11 @@ on:
         description: "Continue if config hash changes are detected during preflight, including when all hashes change"
         required: false
         default: true
+      upload-results:
+        type: boolean
+        description: "Upload sweep results to SFTP server?"
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -33,7 +52,7 @@ jobs:
       caller-id: ${{ format('{0}/run-{1}/attempt-{2}', github.workflow, github.run_id, github.run_attempt) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install registry parser dependency
         run: pip3 install PyYAML
@@ -41,10 +60,12 @@ jobs:
       - name: Parse trace selection registry
         id: parse-trace-selection-registry
         env:
-          MODELS_FILTER: ${{ inputs.models-filter }}
+          MODELS_FILTER: ${{ inputs.models-filter || '' }}
+          SCOPE_OVERRIDE: ${{ inputs.scope-targets || 'auto' }}
         run: |
           python3 - <<'PY'
           import os
+          import sys
           import yaml
 
           registry_path = "model_tracer/trace_selection_registry.yaml"
@@ -54,7 +75,18 @@ jobs:
           models_filter_raw = os.environ.get("MODELS_FILTER", "").strip()
           models_filter = {m.strip() for m in models_filter_raw.split(",") if m.strip()} if models_filter_raw else set()
 
+          scope_override = os.environ.get("SCOPE_OVERRIDE", "auto").strip() or "auto"
+          if scope_override not in {"auto", "lead_models", "model_traced"}:
+              print(f"ERROR: invalid scope-targets value '{scope_override}'", file=sys.stderr)
+              sys.exit(1)
+
           targets = registry_data.get("targets", {})
+
+          # When models-filter is provided, it overrides scope-targets: search
+          # all scopes for the requested models so the user doesn't have to
+          # also pick the right scope dropdown.
+          if scope_override in {"lead_models", "model_traced"} and not models_filter:
+              targets = {scope_override: targets.get(scope_override, [])}
 
           # Filter targets in-memory for scope detection (no file written;
           # the actual DB filtering is done by --models-filter in the impl workflow)
@@ -70,15 +102,20 @@ jobs:
                       filtered_targets[scope] = filtered_entries
               targets = filtered_targets
 
-          target_keys = set(targets.keys())
-          if target_keys == {"lead_models"}:
-              scope_target = "lead_models"
-          elif target_keys == {"model_traced"}:
-              scope_target = "model_traced"
-          elif {"lead_models", "model_traced"}.issubset(target_keys):
-              scope_target = "all"
-          else:
-              scope_target = "none"
+          # Determine effective scope. When models-filter is provided, always
+          # auto-detect from whatever matched (models-filter overrides scope).
+          if scope_override in {"lead_models", "model_traced"} and not models_filter:
+              scope_target = scope_override if scope_override in targets else "none"
+          else:  # auto or models-filter override
+              target_keys = set(targets.keys())
+              if target_keys == {"lead_models"}:
+                  scope_target = "lead_models"
+              elif target_keys == {"model_traced"}:
+                  scope_target = "model_traced"
+              elif {"lead_models", "model_traced"}.issubset(target_keys):
+                  scope_target = "all"
+              else:
+                  scope_target = "none"
 
           all_models = []
           all_trace_ids = []
@@ -107,10 +144,12 @@ jobs:
           echo "├─────────────────────────────────────────────────────────────┤"
           echo "│ Branch/Ref:           ${{ github.ref_name }}"
           echo "│ Registry:             ${{ steps.parse-trace-selection-registry.outputs.trace_selection_registry_path }}"
-          echo "│ Selected Scope:       ${{ steps.parse-trace-selection-registry.outputs.scope_targets }}"
+          echo "│ Scope Override:       ${{ inputs.scope-targets }}"
+          echo "│ Effective Scope:      ${{ steps.parse-trace-selection-registry.outputs.scope_targets }}"
           echo "│ Selected Models:      ${{ steps.parse-trace-selection-registry.outputs.selected_models }}"
           echo "│ Selected Trace IDs:   ${{ steps.parse-trace-selection-registry.outputs.selected_trace_ids }}"
           echo "│ Allow Partial Changes:${{ inputs.allow-partial-hash-changes && ' true' || ' false' }}"
+          echo "│ Upload Results:       ${{ inputs.upload-results && 'true' || 'false' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
 
@@ -132,5 +171,6 @@ jobs:
       models: ${{ needs.inspect-trace-selection-registry.outputs.selected-models }}
       trace-ids: ${{ needs.inspect-trace-selection-registry.outputs.selected-trace-ids }}
       caller-id: ${{ needs.inspect-trace-selection-registry.outputs.caller-id }}
-      allow-partial-hash-changes: ${{ inputs.allow-partial-hash-changes }}
-      models-filter: ${{ inputs.models-filter }}
+      allow-partial-hash-changes: ${{ github.event_name == 'schedule' && true || inputs.allow-partial-hash-changes }}
+      models-filter: ${{ inputs.models-filter || '' }}
+      upload-results: ${{ github.event_name == 'schedule' && false || inputs.upload-results }}

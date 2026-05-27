@@ -64,6 +64,8 @@ class TtDispatchModule(LightweightModule):
         cluster_axis: int = 0,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
+        fp8_output: bool = False,
+        subdevice_id=None,
     ):
         """
         Initialize dispatch module with configuration parameters.
@@ -84,7 +86,10 @@ class TtDispatchModule(LightweightModule):
             cluster_axis: Mesh axis along which dispatch communicates (0 = SP/dispatch axis).
             num_links: Number of fabric links for remote token writes.
             topology: Fabric topology for remote token writes.
+            fp8_output: Output dtype for the dispatched buffer.
         """
+        if fp8_output and "blackhole" not in ttnn.get_arch_name():
+            raise ValueError("fp8_output requires Blackhole hardware")
         super().__init__()
         self.mesh_device = mesh_device
         self.dispatch_group_size = dispatch_group_size
@@ -97,6 +102,8 @@ class TtDispatchModule(LightweightModule):
         self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.topology = topology
+        self.fp8_output = fp8_output
+        self.subdevice_id = subdevice_id
 
     @staticmethod
     def shard_expert_offsets(
@@ -258,7 +265,17 @@ class TtDispatchModule(LightweightModule):
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
             topology=self.topology,
+            use_fp8_dispatch=self.fp8_output,
+            subdevice_id=self.subdevice_id,
         )
+
+        if tt_dispatched_buffer.dtype == ttnn.uint8:
+            logger.warning(
+                """tt_dispatched_buffer dtype is uint8 but the actual content is fp8_e4m3fn. \
+                Workaround until fp8_e4m3fn is supported as a data type. \
+                Use custom kernels to typecast. See test_fp8_typecast.py
+                """
+            )
 
         tt_dispatched_buffer_shape = tt_dispatched_buffer.shape
         tt_dispatched_metadata_shape = tt_dispatch_metadata.shape

@@ -86,7 +86,7 @@
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_class_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py
-  model: llama90b-vl
+  model: llama3.2-90b-vision
   skus:
     wh_llmbox_perf:
       timeout: 15
@@ -203,6 +203,67 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+# Gemma-4 unit tests: one entry per model variant, multiple SKUs per entry.
+# parametrize_mesh_with_fabric() picks the largest mesh shape that fits on each
+# runner when CI=true is set, so the same `pytest` invocation runs 1x1 on N150,
+# 1x2 on N300, 1x8 on T3K — no per-SKU `-k` filter needed.
+
+- name: Gemma-4-E2B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E2B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E2B-it
+    pytest --timeout 600 models/demos/gemma4/tests/unit/
+  model: gemma-4-e2b
+  skus:
+    wh_n150:
+      timeout: 5
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma-4-E4B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
+    pytest --timeout 600 models/demos/gemma4/tests/unit/
+  model: gemma-4-e4b
+  skus:
+    wh_n150:
+      timeout: 10
+      tier: 2
+    # wh_n300 disabled due to reduced N300 runner availability — re-enable when capacity returns.
+    # wh_n300:
+    #   timeout: 5
+    #   tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma-4-26B-A4B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-26B-A4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-26B-A4B-it
+    pytest --timeout 900 models/demos/gemma4/tests/unit/
+  model: gemma-4-26b-a4b
+  skus:
+    wh_llmbox:
+      timeout: 15
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma-4-31B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
+    pytest --timeout 900 models/demos/gemma4/tests/unit/
+  model: gemma-4-31b
+  skus:
+    wh_llmbox:
+      timeout: 15
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
 - name: Shallow UNet unit tests
   cmd: |
     pytest --timeout 600 models/experimental/functional_unet/tests/test_unet_model.py
@@ -274,31 +335,52 @@
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
-# GPT-OSS 20B unit tests: disabled — segfaulting on CI
-# - name: GPT-OSS 20B unit tests (T3K)
-#   cmd: |
-#     uv pip install -r models/demos/gpt_oss/requirements.txt
-#     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b
-#     pytest models/demos/gpt_oss/tests/unit -k "1x8" --timeout 600
-#   model: gpt-oss-20b
-#   skus:
-#     wh_llmbox_perf:
-#       timeout: 15
-#       tier: 2
-#   owner_id: U08TJ70UFRT # Stuti Raizada
-#   team: models
-
-- name: GPT-OSS 120B unit tests (Galaxy, high batch)
+# GPT-OSS unit tests: uses HF config only (no weights). parametrize_mesh_with_fabric()
+# picks the largest fitting mesh shape per SKU when CI=true, so one yaml entry
+# covers N150 (1x1), T3K/llmbox (1x8), and Galaxy (4x8) without per-SKU -k filters.
+- name: GPT-OSS 20B unit tests
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
-    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
-    pytest --timeout 1500 models/demos/gpt_oss/tests/unit -k "4x8 and decode_high_throughput"
-  model: gpt-oss-120b-high-batch-galaxy
+    export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b
+    pytest --timeout 600 models/demos/gpt_oss/tests/unit/
+  model: gpt-oss-20b
   skus:
-    wh_galaxy_perf:
+    # Wormhole
+    wh_llmbox:
+      timeout: 10
+      tier: 2
+    # Blackhole
+    bh_p150:
+      timeout: 10
+      tier: 2
+    bh_quietbox_2:
+      timeout: 10
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: GPT-OSS 120B unit tests
+  cmd: |
+    uv pip install -r models/demos/gpt_oss/requirements.txt
+    export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b
+    pytest --timeout 1500 models/demos/gpt_oss/tests/unit
+  model: gpt-oss-120b
+  skus:
+    # Wormhole
+    wh_llmbox:
       timeout: 25
       tier: 1
-  owner_id: U08TJ70UFRT # Stuti Raizada
+    wh_galaxy:
+      timeout: 30
+      tier: 1
+    # Blackhole
+    bh_quietbox_2:
+      timeout: 30
+      tier: 1
+    bh_galaxy:
+      timeout: 30
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Whisper unit tests

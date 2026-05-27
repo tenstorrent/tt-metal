@@ -35,15 +35,21 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
+from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 # Token IDs are int32 over the socket; payload size per step is B * TOKEN_ID_BYTES.
 TOKEN_ID_BYTES: int = 4
 
-PCIE_PAGE_ALIGNMENT_BYTES: int = 64
+# Each H2D page carries the full DeepseekMetadata struct (header + reserved
+# p_indices/p_scores tail) so the on-device fused embedding kernel can copy the
+# entire struct downstream in one shot. The host only fills the header fields
+# (token id, position id, etc.); the trailing bytes stay zero.
+PCIE_PAGE_ALIGNMENT_BYTES: int = DeepseekMetadata.aligned_size_bytes()
 
 
 # ---------------------------------------------------------------------------
-# Speculative-decode page layout (64 bytes = 16 uint32 words)
+# Speculative-decode page layout (DeepseekMetadata struct, PCIE_PAGE_ALIGNMENT_BYTES total)
 # ---------------------------------------------------------------------------
 
 
@@ -67,6 +73,9 @@ class InputField:
     POSITION_ID = 8
     PREFILL_TOKEN_ID = 9
     TOKEN0_POSITION_ID = 2
+    TEMPERATURE = 10
+    TOP_K = 11
+    PROBABILITY_MASS_THRESHOLD = 12
 
 
 class TokenType:
@@ -76,7 +85,7 @@ class TokenType:
 
 @dataclass
 class DecodeResult:
-    """Parsed output page from the pipeline."""
+    """Parsed output page from the pipeline (256-byte DeepseekMetadata struct)."""
 
     token_0: int
     token_0_type: int
@@ -85,11 +94,27 @@ class DecodeResult:
     token_1_type: int | None = None
     token_1_pos: int | None = None
     slot_id: int | None = None
+    p_indices: list[int] | None = None
+    p_scores: list[float] | None = None
 
 
 def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
-    """Parse a 16-word output page into a structured DecodeResult."""
+    """Parse a DeepseekMetadata output page into a structured DecodeResult.
+
+    The output buffer is 64 uint32 words (256 bytes) laid out as:
+      words  0-15 : header (tok0_id … _pad2)
+      words 16-47 : p_indices[32]  (uint32)
+      words 48-63 : p_scores[32]   (bf16 packed as uint16)
+    """
     raw = ttnn.to_torch(output_buffer).to(torch.int32).flatten()
+
+    p_indices = None
+    p_scores = None
+    if raw.numel() >= 64:
+        p_indices = raw[16:48].tolist()
+        scores_bf16 = raw[48:64].contiguous().view(torch.bfloat16)
+        p_scores = scores_bf16.float().tolist()
+
     return DecodeResult(
         token_0=int(raw[OutputField.TOKEN_0].item()),
         token_0_type=int(raw[OutputField.TOKEN_0_TYPE].item()),
@@ -98,11 +123,21 @@ def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
         token_1_type=int(raw[OutputField.TOKEN_1_TYPE].item()),
         token_1_pos=int(raw[OutputField.TOKEN_1_POS].item()),
         slot_id=int(raw[InputField.USER_ID].item()),
+        p_indices=p_indices,
+        p_scores=p_scores,
     )
 
 
 def to_spec_input(
-    token_id: int, prefill_token_id: int, user_id: int, position_id: int, page_size_datums: int, token_type: TokenType
+    token_id: int,
+    prefill_token_id: int,
+    user_id: int,
+    position_id: int,
+    page_size_datums: int,
+    token_type: TokenType,
+    temperature: float,
+    top_k: int,
+    probability_mass_threshold: float,
 ) -> ttnn.Tensor:
     """Build a PCIe-aligned input page carrying (token_id, user_id, position_id)."""
     torch_padded = torch.zeros(1, page_size_datums, dtype=torch.int32)
@@ -112,6 +147,9 @@ def to_spec_input(
     torch_padded[0, InputField.USER_ID] = user_id
     torch_padded[0, InputField.POSITION_ID] = position_id
     torch_padded[0, InputField.TOKEN0_POSITION_ID] = position_id
+    torch_padded[0, InputField.TEMPERATURE] = float_to_uint32(temperature)
+    torch_padded[0, InputField.TOP_K] = top_k
+    torch_padded[0, InputField.PROBABILITY_MASS_THRESHOLD] = float_to_uint32(probability_mass_threshold)
     return ttnn.from_torch(torch_padded, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
@@ -177,7 +215,6 @@ class DeepSeekV3:
         self.batch_size = batch_size
         self._pipeline_depth = pipeline_depth
         payload_bytes: int = batch_size * TOKEN_ID_BYTES
-        logger.debug(f"Payload bytes: {payload_bytes} bytes")
         self._tensor_size_bytes: int = align_up(payload_bytes, PCIE_PAGE_ALIGNMENT_BYTES)
         self._page_size_datums: int = self._tensor_size_bytes // TOKEN_ID_BYTES
         self._position: int = 0
@@ -257,11 +294,27 @@ class DeepSeekV3:
         return self._output_buffer
 
     def write_input(
-        self, token_id: int, prefill_token_id: int, user_id: int, position_id: int, token_type: TokenType
+        self,
+        token_id: int,
+        prefill_token_id: int,
+        user_id: int,
+        position_id: int,
+        token_type: TokenType,
+        temperature: float,
+        top_k: int,
+        probability_mass_threshold: float,
     ) -> None:
         """Write a single spec-decode input page (token_id, user_id, position_id) to the pipeline."""
         input_tensor = to_spec_input(
-            token_id, prefill_token_id, user_id, position_id, self._page_size_datums, token_type
+            token_id,
+            prefill_token_id,
+            user_id,
+            position_id,
+            self._page_size_datums,
+            token_type,
+            temperature,
+            top_k,
+            probability_mass_threshold,
         )
         self._write_fn(input_tensor)
 

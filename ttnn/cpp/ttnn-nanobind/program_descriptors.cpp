@@ -18,6 +18,7 @@
 #include <nanobind/operators.h>
 #include <nanobind/make_iterator.h>
 #include <nanobind/stl/bind_vector.h>
+#include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
@@ -688,7 +689,8 @@ void py_module_types(nb::module_& mod) {
                 tt::tt_metal::KernelDescriptor::RuntimeArgs,
                 tt::tt_metal::KernelDescriptor::CommonRuntimeArgs,
                 std::optional<tt::tt_metal::KernelBuildOptLevel>,
-                tt::tt_metal::KernelDescriptor::ConfigDescriptor>(),
+                tt::tt_metal::KernelDescriptor::ConfigDescriptor,
+                tt::tt_metal::KernelDescriptor::IncludePaths>(),
             nb::arg("kernel_source"),
             nb::arg("source_type") = nb::cast(tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH),
             nb::arg("core_ranges"),
@@ -699,6 +701,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("common_runtime_args") = tt::tt_metal::KernelDescriptor::CommonRuntimeArgs(),
             nb::arg("opt_level") = nb::none(),
             nb::arg("config"),
+            nb::arg("compiler_include_paths") = nb::cast(tt::tt_metal::KernelDescriptor::IncludePaths()),
             R"pbdoc(
                 Initialize a KernelDescriptor with complete configuration.
 
@@ -713,6 +716,7 @@ void py_module_types(nb::module_& mod) {
                     common_runtime_args: Common runtime arguments shared across kernels
                     opt_level: Optimization level for kernel compilation
                     config: Configuration descriptor for the kernel
+                    compiler_include_paths: Additional include paths passed to the kernel compiler as -I flags
             )pbdoc")
         .def_rw(
             "kernel_source",
@@ -771,6 +775,10 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::KernelDescriptor::common_runtime_args,
             "Common runtime arguments shared across all cores")
         .def_rw("config", &tt::tt_metal::KernelDescriptor::config, "Configuration descriptor for the kernel")
+        .def_rw(
+            "compiler_include_paths",
+            &tt::tt_metal::KernelDescriptor::compiler_include_paths,
+            "Additional include paths passed to the kernel compiler as -I flags")
         .def(
             "clear_runtime_args",
             [](tt::tt_metal::KernelDescriptor& self) { self.runtime_args.clear(); },

@@ -29,7 +29,8 @@ public:
         const CoreType& core_type,
         bool is_galaxy_cluster,
         bool are_cqs_dram_backed,
-        uint32_t l1_alignment);
+        uint32_t l1_alignment,
+        uint32_t prefetch_q_entry_size_bytes);
 
     bool operator==(const DispatchSettings& other) const;
 
@@ -76,10 +77,6 @@ public:
     //
     // Non Configurable Settings
     //
-
-    // Prefetch Queue entry type
-    // Same as the one in cq_prefetch.cpp
-    using prefetch_q_entry_type = uint16_t;
 
     // Prefetch Queue pointer type
     // Same as the one in cq_prefetch.cpp
@@ -143,6 +140,7 @@ public:
     uint32_t other_ptrs_size{};               // configured with alignment
 
     // cq_prefetch
+    uint32_t prefetch_q_entry_size_bytes_{};  // 2 for WH ETH, 4 otherwise
     uint32_t prefetch_q_entries_{0};
     uint32_t prefetch_q_size_{};
     uint32_t prefetch_max_cmd_size_{};

@@ -378,6 +378,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("previous_chunk_sent_semaphore_id");
     constexpr uint32_t combine_sync_semaphore_id = get_named_compile_time_arg_val("combine_sync_semaphore_id");
 
+    // When compute_only=1, the fused selective_reduce_combine path is bypassed and no combine
+    // kernels run on combine cores. Skip the metadata-ready signal to combine cores.
+    constexpr bool compute_only = get_named_compile_time_arg_val("compute_only") == 1;
+
     uint32_t partial_metadata_ready_semaphore_addr = get_semaphore(partial_metadata_ready_semaphore_id);
     uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
     uint32_t previous_chunk_sent_semaphore_addr = get_semaphore(previous_chunk_sent_semaphore_id);
@@ -492,8 +496,12 @@ void kernel_main() {
         uint64_t drain_scores_noc_addr = get_noc_addr(drain_core_noc_x, drain_core_noc_y, local_scores_addr);
 
         // NOC read indices and scores for this core's token range
-        noc_async_read(drain_indices_noc_addr, local_indices_addr, num_tokens_this_core * aligned_indices_page_size);
-        noc_async_read(drain_scores_noc_addr, local_scores_addr, num_tokens_this_core * aligned_scores_page_size);
+
+        if (num_tokens_this_core > 0) {
+            noc_async_read(
+                drain_indices_noc_addr, local_indices_addr, num_tokens_this_core * aligned_indices_page_size);
+            noc_async_read(drain_scores_noc_addr, local_scores_addr, num_tokens_this_core * aligned_scores_page_size);
+        }
     }
 
     // Wait for all reads to complete (mapping + indices/scores for non-drain)
@@ -786,7 +794,9 @@ void kernel_main() {
         // Write to DRAM: activated rows (num_activated_tokens) rows
         uint32_t expert_activation_write_size = num_activated_tokens * aligned_activation_row_bytes;
         uint64_t expert_activation_dram_addr = get_noc_addr(0, expert_activation_output_tensor_addr_gen);
-        noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
+        if (num_activated_tokens > 0) {
+            noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
+        }
         // Barrier for this write is at the very end of the kernel
 
         // DEBUG: print_e_t_buffer<experts_per_device, tokens, e_t_entry_size>(e_t_cb_id);
@@ -823,7 +833,7 @@ void kernel_main() {
                 per_expert_total_tokens_cb_read_ptr,
                 per_expert_counts_mcast_addr,
                 experts_per_device * sizeof(uint32_t),
-                num_tilize_cores - 1);
+                tilize_bounding_box_num_cores - 1);
 
             // Multicast total_chunks to all tilize cores
             noc_async_write_multicast(
@@ -947,12 +957,14 @@ void kernel_main() {
         noc_async_write_barrier();
 
         // signal to A2A combine that metadata is available. Separate signal from matmul because e_t write is also
-        // needed.
-        const uint64_t combine_sync_noc_addr =
-            safe_get_noc_addr(combine_sync_noc_x, combine_sync_noc_y, combine_sync_addr, 1);
-        noc_semaphore_inc(combine_sync_noc_addr, 1);
+        // needed. Skipped in compute_only mode (no combine kernels listening).
+        if constexpr (!compute_only) {
+            const uint64_t combine_sync_noc_addr =
+                safe_get_noc_addr(combine_sync_noc_x, combine_sync_noc_y, combine_sync_addr, 1);
+            noc_semaphore_inc(combine_sync_noc_addr, 1);
 
-        noc_async_atomic_barrier();
+            noc_async_atomic_barrier();
+        }
     }
 
     // DEBUG

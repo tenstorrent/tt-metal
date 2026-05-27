@@ -9,10 +9,11 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Import master config loader for traced model configurations
@@ -47,25 +48,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -131,11 +118,14 @@ def run(
         golden_input = torch_input_tensor_a.squeeze(1) if needs_squeeze else torch_input_tensor_a
         if needs_squeeze:
             torch_input_tensor_a = torch_input_tensor_a.squeeze(1)
+        golden_kwargs = {"num_heads": num_heads}
+        if "transpose_key" in op_kwargs:
+            golden_kwargs["transpose_key"] = op_kwargs["transpose_key"]
         (
             torch_query_tensor,
             torch_key_tensor,
             torch_value_tensor,
-        ) = golden_function(golden_input, num_heads=num_heads)
+        ) = golden_function(golden_input, **golden_kwargs)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
@@ -203,6 +193,10 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     # No unsqueeze needed — experimental op returns 5D [B,1,H,S,D] matching golden
+    if is_mesh_device:
+        torch_query_tensor = reconcile_golden_to_actual(torch_query_tensor, query_tensor, input_a_tensor_placement)
+        torch_key_tensor = reconcile_golden_to_actual(torch_key_tensor, key_tensor, input_a_tensor_placement)
+        torch_value_tensor = reconcile_golden_to_actual(torch_value_tensor, value_tensor, input_a_tensor_placement)
 
     # Check with PCC for all three outputs
     # check_with_pcc returns (bool, str) tuple
@@ -212,8 +206,6 @@ def run(
 
     # All three must pass for overall success
     all_pass = pcc_q[0] and pcc_k[0] and pcc_v[0]
-    # Use minimum PCC value as the reported value
-    min_pcc_value = min(float(pcc_q[1]), float(pcc_k[1]), float(pcc_v[1]))
-    pcc_result = (all_pass, str(min_pcc_value))
+    pcc_result = (all_pass, f"q: {pcc_q[1]}; k: {pcc_k[1]}; v: {pcc_v[1]}")
 
     return [pcc_result, e2e_perf]

@@ -110,8 +110,8 @@ void kernel_main() {
         const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
         const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
 
-        read_row(light_global_row);
         read_row(heavy_global_row);
+        read_row(light_global_row);
     }
 #else
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {

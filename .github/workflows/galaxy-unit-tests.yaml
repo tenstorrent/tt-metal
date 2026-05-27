@@ -13,8 +13,9 @@ on:
           - unit
           - fabric
           - multiprocess
-          - prefetcher
+#          - prefetcher
           - distributed-ops
+          - tttv2
       platform:
         required: false
         type: choice

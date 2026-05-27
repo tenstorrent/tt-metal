@@ -77,9 +77,9 @@ void fill_pad_face(T* tile_ptr, T fill_value) {
                                         : face_w_offset + FACE_WIDTH - num_elements_unpadded_w;
 
     if constexpr (face_pad_w > 0) {
-#pragma unroll
         for (uint32_t row = 0; row < FACE_HEIGHT; ++row) {
             auto row_ptr = face_ptr + row * FACE_WIDTH;
+#pragma GCC unroll 32
             for (uint32_t col = FACE_WIDTH - face_pad_w; col < FACE_WIDTH; ++col) {
                 row_ptr[col] = fill_value;
             }
@@ -94,9 +94,9 @@ void fill_pad_face(T* tile_ptr, T fill_value) {
                                         : face_h_offset + FACE_HEIGHT - num_elements_unpadded_h;
 
     if constexpr (face_pad_h > 0) {
-#pragma unroll
         for (uint32_t row = FACE_HEIGHT - face_pad_h; row < FACE_HEIGHT; ++row) {
             auto row_ptr = face_ptr + row * FACE_WIDTH;
+#pragma GCC unroll 32
             for (uint32_t col = 0; col < FACE_WIDTH; ++col) {
                 row_ptr[col] = fill_value;
             }

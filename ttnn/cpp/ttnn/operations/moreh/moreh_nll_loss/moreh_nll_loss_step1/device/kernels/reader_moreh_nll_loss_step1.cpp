@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     using namespace tt::constants;
@@ -43,25 +46,30 @@ void kernel_main() {
     const auto u16_one = uint16_t(one.u >> 16);
     const auto u16_zero = uint16_t(zero.u >> 16);
 
+    CircularBuffer cb_target_obj(cb_target);
+    CircularBuffer cb_output_obj(cb_output);
+#if defined(WEIGHT)
+    CircularBuffer cb_weight_obj(cb_weight);
+#endif
+
 #if defined(WEIGHT)
     // weight: (1, C)
     read_line(cb_weight, cb_weight_scratch, addrg_weight, weight_num_tile);
 
-    cb_wait_front(cb_weight, weight_num_tile);
-    auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);
+    cb_weight_obj.wait_front(weight_num_tile);
+    CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
 #endif
 
     uint32_t end_id = start_id + num_units_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        // target: (N, d1, d2, .. dk)
         uint32_t target_noc_id = i;
         read_tile(cb_target, addrg_target, target_noc_id);
 
-        cb_reserve_back(cb_output, onetile);
-        cb_wait_front(cb_target, onetile);
+        cb_output_obj.reserve_back(onetile);
+        cb_target_obj.wait_front(onetile);
 
-        auto output_l1_ptr = get_write_ptr<uint16_t>(cb_output);
-        auto target_l1_ptr = get_read_ptr<int32_t>(cb_target);
+        CoreLocalMem<volatile uint16_t> output_l1_ptr(cb_output_obj.get_write_ptr());
+        CoreLocalMem<volatile int32_t> target_l1_ptr(cb_target_obj.get_read_ptr());
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {
@@ -83,8 +91,8 @@ void kernel_main() {
                 }
             }
         }
-        cb_push_back(cb_output, onetile);
+        cb_output_obj.push_back(onetile);
 
-        cb_pop_front(cb_target, onetile);
+        cb_target_obj.pop_front(onetile);
     }
 }

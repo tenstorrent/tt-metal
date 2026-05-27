@@ -9,6 +9,17 @@
 namespace ckernel
 {
 
+// Currently unused but kept for backwards compatibility
+enum class VectorMode : std::uint8_t
+{
+    None      = 0,
+    R         = 1,
+    C         = 2,
+    RC        = 4,
+    RC_custom = 6,
+    Invalid   = 0xFF,
+};
+
 enum class ReduceDim : std::uint8_t
 {
     REDUCE_ROW,
@@ -70,15 +81,36 @@ enum class SfpuType : std::uint32_t
     rsqrt,
     relu,
     lrelu,
-    relumin,
-    relumax,
+    relu_min,
+    relu_max,
     stochround,
     typecast,
     add,
     square,
     sigmoid,
     silu,
-    abs
+    abs,
+    fill,
+    swiglu,
+    where,
+    unused,
+    lt,
+    gt,
+    le,
+    ge,
+    lt_int,
+    gt_int,
+    le_int,
+    ge_int,
+    mul_int,
+};
+
+enum class BinaryOp : std::uint8_t
+{
+    ADD,
+    SUB,
+    MUL,
+    DIV,
 };
 
 enum class DstSync : std::uint8_t
@@ -101,6 +133,13 @@ enum class StochRndType : std::uint8_t
     Fpu  = 1,
     Pack = 2,
     All  = 3,
+};
+
+enum class PackMode : std::uint8_t
+{
+    Default  = 0,
+    Untilize = 1,
+    Tilize   = 2,
 };
 
 // Packer ReLU modes; encoding matches RELU_MODE (2 bits) in HW.
@@ -158,6 +197,8 @@ private:
     ReluType mode           = ReluType::NO_RELU;
     std::uint32_t threshold = 0;
 };
+
+constexpr std::uint32_t SFPU_ITERATIONS = 8; // Number of iterations to unroll for SFPU loops
 
 } // namespace ckernel
 

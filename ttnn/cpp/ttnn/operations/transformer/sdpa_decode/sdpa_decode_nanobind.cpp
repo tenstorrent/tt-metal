@@ -92,7 +92,16 @@ void bind_sdpa_decode(nb::module_& mod) {
         nb::arg("sliding_window_size") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        // block_size reads the K/V cache through a different (block_size, head_dim)
+        // view than its declared shape; needed for vLLM's shared kv-cache groups. See
+        // ttnn.experimental.paged_update_cache's kwarg of the same name.
+        nb::arg("block_size") = nb::none(),
+        // num_kv_heads reads the cache through a different per-block kv-head count
+        // than its declared shape. Companion to block_size for HMA cross-group sharing
+        // when sliding/full layers have asymmetric num_kv_heads. See
+        // ttnn.experimental.paged_update_cache's kwarg of the same name.
+        nb::arg("num_kv_heads") = nb::none());
 
     ttnn::bind_function<"flash_multi_latent_attention_decode", "ttnn.transformer.">(
         mod,

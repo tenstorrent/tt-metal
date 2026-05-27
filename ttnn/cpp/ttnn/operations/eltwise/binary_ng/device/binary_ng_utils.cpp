@@ -176,42 +176,42 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             }
             break;
         case BinaryOpType::LT:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 || dtype == DataType::UINT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::LT;
             } else {
                 postprocess = unary::UnaryOpType::LTZ;
             }
             break;
         case BinaryOpType::GT:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 || dtype == DataType::UINT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::GT;
             } else {
                 postprocess = unary::UnaryOpType::GTZ;
             }
             break;
         case BinaryOpType::GE:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 || dtype == DataType::UINT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::GE;
             } else {
                 postprocess = unary::UnaryOpType::GEZ;
             }
             break;
         case BinaryOpType::LE:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 || dtype == DataType::UINT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::LE;
             } else {
                 postprocess = unary::UnaryOpType::LEZ;
             }
             break;
         case BinaryOpType::EQ:
-            if (is_sfpu_op() && dtype == DataType::FLOAT32) {
+            if (is_sfpu_op() && (dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16)) {
                 binary_op = SfpuBinaryOp::EQ;
             } else {
                 postprocess = unary::UnaryOpType::EQZ;
             }
             break;
         case BinaryOpType::NE:
-            if (is_sfpu_op() && dtype == DataType::FLOAT32) {
+            if (is_sfpu_op() && (dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16)) {
                 binary_op = SfpuBinaryOp::NE;
             } else {
                 postprocess = unary::UnaryOpType::NEZ;
@@ -393,6 +393,7 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             binary_op = EnumT::ADD;
             postprocess = unary::UnaryOpType::SQRT;
             break;
+        case BinaryOpType::ISCLOSE: binary_op = SfpuBinaryOp::ISCLOSE; break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -528,12 +529,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             }
             return {"le_binary_tile_init();", "le_binary_tile"};
         case EQ:
-            if (dtype == DataType::FLOAT32) {
+            if (dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16) {
                 return {"eq_binary_tile_init();", "eq_binary_tile"};
             }
             TT_THROW("SFPU EQ binary tile is only defined for Float32");
         case NE:
-            if (dtype == DataType::FLOAT32) {
+            if (dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16) {
                 return {"ne_binary_tile_init();", "ne_binary_tile"};
             }
             TT_THROW("SFPU NE binary tile is only defined for Float32");
@@ -544,6 +545,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                                                                      : "Float16_b";
             return {"where_tile_init();", fmt::format("where_tile<DataFormat::{}>", data_format)};
         }
+        case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -768,7 +770,6 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
     }
 
     // enable a few more conditions for faster performance
-    // in order to achieve performance parity with legacy binary
     auto output_shape = compute_broadcasted_output(a.logical_shape(), b->logical_shape());
     bool a_is_sharded = a.memory_config().is_sharded();
     bool b_is_sharded = b->memory_config().is_sharded();

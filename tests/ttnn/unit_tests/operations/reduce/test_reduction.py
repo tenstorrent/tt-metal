@@ -164,7 +164,6 @@ def test_prod(device, input_shape, dim, keepdim, force_implicit_pad, dtype):
     )
 
 
-# TODO: add few more shapes, once issue #42500 is solved
 @pytest.mark.parametrize("dim_1", [1])
 @pytest.mark.parametrize("dim_2", [2])
 @pytest.mark.parametrize("dim_3", [3])
@@ -172,7 +171,7 @@ def test_prod(device, input_shape, dim, keepdim, force_implicit_pad, dtype):
 @pytest.mark.parametrize("dim_5", [4])
 @pytest.mark.parametrize("dim_6", [6])
 @pytest.mark.parametrize("dim_7", [7])
-@pytest.mark.parametrize("dim_8", [8])
+@pytest.mark.parametrize("dim_8", [8, 32, 63])
 @pytest.mark.parametrize("dim", [[3, 7]])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7, dim_8, dim, keepdim):

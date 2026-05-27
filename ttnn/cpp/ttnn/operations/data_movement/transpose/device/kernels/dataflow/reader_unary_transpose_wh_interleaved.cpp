@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -21,13 +21,13 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb(cb_id_in0);
+    Noc noc;
+    CircularBuffer cb(cb_id_in0);
 
 #ifdef REDUCE_SCALER
     constexpr uint32_t cb_in_2 = 2;
     constexpr uint32_t scaler = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
-    experimental::CircularBuffer cb_scaler(cb_in_2);
+    CircularBuffer cb_scaler(cb_in_2);
     cb_scaler.reserve_back(1);
     if (scaler != 0) {
         uint16_t u = uint16_t(scaler >> 16);

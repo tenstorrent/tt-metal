@@ -36,7 +36,7 @@ run_tg_tests() {
     pytest models/tt_dit/tests/models/wan2_2/test_rope.py -k "wh_4x8sp1tp0"; fail+=$?
     pytest models/tt_dit/tests/models/wan2_2/test_attention_wan.py -k "wh_4x8sp1tp0"; fail+=$?
     pytest models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and wh_4x8sp1tp0 or short_seq-wh_4x8sp1tp0 and not yes_load_cache and not model_caching"; fail+=$?
-    pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "(test_wan_encoder or test_wan_decoder) and 4x8 and real_weights and check_output and _1f and chunk_1"; fail+=$?
+    pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "(test_wan_encoder or test_wan_decoder) and wh_4x8 and real_weights and check_output and _1f and chunk_1"; fail+=$?
     pytest models/tt_dit/tests/encoders/umt5/test_umt5.py -k "wh_glx" ; fail+=$?
     pytest models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding  -k "wh_glx" ; fail+=$?
 
@@ -46,7 +46,7 @@ run_tg_tests() {
 
   elif [[ "$1" == "mochi" ]]; then
     echo "LOG_METAL: running mochi run_tg_frequent_tests"
-    ARCH_NAME=wormhole_b0 FAKE_DEVICE=TG pytest models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "decoder and 4links-load_dit-large_latent or conv3d_1x1x1 or -4links-l768" --timeout=1500; fail+=$?
+    ARCH_NAME=wormhole_b0 FAKE_DEVICE=TG pytest models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "(decoder and wh_8x4 and load_dit and large_latent) or conv3d_1x1x1 or (wh_8x4 and l768 and bf16)" --timeout=1500; fail+=$?
     ARCH_NAME=wormhole_b0 pytest models/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq and 4x8"; fail+=$?
     ARCH_NAME=wormhole_b0 pytest models/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "4x8 and short_seq and not yes_load_cache and not model_caching"; fail+=$?
 

@@ -20,6 +20,7 @@ set(HW_JIT_API_HEADERS
     inc/api/numeric/bfloat16.h
     inc/api/numeric/float32.h
     inc/api/numeric/int32.h
+    inc/api/kernel_thread_globals.h
     inc/api/tensor/tensor_accessor.h
     inc/api/tensor/tensor_accessor_args.h
     inc/api/tensor/shard_pages_address_iterator.h
@@ -102,6 +103,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/semaphore.h
     inc/api/compute/binary_fmod.h
     inc/api/compute/gcd.h
+    inc/api/compute/isclose.h
     inc/api/compute/layernorm.h
     inc/api/compute/lcm.h
     inc/api/compute/logsigmoid.h
@@ -129,19 +131,20 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/untilize.h
     inc/api/compute/welford.h
     inc/api/compute/xlogy.h
-    inc/experimental/lock.h
-    inc/experimental/noc.h
-    inc/experimental/circular_buffer.h
-    inc/experimental/dataflow_buffer.h
+    inc/api/lock.h
+    inc/api/dataflow/noc.h
+    inc/api/dataflow/endpoints.h
+    inc/api/dataflow/circular_buffer.h
+    inc/api/dataflow/dataflow_buffer.h
     inc/experimental/kernel_args.h
-    inc/experimental/noc_semaphore.h
-    inc/experimental/endpoints.h
-    inc/experimental/core_local_mem.h
-    inc/experimental/tensor.h
+    inc/api/dataflow/noc_semaphore.h
+    inc/api/core_local_mem.h
+    inc/api/tensor/noc_traits.h
     inc/hostdev/dev_msgs.h
     inc/hostdev/device_print_common.h
     inc/hostdev/device_print_structures.h
     inc/hostdev/fabric_telemetry_msgs.h
+    inc/hostdev/realtime_profiler_msgs.h
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h
     inc/internal/hw_thread.h

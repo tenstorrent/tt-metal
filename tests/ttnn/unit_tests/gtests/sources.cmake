@@ -6,7 +6,7 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_to_and_from_json.cpp
     test_sliding_window_infra.cpp
     test_async_runtime.cpp
-    test_conv2d.cpp
+    conv/test_conv2d.cpp
     test_multi_cq_multi_dev.cpp
     test_multiprod_queue.cpp
 )
@@ -62,6 +62,7 @@ set(UNIT_TESTS_TTNN_ACCESSOR_SOURCES
     accessor/test_accessor_benchmarks.cpp
     accessor/test_tensor_accessor.cpp
     accessor/test_tensor_accessor_on_device.cpp
+    accessor/test_tensor_accessor_strided_dfb.cpp
 )
 
 set(UNIT_TESTS_TTNN_TENSOR_SOURCES
@@ -78,6 +79,7 @@ set(UNIT_TESTS_TTNN_TENSOR_SOURCES
     tensor/test_tensor_layout.cpp
     tensor/test_tensor_nd_sharding.cpp
     tensor/test_tensor_serialization.cpp
+    tensor/test_tensor_utils.cpp
     tensor/test_unit_mesh_utils.cpp
     tensor/test_vector_conversion.cpp
     tensor/test_xtensor_adapter.cpp

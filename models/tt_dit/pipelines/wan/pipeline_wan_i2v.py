@@ -15,7 +15,7 @@ import ttnn
 
 from ...models.vae.vae_wan2_1 import WanEncoder
 from ...utils import cache
-from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
+from ...utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width
 from ...utils.tensor import bf16_tensor_2dshard, fast_device_to_host, unflatten
 from .pipeline_wan import WanPipeline
 
@@ -26,7 +26,7 @@ class ImagePrompt(NamedTuple):
 
 
 class WanPipelineI2V(WanPipeline):
-    def __init__(self, *args, target_height: int = 0, target_width: int = 0, **kwargs):
+    def __init__(self, *args, height: int = 0, width: int = 0, **kwargs):
         # Update I2V specific defaults
         if "checkpoint_name" not in kwargs:
             kwargs["checkpoint_name"] = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
@@ -35,8 +35,8 @@ class WanPipelineI2V(WanPipeline):
                 kwargs["checkpoint_name"], subfolder="scheduler", trust_remote_code=True
             )
 
-        # initialize without warmup
-        super().__init__(*args, model_type="i2v", run_warmup=False, **kwargs)
+        # initialize without warmup; pass height/width so the decoder also gets production blocking dims
+        super().__init__(*args, model_type="i2v", run_warmup=False, height=height, width=width, **kwargs)
 
         self.tt_vae_encoder = WanEncoder(
             base_dim=self.vae.config.base_dim,
@@ -62,9 +62,7 @@ class WanPipelineI2V(WanPipeline):
         )
 
         # warmup buffers
-        self.warmup_buffers(
-            height=target_height, width=target_width, image_prompt=Image.new("RGB", (target_width, target_height))
-        )
+        self.warmup_buffers(height=height, width=width, image_prompt=Image.new("RGB", (width, height)))
 
     @staticmethod
     def create_pipeline(*args, **kwargs):
@@ -147,6 +145,9 @@ class WanPipelineI2V(WanPipeline):
         tt_video_condition_BTHWC, logical_h = conv_pad_height(
             tt_video_condition_BTHWC, self.vae_parallel_config.height_parallel.factor * self.vae_scale_factor_spatial
         )
+        tt_video_condition_BTHWC, logical_w = conv_pad_width(
+            tt_video_condition_BTHWC, self.vae_parallel_config.width_parallel.factor * self.vae_scale_factor_spatial
+        )
         tt_video_condition_BTHWC = bf16_tensor_2dshard(
             tt_video_condition_BTHWC,
             self.mesh_device,
@@ -157,7 +158,9 @@ class WanPipelineI2V(WanPipeline):
             },
         )
 
-        encoded_video_BCTHW, new_logical_h = self.tt_vae_encoder(tt_video_condition_BTHWC, logical_h)
+        encoded_video_BCTHW, new_logical_h, new_logical_w = self.tt_vae_encoder(
+            tt_video_condition_BTHWC, logical_h, logical_w=logical_w
+        )
 
         # convert to torch
         concat_dims = [None, None]
@@ -169,7 +172,7 @@ class WanPipelineI2V(WanPipeline):
             concat_dims,
             ccl_manager=self.vae_ccl_manager,
         )
-        encoded_video_torch = encoded_video_torch[:, :, :, :new_logical_h, :]
+        encoded_video_torch = encoded_video_torch[:, :, :, :new_logical_h, :new_logical_w]
         encoded_video_torch = encoded_video_torch.to(dtype=dtype)
 
         latents_mean = (

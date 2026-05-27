@@ -17,6 +17,7 @@
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp"
 #include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
@@ -153,6 +154,28 @@ autograd::TensorPtr broadcast_batch(const autograd::TensorPtr& tensor, uint32_t 
         tensor->add_grad(res);
     };
 
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
+    return out;
+}
+
+autograd::TensorPtr exp(const autograd::TensorPtr& tensor) {
+    auto out = autograd::create_tensor();
+    out->set_value(ttnn::exp(tensor->get_value()));
+    autograd::GradFunction grad = [tensor, out]() {
+        auto res = ttnn::exp_bw(out->get_grad(), tensor->get_value());
+        tensor->add_grad(res[0].value());
+    };
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
+    return out;
+}
+
+autograd::TensorPtr clip(const autograd::TensorPtr& tensor, float lo, float hi) {
+    auto out = autograd::create_tensor();
+    out->set_value(ttnn::clip(tensor->get_value(), lo, hi));
+    autograd::GradFunction grad = [tensor, out, lo, hi]() {
+        auto res = ttnn::clip_bw(out->get_grad(), tensor->get_value(), lo, hi);
+        tensor->add_grad(res[0]);
+    };
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }

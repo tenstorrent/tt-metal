@@ -44,7 +44,7 @@ void kernel_main() {
     // program cache hits.
     const auto s0 = TensorAccessor(src_args, src_addr - misalignment, padded_stick_size);
 
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB cb_in0(cb_id_in0);
     experimental::CB cb_non_aligned(cb_id_non_aligned);
 
@@ -100,7 +100,7 @@ void kernel_main() {
     if constexpr (is_non_aligned) {
         // TRID-based pipelined async-read from src->scratch->dst.
         // The ncrisc_noc_read_with_transaction_id_flushed polling pattern is kept as legacy —
-        // experimental::Noc does not yet expose per-TRID completion polling.
+        // Noc does not yet expose per-TRID completion polling.
         enum SlotState : uint8_t { IDLE = 0, SRC_PENDING = 1, SCRATCH_READY = 2, SCRATCH_PENDING = 3 };
         constexpr uint32_t trid_base = 1;
 
@@ -137,7 +137,7 @@ void kernel_main() {
                         // Start new src->scratch transfer
 
                         noc_async_read_set_trid(active_trid);
-                        uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0);
+                        uint64_t src_noc_addr = s0.get_noc_addr(src_stick_id);
                         dest_write_addrs[slot] = current_src_buffer_l1_addr;
                         noc_async_read(src_noc_addr, scratch_write_addrs[slot], padded_stick_size + misalignment);
                         slot_states[slot] = SlotState::SRC_PENDING;

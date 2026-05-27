@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_eltwise_binary ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Binary ALIAS ttnn_op_eltwise_binary)
 
@@ -18,28 +20,13 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
-            binary.hpp
-            binary_composite.hpp
-            common/binary_op_types.hpp
-            common/binary_op_utils.hpp
-            device/binary_device_operation.hpp
+        FILES ${TTNN_OP_ELTWISE_BINARY_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        binary.cpp
-        common/binary_op_utils.cpp
-        device/binary_composite_op.cpp
-        device/binary_device_operation.cpp
-        device/broadcast_height_and_width_multi_core_program_factory.cpp
-        device/broadcast_height_multi_core_program_factory.cpp
-        device/broadcast_width_multi_core_program_factory.cpp
-        device/element_wise_multi_core_program_factory.cpp
-        device/element_wise_multi_core_sfpu_pgm_factory.cpp
-        device/broadcast_height_multi_core_sharded_optimized_program_factory.cpp
-        device/broadcast_height_multi_core_sharded_program_factory.cpp
+        ${TTNN_OP_ELTWISE_BINARY_SRCS}
 )
 
 target_include_directories(ttnn_op_eltwise_binary PRIVATE ${FixmeOpIncDirs})

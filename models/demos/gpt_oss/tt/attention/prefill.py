@@ -5,11 +5,14 @@ import ttnn
 
 from .config import AttentionConfig, ProgramConfig
 from .operations import (
+    apply_allgather_and_slice,
     apply_allreduce,
     apply_output_projection,
+    apply_output_projection_fused_rs,
     apply_qkv_projection,
     apply_rope,
     concat_heads,
+    is_shape_fused_mm_rs_supported,
     split_qkv_heads_prefill,
 )
 from .weights import AttentionWeights
@@ -164,8 +167,16 @@ def prefill_forward(
     if batch_size > 1:
         tt_sdpa_out = ttnn.reshape(tt_sdpa_out, [1, 1, total_seq_len, -1])
 
-    tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
-    tt_sdpa_out.deallocate(True)
-    # Tensor parallel allreduce
-    tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
+    # Output projection + tensor-parallel allreduce.
+    # When TP > 1 we use the fused matmul + reduce-scatter op; the trailing
+    # all-gather + padding slice stay as separate ops. See
+    # apply_output_projection_fused_rs for the per-shape tuned configs.
+    if mesh_config.tp > 1 and is_shape_fused_mm_rs_supported(tt_sdpa_out):
+        rs_out = apply_output_projection_fused_rs(tt_sdpa_out, weights, mesh_config, ccl_manager)
+        tt_sdpa_out.deallocate(True)
+        tt_out_result = apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size)
+    else:
+        tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
+        tt_sdpa_out.deallocate(True)
+        tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
     return tt_out_result

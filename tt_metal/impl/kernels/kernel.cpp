@@ -88,6 +88,28 @@ fs::path resolve_path(const fs::path& given_file_name) {
     // Not found
     TT_THROW("Kernel file {} doesn't exist in any of the searched paths!", given_file_name);
 }
+
+// Resolve a user-supplied compiler include path (-I):
+//  - Absolute paths pass through unchanged
+//  - Relative paths are resolved against the current working directory
+//
+// If the user-supplied path doesn't exist:
+//  - Absolute path will go straight to gcc, which will warn about the missing dir
+//  - Unresolved relative path will throw here
+//
+fs::path resolve_compiler_include_dir(const fs::path& given) {
+    if (given.is_absolute()) {
+        return given;
+    }
+    auto resolved = fs::current_path() / given;
+    if (!fs::is_directory(resolved)) {
+        TT_THROW(
+            "Compiler include directory '{}' not found relative to current working directory '{}'.",
+            given.string(),
+            fs::current_path().string());
+    }
+    return resolved;
+}
 }  // namespace
 
 KernelSource::KernelSource(const std::string& source, const SourceType& source_type) :
@@ -109,7 +131,9 @@ Kernel::Kernel(
     const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles,
     const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles,
     const std::vector<std::string>& named_runtime_args,
-    const std::vector<std::string>& named_common_runtime_args) :
+    const std::vector<std::string>& named_common_runtime_args,
+    const std::vector<TensorBindingHandle>& tensor_binding_handles,
+    const KernelCrtaLayout& crta_layout) :
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
     kernel_src_(kernel_src),
@@ -121,6 +145,8 @@ Kernel::Kernel(
     semaphore_local_accessor_handles_(semaphore_local_accessor_handles),
     named_runtime_args_(named_runtime_args),
     named_common_runtime_args_(named_common_runtime_args),
+    tensor_binding_handles_(tensor_binding_handles),
+    crta_layout_(crta_layout),
 
     core_with_max_runtime_args_({0, 0}),
     defines_(defines),
@@ -293,12 +319,33 @@ void Kernel::process_semaphore_local_accessor_handles(
     }
 }
 
+void Kernel::process_tensor_binding_handles(const std::function<void(
+                                                const std::string& accessor_name,
+                                                uint32_t cta_offset,
+                                                uint32_t addr_crta_offset,
+                                                uint32_t num_runtime_field_crta_words)> callback) const {
+    for (const auto& handle : this->tensor_binding_handles_) {
+        callback(handle.accessor_name, handle.cta_offset, handle.addr_crta_offset, handle.num_runtime_field_crta_words);
+    }
+}
+
 void Kernel::process_include_paths(const std::function<void(const std::string& path)>& callback) const {
     // For FILE_PATH kernels, add the kernel source directory to the include path.
     // This enables relative includes (e.g., #include "foo.inc") to work when the kernel
     // source is transformed and inlined (as with simplified compute kernel syntax).
     if (kernel_src_.source_type_ == KernelSource::FILE_PATH) {
         callback(kernel_src_.path_.parent_path().string());
+    }
+    for (const auto& path : this->resolved_compiler_include_paths_) {
+        callback(path);
+    }
+}
+
+void Kernel::set_compiler_include_paths(const std::vector<std::filesystem::path>& paths) {
+    this->resolved_compiler_include_paths_.clear();
+    this->resolved_compiler_include_paths_.reserve(paths.size());
+    for (const auto& p : paths) {
+        this->resolved_compiler_include_paths_.push_back(resolve_compiler_include_dir(p).string());
     }
 }
 
@@ -469,6 +516,19 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
     }
+    // Tensor binding handles:
+    //  - stored as a std::vector (user-specified order), so no sort step needed
+    //  - genfiles.cpp emits the `ta::` namespace in the same order
+    //  - hash the size first to avoid the [a, b] vs [ab] collision noted below.
+    //  - tensor_parameter_name is intentionally omitted, as it doesn't appear in
+    //    the generated headers
+    hasher.update(static_cast<uint64_t>(this->tensor_binding_handles_.size()));
+    for (const auto& handle : this->tensor_binding_handles_) {
+        hasher.update(handle.accessor_name);
+        hasher.update(static_cast<uint64_t>(handle.cta_offset));
+        hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
+        hasher.update(static_cast<uint64_t>(handle.num_runtime_field_crta_words));
+    }
     // Named RTA/CRTA schema: order matters (determines byte offsets), so hash the sequence.
     // Named RTA and CRTA counts also need to be hashed!
     // Otherwise, RTAs ["a", "b"] could hash the same as ["ab"].
@@ -483,6 +543,16 @@ uint64_t Kernel::compute_hash() const {
     hasher.update(this->kernel_src_.source_);
     hasher.update(this->compile_time_args_.begin(), this->compile_time_args_.end());
     hasher.update(this->config_hash());
+
+    // Include paths affect compilation: the gcc -I order is significant (left-to-right
+    // header resolution), so different lists or orderings must produce different binaries.
+    // Header contents are tracked separately via the per-object .dephash mechanism.
+    size_t num_include_paths = 0;
+    this->process_include_paths([&](const std::string& path) {
+        hasher.update(path);
+        ++num_include_paths;
+    });
+    hasher.update(static_cast<uint64_t>(num_include_paths));
     return hasher.digest();
 }
 

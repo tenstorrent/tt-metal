@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // Retrieve arguments
@@ -45,8 +45,8 @@ void kernel_main() {
     // Initialize address generator
     const auto s = TensorAccessor(dst_args, dst_addr);
 
-    experimental::CircularBuffer cb(cb_id_out0);
-    experimental::CircularBuffer cb_padding(tt::CBIndex::c_1);
+    CircularBuffer cb(cb_id_out0);
+    CircularBuffer cb_padding(tt::CBIndex::c_1);
 
     // Calculate actual data height in the last tile
     constexpr uint32_t H_last_tile = H - (H_t - 1) * TILE_HEIGHT;

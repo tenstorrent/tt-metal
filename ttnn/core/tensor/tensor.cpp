@@ -15,6 +15,7 @@
 
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/float8.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/host_buffer.hpp>
@@ -78,11 +79,6 @@ Tensor::Tensor(
 
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
     Tensor(HostTensor(std::move(buffer), std::move(tensor_spec), TensorTopology{})) {}
-
-Tensor::Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-    tensor_id(Tensor::next_tensor_id()),
-    tensor_attributes(
-        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
 
 Tensor::Tensor(HostTensor tensor) :
     tensor_id(Tensor::next_tensor_id()),
@@ -379,6 +375,7 @@ uint32_t Tensor::element_size() const {
         case DataType::INT32: return sizeof(int32_t);
         case DataType::UINT32: return sizeof(uint32_t);
         case DataType::UINT16: return sizeof(uint16_t);
+        case DataType::FP8_E4M3: return sizeof(float8_e4m3);
         case DataType::UINT8: return sizeof(uint8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: return sizeof(std::byte);

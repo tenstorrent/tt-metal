@@ -6,7 +6,7 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 // This kernel keeps track of which page (tile) we are on from a logical tensor perspective, and fills the output with
 // either the input or padding respectively
@@ -37,8 +37,8 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<7>();
 
     const auto s0 = TensorAccessor(dst_args, output_addr);
-    experimental::CircularBuffer cb_input(input_cb_id);
-    experimental::CircularBuffer cb_pad_val(pad_val_cb_id);
+    CircularBuffer cb_input(input_cb_id);
+    CircularBuffer cb_pad_val(pad_val_cb_id);
 
     // Reserve and push the pad value into the circular buffer, generalized for any contiguous dtype
     cb_pad_val.reserve_back(1);

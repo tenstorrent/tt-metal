@@ -72,7 +72,9 @@ def decode_forward(
         nnz=num_experts_per_tok,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
-        program_config=program_config.get_decode_gate_up_config(hidden_states.shape[2], weights.gate_proj.shape[3]),
+        program_config=program_config.get_decode_gate_up_config(
+            hidden_states.shape[2], weights.gate_proj.shape[3], k=hidden_states.shape[-1]
+        ),
         dtype=activation_dtype,
     )
     # Note: reshape/transpose operations return views - do not deallocate originals
@@ -89,7 +91,9 @@ def decode_forward(
         nnz=num_experts_per_tok,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
-        program_config=program_config.get_decode_gate_up_config(hidden_states.shape[2], weights.up_proj.shape[3]),
+        program_config=program_config.get_decode_gate_up_config(
+            hidden_states.shape[2], weights.up_proj.shape[3], k=hidden_states.shape[-1]
+        ),
         dtype=activation_dtype,
     )
     hidden_states.deallocate(True)
@@ -113,7 +117,9 @@ def decode_forward(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         is_input_a_sparse=True,
-        program_config=program_config.get_decode_down_config(down_input.shape[2], weights.down_proj.shape[-1]),
+        program_config=program_config.get_decode_down_config(
+            down_input.shape[2], weights.down_proj.shape[-1], k=down_input.shape[-1]
+        ),
         dtype=activation_dtype,
     )
 

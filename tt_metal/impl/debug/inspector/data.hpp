@@ -35,6 +35,7 @@ private:
     void rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builder results);
     void rpc_get_metal_device_id_mappings(rpc::Inspector::GetMetalDeviceIdMappingsResults::Builder results);
     void rpc_get_configuration(rpc::Inspector::GetConfigurationResults::Builder& results);
+    void rpc_get_system_mesh(rpc::Inspector::GetSystemMeshResults::Builder& results);
 
     static rpc::BinaryStatus convert_binary_status(ProgramBinaryStatus status);
     static void populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id);
@@ -76,6 +77,10 @@ private:
     std::unordered_map<tt_cxy_pair, inspector::CoreInfo> dispatch_s_core_info;
     // store prefetcher core info by virtual core
     std::unordered_map<tt_cxy_pair, inspector::CoreInfo> prefetcher_core_info;
+
+    std::atomic<bool> kernel_path_collection_enabled{false};
+    std::mutex kernel_path_mutex;
+    std::unordered_map<int, std::string> kernel_id_to_path;
 
     // fw_compile_hash needs to be atomic because it is set in MetalContext::initialize()
     std::atomic<uint64_t> fw_compile_hash;

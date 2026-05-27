@@ -12,12 +12,18 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 
-from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batch_seq, parametrize_mesh_with_fabric
+from ...tests.test_factory import (
+    TestFactory,
+    compare_tensors,
+    get_pcc_threshold,
+    parametrize_batch_seq,
+    parametrize_mesh_with_fabric,
+)
 
 
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq()
-def test_rms_norm_with_scale(batch_size, seq_len, mesh_device):
+def test_rms_norm_with_scale(batch_size, seq_len, mesh_device, reset_seeds, request):
     """Test RMSNorm (with_scale=True) against HF Gemma4RMSNorm."""
     from transformers.models.gemma4.modeling_gemma4 import Gemma4RMSNorm
 
@@ -45,13 +51,13 @@ def test_rms_norm_with_scale(batch_size, seq_len, mesh_device):
     tt_output = tt_norm.forward(x_tt)
     tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]) if is_mesh else ttnn.to_torch(tt_output)
 
-    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=0.999)
+    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, f"RMSNorm with_scale PCC too low: {pcc_msg}"
 
 
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq()
-def test_rms_norm_without_scale(batch_size, seq_len, mesh_device):
+def test_rms_norm_without_scale(batch_size, seq_len, mesh_device, reset_seeds, request):
     """Test RMSNorm (with_scale=False) against HF Gemma4RMSNorm."""
     from transformers.models.gemma4.modeling_gemma4 import Gemma4RMSNorm
 
@@ -78,5 +84,5 @@ def test_rms_norm_without_scale(batch_size, seq_len, mesh_device):
     tt_output = tt_norm.forward(x_tt)
     tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]) if is_mesh else ttnn.to_torch(tt_output)
 
-    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=0.999)
+    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, f"RMSNorm without_scale PCC too low: {pcc_msg}"

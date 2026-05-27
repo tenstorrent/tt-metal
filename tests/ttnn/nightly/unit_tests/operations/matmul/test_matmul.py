@@ -453,3 +453,60 @@ def test_matmul_transpose_a_fuse_batch(device, batch, m, k, n, program_config):
     assert_numeric_metrics(
         torch_out, output, check_allclose=False, check_frobenius=False, pcc_threshold=0.999, check_ulp=False
     )
+
+
+def test_matmul_m_direction_padding(device):
+    # Create input tensors (keep the same random data for comparison)
+    torch.manual_seed(0)
+    torch_a = torch.randn((1, 1, 64, 2880), dtype=torch.bfloat16)
+    torch_b = torch.randn((1, 1, 2880, 2880), dtype=torch.bfloat16)
+
+    tensor_a = ttnn.from_torch(
+        torch_a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    tensor_b = ttnn.from_torch(
+        torch_b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    compute_kernel_config_HiFi4 = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        # compute_with_storage_grid_size=(13, 10),
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=6,
+        per_core_N=22,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    # Perform matrix multiplication
+    result = ttnn.matmul(
+        tensor_a,
+        tensor_b,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config_HiFi4,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+    )
+
+    output = ttnn.to_torch(result)
+    expected = torch.matmul(torch_a, torch_b)
+
+    assert_numeric_metrics(
+        expected,
+        output,
+        check_allclose=False,
+        check_frobenius=True,
+        frobenius_threshold=0.02,
+        pcc_threshold=0.999,
+        check_ulp=False,
+    )

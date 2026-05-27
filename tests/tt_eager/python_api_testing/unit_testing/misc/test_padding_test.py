@@ -281,9 +281,8 @@ def test_run_tile_padding_and_add_test(input_tensor_shape, pad_value, device):
     out_dev = ttnn.add(a_dev, b_dev)
     out_pad = out_dev.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
 
-    # Unpad out to get result
-    out = out_pad.unpad_from_tile(input_tensor_shape)
-    out_pt = out.to_torch().to(torch.float32)
+    # to(ROW_MAJOR_LAYOUT) already unpadded; use directly.
+    out_pt = out_pad.to_torch().to(torch.float32)
 
     out_ref = inp + ones
 

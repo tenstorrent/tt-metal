@@ -11,7 +11,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_slow_dispatch
+from models.common.utility_functions import is_blackhole, is_slow_dispatch
 from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
@@ -34,7 +34,14 @@ def create_fabric_router_config(max_payload_size):
         (64, 1024, 512),
         (512, 1024, 512),
         (1024, 2048, 128),
-        (32768, 65536, 128),
+        pytest.param(
+            32768,
+            65536,
+            128,
+            marks=pytest.mark.skip(
+                reason="[SKIP REASON]: Blackhole HostIO large loopback fails DMA page pinning for both H2D modes. Issue: #43079"
+            ),
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -234,6 +241,30 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         pytest.skip("Test requires a full galaxy")
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
+
+    # TODO(#43079): Root-cause Blackhole full-galaxy multi-stage HostInterface hangs and remove the temporary skips.
+    known_blackhole_hangs = {
+        (ttnn.H2DMode.HOST_PUSH, 64, 128, 512),
+        (ttnn.H2DMode.HOST_PUSH, 64, 256, 512),
+        (ttnn.H2DMode.HOST_PUSH, 64, 512, 512),
+        (ttnn.H2DMode.HOST_PUSH, 64, 1024, 512),
+        (ttnn.H2DMode.HOST_PUSH, 512, 1024, 512),
+        (ttnn.H2DMode.HOST_PUSH, 1024, 2048, 128),
+        (ttnn.H2DMode.HOST_PUSH, 32768, 65536, 128),
+        (ttnn.H2DMode.DEVICE_PULL, 64, 128, 512),
+        (ttnn.H2DMode.DEVICE_PULL, 64, 256, 512),
+        (ttnn.H2DMode.DEVICE_PULL, 64, 512, 512),
+        (ttnn.H2DMode.DEVICE_PULL, 64, 1024, 512),
+        (ttnn.H2DMode.DEVICE_PULL, 512, 1024, 512),
+        (ttnn.H2DMode.DEVICE_PULL, 1024, 2048, 128),
+        (ttnn.H2DMode.DEVICE_PULL, 32768, 65536, 128),
+    }
+    if is_blackhole() and (h2d_mode, tensor_size_bytes, fifo_size, num_iterations) in known_blackhole_hangs:
+        pytest.skip(
+            "[SKIP REASON]: "
+            "test_multi_stage_pipeline_loopback hangs or times out for this Blackhole full-galaxy tuple. "
+            "Issue: #43079"
+        )
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
@@ -442,6 +473,32 @@ def test_multi_stage_pipeline_loopback_with_embedding(
         pytest.skip("Test requires a full galaxy")
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
+
+    # TODO(#43079): Root-cause Blackhole full-galaxy embedding HostInterface teardown hang and remove this skip.
+    known_blackhole_embedding_hangs = {
+        (ttnn.H2DMode.HOST_PUSH, 128, 7168, 128, 2),
+        (ttnn.H2DMode.DEVICE_PULL, 128, 7168, 128, 2),
+        (ttnn.H2DMode.HOST_PUSH, 128, 7168, 256, 4),
+        (ttnn.H2DMode.DEVICE_PULL, 128, 7168, 256, 4),
+        (ttnn.H2DMode.HOST_PUSH, 256, 3584, 128, 2),
+        (ttnn.H2DMode.DEVICE_PULL, 256, 3584, 128, 2),
+        (ttnn.H2DMode.HOST_PUSH, 256, 3584, 256, 4),
+        (ttnn.H2DMode.DEVICE_PULL, 256, 3584, 256, 4),
+        (ttnn.H2DMode.HOST_PUSH, 512, 1792, 128, 2),
+        (ttnn.H2DMode.DEVICE_PULL, 512, 1792, 128, 2),
+        (ttnn.H2DMode.HOST_PUSH, 512, 1792, 256, 4),
+        (ttnn.H2DMode.DEVICE_PULL, 512, 1792, 256, 4),
+    }
+    if (
+        is_blackhole()
+        and (h2d_mode, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor)
+        in known_blackhole_embedding_hangs
+    ):
+        pytest.skip(
+            "[SKIP REASON]: "
+            "test_multi_stage_pipeline_loopback_with_embedding verifies token lookups, then hangs past "
+            "--timeout=300 during Blackhole full-galaxy teardown for this tuple. Issue: #43079"
+        )
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 

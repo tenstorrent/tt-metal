@@ -22,7 +22,7 @@ inline sfpi::vFloat _calculate_isinf_(const sfpi::vFloat& in)
 {
     // SFPU microcode
     sfpi::vInt exp   = sfpi::exexp(in);
-    sfpi::vInt man   = sfpi::exman9(in);
+    sfpi::vInt man   = sfpi::exman(in);
     sfpi::vFloat out = sfpi::vConst0;
     v_if (exp == 128 && man == 0)
     {
@@ -44,7 +44,7 @@ inline sfpi::vFloat _calculate_isposinf_(const sfpi::vFloat& in)
 {
     // SFPU microcode
     sfpi::vInt exp     = sfpi::exexp(in);
-    sfpi::vInt man     = sfpi::exman9(in);
+    sfpi::vInt man     = sfpi::exman(in);
     sfpi::vFloat out   = sfpi::vConst0;
     sfpi::vInt signbit = sfpi::reinterpret<sfpi::vInt>(in) & 0x80000000; // returns 0 for +ve value
     v_if (signbit == 0 && exp == 128 && man == 0)
@@ -67,7 +67,7 @@ inline sfpi::vFloat _calculate_isneginf_(const sfpi::vFloat& in)
 {
     // SFPU microcode
     sfpi::vInt exp     = sfpi::exexp(in);
-    sfpi::vInt man     = sfpi::exman9(in);
+    sfpi::vInt man     = sfpi::exman(in);
     sfpi::vFloat out   = sfpi::vConst0;
     sfpi::vInt signbit = sfpi::reinterpret<sfpi::vInt>(in) & 0x80000000; // returns 0x80000000 for -ve value
     v_if (signbit == 0x80000000 && exp == 128 && man == 0)
@@ -89,7 +89,7 @@ inline sfpi::vFloat _calculate_isnan_(const sfpi::vFloat& in)
 {
     // SFPU microcode
     sfpi::vInt exp   = sfpi::exexp(in);
-    sfpi::vInt man   = sfpi::exman9(in);
+    sfpi::vInt man   = sfpi::exman(in);
     sfpi::vFloat out = sfpi::vConst0;
     v_if (exp == 128 && man != 0)
     {

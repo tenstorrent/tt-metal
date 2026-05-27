@@ -144,7 +144,6 @@ class Llama(AbstractModuleBase):
                 config.hidden_size,
                 self.padded_vocab_size,
                 has_bias=False,
-                weight_init=ttml.init.normal(0.0, 0.02),
                 gather_output=True,
                 axis_name="tp",
             )
@@ -154,7 +153,6 @@ class Llama(AbstractModuleBase):
                 config.hidden_size,
                 self.padded_vocab_size,
                 False,
-                weight_init=ttml.init.normal(0.0, 0.02),
             )
 
         self.tok_emb = Embedding(

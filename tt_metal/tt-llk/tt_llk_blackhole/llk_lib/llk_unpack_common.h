@@ -76,7 +76,7 @@ inline void _llk_unpack_configure_stoch_rnd_()
 }
 
 // TODO NC: Clean up as the part of tt-metal#34499
-template <bool is_fp32_dest_acc_en, bool to_from_int8 = false, p_dim_stride_target dim_stride_target = p_dim_stride_target::IGNORE>
+template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void _llk_unpack_reconfig_data_format_srca_impl_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
@@ -128,7 +128,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
 }
 
 // TODO NC: Clean up as the part of tt-metal#34499
-template <bool is_fp32_dest_acc_en, bool to_from_int8 = false, p_dim_stride_target dim_stride_target = p_dim_stride_target::IGNORE>
+template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,

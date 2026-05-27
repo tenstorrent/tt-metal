@@ -77,9 +77,13 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
 
         if (gamma_tensor.layout() == Layout::TILE) {
             TT_FATAL(
-                a.padded_shape()[-1] == gamma_tensor.padded_shape()[-1],
-                "{} != {}",
+                a.logical_shape()[-1] == gamma_tensor.logical_shape()[-1] &&
+                    a.padded_shape()[-1] == gamma_tensor.padded_shape()[-1],
+                "Input and gamma last logical and padded dims must match, got input: logical[-1]={} padded[-1]={} vs "
+                "gamma: logical[-1]={} padded[-1]={}",
+                a.logical_shape()[-1],
                 a.padded_shape()[-1],
+                gamma_tensor.logical_shape()[-1],
                 gamma_tensor.padded_shape()[-1]);
             TT_FATAL(
                 gamma_tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -117,9 +121,13 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
         const auto& beta_tensor = beta.value();
         if (beta_tensor.layout() == Layout::TILE) {
             TT_FATAL(
-                a.padded_shape()[-1] == beta_tensor.padded_shape()[-1],
-                "Input and beta inner dimensions must match, got input: {} vs beta: {}",
+                a.logical_shape()[-1] == beta_tensor.logical_shape()[-1] &&
+                    a.padded_shape()[-1] == beta_tensor.padded_shape()[-1],
+                "Input and beta last logical and padded dims must match, got input: logical[-1]={} padded[-1]={} vs "
+                "beta: logical[-1]={} padded[-1]={}",
+                a.logical_shape()[-1],
                 a.padded_shape()[-1],
+                beta_tensor.logical_shape()[-1],
                 beta_tensor.padded_shape()[-1]);
             TT_FATAL(
                 beta_tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
