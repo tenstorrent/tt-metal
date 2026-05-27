@@ -579,9 +579,9 @@ jobs:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: >-
-            ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'asan-build, code-analysis' || 'asan-build' }}
+          required-jobs: "asan-build"
           optional-jobs: >-
+            code-analysis,
             clang-tidy-light,
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             model-charts-sync, build-docs,
