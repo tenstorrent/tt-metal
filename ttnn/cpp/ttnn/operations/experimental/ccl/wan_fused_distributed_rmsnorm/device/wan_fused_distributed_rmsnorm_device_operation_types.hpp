@@ -89,4 +89,34 @@ struct WanFusedDistributedRmsnormInputs {
     std::optional<Tensor> persistent_output_buffer;
 };
 
+// Sizing derived from args + input shape. Shared between compute_output_specs
+// (to spec the stats DRAM scratch tensor) and the program factory (to lay out
+// kernels and CBs identically). Keep all derivation in one place so the spec
+// and the factory cannot drift.
+//
+// Packed-page stats AG (Phase 9): the post-reduce stat tile carries only
+// 32 real values (one per token in the tile-row, in col 0). Transposing the
+// tile moves those 32 values to row 0 — split across face_00[0..63] and
+// face_01[0..63]. We then pack `window_size` such row-0 strips into one
+// row-major page of `TILE_HEIGHT * window_size * elem_bytes` bytes and
+// fabric-mcast the page in a single packet. That cuts both fabric and DRAM
+// traffic by ~32× compared to sending whole 4 KB tiles.
+//
+// The buffer's logical shape is independent of `num_workers` per design
+// constraint — workers cooperate by writing different chunk indices into
+// the same set of pages. Total pages per chip = num_devices * num_chunks_per_device.
+struct WanFusedDistributedRmsnormSizing {
+    uint32_t num_tile_rows = 0;
+    uint32_t num_workers = 0;
+    bool is_tp_1 = false;
+    bool use_mux = false;
+    uint32_t chunk_size_rows = 0;        // same as window_size; kept for legacy field names
+    uint32_t window_size = 0;            // tile-rows per packed page
+    uint32_t num_chunks_per_device = 0;  // ceil(num_tile_rows / window_size)
+    uint32_t total_pages = 0;            // num_devices * num_chunks_per_device (0 when !use_mux)
+    uint32_t page_size_bytes = 0;        // TILE_HEIGHT * window_size * sizeof(float)
+};
+
+WanFusedDistributedRmsnormSizing compute_sizing(const WanFusedDistributedRmsnormParams& args, const Tensor& input);
+
 }  // namespace ttnn::experimental::prim
