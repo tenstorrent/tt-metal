@@ -254,7 +254,11 @@ class TtMoERoutingSetup(LightweightModule):
         # offset_cumsum outputs are tiny UINT32 vectors placed in DRAM
         # (downstream ops read device-side, no perf impact). L1 placement
         # clashes with the unified routed-expert FFN's static CB region on
-        # the 256-expert / 32-per-chip configuration.
+        # the 256-expert / 32-per-chip configuration. Reverting to
+        # L1_MEMORY_CONFIG here triggers an L1-overflow at program create on
+        # that path — exercised by tests/pcc/test_ttnn_moe.py::test_ttnn_moe
+        # [blackhole-mesh-8x4-pcc-device-256], which runs this routing setup
+        # followed by the unified op on 256 experts / 32 per chip.
         #
         # Contract: expert_region_offsets entries are TOKEN rows, tile-aligned
         # (multiples of TILE_HEIGHT=32). The unified routed-expert FFN's
