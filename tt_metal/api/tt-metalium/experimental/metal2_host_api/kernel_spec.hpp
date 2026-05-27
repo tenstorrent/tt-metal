@@ -68,8 +68,6 @@ struct ComputeConfiguration {
 
 struct DataMovementConfiguration {
     // The DM configuration is different for Gen1 and Gen2.
-    // You can provide either a Gen1 config, a Gen2 config, or both.
-    // If your host code is intended to be architecture-agnostic, provide both.
 
     struct Gen1DataMovementConfig {
         tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
@@ -79,8 +77,12 @@ struct DataMovementConfiguration {
     std::optional<Gen1DataMovementConfig> gen1_data_movement_config = std::nullopt;
 
     struct Gen2DataMovementConfig {
-        // Currently, no configuration is needed for Gen2!
-        // The empty struct is still used to express a Gen2 DM kernel.
+        // Opt-out of DFB implicit sync (on a per-DFB basis)
+        //  - Implicit sync enables streamlined kernel-side syntax, but triggers ISR handling.
+        //  - Use this control to revert to legacy explicit sync APIs (for specific bound DFBs).
+        //  - This feature is mainly for debug purposes, or for backwards-compatible code style.
+        // Any bound DFB not listed here will use implicit sync by default.
+        std::vector<DFBSpecName> disable_implicit_sync_for;
     };
     std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
 };

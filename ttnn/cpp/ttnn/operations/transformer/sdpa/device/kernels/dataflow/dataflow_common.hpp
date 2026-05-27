@@ -96,6 +96,23 @@ public:
     uint32_t id_of(uint32_t i0, uint32_t i1, uint32_t i2, uint32_t i3) const {
         return i0 * strides[0] + i1 * strides[1] + i2 * strides[2] + i3 * strides[3];
     }
+
+    uint32_t d2() const { return shape[2]; }
+    uint32_t stride2() const { return strides[2]; }
+};
+
+template <uint32_t D0, uint32_t D1, uint32_t D2, uint32_t D3>
+class StaticTensorTileShape {
+public:
+    constexpr StaticTensorTileShape() = default;
+    constexpr StaticTensorTileShape(uint32_t, uint32_t, uint32_t, uint32_t) {}
+
+    uint32_t id_of(uint32_t i0, uint32_t i1, uint32_t i2, uint32_t i3) const {
+        return i0 * D1 * D2 * D3 + i1 * D2 * D3 + i2 * D3 + i3;
+    }
+
+    static constexpr uint32_t d2() { return D2; }
+    static constexpr uint32_t stride2() { return D3; }
 };
 
 template <uint32_t tile_bytes, typename ReaderType, bool push_num_tiles = true>
@@ -128,7 +145,7 @@ uint32_t read_chunk_with_padding(
     for (uint32_t row = 0; row < src_rows; ++row) {
         uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
         for (uint32_t col = 0; col < src_cols; ++col) {
-            noc_async_read_tile(start_tile_id, reader, write_ptr);
+            noc_async_read_page(start_tile_id, reader, write_ptr);
             start_tile_id += 1;
             write_ptr += inner_ptr_stride;
 
@@ -185,7 +202,7 @@ FORCE_INLINE void read_q_subblock(
 
         if (row < src_rows) {
             for (uint32_t col = 0; col < src_cols; ++col) {
-                noc_async_read_tile(start_tile_id++, reader, write_ptr);
+                noc_async_read_page(start_tile_id++, reader, write_ptr);
                 write_ptr += tile_bytes;
                 if (++barrier_count == barrier_threshold) {
                     noc_async_read_barrier();
@@ -239,7 +256,7 @@ void read_paged_chunk_with_padding(
             virtual_row_num, cur_head, page_table_ptr);
 
         for (uint32_t col = 0; col < src_cols; ++col) {
-            noc_async_read_tile(physical_tile_id, reader, write_ptr);
+            noc_async_read_page(physical_tile_id, reader, write_ptr);
             physical_tile_id += 1;
             write_ptr += inner_ptr_stride;
 
@@ -893,7 +910,7 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
     cb_push_back(cb_mask_in, mask_size_tiles);
 }
 
-// Issue noc_async_read_tile for a (num_rows × cols) tile block. tile_id starts at base_tile_id,
+// Issue noc_async_read_page for a (num_rows × cols) tile block. tile_id starts at base_tile_id,
 // advances by ++ per col and by row_stride per row (i.e., tile_id += row_stride - cols after each
 // inner col loop). dst starts at dst_addr + dst_row_origin * outer_stride, advances by
 // inner_stride per col and outer_stride per row. No barrier — caller must noc_async_read_barrier().
@@ -915,7 +932,7 @@ inline void issue_block_reads(
     for (uint32_t r = 0; r < num_rows; ++r) {
         uint32_t dst = dst_addr + (dst_row_origin + r) * outer_stride;
         for (uint32_t col = 0; col < cols; ++col) {
-            noc_async_read_tile(tile_id, reader, dst);
+            noc_async_read_page(tile_id, reader, dst);
             ++tile_id;
             dst += inner_stride;
             if (barrier_threshold > 0 && ++barrier_count == barrier_threshold) {
@@ -953,7 +970,7 @@ inline void zero_fill_block(
     }
 }
 
-// Issue noc_async_write_tile for a (num_rows × cols) tile block. Same tile_id/src arithmetic
+// Issue noc_async_write_page for a (num_rows × cols) tile block. Same tile_id/src arithmetic
 // as issue_block_reads (with src instead of dst). No barrier — caller must noc_async_write_barrier().
 template <typename WriterType>
 inline void issue_block_writes(
@@ -970,7 +987,7 @@ inline void issue_block_writes(
     for (uint32_t r = 0; r < num_rows; ++r) {
         uint32_t src = src_addr + (src_row_origin + r) * outer_stride;
         for (uint32_t col = 0; col < cols; ++col) {
-            noc_async_write_tile(tile_id, writer, src);
+            noc_async_write_page(tile_id, writer, src);
             ++tile_id;
             src += inner_stride;
         }
@@ -1137,12 +1154,12 @@ struct CatAddrGenerator {
     }
 };
 
-template <typename ReaderType>
+template <typename ReaderType, typename TensorShapeType = TensorTileShape>
 struct PaddedAddrGenerator {
     ReaderType reader;
-    TensorTileShape tensor_shape;
+    TensorShapeType tensor_shape;
 
-    PaddedAddrGenerator(const ReaderType& reader, TensorTileShape tensor_shape) :
+    PaddedAddrGenerator(const ReaderType& reader, TensorShapeType tensor_shape) :
         reader(reader), tensor_shape(tensor_shape) {}
 
     // Issue async NoC reads for a slice to L1. No barrier — caller must
@@ -1158,7 +1175,7 @@ struct PaddedAddrGenerator {
         const uint32_t d2_start = slice.d2_start;
         const uint32_t rows = slice.get_d2_size();
         const uint32_t cols = slice.get_d3_size();
-        const uint32_t shape_d2 = tensor_shape.shape[2];
+        const uint32_t shape_d2 = tensor_shape.d2();
         const uint32_t bound = shape_d2 < end_seq_tile ? shape_d2 : end_seq_tile;
         const uint32_t valid_rows = (d2_start >= bound) ? 0 : std::min(rows, bound - d2_start);
         uint32_t barrier_count = 0;
@@ -1167,7 +1184,7 @@ struct PaddedAddrGenerator {
         issue_block_reads(
             reader,
             tensor_shape.id_of(slice.d0, slice.d1, d2_start, slice.d3_start),
-            tensor_shape.strides[2],
+            tensor_shape.stride2(),
             valid_rows,
             cols,
             /*dst_row_origin=*/0,
@@ -1198,7 +1215,7 @@ struct PaddedAddrGenerator {
         const uint32_t d2_start = slice.d2_start;
         const uint32_t rows = slice.get_d2_size();
         const uint32_t cols = slice.get_d3_size();
-        const uint32_t shape_d2 = tensor_shape.shape[2];
+        const uint32_t shape_d2 = tensor_shape.d2();
         const uint32_t bound = shape_d2 < end_seq_tile ? shape_d2 : end_seq_tile;
         const uint32_t valid_rows = (d2_start >= bound) ? 0 : std::min(rows, bound - d2_start);
 
@@ -1206,7 +1223,7 @@ struct PaddedAddrGenerator {
         issue_block_writes(
             reader,
             tensor_shape.id_of(slice.d0, slice.d1, d2_start, slice.d3_start),
-            tensor_shape.strides[2],
+            tensor_shape.stride2(),
             valid_rows,
             cols,
             /*src_row_origin=*/0,
@@ -1214,7 +1231,24 @@ struct PaddedAddrGenerator {
             outer_stride,
             inner_stride);
     }
+
+    void issue_writes_no_padding(
+        const Slice& slice, uint32_t src_addr, uint32_t outer_stride, uint32_t inner_stride) const {
+        issue_block_writes(
+            reader,
+            tensor_shape.id_of(slice.d0, slice.d1, slice.d2_start, slice.d3_start),
+            tensor_shape.stride2(),
+            slice.get_d2_size(),
+            slice.get_d3_size(),
+            /*src_row_origin=*/0,
+            src_addr,
+            outer_stride,
+            inner_stride);
+    }
 };
+
+template <typename ReaderType, typename TensorShapeType>
+PaddedAddrGenerator(const ReaderType&, TensorShapeType) -> PaddedAddrGenerator<ReaderType, TensorShapeType>;
 
 // Fetch tiles via NOC reads into a given L1 address. No CB lifecycle — caller manages
 // cb_reserve_back / cb_push_back. Used by forwarding paths that mcast before pushing.
@@ -1303,7 +1337,7 @@ void write_block(
     uint32_t l1_read_addr = get_read_ptr(cb_out);
     for (uint32_t row = 0; row < rows; ++row) {
         for (uint32_t col = 0; col < cols; ++col) {
-            noc_async_write_tile(tile_id, out_writer, l1_read_addr);
+            noc_async_write_page(tile_id, out_writer, l1_read_addr);
             ++tile_id;
             l1_read_addr += tile_bytes;
 
@@ -1351,7 +1385,7 @@ void write_block_row_grouped(
             const uint32_t row = rg * sbh + r;
             if (row < write_rows) {
                 for (uint32_t col = 0; col < cols; ++col) {
-                    noc_async_write_tile(tile_id, out_writer, l1_read_addr + col * tile_bytes);
+                    noc_async_write_page(tile_id, out_writer, l1_read_addr + col * tile_bytes);
                     ++tile_id;
                     if (++barrier_count == barrier_threshold) {
                         noc_async_write_flushed_with_trid(default_trid);
@@ -1374,7 +1408,7 @@ void write_block_row_grouped(
 // with via noc_async_write_set_trid (0 = default); per-group flush uses
 // noc_async_write_flushed_with_trid(flush_trid) so it waits exactly for THIS drain's writes
 // to be source-L1-acked. Caller handles any final DRAM-arrival NoC barrier.
-template <typename CatAddrGeneratorType>
+template <bool all_rows_valid = false, typename CatAddrGeneratorType>
 void write_block_row_grouped_trid(
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& dst_slice,
@@ -1402,7 +1436,11 @@ void write_block_row_grouped_trid(
             dst_slice.d2_start + rg * sbh + rows_this_group,
             dst_slice.d3_start,
             dst_slice.d3_end);
-        cat_addr_generator.issue_writes(group_slice, end_seq_tile, get_read_ptr(cb_out), outer_stride, tile_bytes);
+        if constexpr (all_rows_valid) {
+            cat_addr_generator.issue_writes_no_padding(group_slice, get_read_ptr(cb_out), outer_stride, tile_bytes);
+        } else {
+            cat_addr_generator.issue_writes(group_slice, end_seq_tile, get_read_ptr(cb_out), outer_stride, tile_bytes);
+        }
         noc_async_write_flushed_with_trid(flush_trid);
         cb_pop_front(cb_out, tiles_this_group);
     }
