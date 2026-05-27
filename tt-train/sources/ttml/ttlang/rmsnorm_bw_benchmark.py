@@ -9,11 +9,9 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 import zlib
-from pathlib import Path
 
 import numpy as np
 import torch
@@ -24,7 +22,7 @@ RMSNORM_EPS = 0.0078125
 NUM_WARMUP = 5
 NUM_MEASURE = 50
 
-_TTL_WORKER_L1_RESERVE_BYTES = 77824
+_TTL_WORKER_L1_RESERVE_BYTES = 90112
 
 import ttl_rmsnorm_bw_2pass
 import ttml
@@ -47,18 +45,11 @@ def _open_mesh_for_kernel_bw(ctx: AutoContext, kernel: str) -> None:
 
 
 SHAPES = (
-    ([1, 1, 256, 384], "256x384"),
-    ([1, 1, 256, 2048], "256x2048"),
-    ([1, 1, 2048, 2048], "2048x2048"),
-    ([2, 1, 2048, 2048], "4096x2048"),
-    ([4, 1, 2048, 2048], "8192x2048"),
-    ([8, 1, 2048, 2048], "16384x2048"),
-    ([16, 1, 2048, 2048], "32768x2048"),
-    ([1, 1, 2048, 4096], "2048x4096"),
-    ([2, 1, 2048, 4096], "4096x4096"),
-    ([4, 1, 2048, 4096], "8192x4096"),
-    ([8, 1, 2048, 4096], "16384x4096"),
-    ([16, 1, 2048, 4096], "32768x4096")
+    ([1, 1, 2048, 5632], "2048x5632"),
+    ([2, 1, 2048, 5632], "4096x5632"),
+    ([4, 1, 2048, 5632], "8192x5632"),
+    ([8, 1, 2048, 5632], "16384x5632"),
+    ([16, 1, 2048, 5632], "32768x5632"),
 )
 
 
@@ -103,12 +94,12 @@ def _ttl_rmsnorm_bw_tensors_to_padded_device(
     cols_p: int,
 ):
     """Pad 2D torch inputs to ``(rows_p, cols_p)`` and ``_to_dev``."""
-    x_p = ttl_mod._to_dev(ttl_mod._pad(x2, rows_p, cols_p), mesh)
-    g_p = ttl_mod._to_dev(ttl_mod._pad(g2, rows_p, cols_p), mesh)
-    rms_p = ttl_mod._to_dev(ttl_mod._pad(r2, rows_p, cols_p), mesh)
-    dL_p = ttl_mod._to_dev(ttl_mod._pad(dL2, rows_p, cols_p), mesh)
-    out_da = ttl_mod._to_dev(torch.zeros(rows_p, cols_p, dtype=torch.bfloat16), mesh)
-    out_dg = ttl_mod._to_dev(torch.zeros(rows_p, cols_p, dtype=torch.bfloat16), mesh)
+    x_p = ttl_mod.to_dev(ttl_mod.pad(x2, rows_p, cols_p), mesh)
+    g_p = ttl_mod.to_dev(ttl_mod.pad(g2, rows_p, cols_p), mesh)
+    rms_p = ttl_mod.to_dev(ttl_mod.pad(r2, rows_p, cols_p), mesh)
+    dL_p = ttl_mod.to_dev(ttl_mod.pad(dL2, rows_p, cols_p), mesh)
+    out_da = ttl_mod.to_dev(torch.zeros(rows_p, cols_p, dtype=torch.bfloat16), mesh)
+    out_dg = ttl_mod.to_dev(torch.zeros(rows_p, cols_p, dtype=torch.bfloat16), mesh)
     return x_p, g_p, rms_p, dL_p, out_da, out_dg
 
 
@@ -166,7 +157,7 @@ def _run_kernel(kernel: str = "metal") -> None:
                 x_t, g_t, dL_t, rms_t = _metal_rmsnorm_bw_tensors_from_numpy(x_np, g_np, d_np, rms_np)
 
                 def run_step() -> None:
-                    d_in, d_gamma = ttml.ops.rmsnorm.rmsnorm_bw(x_t, g_t, rms_t, dL_t)
+                    _, _ = ttml.ops.rmsnorm.rmsnorm_bw(x_t, g_t, rms_t, dL_t)
 
             elif kernel == "ttl_2pass":
                 assert ttl_mod is not None
@@ -180,20 +171,23 @@ def _run_kernel(kernel: str = "metal") -> None:
                 ttl_kernel = ttl_mod.make_kernel()
 
                 def run_step() -> None:
-                    ttl_kernel(x_p, g_p, rms_p, dL_p, out_da, out_dg)
+                    _, _ = ttl_mod.run_rmsnorm_bw_2pass(
+                        mesh, ttl_kernel, x_p, g_p, rms_p, dL_p, out_da, out_dg
+                    )
 
             else:
                 raise ValueError(f"unknown kernel: {kernel}")
 
             for _ in range(NUM_WARMUP):
                 run_step()
+            ttnn.synchronize_device(mesh)
 
             total = 0.0
+            t0 = time.perf_counter()
             for _ in range(NUM_MEASURE):
-                t0 = time.perf_counter()
                 run_step()
-                ttnn.synchronize_device(mesh)
-                total += time.perf_counter() - t0
+            ttnn.synchronize_device(mesh)
+            total = time.perf_counter() - t0
             avg_s = total / NUM_MEASURE
             if kernel == "metal":
                 suffix = "Kernel_Metal"
@@ -212,10 +206,7 @@ def main() -> int:
         "--kernel",
         choices=("metal", "ttl_2pass"),
         default="metal",
-        help=(
-            "metal: ttml rmsnorm_bw; "
-            "ttl_2pass: ttl_2pass rmsnorm_bw "
-        ),
+        help=("metal: ttml rmsnorm_bw; " "ttl_2pass: ttl_2pass rmsnorm_bw "),
     )
     args = p.parse_args()
 

@@ -23,15 +23,6 @@ def _torch_ref(x, gamma_1d, eps, dL):
     return x.grad.to(torch.bfloat16), g.grad.to(torch.bfloat16), rms.detach().to(torch.bfloat16)
 
 
-def _pad(t, rows_padded, cols_padded):
-    rows, cols = t.shape
-    pad_r = rows_padded - rows
-    pad_c = cols_padded - cols
-    if pad_r == 0 and pad_c == 0:
-        return t
-    return torch.nn.functional.pad(t, (0, pad_c, 0, pad_r), value=0.0)
-
-
 def _run_case(
     device: ttnn.Device,
     rows: int,
@@ -53,34 +44,37 @@ def _run_case(
     rms_2d = rms.float().expand(-1, cols).contiguous()
 
     dL_dx_ref, dL_dg_ref, _ = _torch_ref(x, g1d, eps, dL)
+    dL_dg_ref = dL_dg_ref.unsqueeze(0)
 
     rows_p = -(-rows // TILE) * TILE
     cols_p = -(-cols // TILE) * TILE
-    x_p = _pad(x, rows_p, cols_p)
-    g_p = _pad(g2d, rows_p, cols_p)
-    rms_p = _pad(rms_2d, rows_p, cols_p)
-    dL_p = _pad(dL, rows_p, cols_p)
+    x_p = ttl_mod.pad(x, rows_p, cols_p)
+    g_p = ttl_mod.pad(g2d, rows_p, cols_p)
+    rms_p = ttl_mod.pad(rms_2d, rows_p, cols_p)
+    dL_p = ttl_mod.pad(dL, rows_p, cols_p)
 
     k = ttl_mod.make_kernel()
-    out_da = ttl_mod._to_dev(torch.zeros(rows_p, cols_p, dtype=torch.bfloat16), device)
-    out_dg = ttl_mod._to_dev(torch.zeros(rows_p, cols_p, dtype=torch.bfloat16), device)
-    k(
-        ttl_mod._to_dev(x_p, device),
-        ttl_mod._to_dev(g_p, device),
-        ttl_mod._to_dev(rms_p, device),
-        ttl_mod._to_dev(dL_p, device),
+    out_da = ttl_mod.to_dev(torch.zeros(rows_p, cols_p, dtype=torch.bfloat16), device)
+    out_dg = ttl_mod.to_dev(torch.zeros(rows_p, cols_p, dtype=torch.bfloat16), device)
+    out_da, dg_reduced_ttnn = ttl_mod.run_rmsnorm_bw_2pass(
+        device,
+        k,
+        ttl_mod.to_dev(x_p, device),
+        ttl_mod.to_dev(g_p, device),
+        ttl_mod.to_dev(rms_p, device),
+        ttl_mod.to_dev(dL_p, device),
         out_da,
         out_dg,
     )
     ttnn.synchronize_device(device)
 
     da = ttnn.to_torch(out_da)[:rows, :cols]
-    dg = ttnn.to_torch(out_dg)[:rows, :cols]
+    dg_reduced = ttnn.to_torch(dg_reduced_ttnn)[:, :cols]
 
     torch.testing.assert_close(da, dL_dx_ref, rtol=rtol, atol=atol)
     print(f"OK {label}: dL/dx matches torch ref (rtol={rtol}, atol={atol}).")
-    torch.testing.assert_close(dg.sum(dim=0), dL_dg_ref, rtol=rtol, atol=atol)
-    print(f"OK {label}: dL/dgamma (column sum) matches torch ref (rtol={rtol}, atol={atol}).")
+    torch.testing.assert_close(dg_reduced, dL_dg_ref, rtol=rtol, atol=atol)
+    print(f"OK {label}: dL/dgamma matches torch ref (rtol={rtol}, atol={atol}).")
 
 
 def main() -> None:
