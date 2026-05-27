@@ -235,13 +235,9 @@ static inline uint32_t dram_pattern_generate(
     uint32_t pattern_id, uint32_t seed, uint32_t pass, uint32_t word_index, uint32_t repeat_index) {
     switch (pattern_id) {
         case DRAM_PATTERN_CHECKERBOARD: return dram_pattern_checkerboard(pass, word_index);
-
         case DRAM_PATTERN_RANDOM: return dram_pattern_random(seed, pass, word_index);
-
         case DRAM_PATTERN_MARCHING_ONES: return dram_pattern_marching_ones(pass, word_index);
-
         case DRAM_PATTERN_MARCHING_ZEROES: return dram_pattern_marching_zeroes(pass, word_index);
-
         case DRAM_PATTERN_REVERSIBLE_RANDOM: return dram_pattern_reversible_random(word_index);
 
         case DRAM_PATTERN_RANDOM_XOSHIRO128PP: {
@@ -253,19 +249,12 @@ static inline uint32_t dram_pattern_generate(
         }
 
         case DRAM_PATTERN_TOGGLE_BITS: return dram_pattern_toggle_bits(pass, word_index);
-
         case DRAM_PATTERN_SATURATION: return dram_pattern_saturation(pass, word_index);
-
         case DRAM_PATTERN_MARCHING_ONE_BITS: return dram_pattern_marching_one_bits(pass);
-
         case DRAM_PATTERN_MARCHING_ZERO_BITS: return dram_pattern_marching_zero_bits(pass);
-
         case DRAM_PATTERN_COUNTER: return dram_pattern_counter(seed, word_index);
-
         case DRAM_PATTERN_ADDRESS: return dram_pattern_address(repeat_index, word_index);
-
         case DRAM_PATTERN_BYTEWISE_SSN: return dram_pattern_bytewise_ssn(repeat_index, word_index);
-
         default: return 0u;
     }
 }
