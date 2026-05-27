@@ -45,7 +45,9 @@ ELTWISE_DECLARE_UNARY(Erfinv, erfinv)
 ELTWISE_DECLARE_UNARY(I0, i0)
 ELTWISE_DECLARE_UNARY(I1, i1)
 ELTWISE_DECLARE_UNARY(Digamma, digamma)
-ELTWISE_DECLARE_UNARY(TanhDerivative, tanh_derivative)
+// TanhDerivative lives in eltwise_activations.hpp now (it's an activation
+// derivative). Keep tanh_derivative.h include here for backward compat with
+// any old call sites that haven't moved over yet.
 
 #undef ELTWISE_DECLARE_UNARY
 
