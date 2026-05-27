@@ -301,7 +301,18 @@ class SamplingGenerator:
         )
         tt_bitmask = ttnn.bitwise_right_shift(tt_bitmask, self._bitmask_arange, **op_kwargs)
         tt_bitmask = ttnn.bitwise_and(tt_bitmask, 1, **op_kwargs)
-        tt_bitmask = ttnn.reshape(tt_bitmask, (self.seed_manager.max_batch_size, -1), **op_kwargs)
+        # Match the logits rank before the in-place add.  Row-sharded GPT-OSS
+        # logits are 4D ([1, 1, global_batch, vocab]); adding a 2D
+        # [global_batch, vocab] mask relies on subtile broadcasting that is not
+        # valid for that layout.
+        if len(logits.shape) == 4:
+            tt_bitmask = ttnn.reshape(
+                tt_bitmask,
+                (logits.shape[0], logits.shape[1], logits.shape[2], -1),
+                **op_kwargs,
+            )
+        else:
+            tt_bitmask = ttnn.reshape(tt_bitmask, (self.seed_manager.max_batch_size, -1), **op_kwargs)
         tt_bitmask = ttnn.to_layout(tt_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
         tt_bitmask = ttnn.where(tt_bitmask, 0.0, float("-inf"), **op_kwargs)
 
