@@ -109,7 +109,7 @@ tt-perf-report "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_ops.csv" \
 
 Use the same pattern for prefill with `PERF_PREFILL` signposts and `prefill_*` filenames. If your installed `tt-perf-report` version uses different flags, run `tt-perf-report --help`, use the equivalent flags, and record the exact command.
 
-The required `tt-perf-report` run must keep advice enabled. If you also need a compact no-advice report for a table, run that as a secondary command and do not use it as the basis for `tt_perf_advice.json`.
+The `tt-perf-report` run used for final optimization conclusions should keep advice enabled. If you also need a compact no-advice report for a table, run that as a secondary command and keep the advice-backed run in the work log.
 
 Check time units before computing latency. Filtered `tt-perf-report` CSVs may expose `Device Time` in microseconds; raw Tracy ops CSVs often expose `DEVICE KERNEL DURATION [ns]`.
 
@@ -122,13 +122,13 @@ For every actionable `tt-perf-report` recommendation:
 - keep it if it improves the target metric without unacceptable PCC or complexity;
 - reject it only with evidence, then continue optimizing the rest of the decoder.
 
-Do not suppress advice in the required report. The final optimized decoder is not done while untried applicable advice remains.
+Avoid suppressing advice in the report used to guide optimization. When applicable advice remains untried, call that out as remaining work rather than implying the optimization pass is complete.
 
 ## Final Audit Checks
 
 - No unnecessary `InterleavedToSharded`, `ShardedToInterleaved`, `reshard`, `tilize`, `untilize`, `to_torch`, or `from_torch` in the optimized runtime path.
 - Decode trace replay still measures the optimized path, not a fallback path.
-- Program configs and compute-kernel configs are serialized in artifacts.
+- Program configs and compute-kernel configs are described in the final report or a compact structured summary.
 - PCC covers prefill and decode for every representative layer kind.
 - Optimized stress runs and passes for every representative layer kind and exercised mode; skipped stress is not a passing optimized result.
 - Final perf reports cover warmed prefill and warmed decode separately.
