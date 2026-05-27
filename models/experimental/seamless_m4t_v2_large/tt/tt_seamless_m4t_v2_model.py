@@ -1870,6 +1870,18 @@ class TTSeamlessM4Tv2Model:
                 if lang_map is None or tgt_lang not in lang_map:
                     raise ValueError(f"`tgt_lang={tgt_lang}` missing from generation_config.{key}.")
 
+        import os as _os_gt, time as _t_gt
+
+        _gt_on = bool(_os_gt.environ.get("GEN_TIMING"))
+        _gt_state = {"t": _t_gt.time()}
+
+        def _gt_mark(name: str) -> None:
+            if _gt_on:
+                ttnn.synchronize_device(self.device)
+                now = _t_gt.time()
+                print(f"[GEN-TIMING] {name}: {now - _gt_state['t']:.1f}s", flush=True)
+                _gt_state["t"] = now
+
         # ---- First encode ----
         if input_features is not None:
             # Speech encoder conv programs do not coexist with vocoder/T2U JIT in the same L1 budget.
@@ -1877,6 +1889,7 @@ class TTSeamlessM4Tv2Model:
             enc_tt, enc_attn_tt, enc_attn_owned = self._encode_speech(input_features, attn_tt_text)
         else:
             enc_tt, enc_attn_tt, enc_attn_owned = self._encode_text(input_ids, attn_tt_text)  # type: ignore[arg-type]
+        _gt_mark("encode")
 
         reuse_text_sequences = text_sequences is not None
 
@@ -2002,6 +2015,11 @@ class TTSeamlessM4Tv2Model:
                 # CQ0 is idle after prefill; record the initial "done" event.
                 _2cq_op_event = ttnn.record_event(self.device, 0)
 
+            import os as _os_dbg
+
+            _decode_path_dbg = bool(_os_dbg.environ.get("DECODE_PATH_DBG"))
+            _dp = {"capture": 0, "trace2cq": 0, "trace1cq": 0, "eager": 0, "fallback": 0}
+
             for _decode_step in range(decode_steps_remaining):
                 cur_tok = int(seq_host[cur_pos])
                 # Sampling does not use the trace (random token breaks the traced path).
@@ -2011,6 +2029,7 @@ class TTSeamlessM4Tv2Model:
                         # 2CQ pipelined decode: CQ1 uploads H2D while CQ0 executes trace.
                         trace_id = self._select_decode_trace_for_position(cur_pos, batch_size)
                         if trace_id is None:
+                            _dp["capture"] += 1
                             logits = self._decode_token_with_kv_cache_traced(
                                 cur_tok,
                                 cur_pos,
@@ -2022,6 +2041,7 @@ class TTSeamlessM4Tv2Model:
                             )
                             _2cq_op_event = ttnn.record_event(self.device, 0)
                         else:
+                            _dp["trace2cq"] += 1
                             rt = self._kv_decode_rt
                             # CQ1 waits until CQ0 has finished the previous trace
                             # (decode input buffers are free to be overwritten).
@@ -2037,6 +2057,7 @@ class TTSeamlessM4Tv2Model:
                             _2cq_op_event = ttnn.record_event(self.device, 0)
                             logits = rt.logits_tt
                     else:
+                        _dp["trace1cq"] += 1
                         logits = self._decode_token_with_kv_cache_traced(
                             cur_tok,
                             cur_pos,
@@ -2047,6 +2068,7 @@ class TTSeamlessM4Tv2Model:
                             batch_size=batch_size,
                         )
                 else:
+                    _dp["eager"] += 1
                     logits = self._decode_token_with_kv_cache(
                         cur_tok,
                         cur_pos,
@@ -2076,6 +2098,7 @@ class TTSeamlessM4Tv2Model:
                         cross_4d=decode_cross_4d,
                         batch_size=batch_size,
                     )
+                    _dp["fallback"] += 1
                     use_decode_trace = False
                     decode_trace_ready = False
                 if do_sample:
@@ -2104,6 +2127,14 @@ class TTSeamlessM4Tv2Model:
                     cross_valid = True
                 if eos_ids and next_id in eos_ids:
                     break
+            if _decode_path_dbg:
+                _trace_steps = _dp["capture"] + _dp["trace2cq"] + _dp["trace1cq"]
+                print(
+                    f"[DECODE-PATH] tp={self._tp} use_2cq={use_2cq} steps={_dp} "
+                    f"=> traced={_trace_steps} (incl. 2cq={_dp['trace2cq']}) eager={_dp['eager']} "
+                    f"fallback={_dp['fallback']}",
+                    flush=True,
+                )
             ttnn.deallocate(decode_cross_4d)
             sequences_tt = _ttnn_ids_from_list([seq_host], self.device)
         else:
@@ -2142,6 +2173,7 @@ class TTSeamlessM4Tv2Model:
         if gen_causal is not None:
             ttnn.deallocate(gen_causal)
             ttnn.deallocate(gen_cross)
+        _gt_mark(f"decode({len(seq_host)} tok)")
 
         # ---- Text-only generation: return tokens ----
         if not generate_speech:
@@ -2172,6 +2204,7 @@ class TTSeamlessM4Tv2Model:
         else:
             # Text path reuses the first-pass encoder output (HF parity).
             enc_tt2, enc_attn_tt2, enc_attn_owned2 = enc_tt, enc_attn_tt, enc_attn_owned
+        _gt_mark("speech re-encode")
 
         # T2U decoder hidden states come from running text-decoder on ``sequences[:, :-1]`` (HF
         # trims the final EOS). Use logical ``seq_host`` length (not tile-padded tensor width).
@@ -2182,6 +2215,7 @@ class TTSeamlessM4Tv2Model:
         ttnn.deallocate(enc_tt2)
         if enc_attn_owned2:
             ttnn.deallocate(enc_attn_tt2)
+        _gt_mark("decoder_hidden")
 
         # T2U prep: characters & char counts come from the generated text-token sequence.
         seq_full_ints = list(seq_host)
@@ -2210,6 +2244,7 @@ class TTSeamlessM4Tv2Model:
             cc_list,
             reference_discrete_durations=None,
         )
+        _gt_mark("t2u.forward")
         ttnn.deallocate(dec_hidden_padded)
         ttnn.deallocate(t2u_mask_4d)
         ttnn.deallocate(char_ids_tt)
@@ -2328,10 +2363,12 @@ class TTSeamlessM4Tv2Model:
         # otherwise exceeds per-core L1 when programs accumulate in the demo's T2TT→T2ST flow).
         self.clear_runtime_program_cache()
         ttnn.synchronize_device(self.device)
+        _gt_mark("argmax+unit-remap(host)")
         wav_tt, lengths_tt = self.vocoder.forward(vocoder_input, spk_tt, voc_tt)
         ttnn.deallocate(vocoder_input)
         ttnn.deallocate(voc_tt)
         ttnn.deallocate(spk_tt)
+        _gt_mark("vocoder.forward")
 
         # Vocoder lengths is 1D ``[B]``; standardise to ``[1, B]`` for callers / tests.
         if len(tuple(lengths_tt.shape)) == 1:
