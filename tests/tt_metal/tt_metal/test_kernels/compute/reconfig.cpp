@@ -28,7 +28,7 @@ void kernel_main() {
     CircularBuffer cbout1(tt::CBIndex::c_17);
 
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    binary_tiles_init<false, ELWADD>(cb_in0, cb_in1);
+    binary_tiles_init<false, EltwiseBinaryType::ELWADD>(cb_in0, cb_in1);
     for (uint32_t block = 0; block < num_tiles; ++block) {
         cbin0.wait_front(ublock_size_tiles);
         cbin1.wait_front(ublock_size_tiles);

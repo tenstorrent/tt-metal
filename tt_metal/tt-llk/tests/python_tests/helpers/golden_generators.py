@@ -1956,44 +1956,40 @@ class UnarySFPUGolden:
         else:  # self.data_format == DataFormat.Float16:
             return math.nan
 
+    def _torch_unary(self, x, torch_fn) -> float:
+        """Apply torch_fn to scalar x in fp32, then enforce the
+        format-aware NaN rule: convert +/-inf to NaN when the dest is
+        A-exponent (Float16).
+        """
+        result = torch_fn(torch.tensor(x, dtype=torch.float32)).item()
+        if math.isinf(result) and not self.data_format.is_exponent_B():
+            return math.nan
+        return result
+
     # Operation methods
     def _abs(self, x):
         return abs(x)
 
     def _atanh(self, x):
-        if x < -1.0 or x > 1.0:
-            return math.nan
-        if x == -1.0:
-            return self.handle_infinite_numbers(-math.inf)
-        if x == 1.0:
-            return self.handle_infinite_numbers(math.inf)
-        return math.atanh(x)
+        return self._torch_unary(x, torch.atanh)
 
     def _asinh(self, x):
         return math.asinh(x)
 
     def _acosh(self, x):
-        if x < 1.0:
-            return math.nan
-        return math.acosh(x)
+        return self._torch_unary(x, torch.acosh)
 
     def _cos(self, x):
         return math.cos(x)
 
     def _log(self, x):
-        if x == 0.0:
-            return self.handle_infinite_numbers(-math.inf)
-        return math.log(x)
+        return self._torch_unary(x, torch.log)
 
     def _log1p(self, x):
-        if x == -1.0:
-            return self.handle_infinite_numbers(-math.inf)
-        return math.log1p(x)
+        return self._torch_unary(x, torch.log1p)
 
     def _reciprocal(self, x):
-        if x == 0.0:
-            return self.handle_infinite_numbers(float("inf"))
-        return 1 / x
+        return self._torch_unary(x, torch.reciprocal)
 
     def _sin(self, x):
         # Never not finite, values range from [-1, 1]
@@ -2003,16 +1999,10 @@ class UnarySFPUGolden:
         return max(0.0, x)
 
     def _rsqrt(self, x):
-        if x < 0.0:
-            return self.handle_infinite_numbers(float("nan"))
-        if x == 0.0:
-            return self.handle_infinite_numbers(float("inf"))
-        return 1 / math.sqrt(x)
+        return self._torch_unary(x, torch.rsqrt)
 
     def _sqrt(self, x):
-        if x < 0.0:
-            return math.nan
-        return math.sqrt(x)
+        return self._torch_unary(x, torch.sqrt)
 
     def _tanh(self, x):
         return math.tanh(x)
