@@ -21,6 +21,7 @@
 #include "api/compute/eltwise_unary/cbrt.h"
 #include "api/compute/eltwise_unary/log1p.h"
 #include "api/compute/eltwise_unary/rpow.h"
+#include "api/compute/cumsum.h"              // Cumsum
 #include "api/compute/compute_kernel_api.h"  // log_tile / log_tile_init / power_tile
 
 namespace compute_kernel_lib {
@@ -63,8 +64,10 @@ struct Recip : UnaryOp<Recip<Slot>, Slot> {
 // ---- Rsqrt — Approx (Fast/Exact) and Legacy (On/Off). Templated on both.
 template <Approx fast = Approx::Exact, Legacy legacy = Legacy::Off, Dst Slot = Dst::D0>
 struct Rsqrt : UnaryOp<Rsqrt<fast, legacy, Slot>, Slot> {
-    static ALWI void init() { rsqrt_tile_init(); }
-    static ALWI void exec_impl(uint32_t slot_offset) { rsqrt_tile<fast == Approx::Fast>(to_u32(Slot) + slot_offset); }
+    static ALWI void init() { rsqrt_tile_init<legacy == Legacy::On>(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        rsqrt_tile<legacy == Legacy::On, fast == Approx::Fast>(to_u32(Slot) + slot_offset);
+    }
 };
 
 // ---- Cbrt ----
@@ -99,6 +102,20 @@ struct Rpow : UnaryOp<Rpow<Slot>, Slot> {
     constexpr Rpow() noexcept : base(0) {}
     static ALWI void init() { rpow_tile_init(); }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { rpow_tile(to_u32(Slot) + slot_offset, base); }
+};
+
+// ---- Cumsum — columnwise cumulative sum (in-DEST). ----
+// LLK `cumsum_tile(idst, first)` where `first` resets the accumulator for the
+// first row tile. Modelled as a unary op with a single bool param `first` so
+// the chain can iterate over consecutive tiles with `first=true` only on the
+// initial call. For chain-driven multi-tile loops where each iteration is a
+// fresh row, leave `first = true` (default).
+template <Dst Slot = Dst::D0>
+struct Cumsum : UnaryOp<Cumsum<Slot>, Slot> {
+    bool first;
+    constexpr explicit Cumsum(bool f = true) noexcept : first(f) {}
+    static ALWI void init() { cumsum_tile_init(); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { cumsum_tile(to_u32(Slot) + slot_offset, first); }
 };
 
 // ---- PowerIterative — positive-integer exponent via iterative multiply. ----
