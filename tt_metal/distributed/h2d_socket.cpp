@@ -5,6 +5,7 @@
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
+#include "tt_metal/distributed/hd_socket_connector_state.hpp"
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/distributed/pcie_core_writer.hpp"
 #include "tt_metal/distributed/shm_resource_tracker.hpp"
@@ -27,6 +28,16 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
     uint32_t pcie_alignment,
     const std::string& shm_name) {
     size_t page_size = sysconf(_SC_PAGESIZE);
+    // The pinned region is just a 4-byte bytes_acked counter; the rest of the
+    // page hosts the connector-state struct so consecutive driver processes
+    // can resume from the previous driver's bytes_sent / write_ptr / page_size.
+    // Place the struct immediately after the pinned region, aligned up to its
+    // own alignment requirement so the reinterpret_cast<> in connect() is
+    // well-defined.
+    connector_state_offset_ = static_cast<uint32_t>(align(sizeof(uint32_t), alignof(HDSocketConnectorState)));
+    TT_FATAL(
+        page_size >= connector_state_offset_ + sizeof(HDSocketConnectorState),
+        "System page size too small to host HDSocketConnectorState.");
     shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, page_size));
     void* aligned_ptr = shm_->ptr();
     TT_FATAL(
@@ -59,7 +70,12 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_host_data_buffer(
     uint32_t host_buffer_size_bytes = fifo_size_ + sizeof(uint32_t);
     uint32_t host_buffer_size_words = host_buffer_size_bytes / sizeof(uint32_t);
     size_t page_size = sysconf(_SC_PAGESIZE);
-    size_t alloc_size = align(host_buffer_size_bytes, page_size);
+    // Reserve room for HDSocketConnectorState immediately after the pinned region,
+    // aligned up to its own alignment requirement so the reinterpret_cast<> in
+    // connect() is well-defined. The pinned HostBuffer view below still spans
+    // only [data | bytes_acked], so the device never touches the state struct.
+    connector_state_offset_ = align(host_buffer_size_bytes, alignof(HDSocketConnectorState));
+    size_t alloc_size = align(connector_state_offset_ + sizeof(HDSocketConnectorState), page_size);
     shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, alloc_size));
     void* aligned_ptr = shm_->ptr();
     TT_FATAL(
@@ -239,6 +255,15 @@ H2DSocket::H2DSocket(
     init_receiver_tlb(mesh_device);
 
     config_buffer_address_ = config_buffer_->address();
+
+    // Initialize the persistent connector-state struct living in SHM.
+    // NamedShm::create zero-initialized the region; we stamp the version and
+    // mark clean_shutdown=1 so the first connect() sees "no prior crash" (the
+    // owner side has nothing to recover from).
+    connector_state_ =
+        reinterpret_cast<HDSocketConnectorState*>(static_cast<uint8_t*>(shm_->ptr()) + connector_state_offset_);
+    connector_state_->version = kHDSocketConnectorStateVersion;
+    connector_state_->clean_shutdown = 1;
 }
 
 H2DSocket::~H2DSocket() noexcept {
@@ -250,6 +275,12 @@ H2DSocket::~H2DSocket() noexcept {
         log_warning(LogMetal, "H2DSocket destructor: barrier failed with exception: {}", e.what());
     } catch (...) {
         log_warning(LogMetal, "H2DSocket destructor: barrier failed with unknown exception");
+    }
+    // Mark a clean shutdown so the next connector sees clean_shutdown=1. A process
+    // that exits without running this destructor (crash, _exit, kill) leaves the
+    // 0 written by connect()/owner-construct in place, signalling unclean exit.
+    if (connector_state_) {
+        connector_state_->clean_shutdown = 1;
     }
     if (is_owner_) {
         pinned_memory_.reset();
@@ -316,6 +347,9 @@ void H2DSocket::push_bytes(uint32_t num_bytes) {
         write_ptr_ += num_bytes;
         bytes_sent_ += num_bytes;
     }
+    // Crash-safe persistence for the next driver process.
+    connector_state_->bytes_sent = bytes_sent_;
+    connector_state_->write_ptr = write_ptr_;
 }
 
 void H2DSocket::notify_receiver() {
@@ -339,6 +373,10 @@ void H2DSocket::set_page_size(uint32_t page_size) {
     write_ptr_ = next_fifo_wr_ptr;
     page_size_ = page_size;
     fifo_curr_size_ = fifo_page_aligned_size;
+    connector_state_->page_size = page_size_;
+    connector_state_->fifo_curr_size = fifo_curr_size_;
+    connector_state_->bytes_sent = bytes_sent_;
+    connector_state_->write_ptr = write_ptr_;
 }
 
 void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) {
@@ -395,6 +433,7 @@ std::string H2DSocket::export_descriptor(const std::string& socket_id) {
     desc.bytes_acked_offset = (h2d_mode_ == H2DMode::DEVICE_PULL) ? fifo_size_ : 0;
     desc.h2d_mode = static_cast<uint32_t>(h2d_mode_);
     desc.aligned_data_buf_start = aligned_data_buf_start_;
+    desc.connector_state_offset = connector_state_offset_;
 
     descriptor_path_ = descriptor_path_for_socket("h2d", socket_id);
     desc.write_to_file(descriptor_path_);
@@ -429,6 +468,50 @@ std::unique_ptr<H2DSocket> H2DSocket::connect(const std::string& socket_id, std:
     socket->pcie_writer_instance_ =
         std::make_unique<PCIeCoreWriter>(desc.device_id, desc.virtual_core_x, desc.virtual_core_y);
     socket->pcie_writer = socket->pcie_writer_instance_->get_pcie_writer();
+
+    // Restore connector-mutable state left behind by any prior driver process.
+    // First connector after owner-init sees an all-zero struct (version stamped
+    // by the owner), which matches a fresh socket.
+    TT_FATAL(
+        desc.connector_state_offset + sizeof(HDSocketConnectorState) <= desc.shm_size,
+        "Descriptor connector_state_offset out of range for SHM size {}.",
+        desc.shm_size);
+    socket->connector_state_offset_ = desc.connector_state_offset;
+    socket->connector_state_ = reinterpret_cast<HDSocketConnectorState*>(
+        static_cast<uint8_t*>(socket->shm_->ptr()) + desc.connector_state_offset);
+    TT_FATAL(
+        socket->connector_state_->version == kHDSocketConnectorStateVersion,
+        "HDSocketConnectorState version mismatch: got {}, expected {}.",
+        socket->connector_state_->version,
+        kHDSocketConnectorStateVersion);
+    // Capture the prior process's clean_shutdown before overwriting it. A 0 here
+    // means the previous connector exited without running its destructor (crash,
+    // _exit, kill); callers can query had_clean_prior_shutdown() to react.
+    socket->prior_clean_shutdown_ = (socket->connector_state_->clean_shutdown != 0);
+    if (!socket->prior_clean_shutdown_) {
+        log_warning(
+            LogMetal,
+            "H2DSocket::connect: prior connector process exited without running its destructor. State has been "
+            "recovered from SHM, but downstream effects (in-flight writes, device-side counters) may need manual "
+            "inspection.");
+    }
+    socket->connector_state_->clean_shutdown = 0;
+    socket->page_size_ = socket->connector_state_->page_size;
+    socket->fifo_curr_size_ = socket->connector_state_->fifo_curr_size;
+    socket->bytes_sent_ = socket->connector_state_->bytes_sent;
+    socket->write_ptr_ = socket->connector_state_->write_ptr;
+    // bytes_acked_ is the cached copy of the device-written counter that
+    // already lives in SHM. Read it live so we don't underestimate the
+    // available FIFO space on the first reserve_bytes().
+    socket->bytes_acked_ = socket->bytes_acked_ptr_[0];
+
+    // Reconcile the device-side bytes_sent with the restored SHM value. The
+    // previous driver process may have died between push_bytes (SHM flushed)
+    // and notify_receiver (PCIe write to the device's config buffer), leaving
+    // the device's bytes_sent behind. Without this, a barrier() on the new
+    // connector would wait forever for the device to ack bytes it never knew
+    // were sent. For a fresh socket this writes 0 over 0 — a no-op.
+    socket->notify_receiver();
 
     return socket;
 }
