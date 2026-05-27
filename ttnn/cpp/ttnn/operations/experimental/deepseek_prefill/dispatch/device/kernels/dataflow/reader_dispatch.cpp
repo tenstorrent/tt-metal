@@ -6,19 +6,15 @@
 // Sender RISCV_1 kernel — row-major path only.
 //
 // This kernel is created only on the row-major dispatch path; the tile-layout path
-// runs without a sender reader RISC (the sender writer drives the address handshake
-// and credits untilize directly).
+// runs without a reader kernel
 //
-// Reads input/indices/weights, builds (route_info, payload, metadata) entries and
-// pushes them locally via cb_push_back for the fabric writer to drain.
-//
+// Reads input/indices/weights and builds (route_info, payload, metadata)
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
 #define ENABLE_DISPATCH_DEBUG 0
 
 #if ENABLE_DISPATCH_DEBUG
@@ -35,6 +31,7 @@ void kernel_main() {
     using namespace ttnn::operations::ccl::common;
 
     // ===== Compile Time Args =====
+    // CB IDs (indices 0-9)
     constexpr uint32_t cb_input_id = get_compile_time_arg_val(0);
     constexpr uint32_t cb_indices_id = get_compile_time_arg_val(1);
     constexpr uint32_t cb_weights_id = get_compile_time_arg_val(2);
@@ -46,6 +43,7 @@ void kernel_main() {
     constexpr uint32_t cb_packet_header_id = get_compile_time_arg_val(8);
     constexpr uint32_t cb_dispatch_table_id = get_compile_time_arg_val(9);
 
+    // Page counts (indices 10-16)
     constexpr uint32_t input_pages = get_compile_time_arg_val(10);
     constexpr uint32_t indices_pages = get_compile_time_arg_val(11);
     constexpr uint32_t weights_pages = get_compile_time_arg_val(12);
@@ -54,12 +52,14 @@ void kernel_main() {
     constexpr uint32_t metadata_pages = get_compile_time_arg_val(15);
     constexpr uint32_t dispatch_table_pages = get_compile_time_arg_val(16);
 
+    // Page sizes (indices 17-23)
     constexpr uint32_t input_page_size = get_compile_time_arg_val(17);
     constexpr uint32_t indices_page_size = get_compile_time_arg_val(18);
     constexpr uint32_t weights_page_size = get_compile_time_arg_val(19);
     constexpr uint32_t output_page_size = get_compile_time_arg_val(21);
     constexpr uint32_t metadata_page_size = get_compile_time_arg_val(22);
 
+    // Operation parameters (indices 24-30)
     constexpr uint32_t num_devices = get_compile_time_arg_val(24);
     constexpr uint32_t hidden_size = get_compile_time_arg_val(25);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(26);
@@ -68,12 +68,14 @@ void kernel_main() {
     constexpr uint32_t metadata_len = get_compile_time_arg_val(29);
     constexpr uint32_t tokens_per_device = get_compile_time_arg_val(30);
 
+    // Mesh information (indices 31-35)
     constexpr uint32_t src_mesh_id = get_compile_time_arg_val(31);
     constexpr uint32_t src_chip_id = get_compile_time_arg_val(32);
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(33);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(34);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(35);
 
+    // Aligned page sizes (indices 36-42)
     constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(36);
     constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(37);
     constexpr uint32_t aligned_weights_page_size = get_compile_time_arg_val(38);
@@ -82,14 +84,17 @@ void kernel_main() {
     constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(41);
     constexpr uint32_t aligned_dispatch_table_page_size = get_compile_time_arg_val(42);
 
+    // Fabric configuration (indices 43-46)
     constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(43);
     constexpr uint32_t l1_alignment = get_compile_time_arg_val(44);
     constexpr uint32_t num_links = get_compile_time_arg_val(45);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(46);
 
+    // Batch configuration (indices 47-48)
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(47);
     constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(48);
 
+    // Tensor accessor args (indices 49-54)
     constexpr auto input_args = TensorAccessorArgs<49>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
@@ -130,6 +135,9 @@ void kernel_main() {
     constexpr uint32_t device_stride = 1;
 #endif
 
+    DPRINT_DISPATCH << "Reader kernel: tokens=[" << token_start_idx << "," << token_end_idx << ")"
+                    << " dispatch_core=" << dispatch_core_idx << "/" << num_dispatch_cores << ENDL();
+
     const auto offsets_addr_gen = TensorAccessor(offsets_args, offsets_tensor_address);
     cb_reserve_back(cb_offsets_id, offsets_pages);
     uint32_t offsets_base_addr = get_write_ptr(cb_offsets_id);
@@ -139,6 +147,7 @@ void kernel_main() {
     noc_async_read_barrier();
     tt_l1_ptr uint32_t* offsets = reinterpret_cast<tt_l1_ptr uint32_t*>(offsets_base_addr);
 
+    // Read dispatch table into local scratch
     const auto dispatch_table_addr_gen = TensorAccessor(dispatch_table_args, dispatch_table_tensor_address);
     cb_reserve_back(cb_dispatch_table_id, dispatch_table_pages);
     uint32_t dispatch_table_base_addr = get_write_ptr(cb_dispatch_table_id);
@@ -149,6 +158,10 @@ void kernel_main() {
     noc_async_read_barrier();
     tt_l1_ptr int32_t* expert_dispatch_table = reinterpret_cast<tt_l1_ptr int32_t*>(dispatch_table_base_addr);
 
+    // Reserve scratch space once — these CBs are not used as FIFOs. Each batch
+    // overwrites the same region at offsets [0, batch_count) without push/pop.
+    // DRAM reads are batched to saturate DRAM bandwidth, while the L1-to-writer-CB
+    // copies below are done one page at a time — this avoids CB FIFO pointer wrapping
     cb_reserve_back(cb_indices_id, read_batch_size);
     uint32_t indices_base = get_write_ptr(cb_indices_id);
     cb_reserve_back(cb_weights_id, read_batch_size);
@@ -164,6 +177,7 @@ void kernel_main() {
     cb_reserve_back(cb_metadata_temp_id, 1);
     uint32_t metadata_temp_addr = get_write_ptr(cb_metadata_temp_id);
 
+    // Prefetch first batch of DRAM reads
     uint32_t first_batch_end =
         (token_start_idx + read_batch_size < token_end_idx) ? token_start_idx + read_batch_size : token_end_idx;
     uint32_t first_batch_count = first_batch_end - token_start_idx;
@@ -205,6 +219,8 @@ void kernel_main() {
                 auto expert_chip = device_begin_idx + expert_chip_og * device_stride;
                 auto& offset = offsets[routed_expert];
                 if (offset >= max_dispatch_buffer_token_size) {
+                    // Token would overflow the dispatch buffer - skip to prevent
+                    // out-of-bounds DRAM writes that corrupt memory and cause hangs.
                     offset++;
                     continue;
                 }
@@ -262,6 +278,7 @@ void kernel_main() {
             }
         }
 
+        // Issue next batch reads BEFORE write barrier to overlap DMA reads with NOC writes
         uint32_t next_batch_start = batch_start + read_batch_size;
         bool has_next_batch = (next_batch_start < token_end_idx);
         if (has_next_batch) {
