@@ -412,14 +412,11 @@ jobs:
   # Runs alongside clang-tidy-light; clang-tidy-light gives fast inline PR comments,
   # code-analysis gives the authoritative result used as a required status check.
   code-analysis:
-    needs: [build-docker-images]
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
     with:
-      platform: "Ubuntu 22.04"
-      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
-      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
+      platform: "Ubuntu 24.04"
 
   # LLK PR Labeling — auto-apply labels based on which LLK directories changed
   llk-label-pr:
