@@ -78,6 +78,11 @@ on:
         type: string
         default: ""
         description: "Pre-built wheel artifact name (skips build if provided)"
+      use-artifacts-from-run:
+        required: false
+        type: string
+        default: ""
+        description: "Workflow run ID to download artifacts from (skips build)"
       enable-llk-asserts:
         required: false
         type: boolean
@@ -158,6 +163,11 @@ on:
         type: boolean
         default: true
         description: "Run Blackhole multi-card fast unit tests"
+      use-artifacts-from-run:
+        required: false
+        type: string
+        default: ""
+        description: "Workflow run ID to download artifacts from (skips build)"
       enable-llk-asserts:
         required: false
         default: false
@@ -253,6 +263,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-umd-tests: true
       enable-lto: ${{ inputs.enable-lto || false }}
+      use-artifacts-from-run: ${{ inputs.use-artifacts-from-run || '' }}
 
   resolve-artifacts:
     runs-on: ubuntu-latest
