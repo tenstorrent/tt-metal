@@ -19,6 +19,7 @@ from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.cpu_reference import VoxtralCPUReference
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN
 from models.experimental.voxtraltts.tests.common import log_per_step_code_match, resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_high_accuracy_optimizations
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
 
 WAVEFORM_PCC_TARGET = 0.99
@@ -58,6 +59,7 @@ def test_ttnn_voxtral_tts_staged_pcc(device, reset_seeds, request):
             device,
             model_name_or_path=name,
             text_max_seq_len=DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN,
+            text_optimizations=voxtral_text_high_accuracy_optimizations,
         )
     except Exception as exc:
         pytest.skip(f"TT pipeline load failed: {exc}")
