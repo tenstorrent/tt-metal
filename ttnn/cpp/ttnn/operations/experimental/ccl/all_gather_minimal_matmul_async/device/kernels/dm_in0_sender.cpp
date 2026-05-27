@@ -401,6 +401,7 @@ void kernel_main() {
                     }
                 }
                 if (is_injector_core) {
+                    DeviceZoneScopedN("injector core read in0 block");
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         noc_obj,
                         in0_reader,
