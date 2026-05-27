@@ -136,7 +136,7 @@ def _tt_speech_enc_attn(sub_lens_tt: ttnn.Tensor, enc_seq: int, device: ttnn.Dev
     ttnn.deallocate(indices)
     mask_bool = ttnn.lt(indices_row, sub_col, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(indices_row)
-    mask_u32 = ttnn.typecast(mask_bool, ttnn.uint32)
+    mask_u32 = ttnn.typecast(mask_bool, ttnn.uint32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(mask_bool)
     return mask_u32
 
@@ -550,7 +550,13 @@ class TTSeamlessM4Tv2Model:
 
         enc_out = enc_raw
         if physical_len > logical_len:
-            sliced = ttnn.slice(enc_out, [0, 0, 0], [batch, logical_len, self.hidden_size], (1, 1, 1))
+            sliced = ttnn.slice(
+                enc_out,
+                [0, 0, 0],
+                [batch, logical_len, self.hidden_size],
+                (1, 1, 1),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
             ttnn.deallocate(enc_out)
             enc_out = sliced
         if logical_len < padded_len:
@@ -566,6 +572,13 @@ class TTSeamlessM4Tv2Model:
             ttnn.deallocate(enc_out)
             ttnn.deallocate(pad_tail)
             enc_out = cat
+        elif enc_out.memory_config().buffer_type != ttnn.BufferType.DRAM:
+            # enc_raw arrives in L1; if neither slice nor concat moved it to DRAM, do so
+            # explicitly. A ~500 KB L1 enc_out persists for the whole generate() call and
+            # fragments single-core L1 (was: CB clash in _greedy_next_token's slice).
+            dram = ttnn.to_memory_config(enc_out, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(enc_out)
+            enc_out = dram
 
         enc_attn_tt = _tt_speech_enc_attn(sub_lens_tt, padded_len, self.device)
         ttnn.deallocate(sub_lens_tt)

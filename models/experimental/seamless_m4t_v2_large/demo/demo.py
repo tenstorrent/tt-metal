@@ -372,9 +372,14 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         s2tt_chunks: list[str] = []
         for para_wav in per_para_wavs:
             in_feats, in_attn = _audio_inputs_for_chain(para_wav)
+            # Hold references and explicitly deallocate — ``generate`` doesn't free its inputs,
+            # and ``torch_feats_to_ttnn`` allocates in L1. Across 4 chunks per task × 3 tasks the
+            # leaked input tensors fragment single-core L1 enough to clash with later op CBs.
+            in_feats_tt = torch_feats_to_ttnn(device, in_feats)
+            in_attn_tt = torch_ids_to_ttnn(device, in_attn)
             s2tt_out = tt_model.generate(
-                input_features=torch_feats_to_ttnn(device, in_feats),
-                attention_mask=torch_ids_to_ttnn(device, in_attn),
+                input_features=in_feats_tt,
+                attention_mask=in_attn_tt,
                 generate_speech=False,
                 tgt_lang=tgt_back_text,
                 **gen_common,
@@ -383,6 +388,8 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
                 raise TypeError(f"S2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(s2tt_out)}")
             s2tt_chunks.append(_decode(tokenizer, s2tt_out.sequences))
             ttnn.deallocate(s2tt_out.sequences)
+            ttnn.deallocate(in_feats_tt)
+            ttnn.deallocate(in_attn_tt)
         s2tt_joined = "\n\n".join(s2tt_chunks)
         print(f"  Output text ({tgt_back_text}): {s2tt_joined}")
 
@@ -398,9 +405,11 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         s2st_wavs: list[np.ndarray] = []
         for idx, para_wav in enumerate(per_para_wavs):
             in_feats, in_attn = _audio_inputs_for_chain(para_wav)
+            in_feats_tt = torch_feats_to_ttnn(device, in_feats)
+            in_attn_tt = torch_ids_to_ttnn(device, in_attn)
             s2st_out = tt_model.generate(
-                input_features=torch_feats_to_ttnn(device, in_feats),
-                attention_mask=torch_ids_to_ttnn(device, in_attn),
+                input_features=in_feats_tt,
+                attention_mask=in_attn_tt,
                 generate_speech=True,
                 return_intermediate_token_ids=True,
                 tgt_lang=tgt_speech_other,
@@ -413,6 +422,8 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
             s2st_wavs.append(_waveform_to_mono_fp32(s2st_out.waveform, s2st_out.waveform_lengths))
             if idx < len(per_para_wavs) - 1:
                 s2st_wavs.append(inter_para_silence)
+            ttnn.deallocate(in_feats_tt)
+            ttnn.deallocate(in_attn_tt)
         s2st_text_joined = "\n\n".join(s2st_texts)
         print(f"  Intermediate text ({tgt_speech_other}): {s2st_text_joined}")
         spanish_wav_np = np.concatenate(s2st_wavs) if s2st_wavs else np.zeros(0, dtype=np.float32)
@@ -435,9 +446,11 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         asr_chunks: list[str] = []
         for para_wav in per_para_wavs:
             in_feats, in_attn = _audio_inputs_for_chain(para_wav)
+            in_feats_tt = torch_feats_to_ttnn(device, in_feats)
+            in_attn_tt = torch_ids_to_ttnn(device, in_attn)
             asr_out = tt_model.generate(
-                input_features=torch_feats_to_ttnn(device, in_feats),
-                attention_mask=torch_ids_to_ttnn(device, in_attn),
+                input_features=in_feats_tt,
+                attention_mask=in_attn_tt,
                 generate_speech=False,
                 tgt_lang=tgt_asr,
                 **gen_common_asr,
@@ -446,6 +459,8 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
                 raise TypeError(f"ASR expected TTSeamlessM4Tv2GreedySearchOutput, got {type(asr_out)}")
             asr_chunks.append(_decode(tokenizer, asr_out.sequences))
             ttnn.deallocate(asr_out.sequences)
+            ttnn.deallocate(in_feats_tt)
+            ttnn.deallocate(in_attn_tt)
         asr_joined = "\n\n".join(asr_chunks)
         print(f"  Output text ({tgt_asr}): {asr_joined}")
 
