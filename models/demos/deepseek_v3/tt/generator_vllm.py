@@ -67,9 +67,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                     "Ensure the vLLM plugin passes model_config.max_model_len and "
                     "scheduler_config.max_num_seqs (see tenstorrent/vllm#384)."
                 )
-            return_value = int(max_model_len) * int(max_num_seqs)
-            logger.info(f"get_max_tokens_all_users return_value: {return_value}")
-            return return_value
+            return int(max_model_len) * int(max_num_seqs)
         else:
             raise ValueError("DeepSeek-R1-0528 not supported on non-Wormhole devices")
 
