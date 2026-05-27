@@ -16,8 +16,14 @@ namespace ttnn::experimental::prim {
 struct WanFusedDistributedRmsnormDeviceOperation {
     using operation_attributes_t = WanFusedDistributedRmsnormParams;
     using tensor_args_t = WanFusedDistributedRmsnormInputs;
-    using spec_return_value_t = TensorSpec;
-    using tensor_return_value_t = Tensor;
+    // [0] = user-visible output tensor.
+    // [1] = persistent stats DRAM scratch (only when use_mux). Allocated by
+    //       the framework via create_device_tensor, so the underlying
+    //       MeshBuffer is allocated in lock-step across the mesh and every
+    //       chip sees the same DRAM address — required for the fabric mcast
+    //       to land at a consistent remote-chip page.
+    using spec_return_value_t = std::vector<TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<WanFusedDistributedRmsnormMeshWorkloadFactory>;
     using shared_variables_t = WanFusedDistributedRmsnormMeshWorkloadFactory::shared_variables_t;
 
@@ -34,8 +40,9 @@ struct WanFusedDistributedRmsnormDeviceOperation {
 
 namespace ttnn::prim {
 
-ttnn::experimental::prim::WanFusedDistributedRmsnormDeviceOperation::tensor_return_value_t
-wan_fused_distributed_rmsnorm(
+// Returns just the user-visible output (element 0 of the underlying
+// tensor_return_value_t vector — the stats DRAM scratch is internal).
+Tensor wan_fused_distributed_rmsnorm(
     const Tensor& input_tensor,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,

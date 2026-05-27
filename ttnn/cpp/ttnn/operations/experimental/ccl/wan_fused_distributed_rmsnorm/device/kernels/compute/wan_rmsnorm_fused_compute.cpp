@@ -36,6 +36,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/matmul.h"
+#include "api/compute/transpose_wh.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 void kernel_main() {
@@ -67,8 +68,22 @@ void kernel_main() {
     // and pushes per-row stats directly into stats_gathered_cb. This makes
     // TP=1 (single-device) operation self-contained — no forwarder needed.
     constexpr uint32_t is_tp_1 = get_compile_time_arg_val(23);
+    // Phase 9 packed-page AG (only the MUX writer uses it). When enabled the
+    // pre phase transposes the per-row stat tile (real data in col 0 → row 0)
+    // so the writer can extract two contiguous 64-byte spans per tile and
+    // pack `window_size` of them into a single fabric packet. The post phase
+    // then transposes the row-0 gathered tiles back to col 0 before the
+    // existing reduce<AVG,REDUCE_ROW> chain runs.
+    constexpr uint32_t stats_transposed_local_cb = get_compile_time_arg_val(24);
+    constexpr uint32_t stats_transposed_gathered_cb = get_compile_time_arg_val(25);
+    constexpr uint32_t packed_ag_enabled = get_compile_time_arg_val(26);
 
     constexpr uint32_t stats_dest_cb = (is_tp_1 != 0) ? stats_gathered_cb : stats_local_cb;
+    // Per-row post reduce reads ring_size tiles. With packed AG enabled the
+    // ring_size tiles live in stats_transposed_gathered_cb (post-transpose);
+    // otherwise the legacy path uses stats_gathered_cb directly.
+    constexpr uint32_t stats_reduce_src_cb =
+        (packed_ag_enabled != 0) ? stats_transposed_gathered_cb : stats_gathered_cb;
 
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
 
@@ -144,6 +159,34 @@ void kernel_main() {
                 compute_kernel_lib::ReduceInputBlockShape::single());
         }
 
+        // Phase 9 pre: transpose each per-row stat tile so the 32 real values
+        // (one per token in the tile-row) move from col 0 to row 0 — packed
+        // into face_00[0..63] and face_01[0..63] as two 64-byte spans. The
+        // writer then pulls those spans out and bundles `window_size` rows'
+        // worth into a single fabric packet per chunk.
+        if constexpr (packed_ag_enabled != 0) {
+            cb_wait_front(stats_local_cb, rows_in_chunk);
+            cb_reserve_back(stats_transposed_local_cb, rows_in_chunk);
+            // Both unpack-srca and pack format must point at the right CB.
+            // The previous op was reduce<SUM,REDUCE_ROW>(pre_intermediate_cb,
+            // ..., stats_dest_cb) which left srca set to pre_intermediate_cb
+            // and pack set to stats_dest_cb (== stats_local_cb here). We're
+            // now feeding from stats_local_cb to stats_transposed_local_cb.
+            reconfig_data_format_srca(stats_local_cb);
+            pack_reconfig_data_format(stats_transposed_local_cb);
+            transpose_wh_init_short(stats_local_cb);
+            for (uint32_t r = 0; r < rows_in_chunk; r++) {
+                tile_regs_acquire();
+                transpose_wh_tile(stats_local_cb, r, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, stats_transposed_local_cb);
+                tile_regs_release();
+                cb_push_back(stats_transposed_local_cb, 1);
+            }
+            cb_pop_front(stats_local_cb, rows_in_chunk);
+        }
+
         // -------- WAIT FOR FORWARDER TO COMPLETE AG FOR THIS CHUNK --------
         cb_wait_front(stats_gathered_cb, chunk_stats_tiles);
 
@@ -153,10 +196,33 @@ void kernel_main() {
             uint32_t rope_cos_tile_in_head = 0;
             uint32_t rope_sin_tile_in_head = 0;
 
+            // Phase 9 post: with packed AG the writer scattered the gathered
+            // packed pages into row 0 of stats_gathered_cb tiles. Transpose
+            // each of the ring_size tiles for this row back to col 0 so the
+            // existing reduce<AVG,REDUCE_ROW> chain runs unchanged.
+            if constexpr (packed_ag_enabled != 0) {
+                const uint32_t row_base_tiles = r * stats_tiles_cols;
+                cb_reserve_back(stats_transposed_gathered_cb, stats_tiles_cols);
+                reconfig_data_format_srca(stats_gathered_cb);
+                pack_reconfig_data_format(stats_transposed_gathered_cb);
+                transpose_wh_init_short(stats_gathered_cb);
+                for (uint32_t d = 0; d < stats_tiles_cols; d++) {
+                    tile_regs_acquire();
+                    transpose_wh_tile(stats_gathered_cb, row_base_tiles + d, 0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, stats_transposed_gathered_cb);
+                    tile_regs_release();
+                    cb_push_back(stats_transposed_gathered_cb, 1);
+                }
+            }
+
             // Reduce gathered TP partials. For TP=1 (stats_tiles_cols==1), this
             // is effectively a pass-through (single tile averaged with itself).
+            // With packed AG enabled the source is stats_transposed_gathered_cb
+            // (col-0 stats); otherwise it's stats_gathered_cb directly.
             compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
-                stats_gathered_cb,
+                stats_reduce_src_cb,
                 reduce_scalar_avg_cb,
                 reduce_result_cb,
                 compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));

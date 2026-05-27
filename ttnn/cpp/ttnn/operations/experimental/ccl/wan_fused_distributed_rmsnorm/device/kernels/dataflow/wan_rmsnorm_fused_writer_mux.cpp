@@ -43,30 +43,59 @@
 using namespace tt::tt_fabric::linear::experimental;
 
 // =============================================================================
-// Compile-time args
+// Compile-time args (Phase 9 packed-page AG)
 // =============================================================================
 constexpr uint32_t output_cb = get_compile_time_arg_val(0);
 constexpr uint32_t num_tile_cols = get_compile_time_arg_val(1);
 constexpr uint32_t block_size = get_compile_time_arg_val(2);
-constexpr uint32_t stats_local_cb = get_compile_time_arg_val(3);
+// stats_transposed_local_cb : window_size post-transpose fp32 tiles produced
+// by the compute kernel. Real data lives in row 0 of each tile — two 64 B
+// spans at face_00[0..63] and face_01[0..63] (the inter-face gap is 960 B of
+// padding). The writer extracts those two spans per tile and packs them
+// contiguously into stats_packed_local_cb (next CB) for a single fabric mcast.
+constexpr uint32_t stats_transposed_local_cb = get_compile_time_arg_val(3);
+// stats_gathered_cb : window_size * ring_size fp32 tiles. After AG, the
+// writer scatters the gathered packed bytes back into row 0 of these tiles
+// (face_00[0..63] + face_01[0..63] per tile). Compute then transposes each
+// tile to col 0 before the existing AVG-reduce chain.
 constexpr uint32_t stats_gathered_cb = get_compile_time_arg_val(4);
-constexpr uint32_t ring_size = get_compile_time_arg_val(5);
-constexpr uint32_t my_device_index = get_compile_time_arg_val(6);
-constexpr uint32_t num_targets_forward = get_compile_time_arg_val(7);
-constexpr uint32_t num_targets_backward = get_compile_time_arg_val(8);
-constexpr uint32_t chunk_size_rows = get_compile_time_arg_val(9);
+// stats_packed_local_cb : 2 slots × page_size_bytes (= TILE_HEIGHT *
+// window_size * sizeof(float)). Writer-owned scratch; packs row-0 spans
+// from `window_size` transposed tiles into one row-major page, fabric
+// mcasts it, then advances to the next slot for the next chunk.
+constexpr uint32_t stats_packed_local_cb = get_compile_time_arg_val(5);
+// stats_packed_gathered_cb : ring_size slots × page_size_bytes. Writer
+// reads (ring_size-1) remote-device packed pages from DRAM into this CB;
+// the local-device slot is L1-copied from stats_packed_local_cb (skip the
+// local-DRAM roundtrip — Phase 1.1 pattern at page granularity).
+constexpr uint32_t stats_packed_gathered_cb = get_compile_time_arg_val(6);
+constexpr uint32_t ring_size = get_compile_time_arg_val(7);
+constexpr uint32_t my_device_index = get_compile_time_arg_val(8);
+constexpr uint32_t num_targets_forward = get_compile_time_arg_val(9);
+constexpr uint32_t num_targets_backward = get_compile_time_arg_val(10);
+constexpr uint32_t chunk_size_rows = get_compile_time_arg_val(11);
+constexpr uint32_t num_chunks_per_device = get_compile_time_arg_val(12);
 
 // MUX CT args (5, in canonical order — matches ccl::fabric_mux_connection_ct_args).
 // Same for forward and backward MUX (we use the same FabricMuxConfig for both).
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(10);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(11);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(12);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(13);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(14);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(13);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(14);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(15);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(16);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(17);
 
-constexpr auto output_args = TensorAccessorArgs<15>();
-// Persistent DRAM stats buffer accessor args (Phase 1).
+constexpr auto output_args = TensorAccessorArgs<18>();
+// Packed-page DRAM scratch accessor.
 constexpr auto stats_dram_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+
+// Tile layout after transpose_wh: real per-token data sits in row 0 of the
+// 32x32 tile = row 0 of face_00 (top-left, byte offsets 0..63) plus row 0 of
+// face_01 (top-right, byte offsets 1024..1087). The 960 bytes between those
+// two spans are garbage (rest of face_00). face_10/face_11 (bottom row of
+// faces) also hold garbage. So real data per tile = 2 × 64 B = 128 B.
+constexpr uint32_t kTileFaceRowBytes = 64u;                    // 16 fp32 values
+constexpr uint32_t kTileFace01ByteOffset = 1024u;              // start of face_01 in tile
+constexpr uint32_t kRowBytesPerTile = 2u * kTileFaceRowBytes;  // 128 — real data per tile-row
 
 // =============================================================================
 // Per-direction MUX runtime-arg parsing
@@ -160,7 +189,10 @@ void kernel_main() {
     // [num_workers, chunk_size_rows, ring_size] fp32 tiles. This worker owns
     // tiles [worker_tile_base, worker_tile_base + chunk_size_rows*ring_size).
     const uint32_t stats_dram_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t worker_tile_base = get_arg_val<uint32_t>(arg_idx++);
+    // First chunk index this worker owns on this chip. Chunk indices are
+    // chip-global so all workers share the same DRAM scratch — worker i owns
+    // chunks [worker_chunk_base, worker_chunk_base + chunks_in_this_worker).
+    const uint32_t worker_chunk_base = get_arg_val<uint32_t>(arg_idx++);
 
     // Two MUX rt blocks: forward first, then backward. Both blocks present
     // always (set by host), with `connection_valid=false` if that direction
@@ -203,6 +235,41 @@ void kernel_main() {
     auto pkt_hdr_backward = PacketHeaderPool::allocate_header();
 
     const uint32_t stats_tile_bytes = get_tile_size(stats_gathered_cb);
+    // Each packed page = window_size × 128 B of real data. Last chunk on
+    // each chip may have rows_in_chunk < chunk_size_rows; we still allocate
+    // and transmit a full page (padding bytes are unread garbage).
+    const uint32_t page_size_bytes = chunk_size_rows * kRowBytesPerTile;
+
+    // ---------- ONE-TIME zero of stats_gathered_cb L1 region ----------
+    // Why: after packed AG, the writer scatters only ROW 0 of each tile
+    // (face_00[0..63] + face_01[0..63]). The COMPUTE kernel then transposes
+    // each tile so that row 0 → col 0. But transpose copies the ENTIRE tile,
+    // so anything in rows 1..31 becomes cols 1..31 of the transposed tile.
+    // The downstream reduce<AVG,REDUCE_ROW> sums across ALL 32 cols of each
+    // row — if cols 1..31 hold uninitialized L1 garbage, the mean is wrong.
+    //
+    // In Phase 8 this wasn't an issue because reduce<SUM,REDUCE_ROW> in pre
+    // explicitly produces zero in cols 1..31 (LLK behavior), and the whole
+    // 4 KB tile was fabric-mcast intact. With packed pages we only transmit
+    // the 128 B of real data per tile, so we must zero the rest ourselves.
+    //
+    // Zero ONCE here, not per chunk: the CB's L1 slots cycle (chunk N's
+    // tiles use the same L1 addresses as chunk 0). The scatter only touches
+    // row 0 each chunk, so cols 1..31 stay zero across chunks.
+    //
+    // Cost: ~chunk_stats_tiles * 1024 RISC-V stores (~8 KB cycles for the
+    // worst case of chunk_size=4 × ring=8 = 32 KB region). One-time, before
+    // the main loop.
+    {
+        cb_reserve_back(stats_gathered_cb, chunk_size_rows * ring_size);
+        volatile tt_l1_ptr uint32_t* zero_base =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(stats_gathered_cb));
+        const uint32_t total_words = (chunk_size_rows * ring_size * stats_tile_bytes) / sizeof(uint32_t);
+        for (uint32_t i = 0; i < total_words; i++) {
+            zero_base[i] = 0u;
+        }
+        // Don't push — the chunk loop will fill row 0 of each tile and push then.
+    }
 
     // GlobalSemaphore lives on THIS worker core; remote chips' matching workers
     // atomic_inc it via fabric. Compute its NoC-0 addr for the packet headers
@@ -211,90 +278,142 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* out_ready_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
 
-    // ---------- Chunked AG + output drain ----------
-    // For each chunk: AG that chunk's rows, push stats_gathered for compute's
-    // post phase, then drain that chunk's output_cb to DRAM. The sem is NOT
-    // reset between chunks — we wait on a cumulative count so concurrent
-    // incoming incs for chunk N+1 don't race with chunk N's wait. Reset once
-    // at the very end so a subsequent invocation starts at 0.
+    // ---------- Chunked AG + output drain (packed-page) ----------
+    // Each chunk produces ONE fabric packet (one packed page) instead of
+    // chunk_size_rows whole-tile packets — that's the entire point of
+    // Phase 9. After AG, we scatter the gathered packed pages back into
+    // row 0 of stats_gathered_cb tiles for the compute kernel to transpose.
+    // Sem is cumulative across chunks: each chunk contributes (ring_size-1)
+    // expected incs (one from each remote device's matching worker).
     uint32_t row_processed = 0;
+    uint32_t chunks_processed = 0;
     uint32_t cumulative_expected_incs = 0;
     while (row_processed < num_tile_rows) {
         const uint32_t rows_in_chunk =
             ((row_processed + chunk_size_rows) <= num_tile_rows) ? chunk_size_rows : (num_tile_rows - row_processed);
         const uint32_t chunk_stats_tiles = rows_in_chunk * ring_size;
+        const uint32_t chunk_idx_on_device = worker_chunk_base + chunks_processed;
 
-        // Reserve CB region up front; Phase A writes our local slot directly
-        // into it (optimization #3: skip the local-DRAM round-trip).
-        cb_reserve_back(stats_gathered_cb, chunk_stats_tiles);
-        const uint32_t stats_gathered_base = get_write_ptr(stats_gathered_cb);
+        // ---- Phase A: pack window into staging CB, fabric mcast ONE packet ----
+        // Reserve packed_local slot and packed_gathered slot for THIS chip.
+        cb_reserve_back(stats_packed_local_cb, 1);
+        const uint32_t packed_local_addr = get_write_ptr(stats_packed_local_cb);
 
-        // ---- Phase A: AG. Local L1 copy + fabric mcast to remote DRAM ----
+        // Reserve full ring's worth of gathered slots up front; we fill our
+        // own slot in this phase and read remote slots in Phase A.5.
+        cb_reserve_back(stats_packed_gathered_cb, ring_size);
+        const uint32_t packed_gathered_base = get_write_ptr(stats_packed_gathered_cb);
+        const uint32_t my_packed_gathered_addr = packed_gathered_base + my_device_index * page_size_bytes;
+
+        // Wait for compute to deliver `rows_in_chunk` post-transpose tiles
+        // (real data in row 0 of each tile). Extract row 0 from each tile
+        // and pack into stats_packed_local_cb at offset r * 128 B.
+        cb_wait_front(stats_transposed_local_cb, rows_in_chunk);
+        const uint32_t transposed_base = get_read_ptr(stats_transposed_local_cb);
         for (uint32_t r = 0; r < rows_in_chunk; r++) {
-            cb_wait_front(stats_local_cb, 1);
-            uint32_t l1_read_addr = get_read_ptr(stats_local_cb);
-
-            // Optimization #3: copy our slot directly L1→L1 into stats_gathered_cb,
-            // skipping the local-DRAM write+read round-trip.
-            const uint32_t local_cb_slot_addr =
-                stats_gathered_base + (r * ring_size + my_device_index) * stats_tile_bytes;
-            const uint64_t local_cb_noc_addr = safe_get_noc_addr(my_x[0], my_y[0], local_cb_slot_addr, 0);
-            noc_async_write(l1_read_addr, local_cb_noc_addr, stats_tile_bytes);
-
-            // Remote DRAM target for fabric mcasts (same tile_idx on every chip).
-            const uint32_t dram_tile_idx = worker_tile_base + r * ring_size + my_device_index;
-            const uint64_t dram_dest_noc_addr = get_noc_addr(dram_tile_idx, stats_dram_accessor);
-
-            if constexpr (num_targets_forward > 0) {
-                if (fwd_mux_args.connection_valid) {
-                    fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                        &fwd_mux_conn,
-                        pkt_hdr_forward,
-                        l1_read_addr,
-                        stats_tile_bytes,
-                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                            dram_dest_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, false},
-                        /*start_distance=*/1,
-                        static_cast<uint8_t>(num_targets_forward));
-                }
-            }
-            if constexpr (num_targets_backward > 0) {
-                if (bwd_mux_args.connection_valid) {
-                    fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                        &bwd_mux_conn,
-                        pkt_hdr_backward,
-                        l1_read_addr,
-                        stats_tile_bytes,
-                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                            dram_dest_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, false},
-                        /*start_distance=*/1,
-                        static_cast<uint8_t>(num_targets_backward));
-                }
-            }
-
-            cb_pop_front(stats_local_cb, 1);
+            const uint32_t tile_base = transposed_base + r * stats_tile_bytes;
+            const uint32_t dst_offset = r * kRowBytesPerTile;
+            // face_00 row 0 (cols 0-15) → packed[0..63]
+            const uint64_t src0 = safe_get_noc_addr(my_x[0], my_y[0], tile_base, 0);
+            noc_async_read(src0, packed_local_addr + dst_offset, kTileFaceRowBytes);
+            // face_01 row 0 (cols 16-31) → packed[64..127]
+            const uint64_t src1 = safe_get_noc_addr(my_x[0], my_y[0], tile_base + kTileFace01ByteOffset, 0);
+            noc_async_read(src1, packed_local_addr + dst_offset + kTileFaceRowBytes, kTileFaceRowBytes);
         }
+        noc_async_read_barrier();
+        cb_pop_front(stats_transposed_local_cb, rows_in_chunk);
 
-        cumulative_expected_incs += rows_in_chunk * (ring_size - 1);
+        // Write my own packed page to my LOCAL DRAM (uniform path with remote
+        // reads in Phase A.5 — avoids the L1-shortcut race where in-flight
+        // fabric reads from packed_local_addr collide with the next chunk's
+        // overwrite). This costs a DRAM round-trip vs Phase 1.1's L1 copy
+        // but keeps the read-side logic uniform across all `d`.
+        const uint64_t my_dram_self_noc_addr =
+            get_noc_addr(my_device_index * num_chunks_per_device + chunk_idx_on_device, stats_dram_accessor);
+        noc_async_write(packed_local_addr, my_dram_self_noc_addr, page_size_bytes);
+
+        // Fabric mcast: the SAME page index lands at the same DRAM address
+        // on every chip; my_device_index ensures my data goes to my pages.
+        const uint32_t my_dram_page_idx = my_device_index * num_chunks_per_device + chunk_idx_on_device;
+        const uint64_t dram_dest_noc_addr = get_noc_addr(my_dram_page_idx, stats_dram_accessor);
+        if constexpr (num_targets_forward > 0) {
+            if (fwd_mux_args.connection_valid) {
+                fabric_multicast_noc_fused_unicast_with_atomic_inc(
+                    &fwd_mux_conn,
+                    pkt_hdr_forward,
+                    packed_local_addr,
+                    page_size_bytes,
+                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                        dram_dest_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, false},
+                    /*start_distance=*/1,
+                    static_cast<uint8_t>(num_targets_forward));
+            }
+        }
+        if constexpr (num_targets_backward > 0) {
+            if (bwd_mux_args.connection_valid) {
+                fabric_multicast_noc_fused_unicast_with_atomic_inc(
+                    &bwd_mux_conn,
+                    pkt_hdr_backward,
+                    packed_local_addr,
+                    page_size_bytes,
+                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                        dram_dest_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, false},
+                    /*start_distance=*/1,
+                    static_cast<uint8_t>(num_targets_backward));
+            }
+        }
+        // packed_local_cb is double-buffered; release this slot so the next
+        // chunk can use the other.
+        cb_push_back(stats_packed_local_cb, 1);
+        cb_pop_front(stats_packed_local_cb, 1);
+
+        cumulative_expected_incs += (ring_size - 1);
         if (cumulative_expected_incs > 0) {
             noc_semaphore_wait_min(out_ready_sem_ptr, cumulative_expected_incs);
         }
-        // Local L1 copies must land before compute reads stats_gathered_cb.
+        // Wait for all outstanding NoC operations to complete:
+        //  - noc_async_write_barrier: the local L1 copy (and the fabric
+        //    sender's NoC read from packed_local_addr, since send_chunk_from_address
+        //    is non-blocking and the read is still in flight).
+        //  - noc_async_atomic_barrier: any outstanding atomic transactions
+        //    from this core's perspective (analogous to the pattern in
+        //    all_gather_async/minimal_default_writer.cpp).
+        // Without these, the next chunk's reuse of packed_local_cb slots can
+        // race with the in-flight fabric reads, and small DRAM writes from
+        // the fabric router on the receiver side may not have committed by
+        // the time we issue the next-chunk reads.
         noc_async_write_barrier();
+        noc_async_atomic_barrier();
 
-        // ---- Phase A.5: Read REMOTE chips' DRAM slots → stats_gathered_cb ----
-        // Skip our own slot — already filled by L1 copy in Phase A.
-        for (uint32_t r = 0; r < rows_in_chunk; r++) {
-            for (uint32_t d = 0; d < ring_size; d++) {
-                if (d == my_device_index) {
-                    continue;
-                }
-                const uint32_t dram_tile_idx = worker_tile_base + r * ring_size + d;
-                const uint32_t cb_slot_addr = stats_gathered_base + (r * ring_size + d) * stats_tile_bytes;
-                noc_async_read_tile(dram_tile_idx, stats_dram_accessor, cb_slot_addr);
-            }
+        // ---- Phase A.5: Read all device pages (including my own) ----
+        // We don't skip our own slot anymore — the local DRAM write above
+        // ensures my page is in DRAM by the time we get here.
+        for (uint32_t d = 0; d < ring_size; d++) {
+            const uint32_t dram_page_idx = d * num_chunks_per_device + chunk_idx_on_device;
+            const uint32_t local_slot_addr = packed_gathered_base + d * page_size_bytes;
+            noc_async_read_page(dram_page_idx, stats_dram_accessor, local_slot_addr);
         }
         noc_async_read_barrier();
+
+        // Scatter packed bytes back into row 0 of stats_gathered_cb tiles.
+        // Per (row r, device d): take 128 B from packed_gathered[d][r] and
+        // write to row 0 of stats_gathered tile[r * ring + d] — face_00[0..63]
+        // and face_01[0..63] (two NoC writes per tile).
+        cb_reserve_back(stats_gathered_cb, chunk_stats_tiles);
+        const uint32_t stats_gathered_base = get_write_ptr(stats_gathered_cb);
+        for (uint32_t r = 0; r < rows_in_chunk; r++) {
+            for (uint32_t d = 0; d < ring_size; d++) {
+                const uint32_t packed_src = packed_gathered_base + d * page_size_bytes + r * kRowBytesPerTile;
+                const uint32_t tile_dst = stats_gathered_base + (r * ring_size + d) * stats_tile_bytes;
+                const uint64_t dst0 = safe_get_noc_addr(my_x[0], my_y[0], tile_dst, 0);
+                noc_async_write(packed_src, dst0, kTileFaceRowBytes);
+                const uint64_t dst1 = safe_get_noc_addr(my_x[0], my_y[0], tile_dst + kTileFace01ByteOffset, 0);
+                noc_async_write(packed_src + kTileFaceRowBytes, dst1, kTileFaceRowBytes);
+            }
+        }
+        noc_async_write_barrier();
+        cb_push_back(stats_packed_gathered_cb, ring_size);
+        cb_pop_front(stats_packed_gathered_cb, ring_size);
         cb_push_back(stats_gathered_cb, chunk_stats_tiles);
 
         // Drain this chunk's output_cb tiles to DRAM. Compute always pushes
@@ -327,6 +446,7 @@ void kernel_main() {
         }
 
         row_processed += rows_in_chunk;
+        chunks_processed += 1;
     }
     // Final barrier — all in-flight output writes must complete before
     // we disconnect from the fabric MUX.

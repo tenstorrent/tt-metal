@@ -58,6 +58,8 @@ uint32_t float_to_u32(float v) {
     return out;
 }
 
+}  // namespace
+
 // Upper cap on TP>1 worker cores per chip. The MUX channel count is uint8_t
 // but in practice the fabric MUX rejects (or deadlocks) above ~64 full-size
 // channels per core. Don't raise without verifying on hardware.
@@ -85,14 +87,45 @@ uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows) {
     return capped;
 }
 
-}  // namespace
+// Sizing derivation used in both spec computation (to size the stats scratch
+// tensor in `compute_output_specs`) and the program factory (to lay out
+// kernels + CBs). Single source of truth so the two cannot drift.
+WanFusedDistributedRmsnormSizing compute_sizing(const WanFusedDistributedRmsnormParams& args, const Tensor& input) {
+    WanFusedDistributedRmsnormSizing s;
+    const auto& padded = input.padded_shape();
+    const uint32_t W = padded[-1];
+    const uint32_t folded_H = input.physical_volume() / W;
+    s.num_tile_rows = folded_H / TILE_HEIGHT;
+    s.is_tp_1 = (args.ring_size == 1);
+    s.num_workers = s.is_tp_1 ? 1u : pick_num_workers_tp_gt_1(s.num_tile_rows);
+    s.use_mux = !s.is_tp_1 && (s.num_workers > 1);
+    const uint32_t rows_per_worker = tt::div_up(s.num_tile_rows, s.num_workers);
+    constexpr uint32_t kMaxChunkSizeRows = 4u;
+    const uint32_t chunk_for_two = std::max(1u, (rows_per_worker + 1u) / 2u);
+    s.chunk_size_rows = std::min<uint32_t>(chunk_for_two, kMaxChunkSizeRows);
+    s.window_size = s.chunk_size_rows;
+    // Pages are addressed across the whole chip (not per-worker) so the
+    // buffer shape doesn't depend on num_workers. Each chunk a worker
+    // produces lands at a page index derived only from (device_idx, chunk
+    // index on this chip), which lets the caller spec the buffer without
+    // knowing the worker count.
+    s.num_chunks_per_device = s.use_mux ? tt::div_up(s.num_tile_rows, s.window_size) : 0u;
+    s.total_pages = s.use_mux ? args.ring_size * s.num_chunks_per_device : 0u;
+    s.page_size_bytes = s.use_mux ? TILE_HEIGHT * s.window_size * sizeof(float) : 0u;
+    return s;
+}
 
 WanFusedDistributedRmsnormMeshWorkloadFactory::cached_program_t
 WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const WanFusedDistributedRmsnormParams& args,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const WanFusedDistributedRmsnormInputs& tensor_args,
-    Tensor& output_tensor) {
+    std::vector<Tensor>& tensor_return_value) {
+    Tensor& output_tensor = tensor_return_value.at(0);
+    // Stats DRAM scratch: only allocated for the MUX writer path (TP>1 with
+    // multiple workers). When not allocated (TP=1 or num_workers=1) the
+    // legacy writer doesn't reference it.
+    Tensor* stats_dram_tensor = tensor_return_value.size() > 1 ? &tensor_return_value[1] : nullptr;
     const auto& input_tensor = tensor_args.input;
     const auto& weight = tensor_args.weight;
     const auto& trans_mat = tensor_args.transformation_mat;
@@ -241,6 +274,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     constexpr uint32_t kMaxChunkSizeRows = 4u;
     const uint32_t chunk_for_two_chunks = std::max(1u, (num_tile_rows_per_worker + 1u) / 2u);
     const uint32_t chunk_size_rows = std::min<uint32_t>(chunk_for_two_chunks, kMaxChunkSizeRows);
+    // Phase 9 packed-page AG: every chunk this chip processes maps to a
+    // distinct DRAM page. Page index = my_device_index * num_chunks_per_device
+    // + chunk_idx_on_device. Independent of num_workers per design.
+    const uint32_t num_chunks_per_device = use_mux ? tt::div_up(num_tile_rows, chunk_size_rows) : 0u;
 
     // ------------------------------------------------------------------------
     // Compute kernel config + dtype/format setup
@@ -275,20 +312,17 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     //
     // Layout: [num_workers, chunk_size_rows, ring_size] tiles, fp32.
     //   Worker i, row r, device d → tile_idx = i * chunk × ring + r * ring + d.
-    // Same DRAM allocation (deterministic allocator order) on every chip, so
-    // a fabric mcast packet targeting tile_idx on the source chip lands at
-    // the matching tile_idx on every remote chip.
-    std::shared_ptr<tt::tt_metal::Buffer> stats_dram_buffer;
-    if (use_mux) {
-        const uint32_t stats_dram_num_tiles = num_workers * chunk_size_rows * args.ring_size;
-        const uint32_t stats_dram_size_bytes = stats_dram_num_tiles * fp32_tile_size;
-        tt::tt_metal::InterleavedBufferConfig stats_dram_config{
-            .device = device,
-            .size = stats_dram_size_bytes,
-            .page_size = fp32_tile_size,
-            .buffer_type = tt::tt_metal::BufferType::DRAM};
-        stats_dram_buffer = tt::tt_metal::CreateBuffer(stats_dram_config);
-    }
+    // The buffer is a regular device tensor (allocated by the framework via
+    // `create_output_tensors` → `create_device_tensor`). On a MeshDevice that
+    // gives a mesh-coherent MeshBuffer allocation: every chip sees the same
+    // DRAM address — required so the fabric mcast's NoC address resolves to
+    // the matching tile on every remote chip. (A per-chip `tt_metal::CreateBuffer`
+    // does NOT give that guarantee on submeshes; that mismatch caused TP=2
+    // LINE NaN bugs where fabric mcasts landed at the wrong remote page.)
+    TT_FATAL(
+        !use_mux || stats_dram_tensor != nullptr,
+        "create_at requires a stats DRAM scratch tensor at tensor_return_value[1] when use_mux is true");
+    tt::tt_metal::Buffer* stats_dram_buffer = use_mux ? stats_dram_tensor->buffer() : nullptr;
 
     // ------------------------------------------------------------------------
     // CB allocations (on worker cores)
@@ -309,6 +343,29 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     constexpr uint32_t rope_sin_cb_id = tt::CBIndex::c_13;
     constexpr uint32_t rotated_input_cb_id = tt::CBIndex::c_14;
     constexpr uint32_t reserved_packet_header_cb_id = tt::CBIndex::c_15;
+    // Phase 9 packed-page AG (use_mux only):
+    //   stats_transposed_local_cb : window_size fp32 tiles, post-transpose.
+    //       Real per-token sum-of-squares now lives in row 0 of each tile
+    //       (2 contiguous 64-byte spans at face_00[0] and face_01[0]).
+    //       Compute pushes, writer pops.
+    //   stats_packed_local_cb     : 2 staging slots of page_size_bytes
+    //       (= TILE_HEIGHT * window_size * sizeof(float)). Writer packs row 0
+    //       of W tiles into one row-major span, then fabric-mcasts that
+    //       single packet. Double-buffered so it can prep packet N+1 while
+    //       packet N is in flight.
+    //   stats_packed_gathered_cb  : ring_size slots of page_size_bytes.
+    //       Writer NoC-reads the (ring_size-1) remote-device pages from DRAM
+    //       here; the local-device page is L1-copied from stats_packed_local
+    //       (Phase 1.1 skip-local-roundtrip pattern, applied at the page
+    //       granularity).
+    //   stats_transposed_gathered_cb : ring_size fp32 tiles. Compute
+    //       transposes each row-0 gathered tile (stats_gathered_cb) back to
+    //       col 0 here, so the existing post-reduce<AVG,REDUCE_ROW> chain
+    //       runs unchanged on it.
+    constexpr uint32_t stats_transposed_local_cb_id = tt::CBIndex::c_16;
+    constexpr uint32_t stats_packed_local_cb_id = tt::CBIndex::c_17;
+    constexpr uint32_t stats_packed_gathered_cb_id = tt::CBIndex::c_18;
+    constexpr uint32_t stats_transposed_gathered_cb_id = tt::CBIndex::c_19;
 
     // Double-buffer input_cb (Phase 5): reader can fill chunk N+1 while compute
     // is in chunk N's post phase. Cumulative cb_wait_front in compute (Phase 4)
@@ -323,6 +380,27 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     create_cb(stats_local_cb_id, program, worker_core_set, fp32_tile_size, stats_local_tiles, fp32_format);
     const uint32_t stats_gathered_tiles = chunk_size_rows * args.ring_size;
     create_cb(stats_gathered_cb_id, program, worker_core_set, fp32_tile_size, stats_gathered_tiles, fp32_format);
+
+    // Phase 9 packed-page AG: dedicated CBs only when the MUX writer runs.
+    // The legacy single-worker writer still uses the old whole-tile AG path
+    // so it doesn't need these; give it 1-slot stubs so compile-time
+    // arguments stay valid across both paths.
+    {
+        const uint32_t window = use_mux ? chunk_size_rows : 1u;
+        const uint32_t ring = use_mux ? args.ring_size : 1u;
+        const uint32_t page_size_bytes = use_mux ? TILE_HEIGHT * window * sizeof(float) : fp32_tile_size;
+        create_cb(stats_transposed_local_cb_id, program, worker_core_set, fp32_tile_size, window, fp32_format);
+        // packed CBs use page_size_bytes per slot, not the fp32 tile size.
+        tt::tt_metal::CircularBufferConfig packed_local_cfg =
+            tt::tt_metal::CircularBufferConfig(2u * page_size_bytes, {{stats_packed_local_cb_id, fp32_format}})
+                .set_page_size(stats_packed_local_cb_id, page_size_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, worker_core_set, packed_local_cfg);
+        tt::tt_metal::CircularBufferConfig packed_gathered_cfg =
+            tt::tt_metal::CircularBufferConfig(ring * page_size_bytes, {{stats_packed_gathered_cb_id, fp32_format}})
+                .set_page_size(stats_packed_gathered_cb_id, page_size_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, worker_core_set, packed_gathered_cfg);
+        create_cb(stats_transposed_gathered_cb_id, program, worker_core_set, fp32_tile_size, ring, fp32_format);
+    }
 
     if (has_weight) {
         create_cb(weight_cb_id, program, worker_core_set, bf16_tile_size, num_tile_cols, bf16_format);
@@ -472,19 +550,29 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             worker_core_set,
             WriterDataMovementConfig(writer_compile_args));
     } else {
-        // MUX writer for TP>1: first 10 CT args, then 5 MUX CT args, then
-        // TensorAccessorArgs for output.
+        // MUX writer for TP>1 (Phase 9 packed-page AG): first 13 CT args,
+        // then 5 MUX CT args, then TensorAccessorArgs for output and stats
+        // scratch. The two transposed/packed CBs replace the whole-tile
+        // L1↔fabric path used in earlier phases.
         std::vector<uint32_t> writer_compile_args = {
             output_cb_id,
             num_tile_cols,
             block_size,
-            stats_local_cb_id,
+            // Compute pushes post-transpose stat tiles (row-0 stats) here;
+            // the writer extracts each row 0 into the packed staging CB.
+            stats_transposed_local_cb_id,
+            // The writer scatters the gathered packed pages into row 0 of
+            // these tiles for compute to transpose back.
             stats_gathered_cb_id,
+            // Packed-page staging + receive CBs.
+            stats_packed_local_cb_id,
+            stats_packed_gathered_cb_id,
             args.ring_size,
             device_index,
             num_targets_forward,
             num_targets_backward,
             chunk_size_rows,
+            num_chunks_per_device,
         };
         // Each link's MUX has num_workers_per_link clients; the writer kernel's
         // num_mux_clients CT arg uses this per-link count (termination master
@@ -496,7 +584,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             writer_compile_args);
         TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
         // Persistent DRAM stats buffer accessor args (Phase 1).
-        TensorAccessorArgs(stats_dram_buffer.get()).append_to(writer_compile_args);
+        TensorAccessorArgs(stats_dram_buffer).append_to(writer_compile_args);
 
         writer_kernel_id = CreateKernel(
             program,
@@ -534,6 +622,12 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(fuse_rope),
         head_dim_tiles,
         /*is_tp_1=*/(args.ring_size == 1) ? 1u : 0u,
+        // Phase 9 packed AG CBs (used when is_tp_1 == 0 AND use_mux). For
+        // is_tp_1 the compute kernel sidesteps the packed path entirely
+        // (pushes col-0 stats straight into stats_gathered_cb).
+        stats_transposed_local_cb_id,
+        stats_transposed_gathered_cb_id,
+        static_cast<uint32_t>(use_mux ? 1u : 0u),  // packed_ag_enabled
     };
 
     KernelHandle compute_kernel_id = CreateKernel(
@@ -646,10 +740,34 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // ------------------------------------------------------------------------
     // Per-worker runtime args
     // ------------------------------------------------------------------------
+    // Captured inside the worker loop (use_mux branch); stored in
+    // shared_variables so override_runtime_arguments can refresh the stats
+    // scratch address each launch.
+    std::optional<size_t> stats_dram_addr_writer_arg_idx;
+    // Worker assignment. For the packed-page MUX path, distribute chip-global
+    // chunks across workers (each chunk = a contiguous block of chunk_size_rows
+    // tile-rows). The DRAM page index for a chunk is `device * num_chunks_per_device
+    // + chunk_idx`, so workers must align on chunk boundaries — they cannot
+    // straddle a chunk. Even distribution: first (num_chunks % num_workers)
+    // workers get (floor+1) chunks; the rest get floor.
+    // For the legacy writer path (use_mux = false), keep the row-based split.
+    const uint32_t base_chunks_per_worker = use_mux ? (num_chunks_per_device / num_workers) : 0u;
+    const uint32_t extra_chunks = use_mux ? (num_chunks_per_device % num_workers) : 0u;
     for (uint32_t i = 0; i < num_workers; i++) {
         const auto& core = worker_cores[i];
-        const uint32_t tile_row_start = std::min(i * num_tile_rows_per_worker, num_tile_rows);
-        const uint32_t tile_row_end = std::min(tile_row_start + num_tile_rows_per_worker, num_tile_rows);
+        uint32_t tile_row_start;
+        uint32_t tile_row_end;
+        uint32_t worker_chunk_base = 0;
+        if (use_mux) {
+            // Even distribution by chunk.
+            const uint32_t this_worker_chunks = base_chunks_per_worker + (i < extra_chunks ? 1u : 0u);
+            worker_chunk_base = i * base_chunks_per_worker + std::min(i, extra_chunks);
+            tile_row_start = std::min(worker_chunk_base * chunk_size_rows, num_tile_rows);
+            tile_row_end = std::min(tile_row_start + this_worker_chunks * chunk_size_rows, num_tile_rows);
+        } else {
+            tile_row_start = std::min(i * num_tile_rows_per_worker, num_tile_rows);
+            tile_row_end = std::min(tile_row_start + num_tile_rows_per_worker, num_tile_rows);
+        }
         const uint32_t this_core_rows = tile_row_end - tile_row_start;
 
         std::vector<uint32_t> reader_rt_args = {
@@ -675,10 +793,15 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             const uint32_t channel_id_in_link = i / num_links_eff;
             const bool is_term_master_of_link = (channel_id_in_link == 0);
             writer_rt_args.push_back(out_ready_sem_bank_addr);
-            // Persistent DRAM stats buffer address + this worker's base
-            // tile-index in it (worker i owns tiles [i*chunk*ring, (i+1)*chunk*ring)).
+            // Packed-page DRAM scratch base address + this worker's first
+            // chunk index on the chip. DRAM page idx for a (device, chunk)
+            // pair = device * num_chunks_per_device + chunk_idx. The buffer
+            // is allocated fresh per launch (regular device tensor), so
+            // override_runtime_arguments refreshes the address slot — record
+            // its index in the per-program rt args vector.
+            stats_dram_addr_writer_arg_idx = writer_rt_args.size();
             writer_rt_args.push_back(stats_dram_buffer->address());
-            writer_rt_args.push_back(i * chunk_size_rows * args.ring_size);
+            writer_rt_args.push_back(worker_chunk_base);
             ttnn::ccl::fabric_mux_connection_rt_args(
                 /*mux_connection_valid=*/fwd_mux_valid,
                 /*is_termination_master=*/is_term_master_of_link,
@@ -731,7 +854,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             .writer_kernel_ids = {writer_kernel_id},
             .compute_kernel_ids = {compute_kernel_id},
             .cores = worker_cores,
-            .stats_dram_buffer = std::move(stats_dram_buffer),
+            .stats_dram_addr_writer_arg_idx = stats_dram_addr_writer_arg_idx,
         }};
 }
 
@@ -740,7 +863,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_mesh_workload(
     const WanFusedDistributedRmsnormParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const WanFusedDistributedRmsnormInputs& tensor_args,
-    Tensor& tensor_return_value) {
+    std::vector<Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -759,9 +882,9 @@ void WanFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const WanFusedDistributedRmsnormParams& /*operation_attributes*/,
     const WanFusedDistributedRmsnormInputs& tensor_args,
-    Tensor& tensor_return_value) {
+    std::vector<Tensor>& tensor_return_value) {
     const uint32_t input_addr = tensor_args.input.buffer()->address();
-    const uint32_t output_addr = tensor_return_value.buffer()->address();
+    const uint32_t output_addr = tensor_return_value.at(0).buffer()->address();
     const uint32_t weight_addr = tensor_args.weight.has_value() ? tensor_args.weight.value().buffer()->address() : 0;
     const uint32_t trans_mat_addr =
         tensor_args.transformation_mat.has_value() ? tensor_args.transformation_mat.value().buffer()->address() : 0;
@@ -769,6 +892,12 @@ void WanFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
         tensor_args.rope_cos.has_value() ? tensor_args.rope_cos.value().buffer()->address() : 0;
     const uint32_t rope_sin_addr =
         tensor_args.rope_sin.has_value() ? tensor_args.rope_sin.value().buffer()->address() : 0;
+    // Stats DRAM scratch is reallocated per launch (it's a regular device
+    // tensor), so its address changes and must be refreshed on cache hits.
+    // The MUX writer reads it from a fixed runtime-arg slot whose host-side
+    // index is captured in shared.stats_dram_addr_writer_arg_idx (set at
+    // create_at time, only when use_mux).
+    const uint32_t stats_dram_addr = tensor_return_value.size() > 1 ? tensor_return_value[1].buffer()->address() : 0u;
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared = cached_workload.shared_variables.at(range);
@@ -788,6 +917,9 @@ void WanFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
 
             auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
             writer_args[0] = output_addr;
+            if (shared.stats_dram_addr_writer_arg_idx.has_value()) {
+                writer_args[shared.stats_dram_addr_writer_arg_idx.value()] = stats_dram_addr;
+            }
         }
     }
 }
