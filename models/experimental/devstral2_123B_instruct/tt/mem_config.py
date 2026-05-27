@@ -214,6 +214,42 @@ def get_sharded_norm_compute_kernel_config(mesh_device) -> ttnn.DeviceComputeKer
     return ttnn.WormholeComputeKernelConfig(**cfg)
 
 
+def get_prefill_width_sharded_embedding_mem_config(seq_len: int, hidden_size: int) -> ttnn.MemoryConfig:
+    """L1 WIDTH-sharded ``ttnn.embedding`` output matching prefill RMSNorm layout.
+
+    Same 8×8 grid and per-core shard ``(M, hidden/64)`` as
+    ``get_prefill_width_sharded_activation_mem_config`` (e.g. seq=128 → ``[128, 192]`` per core,
+    ~48 KiB vs ~768 KiB per core for HEIGHT ``[32, 12288]`` on 4 cores).
+
+    ``EmbeddingsDeviceOperation`` tilized path supports WIDTH-sharded outputs; ``TtRMSNorm`` can
+    skip ``interleaved_to_sharded`` when embed already uses this mem config.
+    """
+    return get_prefill_width_sharded_activation_mem_config(seq_len, hidden_size)
+
+
+def get_embedding_output_mem_config(
+    args: Devstral2Args,
+    mode: str,
+    mesh_device,
+    *,
+    batch_size: int = 1,
+    seq_len: int = 1,
+) -> ttnn.MemoryConfig:
+    """Memory config for ``ttnn.embedding`` output (distinct from matmul ``act_mem``).
+
+    - **Prefill:** WIDTH-sharded L1 aligned with width-sharded RMSNorm when ``seq_len <= kv_block_size``.
+    - **Decode:** L1 interleaved — WIDTH embed needs ``input_volume % shard_h == 0`` but decode
+      ``M=1`` while the norm shard height is ``TILE_SIZE`` (32).
+    """
+    _ = mesh_device
+    if mode == "decode":
+        return ttnn.L1_MEMORY_CONFIG
+    seq = max(1, int(seq_len))
+    if seq <= args.kv_block_size:
+        return get_prefill_width_sharded_embedding_mem_config(seq, args.hidden_size)
+    return ttnn.L1_MEMORY_CONFIG
+
+
 def get_activation_mem_config(args: Devstral2Args, mode: str, mesh_device) -> ttnn.MemoryConfig:
     """Interleaved L1 activations for matmuls; width-sharded layout is RMSNorm-only."""
     _ = (args, mode, mesh_device)
