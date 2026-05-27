@@ -28,6 +28,31 @@ class DeviceConfig:
         self.device_ids = device_config.get("device_ids", None)
         self.enable_tp = device_config.get("enable_tp", False)
         self.enable_ddp = device_config.get("enable_ddp", False)
+        # Sequence parallelism over the TP axis: shard activations along the
+        # sequence dim at block boundaries; all_gather before column-parallel
+        # projections and reduce_scatter after row-parallel projections.
+        # Requires enable_tp=true.
+        self.enable_sp = device_config.get("enable_sp", False)
+        if self.enable_sp and not self.enable_tp:
+            raise ValueError("device_config.enable_sp requires device_config.enable_tp=true")
+        # MoE tensor-parallel axis index in `mesh_shape`. -1 (default)
+        # disables MoE TP; 0/1/... selects which mesh axis to shard the
+        # MoE expert intermediate dim on. The axis is registered on the
+        # mesh under the name "moe_tp".
+        self.moe_tp_axis = int(device_config.get("moe_tp_axis", -1))
+        # How the MoE axis (the "tp" axis when enable_tp=true, or the
+        # axis named by moe_tp_axis otherwise) is used for MoE sharding:
+        #   "tp" — shard each expert's intermediate dim across the axis
+        #          (every chip holds all E experts, sharded weights);
+        #          one all_reduce after the FFN combines partials.
+        #   "ep" — partition the expert list across the axis; each chip
+        #          holds and runs E / D experts with full weights. One
+        #          all_reduce after moe_ungroup sums per-chip partials.
+        # Use "ep" only when this MoE axis is independent from DP — DP+EP
+        # on the same axis needs a CCL on routing that isn't in place yet.
+        self.moe_parallel_type = str(device_config.get("moe_parallel_type", "tp")).lower()
+        if self.moe_parallel_type not in ("tp", "ep"):
+            raise ValueError(f"DeviceConfig.moe_parallel_type must be 'tp' or 'ep', " f"got {self.moe_parallel_type!r}")
 
     def total_devices(self) -> int:
         """Get total number of devices in mesh.

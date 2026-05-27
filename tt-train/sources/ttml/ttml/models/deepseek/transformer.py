@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import ttml
-from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
+from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, Parameter, RowParallelLinear
 
 
 class RMSNormLayer(AbstractModuleBase):
@@ -25,11 +25,34 @@ class RMSNormLayer(AbstractModuleBase):
 class DeepSeekMLP(AbstractModuleBase):
     """SwiGLU feed-forward network: w2(silu(w1(x)) * w3(x))."""
 
-    def __init__(self, dim: int, inter_dim: int) -> None:
+    def __init__(self, dim: int, inter_dim: int, *, use_tp: bool = False, tp_axis_name: str = "tp") -> None:
         super().__init__()
-        self.w1 = LinearLayer(dim, inter_dim, has_bias=False)
-        self.w3 = LinearLayer(dim, inter_dim, has_bias=False)
-        self.w2 = LinearLayer(inter_dim, dim, has_bias=False)
+        if use_tp:
+            self.w1 = ColumnParallelLinear(
+                dim,
+                inter_dim,
+                has_bias=False,
+                gather_output=False,
+                axis_name=tp_axis_name,
+            )
+            self.w3 = ColumnParallelLinear(
+                dim,
+                inter_dim,
+                has_bias=False,
+                gather_output=False,
+                axis_name=tp_axis_name,
+            )
+            self.w2 = RowParallelLinear(
+                inter_dim,
+                dim,
+                has_bias=False,
+                input_is_parallel=True,
+                axis_name=tp_axis_name,
+            )
+        else:
+            self.w1 = LinearLayer(dim, inter_dim, has_bias=False)
+            self.w3 = LinearLayer(dim, inter_dim, has_bias=False)
+            self.w2 = LinearLayer(inter_dim, dim, has_bias=False)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         return self.w2(ttml.ops.binary.mul(ttml.ops.unary.silu(self.w1(x)), self.w3(x)))
@@ -43,15 +66,57 @@ class DeepSeekBlock(AbstractModuleBase):
 
     def __init__(self, layer_id: int, config, rope_params) -> None:
         # Lazy imports to avoid circular dependency (mla/moe import RMSNormLayer from here)
+        import ttml as _ttml
         from .mla import MultiHeadLatentAttention
         from .moe import MoE
+        from .moe_sparse import SparseMoE
+        from .moe_sparse_tp import SparseMoETP
+        from .moe_sparse_ep import SparseMoEEP
 
         super().__init__()
         self.attn = MultiHeadLatentAttention(config, rope_params)
+        use_tp = bool(getattr(config, "use_tp", False))
         if layer_id < config.n_dense_layers:
-            self.ffn = DeepSeekMLP(config.dim, config.inter_dim)
+            self.ffn = DeepSeekMLP(config.dim, config.inter_dim, use_tp=use_tp)
         else:
-            self.ffn = MoE(config)
+            moe_type = str(getattr(config, "moe_type", "sparse")).lower()
+            if moe_type == "dense":
+                self.ffn = MoE(config)
+            elif moe_type == "sparse":
+                mesh = _ttml.maybe_mesh()
+                # Resolve the MoE axis: full-model TP → "tp", else moe_tp_axis_name
+                # if it points at a real axis with size > 1, else no MoE axis.
+                if use_tp:
+                    moe_axis_name = "tp"
+                else:
+                    tp_name = getattr(config, "moe_tp_axis_name", None)
+                    moe_axis_name = (
+                        tp_name
+                        if (
+                            tp_name is not None
+                            and mesh is not None
+                            and mesh.has_axis(tp_name)
+                            and mesh.axis_size(tp_name) > 1
+                        )
+                        else None
+                    )
+
+                parallel_type = str(getattr(config, "moe_parallel_type", "tp")).lower()
+                if moe_axis_name is None:
+                    # No MoE axis (single-chip or pure replication) — fall back
+                    # to SparseMoE regardless of moe_parallel_type. "ep" with no
+                    # axis is a no-op.
+                    self.ffn = SparseMoE(config)
+                elif parallel_type == "ep":
+                    self.ffn = SparseMoEEP(config, axis_name=moe_axis_name)
+                else:  # "tp"
+                    self.ffn = SparseMoETP(config)
+            else:
+                raise ValueError(
+                    f"DeepSeekBlock: unknown moe_type={moe_type!r}; expected 'sparse' or 'dense' "
+                    f"(from DeepSeekConfig.moe_type)"
+                )
+            self.ffn._debug_layer_id = layer_id
         self.attn_norm = RMSNormLayer(config.dim)
         self.ffn_norm = RMSNormLayer(config.dim)
 

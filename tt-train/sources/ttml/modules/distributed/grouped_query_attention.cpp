@@ -4,11 +4,16 @@
 
 #include "grouped_query_attention.hpp"
 
+#include <fmt/core.h>
+
+#include <memory>
+
 #include "autograd/auto_context.hpp"
 #include "linear.hpp"
 #include "modules/dropout_module.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/rotary_embedding.hpp"
+#include "ops/distributed/comm_ops.hpp"
 #include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
@@ -92,8 +97,30 @@ DistributedGroupedQueryAttention::DistributedGroupedQueryAttention(const GQAConf
 
 ttml::autograd::TensorPtr DistributedGroupedQueryAttention::operator()(
     const ttml::autograd::TensorPtr& x, const std::optional<ttml::autograd::TensorPtr>& mask) {
-    auto q = (*m_q_linear)(x);
-    auto kv = (*m_kv_linear)(x);
+    auto linear_input = x;
+    auto& pctx = autograd::ctx().get_parallelism_context();
+    const bool use_sp = pctx.is_sp_enabled();
+    if (use_sp) {
+        static bool printed_sp_path = false;
+        const int seq_dim = static_cast<int>(x->get_rank()) - 2;
+        if (!printed_sp_path) {
+            fmt::println(
+                "[ttml][SP] GroupedQueryAttention all_gathering sequence before column projections on seq_dim={} "
+                "cluster_axis={}",
+                seq_dim,
+                pctx.get_tp_axis().has_value() ? static_cast<int>(*pctx.get_tp_axis()) : -1);
+            printed_sp_path = true;
+        }
+        linear_input =
+            ops::distributed::all_gather(x, seq_dim, pctx.get_tp_axis(), ops::distributed::GradOutputType::SHARDED);
+    }
+
+    auto q = use_sp
+                 ? std::static_pointer_cast<ColumnParallelLinear>(m_q_linear)->forward_no_input_broadcast(linear_input)
+                 : (*m_q_linear)(linear_input);
+    auto kv =
+        use_sp ? std::static_pointer_cast<ColumnParallelLinear>(m_kv_linear)->forward_no_input_broadcast(linear_input)
+               : (*m_kv_linear)(linear_input);
 
     auto [query_with_heads, key_with_heads, value_with_heads] =
         ops::grouped_heads_creation(q, kv, m_num_local_heads, m_num_local_groups);
@@ -106,7 +133,6 @@ ttml::autograd::TensorPtr DistributedGroupedQueryAttention::operator()(
 
     // Apply attention: use ring_attention_sdpa if CP is enabled, otherwise regular SDPA
     autograd::TensorPtr attention;
-    auto& pctx = autograd::ctx().get_parallelism_context();
     if (pctx.is_cp_enabled() && pctx.get_cp_size() > 1) {
         /*
          * TODO: add support for non-causal mask

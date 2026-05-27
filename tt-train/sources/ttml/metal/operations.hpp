@@ -21,5 +21,6 @@
 #include "ops/subtract_at_target/subtract_at_target.hpp"
 #include "ops/swiglu_elemwise_bw/swiglu_elemwise_bw.hpp"
 #include "ops/frobenius_normalize/frobenius_normalize.hpp"
+#include "ops/variable_matmul/variable_matmul.hpp"
 #include "optimizers/adamw/adamw.hpp"
 #include "optimizers/sgd/sgd.hpp"

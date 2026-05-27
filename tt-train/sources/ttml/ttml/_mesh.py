@@ -140,13 +140,6 @@ def _validate_mgd(mesh: Mesh) -> None:
             )
         if mesh.has_axis("dp"):
             dp_axis = mesh.axis_index("dp")
-            if dp_axis < len(dim_types) and dim_types[dp_axis] != "RING":
-                raise RuntimeError(
-                    f"DDP axis (axis {dp_axis}) expected RING topology, "
-                    f"but MGD has '{dim_types[dp_axis]}'.\n"
-                    f"  MGD dim_types: {dim_types}\n"
-                    f"  MGD file: {mgd_path}"
-                )
 
     print(f"MGD validated: dims={mgd_dims}, file={mgd_path}")
 

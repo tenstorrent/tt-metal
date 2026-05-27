@@ -14,7 +14,8 @@ Supported ``model_type``:
 
 - ``llama``    — any combination of DDP and TP (uses the ``"tp"`` mesh axis).
 - ``gpt2``     — DDP only; TP is rejected.
-- ``deepseek`` — single-device only.
+- ``deepseek`` — DDP and/or TP on the ``"tp"`` axis (MLA, dense MLP, LM head,
+  sparse MoE). Optional MoE-only TP on a non-TP mesh uses ``moe_tp_axis``.
 - ``qwen3``    — DDP only; TP is rejected.
 """
 
@@ -193,6 +194,7 @@ class ModelConfig:
     n_limited_groups: int = 1
     score_func: str = "sigmoid"
     route_scale: float = 2.5
+    moe_type: Literal["sparse", "dense"] = "sparse"
     q_lora_rank: int = 256
     kv_lora_rank: int = 128
     qk_nope_head_dim: int = 64
@@ -201,6 +203,14 @@ class ModelConfig:
     # Qwen3-specific fields
     head_dim: Optional[int] = None  # Explicit head_dim (can differ from embedding_dim / num_heads)
     attention_bias: bool = False
+    # MoE TP: name of the mesh axis to shard expert intermediate dim on.
+    # None / "" disables MoE TP (single-device SparseMoE).
+    moe_tp_axis_name: Optional[str] = None
+    # How the MoE axis is used: "tp" (shard intermediate dim, SparseMoETP)
+    # or "ep" (partition expert list, SparseMoEEP). Source of truth lives
+    # in DeviceConfig.moe_parallel_type — this field receives the resolved
+    # value via the train_nanogpt main flow.
+    moe_parallel_type: str = "tp"
 
 
 class LossAverageMeter:
@@ -292,6 +302,12 @@ def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
     2D mesh (both dims > 1): the number of enabled parallelisms must equal
     the number of mesh dims, and assignment order is DP -> TP. CP/PP are
     out of scope here.
+
+    Exception: some models still want a 2D mesh for DDP + MoE-only TP
+    without general TP. In that case, allow `enable_ddp=true` with
+    `enable_tp=false` on a 2D mesh by naming axis 0 as "dp" and leaving
+    other axes unnamed; the caller may rename a remaining axis (e.g. to
+    "moe_tp") for MoE sharding via ``moe_tp_axis``.
     """
     shape = tuple(int(s) for s in device_config.mesh_shape)
     n = len(shape)
@@ -316,11 +332,18 @@ def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
         axis_names[active] = enabled_names[0]
     else:
         if len(enabled_names) != n:
-            raise ValueError(f"2D mesh {shape} requires both axes assigned (DP and TP). Got enabled={enabled_names}")
-        # enabled_names is ordered ("dp", "tp") by construction above, matching
-        # the C++ assignment order in auto_context.cpp.
-        for i, name in enumerate(enabled_names):
-            axis_names[i] = name
+            # Allow DP-only on a 2D mesh (axis 0 becomes "dp").
+            if enabled_names == ("dp",):
+                axis_names[0] = "dp"
+            else:
+                raise ValueError(
+                    f"2D mesh {shape} requires both axes assigned (DP and TP). Got enabled={enabled_names}"
+                )
+        else:
+            # enabled_names is ordered ("dp", "tp") by construction above, matching
+            # the C++ assignment order in auto_context.cpp.
+            for i, name in enumerate(enabled_names):
+                axis_names[i] = name
 
     return ttml.Mesh(shape, tuple(axis_names))
 
@@ -412,6 +435,40 @@ def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tenso
     targets_np = np.array(targets, dtype=np.uint32).reshape(actual_batch_size, sequence_length)
 
     mesh = ttml.mesh()
+
+    # SP path: shard batch on dp axis (if dp_size>1) AND shard seq on tp axis.
+    # Each TP chip then receives a different seq slice, matching the SP
+    # block-boundary layout. SP-off code path below is byte-identical to the
+    # pre-SP collate_fn.
+    from ttml.models.deepseek.sp_utils import sp_enabled as _sp_enabled
+
+    if _sp_enabled():
+        tp_size = mesh.axis_size("tp") if mesh.has_axis("tp") else 1
+        if tp_size <= 1:
+            raise ValueError("SP enabled but mesh has no 'tp' axis with size > 1")
+        if sequence_length % tp_size != 0:
+            raise ValueError(f"SP requires sequence_length ({sequence_length}) divisible by tp_size ({tp_size})")
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        names = list(mesh.axis_names)
+        tp_idx = names.index("tp")
+        dp_idx = names.index("dp") if ("dp" in names and mesh.axis_size("dp") > 1) else None
+        # ShardTensor2dMesh(dims=(...)) places each tensor dim on a mesh axis.
+        # Data is [B, 1, 1, S] → seq is dim 3; targets are [B, S] → seq is dim 1.
+        data_dims = [None, None]
+        targets_dims = [None, None]
+        if dp_idx is not None:
+            data_dims[dp_idx] = 0
+            targets_dims[dp_idx] = 0
+        data_dims[tp_idx] = 3
+        targets_dims[tp_idx] = 1
+        data_mapper = ttnn.distributed.ShardTensor2dMesh(device, tuple(mesh.shape), tuple(data_dims))
+        targets_mapper = ttnn.distributed.ShardTensor2dMesh(device, tuple(mesh.shape), tuple(targets_dims))
+        data_tensor = ttml.autograd.Tensor.from_numpy(data_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, data_mapper)
+        targets_tensor = ttml.autograd.Tensor.from_numpy(
+            targets_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, targets_mapper
+        )
+        return data_tensor, targets_tensor
+
     mapper = None
     if mesh.has_axis("dp") and mesh.axis_size("dp") > 1:
         mapper = mesh.axis_mapper("dp", tdim=0)
@@ -423,19 +480,26 @@ def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tenso
 
 
 def get_loss_value(loss: ttml.autograd.Tensor) -> float:
-    """Extract loss value from tensor without using NumPy.
+    """Extract a scalar loss value (first device's replica on a mesh).
 
-    Uses ttnn.Tensor.item() which directly extracts scalar via to_vector<T>() without NumPy conversion.
-
-    Args:
-        loss: Loss tensor from cross_entropy_loss (should already be reduced to scalar)
-
-    Returns:
-        Loss value as float
+    On a multi-device mesh the loss tensor is replicated across all
+    chips (model is fully replicated, no DDP gradient sync wired in
+    this script). All chips compute identical losses, so we just read
+    chip 0's value to avoid duplicate prints / mean over identical
+    copies.
     """
-    # Extract scalar value directly using ttnn.Tensor.item() - avoids NumPy conversion
-    # This uses to_vector<T>() internally which is more efficient than to_numpy()
-    return float(loss.get_value().item())
+    val = loss.get_value()
+    mesh = ttml.maybe_mesh()
+    if mesh is None or mesh.num_devices() == 1:
+        return float(val.item())
+    # Multi-device: gather to host as a stack of per-device tensors
+    # and take the first replica.
+    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(
+        ttml.autograd.AutoContext.get_instance().get_device(), 0
+    )
+    arr = loss.to_numpy(composer=composer)
+    flat = arr.reshape(mesh.num_devices(), -1)
+    return float(flat[0].mean())
 
 
 def train_step(
@@ -614,6 +678,7 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
         config.n_limited_groups = transformer_config.get("n_limited_groups", config.n_limited_groups)
         config.score_func = transformer_config.get("score_func", config.score_func)
         config.route_scale = transformer_config.get("route_scale", config.route_scale)
+        config.moe_type = transformer_config.get("moe_type", config.moe_type)
         config.q_lora_rank = transformer_config.get("q_lora_rank", config.q_lora_rank)
         config.kv_lora_rank = transformer_config.get("kv_lora_rank", config.kv_lora_rank)
         config.qk_nope_head_dim = transformer_config.get("qk_nope_head_dim", config.qk_nope_head_dim)
@@ -900,13 +965,13 @@ def create_model_from_config(model_config: ModelConfig, use_tp: bool = False) ->
     When ``use_tp`` is True the named device mesh must already expose a "tp"
     axis (set up by ``build_mesh`` from ``DeviceConfig.enable_tp``).
 
-    Only the Python Llama integrates with the named-mesh TP path; gpt2,
-    deepseek, and qwen3 hard-error on TP since they have no use_tp implementation here.
+    ``Llama`` and ``DeepSeek`` integrate with the named-mesh TP path; ``gpt2``
+    and ``qwen3`` hard-error on TP here.
 
     Args:
         model_config: Universal model configuration.
         use_tp: Whether the active mesh has a "tp" axis the model should
-            shard across. Forwarded to ``LlamaConfig.use_tp``.
+            shard across. Forwarded to ``LlamaConfig.use_tp`` / ``DeepSeekConfig.use_tp``.
 
     Returns:
         A NanoGPT, Llama, DeepSeek, or Qwen3 model instance.
@@ -960,10 +1025,6 @@ def create_model_from_config(model_config: ModelConfig, use_tp: bool = False) ->
         )
         return Llama(llama_config)
     elif model_config.model_type == "deepseek":
-        if use_tp:
-            raise ValueError(
-                "model_type=deepseek has no TP path on the named-mesh API; use model_type=llama for DP+TP."
-            )
         inter_dim = model_config.inter_dim
         if inter_dim is None:
             inter_dim = ((4 * model_config.embedding_dim * 2) // 3 + 255) // 256 * 256
@@ -982,6 +1043,7 @@ def create_model_from_config(model_config: ModelConfig, use_tp: bool = False) ->
             n_limited_groups=model_config.n_limited_groups,
             score_func=model_config.score_func,
             route_scale=model_config.route_scale,
+            moe_type=model_config.moe_type,
             q_lora_rank=model_config.q_lora_rank,
             kv_lora_rank=model_config.kv_lora_rank,
             qk_nope_head_dim=model_config.qk_nope_head_dim,
@@ -990,6 +1052,9 @@ def create_model_from_config(model_config: ModelConfig, use_tp: bool = False) ->
             max_seq_len=model_config.max_sequence_length,
             rope_theta=model_config.theta,
             runner_type=model_config.runner_type,
+            moe_tp_axis_name=model_config.moe_tp_axis_name or None,
+            moe_parallel_type=model_config.moe_parallel_type,
+            use_tp=use_tp,
         )
         return DeepSeek(deepseek_config)
     elif model_config.model_type == "qwen3":
@@ -1308,7 +1373,6 @@ def main():
             "step thereafter. Columns: step,layer,expert,prob."
         ),
     )
-
     args = parser.parse_args()
 
     print("=" * 70)
@@ -1370,7 +1434,7 @@ def main():
     # Check if we're in inference-only mode (prompt + explicit model_path).
     inference_only = args.prompt and args.model_path
 
-    # Parse device config from YAML (mesh_shape, enable_ddp, enable_tp).
+    # Parse device config from YAML (mesh_shape, enable_ddp, enable_tp, moe_tp_axis).
     device_config = DeviceConfig(yaml_config)
 
     # Mirrors main.cpp:447-451 and lora_llama: TP-sharded parameters cannot be
@@ -1388,7 +1452,33 @@ def main():
     # (auto_context.cpp:140-195) so ttml.sync_gradients and axis_mapper("dp"|"tp", ...)
     # bind to the same physical axes the C++ trainer would.
     mesh = build_mesh(device_config)
-    if device_config.enable_ddp or device_config.enable_tp:
+
+    # Optional MoE tensor-parallel axis: YAML `moe_tp_axis` is an index into
+    # `mesh_shape`. When ``enable_tp`` is false, ``SparseMoETP`` reads
+    # ``DeepSeekConfig.moe_tp_axis_name`` (set here) for the shard axis.
+    # When ``enable_tp`` is true, full-model TP uses the ``"tp"`` axis and
+    # ``SparseMoETP`` ignores this name in favor of ``"tp"``.
+    moe_ax = device_config.moe_tp_axis
+    if moe_ax != -1:
+        shape = tuple(int(s) for s in device_config.mesh_shape)
+        if not (0 <= moe_ax < len(shape)):
+            raise ValueError(
+                f"device_config.moe_tp_axis ({moe_ax}) is out of range for mesh_shape of length {len(shape)}"
+            )
+        names = list(mesh.axis_names)
+        logical = names[moe_ax]
+        if logical.startswith("_"):
+            names[moe_ax] = "moe_tp"
+            mesh = ttml.Mesh(mesh.shape, tuple(names))
+            model_config.moe_tp_axis_name = "moe_tp"
+        else:
+            model_config.moe_tp_axis_name = logical
+
+    # Plumb moe_parallel_type from device_config to model_config so the
+    # transformer dispatcher can pick SparseMoEEP vs SparseMoETP.
+    model_config.moe_parallel_type = device_config.moe_parallel_type
+
+    if device_config.enable_ddp or device_config.enable_tp or device_config.moe_tp_axis != -1:
         print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")
     ttml.open_device_mesh(mesh, tuple(device_config.device_ids) if device_config.device_ids else None)
     ttml.autograd.AutoContext.get_instance().get_device()
@@ -1399,6 +1489,7 @@ def main():
     if args.track_memory:
         print("\nMemory tracking enabled")
         memory_guard = MemoryUsageTracker.begin_capture()
+        os.environ["TTML_TRACK_MEMORY"] = "1"
 
     ttml.autograd.AutoContext.get_instance().set_seed(training_config.seed)
     np.random.seed(training_config.seed)
@@ -1556,9 +1647,9 @@ def main():
             print(f"    Runner type: {runner_type_str}")
             print(f"    Weight tying: {weight_tying_str}")
 
-            # Create model. Pass use_tp so Llama configures ColumnParallelLinear
-            # against the "tp" axis of the active mesh (no-op for non-Llama and
-            # an error for non-Llama with TP).
+            # Create model. Pass use_tp so Llama / DeepSeek configure
+            # ColumnParallelLinear / RowParallelLinear against the "tp" axis
+            # of the active mesh (no-op when TP is disabled).
             model = create_model_from_config(model_config, use_tp=device_config.enable_tp)
             if args.print_summary:
                 summary(model)
@@ -1760,6 +1851,7 @@ def main():
                         MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
                         MemoryUsageTracker.print_memory_usage()
                         MemoryUsageTracker.clear()
+                        os.environ["TTML_TRACK_MEMORY"] = "0"
                         if memory_guard:
                             memory_guard.release()
 

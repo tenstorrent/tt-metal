@@ -23,6 +23,13 @@ inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
     return ((a + b - 1U) / b) * b;
 }
 
+// Resolve a semaphore id to its volatile L1 pointer. Wraps the boilerplate
+// reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(...)) used at
+// every cross-RISC / cross-core sync site.
+inline volatile tt_l1_ptr uint32_t* get_sem_ptr(uint32_t sem_id) {
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
+}
+
 // IEEE 754 bit representations for compile-time template parameters
 constexpr uint32_t FP32_ONE_BITS = 0x3F800000;    // 1.0f
 constexpr uint32_t FP32_ZERO_BITS = 0x00000000;   // 0.0f

@@ -26,6 +26,7 @@
 //   3: offsets_addr
 
 #include "api/dataflow/dataflow_api.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 constexpr uint32_t cb_out = tt::CBIndex::c_2;
 constexpr uint32_t cb_offset = tt::CBIndex::c_5;
@@ -39,8 +40,6 @@ constexpr uint32_t plan_ready_sem_id = get_compile_time_arg_val(6);
 constexpr auto grouped_args = TensorAccessorArgs<7>();
 constexpr auto offsets_args = TensorAccessorArgs<grouped_args.next_compile_time_args_offset()>();
 
-constexpr uint32_t TILE_H = 32U;
-
 void kernel_main() {
     const uint32_t grouped_addr = get_arg_val<uint32_t>(0);
     const uint32_t my_start = get_arg_val<uint32_t>(1);
@@ -48,8 +47,7 @@ void kernel_main() {
     const uint32_t offsets_addr = get_arg_val<uint32_t>(3);
 
     // Wait for scan to finish writing plan/counts/offsets.
-    volatile tt_l1_ptr uint32_t* plan_ready_sem =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(plan_ready_sem_id));
+    volatile tt_l1_ptr uint32_t* plan_ready_sem = get_sem_ptr(plan_ready_sem_id);
     noc_semaphore_wait(plan_ready_sem, 1U);
 
     const uint32_t tile_bytes = get_tile_size(cb_out);
@@ -61,7 +59,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* scratch_buf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_addr);
     noc_async_read(get_noc_addr(0, offsets_addrgen), scratch_addr, (e_local + 1U) * sizeof(uint32_t));
     noc_async_read_barrier();
-    uint32_t max_active_tiles = scratch_buf[e_local] / TILE_H;
+    uint32_t max_active_tiles = scratch_buf[e_local] / tt::constants::TILE_HEIGHT;
 
     // Strided tile-row layout: tile_row = my_start + step*stride.
     // Reader publishes my_active_count per core via cb_ctrl; writer recomputes

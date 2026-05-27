@@ -141,6 +141,22 @@ class ColumnParallelLinear(AbstractModuleBase):
             x = ttml.ops.distributed.all_gather(x, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED)
         return x
 
+    def forward_no_input_broadcast(self, x):
+        """Same as ``forward`` but skips the per-call broadcast.
+
+        Used in the SP path: the caller has already all-gathered the input
+        on the sequence dim, so the activation is replicated across the TP
+        axis at the matmul entry. Skipping the broadcast avoids a redundant
+        collective and keeps the backward graph from inserting an extra
+        all_reduce on top of the all_gather's already-sharded backward.
+        Never called when SP is off — ``forward`` is the only path then.
+        """
+        bias_t = self.bias.tensor if self.bias is not None else None
+        x = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
+        if self.gather_output:
+            x = ttml.ops.distributed.all_gather(x, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED)
+        return x
+
 
 class RowParallelLinear(AbstractModuleBase):
     """Row-parallel linear layer.
@@ -200,9 +216,18 @@ class RowParallelLinear(AbstractModuleBase):
             # Split the input along the feature dimension across TP devices.
             x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
         x = ttml.ops.linear.linear(x, self.weight.tensor, None)
-        # Sum partial products across TP devices to obtain the full result.
-        x = ttml.ops.distributed.all_reduce(x, self.input_is_parallel, self.cluster_axis)
-        # Bias is replicated, so it is safe to add after the all-reduce.
+        # SP path: reduce-scatter on the seq dim so the next block starts
+        # with a seq-sharded activation. Byte-identical to the original
+        # all_reduce when SP is off.
+        from ttml.models.deepseek.sp_utils import sp_enabled as _sp_enabled
+
+        if _sp_enabled():
+            seq_dim = len(x.get_value().shape) - 2
+            x = ttml.ops.distributed.reduce_scatter(x, seq_dim, self.cluster_axis)
+        else:
+            # Sum partial products across TP devices to obtain the full result.
+            x = ttml.ops.distributed.all_reduce(x, self.input_is_parallel, self.cluster_axis)
+        # Bias is replicated, so it is safe to add after the all-reduce / reduce-scatter.
         if self.bias is not None:
             x = ttml.ops.binary.add(x, self.bias.tensor)
         return x

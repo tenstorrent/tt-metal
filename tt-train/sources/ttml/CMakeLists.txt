@@ -72,6 +72,11 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_ffn_swiglu_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_ffn_swiglu_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_group_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_group_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_ungroup_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_ungroup_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rand_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/randn_op.cpp
@@ -161,10 +166,18 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_group/moe_group.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_group/device/moe_group_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_group/device/moe_group_program_factory.cpp
+    # MoE Ungroup
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_ungroup/moe_ungroup.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_ungroup/device/moe_ungroup_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_ungroup/device/moe_ungroup_program_factory.cpp
     # SwiGLU Elemwise Backward (fused eltwise backward)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_program_factory.cpp
+    # MoE Ungroup
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_ungroup/moe_ungroup.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_ungroup/device/moe_ungroup_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_ungroup/device/moe_ungroup_program_factory.cpp
     # SDPA Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
@@ -205,6 +218,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/frobenius_normalize/frobenius_normalize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/frobenius_normalize/device/frobenius_normalize_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/frobenius_normalize/device/frobenius_normalize_program_factory.cpp
+    # Variable MatMul (variable-M for MoE)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/variable_matmul/variable_matmul.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/variable_matmul/device/variable_matmul_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/variable_matmul/device/variable_matmul_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
