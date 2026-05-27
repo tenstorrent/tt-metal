@@ -65,9 +65,12 @@ class Qwen3MLP(AbstractModuleBase):
         )
 
     def forward(self, x):
-        gate = ttml.ops.unary.silu(self.gate_proj(x))
-        up = self.up_proj(x)
-        return self.down_proj(ttml.ops.binary.mul(gate, up))
+        return ttml.ops.swiglu.swiglu(
+            x,
+            self.gate_proj.weight.tensor,
+            self.down_proj.weight.tensor,
+            self.up_proj.weight.tensor,
+        )
 
 
 class Qwen3Block(AbstractModuleBase):
