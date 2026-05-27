@@ -42,7 +42,8 @@ void kernel_main() {
     constexpr uint32_t has_weight = get_compile_time_arg_val(12);
     constexpr uint32_t fuse_rope = get_compile_time_arg_val(13);
     constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(14);
-    constexpr auto input_args = TensorAccessorArgs<15>();
+    constexpr uint32_t chunk_size_rows = get_compile_time_arg_val(15);
+    constexpr auto input_args = TensorAccessorArgs<16>();
     constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto transformation_mat_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto rope_cos_args = TensorAccessorArgs<transformation_mat_args.next_compile_time_args_offset()>();
@@ -93,6 +94,13 @@ void kernel_main() {
         cb_push_back(transformation_mat_cb, 1);
     }
 
+    // Weight is consumed in the POST phase (sub-phase 2) which only starts
+    // after chunk 0's AG completes. So the weight read can be deferred until
+    // chunk 0's input rows are all pushed — the read latency then hides behind
+    // chunk 0's pre compute + fabric mcast + fabric wait. Issued in
+    // `block_size`-sized pushes so the compute kernel can consume cumulatively.
+    bool weight_pushed = (has_weight == 0);
+
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         uint32_t input_tile_idx = tile_row * num_tile_cols;
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
@@ -112,20 +120,6 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(input_cb, tiles_in_block);
 
-            if constexpr (has_weight) {
-                if (tile_row == tile_row_start) {
-                    cb_reserve_back(weight_cb, tiles_in_block);
-                    uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
-                    for (uint32_t i = 0; i < tiles_in_block; i++) {
-                        uint64_t weight_noc_addr = get_noc_addr(col_tile + i, weight_accessor);
-                        noc_async_read(weight_noc_addr, weight_wr_ptr, face_row_bytes);
-                        noc_async_read(weight_noc_addr + face_bytes, weight_wr_ptr + face_bytes, face_row_bytes);
-                        weight_wr_ptr += weight_tile_bytes;
-                    }
-                    noc_async_read_barrier();
-                    cb_push_back(weight_cb, tiles_in_block);
-                }
-            }
             if constexpr (fuse_rope) {
                 if (col_tile == 0) {
                     uint32_t rope_tile_start_idx = tile_row * head_dim_tiles;
@@ -147,6 +141,31 @@ void kernel_main() {
                     noc_async_read_barrier();
                     cb_push_back(rope_sin_cb, head_dim_tiles);
                 }
+            }
+        }
+
+        // After chunk 0's rows are pushed (or at end-of-worker if the worker
+        // has fewer rows than chunk_size_rows), issue the weight read.
+        if (!weight_pushed) {
+            const uint32_t rows_pushed = tile_row + 1 - tile_row_start;
+            const bool first_chunk_done = (rows_pushed >= chunk_size_rows);
+            const bool last_row = (tile_row + 1 == tile_row_end);
+            if (first_chunk_done || last_row) {
+                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                    const uint32_t tiles_in_block =
+                        ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                    cb_reserve_back(weight_cb, tiles_in_block);
+                    uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
+                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                        uint64_t weight_noc_addr = get_noc_addr(col_tile + i, weight_accessor);
+                        noc_async_read(weight_noc_addr, weight_wr_ptr, face_row_bytes);
+                        noc_async_read(weight_noc_addr + face_bytes, weight_wr_ptr + face_bytes, face_row_bytes);
+                        weight_wr_ptr += weight_tile_bytes;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(weight_cb, tiles_in_block);
+                }
+                weight_pushed = true;
             }
         }
     }
