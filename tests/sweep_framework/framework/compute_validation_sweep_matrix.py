@@ -194,7 +194,7 @@ def compute_validation_matrix(
         trace_id_list = sorted(trace_ids_by_hardware.get(hardware_group, []))
 
         if needs_mesh_split:
-        for mesh_str, mesh_modules in sorted(mesh_to_modules.items()):
+            for mesh_str, mesh_modules in sorted(mesh_to_modules.items()):
                 sorted_modules = sorted(mesh_modules)
                 runner_batches = chunk_modules(sorted_modules, batch_size)
                 total_batches = len(runner_batches)
