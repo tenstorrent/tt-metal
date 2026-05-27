@@ -339,17 +339,50 @@ all_gather_minimal_matmul_async_factory_helper(
     // Adaptive CB depth: maximize in0_cb depth (it hides chain mcast pipeline build-up,
     // ~100us at depth 2), then opportunistically bump in1_cb.
     //
-    // Budget = (per-core L1) - (allocator base) - safety margin for non-CB
-    // allocations (kernel binaries, mux buffers, semaphores, runtime args).
-    // Capped at 1300 KB to preserve the depth choices validated on BH/WH 4x8 in
-    // the sweep — when actual usable L1 is larger, we don't speculatively pick
-    // deeper CBs that haven't been perf-validated.
-    const uint32_t l1_unreserved =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    constexpr uint32_t L1_NON_CB_MARGIN_BYTES = 256 * 1024;
-    constexpr uint32_t L1_BUDGET_CAP_BYTES = 1300 * 1024;
-    const uint32_t l1_for_cbs = l1_unreserved > L1_NON_CB_MARGIN_BYTES ? l1_unreserved - L1_NON_CB_MARGIN_BYTES : 0u;
-    const uint32_t L1_BUDGET_BYTES = std::min(L1_BUDGET_CAP_BYTES, l1_for_cbs);
+    // Budget = (lowest L1 address occupied by allocator buffers) - (allocator base) -
+    // a small safety margin for non-CB allocations the allocator does not yet account
+    // for at program-factory time (semaphores allocated below, runtime-args staging).
+    // Pattern lifted from ttnn::operations::data_movement::common::get_max_l1_space.
+    // Falls back to `l1_size_per_core` when no L1 buffers are placed yet (typical for
+    // AGMM where input tensors are in DRAM and the op's own buffers haven't been
+    // allocated). On WH 4x8 this yields ~1300 KB — the same value the earlier
+    // hardcoded constant gave — without needing arch- or sweep-specific tuning.
+    auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address();
+    const uint32_t l1_top =
+        lowest_occupied_l1.has_value() ? static_cast<uint32_t>(lowest_occupied_l1.value()) : device->l1_size_per_core();
+    const uint32_t l1_unreserved = l1_top - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    constexpr uint32_t L1_NON_CB_MARGIN_BYTES = 64 * 1024;
+    const uint32_t L1_BUDGET_BYTES =
+        l1_unreserved > L1_NON_CB_MARGIN_BYTES ? l1_unreserved - L1_NON_CB_MARGIN_BYTES : 0u;
+    // Warn if L1 is under pressure (existing tensors take up enough room that our
+    // CB budget falls noticeably below the sweep-validated working point of ~1300 KB
+    // on WH 4x8). Smaller budget forces shallower CBs and degrades perf. Trigger at
+    // 1100 KB to allow ~200 KB of normal headroom variation without false alarms.
+    constexpr uint32_t L1_BUDGET_WARN_THRESHOLD_BYTES = 1100 * 1024;
+    if (L1_BUDGET_BYTES < L1_BUDGET_WARN_THRESHOLD_BYTES) {
+        log_warning(
+            tt::LogOp,
+            "AGMM L1 budget is unexpectedly small ({} KB); CB depths will be capped and perf may "
+            "regress. lowest_occupied_l1={} alloc_base={} l1_size={}. Check L1 allocator pressure "
+            "(persistent tensors in L1, large sharded buffers).",
+            L1_BUDGET_BYTES / 1024,
+            l1_top,
+            device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+            device->l1_size_per_core());
+    }
+    auto lowest_occupied = device->lowest_occupied_compute_l1_address();
+    std::fprintf(
+        stderr,
+        "AGMM-L1: l1_size=%u alloc_base=%u lowest_occ=%lld lowest_occ-base=%lld l1_unreserved=%u BUDGET=%u\n",
+        (unsigned)device->l1_size_per_core(),
+        (unsigned)device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+        (long long)(lowest_occupied.has_value() ? (int64_t)lowest_occupied.value() : -1),
+        (long long)(lowest_occupied.has_value()
+                        ? (int64_t)lowest_occupied.value() -
+                              (int64_t)device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1)
+                        : -1),
+        (unsigned)l1_unreserved,
+        (unsigned)L1_BUDGET_BYTES);
     const uint32_t base_fixed_bytes = out_block_num_tiles * out_tile_size                      // out (single)
                                       + out_block_num_tiles * intermediate_tile_size           // intermediate (single)
                                       + (use_bias ? in2_block_num_tiles * in2_tile_size : 0);  // bias (single)
