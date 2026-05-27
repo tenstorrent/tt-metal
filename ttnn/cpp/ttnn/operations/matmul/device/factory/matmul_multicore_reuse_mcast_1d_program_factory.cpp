@@ -115,8 +115,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     bool output_is_sharded,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
-    bool row_broadcast_bias = true,
-    CoreCoord sub_device_start_core = {0, 0}) {
+    bool row_broadcast_bias,
+    CoreCoord sub_device_start_core = {0, 0},
+    bool tile_pack_row_major = false) {
+    using tt::tt_metal::num_cores_to_corerangeset;
     using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
     // currently only support transpose of the full tile
@@ -141,7 +143,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // TILE_PACK_ROW_MAJOR: see matmul_multicore_reuse_mcast_2d_program_factory for rationale.
+    // Per-row-group reserve/push on out_cb breaks the shared out/interm0 L1 region assumption,
+    // so force separate regions when the flag is on.
+    bool do_not_inplace_interm0_out_CB = (output_is_sharded && (per_core_M != out_block_h)) || tile_pack_row_major;
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -521,6 +526,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     if (output_is_sharded) {
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
+    }
+
+    // TILE_PACK_ROW_MAJOR: compute packs tiles at absolute CB offsets row-first, writer reads
+    // per-M-row-group. mcast_in0 path has one sender/writer kernel; no receiver variant to emit.
+    if (tile_pack_row_major) {
+        mm_kernel_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_sender_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
     }
 
     // TODO: SKIP_MCAST flag isn't used for the sharded reader kernel because internal mcast logic already works without
@@ -1146,8 +1158,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     bool in0_is_sharded,
     bool output_is_sharded,
     bool untilize_out,
-    bool row_broadcast_bias = true,
-    CoreCoord sub_device_start_core = {0, 0}) {
+    bool row_broadcast_bias,
+    CoreCoord sub_device_start_core = {0, 0},
+    bool tile_pack_row_major = false) {
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
@@ -1172,7 +1185,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // TILE_PACK_ROW_MAJOR: see matmul_multicore_reuse_mcast_2d_program_factory for rationale.
+    // Per-row-group reserve/push on out_cb breaks the shared out/interm0 L1 region assumption,
+    // so force separate regions when the flag is on.
+    bool do_not_inplace_interm0_out_CB = (output_is_sharded && (per_core_M != out_block_h)) || tile_pack_row_major;
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -1436,11 +1452,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)M * N  // MtNt
     };
 
-    if (bias_tensor.has_value()) {
-        in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in1_block_w);
-    } else {
-        in1_receiver_writer_compile_time_args.push_back(0);  // Placeholder; not used
-    }
+    // Always pass in1_block_w (= out_block_w / bias block width). Consumed by the FUSE_BIAS
+    // path as in3_block_w and by the TILE_PACK_ROW_MAJOR path as the row-group stride, so the
+    // value must be populated regardless of which kernel-side flags are set.
+    in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in1_block_w);
     in1_receiver_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
     tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(in1_receiver_writer_compile_time_args);
 
@@ -1481,6 +1496,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     if (output_is_sharded) {
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
+    }
+
+    // TILE_PACK_ROW_MAJOR: compute packs tiles at absolute CB offsets row-first, writer reads
+    // per-M-row-group. mcast_in1 path emits to compute, sender writer, and receiver writer.
+    if (tile_pack_row_major) {
+        mm_kernel_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_sender_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_receiver_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
     }
 
     mm_kernel_in0_sender_defines["SKIP_MCAST"] = "1";
@@ -2961,7 +2984,8 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
-    CoreCoord sub_device_start_core = {0, 0}) {
+    CoreCoord sub_device_start_core = {0, 0},
+    bool tile_pack_row_major = false) {
     using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
     // currently only support transpose of the full tile
@@ -2986,7 +3010,10 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // TILE_PACK_ROW_MAJOR: see matmul_multicore_reuse_mcast_2d_program_factory for rationale.
+    // The descriptor path previously dropped tile_pack_row_major; force separate out/interm0
+    // regions when it is set so the row-major per-row-group pack doesn't overwrite unconsumed partials.
+    bool do_not_inplace_interm0_out_CB = (output_is_sharded && (per_core_M != out_block_h)) || tile_pack_row_major;
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -3386,6 +3413,14 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         if (in1_needs_intermediate_cb_read) {
             mm_kernel_in1_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
         }
+    }
+
+    // TILE_PACK_ROW_MAJOR: mirror the legacy process_mcast_in0 emit; the descriptor path
+    // previously dropped tile_pack_row_major, causing the 2 mcast_in0 + l1_sharded_out +
+    // multi-row subblock failures in test_matmul_tile_pack_row_major.py.
+    if (tile_pack_row_major) {
+        mm_kernel_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_sender_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
     }
 
     // Helper to convert std::map defines to KernelDescriptor::Defines (vector of pairs)
@@ -4001,7 +4036,8 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     bool output_is_sharded,
     bool untilize_out,
     bool row_broadcast_bias = true,
-    CoreCoord sub_device_start_core = {0, 0}) {
+    CoreCoord sub_device_start_core = {0, 0},
+    bool tile_pack_row_major = false) {
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
@@ -4026,7 +4062,8 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // TILE_PACK_ROW_MAJOR: see matmul_multicore_reuse_mcast_2d_program_factory for rationale.
+    bool do_not_inplace_interm0_out_CB = (output_is_sharded && (per_core_M != out_block_h)) || tile_pack_row_major;
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -4280,11 +4317,10 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         (std::uint32_t)M * N  // MtNt
     };
 
-    if (bias_tensor.has_value()) {
-        in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in1_block_w);
-    } else {
-        in1_receiver_writer_compile_time_args.push_back(0);  // Placeholder; not used
-    }
+    // Always pass in1_block_w. Consumed by FUSE_BIAS as in3_block_w and by TILE_PACK_ROW_MAJOR
+    // as the row-group stride; the descriptor path previously dropped it for no-bias TILE_PACK
+    // configurations, causing PCC corruption on the writer side.
+    in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in1_block_w);
     in1_receiver_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
     tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(in1_receiver_writer_compile_time_args);
 
@@ -4345,6 +4381,13 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         if (in1_needs_intermediate_cb_read) {
             mm_kernel_in1_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
         }
+    }
+
+    // TILE_PACK_ROW_MAJOR: mirror the legacy process_mcast_in1 emit.
+    if (tile_pack_row_major) {
+        mm_kernel_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_sender_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_receiver_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
     }
 
     // Helper to convert std::map defines to KernelDescriptor::Defines (vector of pairs)
@@ -4858,11 +4901,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
-    std::optional<CoreRangeSet> restricted_cores) {
+    std::optional<CoreRangeSet> restricted_cores,
+    bool tile_pack_row_major = false) {
     const auto& b = b_tensors[0];
     const auto& output = output_tensors[0].mesh_tensor();
 
     TT_FATAL(output_tensors.size() == b_tensors.size(), "number of outputs must match number of inputs b");
+
+    const bool row_broadcast_bias = operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias);
 
     const auto& ashape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
     const auto& bshape = operations::matmul::utilities::get_matmul_tensor_padded_shape(b, transpose_b);
@@ -5107,8 +5153,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             output.memory_config().is_sharded(),
             untilize_out,
             fused_op_signaler,
-            operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias),
-            sub_device_start_core);
+            row_broadcast_bias,
+            sub_device_start_core,
+            tile_pack_row_major);
     }
     return reuse_mcast_1d_optimized_helpers::process_mcast_in1_program_and_create_override_variables(
         program,
@@ -5151,8 +5198,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         a.memory_config().is_sharded(),
         output.memory_config().is_sharded(),
         untilize_out,
-        operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias),
-        sub_device_start_core);
+        row_broadcast_bias,
+        sub_device_start_core,
+        tile_pack_row_major);
 }
 
 void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
@@ -5197,6 +5245,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     auto per_core_N = program_config.per_core_N;
     auto mcast_in0 = program_config.mcast_in0;
     auto gather_in0 = program_config.gather_in0;
+    auto tile_pack_row_major = program_config.tile_pack_row_major;
 
     TT_FATAL(!gather_in0, "create_descriptor does not support gather_in0 mode");
 
@@ -5327,7 +5376,8 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
             untilize_out,
             fused_op_signaler,
             fused_matmul_bias_row_broadcastable(bias),
-            sub_device_start_core);
+            sub_device_start_core,
+            tile_pack_row_major);
     }
     return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1_descriptor(
         a,
@@ -5370,7 +5420,8 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
         output.memory_config().is_sharded(),
         untilize_out,
         fused_matmul_bias_row_broadcastable(bias),
-        sub_device_start_core);
+        sub_device_start_core,
+        tile_pack_row_major);
 }
 
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
@@ -5433,7 +5484,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         config.num_global_cb_receivers,
         sub_device_id,
         start_cb_index,
-        std::move(restricted_cores));
+        std::move(restricted_cores),
+        config.tile_pack_row_major);
 }
 
 MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::cached_mesh_workload_t
@@ -5497,7 +5549,8 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
                 pc.num_global_cb_receivers,
                 attributes.sub_device_id,
                 tt::CBIndex::c_0,
-                std::nullopt);
+                std::nullopt,
+                pc.tile_pack_row_major);
             shared_variables[mesh_coord_range] = std::move(shared_vars);
             workload.add_program(mesh_coord_range, std::move(program));
         }

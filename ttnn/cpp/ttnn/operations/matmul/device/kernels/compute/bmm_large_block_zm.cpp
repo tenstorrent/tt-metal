@@ -5,111 +5,59 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 
 void kernel_main() {
-    uint32_t in0_block_w = get_compile_time_arg_val(0);              // inner block size in tiles
-    uint32_t in0_num_subblocks = get_compile_time_arg_val(1);        // outer row block size (in inner row blocks)
-    uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);      // out_subblock_h*in0_block_w*in0_num_subblocks;
-    uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);   // out_subblock_h*in0_block_w
-    uint32_t in1_num_subblocks = get_compile_time_arg_val(4);        // outer column block size (in inner column blocks)
-    uint32_t in1_block_num_tiles = get_compile_time_arg_val(5);      // out_subblock_w*in0_block_w* in1_num_subblocks;
-    uint32_t in1_per_core_w = get_compile_time_arg_val(6);           // out_subblock_w*in1_num_subblocks
-    uint32_t num_blocks = get_compile_time_arg_val(7);               // outer inner dim (in inner dim blocks)
-    uint32_t out_subblock_h = get_compile_time_arg_val(8);           // inner row block size in tiles
-    uint32_t out_subblock_w = get_compile_time_arg_val(9);           // inner column block size in tiles
-    uint32_t out_subblock_num_tiles = get_compile_time_arg_val(10);  // out_subblock_h * out_subblock_w;
-    uint32_t batch = get_compile_time_arg_val(11);                   // batch dim
+    uint32_t in0_block_w = get_compile_time_arg_val(0);
+    uint32_t in0_num_subblocks = get_compile_time_arg_val(1);
+    uint32_t in1_num_subblocks = get_compile_time_arg_val(4);
+    uint32_t num_k_blocks = get_compile_time_arg_val(7);
+    uint32_t out_subblock_h = get_compile_time_arg_val(8);
+    uint32_t out_subblock_w = get_compile_time_arg_val(9);
+    uint32_t batch = get_compile_time_arg_val(11);
 
     constexpr uint32_t cb_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t cb_intermed0 = get_named_compile_time_arg_val("cb_intermed0");
 
-    CircularBuffer in0_cb(cb_in0);
-    CircularBuffer in1_cb(cb_in1);
-    CircularBuffer out_cb(cb_out);
-    CircularBuffer intermed0_cb(cb_intermed0);
+    CircularBuffer in0_buf(cb_in0);
+    CircularBuffer in1_buf(cb_in1);
+    CircularBuffer out_buf(cb_out);
+    CircularBuffer interm_buf(cb_intermed0);
 
-    mm_init(cb_in0, cb_in1, cb_intermed0);
+    // Factories that emit TILE_PACK_ROW_MAJOR want absolute-offset packing so writers
+    // read tiles in row-major order. Multicast factories (no define) use sequential pack.
+    constexpr compute_kernel_lib::OutputCBLayout output_layout =
+#ifdef TILE_PACK_ROW_MAJOR
+        compute_kernel_lib::OutputCBLayout::TileRowMajor;
+#else
+        compute_kernel_lib::OutputCBLayout::SubblockMajor;
+#endif
 
-    for (uint32_t b = 0; b < batch; b++) {
-        bool spill = num_blocks > 1;
-        bool enable_reload = false;
-        uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
+    // Boot-time matmul init. Mirrors the precedent of every other migrated kernel
+    // (bmm_large_block_zm_fused_bias_activation.cpp, conv_bmm_tilize.cpp, ccl
+    // all_gather_minimal_matmul_async/compute.cpp, etc.): one mm_block_init at the top
+    // of kernel_main does the unpack/math/pack hw_configure as the first compute API
+    // call, then the helper is invoked with InitMode::None so it reuses LLK state
+    // across the batch loop. Per-batch re-init was found to corrupt state on
+    // heterogeneous-tile-shape DRAM-sharded configs — see commit 76e99730d2e for the
+    // analogous fix in bmm_large_block_zm_fused_bias_activation.cpp, which preserves
+    // a kernel-side batch loop because it interleaves bias-add / untilize phases per
+    // batch. This simpler bmm has no per-batch phase work, so helper-batched is the
+    // right shape.
+    mm_block_init(cb_in0, cb_in1, cb_intermed0, /*transpose=*/false, out_subblock_w, out_subblock_h, in0_block_w);
 
-        for (uint32_t block = 0; block < num_blocks; block++) {
-            bool last_out = block == (num_blocks - 1);
-
-            in0_cb.wait_front(in0_block_num_tiles);
-            in1_cb.wait_front(in1_block_num_tiles);
-            int in0_index_subblock_offset = 0;
-            for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                int in1_index_subblock_offset = 0;
-                for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                    acquire_dst();
-
-                    if (enable_reload) {
-                        copy_tile_to_dst_init_short_with_dt(cb_in1, cb_intermed0);
-                        intermed0_cb.wait_front(out_subblock_num_tiles);
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            copy_tile(cb_intermed0, i, i);
-                        }
-                        intermed0_cb.pop_front(out_subblock_num_tiles);
-                        mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed0);
-                    }
-
-                    // Compute output sub-block from in0_subblock x in1_subblock
-                    int dst_index = 0;
-                    int in0_index_h_offset = 0;
-                    for (uint32_t h = 0; h < out_subblock_h; h++) {
-                        for (uint32_t w = 0; w < out_subblock_w; w++) {
-                            int in1_index_inner_dim_offset = 0;
-                            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                                int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
-                                int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index);
-                                in1_index_inner_dim_offset += in1_per_core_w;
-                            }
-                            dst_index++;
-                        }
-                        in0_index_h_offset += in0_block_w;
-                    }
-
-                    if (last_out) {
-                        // Pack out to output buffer
-                        out_cb.reserve_back(out_subblock_num_tiles);
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            pack_tile(i, cb_out);
-                        }
-                        out_cb.push_back(out_subblock_num_tiles);
-                    } else {
-                        // Wait for tiles in output buffer to be written out since interm and output share memory
-                        if (block == 0) {
-                            out_cb.reserve_back(out_num_tiles_to_wait);
-                            out_num_tiles_to_wait += out_subblock_num_tiles;
-                        }
-                        // Move partial result to interm buffer
-                        intermed0_cb.reserve_back(out_subblock_num_tiles);
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            pack_tile(i, cb_intermed0);
-                        }
-                        intermed0_cb.push_back(out_subblock_num_tiles);
-                    }
-
-                    release_dst();
-                    in1_index_subblock_offset += out_subblock_w;
-                }
-                in0_index_subblock_offset += in0_subblock_num_tiles;
-            }
-
-            if (spill) {
-                enable_reload = true;
-            }
-
-            in0_cb.pop_front(in0_block_num_tiles);
-            in1_cb.pop_front(in1_block_num_tiles);
-        }
-    }
+    compute_kernel_lib::matmul_block<
+        /*transpose=*/false,
+        /*packer_l1_acc=*/false,
+        compute_kernel_lib::LastBlockTarget::Out,
+        output_layout,
+        compute_kernel_lib::matmul_config::InitMode::None>(
+        in0_buf,
+        in1_buf,
+        out_buf,
+        interm_buf,
+        compute_kernel_lib::MatmulBlockShape::of(
+            in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, in0_block_w, num_k_blocks, batch));
 }
