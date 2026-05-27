@@ -110,8 +110,8 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows, true);
     (void)num_cores;
 
-    constexpr uint32_t input_cb_index = tt::CBIndex::c_0;
-    constexpr uint32_t output_cb_index = tt::CBIndex::c_2;
+    constexpr uint8_t input_cb_index = tt::CBIndex::c_0;
+    constexpr uint8_t output_cb_index = tt::CBIndex::c_2;
     constexpr uint32_t num_input_pages = 2;   // Always use double buffering
     constexpr uint32_t num_output_pages = 2;  // Always use double buffering
 
