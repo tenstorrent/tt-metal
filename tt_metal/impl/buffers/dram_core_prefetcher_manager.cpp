@@ -204,7 +204,7 @@ bool layout_equal(const DramCorePrefetcherTensorLayout& a, const DramCorePrefetc
 // bank-local address is carried separately in the per-tensor
 // DramCorePrefetcherEntry, so identical-geometry tensors share one layout.
 DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
-    const MeshTensor& t, uint32_t block_count, uint32_t ring_half, ContextId context_id) {
+    const MeshTensor& t, uint32_t block_count, uint32_t stage_third, ContextId context_id) {
     // Read the original (non-squeezed) NdShardSpec from the MemoryConfig — the
     // BDS internally collapses adjacent matching dims, so its
     // shard_shape_in_pages() can come back rank-1 even though the caller
@@ -256,19 +256,21 @@ DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
     const uint32_t bytes_per_recv_per_block = k_block_w_tiles * n_per_recv * tile_bytes;
     const uint32_t recv_stride_bytes = k_tiles_raw * n_per_recv * tile_bytes;
 
-    // Fit ladder. Rung 1: full block fits in the stage half. Rung 2: K-sub
-    // split for shapes where one block exceeds the stage half (the kernel walks
-    // sub-bands across stage halves; multi-block batching still works because
-    // B blocks of a receiver are contiguous in DRAM).
+    // Fit ladder. Rung 1: full block fits in one stage-third (the kernel uses
+    // 3 rotating slots, not 2 halves, so the constraint is tighter than the
+    // legacy K-row path). Rung 2: K-sub split for shapes where one block
+    // exceeds the stage_third; the kernel walks sub-bands across slots and
+    // multi-block batching still works because B blocks of a receiver are
+    // contiguous in DRAM.
     uint32_t rows_per_sub = 0;
     uint32_t num_sub = 1;
-    if (bytes_per_recv_per_block <= ring_half) {
+    if (bytes_per_recv_per_block <= stage_third) {
         rows_per_sub = k_block_w_tiles;
         num_sub = 1;
     } else {
         rows_per_sub = 0;
         for (uint32_t d = k_block_w_tiles; d >= 1; --d) {
-            if (k_block_w_tiles % d == 0 && static_cast<uint64_t>(d) * n_per_recv * tile_bytes <= ring_half) {
+            if (k_block_w_tiles % d == 0 && static_cast<uint64_t>(d) * n_per_recv * tile_bytes <= stage_third) {
                 rows_per_sub = d;
                 break;
             }
@@ -276,29 +278,29 @@ DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
         TT_FATAL(
             rows_per_sub >= 1,
             "Receiver-contiguous mode cannot fit a single K-row slice "
-            "(n_per_recv={}, tile_bytes={}, ring_half={} B). Reduce n_per_recv or grow num_global_cb_receivers.",
+            "(n_per_recv={}, tile_bytes={}, stage_third={} B). Reduce n_per_recv or grow num_global_cb_receivers.",
             n_per_recv,
             tile_bytes,
-            ring_half);
+            stage_third);
         num_sub = k_block_w_tiles / rows_per_sub;
     }
 
     const uint32_t sub_chunk_bytes = rows_per_sub * n_per_recv * tile_bytes;
     TT_FATAL(
-        sub_chunk_bytes <= ring_half,
-        "Internal: receiver-contiguous chunk size {} B exceeds ring_half {} B",
+        sub_chunk_bytes <= stage_third,
+        "Internal: receiver-contiguous chunk size {} B exceeds stage_third {} B",
         sub_chunk_bytes,
-        ring_half);
+        stage_third);
 
-    // target_per_visit_pages: ~6 stage halves' worth of blocks per visit. The
+    // target_per_visit_pages: ~6 stage thirds' worth of blocks per visit. The
     // kernel amortizes one noc_async_write_one_packet_set_state per receiver
     // visit, so making each visit cover many blocks reduces set_state cost.
     // The kernel further clamps by free downstream space, remaining blocks,
     // and fifo-wrap distance, so the static ceiling is a hint, not a contract.
     const uint32_t page_bytes_per_recv = k_block_w_tiles * coalesced_num_pages * coalesced_page_size;
-    const uint32_t stage_half_pages = page_bytes_per_recv > 0 ? ring_half / page_bytes_per_recv : 0;
-    constexpr uint32_t kVisitStageHalfMultiplier = 6;
-    uint32_t target_per_visit_pages = stage_half_pages * kVisitStageHalfMultiplier;
+    const uint32_t stage_slot_pages = page_bytes_per_recv > 0 ? stage_third / page_bytes_per_recv : 0;
+    constexpr uint32_t kVisitStageSlotMultiplier = 6;
+    uint32_t target_per_visit_pages = stage_slot_pages * kVisitStageSlotMultiplier;
     if (target_per_visit_pages == 0) {
         target_per_visit_pages = 1;
     }
@@ -326,13 +328,14 @@ DramCorePrefetcherTensorLayout compute_tensor_layout(
     uint32_t num_senders,
     uint32_t num_receivers,
     uint32_t ring_half,
+    uint32_t stage_third,
     ContextId context_id) {
     const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
     const LayoutMode mode = detect_layout_mode(*ref_buffer, num_senders, num_receivers);
     if (mode == LayoutMode::KRowMajor) {
         return compute_tensor_layout_krow_major(t, block_count, num_receivers, ring_half, context_id);
     }
-    return compute_tensor_layout_recv_contig(t, block_count, ring_half, context_id);
+    return compute_tensor_layout_recv_contig(t, block_count, stage_third, context_id);
 }
 
 }  // namespace
@@ -480,17 +483,23 @@ void DramCorePrefetcherManager::start(const experimental::DramCorePrefetcherConf
         "DRISC L1 kernel region ({} B) too small for socket buffers + stage ring",
         kernel_region_size);
     stage_ring_size_ = kernel_region_end - stage_ring_base_;
-    stage_ring_size_ &= ~(2 * l1_alignment - 1);
-    // After masking down, make sure the ring is still big enough for at least
-    // one minimal sub-chunk per half. Catches accidental shrink-to-zero if the
+    // Align stage_ring_size to LCM(2, 3, l1_alignment) so both halves (K-row
+    // path) and thirds (recv-contig path) are individually l1-aligned. With
+    // l1_alignment=16, LCM = 48. Bitmask shortcut doesn't work because 48 is
+    // not a power of 2 — use integer division.
+    const uint32_t kRingSizeAlign = 6u * l1_alignment;  // = LCM(2*3, l1_alignment) when l1_alignment is even
+    stage_ring_size_ = (stage_ring_size_ / kRingSizeAlign) * kRingSizeAlign;
+    // After aligning down, make sure the ring is still big enough for at least
+    // one minimal sub-chunk per slot. Catches accidental shrink-to-zero if the
     // socket carve-out ever grows past the L1 region.
     TT_FATAL(
-        stage_ring_size_ >= 4 * l1_alignment,
-        "DRISC L1 stage ring shrank to {} B after alignment masking — socket buffers consumed too much of the {} B "
+        stage_ring_size_ >= 6 * l1_alignment,
+        "DRISC L1 stage ring shrank to {} B after alignment — socket buffers consumed too much of the {} B "
         "kernel region",
         stage_ring_size_,
         kernel_region_size);
     ring_half_ = stage_ring_size_ / 2;
+    stage_third_ = stage_ring_size_ / 3;
 
     // Populate devices_ list once; both allocate_sockets and build_and_launch_programs use it.
     // Build the coord->index map at the same time so worker_loop fan-out is O(targets).
@@ -574,7 +583,13 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
         // block_count is per-tensor: it sets how many K-blocks the kernel pushes
         // (and how K is divided in compute_tensor_layout), replacing the GCB ring size.
         const DramCorePrefetcherTensorLayout layout = compute_tensor_layout(
-            input.tensor.get(), input.block_count, num_senders_, gcb_num_receivers, ring_half_, context_id);
+            input.tensor.get(),
+            input.block_count,
+            num_senders_,
+            gcb_num_receivers,
+            ring_half_,
+            stage_third_,
+            context_id);
         const uint32_t bank_local_base = static_cast<uint32_t>(input.tensor.get().mesh_buffer().address());
 
         // Find this layout in the current page (dedup), or decide it needs adding.

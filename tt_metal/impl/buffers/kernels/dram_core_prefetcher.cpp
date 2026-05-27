@@ -40,6 +40,29 @@ using tt::tt_metal::DramSenderStateBlock;
 using tt::tt_metal::kNumCqSignalSlots;
 using tt::tt_metal::kRequestPageBytes;
 
+// Per-stage cycle profiling — gated on watcher ring-buffer being enabled so
+// production builds pay zero. Decode tags ("0xA1 .. 0xAA") match the dump
+// reader in dram_core_prefetcher_drisc_profile.md.
+// Per-stage cycle profiling — gated on watcher ring-buffer being enabled so
+// production builds pay zero (variables and timestamp reads don't exist).
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_RING_BUFFER) && !defined(FORCE_WATCHER_OFF)
+#include "api/debug/ring_buffer.h"
+#include "internal/tt-1xx/risc_common.h"
+#define PROF_DECL_ACC(name) uint32_t name = 0
+#define PROF_DECL_TS(name) uint32_t name = 0
+#define PROF_TICK(x) x = get_timestamp_32b()
+#define PROF_ACC(acc, t_end, t_start) acc += (t_end) - (t_start)
+#define PROF_INC(counter) ++counter
+#define PROF_DUMP(tag, val) WATCHER_RING_BUFFER_PUSH(((tag) << 24) | ((val) & 0x00FFFFFFu))
+#else
+#define PROF_DECL_ACC(name)
+#define PROF_DECL_TS(name)
+#define PROF_TICK(x) ((void)0)
+#define PROF_ACC(acc, t_end, t_start) ((void)0)
+#define PROF_INC(counter) ((void)0)
+#define PROF_DUMP(tag, val) ((void)0)
+#endif
+
 // DRISC firmware doesn't define cb_interface (no CB infra on DRAM cores).
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
@@ -196,6 +219,14 @@ void kernel_main() {
     constexpr uint32_t ring_half = stage_ring_size / 2;
     constexpr uint32_t stage_slot_a = stage_ring_base;
     constexpr uint32_t stage_slot_b = stage_ring_base + ring_half;
+    // Receiver-contiguous path uses 3 stage slots (vs K-row's 2 halves) so the
+    // NIU has 2 iters to drain a slot's posted writes before that slot is
+    // reused for the next DMA — flush latency drops from per-iter-blocking to
+    // amortized over N-1 iters of DMA + write-enqueue.
+    constexpr uint32_t stage_third = stage_ring_size / 3;
+    constexpr uint32_t stage_slot_0 = stage_ring_base;
+    constexpr uint32_t stage_slot_1 = stage_ring_base + stage_third;
+    constexpr uint32_t stage_slot_2 = stage_ring_base + 2 * stage_third;
 
     // ---- Runtime args ----
     uint32_t rt_idx = 0;
@@ -255,6 +286,16 @@ void kernel_main() {
         const uint32_t gcb_state_addr = req->prefetch.gcb_state_addr;
         volatile tt_l1_ptr DramSenderStateBlock* state =
             reinterpret_cast<volatile tt_l1_ptr DramSenderStateBlock*>(gcb_state_addr);
+
+        PROF_DECL_ACC(prof_rounds);
+        PROF_DECL_ACC(prof_chunks);
+        PROF_DECL_ACC(prof_poll);
+        PROF_DECL_ACC(prof_dma_issue);
+        PROF_DECL_ACC(prof_dma_wait);
+        PROF_DECL_ACC(prof_set_state);
+        PROF_DECL_ACC(prof_writes);
+        PROF_DECL_ACC(prof_flush);
+        PROF_DECL_ACC(prof_finalize);
 
         load_sender_state(state, iface);
         has_loaded_sender_state = true;
@@ -418,50 +459,56 @@ void kernel_main() {
                         stage_slot = next_slot;
                     }
                 } else {
-                    // ---- Receiver-contiguous main loop (dynamic batching) ----
-                    // Per round, we pick a batch size B = min(target_per_visit,
-                    // min_free_blocks_across_receivers, remaining_blocks,
-                    // blocks_to_fifo_wrap). Then for each receiver r in turn we DMA + NoC-write
-                    // B blocks of receiver r's slab (contiguous: slab = recv_stride bytes,
-                    // blocks at stride t_page_bytes_per_recv == t_block_stride). set_state is
-                    // issued ONCE per receiver visit, then with_state writes for every
-                    // coalesced packet — amortizes destination reprogramming across many
-                    // writes. Stage halves ping-pong both within a visit (when one visit's
-                    // payload exceeds ring_half) and across consecutive receivers (the next
-                    // receiver's first DMA loads while the current receiver's writes drain).
+                    // ---- Receiver-contiguous main loop (dynamic batching + 3-slot pipeline) ----
+                    // Per round, we pick B = min(target_per_visit,
+                    // min_free_blocks_across_receivers, remaining_blocks, blocks_to_wrap).
+                    // Then for each receiver r in turn we DMA + NoC-write B blocks of
+                    // receiver r's slab (contiguous: slab = recv_stride, block stride =
+                    // page_bytes_per_recv). set_state once per receiver visit; with_state
+                    // for every packet — amortizes destination reprogramming.
+                    //
+                    // Stage layout is 3 thirds rotating (vs the K-row path's 2 halves).
+                    // Per iter we DMA into slot (gc+1)%3 and write from slot gc%3. The slot
+                    // we're about to overwrite at iter gc+1 was last written at iter gc-2,
+                    // giving the NIU ~2 iters of DMA+enqueue overhead to drain those
+                    // posted writes. We flush only RIGHT BEFORE the next DMA-into-reused-slot
+                    // (gc >= 2), turning the per-iter blocking flush (304 cyc on 8B_FF1_1d)
+                    // into mostly free overlapped work.
                     //
                     // After all num_receivers visits, finalize bumps pages_sent + remote
                     // semaphore by B for every receiver and advances iface.fifo_wr_ptr by
-                    // B * t_page_bytes_per_recv.
-                    //
-                    // The pages_to_wrap clamp prevents B from crossing fifo_limit_page_aligned
-                    // mid-round; the boundary round just gets a smaller B and the next round
-                    // starts after the wrap.
-                    constexpr uint32_t kStageHalfBytes = ring_half;
-                    // Per-stage-half capacity expressed in whole sub-bands; t_chunk_bytes
+                    // B * t_page_bytes_per_recv. The pages_to_wrap clamp prevents B from
+                    // crossing fifo_limit_page_aligned mid-round.
+                    constexpr uint32_t kStageSlotBytes = stage_third;
+                    // Per-stage-slot capacity expressed in whole sub-bands; t_chunk_bytes
                     // (= sub_chunk_bytes) is the natural alignment for both DMA and NoC
                     // writes — it's a multiple of t_coal_page_size by construction, so
                     // packet counts come out exact (no truncation loss).
-                    const uint32_t subs_per_stage_half = kStageHalfBytes / t_chunk_bytes;
-                    const uint32_t max_chunk_bytes = subs_per_stage_half * t_chunk_bytes;
+                    const uint32_t subs_per_stage_slot = kStageSlotBytes / t_chunk_bytes;
+                    const uint32_t max_chunk_bytes = subs_per_stage_slot * t_chunk_bytes;
 
                     // fifo_pages_per_block converts aligned-page free space into
                     // "blocks of t_page_bytes_per_recv" — the batch unit B uses.
                     const uint32_t fifo_pages_per_block =
                         t_page_bytes_per_recv / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
 
+                    constexpr uint32_t slot_addrs[3] = {stage_slot_0, stage_slot_1, stage_slot_2};
+
                     uint32_t pages_sent_global = 0;
-                    uint32_t stage_slot = stage_slot_a;
 
                     while (pages_sent_global < t_block_count) {
+                        PROF_INC(prof_rounds);
                         // ---- Pick B for this round ----
-                        // poll_min_free returns 0 if any receiver has no free space; spin
-                        // until at least one block is free everywhere.
                         uint32_t min_free_blocks;
+                        PROF_DECL_TS(t_poll_start);
+                        PROF_DECL_TS(t_poll_end);
+                        PROF_TICK(t_poll_start);
                         do {
                             const uint32_t min_free_aligned = poll_min_free_aligned_pages(iface, num_receivers);
                             min_free_blocks = min_free_aligned / fifo_pages_per_block;
                         } while (min_free_blocks == 0);
+                        PROF_TICK(t_poll_end);
+                        PROF_ACC(prof_poll, t_poll_end, t_poll_start);
 
                         const uint32_t bytes_to_wrap = iface.fifo_limit_page_aligned - iface.fifo_wr_ptr;
                         const uint32_t pages_to_wrap = bytes_to_wrap / t_page_bytes_per_recv;
@@ -477,92 +524,152 @@ void kernel_main() {
                         if (B > pages_to_wrap) {
                             B = pages_to_wrap;
                         }
-                        // pages_to_wrap >= 1 by invariant (fifo_wr_ptr < fifo_limit_page_aligned).
 
                         const uint32_t fifo_snapshot = iface.fifo_wr_ptr;
                         const uint32_t bytes_per_recv = B * t_page_bytes_per_recv;
+                        const uint32_t chunks_per_visit =
+                            (bytes_per_recv + max_chunk_bytes - 1) / max_chunk_bytes;
+                        const uint32_t total_chunks_round = num_receivers * chunks_per_visit;
 
-                        // ---- Prologue: issue first DMA (receiver 0's first stage half) ----
+                        // ---- Prologue: issue first DMA into slot 0 ----
                         {
                             const uint32_t first_bytes =
                                 bytes_per_recv < max_chunk_bytes ? bytes_per_recv : max_chunk_bytes;
                             const uint32_t first_src = tensor_base + pages_sent_global * t_page_bytes_per_recv;
-                            experimental::dma_async_read(/*stream=*/0, first_src, stage_slot, first_bytes);
+                            PROF_DECL_TS(t_p0);
+                            PROF_DECL_TS(t_p1);
+                            PROF_TICK(t_p0);
+                            experimental::dma_async_read(/*stream=*/0, first_src, slot_addrs[0], first_bytes);
+                            PROF_TICK(t_p1);
+                            PROF_ACC(prof_dma_issue, t_p1, t_p0);
                         }
 
-                        // ---- Per-receiver visits ----
-                        for (uint32_t r = 0; r < num_receivers; ++r) {
-                            volatile tt_l1_ptr uint32_t* xy_ptr =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + r * 2;
-                            const uint32_t remote_noc_xy = uint32_t(NOC_XY_ENCODING(
-                                DYNAMIC_NOC_X(noc_index, xy_ptr[0]), DYNAMIC_NOC_Y(noc_index, xy_ptr[1])));
-                            const uint64_t set_state_dest = get_noc_addr_helper(remote_noc_xy, fifo_snapshot);
-                            noc_async_write_one_packet_set_state</*posted=*/true>(
-                                set_state_dest, t_coal_page_size, noc_index);
+                        // ---- Single flat loop over (receiver, chunk_in_visit) ----
+                        // gc indexes global chunk in this round.
+                        uint32_t cur_r = uint32_t(-1);
+                        uint32_t remote_noc_xy = 0;
+                        for (uint32_t gc = 0; gc < total_chunks_round; ++gc) {
+                            PROF_INC(prof_chunks);
+                            const uint32_t cur_slot_idx = gc % 3u;
+                            const uint32_t next_slot_idx = (gc + 1u) % 3u;
+                            const uint32_t r = gc / chunks_per_visit;
+                            const uint32_t chunk_in_visit = gc - r * chunks_per_visit;
+                            const uint32_t byte_offset = chunk_in_visit * max_chunk_bytes;
+                            const uint32_t remaining_visit = bytes_per_recv - byte_offset;
+                            const uint32_t chunk_bytes =
+                                remaining_visit < max_chunk_bytes ? remaining_visit : max_chunk_bytes;
 
-                            uint32_t bytes_done = 0;
-                            while (bytes_done < bytes_per_recv) {
-                                const uint32_t remaining_this_visit = bytes_per_recv - bytes_done;
-                                const uint32_t chunk_bytes =
-                                    remaining_this_visit < max_chunk_bytes ? remaining_this_visit : max_chunk_bytes;
-
-                                // ---- Issue next DMA before waiting on current ----
-                                uint32_t next_r = r;
-                                uint32_t next_bytes_done = bytes_done + chunk_bytes;
-                                bool has_next = true;
-                                if (next_bytes_done >= bytes_per_recv) {
-                                    next_bytes_done = 0;
-                                    ++next_r;
-                                    if (next_r >= num_receivers) {
-                                        has_next = false;
-                                    }
+                            // ---- Issue next DMA + (if reusing slot) flush previous writes from it ----
+                            const bool has_next = (gc + 1u) < total_chunks_round;
+                            PROF_DECL_TS(t_di0);
+                            PROF_DECL_TS(t_di1);
+                            PROF_TICK(t_di0);
+                            if (has_next) {
+                                // Slot next_slot_idx is being overwritten. If it carried writes
+                                // from iter gc-2 (i.e., gc >= 2), drain them first.
+                                if (gc >= 2u) {
+                                    noc_async_posted_writes_flushed();
                                 }
-
-                                const uint32_t next_slot = stage_slot_sum - stage_slot;
-                                if (has_next) {
-                                    const uint32_t next_remaining = bytes_per_recv - next_bytes_done;
-                                    const uint32_t next_bytes =
-                                        next_remaining < max_chunk_bytes ? next_remaining : max_chunk_bytes;
-                                    const uint32_t next_src = tensor_base + next_r * t_recv_stride +
-                                                              pages_sent_global * t_page_bytes_per_recv +
-                                                              next_bytes_done;
-                                    experimental::dma_async_read(
-                                        /*stream=*/0, next_src, next_slot, next_bytes);
-                                }
-                                const uint32_t outstanding_after_wait = has_next ? 1u : 0u;
-                                experimental::dma_async_read_wait_n(/*stream=*/0, outstanding_after_wait);
-
-                                // ---- NoC writes: flat packet loop with state amortization ----
-                                // The receiver's view of B blocks is contiguous (block_stride ==
-                                // page_bytes_per_recv) and each block's internal layout (rows × coal
-                                // packets) is contiguous, so we just walk packets.
-                                const uint32_t num_packets = chunk_bytes / t_coal_page_size;
-                                uint32_t src_addr = stage_slot;
-                                uint32_t dest_addr = fifo_snapshot + bytes_done;
-                                for (uint32_t p = 0; p < num_packets; ++p) {
-                                    noc_async_write_one_packet_with_state</*posted=*/true>(
-                                        src_addr, dest_addr, noc_index);
-                                    src_addr += t_coal_page_size;
-                                    dest_addr += t_coal_page_size;
-                                }
-
-                                // Stage slot is reused two iterations later by ping-pong.
-                                // Drain the local NoC cmd queue before issuing the next set of
-                                // writes that may source from this slot.
-                                noc_async_posted_writes_flushed();
-                                bytes_done += chunk_bytes;
-                                stage_slot = next_slot;
+                                const uint32_t next_gc = gc + 1u;
+                                const uint32_t next_r2 = next_gc / chunks_per_visit;
+                                const uint32_t next_chunk_in_visit = next_gc - next_r2 * chunks_per_visit;
+                                const uint32_t next_byte_offset = next_chunk_in_visit * max_chunk_bytes;
+                                const uint32_t next_remaining = bytes_per_recv - next_byte_offset;
+                                const uint32_t next_bytes =
+                                    next_remaining < max_chunk_bytes ? next_remaining : max_chunk_bytes;
+                                const uint32_t next_src = tensor_base + next_r2 * t_recv_stride +
+                                                          pages_sent_global * t_page_bytes_per_recv +
+                                                          next_byte_offset;
+                                experimental::dma_async_read(
+                                    /*stream=*/0, next_src, slot_addrs[next_slot_idx], next_bytes);
                             }
+                            PROF_TICK(t_di1);
+                            PROF_ACC(prof_dma_issue, t_di1, t_di0);
+
+                            // ---- Wait for current DMA ----
+                            const uint32_t outstanding_after_wait = has_next ? 1u : 0u;
+                            PROF_DECL_TS(t_dw0);
+                            PROF_DECL_TS(t_dw1);
+                            PROF_TICK(t_dw0);
+                            experimental::dma_async_read_wait_n(/*stream=*/0, outstanding_after_wait);
+                            PROF_TICK(t_dw1);
+                            PROF_ACC(prof_dma_wait, t_dw1, t_dw0);
+
+                            // ---- set_state on the first chunk of a new receiver ----
+                            if (r != cur_r) {
+                                cur_r = r;
+                                volatile tt_l1_ptr uint32_t* xy_ptr =
+                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) +
+                                    r * 2;
+                                remote_noc_xy = uint32_t(NOC_XY_ENCODING(
+                                    DYNAMIC_NOC_X(noc_index, xy_ptr[0]), DYNAMIC_NOC_Y(noc_index, xy_ptr[1])));
+                                const uint64_t set_state_dest =
+                                    get_noc_addr_helper(remote_noc_xy, fifo_snapshot);
+                                PROF_DECL_TS(t_ss0);
+                                PROF_DECL_TS(t_ss1);
+                                PROF_TICK(t_ss0);
+                                noc_async_write_one_packet_set_state</*posted=*/true>(
+                                    set_state_dest, t_coal_page_size, noc_index);
+                                PROF_TICK(t_ss1);
+                                PROF_ACC(prof_set_state, t_ss1, t_ss0);
+                            }
+
+                            // ---- NoC writes: flat packet loop with state amortization ----
+                            const uint32_t num_packets = chunk_bytes / t_coal_page_size;
+                            uint32_t src_addr = slot_addrs[cur_slot_idx];
+                            uint32_t dest_addr = fifo_snapshot + byte_offset;
+                            PROF_DECL_TS(t_w0);
+                            PROF_DECL_TS(t_w1);
+                            PROF_TICK(t_w0);
+                            for (uint32_t p = 0; p < num_packets; ++p) {
+                                noc_async_write_one_packet_with_state</*posted=*/true>(
+                                    src_addr, dest_addr, noc_index);
+                                src_addr += t_coal_page_size;
+                                dest_addr += t_coal_page_size;
+                            }
+                            PROF_TICK(t_w1);
+                            PROF_ACC(prof_writes, t_w1, t_w0);
                         }
+
+                        // ---- Final flush: drain any remaining writes before finalize bumps semaphore.
+                        // (Finalize's per-receiver semaphore inc rides the same NoC VC, so a
+                        // drained NIU also implies data writes are committed in-order on the wire.)
+                        PROF_DECL_TS(t_f0);
+                        PROF_DECL_TS(t_f1);
+                        PROF_TICK(t_f0);
+                        noc_async_posted_writes_flushed();
+                        PROF_TICK(t_f1);
+                        PROF_ACC(prof_flush, t_f1, t_f0);
 
                         // ---- Finalize round: bump pages_sent + semaphores by B blocks ----
+                        PROF_DECL_TS(t_fn0);
+                        PROF_DECL_TS(t_fn1);
+                        PROF_TICK(t_fn0);
                         prefetcher_finalize_block</*skip_ptr_update=*/true>(
                             iface, B * t_page_bytes_per_recv, num_receivers, noc_index);
+                        PROF_TICK(t_fn1);
+                        PROF_ACC(prof_finalize, t_fn1, t_fn0);
                         pages_sent_global += B;
                     }
                 }
             }
         }
+
+        // ---- Profile dump (only emitted when watcher ring-buffer is enabled) ----
+        // Tags: 0xA1 rounds, 0xA2 chunks, 0xA3 poll, 0xA4 dma_issue, 0xA5 dma_wait,
+        //       0xA6 set_state, 0xA7 writes, 0xA8 flush, 0xA9 finalize.
+        // All cycle totals are 24-bit (16M wall-clock cycles ≈ 16 ms at 1 GHz).
+        PROF_DUMP(0xA1u, prof_rounds);
+        PROF_DUMP(0xA2u, prof_chunks);
+        PROF_DUMP(0xA3u, prof_poll);
+        PROF_DUMP(0xA4u, prof_dma_issue);
+        PROF_DUMP(0xA5u, prof_dma_wait);
+        PROF_DUMP(0xA6u, prof_set_state);
+        PROF_DUMP(0xA7u, prof_writes);
+        PROF_DUMP(0xA8u, prof_flush);
+        PROF_DUMP(0xA9u, prof_finalize);
+        PROF_DUMP(0xB0u, stage_ring_size);
+        PROF_DUMP(0xB1u, stage_third);
 
         // Persist mutable state (fifo_wr_ptr) so the next request to this GCB
         // resumes at the right ring offset.

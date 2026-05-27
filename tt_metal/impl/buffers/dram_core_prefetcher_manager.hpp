@@ -131,6 +131,7 @@ private:
     uint32_t stage_ring_base_ = 0;
     uint32_t stage_ring_size_ = 0;
     uint32_t ring_half_ = 0;
+    uint32_t stage_third_ = 0;
     // Per-DRAM-core L1 layout (uniform across all sender cores on all devices).
     // socket_config / socket_data are local L1 addresses; host writes add the
     // DRAM_L1_NOC_OFFSET (passed into H2DSocket's DRAM-recv ctor) before going
