@@ -54,6 +54,16 @@ This skill produces those. Outputs are **added** to the same directory; nothing 
 
 If any input isn't clear, ask before scaffolding files.
 
+### Dependency updates
+
+If the model architecture is too recent for the current `transformers` version (e.g., model not found in `AutoConfig`), it's fine to update the library:
+
+```bash
+/localdev/tcheda/tt-metal/python_env/bin/pip install --upgrade transformers
+```
+
+Same applies to other HF dependencies (`tokenizers`, `accelerate`, etc.) if needed for the specific model being ported.
+
 ## Step 1. Write `<model_dir>/tt/model.py` — full model wrapper
 
 The decoder block is one layer; this file wraps `n_layers` copies of it into a samplable model.
@@ -94,7 +104,7 @@ This is the load-bearing artifact. It must satisfy the contract in `models/commo
 
 | Layer | Methods | Used by |
 |---|---|---|
-| Low-level (caller-managed KV cache) | `prefill_forward(tokens, *, page_table, kv_cache, prompt_lens, **kw)`, `decode_forward(tokens, start_pos, *, page_table, kv_cache, **kw)` | `tt/generator_vllm.py` (vLLM owns the KV cache) |
+| Low-level (caller-managed KV cache) | `prefill_forward(tokens, *, page_table, kv_cache, prompt_lens, return_all_logits=False, **kw)`, `decode_forward(tokens, start_pos, *, page_table, kv_cache, **kw)` | `tt/generator_vllm.py` (vLLM owns KV cache), `run_prefill_check.py` (uses `return_all_logits=True`) |
 | High-level (generator-managed KV cache) | `generate(prompt_token_ids, max_new_tokens, *, next_input=None, **kw) -> list[int]` | demos, readiness check |
 | Attributes / lifecycle | `tokenizer`, `reset()` | both |
 
@@ -118,7 +128,7 @@ Either produces identical token IDs for greedy sampling. The first option exerci
 
 `__init__` builds the model from step 1, allocates a page table, captures KV cache handles, and stores the tokenizer.
 
-`prefill_forward(tokens, *, page_table, kv_cache, prompt_lens, **kw)` runs `model.ttnn_prefill_forward` with the caller-supplied `kv_cache` + `page_table`, returns logits at the last prompt position.
+`prefill_forward(tokens, *, page_table, kv_cache, prompt_lens, return_all_logits=False, **kw)` runs `model.ttnn_prefill_forward` with the caller-supplied `kv_cache` + `page_table`. Returns logits at the last prompt position when `return_all_logits=False` (default), or logits at all positions when `return_all_logits=True` (used by batch prefill readiness check).
 
 `decode_forward(tokens, start_pos, *, page_table, kv_cache, **kw)` runs `model.ttnn_decode_forward` with caller-supplied state, returns logits at the current position. (May return `(logits, log_probs)` — be consistent across calls.)
 
@@ -178,29 +188,40 @@ Launch vLLM with `additional_config: { "tt": { "register_test_models": true } }`
 
 ### One-time setup: generate the HF reference
 
-The teacher-forcing pass compares the TT model's predictions against a saved HF reference (top-K next-token candidates at every generated position; schema in `models/common/readiness_check/schema.py`).
+The readiness checks compare the TT model's predictions against a saved HF reference (top-K next-token candidates at every position; schema in `models/common/readiness_check/schema.py`).
 
 If no reference exists yet for this model:
 
 ```bash
-# Write a prompts file (JSON list). Reuse models/common/readiness_check/prompts/llama31_8b_instruct.json
-# as a template — keep at least one factual prompt and one reasoning prompt.
-
 /localdev/tcheda/tt-metal/python_env/bin/python3 \
   -m models.common.readiness_check.generate \
     --hf-model <hf-model-id-or-local-path> \
-    --prompts-file models/common/readiness_check/prompts/<model>.json \
-    --max-new-tokens 128 \
+    --prompt-len 128 \
+    --gen-len 256 \
     --output models/common/readiness_check/references/<model>.refpt
 ```
 
-Runs on whichever HF can use (CPU or GPU). ~1.7 tok/s on the dev box's CPU for an 8B model; ~2 minutes per 128-token prompt.
+Uses batch prefill on book text. Fast (~1 second with accelerator, ~10-30 seconds on CPU).
 
-### Run the readiness check
+### Run the readiness checks
 
+Two complementary tests validate the model:
+
+**1. Batch prefill check (fast - ~2 seconds):**
 ```bash
 tt-smi -r   # if a previous run crashed
 
+/localdev/tcheda/tt-metal/python_env/bin/python3 \
+  -m models.common.readiness_check.run_prefill_check \
+    --model-dir models/autoports/<model_name> \
+    --reference models/common/readiness_check/references/<model>.refpt \
+    --mesh-device N150
+```
+
+Tests prefill accuracy via `prefill_forward(return_all_logits=True)`. Good for rapid iteration.
+
+**2. Decode with teacher forcing (thorough - ~30 seconds):**
+```bash
 /localdev/tcheda/tt-metal/python_env/bin/python3 \
   -m models.common.readiness_check.run_teacher_forcing \
     --model-dir models/autoports/<model_name> \
@@ -208,19 +229,22 @@ tt-smi -r   # if a previous run crashed
     --mesh-device N150
 ```
 
-The runner imports `<model_dir>/tt/generator.py::build_generator` by convention. No per-model glue is needed beyond your `tt/generator.py`.
+Tests token-by-token decode via `generator.generate()`. Required for release.
+
+Both runners import `<model_dir>/tt/generator.py::build_generator` by convention. No per-model glue needed.
 
 ### Expected output
 
-Per-entry and aggregate top-1 / top-5 / top-100 hit rates:
+Both tests should show similar per-entry and aggregate top-1 / top-5 / top-100 hit rates:
 
 ```
-entry[0]             top1=1.000 (34/34)  top5=1.000 (34/34)  top100=1.000 (34/34)
-entry[1]             top1=0.945 (121/128)  top5=1.000 (128/128)  top100=1.000 (128/128)
-AGGREGATE            top1=0.957 (155/162)  top5=1.000 (162/162)  top100=1.000 (162/162)
+entry[0]             top1=0.850 (217/256)  top5=0.945 (242/256)  top100=0.980 (251/256)
+AGGREGATE            top1=0.850 (217/256)  top5=0.945 (242/256)  top100=0.980 (251/256)
 ```
 
-Heuristic: **top-5 ≥ 99%** and **top-100 = 100%** indicate the port is functionally correct. Lower top-1 reflects quantization (bf8 vs bf16); meaningful but not a hard fail. If top-5 or top-100 are less than this it indicates a problem that must be investigated - either a bug or an over-aggressive low-precision datatype for example.
+Heuristic: **top-5 ≥ 93%** and **top-100 ≥ 97%** indicate the port is functionally correct. Lower top-1 reflects quantization (bf8 vs bf16); meaningful but not a hard fail. If accuracy differs significantly between tests, investigate:
+- Prefill higher: Decode path has issues (KV cache, position encoding)
+- Decode higher: Prefill path has issues (unlikely)
 
 ### Common failure modes
 
@@ -245,8 +269,9 @@ Out of scope for the current iteration. The vLLM serving harness is being design
 |---|---|
 | Decoder block interface (typical reference; the input decoder is the source of truth) | `models/tt_transformers/tt/decoder.py::TransformerBlock` |
 | Generator contract (Protocol + ABC) | `models/common/readiness_check/contract.py` |
-| Readiness runner (teacher forcing) | `models/common/readiness_check/run_teacher_forcing.py` |
-| Reference generator (HF teacher) | `models/common/readiness_check/generate.py` |
+| Readiness runner (batch prefill) | `models/common/readiness_check/run_prefill_check.py` |
+| Readiness runner (decode with teacher forcing) | `models/common/readiness_check/run_teacher_forcing.py` |
+| Reference generator (batch prefill on book text) | `models/common/readiness_check/generate.py` |
 | Reference file schema | `models/common/readiness_check/schema.py` |
 | Full model wrapper — structural template | `models/tt_transformers/tt/model.py::Transformer` |
 | Paged KV allocation pattern | `models/tt_transformers/tt/attention.py::init_kv_cache` |
