@@ -1,6 +1,6 @@
 # CI Disable Work — Status Log
 
-Last updated: **2026-05-27T16:35 UTC** (session: Tier-1 examining session. PR #44860 discovered (not in Quick Index — added this session): rebased onto main `08c2fb10e65`, verification run 26175502415 classified **verified-pass** (transformers/moreh/compute-fused failures are pre-existing on main; test_mla_wo still failing on BH P100+P150b). PR #45306 rebased onto main `08c2fb10e65`. PR #45322 verification run 26520651029 partial results: N150 success, N300 success, P150 failure (3 pre-existing FP8 tests also failing on main), P100 queued >60min (possible runner availability issue). 0 new dispatches this session.)
+Last updated: **2026-05-27T17:00 UTC** (session: Tier-1 examining session. PR #45110 rebased onto main `08c2fb10e65` (merge commit `a2094780e13`); disabled test `test_all_to_all_combine_no_trace` still failing on main — disable valid. PR #45112 rebased onto main `08c2fb10e65` (merge commit `e2edbbdf64e`); CCL nightly tests still failing on main — disables valid. PR #45322 run 26520651029 still in progress (P100 queued >1.5h). 0 new dispatches this session.)
 
 ---
 
@@ -22,8 +22,8 @@ Last updated: **2026-05-27T16:35 UTC** (session: Tier-1 examining session. PR #4
 | [#44860](https://github.com/tenstorrent/tt-metal/pull/44860) | `Nightly tt-metal L2 tests` | `verified-pass` | [26175502415](https://github.com/tenstorrent/tt-metal/actions/runs/26175502415) failure (classified verified-pass) | Yes | Rebased 2026-05-27 16:30 UTC onto main `08c2fb10e65`; test_mla_wo still failing on BH; all verification failures are pre-existing on main |
 | [#44938](https://github.com/tenstorrent/tt-metal/pull/44938) | `t3000-demo-tests` | `verified-pass` | [26295163268](https://github.com/tenstorrent/tt-metal/actions/runs/26295163268) success | Yes | Rebased 2026-05-27 14:28 UTC onto main `08c2fb10e65`; sd35 disable still valid; awaiting CI/review |
 | [#45108](https://github.com/tenstorrent/tt-metal/pull/45108) | `(T3K) T3000 e2e tests` | `verified-pass` | [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) — CCL failure + 90m timeout | Yes | Rebased 2026-05-27 14:27 UTC onto main `08c2fb10e65`; CCL disables still valid; awaiting human review |
-| [#45110](https://github.com/tenstorrent/tt-metal/pull/45110) | `Blackhole post-commit tests` | `verified-pass` | [26508063374](https://github.com/tenstorrent/tt-metal/actions/runs/26508063374) **success** | Yes | Rebased onto main `aa2de19b`; verification passed; awaiting human review |
-| [#45112](https://github.com/tenstorrent/tt-metal/pull/45112) | `(Blackhole) e2e tests` | `verified-pass` | [26508072188](https://github.com/tenstorrent/tt-metal/actions/runs/26508072188) **success** | Yes | Rebased onto main `aa2de19b`; verification passed; awaiting human review |
+| [#45110](https://github.com/tenstorrent/tt-metal/pull/45110) | `Blackhole post-commit tests` | `verified-pass` | [26508063374](https://github.com/tenstorrent/tt-metal/actions/runs/26508063374) **success** | Yes | Rebased 2026-05-27 17:00 UTC onto main `08c2fb10e65` (merge `a2094780e13`); disable still valid; awaiting human review |
+| [#45112](https://github.com/tenstorrent/tt-metal/pull/45112) | `(Blackhole) e2e tests` | `verified-pass` | [26508072188](https://github.com/tenstorrent/tt-metal/actions/runs/26508072188) **success** | Yes | Rebased 2026-05-27 17:00 UTC onto main `08c2fb10e65` (merge `e2edbbdf64e`); CCL nightly disables still valid; awaiting human review |
 | [#45114](https://github.com/tenstorrent/tt-metal/pull/45114) | `(Blackhole) Demo tests` | `out-of-scope` | — | N/A | **Disable REMOVED 2026-05-27**: test fixed on main since May 26. PR should be closed. |
 | [#45306](https://github.com/tenstorrent/tt-metal/pull/45306) | `(T3K) T3000 unit tests` | `verified-pass` | [26513061621](https://github.com/tenstorrent/tt-metal/actions/runs/26513061621) **failure** (pre-existing/out-of-scope) | Yes | Rebased 2026-05-27 16:30 UTC onto main `08c2fb10e65`; all 3 job failures pre-existing or out-of-scope |
 | [#45313](https://github.com/tenstorrent/tt-metal/pull/45313) | `vllm-nightly-tests` | `verified-pass` | [26515302390](https://github.com/tenstorrent/tt-metal/actions/runs/26515302390) **success** | Yes | Both WH-T3K and BH-DB sampling-test jobs passed; awaiting human review |
@@ -37,7 +37,7 @@ Last updated: **2026-05-27T16:35 UTC** (session: Tier-1 examining session. PR #4
 
 | Run | Pipeline | Branch | Started | Status | Notes |
 |-----|----------|--------|---------|--------|-------|
-| [26520651029](https://github.com/tenstorrent/tt-metal/actions/runs/26520651029) | `Nightly tt-metal L2 tests` | `ci/disable-failing-tests-l2-nightly-20260527` | 2026-05-27 15:21 UTC | **in progress (P100 queued >60min)** | PR #45322 first verify; N150 success, N300 success, P150 failure (3 pre-existing FP8 tests), P100 queued since 15:21 UTC — possible runner availability issue |
+| [26520651029](https://github.com/tenstorrent/tt-metal/actions/runs/26520651029) | `Nightly tt-metal L2 tests` | `ci/disable-failing-tests-l2-nightly-20260527` | 2026-05-27 15:21 UTC | **in progress (P100 queued >1h40min as of 17:01 UTC)** | PR #45322 first verify; N150 success, N300 success, P150 failure (3 pre-existing FP8 tests), P100 queued since 15:21 UTC — runner availability issue; still not started at 17:01 UTC |
 
 **Policy:** Concurrent runs across PRs are allowed; each automation session may dispatch at most three new runs.
 
@@ -151,8 +151,8 @@ Commit `dcf3628dcee`:
 | Branch | `ci/disable-failing-tests-blackhole-post-commit-20260524` |
 | Workflow file | `blackhole-post-commit.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-05-27 12:10 UTC — merged onto `main` @ `aa2de19bd3548be5f000f34353f62455e54e4498` via update_pull_request_branch |
-| Last revalidation | 2026-05-27 13:00 UTC — run 26507885931 (SHA `fe07cd11`) still shows same 3 failures |
+| Last rebase | 2026-05-27 17:00 UTC — merged main `08c2fb10e65` into branch (merge commit `a2094780e13`); prior base: `aa2de19bd354` |
+| Last revalidation | 2026-05-27 17:00 UTC — BH post-commit run 26518344490 (main `08c2fb10e65`, 2026-05-27 14:41 UTC): `blackhole-multi-card-fast-unit-tests (BH-LLMBox) / ttnn ops fast unit tests (ccl, DRAM prefetcher)` still **failure**; disable for `test_all_to_all_combine_no_trace[…-fabric_1d_ring_axis_0]` remains valid |
 | Verification run | [26508063374](https://github.com/tenstorrent/tt-metal/actions/runs/26508063374) — **success** (2026-05-27 11:20–12:05 UTC) |
 | Readiness | **Yes** (verification passed; awaiting human review) |
 
@@ -176,8 +176,8 @@ Commit `dcf3628dcee`:
 | Branch | `ci/disable-failing-tests-blackhole-e2e-tests-20260524` |
 | Workflow file | `blackhole-e2e-tests.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-05-27 12:10 UTC — merged onto `main` @ `aa2de19bd3548be5f000f34353f62455e54e4498` via update_pull_request_branch |
-| Last revalidation | 2026-05-27 13:00 UTC — run 26507885931 (SHA `fe07cd11`) still shows same 3 failures |
+| Last rebase | 2026-05-27 17:00 UTC — merged main `08c2fb10e65` into branch (merge commit `e2edbbdf64e`); prior base: `aa2de19bd354` |
+| Last revalidation | 2026-05-27 17:00 UTC — BH e2e run 26501643204 (main `9cc43ddcad`, 2026-05-27 09:02 UTC): `ccl nightly tests` still failing on bh_quietbox_2, bh_llmbox, bh_loudbox; CCL nightly disables (`test_all_to_all_combine_no_trace`, `test_reduce_scatter_async_4dev_ring`, `test_reduce_scatter_async_line`) remain valid. Additional new main failures not in scope (fast unit tests bh_quietbox_2, DeepSeek_PREFILL bh_llmbox). |
 | Verification run | [26508072188](https://github.com/tenstorrent/tt-metal/actions/runs/26508072188) — **success** (2026-05-27 11:21–12:02 UTC) |
 | Readiness | **Yes** (verification passed; awaiting human review) |
 
@@ -347,6 +347,8 @@ Preliminary conclusion: **likely verified-pass** once P100 completes — the Mes
 ---
 
 ## Recent Activity
+
+- `2026-05-27 ~17:00 UTC` — SESSION: **Tier-1 examining session. PR #45110 and PR #45112 rebased onto main `08c2fb10e65`. PR #45322 run 26520651029 still in progress (P100 queued >1.5h).** Examining PRs: #45110 (rebased `aa2de19bd354` → `08c2fb10e65`, merge commit `a2094780e13`; `test_all_to_all_combine_no_trace` disable still valid — BH post-commit run 26518344490 confirms job still failing on main), #45112 (rebased `aa2de19bd354` → `08c2fb10e65`, merge commit `e2edbbdf64e`; CCL nightly disables still valid — BH e2e run 26501643204 confirms `ccl nightly tests` still failing on all BH platforms). Lightweight check on #45322: P100 job in run 26520651029 still queued at 17:01 UTC (>1.5h queued — runner availability issue). No focus PRs (tier 1: all workflows covered; no priority-2/3 PRs). 0 dispatches this session.
 
 - `2026-05-27 ~16:35 UTC` — SESSION: **Tier-1 examining session. PR #44860 discovered and added to state log; PR #45306 rebased; PR #45322 verification partial results.** Examining PRs: #44860 (discovered — not in state log; verification run 26175502415 classified **verified-pass**: transformers/moreh/compute-fused failures all pre-existing on main; rebased onto 08c2fb10e65; test_mla_wo still failing on BH), #45306 (rebased onto 08c2fb10e65; T3K unit tests still failing on main), #45322 (verification run 26520651029 partial: N150 success, N300 success, P150 failure with 3 pre-existing FP8 tests, P100 queued >60min). Tier-1: all non-Galaxy single-card workflows with deterministic failures covered by open PRs (L2 nightly covered by PR #44860 AND #45322). 0 dispatches this session. Next session: classify PR #45322 run when P100 completes (likely verified-pass), check if PR #44860's test_distributed_fused_rmsnorm skip still needed (transformers tests passing on WH in latest scheduled run).
 
