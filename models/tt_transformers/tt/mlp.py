@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import torch
 
 import ttnn
@@ -124,9 +122,7 @@ class MLP(LightweightModule):
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
-        logical_seq_len = x.shape[-2]
-        seq_len = logical_seq_len
-        prefill_mem_seq = int(logical_seq_len) if mode == Mode.PREFILL else None
+        seq_len = x.shape[-2]
         TG = self.args.is_galaxy
         layer_num = max(self.layer_num, 0)  # cross_block uses the configuration of the first decoder
         activation_dtype = self.decoders_optimizations.get_tensor_dtype(
@@ -136,21 +132,9 @@ class MLP(LightweightModule):
             decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
         )
 
-        # Batched prefill can make total seq_len = batch * per_user_seq (e.g. 25*512=12800) which may not
-        # divide prefill_len_cutoff (1024 on WH). Pad to a multiple before chunk reshape; slice at end.
-        mlp_prefill_pad = 0
-        cutoff = self.args.prefill_len_cutoff
-        if mode == Mode.PREFILL and seq_len >= cutoff:  # 512 if Blackhole, 1024 if Wormhole
-            if seq_len % cutoff != 0:
-                mlp_prefill_pad = cutoff - (seq_len % cutoff)
-                x = ttnn.pad(
-                    x,
-                    padding=((0, 0), (0, 0), (0, mlp_prefill_pad), (0, 0)),
-                    value=0.0,
-                )
-                seq_len = logical_seq_len + mlp_prefill_pad
+        if mode == Mode.PREFILL and seq_len >= self.args.prefill_len_cutoff:  # 512 if Blackhole, 1024 if Wormhole
             # Reshape input to to fit on device and parallelize computation
-            x = ttnn.reshape(x, [1, seq_len // cutoff, cutoff, -1])
+            x = ttnn.reshape(x, [1, seq_len // self.args.prefill_len_cutoff, self.args.prefill_len_cutoff, -1])
 
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
@@ -158,81 +142,32 @@ class MLP(LightweightModule):
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
 
-        # For long-seq prefill (and specifically for batched prefill where seq_len is
-        # batch*per_user_seq), routing FF1/FF3 through minimal_matmul instead of
-        # MatmulMultiCoreReuseMultiCast picks up measurable utilization:
-        # per-op FLOP efficiency was ~45% for ttnn.linear vs ~57% for minimal_matmul
-        # on FF2 at the same shape family on Qwen3-Embedding-0.6B bs32/isl512.
-        use_mm_ff1_3 = (
-            mode != Mode.DECODE
-            and self.args.use_minimal_matmul_prefill(seq_len)
-            and isinstance(pc_1, ttnn.MinimalMatmulConfig)
+        w1_out = ttnn.linear(
+            x,
+            self.w1,
+            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
+            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+            program_config=pc_1,
+            memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
+            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
+            sub_device_id=self.prefetcher.worker_sub_device_id
+            if self.prefetcher is not None and mode == Mode.DECODE
+            else None,
         )
-
-        # Optional: emit FF1/FF3 outputs as BFP8 instead of BF16. This halves the
-        # DRAM write/read bandwidth of the [seq, hidden_dim] gate/up tensors that
-        # feed the silu*mul fused op (which already produces BFP8). Targeted to
-        # the MLP path specifically because it doesn't touch the rotary
-        # embedding op (rotary requires BF16 inputs and asserts otherwise).
-        # Profiler showed MinimalMatmul unpacker efficiency ~28% on FF1/FF3,
-        # i.e. the FPU is starved on activation reads — bumping FF1/FF3 outputs
-        # to BFP8 trades 1 bit of mantissa for halved activation traffic on
-        # the FF2 read path. Opt-in via QWEN_FF13_OUT_BFP8=1.
-        ff13_out_dtype = (
-            ttnn.bfloat8_b if mode == Mode.PREFILL and os.getenv("QWEN_FF13_OUT_BFP8", "0") == "1" else None
+        w3_out = ttnn.linear(
+            x,
+            self.w3,
+            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
+            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+            program_config=pc_3,
+            memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
+            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
+            sub_device_id=self.prefetcher.worker_sub_device_id
+            if self.prefetcher is not None and mode == Mode.DECODE
+            else None,
         )
-        if use_mm_ff1_3:
-            w1_out = ttnn.experimental.minimal_matmul(
-                x,
-                self.w1,
-                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-                config=pc_1,
-                memory_config=self.args.get_mlp_ff1_3_mem_config(
-                    mode, self.prefetcher, prefill_seq_len=prefill_mem_seq
-                ),
-                dtype=ff13_out_dtype,
-            )
-            w3_out = ttnn.experimental.minimal_matmul(
-                x,
-                self.w3,
-                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-                config=pc_3,
-                memory_config=self.args.get_mlp_ff1_3_mem_config(
-                    mode, self.prefetcher, prefill_seq_len=prefill_mem_seq
-                ),
-                dtype=ff13_out_dtype,
-            )
-        else:
-            w1_out = ttnn.linear(
-                x,
-                self.w1,
-                dtype=ff13_out_dtype or (ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16),
-                core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
-                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-                program_config=pc_1,
-                memory_config=self.args.get_mlp_ff1_3_mem_config(
-                    mode, self.prefetcher, prefill_seq_len=prefill_mem_seq
-                ),
-                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-                sub_device_id=self.prefetcher.worker_sub_device_id
-                if self.prefetcher is not None and mode == Mode.DECODE
-                else None,
-            )
-            w3_out = ttnn.linear(
-                x,
-                self.w3,
-                dtype=ff13_out_dtype or (ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16),
-                core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
-                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-                program_config=pc_3,
-                memory_config=self.args.get_mlp_ff1_3_mem_config(
-                    mode, self.prefetcher, prefill_seq_len=prefill_mem_seq
-                ),
-                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-                sub_device_id=self.prefetcher.worker_sub_device_id
-                if self.prefetcher is not None and mode == Mode.DECODE
-                else None,
-            )
         ttnn.deallocate(x)
 
         if TG:
@@ -337,13 +272,12 @@ class MLP(LightweightModule):
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
 
-        if mode != Mode.DECODE and self.args.use_minimal_matmul_prefill(seq_len):
+        if seq_len > 128 and mode != Mode.DECODE:
             w2_out = ttnn.experimental.minimal_matmul(
                 w2_in,
                 self.w2,
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
                 config=pc_2,
-                memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher, prefill_seq_len=prefill_mem_seq),
             )
         else:
             w2_out = ttnn.linear(
@@ -352,7 +286,7 @@ class MLP(LightweightModule):
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
                 dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
                 program_config=pc_2,
-                memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher, prefill_seq_len=prefill_mem_seq),
+                memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher),
                 core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
                 global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
                 sub_device_id=self.prefetcher.worker_sub_device_id
@@ -361,40 +295,33 @@ class MLP(LightweightModule):
             )
         ttnn.deallocate(w2_in)
 
-        if self.args.num_devices > 1:
-            w2_out_reduced = tt_all_reduce(
-                w2_out,
-                self.mesh_device,
-                self.tt_ccl,
-                cluster_axis=0,
-                dim=0 if (TG and self.dim < 8192) else 3,
-                sharded=(mode == Mode.DECODE),
-                memory_config=self.args.get_mlp_ff2_all_reduce_mem_config(
-                    mode, w2_out, prefill_seq_len=prefill_mem_seq
-                ),
-                rs_memory_config=self.model_config["MLP_RS_CONFIG"]["rs_memory_config"]
-                if mode == Mode.DECODE
-                else ttnn.DRAM_MEMORY_CONFIG,
-                dtype=self.args.ccl_dtype,
-                use_composite=True if self.dim == 8192 else False,
-                topology=self.args.ccl_topology(),
-                chunks_per_sync=self.model_config["MLP_RS_CONFIG"]["chunks_per_sync"] if mode == Mode.DECODE else 10,
-                num_workers_per_link=self.model_config["MLP_RS_CONFIG"]["num_workers_per_link"]
-                if mode == Mode.DECODE
-                else 2,
-                subdevice_id=self.prefetcher.worker_sub_device_id
-                if mode == Mode.DECODE and self.prefetcher is not None
-                else None,
-            )
-        else:
-            w2_out_reduced = w2_out
+        w2_out_reduced = tt_all_reduce(
+            w2_out,
+            self.mesh_device,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=0 if (TG and self.dim < 8192) else 3,
+            sharded=(mode == Mode.DECODE),
+            memory_config=self.args.get_mlp_ff2_all_reduce_mem_config(mode, w2_out),
+            rs_memory_config=self.model_config["MLP_RS_CONFIG"]["rs_memory_config"]
+            if mode == Mode.DECODE
+            else ttnn.DRAM_MEMORY_CONFIG,
+            dtype=self.args.ccl_dtype,
+            use_composite=True if self.dim == 8192 else False,
+            topology=self.args.ccl_topology(),
+            chunks_per_sync=self.model_config["MLP_RS_CONFIG"]["chunks_per_sync"] if mode == Mode.DECODE else 10,
+            num_workers_per_link=self.model_config["MLP_RS_CONFIG"]["num_workers_per_link"]
+            if mode == Mode.DECODE
+            else 2,
+            subdevice_id=self.prefetcher.worker_sub_device_id
+            if mode == Mode.DECODE and self.prefetcher is not None
+            else None,
+        )
         # Ensure dim 0 and 1 are 1
         original_shape = w2_out_reduced.shape
         w2_out_reduced = ttnn.reshape(
             w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )
-        if mode == Mode.PREFILL and mlp_prefill_pad:
-            w2_out_reduced = w2_out_reduced[:, :, :logical_seq_len, :]
 
         if mode == Mode.DECODE:
             w2_out_reduced = ttnn.to_memory_config(

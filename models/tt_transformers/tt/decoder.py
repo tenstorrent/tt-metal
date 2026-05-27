@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
@@ -102,7 +100,23 @@ class TransformerBlock(LightweightModule):
 
         # TODO: remove after https://github.com/tenstorrent/tt-metal/issues/35650 is fixed
         extra_rmsnorm_kwargs = {}
-        if args.base_model_name in ("Qwen2.5-7B", "Qwen2.5-VL-7B"):
+        # Llama 8B on a Galaxy DP4 row submesh runs out of L1 with fp32 RMSNorm
+        # accumulation, matching the existing Qwen workaround below.
+        use_galaxy_row_submesh_rmsnorm_l1_workaround = (
+            args.base_model_name == "Llama-3.1-8B"
+            and args.num_devices == 8
+            and args.mesh_device is not None
+            and tuple(args.mesh_device.shape) == (1, 8)
+            and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+        )
+        if (
+            args.base_model_name
+            in (
+                "Qwen2.5-7B",
+                "Qwen2.5-VL-7B",
+            )
+            or use_galaxy_row_submesh_rmsnorm_l1_workaround
+        ):
             extra_rmsnorm_kwargs["fp32_dest_acc_en"] = False
         self.attention_norm = DistributedNorm(
             RMSNorm(
@@ -220,8 +234,7 @@ class TransformerBlock(LightweightModule):
         residual = x
 
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
-        prefill_seq_len = int(x.shape[-2]) if mode == Mode.PREFILL else None
-        skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher, prefill_seq_len=prefill_seq_len)
+        skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher)
 
         assert (
             x.memory_config() == skip_mem_cfg
@@ -261,16 +274,9 @@ class TransformerBlock(LightweightModule):
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
         if self.pre_ff_norm is None:
-            # Optional: emit the post-attn residual sum as BFP8 (instead of BF16/None).
-            # ff_norm preserves input dtype, so this propagates to FF1/FF3 as well —
-            # halving the activation DRAM read on the [seq, dim] tensor that flows
-            # ff_norm -> FF1/FF3. Strictly local to the FF subgraph: the per-layer
-            # final residual `out` add still emits bf16 (see further down), so the
-            # next layer's attention path (and its rotary op which asserts bf16) is
-            # unaffected. Opt-in via QWEN_FFNORM_IN_BFP8=1.
-            ffnorm_in_bfp8 = mode == Mode.PREFILL and not TG and os.getenv("QWEN_FFNORM_IN_BFP8", "0") == "1"
-            post_attn_add_dtype = ttnn.bfloat8_b if ffnorm_in_bfp8 else (ttnn.bfloat16 if TG else None)
-            hidden_states = ttnn.add(residual, attn_out, memory_config=skip_mem_cfg, dtype=post_attn_add_dtype)
+            hidden_states = ttnn.add(
+                residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
+            )
             residual = hidden_states
             if mode == "prefill":
                 x.deallocate(True)
@@ -320,28 +326,13 @@ class TransformerBlock(LightweightModule):
                     cluster_axis=1,
                 )
 
-        # Optional: emit the post-FFN final residual sum as BFP8 in prefill.
-        # This is the activation that flows into the NEXT layer's attention_norm
-        # and from there into QKV. With QWEN_FFNORM_IN_BFP8=1 we already make
-        # the post-attn add BFP8 (so FF1/FF3 read BFP8); this knob completes
-        # the chain by also making the post-FFN add BFP8 (so QKV reads BFP8).
-        # Together: residual stream is BFP8 end-to-end through all 28 layers,
-        # halving the activation read on every QKV / FF1 / FF3 matmul.
-        # Safe wrt rotary (which asserts BF16): QKV's explicit `dtype` arg
-        # keeps its OUTPUT bf16, so Q/K split into rotary still get bf16.
-        # Opt-in via QWEN_RESIDUAL_BFP8=1.
-        residual_bfp8 = mode == Mode.PREFILL and not TG and os.getenv("QWEN_RESIDUAL_BFP8", "0") == "1"
-        if residual_bfp8:
-            out_dtype = ttnn.bfloat8_b
-        elif TG and not self.args.is_distributed_norm(mode):
-            out_dtype = self.args.ccl_dtype
-        else:
-            out_dtype = activation_dtype or ttnn.bfloat16
         out = ttnn.add(
             residual,
             hidden_states,
             memory_config=skip_mem_cfg,
-            dtype=out_dtype,
+            dtype=self.args.ccl_dtype
+            if TG and not self.args.is_distributed_norm(mode)
+            else activation_dtype or ttnn.bfloat16,
         )
 
         return out  # fractured across devices
