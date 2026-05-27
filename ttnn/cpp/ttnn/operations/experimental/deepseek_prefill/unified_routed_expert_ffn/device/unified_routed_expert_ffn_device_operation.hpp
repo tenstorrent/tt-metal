@@ -39,10 +39,8 @@ ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& down_proj,
     const ttnn::Tensor& counts,
     const ttnn::Tensor& global_expert_idx_table,
-    const ttnn::Tensor& expert_region_offsets,
     uint32_t local_expert_id,
     uint32_t chunk_M_tiles,
-    bool use_region_offsets,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output);
 

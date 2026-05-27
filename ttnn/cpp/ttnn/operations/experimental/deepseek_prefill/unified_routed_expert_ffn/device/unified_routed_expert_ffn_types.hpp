@@ -25,33 +25,20 @@ struct UnifiedRoutedExpertFfnParams {
     // counts[global_id]).
     uint32_t local_expert_id = 0;
 
-    // When true (fused extract+FFN+insert path): kernels add
-    // start_tile_row = expert_region_offsets[global_id]/32 to all DRAM tile
-    // indices so x reads and output writes hit this expert's slice of a
-    // shared dispatched_buffer. CB_IDX_SCRATCH page holds both idx and
-    // region_offsets.
-    //
-    // When false (unfused path): x is the already-extracted per-expert
-    // tokens tensor and output is a fresh per-expert tensor, both starting
-    // at row 0. Kernels use start_tile_row=0 and skip the region_offsets
-    // DRAM read. CB_IDX_SCRATCH holds only idx — saves the region_offsets
-    // page slot, freeing L1 for the 256-expert / 32-per-chip configuration
-    // where the combined-page CB pushed past the L1 budget and clashed
-    // with allocated L1 buffers at program create.
-    bool use_region_offsets = true;
-
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("chunk_M_tiles", "local_expert_id", "use_region_offsets");
-    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id, use_region_offsets); }
+    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id");
+    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id); }
 };
 
 // Tensors fed into the op.
 //
-// x is the (M_max, K=emb) dispatched-token buffer for this expert. Only the
+// x is the (M_max, K=emb) per-expert token buffer for this expert. Only the
 // first `counts[global_expert_idx_table[local_expert_id]]` rows are valid;
-// the rest is padding the FFN kernels must skip.
+// the rest is padding the FFN kernels must skip. Reader/writer always start
+// at tile row 0 — the FFN op operates on an already-extracted per-expert
+// tensor; a separate ttnn::extract / ttnn::insert pair handles slicing into
+// / out of any shared dispatched buffer.
 //
 // gate_proj/up_proj/down_proj are the (K=emb, N=hidden), (K=emb, N=hidden),
 // and (K=hidden, N=emb) weight tensors.
@@ -65,15 +52,6 @@ struct UnifiedRoutedExpertFfnInputs {
     Tensor down_proj;
     Tensor counts;
     Tensor global_expert_idx_table;
-    // Per-global-expert starting M-row in x (in tokens). The reader reads
-    // region_offsets[global_expert_id] device-side and adds it to the M-tile
-    // index of each DRAM read, so the FFN can operate on a slice of a
-    // larger shared buffer (e.g. the full dispatched_buffer) without a
-    // preceding extract op. Same for the writer's output tile_idx — output
-    // writes land at the same offset, so a separate insert op is also
-    // unnecessary. For single-expert tests where x is already the expert's
-    // tokens, pass a single-element [0] offsets tensor.
-    Tensor expert_region_offsets;
     std::optional<Tensor> optional_output;
 };
 

@@ -40,12 +40,6 @@ constexpr uint32_t CB_IN0_DOWN_FULL = tt::CBIndex::c_12;
 // partials_up (up matmul) using the SAME shared x K-block, halving x DRAM
 // reads vs the v1 sequential-phases design.
 constexpr uint32_t CB_PARTIALS_UP = tt::CBIndex::c_13;
-// Region offsets share CB_IDX_SCRATCH's L1 region. The idx CB is made
-// two-page: page 0 = idx table, page 1 = expert_region_offsets. Both are
-// UInt32 vectors of length num_routed_experts so the page sizes match
-// exactly — no separate CB allocation (which on Blackhole rounded up to
-// a 4KB region per core and pushed cb_in0_x past the L1 budget for the
-// 256-expert / 32-per-chip case).
 }  // namespace
 
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
@@ -196,7 +190,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     auto* down_buffer = t.down_proj.buffer();
     auto* counts_buffer = t.counts.buffer();
     auto* idx_buffer = t.global_expert_idx_table.buffer();
-    auto* region_offsets_buffer = t.expert_region_offsets.buffer();
     auto* out_buffer = tensor_return_value.buffer();
 
     // -------------------------- semaphores --------------------------------
@@ -267,13 +260,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         partials_d_df,
         /*tiles=*/d_out_block_num_tiles,
         partials_d_tile_size);
-    // Output CB: writer drains one subblock at a time. In the unfused path
-    // (use_region_offsets=false, 256-expert / 32-per-chip case) the L1
-    // budget is tight enough that the prior 4-subblock staging pushed the
-    // static CB region into already-allocated L1 buffers. Drop to 2
-    // subblocks (still pipelines compute/writer one-ahead) only on that
-    // path; keep 4 for the fused path where L1 has headroom.
-    const uint32_t cb_out_stage_count = op.use_region_offsets ? 4u : 2u;
+    // Output CB: writer drains one subblock at a time. 2-subblock staging
+    // pipelines compute/writer one-ahead and is safe under the tightest L1
+    // budget (the 256-expert / 32-per-chip case the unfused path is run on).
+    constexpr uint32_t cb_out_stage_count = 2u;
     make_cb(
         CB_OUT,
         out_df,
@@ -298,25 +288,13 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         tt::tt_metal::CircularBufferConfig(counts_page_size, {{CB_COUNTS_SCRATCH, tt::DataFormat::UInt32}})
             .set_page_size(CB_COUNTS_SCRATCH, counts_page_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, counts_cb_cfg);
-    // CB_IDX_SCRATCH:
-    //   * use_region_offsets=true (fused path): holds BOTH idx and
-    //     region_offsets in one page:
-    //       bytes [0, idx_page_size)                     -> idx table
-    //       bytes [idx_page_size, idx_page_size+region)  -> region_offsets
-    //     Reader reads both into the single L1 page (idx first,
-    //     region_offsets appended), pushes 1. Writer/compute cb_wait_front
-    //     and read at their respective offset.
-    //   * use_region_offsets=false (unfused path): holds ONLY idx. Saves
-    //     one region_offsets page per core; combined with the smaller
-    //     CB_OUT staging this drops the static CB region below the L1
-    //     buffer placed near the top of L1 (the placement the prior
-    //     offset_cumsum-output-to-DRAM mitigation already shifted around).
-    const uint32_t region_offsets_page_size = region_offsets_buffer->aligned_page_size();
-    const uint32_t idx_cb_page_size =
-        op.use_region_offsets ? (idx_page_size + region_offsets_page_size) : idx_page_size;
+    // CB_IDX_SCRATCH holds the device-side global_expert_idx_table page so
+    // reader/compute/writer can resolve `global_expert_id =
+    // idx_table[local_expert_id]` without re-reading DRAM. One page sized
+    // to the table's aligned page size.
     tt::tt_metal::CircularBufferConfig idx_cb_cfg =
-        tt::tt_metal::CircularBufferConfig(idx_cb_page_size, {{CB_IDX_SCRATCH, tt::DataFormat::UInt32}})
-            .set_page_size(CB_IDX_SCRATCH, idx_cb_page_size);
+        tt::tt_metal::CircularBufferConfig(idx_page_size, {{CB_IDX_SCRATCH, tt::DataFormat::UInt32}})
+            .set_page_size(CB_IDX_SCRATCH, idx_page_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, idx_cb_cfg);
 
     // -------------------------- kernel build ------------------------------
@@ -352,15 +330,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // K_down_tiles_padded — phase-4 K-loop bound. K dim of down is
         // padded to N_gate_padded so per-K-block sender = gx == kb holds.
         K_down_tiles_padded,
-        // region_offsets share CB_IDX_SCRATCH's single page — reader writes
-        // idx at offset 0 and region_offsets at offset idx_page_bytes
-        // within the same L1 page. Only read when use_region_offsets=true.
-        idx_page_size,
-        // use_region_offsets: when false, the kernel skips the
-        // region_offsets DRAM read and uses start_tile_row=0 (correct for
-        // the unfused extract->FFN path where `x` is already the per-expert
-        // slice).
-        static_cast<uint32_t>(op.use_region_offsets),
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -368,7 +337,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(idx_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(region_offsets_buffer).append_to(reader_ct_args);
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -403,11 +371,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // chunk_M_tiles rows per core, of which only those < M_tiles_full
         // correspond to real output rows in the tensor.
         M_tiles_full,  // 16
-        // Byte offset of region_offsets within CB_IDX_SCRATCH's L1 page.
-        // Writer reads idx at offset 0 and region_offsets at this offset.
-        // Only used when use_region_offsets=true.
-        idx_page_size,                                 // 17
-        static_cast<uint32_t>(op.use_region_offsets),  // 18
     };
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
 
@@ -563,8 +526,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         //  19..28: in0 multicast args
         //  29: act_ready_sem_id
         //  30: act_valid_sem_id
-        //  31: region_offsets_addr
-        //  32+: M-row NoC coord table (GRID_X pairs of x, y)
+        //  31+: M-row NoC coord table (GRID_X pairs of x, y)
         std::vector<uint32_t> reader_args = {
             x_buffer->address(),
             gate_buffer->address(),
@@ -597,7 +559,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             in0_sender_ny,
             act_ready_sem_id,
             act_valid_sem_id,
-            region_offsets_buffer->address(),
         };
         // M-row NoC coord table: for our M-row (gy=my_mt), the NoC (x, y) of
         // each of the GRID_X cores (gx=0..GRID_X-1). Reader uses this per
@@ -647,7 +608,6 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
     const uint32_t down_addr = t.down_proj.buffer()->address();
     const uint32_t counts_addr = t.counts.buffer()->address();
     const uint32_t idx_addr = t.global_expert_idx_table.buffer()->address();
-    const uint32_t region_offsets_addr = t.expert_region_offsets.buffer()->address();
     const uint32_t out_addr = tensor_return_value.buffer()->address();
 
     for (const auto& core : cores) {
@@ -658,9 +618,6 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
         reader_args[3] = down_addr;
         reader_args[4] = counts_addr;
         reader_args[5] = idx_addr;
-        // index 31 = region_offsets_addr (must stay in sync with the layout
-        // built in create() and consumed by reader_unified_re.cpp).
-        reader_args[31] = region_offsets_addr;
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_id, core);
         writer_args[0] = out_addr;

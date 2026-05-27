@@ -72,12 +72,10 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(is_dram_interleaved(w), "{} must be DRAM-interleaved", name);
     }
 
-    // Aux tensors: counts / global_expert_idx_table / expert_region_offsets
-    // are all small UINT32 vectors the reader fetches via DRAM accessor.
+    // Aux tensors: counts / global_expert_idx_table are small UINT32 vectors
+    // the reader fetches via DRAM accessor.
     for (const auto& [name, a] : std::initializer_list<std::pair<const char*, const ttnn::Tensor&>>{
-             {"counts", t.counts},
-             {"global_expert_idx_table", t.global_expert_idx_table},
-             {"expert_region_offsets", t.expert_region_offsets}}) {
+             {"counts", t.counts}, {"global_expert_idx_table", t.global_expert_idx_table}}) {
         TT_FATAL(a.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
         TT_FATAL(a.dtype() == tt::tt_metal::DataType::UINT32, "{} must be UINT32", name);
         TT_FATAL(is_dram_interleaved(a), "{} must be DRAM-interleaved", name);
@@ -150,10 +148,8 @@ ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& down_proj,
     const ttnn::Tensor& counts,
     const ttnn::Tensor& global_expert_idx_table,
-    const ttnn::Tensor& expert_region_offsets,
     uint32_t local_expert_id,
     uint32_t chunk_M_tiles,
-    bool use_region_offsets,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output) {
     using OperationType =
@@ -162,7 +158,6 @@ ttnn::Tensor unified_routed_expert_ffn(
         OperationType::operation_attributes_t{
             .chunk_M_tiles = chunk_M_tiles,
             .local_expert_id = local_expert_id,
-            .use_region_offsets = use_region_offsets,
             .compute_kernel_config = compute_kernel_config},
         OperationType::tensor_args_t{
             .x = x,
@@ -171,7 +166,6 @@ ttnn::Tensor unified_routed_expert_ffn(
             .down_proj = down_proj,
             .counts = counts,
             .global_expert_idx_table = global_expert_idx_table,
-            .expert_region_offsets = expert_region_offsets,
             .optional_output = optional_output});
 }
 

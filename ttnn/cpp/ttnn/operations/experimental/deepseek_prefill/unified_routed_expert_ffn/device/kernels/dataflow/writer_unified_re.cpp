@@ -8,17 +8,15 @@
 // block, packed one subblock at a time) and write tiles to the DRAM-
 // interleaved output tensor at this core's (mt, nt_d) tile region, looped
 // over `effective_chunks` chunks. Reads the device-side counts/idx
-// scratch CBs to compute effective_chunks and start_tile_row (when
-// use_region_offsets=true). The activated tiles are distributed across
-// the M-row by the READER via L1 multicast — there is no DRAM scratch
-// round-trip or cross-core barrier.
+// scratch CBs to compute effective_chunks. Output writes start at tile
+// row 0 — the FFN op writes to a per-expert output tensor; ttnn::insert
+// handles placement into any shared destination buffer. The activated
+// tiles are distributed across the M-row by the READER via L1 multicast —
+// there is no DRAM scratch round-trip or cross-core barrier.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/assert.h"
-
-constexpr uint32_t TILE_HEIGHT = 32;
 
 void kernel_main() {
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
@@ -43,20 +41,12 @@ void kernel_main() {
     // destinations past M_tiles_full — we skip those writes here so we
     // don't OOB-write the output buffer.
     constexpr uint32_t M_tiles_full = get_compile_time_arg_val(16);
-    // Byte offset of region_offsets within cb_idx_scratch's L1 page.
-    // (idx lives at offset 0; region_offsets is appended after it.) Only
-    // used when use_region_offsets.
-    constexpr uint32_t region_offsets_l1_byte_offset = get_compile_time_arg_val(17);
-    // When false, the kernel uses start_tile_row=0 (correct for the unfused
-    // extract->FFN path where the output is a fresh per-expert tensor
-    // starting at row 0). Mirrors the reader's flag.
-    constexpr bool use_region_offsets = get_compile_time_arg_val(18) != 0;
 
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
     constexpr uint32_t d_in1_num_subblocks_M = per_core_M / d_out_subblock_h;
     constexpr uint32_t d_in1_num_subblocks_N = per_core_N_d / d_out_subblock_w;
 
-    constexpr uint32_t out_accessor_offset = 19;
+    constexpr uint32_t out_accessor_offset = 17;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, get_tile_size(cb_out));
 
@@ -78,25 +68,6 @@ void kernel_main() {
     const uint32_t count_tiles = (count_value + 31) / 32;
     const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
     const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
-    // Start tile row of this expert's slice in the shared output DRAM
-    // buffer. When use_region_offsets=true (fused path): read
-    // region_offsets[global_expert_id]/32 (token rows are tile-aligned).
-    // When false (unfused path): output is a fresh per-expert tensor
-    // starting at row 0.
-    uint32_t start_tile_row = 0;
-    if constexpr (use_region_offsets) {
-        const volatile tt_l1_ptr uint32_t* region_offsets_ptr =
-            reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1 + region_offsets_l1_byte_offset);
-        const uint32_t region_offset = region_offsets_ptr[global_expert_id];
-        // Contract: producer (offset_cumsum) emits per-expert region offsets
-        // in TOKEN rows that are tile-aligned (multiple of TILE_HEIGHT=32).
-        // A non-aligned value would silently push this expert's tile writes
-        // into the previous expert's slot.
-        ASSERT((region_offset & (TILE_HEIGHT - 1)) == 0);
-        start_tile_row = region_offset / TILE_HEIGHT;
-    } else {
-        (void)region_offsets_l1_byte_offset;
-    }
 
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
         const uint32_t row0 = chunk * chunk_M_tiles + my_mt * per_core_M;
@@ -117,18 +88,17 @@ void kernel_main() {
                         //     doesn't divide chunk_M_tiles. The matmul still
                         //     runs on those rows (reader zero-fills input),
                         //     but the output isn't part of the result tensor.
-                        // `row` is the LOCAL tile row within this expert's
-                        // slice; `start_tile_row + row` is the GLOBAL row in
-                        // the shared output buffer. Bounds:
+                        // Bounds:
+                        //   * col < N_down_tiles_full: GRID_X=11 ceil_div
+                        //     produces phantom output cols past actual N.
+                        //   * row < M_tiles_full: ceil_div of M produces a
+                        //     last-chunk tail past actual M when
+                        //     M_tiles_full doesn't divide chunk_M_tiles.
                         //   * row < count_tiles: the last chunk's per_core_M
                         //     rows extend past count_tiles when count_tiles
-                        //     is not chunk-aligned. Without this, we'd OOB-
-                        //     write into the NEXT expert's slice.
-                        //   * row < M_tiles_full: legacy guard, harmless to
-                        //     keep (always satisfied when count_tiles bound
-                        //     holds for the fused-insert path).
+                        //     is not chunk-aligned.
                         if (col < N_down_tiles_full && row < M_tiles_full && row < count_tiles) {
-                            const uint32_t tile_idx = (start_tile_row + row) * N_down_tiles_full + col;
+                            const uint32_t tile_idx = row * N_down_tiles_full + col;
                             noc_async_write_tile(tile_idx, out_acc, l1_read);
                         }
                         l1_read += out_tile_bytes;

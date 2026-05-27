@@ -20,19 +20,15 @@ ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& down_proj,
     const ttnn::Tensor& counts,
     const ttnn::Tensor& global_expert_idx_table,
-    const ttnn::Tensor& expert_region_offsets,
     uint32_t local_expert_id,
-    bool use_region_offsets,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& output) {
-    // Single-op fused routed-expert FFN. One device Program runs gate matmul,
+    // Single-op fused per-expert FFN. One device Program runs gate matmul,
     // up matmul, silu, multiply, down matmul as four phases inside the same
     // kernel. The kernel reads counts[global_expert_idx_table[local_expert_id]]
     // device-side at entry and bounds its chunk loop to
     // ceil(count / chunk_M_tiles) — chunks past the actual token count are
-    // skipped entirely (no matmul, no mcast). All MANDATORY (per user):
-    // device-side count sparsity, no host-side count read, no op2op gap from
-    // per-chunk dispatch.
+    // skipped entirely (no matmul, no mcast).
     //
     // chunk_M_tiles: any value in {16, 24, 32, 40, 48, 56, 64} (per_core_M =
     // chunk_M_tiles / GRID_Y, must be >= 2 and <= 8). M_tiles_full does NOT
@@ -72,10 +68,8 @@ ttnn::Tensor unified_routed_expert_ffn(
         down_proj,
         counts,
         global_expert_idx_table,
-        expert_region_offsets,
         local_expert_id,
         chunk_M_tiles,
-        use_region_offsets,
         compute_kernel_config.has_value() ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
                                           : std::nullopt,
         output);
@@ -100,76 +94,18 @@ ttnn::Tensor unified_routed_expert_moe(
     const uint32_t experts_per_chip = static_cast<uint32_t>(gate_projs.size());
     TT_FATAL(experts_per_chip > 0, "Need at least one expert per chip");
 
-    // Path selection based on num_routed_experts. The fused extract+insert
-    // path piggybacks expert_region_offsets onto CB_IDX_SCRATCH's L1 page
-    // (page_size = idx_page + region_offsets_page). On the high-expert
-    // configurations (num_routed_experts > 64, e.g. 256 experts with
-    // experts_per_chip=32) the region_offsets page is large enough
-    // (1024 bytes) to push the FFN's static CB region past a per-core L1
-    // buffer placed by the L1 allocator, producing:
-    //     "Statically allocated CBs ... clash with L1 buffers"
-    // Falling back to the unfused extract -> FFN -> insert path for that
-    // case avoids the issue (CB sizes shrink back to their pre-task-#37
-    // values) at the cost of the extract+insert op2op gaps.
-    const uint32_t num_routed_experts = static_cast<uint32_t>(expert_token_counts.logical_shape()[-1]);
-    const bool use_fused_path = (num_routed_experts <= 64);
-
-    if (use_fused_path) {
-        // Fused extract + FFN + insert: the unified FFN kernel reads
-        // region_offsets[global_expert_id] device-side and applies the
-        // offset to DRAM tile indices for both x reads and output writes.
-        // expert_outputs allocated with dispatched_buffer's shape/dtype;
-        // each per-expert FFN call writes its [start_row,
-        // start_row+ceil_tile(count)) slice.
-        //
-        // CALLER CONTRACT: per-expert slices [region_offsets[gid],
-        // region_offsets[gid] + ceil_tile(counts[gid])) MUST be pairwise
-        // disjoint across the global experts a single chip touches. The
-        // composite cannot enforce this host-side without a host-device
-        // sync (region_offsets is device-resident); offset_cumsum is the
-        // producer of these offsets and is the right place to maintain the
-        // invariant. Overlapping slices => silent cross-expert corruption.
-        auto expert_outputs = ttnn::empty(
-            dispatched_buffer.logical_shape(),
-            dispatched_buffer.dtype(),
-            ttnn::TILE_LAYOUT,
-            dispatched_buffer.device(),
-            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
-
-        for (uint32_t local_expert = 0; local_expert < experts_per_chip; ++local_expert) {
-            (void)unified_routed_expert_ffn(
-                dispatched_buffer,
-                gate_projs[local_expert],
-                up_projs[local_expert],
-                down_projs[local_expert],
-                expert_token_counts,
-                global_expert_idx_table,
-                expert_region_offsets,
-                local_expert,
-                /*use_region_offsets=*/true,
-                compute_kernel_config,
-                /*output=*/expert_outputs);
-        }
-        return expert_outputs;
-    }
-
-    // Fallback: unfused extract -> FFN -> insert per expert. Used for
-    // num_routed_experts > 64 (e.g. 256 experts). `tokens` from extract is
-    // a per-expert (max_dispatched_tokens_per_expert, emb) tensor with
-    // rows starting at 0 — region_offsets do NOT apply to it. Pass
-    // use_region_offsets=false so the FFN kernel:
-    //   (a) uses start_tile_row=0 for x reads and output writes (correctness
-    //       — otherwise the kernel would OOB-read past the small `tokens`
-    //       buffer), and
-    //   (b) drops the region_offsets slot from CB_IDX_SCRATCH and reduces
-    //       CB_OUT staging (L1 budget — the combined-page CB pushes the
-    //       static CB region past the L1 allocator's buffer placement on
-    //       the 256-expert / 32-per-chip case at large M).
-    // Allocate a fresh output buffer rather than aliasing dispatched_buffer.
-    // Aliasing worked iff insert/extract touched strictly disjoint per-expert
-    // regions, but a single bug upstream (e.g. an overlapping region_offset
-    // from offset_cumsum) would silently corrupt the next iteration's
-    // extract input. Mirror the fused path's allocation pattern.
+    // Per-expert composite: extract this expert's tokens out of the shared
+    // dispatched buffer, run the unified FFN on them, and insert the result
+    // back into a fresh output buffer at the expert's region offset. Same
+    // loop applies regardless of `num_routed_experts` — the previously
+    // present "fused" path (FFN reading from / writing to the shared buffer
+    // via device-side region offsets) was removed because it only worked on
+    // non-production configurations (num_routed_experts <= 64).
+    //
+    // `tokens` from extract is a per-expert (max_dispatched_tokens_per_expert,
+    // emb) tensor with rows starting at 0. The FFN kernel always reads/writes
+    // from row 0 of its inputs; `ttnn::insert` handles placement into the
+    // shared output at expert_region_offsets[global_expert_id].
     auto expert_outputs = ttnn::empty(
         dispatched_buffer.logical_shape(),
         dispatched_buffer.dtype(),
@@ -191,9 +127,7 @@ ttnn::Tensor unified_routed_expert_moe(
             down_projs[local_expert],
             expert_token_counts,
             global_expert_idx_table,
-            expert_region_offsets,
             local_expert,
-            /*use_region_offsets=*/false,
             compute_kernel_config,
             std::nullopt);
         expert_outputs = ttnn::insert(

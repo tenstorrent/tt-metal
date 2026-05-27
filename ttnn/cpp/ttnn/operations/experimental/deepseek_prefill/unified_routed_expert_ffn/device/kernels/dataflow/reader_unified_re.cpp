@@ -7,8 +7,8 @@
 // Per-core responsibilities, sequenced over `effective_chunks` chunks
 // (effective_chunks = ceil(this expert's token count / chunk_M_tiles)):
 //   - Read counts/idx_table scratch once at kernel start to discover this
-//     expert's active token count and (when use_region_offsets) its
-//     start_tile_row in the shared dispatched_buffer.
+//     expert's active token count. x is the already-extracted per-expert
+//     token tensor — tile reads always start at row 0.
 //   - Phase 1 (gate matmul, fused with phase 2): per K-block, sender at
 //     gx=0 NoC-mcasts the x K-block to its M-row receivers (in0 mcast);
 //     sender at gy=0 NoC-mcasts the gate+up K-block to its N-col
@@ -23,9 +23,6 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/assert.h"
-
-constexpr uint32_t TILE_HEIGHT = 32;
 
 void kernel_main() {
     // -------------------------- runtime args ------------------------------
@@ -79,15 +76,9 @@ void kernel_main() {
     const uint32_t act_ready_sem_addr = get_semaphore(act_ready_sem_id);
     const uint32_t act_valid_sem_addr = get_semaphore(act_valid_sem_id);
 
-    // expert_region_offsets DRAM buffer address. Reader fetches the page at
-    // kernel start into cb_idx_scratch (appended to the idx page) so the
-    // writer reads the same L1 data — one DRAM read total per program for
-    // the offsets.
-    const uint32_t region_offsets_addr = get_arg_val<uint32_t>(31);
-
-    // M-row NoC coord table: GRID_X (x, y) pairs starting at runtime arg 32.
+    // M-row NoC coord table: GRID_X (x, y) pairs starting at runtime arg 31.
     // Used to resolve the sender's NoC addr per phase-4 K-block kb (= gx).
-    constexpr uint32_t M_ROW_NOC_RT_OFFSET = 32;
+    constexpr uint32_t M_ROW_NOC_RT_OFFSET = 31;
 
     // -------------------------- compile-time args -------------------------
     constexpr uint32_t cb_in0_x = get_compile_time_arg_val(0);
@@ -114,15 +105,6 @@ void kernel_main() {
     constexpr uint32_t cb_activated = get_compile_time_arg_val(20);
     constexpr uint32_t GRID_X_NOC = get_compile_time_arg_val(21);  // M-row mcast group size
     constexpr uint32_t K_down_tiles_padded = get_compile_time_arg_val(22);
-    // Byte offset of expert_region_offsets within cb_idx_scratch's single
-    // L1 page. The CB is sized to hold idx (at offset 0) followed by
-    // region_offsets (at this offset). Only used when use_region_offsets.
-    constexpr uint32_t region_offsets_l1_byte_offset = get_compile_time_arg_val(23);
-    // When false, skip the region_offsets DRAM read and use start_tile_row=0
-    // (correct for the unfused extract->FFN path where `x` is already the
-    // per-expert slice starting at row 0). Also lets the host shrink
-    // CB_IDX_SCRATCH to just the idx page (one fewer page worth of L1).
-    constexpr bool use_region_offsets = get_compile_time_arg_val(24) != 0;
 
     constexpr uint32_t g_in0_block_num_tiles = per_core_M * in0_block_w_gu;
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
@@ -131,7 +113,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 25;
+    constexpr uint32_t x_accessor_offset = 23;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
 
@@ -155,30 +137,15 @@ void kernel_main() {
     constexpr auto idx_args = TensorAccessorArgs<idx_accessor_offset>();
     const auto idx_acc = TensorAccessor(idx_args, idx_table_addr);
 
-    constexpr uint32_t region_offsets_accessor_offset = idx_args.next_compile_time_args_offset();
-    constexpr auto region_offsets_args = TensorAccessorArgs<region_offsets_accessor_offset>();
-    const auto region_offsets_acc = TensorAccessor(region_offsets_args, region_offsets_addr);
-
     // Look up active token count for this expert from device-side buffers.
     // Reserve+read+push so the compute kernel (TRISC) and writer kernel
     // (NCRISC) can cb_wait_front on these CBs and read the same L1 data.
-    // expert_region_offsets shares CB_IDX_SCRATCH's single L1 page: idx
-    // at offset 0, region_offsets at offset region_offsets_l1_byte_offset
-    // (= host-side idx_page_size). One scratch CB instead of three keeps
-    // the per-core L1 budget intact for the 256-expert / 32-per-chip case.
     cb_reserve_back(cb_counts_scratch, 1);
     cb_reserve_back(cb_idx_scratch, 1);
     const uint32_t counts_l1 = get_write_ptr(cb_counts_scratch);
     const uint32_t idx_l1 = get_write_ptr(cb_idx_scratch);
     noc_async_read_page(0, counts_acc, counts_l1);
     noc_async_read_page(0, idx_acc, idx_l1);
-    if constexpr (use_region_offsets) {
-        const uint32_t region_offsets_l1 = idx_l1 + region_offsets_l1_byte_offset;
-        noc_async_read_page(0, region_offsets_acc, region_offsets_l1);
-    } else {
-        (void)region_offsets_acc;
-        (void)region_offsets_l1_byte_offset;
-    }
     noc_async_read_barrier();
     cb_push_back(cb_counts_scratch, 1);
     cb_push_back(cb_idx_scratch, 1);
@@ -187,22 +154,6 @@ void kernel_main() {
     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
     const uint32_t global_expert_id = idx_ptr[local_expert_id];
     const uint32_t count_value = counts_ptr[global_expert_id];
-    // start_tile_row: when use_region_offsets, the per-expert offset within
-    // the shared dispatched_buffer (region_offsets entries are TOKEN rows,
-    // tile-aligned — divide by 32). When false, x is the already-extracted
-    // per-expert slice starting at row 0.
-    uint32_t start_tile_row = 0;
-    if constexpr (use_region_offsets) {
-        const volatile tt_l1_ptr uint32_t* region_offsets_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1 + region_offsets_l1_byte_offset);
-        const uint32_t region_offset = region_offsets_ptr[global_expert_id];
-        // Contract: producer (offset_cumsum) emits per-expert region offsets
-        // in TOKEN rows that are tile-aligned (multiple of TILE_HEIGHT=32).
-        // A non-aligned value would silently shift this expert's tile reads
-        // into the previous expert's tile rows.
-        ASSERT((region_offset & (TILE_HEIGHT - 1)) == 0);
-        start_tile_row = region_offset / TILE_HEIGHT;
-    }
     // count_value is in TOKEN rows. Convert to tile rows (ceil) then to chunks.
     // For count=0 the loop is empty (no chunks processed). For count > 0 we
     // process ceil(count_tiles / chunk_M_tiles) chunks; the remaining chunks
@@ -339,7 +290,7 @@ void kernel_main() {
                     if (row_valid) {
                         for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                             const uint32_t col = kb * in0_block_w_gu + k;
-                            const uint32_t tile_idx = (start_tile_row + row) * K_gate_tiles + col;
+                            const uint32_t tile_idx = row * K_gate_tiles + col;
                             noc_async_read_tile(tile_idx, x_acc, l1_x, /*offset=*/0, /*noc=*/0);
                             l1_x += x_tile_bytes;
                         }
