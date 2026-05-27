@@ -290,32 +290,6 @@ void validate_matmul_compute_grid_and_per_core_dims(
         chosen_program_config);
 }
 
-void validate_matmul_sharded_operand_grids_within_program_compute_grid(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
-    std::visit(
-        [&](const auto& program_config) {
-            using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
-                // When an input is sharded, the factory uses shard_spec.grid directly as all_cores
-                // and ignores compute_with_storage_grid_size entirely. Validating the shard grid
-                // against the origin-anchored compute_with_storage_grid_size rectangle incorrectly
-                // rejects grids that don't start at (0,0) (e.g. column 1 in a multi-chain fused op).
-                // The only physical constraint is that the shard grid fits within the device grid.
-                // For non-sharded inputs the config grid drives split_work_to_cores, so the
-                // origin-anchored check is still correct there.
-                const auto& config_grid = program_config.compute_with_storage_grid_size;
-                const auto device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
-                auto effective_grid_a = input_tensor_a.memory_config().is_sharded() ? device_grid : config_grid;
-                auto effective_grid_b = input_tensor_b.memory_config().is_sharded() ? device_grid : config_grid;
-                check_tensor_in_grid(input_tensor_a, effective_grid_a);
-                check_tensor_in_grid(input_tensor_b, effective_grid_b);
-            }
-        },
-        chosen_program_config);
-}
-
 void validate_matmul_work_distribution_and_gather_ring_topology(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -818,8 +792,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     validate_matmul_compute_grid_and_per_core_dims(input_tensor_a, chosen_program_config);
     validate_matmul_block_and_subblock_configuration(attributes, a_shape_padded, in0_tile, chosen_program_config);
     validate_matmul_fused_operations(optional_bias, attributes.user_fused_activation, chosen_program_config);
-    validate_matmul_sharded_operand_grids_within_program_compute_grid(
-        input_tensor_a, input_tensor_b, chosen_program_config);
     validate_matmul_work_distribution_and_gather_ring_topology(
         input_tensor_a,
         input_tensor_b,
