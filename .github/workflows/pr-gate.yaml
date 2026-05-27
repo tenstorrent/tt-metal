@@ -276,7 +276,7 @@ jobs:
   # Posts inline PR comments so developers can fix issues before the merge queue.
   clang-tidy-light:
     needs: [build-docker-images]
-    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
+    if: (github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'merge_group'
     timeout-minutes: 60
     runs-on: tt-ubuntu-2204-large-stable
     container:
@@ -409,7 +409,7 @@ jobs:
   # Full clang-tidy scan (same checks enforced at merge gate).
   code-analysis:
     needs: [build-docker-images]
-    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
+    if: (github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'merge_group'
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
     with:
@@ -579,7 +579,7 @@ jobs:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "${{ github.event_name == 'pull_request' && 'asan-build, code-analysis' || 'asan-build' }}"
+          required-jobs: "asan-build, code-analysis"
           optional-jobs: >-
             clang-tidy-light,
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
