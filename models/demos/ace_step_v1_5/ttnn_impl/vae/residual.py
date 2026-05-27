@@ -153,9 +153,14 @@ class TtOobleckResidualUnit:
             x = ttnn.to_memory_config(x, dram_mc)
 
         y = self.snake1(x)
-        y = self.conv1(y)  # k>7 static CB active — x safely in DRAM
-        y = self.snake2(y)  # → L1 (output_memory_config=L1; no k>7 conv follows)
-        y = self.conv2(y)  # k=1; _maybe_l1 is a no-op since y already L1
+        # conv1→snake2 TILE contract: return_sharded tries HEIGHT_SHARDED L1 when
+        # ACE_STEP_VAE_K7_SHARDED_OUTPUT=1; otherwise falls back to return_tile (DRAM TILE).
+        # snake2 accepts TILE (DRAM→L1 DMA or L1 passthrough) and skips Tilize on ROW_MAJOR.
+        y = self.conv1(y, return_sharded=True)
+        # snake2→conv2 TILE contract: return_tile keeps L1 TILE out (no Untilize) so conv2
+        # k=1 uses TILE in0 on the linear path or a single Untilize before conv1d.
+        y = self.snake2(y, return_tile=True)
+        y = self.conv2(y)
 
         x_T = int(x.shape[1])
         y_T = int(y.shape[1])

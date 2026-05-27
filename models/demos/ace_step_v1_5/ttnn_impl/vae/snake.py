@@ -115,14 +115,36 @@ class TtSnake1d:
             memory_config=self.memory_config,  # L1
         )
 
-    def __call__(self, x):
+    def _is_l1_tile(self, x) -> bool:
+        """Return ``True`` if *x* is already ``TILE`` layout in L1 (interleaved or HEIGHT_SHARDED).
+
+        Used to detect tensors returned by ``TtConv1d`` with ``return_sharded=True`` so
+        snake can skip the expensive ``to_layout`` Tilize step.
+        """
+        try:
+            if x.layout != self.ttnn.TILE_LAYOUT:
+                return False
+            mc = x.memory_config()
+            dram = getattr(self.ttnn, "DRAM_MEMORY_CONFIG", None)
+            return mc != dram
+        except Exception:
+            return False
+
+    def __call__(self, x, *, return_tile: bool = False):
         """Apply Snake activation in-place-ish.
 
         Args:
-            x: TTNN tensor of shape ``[B, T, C]`` (row-major, DRAM) or ``[B, 1, T, C]`` (tile).
+            x: TTNN tensor of shape ``[B, T, C]`` (row-major, DRAM) **or** TILE layout
+               (DRAM or L1) from ``TtConv1d`` with ``return_tile=True`` /
+               ``return_sharded=True``, **or** ``[B, 1, T, C]`` rank-4 tile.
+            return_tile: When ``True``, return **TILE** layout in ``output_memory_config``
+                (typically L1 for residual ``snake2``) instead of untilizing to ROW_MAJOR.
+                Used at the snake2→conv2(k=1) boundary so conv2 can consume TILE L1 in0
+                without a Tilize on ROW_MAJOR activations.
 
         Returns:
-            ``[B, T, C]`` row-major **DRAM** tensor — CB-safe for k>7 conv1d callers.
+            ``[B, T, C]`` row-major tensor by default — CB-safe for k>7 conv1d callers.
+            With ``return_tile=True``: ``[B, T, C]`` **TILE** in ``output_memory_config``.
             All intermediate tensors (ax, sin, s2, term, y4) live in L1 and are
             deallocated before returning, so the net L1 footprint on exit is zero.
         """
@@ -132,6 +154,15 @@ class TtSnake1d:
         dram_mc = self._dram_mc
 
         orig_shape = tuple(x.shape)
+
+        # Fast path: input is already TILE in L1 (HEIGHT_SHARDED or interleaved) from
+        # conv1(return_sharded=True).  Convert to L1 INTERLEAVED before unsqueeze so the
+        # rank-4 param broadcast and downstream to_layout check work unchanged.
+        # This S2I (or no-op) stays entirely on-chip — no DRAM traffic.
+        if len(orig_shape) == 3 and self._is_l1_tile(x):
+            if l1_mc is not None:
+                x = ttnn.to_memory_config(x, l1_mc)  # HEIGHT_SHARDED → L1 INTERLEAVED (NoC only)
+
         if len(orig_shape) == 3:
             x4 = ttnn.unsqueeze(x, 1)
             squeeze_back = True
@@ -141,9 +172,17 @@ class TtSnake1d:
         else:
             raise ValueError(f"TtSnake1d expects rank-3 [B,T,C] or rank-4 [B,1,T,C]; got {orig_shape}")
 
-        # Tilize to L1: DRAM read once here; all subsequent ops read/write L1 only.
+        # Tilize to L1, or (if already TILE) just ensure we are in L1.
+        # After the HEIGHT_SHARDED → L1 INTERLEAVED conversion above, x4 is L1 TILE
+        # and both branches below are no-ops, saving the expensive Tilize kernel.
         _tilize_kw = {"memory_config": l1_mc} if l1_mc is not None else {}
-        x4 = ttnn.to_layout(x4, ttnn.TILE_LAYOUT, **_tilize_kw)
+        if x4.layout != ttnn.TILE_LAYOUT:
+            # ROW_MAJOR → Tilize to L1 (normal path or DRAM ROW_MAJOR after return_tile).
+            x4 = ttnn.to_layout(x4, ttnn.TILE_LAYOUT, **_tilize_kw)
+        elif l1_mc is not None and x4.memory_config() != l1_mc:
+            # Already TILE but in DRAM (e.g. from return_tile without sharding):
+            # DMA copy DRAM→L1 (replaces the 4568 µs Tilize with a ~150 µs DMA copy).
+            x4 = ttnn.to_memory_config(x4, l1_mc)
 
         x4_compute = x4
         if self.compute_dtype is not None and x4.dtype != self.compute_dtype:
@@ -166,15 +205,19 @@ class TtSnake1d:
         if y4.dtype != self._storage_dtype:
             y4 = ttnn.typecast(y4, self._storage_dtype, **self._typecast_kw)
 
+        y = ttnn.squeeze(y4, 1) if squeeze_back else y4
+
+        if return_tile:
+            # TILE passthrough (residual snake2 → conv2 k=1): skip Untilize so conv2 linear /
+            # conv1d paths avoid a second Tilize on ROW_MAJOR L1 activations.
+            if self._output_mc is not None and y.memory_config() != self._output_mc:
+                y = ttnn.to_memory_config(y, self._output_mc)
+            return y
+
         # Untilize into the requested output memory (DRAM by default).
         # DRAM is required when the caller's next op is k>7 conv1d: program compilation
         # raises TT_FATAL if any L1 buffer is alive in the static CB region (~0–180 KiB).
         # When output_memory_config=L1_MEMORY_CONFIG the result stays in L1, saving the
         # DRAM write here and the downstream _maybe_l1 copy in k=1 conv.
         _rm_out_kw = {"memory_config": self._output_mc} if self._output_mc is not None else {}
-        if squeeze_back:
-            y = ttnn.squeeze(y4, 1)
-            y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, **_rm_out_kw)
-        else:
-            y = ttnn.to_layout(y4, ttnn.ROW_MAJOR_LAYOUT, **_rm_out_kw)
-        return y
+        return ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, **_rm_out_kw)
