@@ -488,16 +488,16 @@ void kernel_main() {
   <section class="panel" id="panel-batch_norm_sfpu">
     <h1>batch_norm_sfpu_kernel — <span class="badge badge-full">FULL</span></h1>
     <div class="path">ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_sfpu_kernel.cpp</div>
-    <div class="meta"><b>Commit:</b> <span class="commit-link">c0507770694</span> &nbsp; <b>Test:</b> <code>test_batch_norm.py</code> — 1526 PASS / 10 fail (= baseline; 10 fails are pre-existing FPU-variant build errors, unrelated)</div>
+    <div class="meta"><b>Commits:</b> <span class="commit-link">c0507770694</span> initial migration · <span class="commit-link">50d82ae55a9</span> absorb held-tile wait/pop into chain (Bulk+Scalar) &nbsp; <b>Test:</b> <code>test_batch_norm.py</code> — 1526 PASS / 10 fail (= baseline; 10 fails are pre-existing FPU-variant build errors, unrelated)</div>
 
     <div class="focus-toolbar" data-fkernel="batch_norm_sfpu">
       <span class="focus-label">Focus on decision:</span>
       <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 · Function CB args → template</button>
-      <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 · Held-tile lifecycles</button>
+      <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 · Held-tile wait/pop absorbed (Bulk + Scalar)</button>
       <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 · 5 stages → 1 fused chain</button>
       <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 · cb_tmp_1 dropped</button>
       <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 · Init: compute_kernel_hw_startup</button>
-      <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 · OptionalChainElement gates</button>
+      <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 · OptionalChainElement gates (+ absorb wait/pop)</button>
       <button class="show-all">Show all</button>
     </div>
 
@@ -677,36 +677,26 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {</span>
 
     const uint32_t inner_count = freq - tile_start;
 
-    <span class="dz" data-d="2">cb_wait_front(cb_bcast, 1);
-    cb_wait_front(cb_den,   1);
-    if constexpr (WeightHas) { cb_wait_front(cb_weight, 1); }
-    if constexpr (BiasHas)   { cb_wait_front(cb_bias,   1); }</span>
-
     constexpr uint32_t cb_final_out = NeedsTypecast ? cb_output_final : cb_output_0;
 
     <span class="dz" data-d="3">// Stage 2..5 fused — DEST[0] threaded through Sub → Mul(den) → [Mul(weight)] → [Add(bias)] → [Typecast] → Pack.
     eltwise_chain(
         inner_count,
-        CopyTile&lt;cb_other, Dst::D0, Streaming,    OperandKind::Scalar, CopyTileReconfig::Input&gt;{},
-        CopyTile&lt;cb_bcast, Dst::D1, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input&gt;{},
+        CopyTile&lt;cb_other, Dst::D0, Streaming, OperandKind::Scalar, CopyTileReconfig::Input&gt;{},
+        <span class="dz" data-d="2">CopyTile&lt;cb_bcast, Dst::D1, Bulk,      OperandKind::Scalar, CopyTileReconfig::Input&gt;{},</span>
         SubBinary&lt;Dst::D0, Dst::D1, Dst::D0&gt;{},
-        CopyTile&lt;cb_den,   Dst::D1, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input&gt;{},
+        <span class="dz" data-d="2">CopyTile&lt;cb_den,   Dst::D1, Bulk,      OperandKind::Scalar, CopyTileReconfig::Input&gt;{},</span>
         MulBinary&lt;Dst::D0, Dst::D1, Dst::D0&gt;{},
         <span class="dz" data-d="6">OptionalChainElement&lt;
             WeightHas,
-            CopyTile&lt;cb_weight, Dst::D1, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input&gt;&gt;{},
+            <span class="dz" data-d="2">CopyTile&lt;cb_weight, Dst::D1, Bulk,    OperandKind::Scalar, CopyTileReconfig::Input&gt;</span>&gt;{},
         OptionalChainElement&lt;WeightHas, MulBinary&lt;Dst::D0, Dst::D1, Dst::D0&gt;&gt;{},
         OptionalChainElement&lt;
             BiasHas,
-            CopyTile&lt;cb_bias, Dst::D1, CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input&gt;&gt;{},
+            <span class="dz" data-d="2">CopyTile&lt;cb_bias,   Dst::D1, Bulk,    OperandKind::Scalar, CopyTileReconfig::Input&gt;</span>&gt;{},
         OptionalChainElement&lt;BiasHas, AddBinary&lt;Dst::D0, Dst::D1, Dst::D0&gt;&gt;{},
         OptionalChainElement&lt;NeedsTypecast, Typecast&lt;TcInFmt, TcOutFmt, Dst::D0&gt;&gt;{},</span>
         PackTile&lt;cb_final_out, Dst::D0, OutStreaming, OperandKind::Scalar, PackTileReconfig::Output&gt;{});</span>
-
-    <span class="dz" data-d="2">cb_pop_front(cb_bcast, 1);
-    cb_pop_front(cb_den,   1);
-    if constexpr (WeightHas) { cb_pop_front(cb_weight, 1); }
-    if constexpr (BiasHas)   { cb_pop_front(cb_bias,   1); }</span>
 }
 
 void kernel_main() {
@@ -758,11 +748,11 @@ void kernel_main() {
       <h4>Decisions — hover for tooltip, click chips above to focus the code</h4>
       <ul>
         <li><span class="swatch" style="background:rgba(255,191,0,0.45)"></span><b>1 · Function CB args → template params.</b> Chain template parameters require constexpr CB ids; the original passed all 11 CBs as <code>uint32_t</code> runtime args. Lifted everything (WeightHas, BiasHas, NeedsTypecast, TcInFmt, TcOutFmt, and 9 CBs) into the function template. Calls from kernel_main pass them as template args.</li>
-        <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 · Held-tile lifecycles: CallerManaged + external wait/pop.</b> cb_bcast / cb_den / cb_weight / cb_bias all wait once at the start of the function and pop once at the end (held across the per-iter loop). Chain side is CallerManaged + Scalar; kernel-side keeps the explicit <code>cb_wait_front</code> / <code>cb_pop_front</code> pair. cb_batch_var, used only once per function call, is Bulk + Scalar (chain absorbs the 1-tile wait+pop via <code>window_1d&lt;Scalar&gt;</code>).</li>
+        <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 · Held-tile wait/pop absorbed via Bulk + Scalar.</b> Every held single-tile operand (cb_bcast, cb_den, cb_weight, cb_bias) uses <code>Bulk + Scalar</code> — <code>window_1d&lt;Scalar&gt;</code> collapses Bulk's window to 1, so each <code>CopyTile</code> emits exactly <code>cb_wait_front(cb, 1)</code> at the chain head and <code>cb_pop_front(cb, 1)</code> at the tail. The initial migration kept these as CallerManaged with 8 external wait/pop lines around the chain; the simplification (50d82ae55a9) drops all eight. cb_batch_var (used only in Stage 1) was already Bulk + Scalar.</li>
         <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 · 5 stages → 1 fused chain.</b> Original ran each of Sub, Mul(den), Mul(weight), Add(bias), Typecast in a separate <code>tile_regs_acquire / commit / release</code> window and staged the running result through cb_tmp_1. The fused chain threads DEST[0] across all stages: <code>CopyTile</code>s load the new operand into D1, SFPU binaries consume (D0, D1) and write D0. Single DEST window. Stage 1 (rsqrt) stays its own chain — it produces cb_den which is then consumed across the iter loop.</li>
         <li><span class="swatch" style="background:rgba(207,34,46,0.40)"></span><b>4 · cb_tmp_1 dropped from the function.</b> No longer needed because DEST holds the running result. The host's CT-arg slot 9 is preserved as a no-op for ABI compatibility with the program factory.</li>
         <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 · Init: <code>compute_kernel_hw_startup</code>.</b> Convention in already-migrated kernels (batch_norm_kernel.cpp FPU FULL). Original used <code>unary_op_init_common(cb_other, cb_output_0)</code> — unary-shaped init that didn't match the actual binary-Sfpu work. The chain emits its own per-element inits, so kernel-level startup just needs to set the initial unpacker/pack formats.</li>
-        <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 · OptionalChainElement gates weight / bias / typecast.</b> Three independent compile-time booleans (WeightHas, BiasHas, NeedsTypecast) collapse to no-op tags when false — eliminates the need for an explicit 8-way constexpr-if branching in the chain body.</li>
+        <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 · OptionalChainElement gates weight / bias / typecast — AND absorbs their wait/pop.</b> Three independent compile-time booleans (WeightHas, BiasHas, NeedsTypecast) collapse to no-op tags when false — eliminates an 8-way constexpr-if branching in the chain body. Crucially, <code>OptionalChainElement&lt;false, Inner&gt;</code> inherits a tag with <code>cb_a_id() = 0</code> and <code>a_policy() = CallerManaged</code>, so the chain emits ZERO wait/pop on the inactive branch — same compile-time gating as the original constexpr-if'd <code>cb_wait_front(cb_weight, 1)</code>, just absorbed into the chain.</li>
       </ul>
     </div>
   </section>
@@ -1256,8 +1246,8 @@ void kernel_main() {
       "1": { title: "Function CB args → template params",
              body: "Chain template parameters require constexpr CB ids; the original passed all 11 CBs as <code>uint32_t</code> runtime args to <code>batchnorm_bcast_tiles</code>. Lifted everything (WeightHas, BiasHas, NeedsTypecast, TcInFmt, TcOutFmt, and 9 CBs) into the function template. Calls from kernel_main pass them as template args.",
              color: "#d6a000" },
-      "2": { title: "Held-tile lifecycles: CallerManaged + external wait/pop",
-             body: "cb_bcast / cb_den / cb_weight / cb_bias all wait once at the start of the function and pop once at the end (held across the per-iter loop). Chain side is CallerManaged + Scalar; kernel-side keeps the explicit wait_front / pop_front pair. cb_batch_var, used only once per function call, uses Bulk + Scalar (chain absorbs the 1-tile wait+pop via window_1d&lt;Scalar&gt;).",
+      "2": { title: "Held-tile wait/pop absorbed via Bulk + Scalar",
+             body: "Every held single-tile operand (cb_bcast, cb_den, cb_weight, cb_bias) uses <code>Bulk + Scalar</code>. <code>window_1d&lt;Scalar&gt;</code> collapses Bulk's window to 1, so each CopyTile emits exactly <code>cb_wait_front(cb, 1)</code> at the chain head and <code>cb_pop_front(cb, 1)</code> at the tail. Initial migration kept these as CallerManaged with 8 external wait/pop lines; simplification (50d82ae55a9) drops all eight.",
              color: "#2ea043" },
       "3": { title: "5 stages → 1 fused chain",
              body: "Original ran each of Sub, Mul(den), Mul(weight), Add(bias), Typecast in a separate tile_regs_acquire/commit/release window and staged the running result through cb_tmp_1. The fused chain threads DEST[0] across all stages — CopyTiles load new operands into D1, SFPU binaries consume (D0, D1) and write D0. Single DEST window. Stage 1 (rsqrt) stays its own chain — it produces cb_den consumed across the iter loop.",
@@ -1268,8 +1258,8 @@ void kernel_main() {
       "5": { title: "Init: compute_kernel_hw_startup",
              body: "Convention in already-migrated kernels (batch_norm_kernel.cpp FPU FULL). Original used <code>unary_op_init_common(cb_other, cb_output_0)</code> — unary-shaped init that didn't match the actual binary-Sfpu work. The chain emits its own per-element inits, so kernel-level startup just needs to set the initial unpacker/pack formats.",
              color: "#9f4bbf" },
-      "6": { title: "OptionalChainElement gates weight / bias / typecast",
-             body: "Three independent compile-time booleans (WeightHas, BiasHas, NeedsTypecast) collapse to no-op tags when false — eliminates the need for an explicit 8-way constexpr-if branching in the chain body.",
+      "6": { title: "OptionalChainElement gates — AND absorbs their wait/pop",
+             body: "Three compile-time booleans (WeightHas, BiasHas, NeedsTypecast) collapse to no-op tags when false. Crucially, <code>OptionalChainElement&lt;false, Inner&gt;</code> inherits a tag with <code>cb_a_id() = 0</code> and <code>a_policy() = CallerManaged</code>, so the chain emits ZERO wait/pop on the inactive branch. Same compile-time gating as a constexpr-if'd external wait, just absorbed into the chain.",
              color: "#ff7a00" }
     },
     "running_stats_sfpu": {
