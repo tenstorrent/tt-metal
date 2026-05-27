@@ -134,35 +134,39 @@ def _coerce_shape_value(obj):
 
 
 def _normalize_tensor_placement(tp):
-    """Normalize tensor_placement for validation comparison.
+    """Collapse fully-replicated placements across different mesh shapes.
 
-    mesh_device_shape and distribution_shape are device-topology properties
-    of the runtime environment, not semantic properties of the op configuration.
-    The same op call produces identical results regardless of whether the mesh
-    was opened as [1,1] or [1,2].  Strip these fields so that master configs
-    traced on a 1-device mesh and sweep results from a 2-device mesh compare
-    as equivalent.
-
-    For fully-replicated placements, also collapse the placement list to a
-    canonical 1-D form so [4,8]-replicated matches [32]-replicated.
+    `[4, 8]` distribution + ['PlacementReplicate', 'PlacementReplicate']
+    is semantically identical to `[32]` distribution + ['PlacementReplicate'].
+    Same for any rectangular full-replication case. Reduce both to the 1-D
+    fully-replicated form for comparison.
     """
     if not isinstance(tp, dict):
         return tp
-    out = dict(tp)
-    # Strip topology-specific fields that don't affect op semantics
-    out.pop("mesh_device_shape", None)
-    out.pop("distribution_shape", None)
-
-    plac_raw = out.get("placement")
+    plac_raw = tp.get("placement")
+    dist_raw = tp.get("distribution_shape")
+    mesh_raw = tp.get("mesh_device_shape")
     try:
         plac = _ast.literal_eval(plac_raw) if isinstance(plac_raw, str) else plac_raw
+        dist = _ast.literal_eval(dist_raw) if isinstance(dist_raw, str) else dist_raw
     except Exception:
-        return out
-    if not isinstance(plac, (list, tuple)):
-        return out
-    # Fully replicated: collapse to canonical form
-    if plac and all("Replicate" in str(p) for p in plac):
-        out["placement"] = "['PlacementReplicate']"
+        return tp
+    if not isinstance(plac, (list, tuple)) or not isinstance(dist, (list, tuple)):
+        return tp
+    if not plac or any("Replicate" not in str(p) for p in plac):
+        return tp
+    # Fully replicated: collapse to 1-D
+    total = 1
+    for d in dist:
+        try:
+            total *= int(d)
+        except (TypeError, ValueError):
+            return tp
+    out = dict(tp)
+    out["placement"] = "['PlacementReplicate']"
+    out["distribution_shape"] = f"[{total}]"
+    if mesh_raw is not None:
+        out["mesh_device_shape"] = f"[1, {total}]"
     return out
 
 
