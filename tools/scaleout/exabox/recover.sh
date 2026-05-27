@@ -36,7 +36,21 @@ Optional:
     --factory-descriptor-path <path>        Path to factory system descriptor file (overrides --config defaults;
                                             when provided, cabling and deployment descriptors are ignored)
                                             (8x16 default: /data/scaleout_configs/5xBH_8x16_intrapod/fsd.textproto)
+    --rerun-on-retrain                      Rerun validation when Ethernet links are retrained
+                                            (the underlying tool early-exits after a successful retrain without sending
+                                            traffic; this reruns it to actually validate the cluster)
+    --validation-args <args>                Extra arguments passed verbatim to run_cluster_validation (quoted string)
+                                            e.g. --validation-args "--min-connections 2 --hard-fail"
+                                            Use this for any run_cluster_validation flag (relaxed validation, strict
+                                            failure, connectivity prints, metrics logging, etc.)
     --help                                  Display this help message and exit
+
+================================================================================
+To see the full list of run_cluster_validation flags forwardable via
+--validation-args, run (no cluster needed, --hosts is not required):
+
+    $0 --use-docker <image> --validation-args "--help"
+================================================================================
 
 Example:
     $0 --hosts bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u02,bh-glx-c02u08
@@ -63,6 +77,8 @@ CHECK=false
 MPI_IF="ens5f0np0"
 MPI_EXTRA_ARGS=()
 OUTPUT_DIR="recover-logs"
+RERUN_ON_RETRAIN=false
+VALIDATION_EXTRA_ARGS=()
 
 CABLING_DESCRIPTOR_PATH_DEFAULT="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto"
 DEPLOYMENT_DESCRIPTOR_PATH_DEFAULT="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"
@@ -193,6 +209,23 @@ while [[ $# -gt 0 ]]; do
             FACTORY_DESCRIPTOR_PATH="$2"
             shift 2
             ;;
+        --rerun-on-retrain)
+            if [[ -n "$2" ]] && [[ "$2" != --* ]]; then
+                echo "Error: --rerun-on-retrain does not accept a value"
+                exit 1
+            fi
+            RERUN_ON_RETRAIN=true
+            shift
+            ;;
+        --validation-args)
+            if [[ -z "$2" ]]; then
+                echo "Error: --validation-args requires a non-empty value"
+                exit 1
+            fi
+            read -ra _extra <<< "$2"
+            VALIDATION_EXTRA_ARGS+=("${_extra[@]}")
+            shift 2
+            ;;
         --help)
             show_help
             exit 0
@@ -204,6 +237,21 @@ while [[ $# -gt 0 ]]; do
             exit 1
             ;;
     esac
+done
+
+# If the operator forwarded --help / -h through --validation-args, just print
+# run_cluster_validation --help from the docker image and exit. Short-circuits
+# before --hosts validation since no cluster operation is performed.
+for _arg in "${VALIDATION_EXTRA_ARGS[@]}"; do
+    if [[ "$_arg" == "--help" || "$_arg" == "-h" ]]; then
+        if [[ -z "$DOCKER_IMAGE" ]]; then
+            echo "Error: --validation-args \"--help\" requires --use-docker <image>"
+            echo "Example: $0 --use-docker <ghcr-image> --validation-args \"--help\""
+            exit 1
+        fi
+        exec docker run --rm --entrypoint='' "$DOCKER_IMAGE" \
+            ./build/tools/scaleout/run_cluster_validation --help
+    fi
 done
 
 # Validate required arguments
@@ -290,6 +338,10 @@ echo "Skip reset: $SKIP_RESET"
 echo "Skip validation: $SKIP_VALIDATION"
 echo "Output directory: $OUTPUT_DIR"
 echo "Log file: $LOG_FILE"
+echo "Rerun on retrain: $RERUN_ON_RETRAIN"
+if [[ ${#VALIDATION_EXTRA_ARGS[@]} -gt 0 ]]; then
+    echo "Extra validation args: ${VALIDATION_EXTRA_ARGS[*]}"
+fi
 echo "=========================================="
 echo ""
 
@@ -316,26 +368,41 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
         VALIDATION_ARGS+=(--send-traffic)
     fi
     VALIDATION_ARGS+=(--num-iterations "$NUM_ITERATIONS")
+    if [[ ${#VALIDATION_EXTRA_ARGS[@]} -gt 0 ]]; then
+        VALIDATION_ARGS+=("${VALIDATION_EXTRA_ARGS[@]}")
+    fi
+
+    run_cluster_validation() {
+        if [[ -n "$DOCKER_IMAGE" ]]; then
+            ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+                --empty-entrypoint \
+                --mpi-interface "$MPI_IF" \
+                --volume /data/scaleout_configs \
+                "${MPI_EXTRA_ARGS[@]}" \
+                --host "$HOSTS" \
+                ./build/tools/scaleout/run_cluster_validation \
+                "${VALIDATION_ARGS[@]}"
+        else
+            mpirun --host "$HOSTS" \
+                --mca btl_tcp_if_include "$MPI_IF" \
+                "${MPI_EXTRA_ARGS[@]}" \
+                --tag-output \
+                ./build/tools/scaleout/run_cluster_validation \
+                "${VALIDATION_ARGS[@]}"
+        fi
+    }
 
     echo ""
     echo "Running cluster validation..."
-    if [[ -n "$DOCKER_IMAGE" ]]; then
-        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
-            --empty-entrypoint \
-            --mpi-interface "$MPI_IF" \
-            --volume /data/scaleout_configs \
-            "${MPI_EXTRA_ARGS[@]}" \
-            --host "$HOSTS" \
-            ./build/tools/scaleout/run_cluster_validation \
-            "${VALIDATION_ARGS[@]}"
-    else
-        mpirun --host "$HOSTS" \
-            --mca btl_tcp_if_include "$MPI_IF" \
-            "${MPI_EXTRA_ARGS[@]}" \
-            --tag-output \
-            ./build/tools/scaleout/run_cluster_validation \
-            "${VALIDATION_ARGS[@]}"
+    VALIDATION_LOG=$(mktemp)
+    run_cluster_validation 2>&1 | tee "$VALIDATION_LOG"
+
+    if [[ "$RERUN_ON_RETRAIN" == true ]] && grep -q "Ethernet Links were Retrained" "$VALIDATION_LOG"; then
+        echo ""
+        echo "Ethernet links were retrained — rerunning validation to issue traffic..."
+        run_cluster_validation
     fi
+    rm -f "$VALIDATION_LOG"
 else
     echo "Skipping validation (--skip-validation)"
 fi

@@ -29,7 +29,18 @@ Optional:
     --mpi-if <interface>                    Network interface for MPI TCP transport (default: ens5f0np0)
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
+    --validation-args <args>                Extra arguments passed verbatim to run_cluster_validation (quoted string)
+                                            e.g. --validation-args "--min-connections 2 --hard-fail"
+                                            Use this for any run_cluster_validation flag (relaxed validation, strict
+                                            failure, connectivity prints, metrics logging, etc.)
     --help                                  Display this help message and exit
+
+================================================================================
+To see the full list of run_cluster_validation flags forwardable via
+--validation-args, run (no cluster needed, --hosts is not required):
+
+    $0 --image <image> --validation-args "--help"
+================================================================================
 
 Example:
     $0 --hosts bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u02,bh-glx-c02u08 \\
@@ -51,6 +62,7 @@ EXTRA_VOLUMES=(/data/scaleout_configs)
 RERUN_ON_RETRAIN=false
 MPI_IF="ens5f0np0"
 MPI_EXTRA_ARGS=()
+VALIDATION_EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -147,6 +159,15 @@ while [[ $# -gt 0 ]]; do
             MPI_EXTRA_ARGS+=("${_extra[@]}")
             shift 2
             ;;
+        --validation-args)
+            if [[ -z "$2" ]]; then
+                echo "Error: --validation-args requires a non-empty value"
+                exit 1
+            fi
+            read -ra _extra <<< "$2"
+            VALIDATION_EXTRA_ARGS+=("${_extra[@]}")
+            shift 2
+            ;;
         --help)
             show_help
             exit 0
@@ -158,6 +179,21 @@ while [[ $# -gt 0 ]]; do
             exit 1
             ;;
     esac
+done
+
+# If the operator forwarded --help / -h through --validation-args, just print
+# run_cluster_validation --help from the docker image and exit. Short-circuits
+# before --hosts validation since no cluster operation is performed.
+for _arg in "${VALIDATION_EXTRA_ARGS[@]}"; do
+    if [[ "$_arg" == "--help" || "$_arg" == "-h" ]]; then
+        if [[ -z "$DOCKER_IMAGE" ]]; then
+            echo "Error: --validation-args \"--help\" requires --image <docker-image>"
+            echo "Example: $0 --image <ghcr-image> --validation-args \"--help\""
+            exit 1
+        fi
+        exec docker run --rm --entrypoint='' "$DOCKER_IMAGE" \
+            ./build/tools/scaleout/run_cluster_validation --help
+    fi
 done
 
 # Validate required arguments
@@ -196,6 +232,7 @@ run_cluster_validation() {
             --tag-output \
             ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
+            "${VALIDATION_EXTRA_ARGS[@]}" \
             --send-traffic \
             --num-iterations 10 \
             --output-path "$validation_output_path"
@@ -208,6 +245,7 @@ run_cluster_validation() {
             --host "$HOSTS" \
             ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
+            "${VALIDATION_EXTRA_ARGS[@]}" \
             --send-traffic \
             --num-iterations 10 \
             --output-path "$validation_output_path"
@@ -284,6 +322,9 @@ if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
 fi
 echo "Number of iterations: $ITERATIONS"
 echo "Output directory: $OUTPUT_DIR"
+if [[ ${#VALIDATION_EXTRA_ARGS[@]} -gt 0 ]]; then
+    echo "Extra validation args: ${VALIDATION_EXTRA_ARGS[*]}"
+fi
 echo ""
 
 # Create output directory if it doesn't exist and resolve to an absolute path so
