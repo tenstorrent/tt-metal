@@ -23,18 +23,18 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import (
 @pytest.mark.parametrize(
     "device_params, axis, num_links, test_skew,topology",
     [
-        # FABRIC_1D_RING
+        # FABRIC_1D_LINE
         pytest.param(
             {
                 "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "trace_region_size": 500000,
             },
             0,
             1,
             False,
-            ttnn.Topology.Ring,
-            id="fabric_1d_ring_axis_0",
+            ttnn.Topology.Linear,
+            id="fabric_1d_line_axis_0",
         ),
     ],
     indirect=["device_params"],
