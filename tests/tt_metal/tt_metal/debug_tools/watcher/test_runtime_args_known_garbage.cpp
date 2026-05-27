@@ -304,7 +304,7 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams krp{
             .kernel_spec_name = DM_KERNEL_NAME,
             .advanced_options =
-                experimental::metal2_host_api::KernelRunParamsAdvancedOptions{
+                experimental::metal2_host_api::AdvancedKernelRunParams{
                     .common_runtime_varargs = default_crtas,
                 },
         };

@@ -133,7 +133,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "producer",
             .advanced_options =
-                KernelRunParamsAdvancedOptions{
+                AdvancedKernelRunParams{
                     .runtime_varargs =
                         {{node,
                           {
@@ -146,7 +146,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "consumer",
             .advanced_options =
-                KernelRunParamsAdvancedOptions{
+                AdvancedKernelRunParams{
                     .runtime_varargs =
                         {{node,
                           {
@@ -285,7 +285,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
             .named_runtime_args = {{.node = node, .args = {{"src_addr", input_buffer->address()}}}},
             .named_common_runtime_args = {{"num_entries", num_transfers}},
             .advanced_options =
-                KernelRunParamsAdvancedOptions{
+                AdvancedKernelRunParams{
                     .runtime_varargs = {{node, {kProducerRta0, kProducerRta1, kProducerRta2}}},
                     .common_runtime_varargs = {kProducerCrta0},
                 },
@@ -295,7 +295,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
             .named_runtime_args = {{.node = node, .args = {{"dst_addr", output_buffer->address()}}}},
             .named_common_runtime_args = {{"num_entries", num_transfers}},
             .advanced_options =
-                KernelRunParamsAdvancedOptions{
+                AdvancedKernelRunParams{
                     .runtime_varargs = {{node, {kConsumerRta0, kConsumerRta1}}},
                     .common_runtime_varargs = {kConsumerCrta0},
                 },
@@ -406,7 +406,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
             .named_runtime_args = {{.node = node, .args = {{"input_offset", kInputOffset}}}},
             .named_common_runtime_args = {{"num_tiles", num_transfers}},
             .advanced_options =
-                KernelRunParamsAdvancedOptions{
+                AdvancedKernelRunParams{
                     .runtime_varargs = {{node, {kVararg0, kVararg1}}},
                     .common_runtime_varargs = {kCommonVararg0},
                 },
@@ -414,7 +414,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "consumer",
             .advanced_options =
-                KernelRunParamsAdvancedOptions{
+                AdvancedKernelRunParams{
                     .runtime_varargs = {{node, {output_buffer->address(), 0u, num_transfers}}},
                 },
         },
@@ -613,14 +613,14 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "producer",
             .advanced_options =
-                KernelRunParamsAdvancedOptions{
+                AdvancedKernelRunParams{
                     .runtime_varargs = {{node, {num_pages}}},
                 },
         },
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "consumer",
             .advanced_options =
-                KernelRunParamsAdvancedOptions{
+                AdvancedKernelRunParams{
                     .runtime_varargs = {{node, {num_pages}}},
                 },
         },

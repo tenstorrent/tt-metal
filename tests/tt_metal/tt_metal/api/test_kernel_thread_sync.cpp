@@ -55,7 +55,7 @@ ProgramRunParams::KernelRunParams make_run_params(
     return ProgramRunParams::KernelRunParams{
         .kernel_spec_name = kernel_name,
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs =
                     {{node,
                       {

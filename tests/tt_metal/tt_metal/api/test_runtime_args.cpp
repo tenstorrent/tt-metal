@@ -1003,7 +1003,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
     params.kernel_run_params = {{
         .kernel_spec_name = kernel_names[0],
         .advanced_options =
-            experimental::metal2_host_api::KernelRunParamsAdvancedOptions{
+            experimental::metal2_host_api::AdvancedKernelRunParams{
                 .runtime_varargs = {{core, std::vector<uint32_t>(common_rtas.size(), 0)}},
                 .common_runtime_varargs = common_rtas,
             },
@@ -1045,7 +1045,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
         params.kernel_run_params.push_back({
             .kernel_spec_name = kernel_names[i],
             .advanced_options =
-                experimental::metal2_host_api::KernelRunParamsAdvancedOptions{
+                experimental::metal2_host_api::AdvancedKernelRunParams{
                     .runtime_varargs = {{core, std::vector<uint32_t>(base_crtas.size(), 0)}},
                     .common_runtime_varargs = kernel_crtas,
                 },

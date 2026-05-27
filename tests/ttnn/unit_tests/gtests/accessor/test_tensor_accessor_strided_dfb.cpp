@@ -185,14 +185,14 @@ void run_strided_dfb_copy_test(
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "reader",
             .advanced_options =
-                KernelRunParamsAdvancedOptions{
+                AdvancedKernelRunParams{
                     .runtime_varargs = {{node, {input_buffer->address(), total_pages}}},
                 },
         },
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "writer",
             .advanced_options =
-                KernelRunParamsAdvancedOptions{
+                AdvancedKernelRunParams{
                     .runtime_varargs = {{node, {output_buffer->address(), total_pages}}},
                 },
         },

@@ -104,7 +104,7 @@ struct KernelSpecAdvancedOptions {
     std::optional<NumVarargsPerNode> num_runtime_varargs_per_node = std::nullopt;
 };
 
-struct DataflowBufferSpecAdvancedOptions {
+struct DFBSpecAdvancedOptions {
     // Alias two or more DFBs.
     // Aliased DFBs are logically distinct, but physically share the same backing memory.
     // Aliased DFBs offer NO guarantees against data clobbering; kernel logic must ensure safety.
@@ -117,7 +117,7 @@ struct DataflowBufferSpecAdvancedOptions {
     std::vector<DFBSpecName> alias_with;
 };
 
-struct KernelRunParamsAdvancedOptions {
+struct AdvancedKernelRunParams {
     // Unnamed runtime argument "varargs" (companion to the vararg schema declared
     // on KernelSpecAdvancedOptions). Specified per-node; length can vary per-node.
     // (Slated for eventual removal in favor of typed array runtime args.)

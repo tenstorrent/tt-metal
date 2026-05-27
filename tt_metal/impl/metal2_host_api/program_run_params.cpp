@@ -24,16 +24,16 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 // Type alias for readability
 using KernelRTASchema = detail::ProgramImpl::KernelRTASchema;
 
-// Helpers for vararg-value access (now living on KernelRunParamsAdvancedOptions).
-const std::vector<KernelRunParamsAdvancedOptions::NodeVarargs>& kernel_runtime_varargs(
+// Helpers for vararg-value access (now living on AdvancedKernelRunParams).
+const std::vector<AdvancedKernelRunParams::NodeVarargs>& kernel_runtime_varargs(
     const ProgramRunParams::KernelRunParams& kp) {
-    static const std::vector<KernelRunParamsAdvancedOptions::NodeVarargs> empty;
+    static const std::vector<AdvancedKernelRunParams::NodeVarargs> empty;
     return kp.advanced_options.has_value() ? kp.advanced_options->runtime_varargs : empty;
 }
 
-const KernelRunParamsAdvancedOptions::CommonVarargs& kernel_common_runtime_varargs(
+const AdvancedKernelRunParams::CommonVarargs& kernel_common_runtime_varargs(
     const ProgramRunParams::KernelRunParams& kp) {
-    static const KernelRunParamsAdvancedOptions::CommonVarargs empty;
+    static const AdvancedKernelRunParams::CommonVarargs empty;
     return kp.advanced_options.has_value() ? kp.advanced_options->common_runtime_varargs : empty;
 }
 

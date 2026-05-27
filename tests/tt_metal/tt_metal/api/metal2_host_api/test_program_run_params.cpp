@@ -140,7 +140,7 @@ inline ProgramRunParams::KernelRunParams MakeKernelRunParams(
     return ProgramRunParams::KernelRunParams{
         .kernel_spec_name = kernel_name,
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs = {{node, per_node_args}},
                 .common_runtime_varargs = common_args,
             },
@@ -174,7 +174,7 @@ TEST_F(ProgramRunParamsTestQuasar, UnknownKernelNameFails) {
     params.kernel_run_params.push_back({
         .kernel_spec_name = "nonexistent_kernel",
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs = {},
                 .common_runtime_varargs = {},
             },
@@ -196,7 +196,7 @@ TEST_F(ProgramRunParamsTestQuasar, InvalidNodeForKernelFails) {
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs = {{wrong_node, {1, 2}}},  // Wrong node!
                 .common_runtime_varargs = {},
             },
@@ -302,7 +302,7 @@ TEST_F(ProgramRunParamsTestQuasar, MissingNodeRTAsFails) {
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs = {},  // Missing node RTAs!
                 .common_runtime_varargs = {},
             },
@@ -381,7 +381,7 @@ TEST_F(ProgramRunParamsTestQuasar, DuplicateNodeCoordInRuntimeArgsFails) {
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs = {{node, {1, 2}}, {node, {3, 4}}},  // Duplicate node!
                 .common_runtime_varargs = {},
             },
@@ -579,7 +579,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_MultiNodeKernel) {
     params.kernel_run_params.push_back({
         .kernel_spec_name = "producer",
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs = {{node0, {10, 20}}, {node1, {30, 40}}},
                 .common_runtime_varargs = {100},
             },
@@ -587,7 +587,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_MultiNodeKernel) {
     params.kernel_run_params.push_back({
         .kernel_spec_name = "consumer",
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs = {{node0, {}}, {node1, {}}},
                 .common_runtime_varargs = {},
             },
@@ -629,7 +629,7 @@ TEST_F(ProgramRunParamsTestQuasar, MultiNode_MissingOneNodeFails) {
     params.kernel_run_params.push_back({
         .kernel_spec_name = "producer",
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs = {{node0, {10, 20}}},  // Missing node1!
                 .common_runtime_varargs = {},
             },
@@ -637,7 +637,7 @@ TEST_F(ProgramRunParamsTestQuasar, MultiNode_MissingOneNodeFails) {
     params.kernel_run_params.push_back({
         .kernel_spec_name = "consumer",
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs = {{node0, {}}, {node1, {}}},
                 .common_runtime_varargs = {},
             },
@@ -792,7 +792,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyMultiNodeDifferingCountsSucceeds) {
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs = {{node_a, {10, 20}}, {node_b, {100, 200, 300, 400, 500}}},
             },
     });
@@ -827,7 +827,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargPerNodeOverrideMixedEntryTypesSucceeds)
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs = {{node_a, {1, 2, 3}}, {node_b, {10, 20, 30}}, {node_c, {100, 200, 300, 400, 500}}},
             },
     });
@@ -861,7 +861,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargScalarDefaultWithSparseOverrideSucceeds
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs =
                     {
                         {node_a, {1, 2}},                     // scalar default (2 args)
@@ -899,7 +899,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargSparseOverrideZeroErasesScalarDefault) 
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs = {{node_a, {1, 2, 3}}},
             },
     });
@@ -942,7 +942,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyRTAsMissingNodeCoverageFails) {
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs = {{node_a, {10, 20}}},  // node_b missing!
             },
     });
@@ -964,7 +964,7 @@ TEST_F(ProgramRunParamsTestQuasar, VarargOnlyUnknownNodeFails) {
     params.kernel_run_params.push_back({
         .kernel_spec_name = "dm_kernel",
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs = {{wrong_node, {42}}},
             },
     });
@@ -1008,7 +1008,7 @@ TEST_F(ProgramRunParamsTestQuasar, NamedAndVarargRTAsCoexistSucceeds) {
         .kernel_spec_name = "dm_kernel",
         .named_runtime_args = {{.node = node, .args = {{"input_ptr", 0x1000}}}},
         .advanced_options =
-            KernelRunParamsAdvancedOptions{
+            AdvancedKernelRunParams{
                 .runtime_varargs = {{node, {7, 8, 9}}},
             },
     });
