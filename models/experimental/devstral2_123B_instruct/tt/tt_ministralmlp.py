@@ -30,6 +30,9 @@ from models.experimental.devstral2_123B_instruct.tt.mem_config import (
     get_compute_kernel_config,
     get_compute_kernel_config_hifi4,
     get_linear_program_config,
+    get_prefill_width_sharded_matmul_output_mem_config,
+    get_prefill_width_sharded_matmul_program_config,
+    use_width_sharded_prefill_norm_matmul,
 )
 from models.experimental.devstral2_123B_instruct.tt.model_args import Devstral2Args
 from models.experimental.devstral2_123B_instruct.tt.weight_loading import (
@@ -120,42 +123,101 @@ class TtMLP:
             activation: Optional[str] = None,
             output_dtype: Optional[ttnn.DataType] = None,
             compute_kernel_config=None,
+            memory_config: Optional[ttnn.MemoryConfig] = None,
+            program_config: Optional[ttnn.ProgramConfig] = None,
         ) -> ttnn.Tensor:
-            return ttnn.linear(
-                inp,
-                weight,
-                dtype=output_dtype if output_dtype is not None else self.args.activation_dtype,
-                memory_config=act_mem,
-                activation=activation,
-                program_config=get_linear_program_config(
+            n = int(weight.shape[-1])
+            k = int(weight.shape[-2])
+            if program_config is None:
+                program_config = get_linear_program_config(
                     self.args,
                     self.mesh_device,
                     mode=mode,
                     kind=kind,
                     seq_len=seq_len,
-                    k=int(weight.shape[-2]),
-                    n=int(weight.shape[-1]),
-                ),
+                    k=k,
+                    n=n,
+                )
+            return ttnn.linear(
+                inp,
+                weight,
+                dtype=output_dtype if output_dtype is not None else self.args.activation_dtype,
+                memory_config=memory_config if memory_config is not None else act_mem,
+                activation=activation,
+                program_config=program_config,
                 compute_kernel_config=compute_kernel_config
                 if compute_kernel_config is not None
                 else self._compute_kernel_config,
             )
 
-        gate = _linear(
-            x,
-            self.gate_proj,
-            kind="gate",
-            activation="silu",
-            output_dtype=self.gate_proj_output_dtype,
-            compute_kernel_config=self._compute_kernel_config_hifi4,
-        )
-        up = _linear(
-            x,
-            self.up_proj,
-            kind="up",
-            output_dtype=self.up_proj_output_dtype,
-            compute_kernel_config=self._compute_kernel_config_hifi4,
-        )
+        def _prefill_width_sharded_linear(
+            inp,
+            weight,
+            *,
+            kind: str,
+            fused_activation: Optional[str] = None,
+            output_dtype: Optional[ttnn.DataType] = None,
+            compute_kernel_config=None,
+        ) -> ttnn.Tensor:
+            """Width-sharded matmul on the prefill norm grid.
+
+            Fused unary ops (e.g. SiLU on gate) must live in ``program_config.fused_activation`` only;
+            ``ttnn.linear(activation=...)`` is rejected for sharded matmul.
+            """
+            n = int(weight.shape[-1])
+            out = _linear(
+                inp,
+                weight,
+                kind=kind,
+                activation=None,
+                output_dtype=output_dtype,
+                compute_kernel_config=compute_kernel_config,
+                memory_config=get_prefill_width_sharded_matmul_output_mem_config(),
+                program_config=get_prefill_width_sharded_matmul_program_config(
+                    self.args,
+                    self.mesh_device,
+                    seq_len=seq_len,
+                    n=n,
+                    fused_activation=fused_activation,
+                ),
+            )
+            if out.memory_config().is_sharded():
+                out = ttnn.sharded_to_interleaved(out, act_mem)
+            return out
+
+        use_ws = use_width_sharded_prefill_norm_matmul(self.args, mode, seq_len)
+        if use_ws:
+            gate = _prefill_width_sharded_linear(
+                x,
+                self.gate_proj,
+                kind="gate",
+                fused_activation="silu",
+                output_dtype=self.gate_proj_output_dtype,
+                compute_kernel_config=self._compute_kernel_config_hifi4,
+            )
+            up = _prefill_width_sharded_linear(
+                x,
+                self.up_proj,
+                kind="up",
+                output_dtype=self.up_proj_output_dtype,
+                compute_kernel_config=self._compute_kernel_config_hifi4,
+            )
+        else:
+            gate = _linear(
+                x,
+                self.gate_proj,
+                kind="gate",
+                activation="silu",
+                output_dtype=self.gate_proj_output_dtype,
+                compute_kernel_config=self._compute_kernel_config_hifi4,
+            )
+            up = _linear(
+                x,
+                self.up_proj,
+                kind="up",
+                output_dtype=self.up_proj_output_dtype,
+                compute_kernel_config=self._compute_kernel_config_hifi4,
+            )
         inner = ttnn.mul(gate, up, memory_config=act_mem)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
