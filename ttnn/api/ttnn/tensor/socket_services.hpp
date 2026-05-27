@@ -174,12 +174,12 @@ public:
     // destruction, or any time a caller needs flow-control synchronisation.
     void barrier();
 
-    const Tensor& get_backing_tensor() const { return device_tensor_; }
+    const Tensor& get_backing_tensor() const;
 
     // The per-shard TensorSpec produced by the mapper. This is the single source
     // of truth for the device tensor's per-coord spec; same as
     // `get_backing_tensor().tensor_spec()`.
-    const TensorSpec& get_per_shard_spec() const { return device_tensor_.tensor_spec(); }
+    const TensorSpec& get_per_shard_spec() const;
 
     std::vector<distributed::H2DSocket*> get_sockets() const;
 
@@ -215,17 +215,96 @@ public:
     // `Config::metadata_size_bytes` was 0.
     DeviceAddr get_metadata_addr() const;
 
+    // ===== Cross-process attachment =====
+
+    // Export a service descriptor to /dev/shm/ so a remote process can attach
+    // via `H2DStreamService::connect(service_id, ...)` and drive
+    // `forward_to_tensor` calls into the same backing tensor. The descriptor
+    // bundles the per-coord socket descriptors inline — the remote does a
+    // single file read and reconstructs every socket in-memory via
+    // `H2DSocket::connect_from_descriptor`, avoiding any race between
+    // service- and socket-level descriptor files becoming visible on disk.
+    //
+    // The descriptor also carries the chunk plan, the mapper config, the mesh
+    // shape, the global tensor spec, the metadata size, and the socket-level
+    // config so the connector reconstructs an equivalent service handle
+    // without needing a `MeshDevice` of its own.
+    //
+    // Returns the descriptor file path. Owner-only; TT_FATALs in connector
+    // mode.
+    std::string export_descriptor(const std::string& service_id);
+
+    // Attach to an exported H2DStreamService from another process.
+    //
+    // Waits for the descriptor file at the conventional `/dev/shm/` path
+    // (`tt_h2d_stream_service_<service_id>.bin`), reads it, reconstructs the
+    // mapper via the shape-only `create_mesh_mapper(mesh_shape, mapper_config)`
+    // overload, and attaches every per-coord H2DSocket inline from the
+    // embedded socket descriptors. NO `MeshDevice` handle is acquired — the
+    // connector talks to the device only through the existing PCIeCoreWriter
+    // path inside each H2DSocket.
+    //
+    // The returned service supports `forward_to_tensor`,
+    // `forward_to_tensor_bytes`, `barrier`, and `get_per_shard_spec`. Owner-
+    // only methods (e.g. `get_backing_tensor`, the worker-sync getters,
+    // `export_descriptor`) TT_FATAL on the returned instance.
+    //
+    // @param service_id Identifier the owner passed to `export_descriptor`.
+    // @param timeout_ms Max wait time for the descriptor file (default 10s).
+    static std::unique_ptr<H2DStreamService> connect(
+        const std::string& service_id, std::optional<uint32_t> timeout_ms = std::nullopt);
+
 private:
+    // Connector-mode ctor. Called by the static `connect()` factory after it
+    // has:
+    //   * read the exported service descriptor,
+    //   * built a Config-equivalent payload (global_spec reconstructed from
+    //     the descriptor, mapper built via the shape-only
+    //     `create_mesh_mapper(mesh_shape, mapper_config)`),
+    //   * attached every per-coord socket via `H2DSocket::connect_from_descriptor`.
+    //
+    // The ctor stitches everything together: claims ownership of `cfg.mapper`,
+    // installs the connected sockets, sets the cached chunk plan, derives
+    // `per_shard_spec_` by running the mapper on a zero host tensor, and
+    // allocates the per-call metadata scratch buffer.
+    //
+    // `mesh_device_` stays null on the connector — no device handle is held.
+    // Arity disambiguates this from the public owner ctor (2 args vs 4 args).
+    H2DStreamService(
+        Config cfg,
+        std::vector<std::unique_ptr<distributed::H2DSocket>> sockets,
+        uint32_t socket_page_size,
+        uint32_t num_socket_pages);
+
     // Flip the termination semaphore from 0 to 1, kicking every persistent
     // receiver kernel out of its socket-wait poll loop on the next iteration.
     // Idempotent — safe to call multiple times.
     void signal_termination();
+
+    // True for services constructed by the public `Config`-based ctor (the
+    // process that owns the device tensor, the service-core claim, the
+    // persistent kernel, and the worker-sync / metadata allocations).
+    // False for services produced by the future `connect()` factory — those
+    // attach to an exported descriptor via shared memory and do NOT own
+    // device-side resources. The dtor branches on this flag to skip owner-only
+    // teardown when the service is a connector.
+    bool is_owner_ = true;
 
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
     Config cfg_;
 
     std::unique_ptr<ttnn::distributed::TensorToMesh> mapper_;
     Tensor device_tensor_;
+
+    // Per-shard tensor spec produced by the mapper. Cached so owner and
+    // connector run the same Tensor-overload validation. Populated:
+    //   * Owner: from `device_tensor_.tensor_spec()` once the device tensor
+    //     is allocated (B3).
+    //   * Connector: by running the mapper on a zero host tensor sized to
+    //     `cfg_.global_spec` — the same trick the owner ctor uses to derive
+    //     the per-shard spec before allocating its device tensor (B2).
+    std::optional<TensorSpec> per_shard_spec_;
+
     std::vector<std::unique_ptr<distributed::H2DSocket>> sockets_;
 
     // Per-coord service core claimed via ServiceCoreManager at construction.
@@ -277,6 +356,12 @@ private:
     std::shared_ptr<distributed::MeshBuffer> metadata_buffer_;
     DeviceAddr metadata_l1_addr_ = 0;
 
+    // Path to the exported service descriptor (set by `export_descriptor`,
+    // empty otherwise). The dtor mirrors `H2DSocket::~H2DSocket`: when non-
+    // empty, the file is unlinked and untracked so it does not linger in
+    // `ShmResourceTracker` until process exit.
+    std::string descriptor_path_;
+
     // Per-service host scratch buffer for the trailing metadata page. Sized
     // to socket_page_size_ at construction (when metadata is enabled), reused
     // across every forward_to_tensor call: each call copies the caller's
@@ -286,7 +371,14 @@ private:
 
     // Persistent receiver workload — built and enqueued once in the ctor,
     // drained in the dtor after termination is signalled.
-    distributed::MeshWorkload workload_;
+    // Persistent receiver workload. Held by unique_ptr so the connector path
+    // doesn't pay for default-constructing a `MeshWorkload` at member-init
+    // time — `MeshWorkloadImpl`'s ctor calls `MetalContext::instance()` to
+    // size kernel/kernel-group tables, which lazy-initializes the Cluster and
+    // acquires the exclusive PCIe chip lock. On the connector that collides
+    // with the owner's hold of the lock and deadlocks. Owner-only construction
+    // via `make_unique<MeshWorkload>()` in B8; connector leaves this null.
+    std::unique_ptr<distributed::MeshWorkload> workload_;
 
     // Chunk plan, cached in the ctor and consumed by every `forward_to_tensor`
     // call. The same values are baked into the kernels' CT args so they must
