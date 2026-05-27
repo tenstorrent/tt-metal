@@ -7,8 +7,15 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import typing
 
+import torch
 from loguru import logger
+
+# VBench 0.1.5 checkpoints contain typing.OrderedDict which is rejected by
+# torch.load's weights_only=True default (PyTorch 2.6+). Allowlist it so
+# VBench's internal torch.load calls succeed without patching the library.
+torch.serialization.add_safe_globals([typing.OrderedDict])
 
 DEFAULT_THRESHOLDS = {
     "subject_consistency": 0.85,
