@@ -205,27 +205,41 @@ def _check_env() -> None:
         sys.exit(2)
 
 
-def _measure_one_kernel_duration_ns(device) -> int | None:
-    """Sync, flush profiler, and sum DEVICE KERNEL DURATION [ns] across all programs."""
+TRISC1_KEY = "DEVICE TRISC1 KERNEL DURATION [ns]"
+
+
+def _measure_one_kernel_duration_ns(device) -> tuple[int | None, int | None]:
+    """Sync, flush profiler. Return (wall_ns, trisc1_ns) summed across programs.
+
+    wall_ns = DEVICE KERNEL DURATION [ns] — program wall-clock, max across all
+              5 RISCs. What the SDPA harness uses.
+    trisc1_ns = DEVICE TRISC1 KERNEL DURATION [ns] — math thread only.
+                What the GEMM_FLOPS matmul benchmark uses. Misses pack+writeback
+                tail but reflects mcast/DRAM stalls (TRISC1 idle in cb_wait_front
+                IS counted in its duration).
+    """
     ttnn.synchronize_device(device)
     ttnn.ReadDeviceProfiler(device)
     perf = ttnn.get_latest_programs_perf_data()
     if not perf:
-        return None
+        return (None, None)
     chip_id = next(iter(perf))
     programs = perf[chip_id]
     if not programs:
-        return None
-    total_ns = 0
+        return (None, None)
+    wall_total = 0
+    trisc1_total = 0
     for prog in programs:
-        result = prog.program_analyses_results.get(DEVICE_KERNEL_DURATION_KEY)
-        if result is None:
-            return None
-        total_ns += int(result.duration)
-    return total_ns
+        wall = prog.program_analyses_results.get(DEVICE_KERNEL_DURATION_KEY)
+        trisc1 = prog.program_analyses_results.get(TRISC1_KEY)
+        if wall is None or trisc1 is None:
+            return (None, None)
+        wall_total += int(wall.duration)
+        trisc1_total += int(trisc1.duration)
+    return (wall_total, trisc1_total)
 
 
-def _run_and_measure(callable_no_args, device, iters: int, warmup: int) -> list[int]:
+def _run_and_measure(callable_no_args, device, iters: int, warmup: int) -> tuple[list[int], list[int]]:
     for _ in range(warmup):
         out = callable_no_args()
         ttnn.synchronize_device(device)
@@ -234,18 +248,19 @@ def _run_and_measure(callable_no_args, device, iters: int, warmup: int) -> list[
     ttnn.ReadDeviceProfiler(device)
     _ = ttnn.get_latest_programs_perf_data()
 
-    durations = []
+    wall_durs, trisc1_durs = [], []
     for _ in range(iters):
         out = callable_no_args()
-        d = _measure_one_kernel_duration_ns(device)
+        wall, trisc1 = _measure_one_kernel_duration_ns(device)
         ttnn.deallocate(out)
-        if d is None:
+        if wall is None or trisc1 is None:
             raise RuntimeError(
                 "No profiler data returned. Are TT_METAL_PROFILER_MID_RUN_DUMP=1 and "
                 "TT_METAL_PROFILER_CPP_POST_PROCESS=1 set, and was tt-metal built with profiling?"
             )
-        durations.append(d)
-    return durations
+        wall_durs.append(wall)
+        trisc1_durs.append(trisc1)
+    return wall_durs, trisc1_durs
 
 
 def _check_numerics(t_a: ttnn.Tensor, t_b: ttnn.Tensor) -> tuple[float, float]:
@@ -304,21 +319,28 @@ def _run_one_shape(shape, iters: int, warmup: int, device) -> dict:
     ttnn.deallocate(out_t)
     ttnn.deallocate(out_m)
 
-    ttnn_durs = _run_and_measure(call_ttnn, device, iters, warmup)
-    makora_durs = _run_and_measure(call_makora, device, iters, warmup)
+    ttnn_wall, ttnn_trisc1 = _run_and_measure(call_ttnn, device, iters, warmup)
+    makora_wall, makora_trisc1 = _run_and_measure(call_makora, device, iters, warmup)
 
-    ttnn_med = statistics.median(ttnn_durs)
-    makora_med = statistics.median(makora_durs)
+    ttnn_wall_med = statistics.median(ttnn_wall)
+    makora_wall_med = statistics.median(makora_wall)
+    ttnn_trisc1_med = statistics.median(ttnn_trisc1)
+    makora_trisc1_med = statistics.median(makora_trisc1)
     return {
         "shape": shape,
         "path": _path_label(shape),
-        "ttnn_median_ns": ttnn_med,
-        "makora_median_ns": makora_med,
-        "speedup": ttnn_med / makora_med if makora_med else float("inf"),
+        "ttnn_median_ns": ttnn_wall_med,
+        "makora_median_ns": makora_wall_med,
+        "speedup": ttnn_wall_med / makora_wall_med if makora_wall_med else float("inf"),
         "pcc": pcc,
         "max_abs_diff": max_abs_diff,
-        "ttnn_util_pct": _math_utilization_pct(shape, ttnn_med),
-        "makora_util_pct": _math_utilization_pct(shape, makora_med),
+        # Wall-clock util (DEVICE KERNEL DURATION [ns]) — same convention as SDPA.
+        "ttnn_util_pct": _math_utilization_pct(shape, ttnn_wall_med),
+        "makora_util_pct": _math_utilization_pct(shape, makora_wall_med),
+        # TRISC1-only util — same convention as the GEMM_FLOPS matmul benchmark.
+        # Misses pack+writeback tail; reflects mcast/DRAM stalls.
+        "ttnn_util_trisc1_pct": _math_utilization_pct(shape, ttnn_trisc1_med),
+        "makora_util_trisc1_pct": _math_utilization_pct(shape, makora_trisc1_med),
     }
 
 
@@ -330,7 +352,8 @@ def _print_row(r):
         f"makora={int(r['makora_median_ns']):>9d} ns  "
         f"speedup={r['speedup']:>5.2f}x  "
         f"pcc={r['pcc']:.4f}  max_abs_diff={r['max_abs_diff']:.2e}  "
-        f"ttnn_util={r['ttnn_util_pct']:>5.2f}%  makora_util={r['makora_util_pct']:>5.2f}%"
+        f"ttnn_util(wall/trisc1)={r['ttnn_util_pct']:>5.2f}%/{r['ttnn_util_trisc1_pct']:>5.2f}%  "
+        f"makora_util(wall/trisc1)={r['makora_util_pct']:>5.2f}%/{r['makora_util_trisc1_pct']:>5.2f}%"
     )
 
 
@@ -360,13 +383,22 @@ def main():
         # Sanity-check that profiler data is being produced.
         warm = ttnn.ones((1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         _ = ttnn.add(warm, warm)
-        if _measure_one_kernel_duration_ns(device) is None:
+        wall_warm, trisc1_warm = _measure_one_kernel_duration_ns(device)
+        if wall_warm is None or trisc1_warm is None:
             sys.stderr.write("ERROR: profiler returned no data on a warmup add. Was tt-metal built with profiling?\n")
             sys.exit(2)
         ttnn.deallocate(warm)
 
         print(f"Op: matmul_silu  iters={args.iters}  warmup={args.warmup}")
-        speedups, ttnn_meds, makora_meds, ttnn_utils, makora_utils = [], [], [], [], []
+        (speedups, ttnn_meds, makora_meds, ttnn_utils, makora_utils, ttnn_t1_utils, makora_t1_utils) = (
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
         for shape in shapes:
             try:
                 r = _run_one_shape(shape, args.iters, args.warmup, device)
@@ -376,6 +408,8 @@ def main():
                 makora_meds.append(r["makora_median_ns"])
                 ttnn_utils.append(r["ttnn_util_pct"])
                 makora_utils.append(r["makora_util_pct"])
+                ttnn_t1_utils.append(r["ttnn_util_trisc1_pct"])
+                makora_t1_utils.append(r["makora_util_trisc1_pct"])
             except Exception as e:
                 print(f"  matmul_silu   shape={str(shape):<28} ERROR: {e}")
 
@@ -383,16 +417,18 @@ def main():
             gmean_speedup = statistics.geometric_mean(speedups)
             gmean_ttnn = statistics.geometric_mean(ttnn_meds)
             gmean_makora = statistics.geometric_mean(makora_meds)
-            # Arithmetic mean for util (geometric mean of percentages is misleading).
             mean_ttnn_util = statistics.mean(ttnn_utils)
             mean_makora_util = statistics.mean(makora_utils)
+            mean_ttnn_t1_util = statistics.mean(ttnn_t1_utils)
+            mean_makora_t1_util = statistics.mean(makora_t1_utils)
             print(
-                f"  matmul_silu   GMEAN over {len(speedups)} shapes:"
-                f"            ttnn={int(gmean_ttnn):>8d} ns  "
-                f"makora={int(gmean_makora):>8d} ns  "
+                f"  matmul_silu  GMEAN over {len(speedups)} shapes:                "
+                f"ttnn={int(gmean_ttnn):>8d} ns  "
+                f"makora={int(gmean_makora):>9d} ns  "
                 f"speedup={gmean_speedup:>5.2f}x"
                 f"                                       "
-                f"ttnn_util={mean_ttnn_util:>5.2f}%  makora_util={mean_makora_util:>5.2f}%"
+                f"ttnn_util(wall/trisc1)={mean_ttnn_util:>5.2f}%/{mean_ttnn_t1_util:>5.2f}%  "
+                f"makora_util(wall/trisc1)={mean_makora_util:>5.2f}%/{mean_makora_t1_util:>5.2f}%"
             )
     finally:
         ttnn.close_device(device)
