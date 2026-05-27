@@ -1,6 +1,6 @@
 # CI Disable Work — Status Log
 
-Last updated: **2026-05-27T17:00 UTC** (session: Tier-1 examining session. PR #45110 rebased onto main `08c2fb10e65` (merge commit `a2094780e13`); disabled test `test_all_to_all_combine_no_trace` still failing on main — disable valid. PR #45112 rebased onto main `08c2fb10e65` (merge commit `e2edbbdf64e`); CCL nightly tests still failing on main — disables valid. PR #45322 run 26520651029 still in progress (P100 queued >1.5h). 0 new dispatches this session.)
+Last updated: **2026-05-27T18:00 UTC** (session: Tier-1 examining session. PR #45322 run 26520651029 P100 job still queued/initializing (startedAt 15:55 UTC, >2h since start, >2.5h since 15:21 dispatch). PR #45114 confirmed CLOSED. New main runs queued: L2 nightly 26518398862 (queued since 14:42 UTC, 3h+), BH post-commit 26526029229 (queued since 17:00 UTC), BH e2e 26526054589 (queued since 17:00 UTC). Main unchanged at `08c2fb10e65`. 0 new dispatches this session.)
 
 ---
 
@@ -24,10 +24,10 @@ Last updated: **2026-05-27T17:00 UTC** (session: Tier-1 examining session. PR #4
 | [#45108](https://github.com/tenstorrent/tt-metal/pull/45108) | `(T3K) T3000 e2e tests` | `verified-pass` | [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) — CCL failure + 90m timeout | Yes | Rebased 2026-05-27 14:27 UTC onto main `08c2fb10e65`; CCL disables still valid; awaiting human review |
 | [#45110](https://github.com/tenstorrent/tt-metal/pull/45110) | `Blackhole post-commit tests` | `verified-pass` | [26508063374](https://github.com/tenstorrent/tt-metal/actions/runs/26508063374) **success** | Yes | Rebased 2026-05-27 17:00 UTC onto main `08c2fb10e65` (merge `a2094780e13`); disable still valid; awaiting human review |
 | [#45112](https://github.com/tenstorrent/tt-metal/pull/45112) | `(Blackhole) e2e tests` | `verified-pass` | [26508072188](https://github.com/tenstorrent/tt-metal/actions/runs/26508072188) **success** | Yes | Rebased 2026-05-27 17:00 UTC onto main `08c2fb10e65` (merge `e2edbbdf64e`); CCL nightly disables still valid; awaiting human review |
-| [#45114](https://github.com/tenstorrent/tt-metal/pull/45114) | `(Blackhole) Demo tests` | `out-of-scope` | — | N/A | **Disable REMOVED 2026-05-27**: test fixed on main since May 26. PR should be closed. |
+| [#45114](https://github.com/tenstorrent/tt-metal/pull/45114) | `(Blackhole) Demo tests` | `out-of-scope` | — | N/A | **Disable REMOVED 2026-05-27**: test fixed on main since May 26. PR **CLOSED 2026-05-27**. |
 | [#45306](https://github.com/tenstorrent/tt-metal/pull/45306) | `(T3K) T3000 unit tests` | `verified-pass` | [26513061621](https://github.com/tenstorrent/tt-metal/actions/runs/26513061621) **failure** (pre-existing/out-of-scope) | Yes | Rebased 2026-05-27 16:30 UTC onto main `08c2fb10e65`; all 3 job failures pre-existing or out-of-scope |
 | [#45313](https://github.com/tenstorrent/tt-metal/pull/45313) | `vllm-nightly-tests` | `verified-pass` | [26515302390](https://github.com/tenstorrent/tt-metal/actions/runs/26515302390) **success** | Yes | Both WH-T3K and BH-DB sampling-test jobs passed; awaiting human review |
-| [#45322](https://github.com/tenstorrent/tt-metal/pull/45322) | `Nightly tt-metal L2 tests` | `verifying` | [26520651029](https://github.com/tenstorrent/tt-metal/actions/runs/26520651029) in progress | No | PR #45322; MeshDeviceFixture.Top32RmDevPipelineCompletes disabled; N150+N300 success, P150 failure (pre-existing FP8), P100 queued >60min |
+| [#45322](https://github.com/tenstorrent/tt-metal/pull/45322) | `Nightly tt-metal L2 tests` | `verifying` | [26520651029](https://github.com/tenstorrent/tt-metal/actions/runs/26520651029) in progress | No | PR #45322; N150+N300 success, P150 failure (pre-existing FP8), P100 job startedAt 15:55 UTC still status:queued (>2h); runner initialization stall |
 
 > **Scope note (2026-05-27 16:35 UTC):** L2 pipeline (`Nightly tt-metal L2 tests`) is covered by TWO PRs: PR #44860 (disables test_mla_wo and other Python tests via pytest.mark.skip; verified-pass) and PR #45322 (disables MeshDeviceFixture.Top32RmDevPipelineCompletes via gtest-filter; verifying). Both target different test failures in the same pipeline. PR #44860 was not tracked in the Quick Index in prior sessions — added this session.
 
@@ -37,7 +37,7 @@ Last updated: **2026-05-27T17:00 UTC** (session: Tier-1 examining session. PR #4
 
 | Run | Pipeline | Branch | Started | Status | Notes |
 |-----|----------|--------|---------|--------|-------|
-| [26520651029](https://github.com/tenstorrent/tt-metal/actions/runs/26520651029) | `Nightly tt-metal L2 tests` | `ci/disable-failing-tests-l2-nightly-20260527` | 2026-05-27 15:21 UTC | **in progress (P100 queued >1h40min as of 17:01 UTC)** | PR #45322 first verify; N150 success, N300 success, P150 failure (3 pre-existing FP8 tests), P100 queued since 15:21 UTC — runner availability issue; still not started at 17:01 UTC |
+| [26520651029](https://github.com/tenstorrent/tt-metal/actions/runs/26520651029) | `Nightly tt-metal L2 tests` | `ci/disable-failing-tests-l2-nightly-20260527` | 2026-05-27 15:21 UTC | **in progress (P100 job startedAt 15:55 UTC but status still queued >2h as of 18:00 UTC)** | PR #45322 first verify; N150 success, N300 success, P150 failure (3 pre-existing FP8 tests), P100 runner initialization stall (startedAt 15:55 but not executing — possible stuck runner) |
 
 **Policy:** Concurrent runs across PRs are allowed; each automation session may dispatch at most three new runs.
 
@@ -318,7 +318,7 @@ Note: `workflow_dispatch` runs skip `llk-sd-unit-tests` by default (`run_sd_unit
 - `llk-sd-unit-tests (wormhole_b0, N150)` — **SUCCESS** ✓ MeshDeviceFixture.Top32RmDevPipelineCompletes correctly filtered; no regressions
 - `llk-sd-unit-tests (wormhole_b0, N300)` — **SUCCESS** ✓ same
 - `llk-sd-unit-tests (blackhole, P150)` — **FAILURE** (3 FP8 tests): `LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3`, `TensixComputePackUntilizeFp8e4m3`, `TensixFp8e4m3ToFp8e4m3` — all 3 are **pre-existing failures on main** (also failing in main scheduled run 26496921030). NOT regressions from PR's gtest-filter disable.
-- `llk-sd-unit-tests (blackhole, P100)` — **QUEUED >60 min** (runner availability issue; expected to show same pre-existing FP8 failures as P150)
+- `llk-sd-unit-tests (blackhole, P100)` — **QUEUED/STALL** (startedAt 15:55 UTC but not executing as of 18:00 UTC — >2h stall; likely runner initialization failure; if job fails without pytest output → verification-inconclusive, re-dispatch eligible)
 
 Preliminary conclusion: **likely verified-pass** once P100 completes — the MeshDeviceFixture filter works on WH; BH P150 failures are pre-existing. Will formally classify in next session after P100 result is known.
 
@@ -347,6 +347,8 @@ Preliminary conclusion: **likely verified-pass** once P100 completes — the Mes
 ---
 
 ## Recent Activity
+
+- `2026-05-27 ~18:00 UTC` — SESSION: **Tier-1 examining session. PR #45322 P100 job still in runner initialization stall. PR #45114 confirmed CLOSED.** Examining PRs: #45322 (lightweight check — P100 job in run 26520651029 shows `startedAt: 15:55 UTC` but `status: queued` as of 18:00 UTC — runner initialization stall >2h; leave as `verifying`; if P100 job fails without pytest output classify as `verification-inconclusive`; likely verified-pass expected once resolved), #44860 (lightweight check — L2 nightly main run 26518398862 queued on SHA `08c2fb10e65b` since 14:42 UTC (3h+ queued) and 26526050206 was `cancelled` at 17:00 UTC; no new completed scheduled run available for `test_distributed_fused_rmsnorm` revalidation; deferred to next session after 4h throttle window). PR #45114 confirmed CLOSED (state: CLOSED via GitHub API). New main runs queued: BH post-commit 26526029229 (17:00 UTC), BH e2e 26526054589 (17:00 UTC) — when completed, will provide revalidation data for PRs #45110/#45112. No focus PRs (tier 1: all workflows covered; no priority-2/3 PRs). 0 dispatches this session.
 
 - `2026-05-27 ~17:00 UTC` — SESSION: **Tier-1 examining session. PR #45110 and PR #45112 rebased onto main `08c2fb10e65`. PR #45322 run 26520651029 still in progress (P100 queued >1.5h).** Examining PRs: #45110 (rebased `aa2de19bd354` → `08c2fb10e65`, merge commit `a2094780e13`; `test_all_to_all_combine_no_trace` disable still valid — BH post-commit run 26518344490 confirms job still failing on main), #45112 (rebased `aa2de19bd354` → `08c2fb10e65`, merge commit `e2edbbdf64e`; CCL nightly disables still valid — BH e2e run 26501643204 confirms `ccl nightly tests` still failing on all BH platforms). Lightweight check on #45322: P100 job in run 26520651029 still queued at 17:01 UTC (>1.5h queued — runner availability issue). No focus PRs (tier 1: all workflows covered; no priority-2/3 PRs). 0 dispatches this session.
 
