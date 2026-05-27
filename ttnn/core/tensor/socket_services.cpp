@@ -5,6 +5,8 @@
 #include "tensor/socket_services.hpp"
 
 #include <algorithm>
+#include <cerrno>
+#include <cstdio>
 #include <cstring>
 
 #include <tt_stl/assert.hpp>
@@ -27,6 +29,9 @@
 #include <tt-metalium/tt_metal.hpp>
 
 #include "tensor/tensor_ops.hpp"
+#include "tt_metal/distributed/h2d_stream_service_descriptor.hpp"
+#include "tt_metal/distributed/hd_socket_descriptor.hpp"
+#include "tt_metal/distributed/shm_resource_tracker.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/global_semaphore.hpp"
 
@@ -299,6 +304,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
 
     // --- B3: allocate backing device tensor -----------------------------------
     device_tensor_ = create_device_tensor(per_shard_spec, mesh_device_.get(), topology);
+    per_shard_spec_ = device_tensor_.tensor_spec();
 
     // --- B3.5: claim one service core per participating device ---------------
     // ServiceCoreManager runs the kernel on a free FD-column core that's outside
@@ -461,6 +467,10 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     }
 
     // --- B8: build one persistent program per socket, bundle into a workload --
+    // Construct the workload only on the owner; `MeshWorkloadImpl`'s ctor
+    // touches `MetalContext::instance()` (see member-decl comment in the
+    // header). Connector-mode services leave `workload_` null.
+    workload_ = std::make_unique<distributed::MeshWorkload>();
     for (auto& s : sockets_) {
         const auto core = s->get_active_cores()[0];
         const Buffer* dbuf = device_tensor_.mesh_buffer().get_device_buffer(core.device_coord);
@@ -506,13 +516,63 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
             device_tensor_.dtype(),
             worker_sync,
             metadata);
-        workload_.add_program(distributed::MeshCoordinateRange(core.device_coord), std::move(program));
+        workload_->add_program(distributed::MeshCoordinateRange(core.device_coord), std::move(program));
     }
 
     // --- B9: launch the persistent kernels (non-blocking) ---------------------
     // The kernels now sit in their outer while-loop polling their sockets.
     // forward_to_tensor calls feed those sockets; the dtor shuts them down.
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload_, /*blocking=*/false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload_, /*blocking=*/false);
+}
+
+H2DStreamService::H2DStreamService(
+    Config cfg,
+    std::vector<std::unique_ptr<distributed::H2DSocket>> sockets,
+    uint32_t socket_page_size,
+    uint32_t num_socket_pages) :
+    is_owner_(false), cfg_(std::move(cfg)) {
+    // --- C1: validate connector inputs ----------------------------------------
+    TT_FATAL(!sockets.empty(), "H2DStreamService(connector): sockets vector must not be empty");
+    TT_FATAL(cfg_.mapper != nullptr, "H2DStreamService(connector): mapper must be pre-built and supplied");
+    TT_FATAL(socket_page_size > 0, "H2DStreamService(connector): socket_page_size must be > 0");
+    TT_FATAL(num_socket_pages > 0, "H2DStreamService(connector): num_socket_pages must be > 0");
+
+    // --- C2: install the mapper (built by the connect() factory via the
+    //         shape-only create_mesh_mapper overload — no MeshDevice handle
+    //         was required) ----------------------------------------------------
+    mapper_ = std::move(cfg_.mapper);
+
+    // --- C3: cache the chunk plan exactly as the owner sees it. Mirrors B6
+    //         on the owner side; sockets must agree on page size for FIFO
+    //         arithmetic to work. ---------------------------------------------
+    socket_page_size_ = socket_page_size;
+    num_socket_pages_ = num_socket_pages;
+    sockets_ = std::move(sockets);
+    for (auto& s : sockets_) {
+        s->set_page_size(socket_page_size_);
+    }
+
+    // --- C4: derive per_shard_spec_ from the mapper. Same trick the owner
+    //         ctor uses in B2: run the mapper on a zero host tensor sized
+    //         to `global_spec`; the resulting distributed tensor's spec is
+    //         the per-shard spec. Required for `get_per_shard_spec` and the
+    //         Tensor-overload spec-equality check (both run identically on
+    //         owner and connector). ------------------------------------------
+    const auto distributed_dummy = (*mapper_)(make_zero_host_tensor(cfg_.global_spec));
+    per_shard_spec_ = distributed_dummy.tensor_spec();
+
+    // --- C5: per-call host metadata scratch. Sized to socket_page_size_
+    //         and zero-initialised so the padding bytes are deterministic;
+    //         each forward_to_tensor call overwrites only the leading
+    //         metadata_size_bytes. Mirrors B7.6 on the owner. -----------------
+    if (cfg_.metadata_size_bytes > 0) {
+        metadata_scratch_.assign(socket_page_size_, std::byte{0});
+    }
+
+    // No B7 / B7.5 / B7.6 / B8 / B9 — service core L1 allocations, worker-sync
+    // resources, metadata MeshBuffer, persistent kernel programs, and workload
+    // dispatch are all owner-side state and stay default-constructed (empty
+    // maps, null shared_ptrs, etc.).
 }
 
 H2DStreamService::~H2DStreamService() {
@@ -520,6 +580,19 @@ H2DStreamService::~H2DStreamService() {
     // step (e.g. mesh device already torn down by a faulty caller) doesn't
     // throw from the destructor.
     try {
+        if (!is_owner_) {
+            // Connector path: the service was attached via shared memory by
+            // `connect()` and owns NO device-side resources. The sockets it
+            // holds were built via `H2DSocket::connect_from_descriptor` and
+            // clean up their own SHM attachments in their dtors. Everything
+            // else (mapper_, metadata_scratch_) is destroyed by the member-
+            // destruction phase.
+            sockets_.clear();
+            return;
+        }
+
+        // Owner path: full teardown of device-side state.
+
         // 1. Drain any in-flight host writes so no kernel iteration is mid-
         //    transfer when we signal termination.
         barrier();
@@ -590,6 +663,16 @@ H2DStreamService::~H2DStreamService() {
                 svc.release(d, {core});
             }
         }
+
+        // 7. If an exported descriptor file was tracked, unlink it and untrack
+        //    so it doesn't linger in ShmResourceTracker until process exit.
+        //    Mirrors the H2DSocket dtor's descriptor cleanup pattern.
+        if (!descriptor_path_.empty()) {
+            if (std::remove(descriptor_path_.c_str()) == 0 || errno == ENOENT) {
+                distributed::ShmResourceTracker::instance().untrack_file(descriptor_path_);
+            }
+            descriptor_path_.clear();
+        }
     } catch (const std::exception& e) {
         log_warning(tt::LogOp, "H2DStreamService: shutdown failed: {}", e.what());
     } catch (...) {
@@ -627,7 +710,27 @@ std::vector<distributed::H2DSocket*> H2DStreamService::get_sockets() const {
     return out;
 }
 
+// Diagnostic helper: all of these getters return state used to wire up a
+// consumer worker workload (kernel CT/RT args, NoC destinations, L1 base
+// addresses). Building a workload requires a MeshDevice handle, which the
+// connector-mode service does not hold by design — its only device
+// interaction is PCIe writes through each H2DSocket. Calling these on the
+// connector is a programming error; fail with a clear message rather than
+// returning incidentally-empty state.
+namespace {
+inline void require_owner(bool is_owner, const char* api) {
+    TT_FATAL(
+        is_owner,
+        "{}: this getter is owner-only. The connector-mode service (built via "
+        "H2DStreamService::connect) has no MeshDevice and cannot dispatch consumer "
+        "workloads, so the worker-sync / metadata addresses it would return are "
+        "meaningless. Call this from the owner process instead.",
+        api);
+}
+}  // namespace
+
 DeviceAddr H2DStreamService::get_data_ready_sem_addr() const {
+    require_owner(is_owner_, "H2DStreamService::get_data_ready_sem_addr");
     TT_FATAL(
         data_ready_sem_.has_value(),
         "H2DStreamService::get_data_ready_sem_addr: worker-sync was not configured (Config::worker_cores unset).");
@@ -635,6 +738,7 @@ DeviceAddr H2DStreamService::get_data_ready_sem_addr() const {
 }
 
 DeviceAddr H2DStreamService::get_consumed_counter_addr(const distributed::MeshCoordinate& coord) const {
+    require_owner(is_owner_, "H2DStreamService::get_consumed_counter_addr");
     auto it = consumed_addrs_.find(coord);
     TT_FATAL(
         it != consumed_addrs_.end(),
@@ -645,6 +749,7 @@ DeviceAddr H2DStreamService::get_consumed_counter_addr(const distributed::MeshCo
 }
 
 CoreCoord H2DStreamService::get_service_core(const distributed::MeshCoordinate& coord) const {
+    require_owner(is_owner_, "H2DStreamService::get_service_core");
     auto it = service_cores_.find(coord);
     TT_FATAL(
         it != service_cores_.end(),
@@ -655,11 +760,93 @@ CoreCoord H2DStreamService::get_service_core(const distributed::MeshCoordinate& 
 }
 
 DeviceAddr H2DStreamService::get_metadata_addr() const {
+    require_owner(is_owner_, "H2DStreamService::get_metadata_addr");
     TT_FATAL(
         cfg_.metadata_size_bytes > 0,
         "H2DStreamService::get_metadata_addr: metadata multicast was not configured "
         "(Config::metadata_size_bytes is 0).");
     return metadata_l1_addr_;
+}
+
+
+const TensorSpec& H2DStreamService::get_per_shard_spec() const {
+    TT_FATAL(per_shard_spec_.has_value(), "H2DStreamService::get_per_shard_spec: per-shard spec not derived");
+    return *per_shard_spec_;
+}
+
+const Tensor& H2DStreamService::get_backing_tensor() const {
+    require_owner(is_owner_, "H2DStreamService::get_backing_tensor");
+    return device_tensor_;
+}
+
+std::string H2DStreamService::export_descriptor(const std::string& service_id) {
+    TT_FATAL(is_owner_, "H2DStreamService::export_descriptor: only owner-side services can be exported");
+    TT_FATAL(mesh_device_ != nullptr, "H2DStreamService::export_descriptor: mesh device unavailable");
+    TT_FATAL(mapper_ != nullptr, "H2DStreamService::export_descriptor: mapper unavailable");
+
+    distributed::H2DStreamServiceDescriptor desc;
+    desc.global_shape = cfg_.global_spec.logical_shape();
+    desc.global_dtype = cfg_.global_spec.data_type();
+    desc.mesh_shape = mesh_device_->shape();
+    desc.mapper_config = mapper_->config();
+    desc.socket_page_size = socket_page_size_;
+    desc.num_socket_pages = num_socket_pages_;
+    desc.metadata_size_bytes = cfg_.metadata_size_bytes;
+    desc.socket_buffer_type = cfg_.socket_buffer_type;
+    desc.socket_mode = cfg_.socket_mode;
+
+    // Embed each owner-side socket's descriptor inline — single-file design,
+    // no separate per-socket .bin files cluttering /dev/shm/ and no race
+    // between service- and socket-level descriptors becoming visible.
+    desc.per_coord_entries.reserve(sockets_.size());
+    for (auto& s : sockets_) {
+        const auto coord = s->get_active_cores()[0].device_coord;
+        desc.per_coord_entries.emplace_back(coord, s->populate_descriptor());
+    }
+
+    auto path = distributed::descriptor_path_for_service(service_id);
+    desc.write_to_file(path);
+    distributed::ShmResourceTracker::instance().track_file(path);
+    descriptor_path_ = path;
+    return path;
+}
+
+std::unique_ptr<H2DStreamService> H2DStreamService::connect(
+    const std::string& service_id, std::optional<uint32_t> timeout_ms) {
+    auto desc = distributed::H2DStreamServiceDescriptor::wait_and_read(
+        distributed::descriptor_path_for_service(service_id), timeout_ms.value_or(10000));
+
+    const TensorLayout tensor_layout(
+        desc.global_dtype,
+        PageConfig(Layout::ROW_MAJOR),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
+    TensorSpec global_spec(desc.global_shape, tensor_layout);
+
+    auto mapper = ttnn::distributed::create_mesh_mapper(desc.mesh_shape, desc.mapper_config);
+
+    std::vector<std::unique_ptr<distributed::H2DSocket>> sockets;
+    sockets.reserve(desc.per_coord_entries.size());
+    for (const auto& [coord, socket_desc] : desc.per_coord_entries) {
+        // The socket descriptor carries its owner-side mesh coord; the outer
+        // per-coord-entry `coord` is kept as a map key but isn't needed for
+        // wire-up.
+        (void)coord;
+        sockets.push_back(distributed::H2DSocket::connect_from_descriptor(socket_desc));
+    }
+
+    Config cfg{
+        .global_spec = std::move(global_spec),
+        .mapper = std::move(mapper),
+        .socket_buffer_type = desc.socket_buffer_type,
+        .fifo_size_bytes = 0,
+        .scratch_cb_size_bytes = 0,
+        .socket_mode = desc.socket_mode,
+        .worker_cores = std::nullopt,
+        .metadata_size_bytes = desc.metadata_size_bytes,
+    };
+
+    return std::unique_ptr<H2DStreamService>(
+        new H2DStreamService(std::move(cfg), std::move(sockets), desc.socket_page_size, desc.num_socket_pages));
 }
 
 void H2DStreamService::forward_to_tensor(
@@ -729,12 +916,13 @@ void H2DStreamService::forward_to_tensor(
         cfg_.metadata_size_bytes);
 
     const auto& host_mesh_tensor = host_tensor.host_storage().host_tensor();
+    TT_FATAL(per_shard_spec_.has_value(), "H2DStreamService::forward_to_tensor: per-shard spec not derived");
     TT_FATAL(
-        host_mesh_tensor.tensor_spec() == device_tensor_.tensor_spec(),
-        "H2DStreamService::forward_to_tensor: host tensor per-shard spec ({}) does not match backing "
+        host_mesh_tensor.tensor_spec() == *per_shard_spec_,
+        "H2DStreamService::forward_to_tensor: host tensor per-shard spec ({}) does not match expected "
         "per-shard spec ({}). Did you distribute the host tensor with a different mapper config?",
         host_mesh_tensor.tensor_spec(),
-        device_tensor_.tensor_spec());
+        *per_shard_spec_);
 
     const auto& dhb = host_mesh_tensor.buffer();
     const uint64_t expected_shard_bytes =

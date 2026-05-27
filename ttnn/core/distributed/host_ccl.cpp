@@ -25,7 +25,13 @@ using ::tt::tt_metal::HostBuffer;
 Tensor all_gather(const Tensor& tensor) {
     TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::HOST, "Tensor must be on host");
     const auto& ctx = tensor.host_storage().buffer().context();
-    if (*ctx->size() == 1) {
+    // A null context is the documented sentinel for "single-host degenerate"
+    // — emitted by the shape-only `DistributedHostBuffer::create` path and by
+    // `create_unit_distributed_host_buffer` (the 3-arg HostTensor ctor's 1x1
+    // helper). Treat it identically to an explicit size-1 context so callers
+    // that build tensors without MetalContext (e.g. cross-process socket
+    // connectors) can still pass through `all_gather`.
+    if (!ctx || *ctx->size() == 1) {
         // Single-host deployment. Validate this host has all the data.
         for (const auto& coord : tensor.host_storage().buffer().shard_coords()) {
             auto shard = tensor.host_storage().buffer().get_shard(coord);

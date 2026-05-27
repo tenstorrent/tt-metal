@@ -16,6 +16,7 @@
 #include "tensor/storage.hpp"
 #include "tensor/tensor_impl.hpp"
 #include <algorithm>
+#include <optional>
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -109,16 +110,61 @@ tt::tt_metal::HostBuffer create_host_buffer_from_span(
 
 class TensorToMesh::Impl {
 public:
+    // MeshDevice-aware ctor: retains the device view so that
+    // `DistributedHostBuffer::create(view)` can honour multi-host distribution
+    // (remote shards are deallocated on each host).
     Impl(
         const MeshDevice& mesh_device,
         DistributionMode distribution_mode,
         const MeshShape& distribution_shape,
         const MeshMapperConfig& config) :
         mesh_device_view_(mesh_device.get_view()),
-        global_range_(mesh_device_view_.shape()),
+        mesh_shape_(mesh_device.shape()),
+        global_range_(mesh_shape_),
         distribution_mode_(distribution_mode),
         distribution_shape_(distribution_shape),
         config_(config) {}
+
+    // Shape-only ctor: used by callers that do not hold a `MeshDevice` handle
+    // (e.g. processes attaching to an exported H2DStreamService over shared
+    // memory). The resulting buffer creation falls back to the single-host
+    // `DistributedHostBuffer::create(MeshShape)` overload — multi-host
+    // distribution is not available without a `MeshDeviceView`.
+    Impl(
+        const MeshShape& mesh_shape,
+        DistributionMode distribution_mode,
+        const MeshShape& distribution_shape,
+        const MeshMapperConfig& config) :
+        mesh_device_view_(std::nullopt),
+        mesh_shape_(mesh_shape),
+        global_range_(mesh_shape_),
+        distribution_mode_(distribution_mode),
+        distribution_shape_(distribution_shape),
+        config_(config) {}
+
+    // Pick the multi-host-aware path when a view is available; otherwise the
+    // shape-only path.
+    //
+    // The shape-only branch deliberately routes through the 4-arg
+    // `DistributedHostBuffer::create(global, local, offset, context)` overload
+    // with a nullptr context, NOT the 1-arg `create(MeshShape)` shortcut. The
+    // shortcut pulls the host-local context out of `MetalContext::instance()`,
+    // which lazy-initializes the `Cluster` and acquires the exclusive PCIe
+    // chip lock — fatal in connector processes that attach to an exported
+    // `H2DStreamService` via shared memory without ever opening a device.
+    // The resulting buffer's `context()` returns nullptr, which is fine for
+    // the streaming path; only `host_ccl.cpp` reads `dhb.context()` and that
+    // call site is not on the streaming pipeline.
+    tt::tt_metal::DistributedHostBuffer make_distributed_host_buffer() const {
+        if (mesh_device_view_.has_value()) {
+            return tt::tt_metal::DistributedHostBuffer::create(*mesh_device_view_);
+        }
+        return tt::tt_metal::DistributedHostBuffer::create(
+            mesh_shape_,
+            mesh_shape_,
+            tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(mesh_shape_.dims()),
+            /*context=*/nullptr);
+    }
 
     Tensor operator()(const Tensor& tensor) const {
         auto extract_logical_data = [this]<typename T>(const tt::tt_metal::Tensor& tensor) -> Tensor {
@@ -182,7 +228,7 @@ public:
             const TensorSpec tensor_spec(shape, layout);
             auto replicated_buffer = create_host_buffer_from_span<T>(span, buffer_pin, tensor_spec, pad_value);
 
-            auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(mesh_device_view_);
+            auto distributed_buffer = make_distributed_host_buffer();
             auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
             std::vector<MeshCoordinate> buffer_coords;
             for (const auto& coord : MeshCoordinateRange(distribution_shape_)) {
@@ -307,7 +353,7 @@ private:
             return true;
         }();
 
-        auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(mesh_device_view_);
+        auto distributed_buffer = make_distributed_host_buffer();
         auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
 
         // Deduplicate processing of replicated buffers, by keeping a cache of already converted buffers.
@@ -369,8 +415,15 @@ private:
         return Tensor(tt::tt_metal::HostTensor(std::move(distributed_buffer), shard_spec, tensor_topology));
     }
 
-    // MeshDevice parameters.
-    MeshDeviceView mesh_device_view_;
+    // Mesh parameters. `mesh_device_view_` is populated when the caller has a
+    // live `MeshDevice` (the common case); it enables multi-host-aware
+    // `DistributedHostBuffer::create(view)`, which deallocates shards remote
+    // to this host. When constructed from a `MeshShape` only (e.g. an external
+    // process attaching to an exported H2DStreamService), the view is empty
+    // and `make_distributed_host_buffer()` falls back to the single-host
+    // shape-only overload.
+    std::optional<MeshDeviceView> mesh_device_view_;
+    MeshShape mesh_shape_;
     MeshCoordinateRange global_range_;
     DistributionMode distribution_mode_ = DistributionMode::ROW_MAJOR;
 
@@ -508,6 +561,27 @@ Tensor TensorToMesh::operator()(
     return (*impl_).template operator()<T>(buffer, shape, buffer_pin, layout, pad_value);
 }
 
+TensorToMesh TensorToMesh::create(const MeshShape& mesh_shape, const MeshMapperConfig& config) {
+    const auto distributed_shape = config.mesh_shape_override.value_or(mesh_shape);
+    TT_FATAL(
+        distributed_shape.mesh_size() <= mesh_shape.mesh_size(),
+        "The size of the supplied mesh shape {} does not match the device shape size {}",
+        distributed_shape,
+        mesh_shape);
+    TT_FATAL(
+        distributed_shape.dims() == config.placements.size(),
+        "The number of dimensions in the mesh shape {} does not match the "
+        "number of placements in the config {}",
+        distributed_shape,
+        config);
+
+    return TensorToMesh(std::make_unique<TensorToMesh::Impl>(
+        mesh_shape,
+        compute_distribution_mode(config.mesh_shape_override, mesh_shape),
+        distributed_shape,
+        config));
+}
+
 TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMapperConfig& config) {
     const auto distributed_shape = config.mesh_shape_override.value_or(mesh_device.shape());
     TT_FATAL(
@@ -522,6 +596,8 @@ TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMappe
         distributed_shape,
         config);
 
+    // Multi-host-aware path: retain the device view so remote shards are
+    // identified and skipped per host.
     return TensorToMesh(std::make_unique<TensorToMesh::Impl>(
         mesh_device,
         compute_distribution_mode(config.mesh_shape_override, mesh_device.shape()),
@@ -595,6 +671,10 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(
 
 std::unique_ptr<TensorToMesh> create_mesh_mapper(MeshDevice& mesh_device, const MeshMapperConfig& config) {
     return std::make_unique<TensorToMesh>(TensorToMesh::create(mesh_device, config));
+}
+
+std::unique_ptr<TensorToMesh> create_mesh_mapper(const MeshShape& mesh_shape, const MeshMapperConfig& config) {
+    return std::make_unique<TensorToMesh>(TensorToMesh::create(mesh_shape, config));
 }
 
 std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(MeshDevice& mesh_device, int dim) {

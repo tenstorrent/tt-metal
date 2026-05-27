@@ -20,6 +20,7 @@ namespace tt::tt_metal::distributed {
 class NamedShm;
 class PCIeCoreWriter;
 struct HDSocketConnectorState;
+struct HDSocketDescriptor;
 
 /**
  * @brief Specifies the data transfer mode for Host-to-Device communication.
@@ -108,6 +109,25 @@ public:
         const std::string& socket_id, std::optional<uint32_t> timeout_ms = std::nullopt);
 
     /**
+     * @brief Connects to an H2DSocket from a pre-loaded descriptor.
+     *
+     * Behaves identically to `connect(socket_id, ...)` except the descriptor is
+     * supplied directly rather than read from `/dev/shm/`. Used by callers that
+     * have aggregated multiple socket descriptors in a higher-level container
+     * (e.g. an `H2DStreamServiceDescriptor` that embeds the per-coord socket
+     * descriptors inline) and want to avoid N additional file reads.
+     *
+     * The descriptor is self-describing — it carries the owner-side mesh
+     * coord — so the resulting connector socket's `get_active_cores()` will
+     * report the right coord without the caller having to plumb it through.
+     *
+     * @param desc A populated socket descriptor, typically produced by an
+     *             owner-side `populate_from_owner` followed by direct embedding.
+     * @return A connected H2DSocket ready for data transfer.
+     */
+    static std::unique_ptr<H2DSocket> connect_from_descriptor(const HDSocketDescriptor& desc);
+
+    /**
      * @brief Exports a descriptor file for cross-process socket attachment.
      *
      * Writes a flatbuffer binary to /dev/shm/ containing all metadata needed for
@@ -118,6 +138,17 @@ public:
      * @return The full path to the written descriptor file.
      */
     std::string export_descriptor(const std::string& socket_id);
+
+    /**
+     * @brief Populate a descriptor for this socket without writing to disk.
+     *
+     * Returns a fully-populated HDSocketDescriptor identical to what
+     * `export_descriptor` would write, but does no file I/O. Used by higher-
+     * level containers (e.g. `H2DStreamServiceDescriptor`) that embed per-
+     * socket descriptors inline and want a single-file write at the container
+     * level. Only callable on the owner-side socket.
+     */
+    HDSocketDescriptor populate_descriptor() const;
 
     /**
      * @brief Destroys the H2DSocket.
@@ -221,7 +252,6 @@ private:
     MeshDevice* mesh_device_ = nullptr;
     bool is_owner_ = true;
     std::string descriptor_path_;
-    bool exported_ = false;
     HDSocketConnectorState* connector_state_ = nullptr;
     uint32_t connector_state_offset_ = 0;
     bool prior_clean_shutdown_ = true;

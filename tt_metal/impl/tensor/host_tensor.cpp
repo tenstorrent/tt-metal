@@ -14,8 +14,24 @@ HostTensor::HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopo
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
+// Build a degenerate 1x1 DistributedHostBuffer wrapping a single HostBuffer.
+//
+// Routes through the 4-arg `DistributedHostBuffer::create` with a nullptr
+// `DistributedContext`, NOT the 1-arg `create(MeshShape)` shortcut. The
+// shortcut pulls the host-local context out of `MetalContext::instance()`,
+// which lazy-initializes the `Cluster` and acquires the exclusive PCIe chip
+// lock — fatal in processes that legitimately hold a single-shard host
+// tensor without ever opening a device (e.g. connectors attaching to an
+// exported `H2DStreamService` via shared memory). The resulting buffer's
+// `context()` returns nullptr; any downstream multi-host op (`host_ccl`)
+// that dereferences `context()` on a tensor built this way will fail
+// loudly, but a 1x1 host buffer is semantically single-host anyway.
 DistributedHostBuffer create_unit_distributed_host_buffer(HostBuffer buffer) {
-    auto distributed_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
+    auto distributed_buffer = DistributedHostBuffer::create(
+        distributed::MeshShape(1, 1),
+        distributed::MeshShape(1, 1),
+        distributed::MeshCoordinate(0, 0),
+        /*context=*/nullptr);
     distributed_buffer.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
     return distributed_buffer;
 }
