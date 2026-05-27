@@ -137,6 +137,20 @@ class TtMistral4TextModel:
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
             cache_file_name=_cf("language_model.lm_head.weight"),
         )
+        _num_devices = mesh_device.get_num_devices()
+        # N tiles per device: 131072 / num_devices / 32; spread across 64 cores.
+        # Single P150: 131072/1/32/64 = 64. P150×8: 131072/8/32/64 = 8.
+        _lm_per_core_N = max(1, (131072 // _num_devices // 32) // 64)
+        self.lm_head_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),  # 64 cores on BH
+            in0_block_w=1,  # K tiles per inner loop
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,  # M=32 → 1 tile row
+            per_core_N=_lm_per_core_N,  # tiles per core; dynamic per device count
+            fuse_batch=True,
+            mcast_in0=True,
+        )
         self.lm_head_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -336,8 +350,9 @@ class TtMistral4TextModel:
         partial = ttnn.linear(
             x_normed,
             self.lm_head_weight,
+            program_config=self.lm_head_program_config,
             compute_kernel_config=self.lm_head_compute_kernel_config,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,  # was bfloat16
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # per device: [1, 1, 1, vocab/num_devices]
         ttnn.deallocate(x_normed)
@@ -359,7 +374,7 @@ class TtMistral4TextModel:
             ttnn.deallocate(partial)
         else:
             full = partial
-
+        full = ttnn.typecast(full, dtype=ttnn.bfloat16)
         idx_tt = ttnn.argmax(full, dim=-1)  # per device: [1, 1, 1] uint32 ROW_MAJOR
         ttnn.deallocate(full)
         # Copy argmax result into pre-allocated output buffer so trace replay can
