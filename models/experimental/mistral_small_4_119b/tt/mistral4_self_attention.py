@@ -269,6 +269,11 @@ class TtMistral4Attention(LightweightModule):
         # 1D-mcast program configs for decode matmuls (M=1 tile for all).
         self._decode_pcs = self._build_decode_program_configs(grid)
 
+        # Height-sharded input mem configs required by paged_update_cache (the
+        # tensor-indexed, trace-compatible KV-cache write used in decode).
+        self._kv_update_k_mem_cfg = self._build_kv_update_mem_cfg(grid, HEAD_DIM)
+        self._kv_update_v_mem_cfg = self._build_kv_update_mem_cfg(grid, V_HEAD_DIM)
+
         p = layer_prefix + "self_attn."
         _cf = (lambda key: str(cache_dir / key)) if cache_dir is not None else (lambda _: None)
 
@@ -436,6 +441,22 @@ class TtMistral4Attention(LightweightModule):
             "v": _pc(KV_LORA_RANK // 32, N_HEADS * V_HEAD_DIM // 32),  # [256,4096]: K=8, N=128
             "o": _pc((N_HEADS * V_HEAD_DIM) // 32, H // 32),  # [4096,4096]: K=128, N=128
         }
+
+    # ------------------------------------------------------------------
+    def _build_kv_update_mem_cfg(self, grid, head_width: int):
+        """Height-sharded ``[1, 1, N_HEADS, head_width]`` config for paged_update_cache.
+
+        Decode batch is 1 (single token, KV cache replicated across the mesh), so the
+        op sees one update index and all ``N_HEADS`` rows land on a single core.  The
+        shard width must equal the input's last dim (``head_width``).
+        """
+        shard_h = ((self.n_heads + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        return ttnn.create_sharded_memory_config(
+            shape=(shard_h, head_width),
+            core_grid=ttnn.num_cores_to_corerangeset(1, grid, row_wise=True),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
 
     # ------------------------------------------------------------------
     def forward(
@@ -778,29 +799,43 @@ class TtMistral4Attention(LightweightModule):
         ttnn.deallocate(k_rope_expanded)
         # k_full: [1, N_HEADS, 1, HEAD_DIM],  v_new: [1, N_HEADS, 1, V_HEAD_DIM]
 
-        # ── Update KV cache at current_pos ─────────────────────────────
-        ttnn.kv_cache.update_cache_for_token_(k_cache, k_full, current_pos)
-        ttnn.kv_cache.update_cache_for_token_(v_cache, v_new, current_pos)
-        ttnn.deallocate(k_full)
-        ttnn.deallocate(v_new)
-
-        # ── Decode SDPA ────────────────────────────────────────────────
-        # scaled_dot_product_attention_decode requires Q in DRAM (kernel constraint).
-        # q_full is [1, N_HEADS, 1, HEAD_DIM]; transpose dims 1&2 → [1, 1, N_HEADS, HEAD_DIM].
-        q_decode = ttnn.transpose(q_full, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(q_full)
-
+        # ── Ensure an INT32 device position tensor ─────────────────────
+        # Both paged_update_cache (KV write) and SDPA-decode (attend) read the
+        # position from this device tensor rather than a Python int — that is what
+        # lets the whole decode step be captured as a replayable trace later.
+        # paged_update_cache requires INT32 specifically.
         _free_pos_tensor = False
         if cur_pos_tensor is None:
             cur_pos_tensor = ttnn.as_tensor(
                 torch.tensor([current_pos], dtype=torch.int32),
-                dtype=ttnn.uint32,
+                dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
             _free_pos_tensor = True
+
+        # ── Update KV cache at current_pos (tensor-indexed → trace-safe) ─
+        # paged_update_cache wants a [1, 1, N_HEADS, dim] height-sharded input, so
+        # transpose [1, N_HEADS, 1, dim] → [1, 1, N_HEADS, dim] and reshard. The write
+        # (head h → cache[0, h, pos, :]) is identical to update_cache_for_token_.
+        k_upd = ttnn.transpose(k_full, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(k_full)
+        v_upd = ttnn.transpose(v_new, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(v_new)
+        k_upd = ttnn.to_memory_config(k_upd, self._kv_update_k_mem_cfg)
+        v_upd = ttnn.to_memory_config(v_upd, self._kv_update_v_mem_cfg)
+        ttnn.experimental.paged_update_cache(k_cache, k_upd, update_idxs_tensor=cur_pos_tensor)
+        ttnn.experimental.paged_update_cache(v_cache, v_upd, update_idxs_tensor=cur_pos_tensor)
+        ttnn.deallocate(k_upd)
+        ttnn.deallocate(v_upd)
+
+        # ── Decode SDPA ────────────────────────────────────────────────
+        # scaled_dot_product_attention_decode requires Q in DRAM (kernel constraint).
+        # q_full is [1, N_HEADS, 1, HEAD_DIM]; transpose dims 1&2 → [1, 1, N_HEADS, HEAD_DIM].
+        q_decode = ttnn.transpose(q_full, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(q_full)
 
         attn_out = ttnn.transformer.scaled_dot_product_attention_decode(
             q_decode,

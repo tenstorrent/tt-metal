@@ -215,7 +215,7 @@ def _open_mesh_device() -> ttnn.MeshDevice:
     device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(rows, cols),
         dispatch_core_config=ttnn.DispatchCoreConfig(),
-        trace_region_size=30_000_000,
+        trace_region_size=128 * 1024 * 1024,  # 36-layer decode trace measures ~66 MB
         num_command_queues=1,
     )
     logger.info(f"Opened {rows}×{cols} mesh device ({device.get_num_devices()} chips)")
@@ -374,6 +374,12 @@ def generate(
         t_dec = time.perf_counter()
         tok_id = model.decode_next_token(cur, current_pos)
         decode_times.append((time.perf_counter() - t_dec) * 1000)
+
+        # The first decode step (step 1) compiles all decode kernels eagerly.
+        # Capture the trace once right after, so steps 2+ replay it instead of
+        # re-dispatching every op from host — the main decode speedup.
+        if step == 1:
+            model.capture_decode_trace()
 
         generated_ids.append(tok_id)
         print(tokenizer.decode([tok_id], skip_special_tokens=True), end="", flush=True)

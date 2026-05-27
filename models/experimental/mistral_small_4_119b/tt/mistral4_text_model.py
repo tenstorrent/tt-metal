@@ -186,7 +186,7 @@ class TtMistral4TextModel:
         )
         self._decode_cur_pos_device = ttnn.as_tensor(
             torch.zeros(1, dtype=torch.int32),
-            dtype=ttnn.uint32,
+            dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -222,6 +222,9 @@ class TtMistral4TextModel:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
+        # Captured decode-step trace (set by capture_decode_trace); None = eager.
+        self._decode_trace_id = None
+        self._last_decode_pos = 0
 
     # ── RoPE table caching ─────────────────────────────────────────────────
 
@@ -353,6 +356,7 @@ class TtMistral4TextModel:
             program_config=self.lm_head_program_config,
             compute_kernel_config=self.lm_head_compute_kernel_config,
             dtype=ttnn.bfloat8_b,  # was bfloat16
+            # dtype=ttnn.bfloat16,  # was bfloat16
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # per device: [1, 1, 1, vocab/num_devices]
         ttnn.deallocate(x_normed)
@@ -525,11 +529,12 @@ class TtMistral4TextModel:
 
         cur_pos_host = ttnn.from_torch(
             torch.tensor([current_pos], dtype=torch.int32),
-            dtype=ttnn.uint32,
+            dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         ttnn.copy_host_to_device_tensor(cur_pos_host, self._decode_cur_pos_device)
+        self._last_decode_pos = current_pos
 
         # Update single-position RoPE buffers from the retained CPU table.
         # CPU indexing is free; copy_host_to_device_tensor reuses the pre-
@@ -618,8 +623,11 @@ class TtMistral4TextModel:
         Single decode step using pre-allocated buffers (_decode_input_id_device,
         _decode_cur_pos_device, _cos_decode, _sin_decode).
 
-        KV cache write uses update_cache_for_token_ (Python int current_pos), so
-        this cannot be captured as a trace.  The argmax result lands in
+        Token id, position and RoPE all come from those persistent buffers, and the
+        KV write is tensor-indexed (paged_update_cache reads _decode_cur_pos_device),
+        so this graph is replayable as a trace — see capture_decode_trace. The
+        ``current_pos`` arg is now vestigial (only forward_decode's no-tensor fallback
+        would use it); the buffers drive everything. The argmax result lands in
         _decode_token_out; host readback happens outside via _readback_argmax().
         """
         x = ttnn.embedding(
@@ -640,18 +648,34 @@ class TtMistral4TextModel:
         ttnn.deallocate(x)
 
     def capture_decode_trace(self) -> None:
-        """Placeholder — trace capture requires a trace-compatible KV cache write.
+        """Capture the single-token decode step as a replayable trace.
 
-        update_cache_for_token_ burns the Python int position into the trace,
-        making it position-specific.  A future implementation using a device-
-        tensor-indexed write (e.g. paged_update_cache with sharded input) would
-        re-enable this.  For now this is a no-op so call sites don't need to change.
+        Call once after at least one eager decode step has run, so every op program
+        is already compiled and in the program cache (capture must not compile). The
+        captured graph reads token id / position / RoPE from the persistent decode
+        buffers, so it replays correctly at any position once those buffers are
+        refreshed by _decode_upload_step_state. Idempotent.
         """
+        if self._decode_trace_id is not None:
+            return
+        ttnn.synchronize_device(self.mesh_device)
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        self._decode_kernel(self._last_decode_pos)
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        self._decode_trace_id = trace_id
 
     def decode_next_token(self, input_id: torch.Tensor, current_pos: int) -> int:
-        """Decode one token and return the greedy next token id (on-device argmax)."""
+        """Decode one token and return the greedy next token id (on-device argmax).
+
+        Replays the captured trace if capture_decode_trace() has been called;
+        otherwise runs the step eagerly (which also compiles the kernels so a
+        subsequent capture is a cache hit).
+        """
         self._decode_upload_step_state(input_id, current_pos)
-        self._decode_kernel(current_pos)
+        if self._decode_trace_id is not None:
+            ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
+        else:
+            self._decode_kernel(current_pos)
         return self._readback_argmax()
 
     # ── Embedding-input entry points (multimodal) ──────────────────────────
