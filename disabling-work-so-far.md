@@ -1,6 +1,6 @@
 # CI Disable Work — Status Log
 
-Last updated: **2026-05-27T14:30 UTC** (session: PR #45313 vllm-nightly verification run 26515302390 completed **success** → classified **verified-pass** (both WH-T3K and BH-DB sampling-test jobs passed). Examining lane: PRs #45108 and #44938 rebased onto main `08c2fb10e65`; CCL and sd35 disables revalidated as still needed. Tier-1 session — no new PRs; L2 nightly not eligible (no 3 consecutive failures with same error signature across all main runs). 0 new dispatches this session.)
+Last updated: **2026-05-27T15:25 UTC** (session: PR #45313 vllm-nightly verification run 26515302390 completed **success** → classified **verified-pass** (both WH-T3K and BH-DB sampling-test jobs passed). Examining lane: PRs #45108 and #44938 rebased onto main `08c2fb10e65`; CCL and sd35 disables revalidated as still needed. Tier-1 session — no new PRs; L2 nightly not eligible (no 3 consecutive failures with same error signature across all main runs). 0 new dispatches this session.)
 
 ---
 
@@ -26,14 +26,17 @@ Last updated: **2026-05-27T14:30 UTC** (session: PR #45313 vllm-nightly verifica
 | [#45114](https://github.com/tenstorrent/tt-metal/pull/45114) | `(Blackhole) Demo tests` | `out-of-scope` | — | N/A | **Disable REMOVED 2026-05-27**: test fixed on main since May 26. PR should be closed. |
 | [#45306](https://github.com/tenstorrent/tt-metal/pull/45306) | `(T3K) T3000 unit tests` | `verified-pass` | [26513061621](https://github.com/tenstorrent/tt-metal/actions/runs/26513061621) **failure** (pre-existing/out-of-scope) | Yes | All 3 job failures are pre-existing or out-of-scope: multiprocess TT_FATAL (pre-existing), ttmetal DPrint flakiness (pre-existing), ttnn 25-min timeout (out-of-scope) |
 | [#45313](https://github.com/tenstorrent/tt-metal/pull/45313) | `vllm-nightly-tests` | `verified-pass` | [26515302390](https://github.com/tenstorrent/tt-metal/actions/runs/26515302390) **success** | Yes | Both WH-T3K and BH-DB sampling-test jobs passed; awaiting human review |
+| [#45322](https://github.com/tenstorrent/tt-metal/pull/45322) | `Nightly tt-metal L2 tests` | `verifying` | [26520651029](https://github.com/tenstorrent/tt-metal/actions/runs/26520651029) in progress | No | New PR 2026-05-27; MeshDeviceFixture.Top32RmDevPipelineCompletes disabled; fresh-build verification dispatched 15:21 UTC |
 
-> **Scope note (2026-05-27):** L2 pipeline (`tt-metal-l2-tests`) is back in scope — prior work scrapped, automation may pick it up again. PR #44860 and the prior `## PR #44860 — tt-metal-l2-tests` section have been removed from this state log so the automation will see L2 as uncovered and create a fresh disable PR for it.
+> **Scope note (2026-05-27 15:25 UTC):** L2 pipeline (`Nightly tt-metal L2 tests`) now covered by PR #45322, created this session. `MeshDeviceFixture.Top32RmDevPipelineCompletes` disabled via gtest-filter in llk-sd-unit-tests job. Verification run 26520651029 dispatched at 15:21 UTC (in progress).
 
 ---
 
 ## Active Runs
 
-*No active verification runs.*
+| Run | Pipeline | Branch | Started | Status | Notes |
+|-----|----------|--------|---------|--------|-------|
+| [26520651029](https://github.com/tenstorrent/tt-metal/actions/runs/26520651029) | `Nightly tt-metal L2 tests` | `ci/disable-failing-tests-l2-nightly-20260527` | 2026-05-27 15:21 UTC | **in progress** | PR #45322 first verify; dispatched with run_sd_unit_tests=true; fresh build; build step in progress |
 
 **Policy:** Concurrent runs across PRs are allowed; each automation session may dispatch at most three new runs.
 
@@ -242,6 +245,36 @@ No SHA-matching successful main run for artifact reuse — dispatched fresh buil
 
 ---
 
+## PR #45322 — Nightly tt-metal L2 tests
+
+| Field | Value |
+|-------|-------|
+| PR | [#45322](https://github.com/tenstorrent/tt-metal/pull/45322) (draft) |
+| Disable issue | [#45320](https://github.com/tenstorrent/tt-metal/issues/45320) |
+| Timeout issue | none |
+| Branch | `ci/disable-failing-tests-l2-nightly-20260527` |
+| Workflow file | `tt-metal-l2-nightly.yaml` |
+| Lifecycle stage | `verifying` |
+| Last rebase | 2026-05-27 15:20 UTC — created from main `08c2fb10e65` |
+| Last revalidation | 2026-05-27 15:10 UTC — 3 consecutive scheduled run failures confirmed (May 25–27 2026) |
+| Verification run | [26520651029](https://github.com/tenstorrent/tt-metal/actions/runs/26520651029) — dispatched 15:21 UTC (in progress; fresh build; run_sd_unit_tests=true) |
+| Readiness | **No** (verification in progress) |
+
+**Disabled tests (via `gtest-filter` in `tt-metal-l2-nightly.yaml` `llk-sd-unit-tests` job):**
+
+- `MeshDeviceFixture.Top32RmDevPipelineCompletes` — all platforms (WH N150, WH N300, BH P100, BH P150) — Disabled by issue #45320
+
+**Evidence:** 3 consecutive **scheduled** main runs where test was executed:
+- 2026-05-25: run [26388857253](https://github.com/tenstorrent/tt-metal/actions/runs/26388857253) — FAILED (457ms, 2190ms on BH)
+- 2026-05-26: run [26437678698](https://github.com/tenstorrent/tt-metal/actions/runs/26437678698) — FAILED (472ms)
+- 2026-05-27: run [26496921030](https://github.com/tenstorrent/tt-metal/actions/runs/26496921030) — FAILED (465ms)
+
+Note: `workflow_dispatch` runs skip `llk-sd-unit-tests` by default (`run_sd_unit_tests=false`). Disable applies only to the gtest-filter in the scheduled-run job.
+
+**Verification approach:** Dispatch `tt-metal-l2-nightly.yaml` on feature branch with `run_sd_unit_tests=true` (all other inputs default false). This runs only `llk-sd-unit-tests` jobs on the feature branch, confirming no regression in previously-passing tests. No artifact reuse — fresh build (L2 nightly doesn't use `use-artifacts-from-run` cross-run sharing).
+
+---
+
 ## Blockers
 
 | Blocker | Status | Notes |
@@ -262,6 +295,8 @@ No SHA-matching successful main run for artifact reuse — dispatched fresh buil
 ---
 
 ## Recent Activity
+
+- `2026-05-27 ~15:25 UTC` — SESSION: **New PR #45322 for Nightly tt-metal L2 tests created and verification dispatched.** Focus PRs: #45322 (priority 1 — new PR for uncovered non-Galaxy workflow). Key findings: (1) L2 nightly `llk-sd-unit-tests` jobs have been failing in all 3 consecutive scheduled runs (May 25–27) with `MeshDeviceFixture.Top32RmDevPipelineCompletes` in `unit_tests_llk`. workflow_dispatch runs skip llk-sd-unit-tests by default (run_sd_unit_tests=false), confirming this is a scheduled-run-only failure. (2) Created tracking issue [#45320](https://github.com/tenstorrent/tt-metal/issues/45320). (3) Created PR [#45322](https://github.com/tenstorrent/tt-metal/pull/45322) on branch `ci/disable-failing-tests-l2-nightly-20260527` with gtest-filter disable in `tt-metal-l2-nightly.yaml`. (4) Dispatched fresh-build verification run [26520651029](https://github.com/tenstorrent/tt-metal/actions/runs/26520651029) with run_sd_unit_tests=true; build in progress at session end. Focus slots filled: 1/3 (only 1 uncovered non-Galaxy workflow existed; no priority-2/3 PRs available; all other open PRs are verified-pass terminal lifecycle under normal-branch examining rules). Examining PRs: 0 (all other open PRs are verified-pass; normal branch — tier 1 conjunct not satisfied at session start because L2 was uncovered). 1 dispatch this session.
 
 - `2026-05-27 ~14:30 UTC` — SESSION: **PR #45313 vllm-nightly verified-pass; examining PRs #45108 and #44938 rebased.** Examining PRs: #45313 (verifying → verified-pass, run 26515302390 completed success at 14:23 UTC), #45108 (rebased onto 08c2fb10e65; CCL disables still valid), #44938 (rebased onto 08c2fb10e65; sd35 disable still valid). No new PRs this session — tier-1: all identified non-Galaxy single-card workflows with deterministic failures are now covered by open/merged PRs. L2 nightly investigated but not eligible (scheduled failures have different test IDs across runs; workflow_dispatch runs succeed; no 3 consecutive completed-run failures with same error signature). 0 dispatches this session.
 
