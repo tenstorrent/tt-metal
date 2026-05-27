@@ -15,8 +15,9 @@ Usage:
     # Batch-32 batched prefill:
     pytest models/demos/gemma4/demo/text_demo.py::test_demo_batch_prefill -k "prefill_128-1x1" -v
 
-    # Batch-32 prefill + decode (issue #44955):
+    # Batch-32 prefill + decode (issue #44955); override batch via GEMMA4_BATCH_DEMO_SIZE=8:
     pytest models/demos/gemma4/demo/text_demo.py::test_demo_batch_32 -k "prefill_128 and 1x1" -v
+    GEMMA4_BATCH_DEMO_SIZE=8 pytest models/demos/gemma4/demo/text_demo.py::test_demo_batch_32 -k "prefill_2048 and 1x4" -v
 
     # 128k batched-prefill ceiling documentation:
     pytest models/demos/gemma4/demo/text_demo.py::test_demo_batch_prefill_4096_ceiling -v
@@ -37,6 +38,7 @@ from models.demos.gemma4.tt.generator import GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN,
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len, sample_host
+from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
 from models.tt_transformers.tt.model_config import determine_device_name
 
 _TT_TRANSFORMERS_PROMPTS_DIR = "models/tt_transformers/demo/sample_prompts"
@@ -140,12 +142,22 @@ def load_demo_prompt(target_bucket, instruct=True):
     return prompt
 
 
-# Batch-32 batched prefill helpers and tests.
-_BATCH_DEMO_SIZE = 32
+# Batch batched-prefill helpers and tests (default batch 32; override with GEMMA4_BATCH_DEMO_SIZE).
+_BATCH32_DRAM_OOM_SIZE = 32
+_DEFAULT_BATCH_DEMO_SIZE = 32
 # Prefill lengths for ``test_demo_batch_32`` (4096 hits the 128k batched-prefill ceiling).
 _DEMO_BATCH_PREFILL_LENGTHS = [128, 512, 1024, 2048, 4096]
-# Prefill-only batch coverage; 2048/4096 may xfail on DRAM-limited meshes (see below).
+# Prefill-only batch coverage; batch-32 2048/4096 may xfail on DRAM-limited meshes (see below).
 _BATCH_PREFILL_LENGTHS = [128, 1024, 2048]
+
+
+def _batch_demo_size():
+    """Demo concurrent-user count; defaults to 32, overridable for smaller-batch experiments."""
+    size = int(os.getenv("GEMMA4_BATCH_DEMO_SIZE", str(_DEFAULT_BATCH_DEMO_SIZE)))
+    if size not in SUPPORTED_PREFILL_BATCH_SIZES:
+        supported = ", ".join(str(b) for b in SUPPORTED_PREFILL_BATCH_SIZES)
+        raise ValueError(f"GEMMA4_BATCH_DEMO_SIZE={size} must be one of: {supported}")
+    return size
 
 
 def _mesh_shape_str(mesh_device):
@@ -159,7 +171,7 @@ def _is_31b_model(model_path):
 
 def _batch_prefill_known_dram_oom(mesh_device, model_path, batch_size, prefill_len):
     """True for batch-32 prefill lengths that OOM on 31B 1×4 (documented hardware limit)."""
-    if batch_size != _BATCH_DEMO_SIZE:
+    if batch_size != _BATCH32_DRAM_OOM_SIZE:
         return False
     if prefill_len not in (2048, 4096):
         return False
@@ -239,7 +251,7 @@ def _prepare_batch_prefill_tokens(prompts, tokenizer, target_prefill_len, instru
 def run_batch_generation(
     mesh_device,
     model_path,
-    batch_size=_BATCH_DEMO_SIZE,
+    batch_size=None,
     prefill_len=128,
     max_new_tokens=32,
     num_layers=None,
@@ -258,7 +270,7 @@ def run_batch_generation(
     Args:
         mesh_device: TT mesh device
         model_path: HuggingFace model path or ID
-        batch_size: Number of concurrent users (default 32)
+        batch_size: Number of concurrent users (default from ``GEMMA4_BATCH_DEMO_SIZE``, else 32)
         prefill_len: Target prefill bucket length
         max_new_tokens: Decode tokens per user after prefill
         max_seq_len: KV cache / context budget
@@ -271,6 +283,9 @@ def run_batch_generation(
         ``prefill_seq_len`` (padded kernel length), and ``prompt_lens``.
     """
     del num_layers  # Full-model demo; layer override not wired through Generator factory yet.
+
+    if batch_size is None:
+        batch_size = _batch_demo_size()
 
     is_ci_env = os.environ.get("CI") == "true"
     profiler = BenchmarkProfiler()
@@ -1077,7 +1092,7 @@ def test_demo_batch_prefill(mesh_device, model_path, prefill_len, request):
     if os.environ.get("CI") == "true" and prefill_len != 128:
         pytest.skip(f"CI: only prefill_128 runs in CI; skipping prefill_{prefill_len}")
 
-    batch_size = _BATCH_DEMO_SIZE
+    batch_size = _batch_demo_size()
     _maybe_xfail_batch_prefill_dram(mesh_device, model_path, batch_size, prefill_len)
 
     max_new_tokens = 1
@@ -1101,7 +1116,7 @@ def test_demo_batch_prefill(mesh_device, model_path, prefill_len, request):
     assert prefilled_tokens.shape[0] == batch_size
     assert result["prefill_seq_len"] == expected_kernel_len
     logger.info(
-        f"Batch-32 prefill_{prefill_len} ok — kernel_seq_len={result['prefill_seq_len']}, "
+        f"Batch-{batch_size} prefill_{prefill_len} ok — kernel_seq_len={result['prefill_seq_len']}, "
         f"sample token: {int(prefilled_tokens[0].item())}"
     )
 
@@ -1130,7 +1145,7 @@ def test_demo_batch_32(mesh_device, model_path, prefill_len, request):
     if os.environ.get("CI") == "true" and prefill_len != 128:
         pytest.skip(f"CI: only prefill_128 runs in CI; skipping prefill_{prefill_len}")
 
-    batch_size = _BATCH_DEMO_SIZE
+    batch_size = _batch_demo_size()
     _maybe_xfail_batch_prefill_dram(mesh_device, model_path, batch_size, prefill_len)
 
     max_new_tokens = 32
@@ -1156,7 +1171,7 @@ def test_demo_batch_32(mesh_device, model_path, prefill_len, request):
     for user, text in enumerate(generated_texts):
         assert len(text) > 0, f"User {user} produced empty output"
     logger.info(
-        f"Batch-32 prefill_{prefill_len} ok — kernel_seq_len={result['prefill_seq_len']}, "
+        f"Batch-{batch_size} prefill_{prefill_len} ok — kernel_seq_len={result['prefill_seq_len']}, "
         f"sample output: {_shorten_for_log(generated_texts[0])}"
     )
 
@@ -1179,7 +1194,7 @@ def test_demo_batch_prefill_4096_ceiling(mesh_device, model_path, request):
     if prefill_len > max_prefill:
         pytest.skip(f"prefill_len={prefill_len} > --max-prefill={max_prefill}")
 
-    batch_size = _BATCH_DEMO_SIZE
+    batch_size = _BATCH32_DRAM_OOM_SIZE
     kernel_len = get_padded_prefill_len(prefill_len)
     total_tokens = batch_size * kernel_len
 
