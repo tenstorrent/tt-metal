@@ -10,13 +10,12 @@ from transformers import AutoTokenizer
 import ttnn
 from models.demos.gemma4.tt.common import create_tt_model
 from models.tt_transformers.tt.common import get_padded_prefill_len
-from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES, Generator
+from models.tt_transformers.tt.generator import MAX_BATCHED_PREFILL_SEQ_LEN, SUPPORTED_PREFILL_BATCH_SIZES, Generator
 from models.tt_transformers.tt.model_config import determine_device_name
 
-# Gemma4 uses a lower batched-prefill token ceiling than the shared Generator
-# (128k). 64k keeps 32×1024 unchunked while splitting 32×2048 (65536) into 2×16
-# to reduce peak DRAM during long batched prefills on memory-constrained meshes.
-GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN = 64 * 1024
+# Same 128k batched-prefill token ceiling as the shared Generator
+# (padded_batch × padded_prefill_seq_len).
+GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN = MAX_BATCHED_PREFILL_SEQ_LEN
 
 
 def _patch_model_args(model_args, mesh_device, max_batch_size, max_seq_len, model_path, tokenizer):
