@@ -197,13 +197,10 @@ class _ForwardVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         if self._in_forward[-1]:
             func = node.func
-            # x.cpu() / x.numpy()
-            if (
-                isinstance(func, ast.Attribute)
-                and func.attr in _FORBIDDEN_METHOD_CALLS
-                and not node.args
-                and not node.keywords
-            ):
+            # x.cpu(...) / x.numpy(...) — any call form. These methods exist
+            # to move tensors to host/numpy; there is no legitimate use
+            # inside a TTNN block's forward path regardless of arguments.
+            if isinstance(func, ast.Attribute) and func.attr in _FORBIDDEN_METHOD_CALLS:
                 self._record(node, f".{func.attr}()")
             # torch.matmul(...) (call form) — handled in visit_Attribute too,
             # but a Call whose func is the Attribute fires here first. We
@@ -234,7 +231,8 @@ def lint_block(file_path: PathLike) -> list[LintViolation]:
     """Scan a TTNN block file for forbidden host-resident patterns.
 
     Walks the file's AST. Inside every function whose name is ``forward``
-    or starts with ``forward_``, looks for ``.cpu()``, ``.numpy()``,
+    or starts with ``forward_``, looks for ``.cpu(...)``, ``.numpy(...)``
+    (any call form, including with positional/keyword arguments),
     ``torch.nn.functional``, ``torch.matmul``. Also regex-scans the whole
     file for ``# TODO: move to ttnn`` (case-insensitive).
 
@@ -388,3 +386,50 @@ def cross_check_reference(
         )
 
     return [entry for entry in block_ops if entry.op not in ref_op_kinds]
+
+
+# ---------------------------------------------------------------------------
+# Composite verdict
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BlockVerdict:
+    """Composite result of verifying one TTNN block.
+
+    Fields:
+        lint: LintViolations found in the block's forward path.
+        missing_kernels: human-readable "any of {...}" strings for kind-required
+            kernels that didn't appear in the traced op list.
+        new_host_ops: host-resident sub-ops present in the block but not in the
+            reference TTNN implementation.
+    """
+
+    lint: list[LintViolation]
+    missing_kernels: list[str]
+    new_host_ops: list[HostResidentSubOp]
+
+    @property
+    def ok(self) -> bool:
+        """True iff all three sub-checks are empty."""
+        return not (self.lint or self.missing_kernels or self.new_host_ops)
+
+
+def verify_block(
+    block_path: PathLike,
+    traced_ops: list[str],
+    kind: str,
+    reference_impl: PathLike,
+) -> BlockVerdict:
+    """Run all three guard checks for one block and return a composite verdict.
+
+    Convenience wrapper around lint_block, assert_traced_ops, and
+    cross_check_reference. The orchestrator tick should consult
+    ``verdict.ok`` to decide whether to mark the TTNN phase done or route
+    the block to a debug-worker.
+    """
+    return BlockVerdict(
+        lint=lint_block(block_path),
+        missing_kernels=assert_traced_ops(traced_ops, kind),
+        new_host_ops=cross_check_reference(block_path, reference_impl),
+    )
