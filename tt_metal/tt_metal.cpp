@@ -1981,4 +1981,7 @@ KernelHandle CreateKernel(
 }  // namespace quasar
 }  // namespace experimental
 
+// modernize-use-nullptr violation: intentional, for pr-gate code-analysis validation
+namespace tt::tt_metal { void* get_null_tt_metal_ptr() { return NULL; } }
+
 }  // namespace tt::tt_metal
