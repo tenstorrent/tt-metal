@@ -340,7 +340,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
-        "reader_unified_re.cpp",
+        "unified_routed_expert_ffn_reader.cpp",
         core_range_set,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
@@ -375,7 +375,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
-        "writer_unified_re.cpp",
+        "unified_routed_expert_ffn_writer.cpp",
         core_range_set,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
@@ -516,7 +516,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const uint32_t in0_sender_nx = in0_sender_noc.x;
         const uint32_t in0_sender_ny = in0_sender_noc.y;
 
-        // Reader runtime arg layout (must match reader_unified_re.cpp):
+        // Reader runtime arg layout (must match unified_routed_expert_ffn_reader.cpp):
         //   0..5: tensor addrs (x, gate, up, down, counts, idx)
         //   6: my_mt
         //   7: my_nt_gu
@@ -572,7 +572,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         }
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
 
-        // Writer runtime arg layout (must match writer_unified_re.cpp):
+        // Writer runtime arg layout (must match unified_routed_expert_ffn_writer.cpp):
         //   0: output_addr
         //   1: my_mt
         //   2: my_nt_d
@@ -631,12 +631,12 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
         reader_args[4] = counts_addr;
         reader_args[5] = idx_addr;
         // index 31 = local_expert_id (must stay in sync with create() layout
-        // and consumed by reader_unified_re.cpp).
+        // and consumed by unified_routed_expert_ffn_reader.cpp).
         reader_args[31] = local_expert_id;
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_id, core);
         writer_args[0] = out_addr;
-        // index 3 = local_expert_id (writer_unified_re.cpp).
+        // index 3 = local_expert_id (unified_routed_expert_ffn_writer.cpp).
         writer_args[3] = local_expert_id;
 
         auto& compute_args = tt::tt_metal::GetRuntimeArgs(program, compute_id, core);
