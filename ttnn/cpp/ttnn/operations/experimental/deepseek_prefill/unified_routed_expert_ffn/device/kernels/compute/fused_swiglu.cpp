@@ -448,8 +448,10 @@ void kernel_main() {
     // num_chunks times. Reader/writer feed/drain chunk-N+1 while compute is
     // still on chunk N via the existing CBs.
     constexpr uint32_t num_chunks = get_compile_time_arg_val(30);
-    constexpr uint32_t local_expert_id = get_compile_time_arg_val(31);
-    constexpr uint32_t chunk_M_tiles = get_compile_time_arg_val(32);
+    constexpr uint32_t chunk_M_tiles = get_compile_time_arg_val(31);
+    // local_expert_id: per-core runtime arg so 32 experts share one cached
+    // program. UNPACK indexes idx_table[local_expert_id] for global expert id.
+    const uint32_t local_expert_id = get_arg_val<uint32_t>(0);
 
     // CBs
     constexpr uint32_t cb_in0_x = get_named_compile_time_arg_val("cb_in0_x");

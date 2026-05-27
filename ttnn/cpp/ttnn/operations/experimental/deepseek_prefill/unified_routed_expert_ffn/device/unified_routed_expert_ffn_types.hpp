@@ -22,13 +22,16 @@ struct UnifiedRoutedExpertFfnParams {
 
     // Local expert id used to index `global_expert_idx_table` at runtime
     // (kernel reads global_id = idx_table[local_expert_id], then count =
-    // counts[global_id]).
+    // counts[global_id]). Stored on the Params struct but DELIBERATELY
+    // excluded from attribute_values so that all per-expert program-cache
+    // entries for the same (chunk_M_tiles) collide on one cached program;
+    // the kernels read local_expert_id as a per-core runtime arg.
     uint32_t local_expert_id = 0;
 
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id");
-    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id); }
+    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles");
+    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles); }
 };
 
 // Tensors fed into the op.

@@ -22,6 +22,9 @@ void kernel_main() {
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
     const uint32_t my_mt = get_arg_val<uint32_t>(1);
     const uint32_t my_nt_d = get_arg_val<uint32_t>(2);
+    // local_expert_id: per-core runtime arg so 32 experts share one cached
+    // program. Kernel indexes idx_table[local_expert_id] for global expert id.
+    const uint32_t local_expert_id = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_out = get_compile_time_arg_val(1);
     constexpr uint32_t per_core_M = get_compile_time_arg_val(2);
@@ -34,19 +37,18 @@ void kernel_main() {
     // NEW: device-side count read.
     constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(13);
     constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(14);
-    constexpr uint32_t local_expert_id = get_compile_time_arg_val(15);
     // M_tiles_full: total tile-row count of the output tensor. When the
     // kernel runs more chunks than strictly needed (because
     // M_tiles_full % chunk_M_tiles != 0), the last chunk has writer
     // destinations past M_tiles_full — we skip those writes here so we
     // don't OOB-write the output buffer.
-    constexpr uint32_t M_tiles_full = get_compile_time_arg_val(16);
+    constexpr uint32_t M_tiles_full = get_compile_time_arg_val(15);
 
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
     constexpr uint32_t d_in1_num_subblocks_M = per_core_M / d_out_subblock_h;
     constexpr uint32_t d_in1_num_subblocks_N = per_core_N_d / d_out_subblock_w;
 
-    constexpr uint32_t out_accessor_offset = 17;
+    constexpr uint32_t out_accessor_offset = 16;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, get_tile_size(cb_out));
 
