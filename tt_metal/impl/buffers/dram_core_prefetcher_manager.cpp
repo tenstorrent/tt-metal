@@ -198,10 +198,11 @@ bool layout_equal(const DramCorePrefetcherTensorLayout& a, const DramCorePrefetc
 // Receiver-contiguous layout: BDS holds `ring_size` shards round-robin across
 // `num_senders` banks, so each bank stacks `num_receivers` shards each of shape
 // (K_tiles, n_per_recv_tiles). Per (receiver, block) the source bytes are a
-// single contiguous DRAM region. Currently pins blocks_per_dma = 1; the fit
-// ladder still supports K-sub split for shapes where one block exceeds the
-// DRISC L1 stage half. The tensor's bank-local address is carried separately in
-// the per-tensor DramCorePrefetcherEntry, so identical-geometry tensors share one layout.
+// single contiguous DRAM region. The kernel dynamically batches B blocks per
+// per-receiver visit (B clamped by free space and fifo wrap at runtime); the
+// manager just computes the static ceiling target_per_visit_pages. The tensor's
+// bank-local address is carried separately in the per-tensor
+// DramCorePrefetcherEntry, so identical-geometry tensors share one layout.
 DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
     const MeshTensor& t, uint32_t block_count, uint32_t ring_half, ContextId context_id) {
     // Read the original (non-squeezed) NdShardSpec from the MemoryConfig — the
@@ -255,11 +256,12 @@ DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
     const uint32_t bytes_per_recv_per_block = k_block_w_tiles * n_per_recv * tile_bytes;
     const uint32_t recv_stride_bytes = k_tiles_raw * n_per_recv * tile_bytes;
 
-    // Fit ladder. Rung 1: full block fits — pin blocks_per_dma = 1 (multi-block
-    // batching needs fifo-wrap-aware writes; TODO). Rung 2: K-sub split.
+    // Fit ladder. Rung 1: full block fits in the stage half. Rung 2: K-sub
+    // split for shapes where one block exceeds the stage half (the kernel walks
+    // sub-bands across stage halves; multi-block batching still works because
+    // B blocks of a receiver are contiguous in DRAM).
     uint32_t rows_per_sub = 0;
     uint32_t num_sub = 1;
-    constexpr uint32_t blocks_per_dma = 1;
     if (bytes_per_recv_per_block <= ring_half) {
         rows_per_sub = k_block_w_tiles;
         num_sub = 1;
@@ -281,12 +283,25 @@ DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
         num_sub = k_block_w_tiles / rows_per_sub;
     }
 
-    const uint32_t sub_chunk_bytes = blocks_per_dma * rows_per_sub * n_per_recv * tile_bytes;
+    const uint32_t sub_chunk_bytes = rows_per_sub * n_per_recv * tile_bytes;
     TT_FATAL(
         sub_chunk_bytes <= ring_half,
         "Internal: receiver-contiguous chunk size {} B exceeds ring_half {} B",
         sub_chunk_bytes,
         ring_half);
+
+    // target_per_visit_pages: ~6 stage halves' worth of blocks per visit. The
+    // kernel amortizes one noc_async_write_one_packet_set_state per receiver
+    // visit, so making each visit cover many blocks reduces set_state cost.
+    // The kernel further clamps by free downstream space, remaining blocks,
+    // and fifo-wrap distance, so the static ceiling is a hint, not a contract.
+    const uint32_t page_bytes_per_recv = k_block_w_tiles * coalesced_num_pages * coalesced_page_size;
+    const uint32_t stage_half_pages = page_bytes_per_recv > 0 ? ring_half / page_bytes_per_recv : 0;
+    constexpr uint32_t kVisitStageHalfMultiplier = 6;
+    uint32_t target_per_visit_pages = stage_half_pages * kVisitStageHalfMultiplier;
+    if (target_per_visit_pages == 0) {
+        target_per_visit_pages = 1;
+    }
 
     DramCorePrefetcherTensorLayout g;
     g.num_sub = num_sub;
@@ -297,9 +312,9 @@ DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
     g.sub_chunk_bytes = sub_chunk_bytes;
     g.sub_stride_bytes = rows_per_sub * n_per_recv * tile_bytes;
     g.block_stride_bytes = k_block_w_tiles * n_per_recv * tile_bytes;  // within-slab K-block stride
-    g.page_bytes_per_recv = k_block_w_tiles * coalesced_num_pages * coalesced_page_size;
+    g.page_bytes_per_recv = page_bytes_per_recv;
     g.layout_mode = static_cast<uint32_t>(LayoutMode::ReceiverContiguous);
-    g.blocks_per_dma = blocks_per_dma;
+    g.target_per_visit_pages = target_per_visit_pages;
     g.recv_stride_bytes = recv_stride_bytes;
     g.block_count = block_count;
     return g;

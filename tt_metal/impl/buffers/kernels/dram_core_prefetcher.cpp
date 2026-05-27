@@ -132,6 +132,30 @@ FORCE_INLINE void prefetcher_finalize_block(
     iface.fifo_wr_ptr = next_wr_ptr;
 }
 
+// Non-blocking variant of remote_cb_reserve_back's polling loop: scans all
+// receivers' (pages_sent - pages_acked) and returns the min free aligned-page
+// count. Used by the recv-contig batched main loop to size the next round.
+FORCE_INLINE uint32_t poll_min_free_aligned_pages(const RemoteSenderCBInterface& iface, uint32_t num_receivers) {
+    const uint32_t fifo_size = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.config_ptr)[3];
+    const uint32_t fifo_aligned_num_pages = fifo_size / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+    volatile tt_l1_ptr uint32_t* pages_sent_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.aligned_pages_sent_ptr);
+    volatile tt_l1_ptr uint32_t* pages_acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        iface.aligned_pages_sent_ptr + experimental::REMOTE_CB_LOCAL_PAGES_ACKED_OFFSET);
+    uint32_t min_free = fifo_aligned_num_pages;
+    invalidate_l1_cache();
+    for (uint32_t i = 0; i < num_receivers; ++i) {
+        const uint32_t sent_minus_ack = *pages_sent_ptr - *pages_acked_ptr;
+        const uint32_t free_pages = fifo_aligned_num_pages - sent_minus_ack;
+        if (free_pages < min_free) {
+            min_free = free_pages;
+        }
+        pages_sent_ptr += experimental::REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
+        pages_acked_ptr += experimental::REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
+    }
+    return min_free;
+}
+
 // Loads the per-GCB sender state block's RemoteSenderCBInterface-compatible region
 // from L1 into the static cb_interface[] slot for this request.
 FORCE_INLINE void load_sender_state(volatile tt_l1_ptr DramSenderStateBlock* sb, RemoteSenderCBInterface& iface) {
@@ -263,7 +287,7 @@ void kernel_main() {
                 const uint32_t t_block_stride = g->block_stride_bytes;
                 const uint32_t t_page_bytes_per_recv = g->page_bytes_per_recv;
                 const uint32_t t_layout_mode = g->layout_mode;
-                // g->blocks_per_dma is currently pinned to 1 by the manager.
+                const uint32_t t_target_per_visit = g->target_per_visit_pages;
                 const uint32_t t_recv_stride = g->recv_stride_bytes;
                 const uint32_t t_block_count = g->block_count;
 
@@ -394,130 +418,147 @@ void kernel_main() {
                         stage_slot = next_slot;
                     }
                 } else {
-                    // ---- Receiver-contiguous main loop ----
-                    // Layout: each bank holds num_receivers slabs of t_recv_stride bytes,
-                    // stacked at offsets 0, V, 2V, ... Within a slab, blocks are at
-                    // blk * t_block_stride and sub-bands within a block at sb * t_sub_stride.
+                    // ---- Receiver-contiguous main loop (dynamic batching) ----
+                    // Per round, we pick a batch size B = min(target_per_visit,
+                    // min_free_blocks_across_receivers, remaining_blocks,
+                    // blocks_to_fifo_wrap). Then for each receiver r in turn we DMA + NoC-write
+                    // B blocks of receiver r's slab (contiguous: slab = recv_stride bytes,
+                    // blocks at stride t_page_bytes_per_recv == t_block_stride). set_state is
+                    // issued ONCE per receiver visit, then with_state writes for every
+                    // coalesced packet — amortizes destination reprogramming across many
+                    // writes. Stage halves ping-pong both within a visit (when one visit's
+                    // payload exceeds ring_half) and across consecutive receivers (the next
+                    // receiver's first DMA loads while the current receiver's writes drain).
                     //
-                    // Iteration order: blk outer, r middle, sb inner. Per (blk, r, sb) we
-                    // issue one DMA + one NoC write to receiver r. Reserve + finalize happen
-                    // on the (r == 0, sb == 0) and (sb == last, r == last) boundaries.
-                    const uint32_t total_chunks = t_block_count * num_receivers * t_num_sub;
+                    // After all num_receivers visits, finalize bumps pages_sent + remote
+                    // semaphore by B for every receiver and advances iface.fifo_wr_ptr by
+                    // B * t_page_bytes_per_recv.
+                    //
+                    // The pages_to_wrap clamp prevents B from crossing fifo_limit_page_aligned
+                    // mid-round; the boundary round just gets a smaller B and the next round
+                    // starts after the wrap.
+                    constexpr uint32_t kStageHalfBytes = ring_half;
+                    // Per-stage-half capacity expressed in whole sub-bands; t_chunk_bytes
+                    // (= sub_chunk_bytes) is the natural alignment for both DMA and NoC
+                    // writes — it's a multiple of t_coal_page_size by construction, so
+                    // packet counts come out exact (no truncation loss).
+                    const uint32_t subs_per_stage_half = kStageHalfBytes / t_chunk_bytes;
+                    const uint32_t max_chunk_bytes = subs_per_stage_half * t_chunk_bytes;
 
-                    experimental::dma_async_read(/*stream=*/0, tensor_base, stage_slot_a, t_chunk_bytes);
+                    // fifo_pages_per_block converts aligned-page free space into
+                    // "blocks of t_page_bytes_per_recv" — the batch unit B uses.
+                    const uint32_t fifo_pages_per_block =
+                        t_page_bytes_per_recv / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
 
-                    uint32_t fifo_snapshot = 0;
-                    uint32_t cum_offset_in_page = 0;
-                    uint32_t blk = 0;
-                    uint32_t r = 0;
-                    uint32_t sb = 0;
+                    uint32_t pages_sent_global = 0;
                     uint32_t stage_slot = stage_slot_a;
-                    bool has_next = (total_chunks > 1);
 
-                    for (uint32_t c = 0; c < total_chunks; ++c) {
-                        if (r == 0 && sb == 0) {
-                            experimental::remote_cb_reserve_back(remote_cb_id, 1);
-                            fifo_snapshot = iface.fifo_wr_ptr;
+                    while (pages_sent_global < t_block_count) {
+                        // ---- Pick B for this round ----
+                        // poll_min_free returns 0 if any receiver has no free space; spin
+                        // until at least one block is free everywhere.
+                        uint32_t min_free_blocks;
+                        do {
+                            const uint32_t min_free_aligned = poll_min_free_aligned_pages(iface, num_receivers);
+                            min_free_blocks = min_free_aligned / fifo_pages_per_block;
+                        } while (min_free_blocks == 0);
+
+                        const uint32_t bytes_to_wrap = iface.fifo_limit_page_aligned - iface.fifo_wr_ptr;
+                        const uint32_t pages_to_wrap = bytes_to_wrap / t_page_bytes_per_recv;
+                        const uint32_t remaining = t_block_count - pages_sent_global;
+
+                        uint32_t B = t_target_per_visit;
+                        if (B > min_free_blocks) {
+                            B = min_free_blocks;
                         }
-                        if (sb == 0) {
-                            cum_offset_in_page = 0;
+                        if (B > remaining) {
+                            B = remaining;
+                        }
+                        if (B > pages_to_wrap) {
+                            B = pages_to_wrap;
+                        }
+                        // pages_to_wrap >= 1 by invariant (fifo_wr_ptr < fifo_limit_page_aligned).
+
+                        const uint32_t fifo_snapshot = iface.fifo_wr_ptr;
+                        const uint32_t bytes_per_recv = B * t_page_bytes_per_recv;
+
+                        // ---- Prologue: issue first DMA (receiver 0's first stage half) ----
+                        {
+                            const uint32_t first_bytes =
+                                bytes_per_recv < max_chunk_bytes ? bytes_per_recv : max_chunk_bytes;
+                            const uint32_t first_src = tensor_base + pages_sent_global * t_page_bytes_per_recv;
+                            experimental::dma_async_read(/*stream=*/0, first_src, stage_slot, first_bytes);
                         }
 
-                        // Successor (blk, r, sb): sb innermost, r middle, blk outermost.
-                        uint32_t next_sb = sb + 1;
-                        uint32_t next_r = r;
-                        uint32_t next_blk = blk;
-                        if (next_sb == t_num_sub) {
-                            next_sb = 0;
-                            ++next_r;
-                            if (next_r == num_receivers) {
-                                next_r = 0;
-                                ++next_blk;
-                                if (next_blk == t_block_count) {
-                                    has_next = false;
+                        // ---- Per-receiver visits ----
+                        for (uint32_t r = 0; r < num_receivers; ++r) {
+                            volatile tt_l1_ptr uint32_t* xy_ptr =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + r * 2;
+                            const uint32_t remote_noc_xy = uint32_t(NOC_XY_ENCODING(
+                                DYNAMIC_NOC_X(noc_index, xy_ptr[0]), DYNAMIC_NOC_Y(noc_index, xy_ptr[1])));
+                            const uint64_t set_state_dest = get_noc_addr_helper(remote_noc_xy, fifo_snapshot);
+                            noc_async_write_one_packet_set_state</*posted=*/true>(
+                                set_state_dest, t_coal_page_size, noc_index);
+
+                            uint32_t bytes_done = 0;
+                            while (bytes_done < bytes_per_recv) {
+                                const uint32_t remaining_this_visit = bytes_per_recv - bytes_done;
+                                const uint32_t chunk_bytes =
+                                    remaining_this_visit < max_chunk_bytes ? remaining_this_visit : max_chunk_bytes;
+
+                                // ---- Issue next DMA before waiting on current ----
+                                uint32_t next_r = r;
+                                uint32_t next_bytes_done = bytes_done + chunk_bytes;
+                                bool has_next = true;
+                                if (next_bytes_done >= bytes_per_recv) {
+                                    next_bytes_done = 0;
+                                    ++next_r;
+                                    if (next_r >= num_receivers) {
+                                        has_next = false;
+                                    }
                                 }
-                            }
-                        }
-                        const uint32_t next_slot = stage_slot_sum - stage_slot;
 
-                        if (has_next) {
-                            const uint32_t next_src = tensor_base + next_r * t_recv_stride + next_blk * t_block_stride +
-                                                      next_sb * t_sub_stride;
-                            experimental::dma_async_read(/*stream=*/0, next_src, next_slot, t_chunk_bytes);
-                        }
-                        const uint32_t outstanding_after_wait = has_next ? 1u : 0u;
-                        experimental::dma_async_read_wait_n(/*stream=*/0, outstanding_after_wait);
+                                const uint32_t next_slot = stage_slot_sum - stage_slot;
+                                if (has_next) {
+                                    const uint32_t next_remaining = bytes_per_recv - next_bytes_done;
+                                    const uint32_t next_bytes =
+                                        next_remaining < max_chunk_bytes ? next_remaining : max_chunk_bytes;
+                                    const uint32_t next_src = tensor_base + next_r * t_recv_stride +
+                                                              pages_sent_global * t_page_bytes_per_recv +
+                                                              next_bytes_done;
+                                    experimental::dma_async_read(
+                                        /*stream=*/0, next_src, next_slot, next_bytes);
+                                }
+                                const uint32_t outstanding_after_wait = has_next ? 1u : 0u;
+                                experimental::dma_async_read_wait_n(/*stream=*/0, outstanding_after_wait);
 
-                        // Single-receiver write: pass the current receiver's xy as the start of
-                        // a length-1 chunk. prefetcher_write_chunk with num_receivers_in_chunk=1
-                        // iterates `t_rows_per_sub` K-rows × `t_coal_num_pages` coalesced pages.
-                        volatile tt_l1_ptr uint32_t* single_recv_xy =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + r * 2;
-                        if (t_rows_per_sub == 1) {
-                            if (t_coal_num_pages == 1) {
-                                prefetcher_write_chunk</*single_row=*/true, /*single_page=*/true>(
-                                    stage_slot,
-                                    fifo_snapshot + cum_offset_in_page,
-                                    single_recv_xy,
-                                    /*num_receivers_in_chunk=*/1,
-                                    t_rows_per_sub,
-                                    t_coal_num_pages,
-                                    t_coal_page_size,
-                                    noc_index);
-                            } else {
-                                prefetcher_write_chunk</*single_row=*/true, /*single_page=*/false>(
-                                    stage_slot,
-                                    fifo_snapshot + cum_offset_in_page,
-                                    single_recv_xy,
-                                    /*num_receivers_in_chunk=*/1,
-                                    t_rows_per_sub,
-                                    t_coal_num_pages,
-                                    t_coal_page_size,
-                                    noc_index);
-                            }
-                        } else {
-                            if (t_coal_num_pages == 1) {
-                                prefetcher_write_chunk</*single_row=*/false, /*single_page=*/true>(
-                                    stage_slot,
-                                    fifo_snapshot + cum_offset_in_page,
-                                    single_recv_xy,
-                                    /*num_receivers_in_chunk=*/1,
-                                    t_rows_per_sub,
-                                    t_coal_num_pages,
-                                    t_coal_page_size,
-                                    noc_index);
-                            } else {
-                                prefetcher_write_chunk</*single_row=*/false, /*single_page=*/false>(
-                                    stage_slot,
-                                    fifo_snapshot + cum_offset_in_page,
-                                    single_recv_xy,
-                                    /*num_receivers_in_chunk=*/1,
-                                    t_rows_per_sub,
-                                    t_coal_num_pages,
-                                    t_coal_page_size,
-                                    noc_index);
+                                // ---- NoC writes: flat packet loop with state amortization ----
+                                // The receiver's view of B blocks is contiguous (block_stride ==
+                                // page_bytes_per_recv) and each block's internal layout (rows × coal
+                                // packets) is contiguous, so we just walk packets.
+                                const uint32_t num_packets = chunk_bytes / t_coal_page_size;
+                                uint32_t src_addr = stage_slot;
+                                uint32_t dest_addr = fifo_snapshot + bytes_done;
+                                for (uint32_t p = 0; p < num_packets; ++p) {
+                                    noc_async_write_one_packet_with_state</*posted=*/true>(
+                                        src_addr, dest_addr, noc_index);
+                                    src_addr += t_coal_page_size;
+                                    dest_addr += t_coal_page_size;
+                                }
+
+                                // Stage slot is reused two iterations later by ping-pong.
+                                // Drain the local NoC cmd queue before issuing the next set of
+                                // writes that may source from this slot.
+                                noc_async_posted_writes_flushed();
+                                bytes_done += chunk_bytes;
+                                stage_slot = next_slot;
                             }
                         }
 
-                        cum_offset_in_page += t_rows_per_sub * t_coal_num_pages * t_coal_page_size;
-
-                        // Block boundary: last receiver's last sub-band has just been written —
-                        // bump pages_sent on every receiver by 1.
-                        if (sb + 1 == t_num_sub && r + 1 == num_receivers) {
-                            noc_async_posted_writes_flushed();
-                            prefetcher_finalize_block</*skip_ptr_update=*/true>(
-                                iface, t_page_bytes_per_recv, num_receivers, noc_index);
-                        } else {
-                            // The ping-pong DMA can reuse this stage slot two chunks later.
-                            // Make sure all posted writes sourced from it have departed first.
-                            noc_async_posted_writes_flushed();
-                        }
-
-                        // Advance counters to next chunk.
-                        blk = next_blk;
-                        r = next_r;
-                        sb = next_sb;
-                        stage_slot = next_slot;
+                        // ---- Finalize round: bump pages_sent + semaphores by B blocks ----
+                        prefetcher_finalize_block</*skip_ptr_update=*/true>(
+                            iface, B * t_page_bytes_per_recv, num_receivers, noc_index);
+                        pages_sent_global += B;
                     }
                 }
             }

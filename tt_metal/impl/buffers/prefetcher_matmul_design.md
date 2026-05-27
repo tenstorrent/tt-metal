@@ -506,44 +506,77 @@ src = bank_local_base[t]
 ```
 bytes_per_recv_per_block = k_block_w * n_per_recv * tile_bytes
 
-# Rung 1: full block fits. blocks_per_dma pinned to 1 for now (multi-block
-# batching needs fifo-wrap-aware writes; TODO).
+# Rung 1: full block fits in the stage half.
 if bytes_per_recv_per_block <= ring_half:
     rows_per_sub = k_block_w
     num_sub      = 1
-    blocks_per_dma = 1
 # Rung 2: single block exceeds ring_half — K-split within one slab.
 else:
-    blocks_per_dma = 1
     pick rows_per_sub | k_block_w such that
          rows_per_sub * n_per_recv * tile_bytes <= ring_half
     num_sub = k_block_w / rows_per_sub
 ```
 
-Each DMA serves exactly one receiver. Total DMAs per layer per tensor:
-`num_receivers * num_blocks * num_sub` per sender. NoC writes per block
-per sender: `num_receivers * k_block_w * coalesced_num_pages` — same
-count as the K-row-major fast path, but each write reads from contiguous
-DRAM rather than a row-strided source.
+The manager additionally computes `target_per_visit_pages` (= `6 *
+ring_half / page_bytes_per_recv`, clamped to ≥ 1) as the static ceiling
+on the kernel's per-receiver visit batch size; see "Kernel main loop"
+below.
 
-#### Kernel main loop (receiver-contiguous)
+#### Kernel main loop (receiver-contiguous, dynamic batching)
+
+The kernel batches **B consecutive blocks of the same receiver per
+visit** to amortize one `noc_async_write_one_packet_set_state` over many
+`with_state` writes. B is recomputed each round under lockstep flow
+control:
 
 ```
-for blk in [0, num_blocks):
-  for r in [0, num_receivers):
-    if r == 0: remote_cb_reserve_back(remote_cb_id, 1)
-    if sb == 0 (loop entry): fifo_snapshot = iface.fifo_wr_ptr
-    for sb in [0, num_sub):              // num_sub > 1 only in rung 2
-      DMA: src = (above), dest = stage_slot, size = sub_chunk_bytes
-      prefetcher_write_chunk(num_receivers_in_chunk = 1, recv_xy[r], ...)
-    if r == num_receivers - 1 and sb == num_sub - 1:
-      noc_async_posted_writes_flushed()
-      prefetcher_finalize_block(...)     // bumps pages_sent on every receiver by 1
+while pages_sent_global < num_blocks:
+    min_free_aligned = poll min(pages_sent[r] - pages_acked[r]) across r in [0, R)
+    pages_to_wrap    = (fifo_limit_page_aligned - fifo_wr_ptr) / page_bytes_per_recv
+    B = min(target_per_visit_pages, min_free_aligned / fifo_pages_per_block,
+            num_blocks - pages_sent_global, pages_to_wrap)
+
+    fifo_snapshot = fifo_wr_ptr
+    bytes_per_recv = B * page_bytes_per_recv  // == B * num_sub * sub_chunk_bytes
+
+    issue first DMA (receiver 0's first stage-half chunk into stage_slot_a)
+    for r in [0, num_receivers):
+        set_state(remote_noc_xy[r], fifo_snapshot, coal_page_size)   // once per visit
+        bytes_done = 0
+        while bytes_done < bytes_per_recv:
+            chunk_bytes = min(max_chunk_bytes,  // = floor(ring_half / sub_chunk_bytes) * sub_chunk_bytes
+                              bytes_per_recv - bytes_done)
+            issue next DMA (continue r, or move to r+1, or none)
+            wait on current DMA
+            for p in [0, chunk_bytes / coal_page_size):
+                with_state(src += coal_page_size, dest += coal_page_size)
+            noc_async_posted_writes_flushed()
+            bytes_done += chunk_bytes
+            stage_slot = stage_slot_sum - stage_slot                  // ping-pong
+    prefetcher_finalize_block(iface, B * page_bytes_per_recv, ...)    // bumps sent + sema by B
+    pages_sent_global += B
 ```
 
-The current kernel iterates `(blk outer, r middle, sb inner)`. Loop order
-doesn't affect correctness as long as `prefetcher_finalize_block` runs
-once per block after all receivers have been written.
+The `pages_to_wrap` clamp avoids inline NoC-write splitting at the fifo
+wrap (the boundary round just gets a smaller B). The packet-stride flat
+write loop is correct because for any tensor in this layout the per-receiver
+B-block payload is contiguous in both the stage L1 (DMA-loaded
+contiguously) and the receiver's queue (`block_stride == page_bytes_per_recv`).
+
+Ping-pong stage halves operate at two levels: (a) within a visit, when
+`bytes_per_recv > max_chunk_bytes` the consecutive stage-half DMAs
+alternate slots; (b) across receivers, the last DMA before transitioning
+to receiver r+1 lands in the alternate slot, so r+1's first DMA can
+overlap with r's last NoC writes draining. set_state runs after that
+overlap, immediately before r+1's with_state writes.
+
+Total DMAs per layer per tensor (rung 1, B = `min(target, num_blocks)`):
+roughly `ceil(num_receivers * num_blocks / B) * ceil(B * page_bytes / ring_half)`,
+which collapses to one DMA per stage half per receiver, vs. the old
+pinned-`blocks_per_dma=1` count of `num_receivers * num_blocks * num_sub`
+(one DMA per block per receiver). NoC writes per layer per tensor are
+unchanged in count but issued mostly via `with_state` rather than
+re-`set_state`'d each block.
 
 ### Extra per-tensor RTA fields (queueable payload)
 
@@ -554,10 +587,11 @@ K-row-major they default to `(0, 1, 0)`); word [13] is the per-tensor
 header word, now per-tensor so different tensors can split K differently):
 
 ```
-[10] layout_mode        // 0 = KRowMajor, 1 = ReceiverContiguous
-[11] blocks_per_dma     // pinned to 1 in current impl
-[12] recv_stride_bytes  // K_tiles * n_per_recv * tile_bytes (0 under KRowMajor)
-[13] block_count        // K-blocks for this tensor (was the shared num_blocks)
+[10] layout_mode             // 0 = KRowMajor, 1 = ReceiverContiguous
+[11] target_per_visit_pages  // recv-contig: per-receiver visit ceiling (blocks);
+                             //   = 6 * ring_half / page_bytes_per_recv, clamped >= 1
+[12] recv_stride_bytes       // K_tiles * n_per_recv * tile_bytes (0 under KRowMajor)
+[13] block_count             // K-blocks for this tensor (was the shared num_blocks)
 ```
 
 `kRequestPageTensorWords` in `dram_core_prefetcher_manager.hpp` reflects
@@ -590,15 +624,17 @@ Under the **receiver-contiguous** layout (`num_shards = ring_size`) the
 per-receiver per-block bytes shrink to
 `k_block_w * n_per_recv * tile_bytes`:
 
-| Op  | n_per_recv | bytes_per_recv_per_block | rung | (rows_per_sub, num_sub, blocks_per_dma) |
-|-----|-----------:|-------------------------:|------|-----------------------------------------|
-| FF1 |          7 |                   15 232 | 1    | (2, 1, 1) — fits easily                 |
-| QKV |          6 |                   13 056 | 1    | (2, 1, 1)                               |
-| O   |          2 |                    4 352 | 1    | (2, 1, 1)                               |
+| Op  | n_per_recv | bytes_per_recv_per_block | rung | (rows_per_sub, num_sub) | target_per_visit |
+|-----|-----------:|-------------------------:|------|-------------------------|------------------:|
+| FF1 |          7 |                   15 232 | 1    | (2, 1)                  | 13                |
+| QKV |          6 |                   13 056 | 1    | (2, 1)                  | 16                |
+| O   |          2 |                    4 352 | 1    | (2, 1)                  | 48                |
 
 All three Llama production shapes land on rung 1 with `num_sub = 1` — no
 K-row splitting needed. The N-chunking sub-row path required for FF1/QKV
-under K-row-major (`M = 2`) is unnecessary here.
+under K-row-major (`M = 2`) is unnecessary here. `target_per_visit` is
+the upper bound on B for that tensor; the kernel further clamps by
+downstream free space and fifo-wrap distance.
 
 ## 8. Cross-component invariants
 
