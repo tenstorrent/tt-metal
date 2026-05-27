@@ -31,13 +31,20 @@ from ....utils.tensor import bf16_tensor, from_torch, to_torch
 from ....utils.test import line_params, ring_params
 
 
-def _torch_rmsnorm(x: torch.Tensor, weight: torch.Tensor | None, eps: float) -> torch.Tensor:
-    """Reference RMSNorm: out = x * 1/sqrt(mean(x**2) + eps) [* weight]."""
+def _torch_rmsnorm(
+    x: torch.Tensor,
+    weight: torch.Tensor | None,
+    eps: float,
+    bias: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Reference RMSNorm: out = x * 1/sqrt(mean(x**2) + eps) [* weight] [+ bias]."""
     x = x.to(torch.float32)
     mean_sq = (x * x).mean(dim=-1, keepdim=True)
     out = x * torch.rsqrt(mean_sq + eps)
     if weight is not None:
         out = out * weight.to(torch.float32).reshape(1, 1, 1, -1)
+    if bias is not None:
+        out = out + bias.to(torch.float32).reshape(1, 1, 1, -1)
     return out.to(torch.bfloat16)
 
 
@@ -139,6 +146,57 @@ def test_wan_fused_distributed_rmsnorm_device_op_tp1(
     tt_out_torch = to_torch(out)
     ref = _torch_rmsnorm(x_torch, weight_torch, EPS)
     assert_quality(ref, tt_out_torch, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"),
+    [((2, 4), {**line_params, "trace_region_size": 90112})],
+    indirect=True,
+    ids=["bh_2x4_line"],
+)
+@pytest.mark.parametrize(
+    ("N", "H"),
+    [
+        pytest.param(32, 256, id="N32_H256"),
+        pytest.param(64, 1280, id="N64_H1280"),
+    ],
+)
+def test_wan_fused_distributed_rmsnorm_device_op_tp1_bias(
+    mesh_device: ttnn.MeshDevice,
+    N: int,
+    H: int,
+) -> None:
+    """TP=1 with optional bias: y = rmsnorm(x) * weight + bias."""
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 1))
+    ccl_manager = CCLManager(mesh_device=submesh, num_links=1, topology=ttnn.Topology.Linear)
+    ag_sem = ccl_manager.get_ag_ping_pong_semaphore(0)
+
+    EPS = 1e-6
+    torch.manual_seed(0)
+    x_torch = torch.randn((1, 1, N, H), dtype=torch.bfloat16)
+    weight_torch = torch.randn(H, dtype=torch.bfloat16)
+    bias_torch = torch.randn(H, dtype=torch.bfloat16)
+    tt_x = bf16_tensor(x_torch, device=submesh)
+    tt_weight = from_torch(weight_torch.reshape(1, H), device=submesh, dtype=ttnn.bfloat16)
+    tt_bias = from_torch(bias_torch.reshape(1, H), device=submesh, dtype=ttnn.bfloat16)
+
+    logger.info(f"TP=1 with bias: N={N} H={H}")
+    out = ttnn.experimental.wan_fused_distributed_rmsnorm(
+        tt_x,
+        0,
+        submesh,
+        ag_sem,
+        topology=ttnn.Topology.Linear,
+        epsilon=EPS,
+        num_heads_per_device=1,
+        weight=tt_weight,
+        bias=tt_bias,
+        use_device_op=True,
+    )
+
+    out_torch = to_torch(out)
+    ref = _torch_rmsnorm(x_torch, weight_torch, EPS, bias=bias_torch)
+    assert_quality(ref, out_torch, pcc=0.999)
 
 
 # ---------------------------------------------------------------------------

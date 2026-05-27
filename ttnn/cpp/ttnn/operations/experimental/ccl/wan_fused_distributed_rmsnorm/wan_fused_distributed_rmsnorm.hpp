@@ -28,6 +28,7 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
     float epsilon = 1e-5,
     uint32_t num_heads_per_device = 1,
     const std::optional<const ttnn::Tensor>& weight = std::nullopt,
+    const std::optional<const ttnn::Tensor>& bias = std::nullopt,
     const std::optional<const ttnn::Tensor>& transformation_mat = std::nullopt,
     const std::optional<const ttnn::Tensor>& rope_cos = std::nullopt,
     const std::optional<const ttnn::Tensor>& rope_sin = std::nullopt,

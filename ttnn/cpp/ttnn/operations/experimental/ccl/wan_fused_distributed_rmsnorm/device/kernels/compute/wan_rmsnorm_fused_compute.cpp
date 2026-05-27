@@ -82,6 +82,10 @@ void kernel_main() {
     // absolute index (col_tile + i) — no wrap-cycling. Broadcast RoPE
     // (per_head_rope=0) pushes only head_dim_tiles and wraps.
     constexpr uint32_t per_head_rope = get_compile_time_arg_val(27);
+    // Optional row-broadcast bias: tilized [1, H] tensor added after weight
+    // multiply (sub-phase 2.5). Mirrors weight handling.
+    constexpr uint32_t bias_cb = get_compile_time_arg_val(28);
+    constexpr uint32_t has_bias = get_compile_time_arg_val(29);
 
     constexpr uint32_t stats_dest_cb = (is_tp_1 != 0) ? stats_gathered_cb : stats_local_cb;
     // Per-row post reduce reads ring_size tiles. With packed AG enabled the
@@ -104,7 +108,10 @@ void kernel_main() {
     }
 
     constexpr uint32_t mul_rms_result_cb = (fuse_rope || has_weight) ? intermediate_cb : output_cb;
-    constexpr uint32_t mul_weight_result_cb = fuse_rope ? intermediate_cb : output_cb;
+    // has_bias implies has_weight (enforced in validate). Weight output stays
+    // in intermediate when bias or rope follows.
+    constexpr uint32_t mul_weight_result_cb = (fuse_rope || has_bias) ? intermediate_cb : output_cb;
+    constexpr uint32_t add_bias_result_cb = fuse_rope ? intermediate_cb : output_cb;
 
     // Process the core's tile rows in chunks of chunk_size_rows.
     uint32_t row_processed = 0;
@@ -272,6 +279,36 @@ void kernel_main() {
                 }
             }
 
+            if constexpr (has_bias) {
+                // ----- Sub-phase 2.5: + bias → add_bias_result_cb -----
+                // bias is row-broadcast (same per col). add_tiles_bcast_rows
+                // mirrors the weight pattern: cumulative wait so compute can
+                // start consuming as soon as the first block of bias arrives.
+                // Pop happens at end of kernel.
+                reconfig_data_format(mul_weight_result_cb, bias_cb);
+                pack_reconfig_data_format(add_bias_result_cb);
+                add_bcast_rows_init_short(mul_weight_result_cb, bias_cb);
+                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                    const uint32_t tiles_in_block =
+                        (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
+                    cb_wait_front(bias_cb, col_tile + tiles_in_block);
+                    cb_wait_front(mul_weight_result_cb, block_size);
+                    tile_regs_acquire();
+                    for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                        add_tiles_bcast_rows(mul_weight_result_cb, bias_cb, i, col_tile + i, i);
+                    }
+                    tile_regs_commit();
+                    cb_pop_front(mul_weight_result_cb, block_size);
+                    cb_reserve_back(add_bias_result_cb, block_size);
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                        pack_tile(i, add_bias_result_cb);
+                    }
+                    tile_regs_release();
+                    cb_push_back(add_bias_result_cb, block_size);
+                }
+            }
+
             if constexpr (fuse_rope) {
                 // ----- Sub-phase 3a: matmul(intermediate, trans_mat) → rotated -----
                 reconfig_data_format(transformation_mat_cb, intermediate_cb);
@@ -418,6 +455,9 @@ void kernel_main() {
     cb_pop_front(epsilon_cb, 1);
     if constexpr (has_weight) {
         cb_pop_front(weight_cb, num_tile_cols);
+    }
+    if constexpr (has_bias) {
+        cb_pop_front(bias_cb, num_tile_cols);
     }
     if constexpr (fuse_rope) {
         cb_pop_front(transformation_mat_cb, 1);
