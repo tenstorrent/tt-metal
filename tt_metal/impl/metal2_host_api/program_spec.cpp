@@ -181,6 +181,12 @@ const std::vector<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) {
     return dfb.advanced_options.has_value() ? dfb.advanced_options->alias_with : empty;
 }
 
+// Helper: return a kernel's dfb-compute-self-loop-scopes list (empty if not set in advanced_options).
+const std::vector<DFBComputeSelfLoopScope>& kernel_self_loop_scopes(const KernelSpec& kernel) {
+    static const std::vector<DFBComputeSelfLoopScope> empty;
+    return kernel.advanced_options.has_value() ? kernel.advanced_options->dfb_compute_self_loop_scopes : empty;
+}
+
 // Local accessor names for kernel resource bindings must be valid C++ identifiers
 // They are used verbatim in the generated kernel source code.
 // TODO: Move this to ttsl in a follow up PR
@@ -1101,12 +1107,12 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // unordered_set), so iteration order — and any resulting error message — is
             // deterministic across runs.
             auto scope_for_kernel = [&](const KernelSpec* k) {
-                for (const auto& entry : k->dfb_compute_self_loop_scopes) {
+                for (const auto& entry : kernel_self_loop_scopes(*k)) {
                     if (entry.dfb_spec_name == dfb.unique_id) {
                         return entry.scope;
                     }
                 }
-                return KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA;
+                return DFBComputeSelfLoopScope::Scope::INTRA;
             };
             const KernelSpec* first_kernel = endpoints.producers.front().kernel;
             const auto first_scope = scope_for_kernel(first_kernel);
@@ -1296,7 +1302,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // (bind it as both producer and consumer).
     // All misapplications fail loudly here for the benefit of users (especially AI users).
     for (const KernelSpec& kernel : spec.kernels) {
-        if (kernel.dfb_compute_self_loop_scopes.empty()) {
+        if (kernel_self_loop_scopes(kernel).empty()) {
             continue;
         }
         TT_FATAL(
@@ -1306,7 +1312,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             kernel.unique_id);
 
         std::unordered_set<DFBSpecName> seen_dfb_names;
-        for (const auto& entry : kernel.dfb_compute_self_loop_scopes) {
+        for (const auto& entry : kernel_self_loop_scopes(kernel)) {
             TT_FATAL(
                 seen_dfb_names.insert(entry.dfb_spec_name).second,
                 "KernelSpec '{}' has duplicate dfb_compute_self_loop_scopes entries for DFB '{}'.",
@@ -1340,7 +1346,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 entry.dfb_spec_name);
 
             TT_FATAL(
-                entry.scope != KernelSpec::DFBComputeSelfLoopScope::Scope::INTER,
+                entry.scope != DFBComputeSelfLoopScope::Scope::INTER,
                 "KernelSpec '{}' specifies INTER scope for self-looped DFB '{}'. INTER scope is "
                 "not yet supported by the runtime.",
                 kernel.unique_id,
@@ -2045,14 +2051,14 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     }();
     std::optional<experimental::dfb::TensixScope> tensix_scope;
     if (is_self_loop && producer->is_compute_kernel()) {
-        auto user_scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA;
-        for (const auto& entry : producer->dfb_compute_self_loop_scopes) {
+        auto user_scope = DFBComputeSelfLoopScope::Scope::INTRA;
+        for (const auto& entry : kernel_self_loop_scopes(*producer)) {
             if (entry.dfb_spec_name == dfb_spec->unique_id) {
                 user_scope = entry.scope;
                 break;
             }
         }
-        tensix_scope = (user_scope == KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA)
+        tensix_scope = (user_scope == DFBComputeSelfLoopScope::Scope::INTRA)
                            ? experimental::dfb::TensixScope::INTRA
                            : experimental::dfb::TensixScope::INTER;  // currently blocked in validation
     }
