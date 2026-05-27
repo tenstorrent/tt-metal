@@ -129,6 +129,8 @@ If the source run does not contain the required artifacts (build tarball, and wh
 
 Most artifact-reuse failures come from picking the wrong source run. Follow these rules in order; any miss is a hard failure that will surface as "Could not find build artifact matching expected pattern" or "Workflow run X has conclusion: failure (expected: success)".
 
+> See also: **End-of-session verification of dispatched runs (mandatory)** below — even after a careful pre-dispatch source-run pick, the agent MUST confirm the dispatched run's artifact-acquisition step finished with `success` before ending its session. Otherwise the run is treated as infra-inconclusive and is retry-eligible.
+
 REQUIREMENT 1 — Source run MUST be a SUCCESS:
 - The source run's `conclusion` must be `success`. Not `failure`, not `cancelled`, not `in_progress`.
 - Verify via the GitHub API / MCP before dispatch. Do NOT pick a source run blindly by recency.
@@ -172,6 +174,31 @@ COMMON FAILURE SIGNATURES AND THEIR CAUSES:
 After committing the workflow edits on the temporary branch, you can sanity-check the patch with a local file read of the workflow file. The patched workflow's `workflow_dispatch.inputs` must list `use-artifacts-from-run`, and the `build-artifact` job's `with:` block must include `use-artifacts-from-run: ${{ inputs.use-artifacts-from-run || '' }}`.
 
 If either is missing, the dispatch will run a fresh build instead of reusing artifacts.
+
+### End-of-session verification of dispatched runs (mandatory)
+
+Before the agent ends its session, for every targeted verification run it dispatched during that session, the agent MUST poll the run until its artifact-acquisition step is no longer queued or in progress. The agent is NOT allowed to end the session by simply reporting "verification dispatched" — it must confirm the artifact step reached a terminal state and report that state.
+
+Specifically, the agent must confirm one of the following:
+
+- When the run was dispatched with `use-artifacts-from-run` (artifact reuse), the `download-artifacts` job inside `build-artifact.yaml` completed with `conclusion: success`.
+- When the run is building artifacts fresh, the `build-artifact` job completed with `conclusion: success`.
+
+The agent only needs the artifact-acquisition job to reach a terminal state. The remaining test jobs may still be in progress when the session ends — this rule is specifically about the artifact step not being left in an unknown state.
+
+If the artifact step did NOT succeed — for example `conclusion: failure` or `cancelled`, "Could not find build artifact matching expected pattern", "Workflow run X has conclusion: failure (expected: success)", source run not found, or any build-intent mismatch — the run is treated as **infra-inconclusive**:
+
+- The agent MUST say so explicitly in the PR comment and in `disabling-work-so-far.md`.
+- Per "Interpreting Verification Results" above, infra-inconclusive runs do NOT consume the PR's one-verification-run budget and ARE retry-eligible (still subject to the per-session dispatch cap).
+- The session is not considered complete until that inconclusive classification has been recorded for the run.
+
+Concrete check the agent should run (substitute the dispatched run ID):
+
+```bash
+gh run view <run-id> --json jobs --jq '.jobs[] | select(.name | test("build-artifact|download-artifacts")) | {name, status, conclusion}'
+```
+
+The agent may also use `gh run view <run-id> --json jobs,conclusion,status` and inspect the `jobs` array directly. Poll until the relevant job's `status` is `completed`, then read its `conclusion`. Only `conclusion: success` lets the session end as "verification dispatched and artifact step healthy". Anything else means "infra-inconclusive, retry-eligible" and the session ends in that state — not as a normal completion.
 
 ## In-Scope vs Out-of-Scope Failures
 
