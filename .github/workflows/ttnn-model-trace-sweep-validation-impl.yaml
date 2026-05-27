@@ -512,12 +512,27 @@ jobs:
               echo "[two-pass] $axis partition missing — skipping"
               return 0
             fi
-            # Filter MODULE_SELECTOR to only modules with vectors in this axis
+            # Derive hardware identity from CI env for filtering vector files
+            local arch_tag="${ARCH_NAME:-}"
+            local tg="${TEST_GROUP_NAME:-}"
+            local is_galaxy=0
+            [[ "$tg" == *galaxy* ]] && is_galaxy=1
+            local hw_series_filter=""
+            for series in n150 n300 p150b p100a galaxy; do
+              if [[ "$tg" == *"$series"* ]]; then hw_series_filter="$series"; break; fi
+            done
+            # Filter MODULE_SELECTOR to modules with vector files matching our
+            # hardware. Without hw filtering, a Galaxy batch picks up N300 files
+            # for the same module name and spawns a pass that loads 0 vectors.
             local filtered_modules=""
             local _IFS_old="$IFS"; IFS=','
             for module in $MODULE_SELECTOR; do
               for f in "$vectors_dir/${module}".*.json "$vectors_dir/${module}.json"; do
                 if [[ -f "$f" ]]; then
+                  local fn="$(basename "$f")"
+                  if [[ -n "$hw_series_filter" && "$fn" != *"$hw_series_filter"* ]]; then continue; fi
+                  if [[ $is_galaxy -eq 1 && "$fn" != *galaxy* ]]; then continue; fi
+                  if [[ $is_galaxy -eq 0 && "$fn" == *galaxy* ]]; then continue; fi
                   filtered_modules="${filtered_modules:+$filtered_modules,}$module"
                   break
                 fi
@@ -525,21 +540,9 @@ jobs:
             done
             IFS="$_IFS_old"
             if [[ -z "$filtered_modules" ]]; then
-              echo "[two-pass] $axis partition has no vectors for batch modules — skipping"
+              echo "[two-pass] $axis partition has no vectors for $hw_series_filter modules — skipping"
               return 0
             fi
-            # Check if any vector file in this partition has vectors for
-            # the current hardware.  Use ARCH_NAME + galaxy detection to
-            # avoid matching Galaxy vectors on N300 runners and vice versa.
-            local arch_tag="${ARCH_NAME:-}"
-            local tg="${TEST_GROUP_NAME:-}"
-            local is_galaxy=0
-            [[ "$tg" == *galaxy* ]] && is_galaxy=1
-            # Derive device series from test group for precise hw filtering
-            local hw_series_filter=""
-            for series in n150 n300 p150b p100a galaxy; do
-              if [[ "$tg" == *"$series"* ]]; then hw_series_filter="$series"; break; fi
-            done
             if [[ -n "$arch_tag" ]]; then
               local arch_base="${arch_tag%%_*}"  # e.g. wormhole from wormhole_b0
               local arch_matched=0
