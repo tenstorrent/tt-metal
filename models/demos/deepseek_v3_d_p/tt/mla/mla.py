@@ -380,6 +380,28 @@ class ttMLA:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+        # Chunked-prefill persistent ring-AllGather buffers. Sized for the full
+        # global seq_len (the op walks K's full physical seq each call); V is
+        # the seq=0 latent placeholder.
+        self.chunked_persistent_k_buf = ttnn.from_torch(
+            torch.zeros(1, 1, seq_len, self.kv_lora_rank + self.qk_rope_head_dim),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[None, None]
+            ),
+        )
+        self.chunked_persistent_v_buf = ttnn.from_torch(
+            torch.zeros(1, 1, 0, self.kv_lora_rank),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
         # Load weights to TT device
         weights = self._convert_and_cache_weights(
             state_dict,
@@ -764,9 +786,6 @@ class ttMLA:
             )
 
             local_offset = chunk_start_global // self.sp_factor
-            seq_max_local = kvpe_cache.shape[2]
-            seq_max_global = seq_max_local * self.sp_factor
-            kvpe_dim = self.kv_lora_rank + self.qk_rope_head_dim
             ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_batch_idx, update_idx=local_offset)
 
             # K: pass kvpe_cache directly + cache_batch_idx (no slice). The op
@@ -777,25 +796,6 @@ class ttMLA:
             # reuse K's buffer for V reads, truncated to vDHt = kv_lora_rank/32
             # tiles per row. wkv_b2 is applied to the compact attn_out after
             # attention so we never materialize the populated V prefix.
-            persistent_k_buf = ttnn.from_torch(
-                torch.zeros(1, 1, seq_max_global, kvpe_dim),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[None, None]
-                ),
-            )
-            persistent_v_buf = ttnn.from_torch(
-                torch.zeros(1, 1, 0, self.kv_lora_rank),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-
             attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 tt_q,
                 kvpe_cache,
@@ -803,8 +803,8 @@ class ttMLA:
                 self.joint_q,
                 self.joint_kv,
                 self.joint_v_lora,
-                persistent_output_buffer_k=persistent_k_buf,
-                persistent_output_buffer_v=persistent_v_buf,
+                persistent_output_buffer_k=self.chunked_persistent_k_buf,
+                persistent_output_buffer_v=self.chunked_persistent_v_buf,
                 joint_strategy="rear",
                 logical_n=chunk_end_global,
                 # SDPA chunk sizes capped at 32/32: the L1 budget is driven by
