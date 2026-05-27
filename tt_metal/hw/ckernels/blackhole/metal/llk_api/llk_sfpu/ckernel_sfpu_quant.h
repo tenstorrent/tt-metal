@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -78,7 +78,7 @@ inline void _quant_kernels_configure_dest_incr_addrmod_() {
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT = false>
-inline void quant_init(const std::uint32_t zero_point) {
+void quant_init(const uint zero_point) {
     // One-time setup for calculate_quant_int32:
     //   1. load the fp32 zero-point constant into LREG2;
     //   2. program ADDR_MOD_6 with dest+=2 for the per-iteration SFPSTORE;
@@ -122,7 +122,7 @@ inline void quant_init(const std::uint32_t zero_point) {
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT = false>
-inline void requant_init(const std::uint32_t zero_point) {
+void requant_init(const uint zero_point) {
     // One-time setup for requant_int32; see quant_init for the
     // record/replay rationale. Loads the zero point into LREG2, programs
     // ADDR_MOD_6 with dest+=2, then records the register-only compute into
@@ -169,7 +169,7 @@ inline void requant_init(const std::uint32_t zero_point) {
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT = false>
-inline void dequant_init(const std::uint32_t zero_point) {
+void dequant_init(const uint zero_point) {
     // One-time setup for calculate_dequant_int32; see quant_init for the
     // record/replay rationale. The caller passes -zero_point (so the
     // recorded body computes (A + LREG2) * B = (A - zero_point) * B).
@@ -204,8 +204,7 @@ inline void dequant_init(const std::uint32_t zero_point) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
-inline void calculate_quant_int32(
-    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A is input (fp32).
     // Operand B is scaling factor (fp32).
     // LREG2 holds the zero-point constant (fp32) loaded by _init_quant_int32_.
@@ -241,8 +240,7 @@ inline void calculate_quant_int32(
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
-inline void calculate_requant_int32(
-    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A is input to requant (int32, sign-magnitude or 2's complement bits).
     // Operand B is scaling factor (fp32).
     // LREG2 holds the zero-point constant (fp32) loaded by _init_requant_int32_.
@@ -274,8 +272,7 @@ inline void calculate_requant_int32(
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
-inline void calculate_dequant_int32(
-    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A[LREG0] is input to dequant (int32, sign-magnitude or 2's complement bits).
     // Operand B[LREG1] is scaling factor (fp32).
     // LREG2 holds the (negated) zero-point constant loaded by _init_dequant_int32_;

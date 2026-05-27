@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -184,7 +184,7 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT /*unused*/ = false>
-inline void quant_init(const uint zero_point) {
+void quant_init(const uint zero_point) {
     // One-time setup for calculate_quant:
     //   1. load the fp32 zero-point constant into LREG2;
     //   2. program ADDR_MOD_6 with dest+=2 for the per-iteration SFPSTORE;
@@ -225,7 +225,7 @@ inline void quant_init(const uint zero_point) {
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT /*unused*/ = false>
-inline void requant_init(const uint zero_point) {
+void requant_init(const uint zero_point) {
     // One-time setup for calculate_requant; see quant_init for the
     // record/replay rationale. Loads the zero point into LREG2, programs
     // ADDR_MOD_6 with dest+=2, then records the register-only compute into
@@ -259,7 +259,7 @@ inline void requant_init(const uint zero_point) {
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT /*unused*/ = false>
-inline void dequant_init(const uint zero_point) {
+void dequant_init(const uint zero_point) {
     // One-time setup for calculate_dequant; see quant_init for the
     // record/replay rationale. The caller passes -zero_point (so the
     // recorded body computes (A + LREG2) * B = (A - zero_point) * B).

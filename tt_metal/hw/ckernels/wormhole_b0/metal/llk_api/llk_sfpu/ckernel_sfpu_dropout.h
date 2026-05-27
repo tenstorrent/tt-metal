@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <cstdint>
-
+#include "ckernel.h"
+#include "ckernel_defs.h"
 #include "ckernel_ops.h"
 #include "sfpi.h"
 
@@ -14,8 +14,8 @@ namespace sfpu {
 
 // probability should be between 0 - INT_MAX (signed)
 // scale should be binary representation of a float32
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_dropout(int probability, uint scale) {
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_dropout(uint probability, uint scale) {
     // SFPU microcode
 
     TT_SFPLOADI(p_sfpu::LREG1, 10, scale & 0xFFFF);
@@ -54,7 +54,10 @@ inline void calculate_dropout(int probability, uint scale) {
     }
 }
 
-inline void dropout_init(const uint seed) { init_prng_seed(seed); }
+template <bool APPROXIMATION_MODE /*unused*/>
+inline void dropout_init(const uint seed) {
+    init_prng_seed(seed);
+}
 
 }  // namespace sfpu
 }  // namespace ckernel

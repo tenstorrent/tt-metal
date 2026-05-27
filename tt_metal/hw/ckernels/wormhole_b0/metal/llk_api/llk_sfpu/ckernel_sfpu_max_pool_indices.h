@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,7 +31,7 @@ template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
     int ITERATIONS = 8,
-    ckernel::DataLayout layout = ckernel::DataLayout::TILE,
+    DataLayout layout = DataLayout::TILE,
     bool accumulate = false>
 inline void _calculate_max_pool_with_indices_(
     const std::uint32_t values_tile_idx, const std::uint32_t indices_tile_idx, const std::uint32_t chunk) {

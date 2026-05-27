@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,7 +31,7 @@ template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
     int ITERATIONS = 8,
-    ckernel::DataLayout layout = ckernel::DataLayout::TILE,
+    DataLayout layout = DataLayout::TILE,
     bool accumulate = false>
 inline void _calculate_max_pool_with_indices_(
     const std::uint32_t values_tile_idx, const std::uint32_t indices_tile_idx, const std::uint32_t chunk) {
@@ -330,7 +330,7 @@ inline void _calculate_max_pool_with_indices_generic_(
     final_swap(odd_column_offset);                                  // Uses LREG0/LREG4 directly
 }
 
-template <bool APPROXIMATION_MODE, DataLayout layout = ckernel::DataLayout::TILE>
+template <bool APPROXIMATION_MODE, DataLayout layout = DataLayout::TILE>
 inline void init_max_pool_with_indices() {
     // Set bit [2] of the SFPU_CONTROL_REG to enable Destination Index Tracking Mode:
     // LREGs 4-7 will be treated as indices corresponding to the values in LREGs 0-3,

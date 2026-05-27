@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_expm1_cw.h"
 
@@ -12,7 +14,7 @@ namespace ckernel::sfpu {
 // celu(x) = x for x>=0, alpha*(exp(x/alpha)-1) for x<0
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void calculate_celu(uint param0, uint param1) {
+inline void calculate_celu(std::uint32_t param0, std::uint32_t param1) {
     sfpi::vFloat alpha = Converter::as_float(param0);
     sfpi::vFloat alpha_recip = Converter::as_float(param1);
 // unroll 2: with expm1_cw_clamped inlined the loop body is large enough that
