@@ -106,13 +106,12 @@ inline void _calculate_sfpu_binary_(
                 result = sfpi::vConst1;
             }
             v_endif;
-        }
-
-        if constexpr (!is_fp32_dest_acc_en)
-        {
-            // Software RNE conversion to match FPU bf16 rounding (Quasar SFPSTORE
-            // truncates by default).
-            result = _float32_to_bf16_rne_(result);
+            if constexpr (!is_fp32_dest_acc_en)
+            {
+                // Software RNE conversion to match FPU bf16 rounding (Quasar SFPSTORE
+                // truncates by default).
+                result = _float32_to_bf16_rne_(result);
+            }
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
