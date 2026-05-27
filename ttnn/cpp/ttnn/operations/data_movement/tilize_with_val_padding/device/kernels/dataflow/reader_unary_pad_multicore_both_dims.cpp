@@ -5,6 +5,10 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 // Alignment-aware fill: writes 4 bytes at a time for the aligned middle,
 // and uses element-sized writes for unaligned start/end to avoid rv32 unaligned faults.
@@ -58,6 +62,8 @@ void kernel_main() {
     const uint32_t pad_value = get_arg_val<uint32_t>(1);
 
     const auto s = TensorAccessor(src_args, src_addr);
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
 
     auto read_block = [&](uint32_t num_rows,
                           uint32_t start_row_id,
@@ -68,15 +74,13 @@ void kernel_main() {
         uint32_t padding_rows = num_rows == 32 ? 0 : 32 - num_rows;
         bool has_rows = (num_rows + padding_rows) > 0;
 
-        cb_reserve_back(cb_id_in0, single_block_size * has_rows);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+        cb_in0.reserve_back(single_block_size * has_rows);
+        uint32_t l1_write_addr = cb_in0.get_write_ptr();
 
-        uint32_t original_addr = get_write_ptr(cb_id_in0);
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
-            uint64_t src_noc_addr = s.get_noc_addr(size_2d + k);
-
-            // Read from DRAM to tmp buffer
-            noc_async_read(src_noc_addr + start_column_id, l1_write_addr, width_size);
+            CoreLocalMem<uint32_t> dst(l1_write_addr);
+            noc.async_read(
+                s, dst, width_size, {.page_id = size_2d + k, .offset_bytes = start_column_id}, {.offset_bytes = 0});
 
             uint32_t prev_size = start_column_id;
             uint32_t this_block_size = unpadded_X_size - prev_size;
@@ -86,7 +90,7 @@ void kernel_main() {
             }
 
             // Block before copying data from tmp to cb buffer
-            noc_async_read_barrier();
+            noc.async_read_barrier();
             l1_write_addr += width_size;
         }
 
@@ -95,7 +99,7 @@ void kernel_main() {
             l1_write_addr += width_size;
         }
 
-        cb_push_back(cb_id_in0, single_block_size * has_rows);
+        cb_in0.push_back(single_block_size * has_rows);
     };
 
     const uint32_t width_size = get_arg_val<uint32_t>(2);

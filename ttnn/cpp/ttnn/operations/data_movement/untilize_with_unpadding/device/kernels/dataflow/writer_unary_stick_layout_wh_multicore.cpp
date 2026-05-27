@@ -5,6 +5,10 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t cb_id_out0 = 16;
@@ -18,6 +22,9 @@ void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
 
     const auto s = TensorAccessor(dst_args, dst_addr);
+    Noc noc;
+    CircularBuffer cb_out0(cb_id_out0);
+
     auto write_block = [&](uint32_t num_rows,
                            uint32_t start_row_id,
                            uint32_t start_column_id,
@@ -26,11 +33,10 @@ void kernel_main() {
                            uint32_t single_block_size) {
         bool has_rows = (num_rows) > 0;
 
-        cb_wait_front(cb_id_out0, single_block_size * has_rows);
-        uint32_t l1_read_addr = get_write_ptr(cb_id_out0);
+        cb_out0.wait_front(single_block_size * has_rows);
+        uint32_t l1_read_addr = cb_out0.get_write_ptr();
 
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
-            uint64_t dst_noc_addr = s.get_noc_addr(size_2d + k);
             uint32_t total_size = start_column_id + width_size;
             uint32_t write_size = width_size;
 
@@ -39,14 +45,16 @@ void kernel_main() {
                 write_size -= padded_size;
             }
 
-            noc_async_write(l1_read_addr, dst_noc_addr + start_column_id, write_size);
+            CoreLocalMem<uint32_t> src(l1_read_addr);
+            noc.async_write(
+                src, s, write_size, {.offset_bytes = 0}, {.page_id = size_2d + k, .offset_bytes = start_column_id});
 
-            noc_async_write_barrier();
+            noc.async_write_barrier();
 
             l1_read_addr += width_size;
         }
 
-        cb_pop_front(cb_id_out0, single_block_size * has_rows);
+        cb_out0.pop_front(single_block_size * has_rows);
     };
 
     const uint32_t width_size = get_arg_val<uint32_t>(1);
