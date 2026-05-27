@@ -108,34 +108,28 @@ def _downstream_of(state: dict, name: str) -> list[str]:
     return sorted(seen)
 
 
-def _device_candidate(component: dict) -> str | None:
-    """Return the worker name this component would route to, or None.
+def _is_device_candidate(state: dict, component: dict) -> bool:
+    """True iff ``component`` is in the device candidate set for Rule 3.
 
-    Encodes the priority rules from SPEC §3 step 3: failing → debug, then
-    pending ttnn → ttnn, then post-ttnn pending optimization → optimization.
-    Returns None if the component has no eligible device work (e.g. all
-    device phases finished, or the current phase is ``blocked``).
+    A candidate must (a) not be host_resident-allowed (escape hatch means
+    no device work), (b) have reference finished, (c) have all upstream
+    deps ttnn-finished, and (d) have *some* remaining device work — either
+    ttnn or optimization in a non-finished state. The per-priority
+    "current phase not blocked" check is applied in the priority scans
+    themselves, not here.
     """
+    if (component.get("host_resident") or {}).get("allowed") is True:
+        return False
+    if not _is_finished(component, "reference"):
+        return False
+    if not _deps_finished_for_ttnn(state, component):
+        return False
     ttnn_status = _phase_status(component, "ttnn")
-    debug_status = _phase_status(component, "debug")
     opt_status = _phase_status(component, "optimization")
-
-    # Priority 1: ttnn failing → debug worker (unless debug itself is blocked).
-    if ttnn_status == "failing" and debug_status != "blocked":
-        return "debug"
-
-    # Priority 2: ttnn pending (or missing) → ttnn worker. The "missing" case
-    # covers a freshly-architected block that has not yet had any ttnn dict
-    # populated. ``blocked`` ttnn is explicitly skipped here.
-    if ttnn_status in ("pending", None):
-        return "ttnn"
-
-    # Priority 3: ttnn done/skipped → optimization, if optimization not blocked.
-    if ttnn_status in _FINISHED_STATUSES:
-        if opt_status in ("pending", None):
-            return "optimization"
-
-    return None
+    # Remaining work if ttnn isn't finished OR optimization isn't finished.
+    ttnn_done = ttnn_status in _FINISHED_STATUSES
+    opt_done = opt_status in _FINISHED_STATUSES
+    return not (ttnn_done and opt_done)
 
 
 def eligible_blocks(state: dict) -> dict:
@@ -156,36 +150,63 @@ def eligible_blocks(state: dict) -> dict:
         return {"phase": "architecture"}
 
     # ---- Rule 2: reference fan-out ---------------------------------------
+    # Design choice: a non-positive ``max_parallel_reference`` is treated as
+    # "no reference work this tick" — we return ``{phase: reference,
+    # blocks: []}`` so the orchestrator sees that Rule 2 matched (preventing
+    # accidental fall-through to a misleading "device" or "done" decision)
+    # but dispatches zero workers. The operator can then detect the cap is
+    # misconfigured. We return rather than skip so the contract "Rule 2
+    # matches whenever there is pending reference work" stays intact.
     max_parallel = state["config"]["max_parallel_reference"]
     reference_candidates: list[str] = []
-    for c in components:
-        ref_status = _phase_status(c, "reference")
-        # Missing reference dict is treated as pending — see SPEC §3 step 2.
-        if ref_status is None or ref_status in _REFERENCE_PENDING_STATUSES:
-            reference_candidates.append(c["name"])
-            if len(reference_candidates) == max_parallel:
-                break
-    if reference_candidates:
-        return {"phase": "reference", "blocks": reference_candidates}
+    if max_parallel > 0:
+        for c in components:
+            ref_status = _phase_status(c, "reference")
+            # Missing reference dict is treated as pending — see SPEC §3 step 2.
+            if ref_status is None or ref_status in _REFERENCE_PENDING_STATUSES:
+                reference_candidates.append(c["name"])
+                if len(reference_candidates) == max_parallel:
+                    break
+        if reference_candidates:
+            return {"phase": "reference", "blocks": reference_candidates}
+    else:
+        # Cap is zero/negative — check whether any component would have been
+        # eligible. If so, surface an empty reference dispatch; if nothing
+        # was eligible anyway, fall through to later rules normally.
+        for c in components:
+            ref_status = _phase_status(c, "reference")
+            if ref_status is None or ref_status in _REFERENCE_PENDING_STATUSES:
+                return {"phase": "reference", "blocks": []}
 
     # ---- Rule 3: device queue --------------------------------------------
-    # A candidate must (a) have reference finished, (b) have all upstream
-    # deps ttnn-finished, and (c) have remaining device work via
-    # _device_candidate — that helper folds in the "current phase not
-    # blocked" check. host_resident-allowed blocks are skipped here: the
-    # escape hatch means there's no device work to dispatch for them, even
-    # if their ttnn status is still nominally "pending".
-    for c in components:
-        if (c.get("host_resident") or {}).get("allowed") is True:
-            continue
-        if not _is_finished(c, "reference"):
-            continue
-        if not _deps_finished_for_ttnn(state, c):
-            continue
-        worker = _device_candidate(c)
-        if worker is None:
-            continue
-        return {"phase": "device", "block": c["name"], "worker": worker}
+    # SPEC §3 step 3: "Priority within the queue" is GLOBAL across the
+    # candidate set, not per-component. We compute the candidate set once,
+    # then do three priority scans in component order:
+    #   (a) ttnn=failing + debug not blocked → debug worker
+    #   (b) ttnn=pending (or missing) + ttnn not blocked → ttnn worker
+    #   (c) ttnn done/skipped + optimization=pending (or missing)
+    #       + optimization not blocked → optimization worker
+    # First match in each scan wins; if scan (a) has no hit we move on.
+    candidates = [c for c in components if _is_device_candidate(state, c)]
+
+    # Priority (a): failing → debug.
+    for c in candidates:
+        if _phase_status(c, "ttnn") == "failing" and _phase_status(c, "debug") != "blocked":
+            return {"phase": "device", "block": c["name"], "worker": "debug"}
+
+    # Priority (b): pending (or missing) ttnn → ttnn worker. ``blocked`` ttnn
+    # is excluded so a single blocked block does not pin the queue.
+    for c in candidates:
+        ttnn_status = _phase_status(c, "ttnn")
+        if ttnn_status in ("pending", None):
+            return {"phase": "device", "block": c["name"], "worker": "ttnn"}
+
+    # Priority (c): ttnn finished + optimization pending → optimization worker.
+    for c in candidates:
+        ttnn_status = _phase_status(c, "ttnn")
+        opt_status = _phase_status(c, "optimization")
+        if ttnn_status in _FINISHED_STATUSES and opt_status in ("pending", None):
+            return {"phase": "device", "block": c["name"], "worker": "optimization"}
 
     # ---- Rule 4: done -----------------------------------------------------
     if all(_ttnn_satisfied_for_completion(c) and _is_finished(c, "optimization") for c in components):

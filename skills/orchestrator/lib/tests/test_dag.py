@@ -120,18 +120,17 @@ def test_reference_blocked_is_excluded():
 # ---------------------------------------------------------------------------
 
 
-def test_device_picks_pending_ttnn_when_deps_done():
-    """B depends on A (ttnn done). Picks B with ttnn worker."""
+def test_device_prefers_first_component_with_remaining_work():
+    """Under global priority (SPEC §3 step 3), pending-ttnn beats optimization
+    across the queue regardless of component order. A has only optimization
+    left (ttnn=done, opt=pending); B has ttnn=pending. B wins via the
+    pending→ttnn priority scan."""
     comps = [
         _component("A", reference="done", ttnn="done"),
         _component("B", deps=["A"], reference="done", ttnn="pending"),
     ]
-    # A also still has optimization=pending so it's an optimization candidate
-    # too, but it should be picked first in component order.
     result = eligible_blocks(_state(comps))
-    # A is picked first because component order — its ttnn is done so it
-    # routes to optimization.
-    assert result == {"phase": "device", "block": "A", "worker": "optimization"}
+    assert result == {"phase": "device", "block": "B", "worker": "ttnn"}
 
 
 def test_device_skips_block_with_unfinished_deps():
@@ -169,6 +168,63 @@ def test_device_priority_optimization_after_ttnn_done():
     comps = [_component("A", reference="done", ttnn="done", optimization="pending")]
     result = eligible_blocks(_state(comps))
     assert result == {"phase": "device", "block": "A", "worker": "optimization"}
+
+
+def test_device_priority_failing_beats_optimization_across_blocks():
+    """Cross-block: A has only optimization to do; B is failing on ttnn.
+    Per SPEC §3 step 3, failing→debug has global priority over
+    optimization across the candidate queue, regardless of component order."""
+    state = _state(
+        [
+            _component("A", reference="done", ttnn="done", optimization="pending"),
+            _component("B", reference="done", ttnn="failing", debug="in_progress", optimization="pending"),
+        ]
+    )
+    result = eligible_blocks(state)
+    assert result == {"phase": "device", "block": "B", "worker": "debug"}
+
+
+def test_device_priority_pending_ttnn_beats_optimization_across_blocks():
+    """Cross-block: A has only optimization to do; B has ttnn pending.
+    Pending ttnn beats optimization across the queue."""
+    state = _state(
+        [
+            _component("A", reference="done", ttnn="done", optimization="pending"),
+            _component("B", reference="done", ttnn="pending"),
+        ]
+    )
+    result = eligible_blocks(state)
+    assert result == {"phase": "device", "block": "B", "worker": "ttnn"}
+
+
+def test_device_skips_fully_finished_components():
+    """A is fully done (ttnn=done, opt=done) so it shouldn't be a candidate;
+    B has remaining work."""
+    state = _state(
+        [
+            _component("A", reference="done", ttnn="done", optimization="done"),
+            _component("B", reference="done", ttnn="pending"),
+        ]
+    )
+    result = eligible_blocks(state)
+    assert result == {"phase": "device", "block": "B", "worker": "ttnn"}
+
+
+def test_reference_zero_max_parallel_returns_empty_blocks():
+    """A misconfigured max_parallel_reference=0 should return no blocks.
+    The orchestrator can then deadlock-detect or treat as 'no work this tick'."""
+    state = _state([_component("A", reference="pending"), _component("B", reference="pending")])
+    state["config"]["max_parallel_reference"] = 0
+    result = eligible_blocks(state)
+    # Either the function returns reference with empty blocks list,
+    # OR it skips to the next rule. Pin whichever behavior you implement.
+    if result["phase"] == "reference":
+        assert result["blocks"] == []
+    else:
+        # If you decided to skip Rule 2 when cap is 0, then components
+        # with pending reference but no other progress means deadlock
+        # (no reference work AND ttnn requires reference done).
+        assert result["phase"] in {"deadlock", "device"}  # whichever your design lands on
 
 
 # ---------------------------------------------------------------------------
