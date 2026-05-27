@@ -346,6 +346,28 @@ void py_module_types(nb::module_& mod) {
 
                 Returns:
                     int: The L1 address.
+            )doc")
+        .def(
+            "export_descriptor",
+            &tt::tt_metal::H2DStreamService::export_descriptor,
+            nb::arg("service_id"),
+            R"doc(
+                Write the service's flatbuffer descriptor to
+                `/dev/shm/tt_h2d_stream_service_<service_id>.bin` so a
+                co-process can attach to this service via
+                `H2DStreamService.connect(service_id)` (C++ API). The
+                descriptor embeds every per-coord socket's connection
+                metadata; the connector reads a single file and attaches all
+                sockets in one shot. Owner-side only — `RuntimeError` if
+                called on a connector-side service.
+
+                Args:
+                    service_id (str): Identifier used in the descriptor
+                        filename. The same value must be passed to
+                        `H2DStreamService::connect` on the connector side.
+
+                Returns:
+                    str: Full path to the written descriptor file.
             )doc");
 }
 
