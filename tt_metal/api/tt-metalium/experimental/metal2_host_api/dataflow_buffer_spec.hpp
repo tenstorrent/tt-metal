@@ -71,7 +71,7 @@ struct DataflowBufferSpec {
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
 
     //////////////////////////////
-    // Advanced options
+    // Backing memory
     //////////////////////////////
 
     // Build DFB on borrowed memory.

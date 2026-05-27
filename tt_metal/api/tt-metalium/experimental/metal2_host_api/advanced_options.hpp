@@ -32,82 +32,116 @@ using DFBSpecName = std::string;
 //   - Slated for removal (kept only because a replacement does not yet exist;
 //     should carry [[deprecated]] with a message stating the removal plan).
 //
-// Members that are merely "advanced but mainstream" — production-ready features
-// most users will not need but that work safely and predictably — stay on the
-// main Spec, NOT here.
+// NOTE: Features that are "advanced" but mainstream and core to the API
+//       belong on the primary Spec. *AdvancedOptions features are limited
+//       to those that are truly niche, unsafe, or unstable.
 //
-// The std::optional wrapper + explicit type name at the use site
-// (e.g. `.advanced_options = KernelAdvancedOptions{.foo = bar}`) is
-// intentional: it puts a small ergonomic speed bump in front of reaching into
-// this bucket on autopilot.
-//
-// (TODO: comments in this header to be revisited with Audrey after structural
-// changes land.)
-
-// Self-loop DFBs on compute kernels (niche use case).
-// This applies only to compute kernels that bind BOTH the producer and consumer
-// endpoints of the same DFB (self-loop).
-//
-// The compute kernel threads can communicate via the DFB in two topologies:
-//
-//   INTRA (intra-thread): Each kernel thread uses the DFB in its own self-loop.
-//         (no cross-thread communication). This is the common case.
-//   INTER (inter-thread): Within the kernel, some threads produce data for other
-//          threads to consume.
-//
-// Only the INTRA case is currently supported. INTER will trigger a validation error.
-// There are currently no known use cases for an INTER-thread self-loop. This option
-// is present in the API for completeness, to surface any use cases that may arise.
-struct DFBComputeSelfLoopScope {
-    DFBSpecName dfb_spec_name;
-    enum class Scope { INTRA, INTER };
-    Scope scope = Scope::INTRA;
-    // If the INTER case were enabled, we would need an additional field to describe
-    // the inter-thread communication pattern here.
-};
+// Use the features in *AdvancedOptions with caution!
+// The header comments for each field describe which category it falls into,
+// and any special considerations for use.
 
 struct KernelAdvancedOptions {
-    // (Optional) Per-node thread count specification.
-    // The default threading is KernelSpec::num_threads. However, you may override
-    // this on a per-node basis.
-    // NOTE: This feature is currently unsupported. It's an open question if we EVER
-    //       want to support it. Here as a placeholder; specifying it will trigger a
-    //       runtime error.
+    ////////////////////////////////////////////////////////////////////////////////
+    // Per-node thread count (Gen2)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // The default kernel threading is specified by KernelSpec::num_threads.
+    // However, you may override this on a per-node basis.
+    //
+    // NOTE: This feature is currently UNSUPPORTED!
+    //       (It's an open question if we EVER want to support it.)
+    //       It is included here just as a placeholder for use case feedback.
+    //       Attempting to use it will trigger a runtime error.
     using NodeSpecificThreadCount = std::pair<Nodes, int>;  // {node_set, num_threads}
     using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
     std::optional<NodeSpecificThreadCounts> node_specific_thread_counts = std::nullopt;
 
-    // Self-loop DFBs on compute kernels — see DFBComputeSelfLoopScope above.
-    std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
+    ////////////////////////////////////////////////////////////////////////////////
+    // Varargs
+    ////////////////////////////////////////////////////////////////////////////////
 
-    // Runtime varargs: dynamic RTAs.
-    // Some kernels are designed to take a variable number of arguments — e.g. N
-    // arguments representing the dimensions of an N-dimensional tensor, where N
-    // is passed to the kernel as a CTA. Varargs are accessed positionally since
-    // the kernel does not know how many to expect. Set the vararg values per
-    // node via ProgramRunParams.
-    // (Slated for eventual removal in favor of typed array runtime args.)
+    // In Metal 2.0, kernel arguments are NAMED parameters declared in the KernelSpec.
+    // However, until typed kernel argument support is available, certain advanced use
+    // cases require a VARIABLE number of arguments. e.g.:
+    //   - N runtime arguments, representing the size of an N-dimensional tensor
+    //   - a kernel that accepts a variadic number of tensor arguments
+    //
+    // Varargs must be accessed POSITIONALLY in the kernel code.
+    //
+    // The vararg schema below is a temporary mechanism to support these use cases.
+    // It will later be deprecated and replaced by std::array typed arguments.
+
+    //--------------------------------
+    // Compile time varargs
+    //--------------------------------
+    // TODO: This is currently unimplemented.
+    //       However, certain variadic kernels require this workaround.
+
+    //--------------------------------
+    // Runtime varargs
+    //--------------------------------
+    // Number of runtime varargs for the kernel.
+    // Set the vararg values (per node) via ProgramRunParams.
     size_t num_runtime_varargs = 0;
 
-    // Common runtime varargs: dynamic CRTAs.
-    // Like runtime varargs, but the same values are broadcast to every node the
-    // kernel runs on.
-    // (Slated for eventual removal in favor of typed array common runtime args.)
+    // Number of common runtime varargs for the kernel.
+    // Set the vararg values via ProgramRunParams.
+    // (The same argument values are broadcast to every node the kernel runs on.)
     size_t num_common_runtime_varargs = 0;
 
-    // Per-node vararg-count override.
+    // Per-node runtime vararg-count override.
     // In very rare cases a kernel needs a DIFFERENT number of runtime varargs on
     // different nodes. Each entry pairs a node set with its vararg count; nodes
     // not listed default to num_runtime_varargs.
-    // TODO: This feature is truly bizarre. Investigate removing it from the API.
+    // TODO: This feature is truly bizarre. It will be removed from the API once
+    //       existing uses are refactored to avoid it.
     using NumVarargsPerNode = std::vector<std::pair<Nodes, size_t>>;
     std::optional<NumVarargsPerNode> num_runtime_varargs_per_node = std::nullopt;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Multi-threaded self-loop DFBs on compute kernels
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // Self-loop DFBs on compute kernels (niche use case).
+    // This applies only to compute kernels that bind BOTH the producer and consumer
+    // endpoints of the same DFB (self-loop).
+    //
+    // The compute kernel threads can communicate via the DFB in two topologies:
+    //
+    //   INTRA (intra-thread): Each kernel thread uses the DFB in its own self-loop.
+    //         (no cross-thread communication). This is the common case.
+    //   INTER (inter-thread): Within the kernel, some threads produce data for other
+    //          threads to consume.
+    //
+    // Only the INTRA case is currently supported. INTER will trigger a validation error.
+    // There are currently no known use cases for an INTER-thread self-loop. This option
+    // is present in the API for completeness, to surface any use cases that may arise.
+    struct DFBComputeSelfLoopScope {
+        DFBSpecName dfb_spec_name;
+        enum class Scope { INTRA, INTER };
+        Scope scope = Scope::INTRA;
+        // If the INTER case were enabled, we would need an additional field to describe
+        // the inter-thread communication pattern here.
+    };
+    // Self-loop DFBs on compute kernels — see DFBComputeSelfLoopScope above.
+    std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
 };
 
+// (Convenience alias for type)
+using DFBComputeSelfLoopScope = KernelAdvancedOptions::DFBComputeSelfLoopScope;
+
 struct DFBAdvancedOptions {
+    ////////////////////////////////////////////////////////////////////////////////
+    // Aliased DFBs
+    ////////////////////////////////////////////////////////////////////////////////
+
     // Alias two or more DFBs.
     // Aliased DFBs are logically distinct, but physically share the same backing memory.
-    // Aliased DFBs offer NO guarantees against data clobbering; kernel logic must ensure safety.
+    // This is an advanced feature for memory use optimization in niche use cases.
+    //
+    // CAUTION:
+    // Aliased DFBs offer NO guarantees against data clobbering!
+    // This feature is unsafe in most circumstances; kernel logic must ensure safety.
     //
     // Rules for aliased DFBs:
     //   - Every DFB in the alias group must list every other member as an alias
@@ -118,24 +152,31 @@ struct DFBAdvancedOptions {
 };
 
 struct AdvancedKernelRunParams {
-    // Unnamed runtime argument "varargs" (companion to the vararg schema declared
-    // on KernelAdvancedOptions). Specified per-node; length can vary per-node.
-    // (Slated for eventual removal in favor of typed array runtime args.)
+    ////////////////////////////////////////////////////////////////////////////////
+    // Varargs
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // Unnamed runtime argument "varargs"
+    // (Companion to the vararg schema declared on KernelAdvancedOptions).
+    // Specified per-node; length can vary per-node (as declared in schema).
     struct NodeVarargs {
         NodeCoord node;
         std::vector<uint32_t> args;
     };
     std::vector<NodeVarargs> runtime_varargs;
 
-    // Unnamed common runtime argument "varargs" — broadcast to every node the kernel
-    // runs on. Companion to num_common_runtime_varargs in the schema.
-    // (Slated for eventual removal in favor of typed array common runtime args.)
+    // Unnamed common runtime argument "varargs"
+    // (Companion to num_common_runtime_varargs in the schema.)
+    // Broadcast to every node the kernel runs on.
     using CommonVarargs = std::vector<uint32_t>;
     CommonVarargs common_runtime_varargs;
 };
 
 struct SemaphoreAdvancedOptions {
-    // Initial value
+    ////////////////////////////////////////////////////////////////////////////////
+    // Non-zero initial value
+    ////////////////////////////////////////////////////////////////////////////////
+
     // NOTE: Setting a non-zero initial value is not supported on Gen2 architectures.
     // NOTE: Runtime wants to deprecate this feature for ALL architectures.
     //       When remote DFB becomes available, non-zero initial values will be removed.
@@ -143,11 +184,16 @@ struct SemaphoreAdvancedOptions {
 };
 
 struct TensorParameterAdvancedOptions {
+    ////////////////////////////////////////////////////////////////////////////////
+    // TensorSpec match relaxation options
+    ////////////////////////////////////////////////////////////////////////////////
+
     // By default, the MeshTensor argument provided at execution time must
-    // EXACTLY match the TensorParameter's declared TensorSpec. The options
-    // below relax this match requirement in particular ways.
+    // EXACTLY match the TensorParameter's declared TensorSpec.
+    // The options here relax this match requirement in particular ways.
     //
-    // NOTE: These options are UNSAFE if set to true; most kernels will not function
+    // CAUTION:
+    // These options are UNSAFE if set to true; most kernels will not function
     // correctly if the tensor argument's spec deviates from the declared spec.
     // Use with caution and ensure that your kernel logic is compatible.
 

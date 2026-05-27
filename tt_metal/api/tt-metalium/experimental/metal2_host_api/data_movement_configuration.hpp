@@ -13,7 +13,8 @@
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 struct DataMovementConfiguration {
-    // The DM configuration is different for Gen1 and Gen2.
+    // Data movement resource configuration for DM kernels.
+    // NOTE: The DM configuration is different for Gen1 and Gen2.
 
     struct Gen1DataMovementConfig {
         tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
