@@ -82,6 +82,16 @@ Timeout handling rule:
 
 Do not spend disable/fix cycles on out-of-scope failures in this project.
 
+## Session Scope (Up to Three PRs)
+
+An automation session may actively work on up to three draft PRs (creating, advancing, or verifying them), bounded only by the three-dispatch cap and the four-hour anti-loop throttle.
+
+- Up to three focus PRs per session for heavy analysis (matching the three-dispatch cap).
+- Up to three new workflow dispatches per session, counted across all PRs combined.
+- The per-PR budgets ("Exactly One Run", "Exactly One Initial Batch") are PER PR, NOT per session — they do not reduce the session-level allowance.
+- Concurrent runs across different PRs are allowed; the cap is on total dispatches, not on simultaneity.
+- The four-hour anti-loop throttle applies on top of the three-dispatch cap to prevent rapid re-dispatch loops on the same PR.
+
 ## Operating Procedure
 
 1. Identify failing jobs from the latest relevant run:
@@ -96,7 +106,7 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
 
 ## Safety Constraints
 
-- Never dispatch more than one workflow run at a time.
+- Cap total workflow dispatches at three per session, counted across all PRs. Concurrent runs across different PRs are allowed; the cap is on total dispatches, not on simultaneity. Respect the four-hour anti-loop throttle on top of the three-dispatch cap.
 - Never dispatch unrelated workflows.
 - Keep PRs as draft until final validation.
 - Do not include temporary workflow-pruning edits in the final PR branch.
