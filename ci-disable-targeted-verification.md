@@ -61,6 +61,8 @@ The agent fills focus slots in priority order:
 
 2. **Second pass — new disable PRs to fill remaining slots.** If after the first pass the agent has fewer than 3 focus PRs, it MUST fill each remaining slot by creating a NEW disable PR for an uncovered non-Galaxy single-card workflow. New-PR creation is a **first-class fill action**, not a low-priority fallback.
 
+   **Same-session verification dispatch (REQUIRED).** Every newly created disable PR in this session MUST also receive its initial verification dispatch in this same session, subject to the existing 3-dispatch session cap and the existing artifact-reuse / fresh-build rules (see "Build Reuse (Optional, Strongly Preferred)" and "Operating Procedure (One Run Per PR)"). The dispatch is part of the PR-creation flow — it is NOT a deferred next-session action. Creating a new PR and ending the session without dispatching its first verification is a bug unless the 3-dispatch cap is already exhausted by other focus PRs (in which case the OUTPUT must explicitly state which PRs consumed the dispatch slots).
+
 The session may NOT end with 0 focus PRs UNLESS one of the following is true:
 
 - Every uncovered non-Galaxy single-card workflow already has an open draft PR associated with it, AND every open draft PR is in a terminal state (`verified-pass`, `verified-fail`, `merged`), OR
@@ -319,6 +321,8 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
 
 > Focus-PR selection (which PRs the session acts on at all) is governed by "Session Scope (Up to Three PRs)" above — the agent fills up to three focus slots, falling back to creating new disable PRs when fewer than three existing-PR slots are actionable. The steps below describe the per-PR mechanics once a PR is in focus.
 
+> **Newly created PRs flow straight through this procedure in the same session.** A focus PR that was created in this session's second-pass fill (see "Session Scope (Up to Three PRs)") is eligible for — and required to receive — its initial verification dispatch (steps 5–7 below) in the same session as its creation, subject to the 3-dispatch session cap and the artifact-reuse / fresh-build rules. Do not defer a newly created PR's first dispatch to the next session unless the 3-dispatch cap is already exhausted by other focus PRs.
+
 1. Identify deterministic failures from completed runs on `main` and confirm each candidate has the same error signature across at least 3 consecutive `main` runs.
 2. Before any verification run, build exactly one initial disable batch from those `main`-proven failures and commit it to the PR branch.
 3. Do not use PR-branch verification to discover or add new disables; verification is not a disable-discovery pass.
@@ -386,6 +390,8 @@ The agent MUST trace which guardrail caused an apparently-empty session and over
 2. Every non-Galaxy single-card workflow already has an associated draft PR (no uncovered workflow remains).
 
 When in doubt between "skip due to throttle" and "do something useful", do something useful. The throttle is a guard against thrash, not a license to idle. Treating BH-artifact-expiry, "main is broken", or "all PRs <4h old" as session-ending blockers is the failure mode this section exists to prevent.
+
+**Partial paralysis: new PR created but its verification deferred.** A session in which a new disable PR was created but its first verification dispatch was deferred to the next session is a paralysis bug WHENEVER the 3-dispatch session cap was not already exhausted by other focus PRs. Either dispatch this session, or — in OUTPUT — explicitly name which other PRs consumed the three dispatch slots. "PR created, dispatch deferred to next session" without a cap-exhaustion explanation is the same flow bug as a zero-action session.
 
 ## Draft PR / Issue / Status File Management (Mandatory)
 
