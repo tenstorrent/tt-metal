@@ -213,7 +213,8 @@ def validate_per_expert_tokens(
         (num_devices, num_cores, per_expert_row_elements)
     )
     # The op allocates the per_expert_total_tokens output sharded across the FULL
-    # compute_with_storage_grid_size() (see moe_compute_device_operation.cpp:196), but
+    # compute_with_storage_grid_size() (see `compute_output_specs` in
+    # moe_compute_device_operation.cpp), but
     # the kernel only multicasts the counts to its `all_worker_cores_bounding_box`
     # (= tilize + matmul + combine cores). On WH 6U the op uses the full grid, so every
     # core is inside the bbox and every shard slot gets the count via mcast. On BH single
@@ -503,7 +504,7 @@ def validate_off_axis_devices_idle(
     `idle_value` defaults to `0` (correct for numerical outputs: per_expert_total_tokens,
     matmul_output, combine_output, expert_activation rows). For the e_t tensor pass
     `idle_value=0xFFFFFFFF` (the sentinel `init_expert_activation_buffer_async()` writes
-    to mark uninitialized entries — see `tilize_reader.cpp:125`).
+    to mark uninitialized entries; see that helper in `tilize_reader.cpp`).
 
     Returns True iff every off-axis device's tensor is uniformly `idle_value`. No-op
     (returns True) when `num_replicated_devices == 1` (no off-axis axis to check).
@@ -1252,6 +1253,7 @@ def compute_matmul_golden(
     torch_b2=None,
     activation_type=MoEActivationFunction.SILU,
     num_dispatch_devices=None,
+    cluster_axis=None,
 ):
     # For 1xN meshes (legacy), num_dispatch_devices == devices and the math is unchanged.
     # For multi-axis meshes with cluster_axis<full (e.g. 2x4 BH single LB with cluster_axis=1),
@@ -1346,12 +1348,23 @@ def compute_matmul_golden(
     out = torch_output_ref.reshape(layers, num_dispatch_devices, experts // num_dispatch_devices, tokens, hidden)
 
     # Broadcast along the device dim so downstream validators that index [l, d, e, t, h] with
-    # d in [0, devices) see the same golden on every replicated-axis copy. Assumes the device
-    # layout places dispatch-axis copies contiguously, which holds for cluster_axis=1 on row-major
-    # meshes (the only case exercised today). cluster_axis=0 would need repeat_interleave instead;
-    # add an explicit branch when that path is exercised.
+    # d in [0, devices) see the same golden on every replicated-axis copy. The two layouts
+    # differ in how dispatch-axis copies are arranged in the linearized device dim:
+    #   - cluster_axis=1 on row-major meshes: dispatch-axis copies are contiguous → use repeat()
+    #     so each block-of-num_dispatch_devices is a full copy of the experts.
+    #   - cluster_axis=0 on row-major meshes: dispatch-axis copies are strided by the row width
+    #     → use repeat_interleave() so each expert appears num_replicated times in a row before
+    #     the next expert.
     if devices != num_dispatch_devices:
-        out = out.repeat(1, num_replicated, 1, 1, 1)
+        if cluster_axis == 1 or cluster_axis is None:
+            out = out.repeat(1, num_replicated, 1, 1, 1)
+        elif cluster_axis == 0:
+            out = out.repeat_interleave(num_replicated, dim=1)
+        else:
+            raise AssertionError(
+                f"compute_matmul_golden: cluster_axis must be 0, 1, or None when devices "
+                f"({devices}) != num_dispatch_devices ({num_dispatch_devices}); got {cluster_axis}"
+            )
     return out
 
 
@@ -1747,6 +1760,7 @@ def run_moe_compute_test(
         torch_b2=torch_b2 if has_bias else None,
         activation_type=activation_type,
         num_dispatch_devices=num_dispatch_devices,
+        cluster_axis=cluster_axis,
     )
 
     # compute goldens for combine
@@ -2194,8 +2208,8 @@ def test_moe_compute_1x16(
         # second one at "========== Running op ==========" on BH single LB. The first
         # variant PASSES end-to-end (per_expert + activation + e_t + matmul + combine all
         # green, PCC ~0.99). The second variant gets past golden compute and the host-side
-        # op build, but the kernels never report progress and the host stays blocked at
-        # ttnn/decorators.py:473 inside run_op_inner. Either variant in isolation passes
+        # op build, but the kernels never report progress and the host stays blocked inside
+        # the ttnn op decorator (`ttnn/decorators.py`) called from run_op_inner. Either variant in isolation passes
         # in <10s. Smells like a fabric/mux/global-semaphore teardown leak in mesh_device
         # fixture path on this branch — needs follow-up. Until then, run the two variants
         # in separate pytest invocations to gate both shapes.
@@ -2229,9 +2243,9 @@ def test_moe_compute_bh_lb(
        `tt::tt_fabric::Topology` as a template parameter. On Linear, range math is
        CT-derived from `LinearizedSrcMeshCoord`, so endpoints elide the absent-direction
        send entirely via `if constexpr` — never indexes an unopened fabric slot.
-       Caller at selective_reduce_combine writer.cpp:338 passes the resolved topology;
-       wait count at writer.cpp:362 adjusts to N-1 on Linear vs N on Ring (no antipodal
-       doubling on a line).
+       The selective_reduce_combine writer's sync-core block (writer.cpp) passes the resolved
+       topology into the call site; the same block computes `expected_inc_count` as N-1 on
+       Linear vs N on Ring (no antipodal doubling on a line).
 
     2. Test pins topology=Linear explicitly (workaround).
        `ttnn::ccl::get_usable_topology(...)` (called from moe_compute_device_operation.cpp)
@@ -2250,19 +2264,21 @@ def test_moe_compute_bh_lb(
     Tunable knobs:
     - `TT_MOE_BH_N` — environment variable; selects the BH ring size used by the host
       Python utility (default 16 on BH; valid: 8, 12, 16). For DeepSeek-7168 N=8 gives
-      a clean 1:1 with the 8 BH DRAM banks. See moe_compute_utils.py:790-849.
+      a clean 1:1 with the 8 BH DRAM banks. See `get_weight_core_shard_maps` in
+      moe_compute_utils.py.
 
     Known remaining limitations (deferred follow-up):
-    - `cluster_axis=0` exercises a `get_linearized_mesh_coord` row-major-only code path
-      in selective_reduce_combine_program_factory.cpp:430 — this test pins cax=1 only.
-    - `kBhMatmulExtras` grid-size filter in moe_compute_program_factory.cpp:200-211 may
-      need relaxing for some shard configs.
+    - `cluster_axis=0` exercises a `get_linearized_index` row-major-only code path used
+      by selective_reduce_combine_program_factory's writer-kernel CT-arg setup — this test
+      pins cax=1 only.
+    - The `kBhMatmulExtras` grid-size filter in `get_cores()` (moe_compute_program_factory.cpp)
+      may need relaxing for some shard configs.
     - `HIDDEN_TO_SHARD_INFO[2880]` may not fit BH's 11×10 harvested grid on every chip;
       mirror the BH-aware shard logic from test_moe_compute_single_card.py if a shard-fit
       assertion fires.
     - The all_to_all_dispatch_metadata writer has its own local copy of
       `fabric_multicast_bidirectional_atomic_inc_ring_1d` with the same Linear-endpoint
-      bug shape (writer_all_to_all_dispatch_metadata.cpp:57). NOT in the moe_compute Full
+      bug shape (writer_all_to_all_dispatch_metadata.cpp). NOT in the moe_compute Full
       path so it does not block this test, but the same fix shape will be needed when the
       standalone a2a op is run on BH LB.
 
@@ -2319,8 +2335,8 @@ def test_moe_compute_bh_lb(
         topology=ttnn.Topology.Linear,
         # BH single LB has 2 ethernet channels between adjacent chips (per fabric error
         # message "2 ethernet channels available to forward b/w src ... and dst ..."). The
-        # op default num_links=4 — appropriate for WH 6U — overshoots and trips the bounds
-        # check at fabric.cpp:163 with "Requested link index 2 is out of bounds". Pin to 2.
+        # op default num_links=4 — appropriate for WH 6U — overshoots and trips a fabric
+        # bounds check with "Requested link index 2 is out of bounds". Pin to 2.
         num_links=2,
     )
 
@@ -2357,10 +2373,10 @@ def test_moe_compute_bh_lb_deepseek(mesh_device, mesh_shape, cluster_axis, has_b
     """DeepSeek-shape companion to test_moe_compute_bh_lb (2x4 cax=1, idle replica row).
 
     Status: **PASSING** as of phase α (arch-conditional `num_buffers` trim 15→14 on BH
-    in `selective_reduce_combine_program_factory.cpp:54-61`). Previously XFAIL'd for
-    ~8KB mux/L1 overlap at hidden=7168; trimming one full-size mux buffer on BH recovers
-    ~32 KB per mux core (3× the overflow). See `BH_LB_DEEPSEEK.md` for the full analysis
-    and `FABRIC_MUX_GUIDE.md` for why the trim doesn't regress MoE perf measurably.
+    in `launch_mux_workers` in selective_reduce_combine_program_factory.cpp). Previously
+    XFAIL'd for ~8KB mux/L1 overlap at hidden=7168; trimming one full-size mux buffer on BH
+    recovers ~32 KB per mux core (3× the overflow). See `BH_LB_DEEPSEEK.md` for the full
+    analysis and `FABRIC_MUX_GUIDE.md` for why the trim doesn't regress MoE perf measurably.
 
     Why this shape (production DeepSeek-v3 FFN, scaled-down expert count):
       - hidden=7168 forces output_width_shard_dim=4 (auto_output_width_shard_dim(7168)=4
@@ -2531,9 +2547,9 @@ def test_moe_compute_bh_lb_1x8_deepseek(mesh_device, mesh_shape, cluster_axis, h
     """DeepSeek-shape EP=8 companion to test_moe_compute_bh_lb_1x8.
 
     Status: **PASSING** as of phase α (arch-conditional `num_buffers` trim 15→14 on BH
-    in `selective_reduce_combine_program_factory.cpp:54-61`). Previously XFAIL'd for
-    ~11KB mux/L1 overlap at hidden=7168; trimming one full-size mux buffer on BH recovers
-    ~32 KB per mux core (3× the overflow). The 1x8 EP=8 flattening doesn't relieve
+    in `launch_mux_workers` in selective_reduce_combine_program_factory.cpp). Previously
+    XFAIL'd for ~11KB mux/L1 overlap at hidden=7168; trimming one full-size mux buffer on BH
+    recovers ~32 KB per mux core (3× the overflow). The 1x8 EP=8 flattening doesn't relieve
     per-chip L1 pressure since experts_per_device is identical to the 2x4 variant — same
     fix unlocks both. See `BH_LB_DEEPSEEK.md` for analysis and `FABRIC_MUX_GUIDE.md` for
     fabric-mux background.

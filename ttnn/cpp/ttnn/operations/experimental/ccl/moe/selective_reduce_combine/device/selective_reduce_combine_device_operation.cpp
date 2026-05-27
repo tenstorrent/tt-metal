@@ -20,7 +20,7 @@ void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
     const auto& token_activations_tensor = tensor_args.dense_activations_tensor;
 
     // Cluster-axis-aware: experts are partitioned along the cluster axis, never the full mesh.
-    // Mirrors compute_output_specs:62 (same op) and the host code in moe_compute. Without this,
+    // Mirrors `compute_output_specs` (same op) and the host code in moe_compute. Without this,
     // 2D meshes (e.g. BH single LB 2x4 cax=1) compute the wrong stride for activation tensor
     // validation.
     const auto& mesh_view = token_activations_tensor.device()->get_view();

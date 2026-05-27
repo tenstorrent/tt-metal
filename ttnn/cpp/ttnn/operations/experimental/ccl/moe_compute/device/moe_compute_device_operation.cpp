@@ -7,6 +7,7 @@
 #include "moe_compute_device_operation.hpp"
 #include "moe_compute_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -437,21 +438,40 @@ std::vector<ttnn::Tensor> moe_compute(
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
     if (!compute_only) {
         // Full path: cluster_axis is required here; the validation block above ensures has_value().
+        // Auto-detect num_links from the mesh's actual fabric routing planes (matches the pattern
+        // used by all_gather/reduce_scatter/all_to_all_dispatch). On WH 6U this returns 4; on BH
+        // single LB it returns 2 (the physical eth-channel count between adjacent chips). Without
+        // this, the hardcoded default=4 trips a fabric "Requested link index N is out of bounds"
+        // error on BH and forces external callers to pass num_links=2 explicitly.
+        const uint32_t resolved_num_links =
+            num_links.value_or(operations::ccl::common::get_num_links(*mesh_device, cluster_axis.value()));
+        // Auto-downgrade Ring → Linear when the mesh can't close a ring (e.g. BH single
+        // Loudbox p150_x8, which is 2x4 LINE/LINE). Without this, downstream writers run
+        // ring-shaped multicast paths on a line and index into never-opened fabric_connections
+        // slots — undefined behavior (uninitialized L1 stack → hang on a never-ticking
+        // flow-control word, or stray NOC write). See the kernel-side `Topology` template guard
+        // in fabric_multicast_bidirectional_atomic_inc_ring_1d (moe_utils.hpp).
+        const auto resolved_topology = ttnn::ccl::get_usable_topology(tilize_input_tensor, topology, cluster_axis);
+        // Mirror the kernel-side static_assert in fabric_multicast_bidirectional_atomic_inc_ring_1d
+        // (moe_utils.hpp). `get_usable_topology` can return Mesh when the fabric default is Torus
+        // and the tensor doesn't span a wrap edge; the combine kernel only handles Ring/Linear and
+        // would silently produce wrong wait counts → on-device hang. Reject at the host boundary
+        // with a clear message instead of waiting for a JIT compile failure or a hang.
+        TT_FATAL(
+            resolved_topology == tt::tt_fabric::Topology::Linear || resolved_topology == tt::tt_fabric::Topology::Ring,
+            "moe_compute: combine kernel only supports Topology::Linear or Topology::Ring, got {}. "
+            "If the fabric default is Torus/Mesh, pass topology=ttnn.Topology.Linear or "
+            "ttnn.Topology.Ring explicitly to ttnn.experimental.moe_compute.",
+            resolved_topology);
         combine_params = ttnn::experimental::prim::SelectiveReduceCombineParams{
             .hidden_size = hidden_size,
             .batch_size = 1,
             .seq_size = total_tokens,
             .select_experts_k = select_experts_k,
             .experts = experts,
-            .num_links = num_links.value_or(4),
+            .num_links = resolved_num_links,
             .axis = cluster_axis.value(),
-            // Auto-downgrade Ring → Linear when the mesh can't close a ring (e.g. BH single
-            // Loudbox p150_x8, which is 2x4 LINE/LINE). Without this, downstream writers run
-            // ring-shaped multicast paths on a line and index into never-opened fabric_connections
-            // slots — undefined behavior (uninitialized L1 stack → hang on a never-ticking
-            // flow-control word, or stray NOC write). See the kernel-side `Topology` template guard
-            // in fabric_multicast_bidirectional_atomic_inc_ring_1d (moe_utils.hpp).
-            .topology = ttnn::ccl::get_usable_topology(tilize_input_tensor, topology, cluster_axis),
+            .topology = resolved_topology,
             .num_token_parallel_cores = num_token_parallel_cores,
             .num_data_parallel_cores = num_data_parallel_cores,
             .worker_cores = combine_cores,

@@ -68,7 +68,8 @@ auto launch_mux_workers(
     // tilize_output scales 1:1 with hidden, mux is shape-independent. Any future MoE shape
     // with hidden ≤ 7168 fits with equal or wider margin. If hidden > 7168 (or some new
     // shape variant pushes per-core L1 differently), the TT_FATAL just below will fire with
-    // a clear "mux L1 overlaps tensor" message — at that point either drop to 13 here
+    // a clear "mux L1 overlaps tensor" message — at that point either drop the buffer count
+    // further (e.g. 13) or revisit the L1 layout to free more headroom for tilize_output.
     const uint8_t num_buffers_full_size_channels = (mesh_device.arch() == tt::ARCH::BLACKHOLE) ? 14 : 15;
     const uint8_t num_buffers_header_only_channels = (mesh_device.arch() == tt::ARCH::BLACKHOLE) ? 14 : 15;
 
