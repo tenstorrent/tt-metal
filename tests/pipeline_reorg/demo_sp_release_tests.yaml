@@ -117,7 +117,7 @@
     export DEEPSEEK_V3_TRACE_ROOT=/mnt/MLPerf/tt_dnn-models/deepseek-ai/debug_trace
     TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --rank-bindings-mapping rank_bindings_mapping.yaml \
-      --mpi-args "--host $PIPELINE_HOSTS --map-by slot --bind-to none --tag-output" \
+      --mpi-args "--allow-run-as-root --host $PIPELINE_HOSTS --map-by slot --bind-to none --tag-output" \
       python3 -m pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io_decoder_sweep_chunked_trace.py::test_run_host_io_decoder_sweep_chunked_trace_world_size_4 \
       --timeout=1200
   model: deepseek_decode
