@@ -47,7 +47,7 @@ void kernel_main() {
     bool read_indices = true;
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {
-            uint64_t noc_input_src_addr = get_noc_addr(curr_row, input) + offset;
+            uint64_t noc_input_src_addr = input.get_noc_addr(curr_row) + offset;
             noc_async_read(noc_input_src_addr, input_l1_addr, input_block_size_bytes);
             noc_async_read_barrier();
             read_indices = false;
