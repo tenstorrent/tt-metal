@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "impl/experimental/quasar/host_api.hpp"
+#include "host_api/temp_quasar_api.hpp"
 
 #include <memory>
 #include <set>
@@ -13,32 +13,16 @@
 
 #include <enchantum/entries.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt_stl/overloaded.hpp>
-#include "tracy/Tracy.hpp"
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "host_api/helpers.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal::experimental::quasar {
-
-namespace {
-
-CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet>& specified_core_spec) {
-    ZoneScoped;
-    return std::visit(
-        ttsl::overloaded{
-            [](const CoreCoord& core_spec) { return CoreRangeSet(CoreRange(core_spec, core_spec)); },
-            [](const CoreRange& core_spec) { return CoreRangeSet(core_spec); },
-            [](const CoreRangeSet& core_spec) { return core_spec; },
-        },
-        specified_core_spec);
-}
-
-}  // namespace
 
 std::set<DataMovementProcessor> GetDataMovementProcessorsInUseOnKernelGroup(
     Program& program, const KernelGroup* kernel_group) {
@@ -164,7 +148,7 @@ KernelHandle CreateKernel(
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const QuasarDataMovementConfig& config) {
-    const CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    const CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     return CreateQuasarDataMovementKernel(
         program, KernelSource(file_name, KernelSource::FILE_PATH), core_ranges, config);
 }
@@ -190,7 +174,7 @@ KernelHandle CreateKernel(
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const QuasarComputeConfig& config) {
-    const CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    const CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     return CreateQuasarComputeKernel(program, KernelSource(file_name, KernelSource::FILE_PATH), core_ranges, config);
 }
 

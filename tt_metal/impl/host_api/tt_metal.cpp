@@ -5,13 +5,13 @@
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
-#include <enchantum/entries.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
 #include "context/context_types.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "device/device_manager.hpp"
+#include "host_api/helpers.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
@@ -76,17 +76,6 @@ struct RuntimeArgsData;
 struct TraceDescriptor;
 
 namespace {
-
-CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet>& specified_core_spec) {
-    ZoneScoped;
-    return std::visit(
-        ttsl::overloaded{
-            [](const CoreCoord& core_spec) { return CoreRangeSet(CoreRange(core_spec, core_spec)); },
-            [](const CoreRange& core_spec) { return CoreRangeSet(core_spec); },
-            [](const CoreRangeSet& core_spec) { return core_spec; },
-        },
-        specified_core_spec);
-}
 
 struct DataMovementConfigStatus {
     bool riscv0_in_use;
@@ -1394,7 +1383,7 @@ KernelHandle CreateKernel(
     std::visit([](const auto& cfg) { ValidateKernelConfigDefines(cfg.defines); }, config);
 
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
     KernelHandle kernel = std::visit(
         [&](const auto& cfg) -> KernelHandle {
@@ -1421,7 +1410,7 @@ KernelHandle CreateKernel(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const EthernetConfig& config) {
     ValidateKernelConfigDefines(config.defines);
-    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
     return CreateEthernetKernel(program, kernel_src, core_ranges, config);
 }
@@ -1432,7 +1421,7 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::variant<DataMovementConfig, ComputeConfig>& config) {
     std::visit([](const auto& cfg) { ValidateKernelConfigDefines(cfg.defines); }, config);
-    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
     return std::visit(
         [&](const auto& cfg) -> KernelHandle {
@@ -1452,7 +1441,7 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const EthernetConfig& config) {
     ValidateKernelConfigDefines(config.defines);
-    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
     return CreateEthernetKernel(program, kernel_src, core_ranges, config);
 }
@@ -1474,7 +1463,7 @@ KernelHandle CreateKernel(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config) {
     ValidateKernelConfigDefines(config.defines);
-    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
     return CreateDramKernel(program, kernel_src, core_ranges, config);
 }
@@ -1485,7 +1474,7 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config) {
     ValidateKernelConfigDefines(config.defines);
-    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
     return CreateDramKernel(program, kernel_src, core_ranges, config);
 }
@@ -1495,7 +1484,7 @@ CBHandle CreateCircularBuffer(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const CircularBufferConfig& config) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     auto cb_handle = program.impl().add_circular_buffer(core_ranges, config);
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateCircularBuffer, cb_handle, program, core_spec, config);
     return cb_handle;
@@ -1780,7 +1769,7 @@ CBHandle CreateCircularBuffer(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const CircularBufferConfig& config,
     const GlobalCircularBuffer& global_circular_buffer) {
-    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     return program.impl().add_circular_buffer(core_ranges, config, global_circular_buffer);
 }
 

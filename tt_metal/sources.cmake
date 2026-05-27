@@ -149,7 +149,7 @@ set(TT_METAL_PUBLIC_API
 )
 
 set(TT_METAL_SOURCES
-    tt_metal.cpp
+    impl/host_api/tt_metal.cpp
     impl/graph/graph_tracking.cpp
     hal.cpp
 )
