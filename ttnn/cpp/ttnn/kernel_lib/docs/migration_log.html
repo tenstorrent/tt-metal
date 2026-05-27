@@ -145,7 +145,7 @@
   <div class="tab-btn" data-tab="moreh_int_sum_nc"><span>moreh_int_sum_nc</span><span class="badge badge-skip">queued</span></div>
 
   <h3>Moreh recip + mul cluster</h3>
-  <div class="tab-btn" data-tab="moreh_nll_step2"><span>moreh_nll_loss_step2</span><span class="badge badge-skip">queued</span></div>
+  <div class="tab-btn" data-tab="moreh_nll_step2"><span>moreh_nll_loss_step2</span><span class="badge badge-partial">attempted</span></div>
   <div class="tab-btn" data-tab="moreh_nll_bw"><span>moreh_nll_loss_backward</span><span class="badge badge-partial">attempted</span></div>
   <div class="tab-btn" data-tab="moreh_bias_single"><span>moreh_bias_bw_single_core</span><span class="badge badge-skip">queued</span></div>
   <div class="tab-btn" data-tab="moreh_bias_multi"><span>moreh_bias_bw_multi_core</span><span class="badge badge-skip">queued</span></div>
@@ -389,6 +389,24 @@
         <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 · HeldStream choice on cb_divisor / cb_tmp1.</b> Both are single-tile held CBs popped at the very end (cb_divisor) or never popped (cb_tmp1). HeldStream emits per-iter <code>wait_front</code>, never pops — matches the lifecycle semantics on paper. May still over-wait subtly.</li>
         <li><b>Next steps:</b> retry with all reconfig flags <code>::None</code> (no format reconfig under BF16); revert init to <code>compute_kernel_hw_startup(cb_divisor, cb_divisor, cb_tmp1)</code> matching the first chain; bisect by migrating only the recip pre-loop stage and leaving the per-iter blocks raw, then add muls one at a time.</li>
       </ul>
+    </div>
+  </section>
+
+  <!-- ===== moreh_nll_loss_step2 (attempted) ===== -->
+  <section class="panel" id="panel-moreh_nll_step2">
+    <h1>moreh_nll_loss_step2 — <span class="badge badge-partial">ATTEMPTED, reverted</span></h1>
+    <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/moreh_nll_loss_step2_kernel.cpp</div>
+    <div class="meta"><b>Status:</b> two attempts, both reverted. <b>Baseline (pre-migration):</b> 13 failed / 57 passed on <code>test_moreh_nll_loss.py</code> — pre-existing failures unrelated to this work.</div>
+    <div class="skip-meta">
+      <b>Attempt 1 (full migration of recip pre-loop + per-iter Stage A/B/C with <code>::None</code> reconfig flags):</b>
+      Failed first BF16 test case (PCC mismatch on <code>[shape=[5,10], reduction=mean]</code>).
+      <br><br>
+      <b>Attempt 2 (recip pre-loop only, all per-iter stages left raw):</b>
+      Adds 4 NEW failures (17 vs baseline 13). All new failures in the <code>WEIGHT && DIVISOR</code> branch — code paths I did <b>not</b> touch. The chain pre-loop is somehow leaving init/format state that the raw post-chain code doesn't handle, even though chain emits <code>::None</code> reconfig flags.
+      <br><br>
+      <b>Hypothesis:</b> the chain's per-op init (e.g. <code>copy_tile_to_dst_init_short(cb_divisor)</code> + <code>recip_tile_init()</code>) leaves the pipeline in a different state than the original's <code>copy_tile_init_with_dt(cb_divisor) + copy_tile + recip_tile_init + recip_tile</code> sequence followed by <code>pack_tile_with_dt</code>. Under FP32 the <code>_with_dt</code> helpers DO reconfig; under BF16 they don't. The chain's "no reconfig" flag may not be equivalent to "no reconfig at all" — chain may still emit some init that perturbs srca/srcb/pack format for downstream raw code.
+      <br><br>
+      <b>Next steps:</b> need a kernel where every stage is migrated (no chain-to-raw boundary); OR investigate whether <code>::None</code> reconfig actually emits no format setup at all, or whether chain's per-op init implicitly programs hw_configure. Deferred — too time-consuming for batch migration; needs a dedicated debug session.
     </div>
   </section>
 
