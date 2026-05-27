@@ -687,7 +687,8 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
 }
 
 bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    // Same 3×2 matmul flow as unpack reconfig; pack_reconfig_data_format between ops; see reconfig_pack_quasar.cpp.
+    // Same 3×2 matmul flow as unpack reconfig; pack reconfig+init per output at pack time; see
+    // reconfig_pack_quasar.cpp.
     const uint32_t f16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t f32_tile_size = tt::tile_size(tt::DataFormat::Float32);
 

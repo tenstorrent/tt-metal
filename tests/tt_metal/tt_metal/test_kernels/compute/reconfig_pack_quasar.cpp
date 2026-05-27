@@ -32,17 +32,15 @@ void kernel_main() {
     out2.reserve_back(1);
 
     // OP[0]: d0×d1 (Float16_b); OP[1]: d2×d3 (Float32); OP[2]: d4×d5 (Float16_b).
-    // Unpack reconfig between ops (same as reconfig_unpack_quasar); pack reconfig between ops for L1 formats.
+    // Unpack reconfig + matmul init between ops (same as reconfig_unpack_quasar).
     tile_regs_acquire();
 
     matmul_tiles(d0.get_id(), d1.get_id(), 0, 0, 0);
 
-    pack_reconfig_data_format(out0.get_id(), out1.get_id());
     reconfig_data_format(d0.get_id(), d2.get_id(), d1.get_id(), d3.get_id());
     UNPACK((llk_unpack_AB_matmul_init(d2.get_id(), d3.get_id())));
     matmul_tiles(d2.get_id(), d3.get_id(), 0, 0, 1);
 
-    pack_reconfig_data_format(out1.get_id(), out2.get_id());
     reconfig_data_format(d2.get_id(), d4.get_id(), d3.get_id(), d5.get_id());
     UNPACK((llk_unpack_AB_matmul_init(d4.get_id(), d5.get_id())));
     matmul_tiles(d4.get_id(), d5.get_id(), 0, 0, 2);
@@ -51,10 +49,13 @@ void kernel_main() {
 
     tile_regs_wait();
     pack_reconfig_data_format(out2.get_id(), out0.get_id());
+    pack_init(out0.get_id());
     pack_tile(0, out0.get_id());
     pack_reconfig_data_format(out0.get_id(), out1.get_id());
+    pack_init(out1.get_id());
     pack_tile(1, out1.get_id());
     pack_reconfig_data_format(out1.get_id(), out2.get_id());
+    pack_init(out2.get_id());
     pack_tile(2, out2.get_id());
     tile_regs_release();
 
