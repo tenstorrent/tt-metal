@@ -156,8 +156,8 @@ void run_strided_dfb_copy_test(
     kernel_builder_fn(reader, writer);
 
     // Inject CTA define so TensorAccessorArgs<0, 0>() resolves at compile time
-    reader.source = KernelSpec::SourceFilePath{kReaderKernelPath};
-    writer.source = KernelSpec::SourceFilePath{kWriterKernelPath};
+    reader.source = kReaderKernelPath;
+    writer.source = kWriterKernelPath;
     reader.compiler_options.defines.push_back({"KERNEL_COMPILE_TIME_ARGS", input_cta_str});
     writer.compiler_options.defines.push_back({"KERNEL_COMPILE_TIME_ARGS", output_cta_str});
 

@@ -145,7 +145,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
 
         experimental::metal2_host_api::KernelSpec dm_spec{
             .unique_id = DM_KERNEL_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{rta_crta_kernel_path},
+            .source = rta_crta_kernel_path,
             .num_threads = 1,
             .compile_time_arg_bindings = {{"l1_scratch_addr", l1_unreserved_base}},
             .config_spec =
@@ -156,7 +156,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
         };
         experimental::metal2_host_api::KernelSpec compute_spec{
             .unique_id = COMPUTE_KERNEL_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{rta_crta_kernel_path},
+            .source = rta_crta_kernel_path,
             .num_threads = 1,
             .compile_time_arg_bindings = {{"l1_scratch_addr", compute_scratch_addr}},
             .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
@@ -272,7 +272,7 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
 
     experimental::metal2_host_api::KernelSpec dm_spec{
         .unique_id = DM_KERNEL_NAME,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{rta_crta_kernel_path},
+        .source = rta_crta_kernel_path,
         .num_threads = is_quasar ? static_cast<uint8_t>(num_dms_) : uint8_t{1},
         .runtime_arguments_schema =
             {.num_runtime_varargs = default_rtas.size(), .num_common_runtime_varargs = default_crtas.size()},
@@ -395,7 +395,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
 
     experimental::metal2_host_api::KernelSpec kspec{
         .unique_id = OOB_KERNEL_NAME,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{rta_crta_kernel_path},
+        .source = rta_crta_kernel_path,
         .compiler_options = {.defines = m2_defines},
         .runtime_arguments_schema = schema,
     };
@@ -468,7 +468,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
     constexpr const char* MULTI_DM_KERNEL_NAME = "multi_dm_oob";
     experimental::metal2_host_api::KernelSpec dm_spec{
         .unique_id = MULTI_DM_KERNEL_NAME,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{rta_crta_kernel_path},
+        .source = rta_crta_kernel_path,
         .num_threads = static_cast<uint8_t>(num_dms_),
         .compiler_options =
             {.defines = {{"MAX_RTA_IDX", std::to_string(default_rtas.size())}, {"TEST_MULTI_DM_RTA", "1"}}},

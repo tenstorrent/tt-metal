@@ -70,8 +70,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
         return experimental::metal2_host_api::KernelSpec{
             .unique_id = unique_id,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check.cpp"},
+
+                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check.cpp",
             .num_threads = num_threads,
             .compile_time_arg_bindings = {{"kernel_id", kernel_id}},
             .runtime_arguments_schema =
@@ -308,8 +308,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     experimental::metal2_host_api::KernelSpec compute_kernel_spec{
         .unique_id = COMPUTE_KERNEL,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/simple_tls_check.cpp"},
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/simple_tls_check.cpp",
         .num_threads = QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER,
         .runtime_arguments_schema =
             {

@@ -122,28 +122,26 @@ struct KernelSpec {
     KernelSpecName unique_id;
 
     // Kernel source: either a path to a source file, or the source code itself.
-    // (Force callers to choose explicitly between path and inline code.)
-    struct SourceFilePath {
-        std::filesystem::path path;
-    };
+    // String literals bind directly to the path variant alternative; wrap inline
+    // source code with SourceCode{...}.
     struct SourceCode {
         std::string code;
     };
-    std::variant<SourceFilePath, SourceCode> source;
+    std::variant<std::filesystem::path, SourceCode> source;
 
     // NOTE: The kernel's target node set is a DERIVED property, based on the
     //       WorkUnitSpec(s) that include this kernel.
 
     // Kernel threading:
     // Number of kernel threads
-    uint8_t num_threads = 1;
+    int num_threads = 1;
 
     // (Optional) Per-node thread count specification
     // The default threading is num_threads. However, you may override this on a per-node basis.
     // NOTE: This feature is currently unsupported. It's an open question if we EVER want to support it.
     //       Here as a placeholder; specifying it will trigger a runtime error.
     using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
-    using NodeSpecificThreadCount = std::pair<Nodes, uint8_t>;  // {node_set, num_threads}
+    using NodeSpecificThreadCount = std::pair<Nodes, int>;  // {node_set, num_threads}
     using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
     std::optional<NodeSpecificThreadCounts> node_specific_thread_counts = std::nullopt;
 
@@ -173,11 +171,11 @@ struct KernelSpec {
     // DFB bindings
     // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
     // The kernel constructs the accessor via DataflowBufferAccessor(dfb::<local_accessor_name>)
-    enum class DFBEndpointType { PRODUCER, CONSUMER, RELAY };
+    enum class DFBEndpointType { PRODUCER, CONSUMER };
     struct DFBBinding {
         DFBSpecName dfb_spec_name;        // identify the DFB within the ProgramSpec
         std::string local_accessor_name;  // DFB accessor name (used in the kernel source code)
-        DFBEndpointType endpoint_type;    // producer, consumer, or relay
+        DFBEndpointType endpoint_type;    // producer or consumer
         DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED;  // strided, all, or blocked
     };
     std::vector<DFBBinding> dfb_bindings;
