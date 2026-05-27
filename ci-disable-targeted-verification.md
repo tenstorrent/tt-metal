@@ -39,7 +39,7 @@ If any test no longer fails on latest `main`:
 
 - Remove its skip/disable from the branch.
 - Keep only disables for tests that are still deterministically failing.
-- Continue the targeted verification loop with the reduced disable set.
+- Do not dispatch another verification run on the PR branch; removals are post-run maintenance only.
 
 Rationale: PRs may remain open for days, and we must avoid disabling tests that have already been fixed and are now passing.
 
@@ -82,17 +82,28 @@ Timeout handling rule:
 
 Do not spend disable/fix cycles on out-of-scope failures in this project.
 
-## Operating Procedure
+## Operating Procedure (One Run Per PR)
 
-1. Identify failing jobs from the latest relevant run:
-  - Initial pass: latest completed run on `main`
-  - Iteration pass: latest completed run on the feature branch
-2. Build the target job set from those failures.
-3. Create a temporary verification branch from the current feature branch.
-4. In the temporary branch, modify workflow/job selection so only target jobs run.
-5. Dispatch workflow on the temporary branch.
-6. Inspect results and apply test-disable fixes on the real feature branch.
-7. Repeat until targeted failures are either fixed, disabled, or classified as infra/flaky.
+1. Identify failing jobs from the latest relevant completed run on `main`.
+2. Build one initial disable batch and commit it to the PR branch.
+3. Build the target job set from those failures for a single pruned verification pass.
+4. Create a temporary verification branch from the current feature branch.
+5. In the temporary branch, modify workflow/job selection so only target jobs run.
+6. Dispatch exactly one targeted verification run for the PR.
+7. Inspect results and apply deterministic disable/fix decisions on the real feature branch.
+8. After that run, do not run another verification pass for the same PR.
+9. Subsequent PR updates are removal-only when latest `main` proves a previously disabled test is fixed.
+
+## Automation Efficiency Guardrails
+
+- Do not perform deep re-analysis for draft PRs updated less than 4 hours ago.
+- For those recently updated draft PRs, allow only lightweight checks unless an exception applies.
+- Lightweight checks include:
+  - detecting active -> completed run state transitions
+  - confirming explicit blocker resolution
+  - handling a PR selected as the current focus item because its run just completed
+- In each automation cycle, perform heavy log/deep failure analysis for at most one focus PR.
+- Keep all non-focus PRs on lightweight status checks only.
 
 ## Safety Constraints
 
@@ -102,18 +113,10 @@ Do not spend disable/fix cycles on out-of-scope failures in this project.
 - Do not include temporary workflow-pruning edits in the final PR branch.
 - After every workflow dispatch, immediately share the run URL in the status update.
 
-## Issue Tracking Sync (Mandatory)
+## Draft PR / Issue / Status File Management (Mandatory)
 
-Keep the linked disable-tracking issue in sync with the draft PR at all times.
-
-- Every time a new test/parameterization is disabled, immediately update the issue with that test ID.
-- The issue must always reflect the full current set of disables in the PR (not just the latest addition).
-- If a disable is removed from the PR, remove it from the issue list in the same session.
-- After the initial disable batch is committed, issue updates should only reflect removals/revalidation outcomes (no new disables).
-
-## Exit Criteria for Full Workflow Run
-
-Run full workflow only when:
-
-- targeted failing jobs are stable/green, and
-- a final confidence pass is needed before undrafting/hand-off.
+- The disable-tracking issue is the source of truth for the current disable set.
+- Keep timeout-involved failures in a separate timeout-tracking issue; do not mix timeout tracking into the disable-tracking issue.
+- Keep `disabling-work-so-far.md` in sync with both PR status and workflow run status.
+- Every disable removal in the PR must be reflected in both the disable-tracking issue and `disabling-work-so-far.md` in the same session.
+- After the initial disable batch is committed, updates should be removal/revalidation only (no new disables on that PR).
