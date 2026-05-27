@@ -372,15 +372,13 @@ class TtRoutedExpert(LightweightModule):
         expert_region_offsets: ttnn.Tensor,
     ) -> ttnn.Tensor:
         """
-        Blackhole forward implementation using narrow and in-place writes.
-
-        Leverages the device-side token-count buffer: per-expert token counts
-        are read host-side (one host-device sync per forward) and used to
-        narrow each expert's extracted-tokens buffer down to ceil_tile(count)
-        rows. The downstream unified routed-expert FFN then matmul-multiplies
-        only the actually-occupied tiles, eliminating the padded-region work
-        that the previous implementation dispatched. For experts with count==0,
-        the FFN call is skipped entirely.
+        Blackhole forward implementation: delegates the per-local-expert work
+        to the `unified_routed_expert_moe` C++ composite. The composite loops
+        over local experts in C++ — there is no Python per-expert loop and no
+        host-device sync to read counts; each per-expert FFN call reads
+        `expert_token_counts` and `global_expert_idx_table` device-side and
+        bounds its chunk loop accordingly. Per-expert FFN calls still appear
+        as separate device ops in tt-perf-report.
 
         Args:
             dispatched_buffer: Dispatched tokens
@@ -401,12 +399,13 @@ class TtRoutedExpert(LightweightModule):
             logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
             dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
 
-        # All per-expert work — extract, FFN, insert — runs C++-side inside
-        # ttnn.experimental.deepseek_prefill.unified_routed_expert_moe. The
-        # FFN's reader/compute/writer kernels read the device-resident
+        # All per-expert dispatch — extract, FFN, insert — runs C++-side
+        # inside ttnn.experimental.deepseek_prefill.unified_routed_expert_moe,
+        # which loops over local experts in C++ (no Python loop, no host-device
+        # count sync). Each per-expert FFN program is still a separate device
+        # op; the FFN's reader/compute/writer kernels read the device-resident
         # `expert_token_counts` and `global_expert_idx_table` to bound their
-        # chunk loops. No host-device sync per forward; no Python per-expert
-        # loop.
+        # chunk loops.
         expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
             dispatched_buffer,
             expert_region_offsets,
