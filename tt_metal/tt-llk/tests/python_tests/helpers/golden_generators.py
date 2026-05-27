@@ -3119,8 +3119,8 @@ class TopKGolden:
 @register_golden
 class WhereGolden:
     def __call__(self, operand1, true_value, false_value):
-        # operand1, true_value, and false_value are 1D tensors of floats
-        mask = operand1.view(32, 32) != 0
-        return torch.where(
-            mask, true_value.view(32, 32), false_value.view(32, 32)
-        ).flatten()
+        # Element-wise select matching the C++ sfpu_ternary_function:
+        #   result[i] = (cond[i] == 0) ? false_value[i] : true_value[i]
+        cond = operand1.flatten().to(torch.float32)
+        mask = cond != 0.0
+        return torch.where(mask, true_value.flatten(), false_value.flatten())
