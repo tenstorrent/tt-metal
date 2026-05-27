@@ -541,6 +541,12 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
 
     // Optional input CBs (cur_pos and page_table - raw data, no tile dims)
     if (use_cur_pos_tensor) {
+        // #44366: cur_pos is consumed by both the writer and compute kernels.
+        // A single shared CB races: whichever consumer pops first drains the
+        // count and the other hangs in cb_wait_front. Use one CB per consumer
+        // — c_8 for the writer, c_15 for compute — each with capacity 1. The
+        // reader fills c_8 (from DRAM, or via the aliased sharded buffer)
+        // then does an L1->L1 copy into c_15.
         add_cb(
             CBIndex::c_8,
             cur_pos_stick_size,
@@ -548,6 +554,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             cur_pos_stick_size,
             nullptr,
             is_cur_pos_tensor_sharded ? cur_pos_buffer : nullptr);
+        add_cb(CBIndex::c_15, cur_pos_stick_size, cur_pos_df, cur_pos_stick_size);
     }
     if (is_paged_attention) {
         uint32_t page_table_cb_size = is_page_table_sharded ? B * page_table_stick_size : page_table_stick_size;
