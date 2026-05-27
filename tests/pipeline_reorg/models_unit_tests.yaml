@@ -363,7 +363,7 @@
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b
-    pytest --timeout 3000 models/demos/gpt_oss/tests/unit
+    pytest --timeout 1500 models/demos/gpt_oss/tests/unit
   model: gpt-oss-120b
   skus:
     # Wormhole
