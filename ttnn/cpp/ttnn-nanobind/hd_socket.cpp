@@ -260,7 +260,18 @@ void py_module_types(nb::module_& mod) {
                     data_span.size(),
                     page_size);
                 uint32_t num_pages = data_span.size() / page_size;
-                self.read(data_span.data(), num_pages, notify_sender);
+                int32_t remaining_bytes_to_read = num_pages * page_size;
+                uint32_t bytes_read = 0;
+                while (remaining_bytes_to_read > 0) {
+                    uint32_t num_pages_to_read =
+                        std::min<int32_t>(remaining_bytes_to_read, self.get_fifo_curr_size()) / page_size;
+                    self.read(
+                        reinterpret_cast<void*>(((uintptr_t)data_span.data()) + bytes_read),
+                        num_pages_to_read,
+                        notify_sender);
+                    bytes_read += num_pages_to_read * page_size;
+                    remaining_bytes_to_read -= num_pages_to_read * page_size;
+                }
             },
             nb::arg("tensor"),
             nb::arg("notify_sender") = true,
