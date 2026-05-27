@@ -1,25 +1,46 @@
 """Harness: benchmark Makora's fused matmul+silu kernel against ttnn.matmul.
 
+Quick start — one command, produces the full Makora-vs-TTNN comparison table
+(6 shapes, per-shape ns + speedup + PCC + max_abs_diff + math util, GMEAN row):
+
+  scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/matmul_silu/test_makora_bench.py::test_matmul_silu_readme_shapes -s
+
+That pytest shim sets the profiler env vars + TT_METAL_LOGGER_LEVEL=Warning
+and drives verify_makora.main() with --readme-shapes. Use --run-all if you
+want pytest not to stop on first failure.
+
+Sample output (Wormhole 8x8 grid):
+  matmul_silu  shape=(32, 32, 32)             path=fused  ttnn=    5 us  makora=     6 us  speedup=0.80x  ttnn_util= 0.64%  makora_util= 0.51%
+  matmul_silu  shape=(128, 128, 128)          path=fused  ttnn=    6 us  makora=     9 us  speedup=0.65x  ttnn_util= 2.09%  makora_util= 1.36%
+  matmul_silu  shape=(4, 1024, 1024, 1024)    path=kwarg  ttnn=  419 us  makora=  3292 us  speedup=0.13x  ttnn_util=15.66%  makora_util= 1.99%
+  matmul_silu  shape=(4096, 1024, 1024)       path=fused  ttnn=  380 us  makora=  3321 us  speedup=0.11x  ttnn_util=17.25%  makora_util= 1.97%
+  matmul_silu  shape=(2, 1, 2048, 2048, 2048) path=kwarg  ttnn=  913 us  makora= 12691 us  speedup=0.07x  ttnn_util=28.70%  makora_util= 2.07%
+  matmul_silu  shape=(4096, 2048, 2048)       path=fused  ttnn= 1054 us  makora= 12838 us  speedup=0.08x  ttnn_util=24.86%  makora_util= 2.04%
+  matmul_silu  GMEAN over 6 shapes:                       ttnn=  129 us  makora=   686 us  speedup=0.19x  ttnn_util=14.87%  makora_util= 1.66%
+
+speedup column is ttnn_time / makora_time, so smaller = TTNN faster.
+path column: 'fused' = single device program (in-kernel SiLU via
+core_grid trigger), 'kwarg' = 2-program post-op chain (used for batched B,
+which TTNN's fused factory refuses at matmul_program_config.cpp:454).
+
 Workflow per shape:
   1) Build random bf16 inputs.
   2) Warmup both kernels (sync + drain profiler).
   3) Run N measured iterations; for each: sync + ReadDeviceProfiler +
      ttnn.get_latest_programs_perf_data(), sum DEVICE KERNEL DURATION [ns]
-     across all programs in the latest read (TTNN may dispatch matmul + silu
-     as two programs when the activation= kwarg is used without a
-     program_config).
-  4) Optionally check numerical agreement (PCC + max-abs-diff vs Makora).
-  5) Print median(makora) vs. median(ttnn) and the ratio.
+     across all programs in the latest read.
+  4) Compute PCC + max_abs_diff vs Makora.
+  5) Compute math utilization (SDPA convention: matmul FLOPs /
+     (active_cores × duration_ns × 2048) × 100, HiFi2).
 
-Required env vars (the script aborts if missing):
+Required env vars (set by the pytest shim above; needed if running directly):
   TT_METAL_DEVICE_PROFILER=1
   TT_METAL_PROFILER_MID_RUN_DUMP=1
   TT_METAL_PROFILER_CPP_POST_PROCESS=1
 
-Usage:
+Direct (no pytest shim, no device-reset-on-exit):
   TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 \\
   TT_METAL_PROFILER_CPP_POST_PROCESS=1 \\
-  python verify_makora.py --shape 32 1024 1024 --iters 5
   python verify_makora.py --readme-shapes --iters 5
 """
 
