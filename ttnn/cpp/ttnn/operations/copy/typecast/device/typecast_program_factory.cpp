@@ -50,7 +50,7 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages, is_row_major);
     (void)num_cores;
 
-    constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
+    constexpr uint8_t src0_cb_index = tt::CBIndex::c_0;
     constexpr uint32_t num_input_pages = 2;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = num_input_pages * input_page_size,
@@ -62,7 +62,7 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
         }}},
     });
 
-    constexpr uint32_t output_cb_index = tt::CBIndex::c_2;
+    constexpr uint8_t output_cb_index = tt::CBIndex::c_2;
     constexpr uint32_t num_output_pages = 2;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = num_output_pages * output_page_size,
@@ -229,7 +229,7 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
         all_cores = ttnn::CoreRangeSet(ttnn::CoreRange(cores[0]));
     }
 
-    const uint8_t src0_cb_index = tt::CBIndex::c_0;
+    constexpr uint8_t src0_cb_index = tt::CBIndex::c_0;
     constexpr uint32_t num_input_tiles = 2;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = num_input_tiles * single_tile_size,
@@ -241,7 +241,7 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
         }}},
     });
 
-    const uint8_t output_cb_index = tt::CBIndex::c_2;
+    constexpr uint8_t output_cb_index = tt::CBIndex::c_2;
     constexpr uint32_t num_output_tiles = 2;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = num_output_tiles * single_tile_size_output,
