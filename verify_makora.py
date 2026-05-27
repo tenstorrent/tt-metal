@@ -104,13 +104,15 @@ def _load_makora_module(category: str, name: str):
 def _ttnn_matmul_silu(a, b):
     """Apples-to-apples vs Makora's fused matmul+silu.
 
-    Matches Makora's compute regime: bf16 in/out, DRAM-interleaved output,
-    HiFi2 + fp32_dest_acc_en. No math_approx_mode (Makora doesn't set it).
+    bf16 in/out, DRAM-interleaved output, HiFi2 + fp32_dest_acc_en.
 
-    Note: without a program_config, the activation= kwarg falls through to a
-    separate unary_chain op — TTNN will dispatch 2 device programs (matmul +
-    silu), not a fused kernel. The harness sums both in DEVICE KERNEL
-    DURATION [ns].
+    `core_grid=device.core_grid` is the trigger that switches matmul.cpp's
+    activation handling from the 2-program post-op `unary_chain` fallback
+    (line 294) to the in-kernel fused path: matmul.cpp:320 sets
+    `user_core_coord` from `core_grid`, which bypasses the fallback, and the
+    chosen program factory then compiles bmm_large_block_zm_fused_bias_activation.cpp
+    with SFPU_ACTIVATION=1 so the SiLU is computed in-kernel between the
+    matmul and the pack — single device program.
     """
     cfg = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -121,6 +123,7 @@ def _ttnn_matmul_silu(a, b):
         b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         activation="silu",
+        core_grid=a.device().core_grid,
         compute_kernel_config=cfg,
     )
 

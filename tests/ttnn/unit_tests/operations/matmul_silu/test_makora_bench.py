@@ -47,14 +47,22 @@ def _run(args):
 @pytest.mark.parametrize(
     "shape",
     [
-        # (*batch, M, K, N). Narrow M, wide K=N — TTNN's tested regime for
-        # matmul(activation="silu"). Square M=K=N hits an untested path that
-        # produces wrong outputs in the agent-eval branch's stripped matmul;
-        # on main the fused-activation header is present so behavior may differ.
-        (32, 1024, 1024),
-        (64, 1024, 1024),
-        (32, 2048, 2048),
-        (64, 2048, 2048),
+        # The agent-eval reference shapes from
+        # /localdev/dnijemcevic/kernels/Tenstorrent/references/matmul_fused_activation.py
+        # Reference uses literal input shapes (a.shape == b.shape, square M=K=N);
+        # harness encodes as (*batch_dims, M, K, N):
+        #   (32, 32)             literal -> (32, 32, 32)             — 1 output tile, 1 core
+        #   (128, 128)           literal -> (128, 128, 128)          — 16 output tiles, ≤16 cores
+        #   (4, 1024, 1024)      literal -> (4, 1024, 1024, 1024)    — batch=4, full 8×8 grid
+        #   (2, 1, 2048, 2048)   literal -> (2, 1, 2048, 2048, 2048) — batch=(2,1), full 8×8 grid
+        (32, 32, 32),
+        (128, 128, 128),
+        (4, 1024, 1024, 1024),
+        (2, 1, 2048, 2048, 2048),
+        # Batch-fused-into-M equivalents of shapes 3 & 4 — same FMAs, but B is
+        # 2D so TTNN's in-kernel fused activation path accepts them.
+        (4096, 1024, 1024),
+        (4096, 2048, 2048),
     ],
     ids=lambda s: "x".join(str(d) for d in s),
 )
