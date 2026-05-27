@@ -1,6 +1,6 @@
 # CI Disable Work — Status Log
 
-Last updated: **2026-05-27T14:00 UTC** (session: PR #45306 (T3K unit tests): verification run 26513061621 completed — classified **verified-pass** (all failures pre-existing or out-of-scope: multiprocess pre-existing TT_FATAL, ttmetal flaky DPrint, ttnn 25-min timeout). New PR #45313 created for vllm-nightly sampling test failures; verification run 26515302390 dispatched on verify/ci-disable-vllm-nightly-20260527 (build SUCCESS). 1 dispatch this session.)
+Last updated: **2026-05-27T14:30 UTC** (session: PR #45313 vllm-nightly verification run 26515302390 completed **success** → classified **verified-pass** (both WH-T3K and BH-DB sampling-test jobs passed). Examining lane: PRs #45108 and #44938 rebased onto main `08c2fb10e65`; CCL and sd35 disables revalidated as still needed. Tier-1 session — no new PRs; L2 nightly not eligible (no 3 consecutive failures with same error signature across all main runs). 0 new dispatches this session.)
 
 ---
 
@@ -19,13 +19,13 @@ Last updated: **2026-05-27T14:00 UTC** (session: PR #45306 (T3K unit tests): ver
 
 | PR | Workflow | Lifecycle stage | Verification result | Ready to merge? | Notes |
 |----|----------|-----------------|---------------------|-----------------|-------|
-| [#44938](https://github.com/tenstorrent/tt-metal/pull/44938) | `t3000-demo-tests` | `verified-pass` | [26295163268](https://github.com/tenstorrent/tt-metal/actions/runs/26295163268) success | Yes | Not behind main (mergeable_state: unknown) — awaiting CI/review |
-| [#45108](https://github.com/tenstorrent/tt-metal/pull/45108) | `(T3K) T3000 e2e tests` | `verified-pass` | [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) — CCL failure + 90m timeout | Yes | Rebased 2026-05-27 11:00 UTC onto main `fe07cd111531`; up-to-date; awaiting human review |
+| [#44938](https://github.com/tenstorrent/tt-metal/pull/44938) | `t3000-demo-tests` | `verified-pass` | [26295163268](https://github.com/tenstorrent/tt-metal/actions/runs/26295163268) success | Yes | Rebased 2026-05-27 14:28 UTC onto main `08c2fb10e65`; sd35 disable still valid; awaiting CI/review |
+| [#45108](https://github.com/tenstorrent/tt-metal/pull/45108) | `(T3K) T3000 e2e tests` | `verified-pass` | [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) — CCL failure + 90m timeout | Yes | Rebased 2026-05-27 14:27 UTC onto main `08c2fb10e65`; CCL disables still valid; awaiting human review |
 | [#45110](https://github.com/tenstorrent/tt-metal/pull/45110) | `Blackhole post-commit tests` | `verified-pass` | [26508063374](https://github.com/tenstorrent/tt-metal/actions/runs/26508063374) **success** | Yes | Rebased onto main `aa2de19b`; verification passed; awaiting human review |
 | [#45112](https://github.com/tenstorrent/tt-metal/pull/45112) | `(Blackhole) e2e tests` | `verified-pass` | [26508072188](https://github.com/tenstorrent/tt-metal/actions/runs/26508072188) **success** | Yes | Rebased onto main `aa2de19b`; verification passed; awaiting human review |
 | [#45114](https://github.com/tenstorrent/tt-metal/pull/45114) | `(Blackhole) Demo tests` | `out-of-scope` | — | N/A | **Disable REMOVED 2026-05-27**: test fixed on main since May 26. PR should be closed. |
 | [#45306](https://github.com/tenstorrent/tt-metal/pull/45306) | `(T3K) T3000 unit tests` | `verified-pass` | [26513061621](https://github.com/tenstorrent/tt-metal/actions/runs/26513061621) **failure** (pre-existing/out-of-scope) | Yes | All 3 job failures are pre-existing or out-of-scope: multiprocess TT_FATAL (pre-existing), ttmetal DPrint flakiness (pre-existing), ttnn 25-min timeout (out-of-scope) |
-| [#45313](https://github.com/tenstorrent/tt-metal/pull/45313) | `vllm-nightly-tests` | `verifying` | [26515302390](https://github.com/tenstorrent/tt-metal/actions/runs/26515302390) in progress | No (verifying) | Verification dispatched 2026-05-27 13:49 UTC; build SUCCESS; 2 target jobs (WH-T3K, BH-DB sampling); fresh build |
+| [#45313](https://github.com/tenstorrent/tt-metal/pull/45313) | `vllm-nightly-tests` | `verified-pass` | [26515302390](https://github.com/tenstorrent/tt-metal/actions/runs/26515302390) **success** | Yes | Both WH-T3K and BH-DB sampling-test jobs passed; awaiting human review |
 
 > **Scope note (2026-05-27):** L2 pipeline (`tt-metal-l2-tests`) is back in scope — prior work scrapped, automation may pick it up again. PR #44860 and the prior `## PR #44860 — tt-metal-l2-tests` section have been removed from this state log so the automation will see L2 as uncovered and create a fresh disable PR for it.
 
@@ -33,9 +33,7 @@ Last updated: **2026-05-27T14:00 UTC** (session: PR #45306 (T3K unit tests): ver
 
 ## Active Runs
 
-| Run | Pipeline | Branch | Started | Status | Notes |
-|-----|----------|--------|---------|--------|-------|
-| [26515302390](https://github.com/tenstorrent/tt-metal/actions/runs/26515302390) | `vllm-nightly-tests` | `verify/ci-disable-vllm-nightly-20260527` | 2026-05-27 13:49 UTC | **in progress** (build SUCCESS; tests running) | PR #45313 first verify; pruned to 2 sampling-test jobs (WH-T3K, BH-DB); fresh build |
+*No active verification runs.*
 
 **Policy:** Concurrent runs across PRs are allowed; each automation session may dispatch at most three new runs.
 
@@ -45,6 +43,7 @@ Last updated: **2026-05-27T14:00 UTC** (session: PR #45306 (T3K unit tests): ver
 
 | Run | Pipeline | Branch | Started | Ended | Result | Notes |
 |-----|----------|--------|---------|-------|--------|-----------|
+| [26515302390](https://github.com/tenstorrent/tt-metal/actions/runs/26515302390) | `vllm-nightly-tests` | `verify/ci-disable-vllm-nightly-20260527` | 2026-05-27 13:49 UTC | 2026-05-27 14:23 UTC | **success** | PR #45313 first verify; both WH-T3K and BH-DB sampling-test jobs **success** → **verified-pass** |
 | [26508072188](https://github.com/tenstorrent/tt-metal/actions/runs/26508072188) | `(Blackhole) e2e tests` | `verify/ci-disable-blackhole-e2e-20260527` | 2026-05-27 11:21 UTC | 2026-05-27 12:02 UTC | **success** | PR #45112 first verify; all ccl nightly tests across all BH platforms **success** → **verified-pass** |
 | [26508063374](https://github.com/tenstorrent/tt-metal/actions/runs/26508063374) | `Blackhole post-commit tests` | `verify/ci-disable-blackhole-post-commit-20260527b` | 2026-05-27 11:20 UTC | 2026-05-27 12:05 UTC | **success** | PR #45110 fourth verify attempt; all multi-card fast unit tests (P300-viommu, BH-LLMBox, BH-LoudBox) **success** → **verified-pass** |
 | [26513061621](https://github.com/tenstorrent/tt-metal/actions/runs/26513061621) | `(T3K) T3000 unit tests` | `verify/ci-disable-t3000-unit-tests-20260527` | 2026-05-27 13:09 UTC | 2026-05-27 13:57 UTC | **failure** | PR #45306 first verify; **classified verified-pass**: multiprocess TT_FATAL pre-existing, ttmetal DPrint flaky, ttnn 25-min timeout out-of-scope |
@@ -70,8 +69,8 @@ Last updated: **2026-05-27T14:00 UTC** (session: PR #45306 (T3K unit tests): ver
 | Branch | `ci/disable-failing-tests-t3000-demo-tests-20260521` |
 | Workflow file | `t3000-demo-tests` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-05-27 02:42 UTC — PR is NOT behind main; up-to-date |
-| Last revalidation | 2026-05-27 11:00 UTC — lightweight check; no new main runs since last session |
+| Last rebase | 2026-05-27 14:28 UTC — rebased via `update_pull_request_branch` onto main `08c2fb10e65` (SHA 3760e1b6) |
+| Last revalidation | 2026-05-27 14:28 UTC — sd35 disable still valid; latest main run 26483848176 (May 27 00:47) still shows t3k_sd35_large_tests failing |
 | Verification run | [26295163268](https://github.com/tenstorrent/tt-metal/actions/runs/26295163268) — **success** (2026-05-22) |
 | Readiness | **Yes** (pending CI checks passing and human review) |
 
@@ -89,8 +88,8 @@ Last updated: **2026-05-27T14:00 UTC** (session: PR #45306 (T3K unit tests): ver
 | Branch | `ci/disable-failing-tests-t3000-e2e-tests-20260524` |
 | Workflow file | `t3000-e2e-tests.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-05-27 ~07:01 UTC — rebased via `update_pull_request_branch` onto `c68e6ee` |
-| Last revalidation | 2026-05-26 ~20:35 UTC — 14 CCL disables revalidated on main |
+| Last rebase | 2026-05-27 14:27 UTC — rebased via `update_pull_request_branch` onto main `08c2fb10e65` (SHA 1a6d4f0b) |
+| Last revalidation | 2026-05-27 14:27 UTC — CCL disables still valid; latest main run 26497844654 (May 27 07:41) still shows t3k_ccl_tests failing |
 | Verification run | [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) — Llama **success**; CCL **failure** (trace-buffer + 90m timeout) |
 | Readiness | **Yes** (rebased and up-to-date; awaiting human review) |
 
@@ -218,11 +217,11 @@ Note: `multi_host_fabric_tests` and potentially other `tt-run` invocations in th
 | Timeout issue | none |
 | Branch | `ci/disable-failing-tests-vllm-nightly-20260527` |
 | Workflow file | `vllm-nightly-tests-impl.yaml` |
-| Lifecycle stage | `verifying` |
+| Lifecycle stage | `verified-pass` |
 | Last rebase | 2026-05-27 13:49 UTC — created from main `08c2fb10e65` |
 | Last revalidation | 2026-05-27 13:45 UTC — vllm-nightly has been failing for 8+ consecutive runs since May 19 |
-| Verification run | [26515302390](https://github.com/tenstorrent/tt-metal/actions/runs/26515302390) — **in progress** (dispatched 2026-05-27 13:49 UTC; fresh build; build SUCCESS) |
-| Readiness | **No** (verifying) |
+| Verification run | [26515302390](https://github.com/tenstorrent/tt-metal/actions/runs/26515302390) — **success** (2026-05-27 13:49–14:23 UTC; fresh build; WH-T3K and BH-DB sampling-test jobs both passed) |
+| Readiness | **Yes** (verification passed; awaiting human review) |
 
 **Disabled tests (via `sampling-test-filter` in `.github/workflows/vllm-nightly-tests-impl.yaml`):**
 
@@ -252,7 +251,8 @@ No SHA-matching successful main run for artifact reuse — dispatched fresh buil
 | PR #45112 first verification | **Resolved** | Fresh-build verification 26508072188 succeeded → verified-pass |
 | PR #45306 verification | **Resolved** | Verification run [26513061621](https://github.com/tenstorrent/tt-metal/actions/runs/26513061621) → verified-pass |
 | `multi_host_fabric_tests` crashes | **Pending** | `tt-run` invocations in `run_t3000_tt_metal_multiprocess_tests()` still crashing. Needs follow-up PR separate from #45306. |
-| PR #45313 verification | **In progress** | Verification run [26515302390](https://github.com/tenstorrent/tt-metal/actions/runs/26515302390) dispatched 2026-05-27 13:49 UTC; build SUCCESS |
+| PR #45313 verification | **Resolved** | Verification run [26515302390](https://github.com/tenstorrent/tt-metal/actions/runs/26515302390) → verified-pass (2026-05-27 14:23 UTC) |
+| PR #45313 needs human undraft + review | **Watch** | verified-pass, draft |
 | PR #44938 needs human review/merge | **Watch** | verified-pass, undrafted |
 | PR #45108 needs human undraft + review | **Watch** | verified-pass, draft |
 | PR #45110 needs human undraft + review | **Watch** | verified-pass, draft |
@@ -262,6 +262,8 @@ No SHA-matching successful main run for artifact reuse — dispatched fresh buil
 ---
 
 ## Recent Activity
+
+- `2026-05-27 ~14:30 UTC` — SESSION: **PR #45313 vllm-nightly verified-pass; examining PRs #45108 and #44938 rebased.** Examining PRs: #45313 (verifying → verified-pass, run 26515302390 completed success at 14:23 UTC), #45108 (rebased onto 08c2fb10e65; CCL disables still valid), #44938 (rebased onto 08c2fb10e65; sd35 disable still valid). No new PRs this session — tier-1: all identified non-Galaxy single-card workflows with deterministic failures are now covered by open/merged PRs. L2 nightly investigated but not eligible (scheduled failures have different test IDs across runs; workflow_dispatch runs succeed; no 3 consecutive completed-run failures with same error signature). 0 dispatches this session.
 
 - `2026-05-27 ~14:00 UTC` — SESSION: **PR #45306 verified-pass; new vllm-nightly disable PR #45313 created and verified.** Focus PRs: #45306 (verifying → result available, carve-out), #45313 (new). Actions: (1) PR #45306 verification run [26513061621](https://github.com/tenstorrent/tt-metal/actions/runs/26513061621) classified **verified-pass**: multiprocess pre-existing TT_FATAL, ttmetal DPrint flakiness (TensixActiveEthTestPrint was pre-existing on main run 26492864186; TensixTestPrintFinish is flaky DPrint), ttnn 25-min timeout out-of-scope. (2) Investigated vllm-nightly failures: confirmed 8+ consecutive main failures; identified 16 specific WH-T3K tests + 1 BH-DB test failing consistently across 3+ runs. (3) Created tracking issue [#45312](https://github.com/tenstorrent/tt-metal/issues/45312), disable PR [#45313](https://github.com/tenstorrent/tt-metal/pull/45313) (sampling-test-filter in vllm-nightly-tests-impl.yaml), verification branch `verify/ci-disable-vllm-nightly-20260527`, dispatched verification run [26515302390](https://github.com/tenstorrent/tt-metal/actions/runs/26515302390) (fresh build; build SUCCESS). 1 dispatch this session.
 
