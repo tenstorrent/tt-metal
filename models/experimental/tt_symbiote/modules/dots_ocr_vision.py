@@ -860,11 +860,8 @@ class TTNNDotsVisionMLP(TTNNModule):
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
 
-        # Down-projection reads gate_up_mul from L1. Use the dedicated
-        # ob_h=8 program config (vs the auto-selected ob_h=16) so static
-        # CBs stay at ~487 KB and don't overflow when added to the 841 KB
-        # gate_up_mul L1 footprint. Output to DRAM: L1 output would add
-        # another 306 KB/core and push total L1 over 1536 KB.
+        # Down-projection reads gate_up_mul from L1; DRAM output while gate_up
+        # is live (L1 interleaved out would exceed per-core L1 with gate_up).
         down_m = int(gate_up_mul.shape[0]) * int(gate_up_mul.shape[1]) * int(gate_up_mul.shape[2])
         down_k = int(self.tt_fc2_weight.shape[-2])
         down_n = int(self.tt_fc2_weight.shape[-1])
@@ -875,12 +872,13 @@ class TTNNDotsVisionMLP(TTNNModule):
             gate_up_mul,
             self.tt_fc2_weight,
             bias=self.tt_fc2_bias,
-            dtype=ttnn.bfloat8_b,
-            memory_config=mem,
+            dtype=ttnn.bfloat4_b,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             program_config=down_pc,
         )
         ttnn.deallocate(gate_up_mul)
+        # output = ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG)
 
         return output
 
@@ -1368,23 +1366,11 @@ class TTNNDotsVisionAttention(TTNNModule):
             q = ttnn.experimental.rotary_embedding(q, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             k = ttnn.experimental.rotary_embedding(k, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # V is BFP8 from the QKV matmul; cast to BFP4 to halve the V DRAM
-        # stream in the chunked SDPA kernel. Per-core SDPA reads V tiles
-        # ``q_per_core`` times during prefill (10 outer-Q iterations at
-        # q_chunk=256, S=12288), so V dominates DRAM bandwidth in non-causal
-        # attention. BFP4 V costs one typecast per layer (~0.1 ms reading
-        # 21 MB BFP8 + writing 10.5 MB BFP4) and saves ~2-3 ms per layer
-        # of SDPA bandwidth. Q/K stay BFP8: K participates in the full QK^T
-        # matmul where BFP4 would lose precision in the early-attention scores.
-        # SDPA validates BFP4 V in sdpa_device_operation.cpp:40 ("Data type ...
-        # must be BFLOAT16, BFLOAT8_B, or BFLOAT4_B"), and the output dtype
-        # matches Q's dtype (BFP8) regardless of V dtype.
-        v = ttnn.typecast(v, dtype=ttnn.bfloat4_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # V stays BFP8 from the QKV matmul through SDPA (no BFP4 downcast).
 
         # SDPA still requires interleaved Q/K/V (sdpa_device_operation.cpp:44 forbids
-        # sharded inputs) and at S=12288 the BFP8 Q+K (~36 MB) + BFP4 V (~10 MB)
-        # plus SDPA's static circular buffers exceed the per-core L1 budget --
-        # keep these tensors on DRAM.
+        # sharded inputs) and at S=12288 the BFP8 Q+K+V (~46 MB) plus SDPA's static
+        # circular buffers exceed the per-core L1 budget -- keep these tensors on DRAM.
 
         # o_proj: in0 is L1 interleaved (nlp_concat_heads writes to L1); output goes to
         # L1 BLOCK_SHARDED so the downstream residual add reads from L1 instead of DRAM.
