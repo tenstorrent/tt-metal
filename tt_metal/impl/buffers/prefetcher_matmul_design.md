@@ -343,6 +343,229 @@ DRAM-core analogue of the worker-core's per-tensor derivations in §5):
   `resize_remote_sender_cb_interface` page size, and the argument to
   `prefetcher_finalize_block`).
 
+### Compile-time args (13)
+
+```
+0  num_layers
+1  num_tensors
+2  num_blocks                          (= ring_size)
+3  num_receivers                       (= num_receivers_per_sender)
+4  stage_ring_base                     (L1 addr; split into two halves by kernel)
+5  stage_ring_size                     (bytes; 2 x ring_half)
+6  remote_cb_id                        (= 31)
+7  pages_sent_l1_addr                  (DRISC-local pages_sent slots)
+8  noc_xy_l1_addr                      (per-receiver noc xy table)
+9  config_l1_addr                      (4-uint32 iface config block)
+10 fifo_size_per_receiver              (= gcb.size())
+11 receiver_buffer_address             (GCB receiver-side fifo base)
+12 remote_pages_sent_worker_l1_addr    (per-receiver remote semaphore base)
+```
+
+Ring depth is fixed at 2 in the kernel (ping-pong slots derived from
+`stage_ring_base` and `stage_ring_base + stage_ring_size / 2`).
+
+Notably absent vs the pre-refactor kernel: `max_chunk_size`, `stage_a_addr`,
+`stage_b_addr`, `num_dma_chunks_per_block (M)`, `k_block_w_tiles`. `M` and
+`rows_per_sub` are per-tensor RTAs now; the kernel no longer needs a single
+`k_block_w_tiles` constant.
+
+### Runtime args
+
+```
+[0]                        bank_id
+[1 .. 1+num_tensors)       bank_local_base[t]       (GDDR bank-local offset)
+[+num_tensors]             num_sub[t]
+[+num_tensors]             M[t]
+[+num_tensors]             rows_per_sub[t]
+[+num_tensors]             coalesced_page_size[t]
+[+num_tensors]             coalesced_num_pages[t]
+[+num_tensors]             sub_chunk_bytes[t]       (rows_per_sub*n_per_bank/M*tile_bytes)
+[+num_tensors]             sub_stride_bytes[t]
+[+num_tensors]             block_stride_bytes[t]
+[+num_tensors]             page_bytes_per_recv[t]
+[2*num_receivers]          noc_x/noc_y per receiver
+```
+
+### Kernel main loop
+
+```
+setup_iface_once();                                       // noc_xy table, config, iface
+issue first DMA into stage_ring[0];                       // prologue for tensor 0
+for layer in [0, num_layers):
+  for t in [0, num_tensors):
+    pull per-tensor RTAs into locals;
+
+    for c in [0, num_blocks * num_sub[t] * M[t]):
+      blk = c / (num_sub[t] * M[t]);
+      sb  = (c % (num_sub[t] * M[t])) / M[t];
+      ch  = c % M[t];
+
+      // On block boundary: reserve a fifo page on every receiver, snapshot wr_ptr.
+      if (sb == 0 and ch == 0):
+        experimental::remote_cb_reserve_back(remote_cb_id, 1);
+        fifo_snapshot   = iface.fifo_wr_ptr;
+        cum_offset_in_page = 0;
+
+      // Issue NEXT DMA (depth=2 ping-pong) before waiting on the current chunk.
+      if (c + 1 < total_chunks):
+        compute (next_blk, next_sb, next_ch) and next_src;
+        experimental::dma_async_read(0, next_src, stage_ring[(c+1)&1], sub_chunk_bytes[t]);
+      experimental::dma_async_read_wait_n(0, has_next ? 1 : 0);
+
+      // Write this chunk to its receiver subset at (fifo_snapshot + cum_offset_in_page).
+      prefetcher_write_chunk(
+        /*src=*/   stage_ring[c & 1],
+        /*dest=*/  fifo_snapshot + cum_offset_in_page,
+        /*recv=*/  noc_xy_ptr + ch * recv_per_chunk * 2,
+        recv_per_chunk,
+        rows_per_sub[t],
+        coalesced_num_pages[t],
+        coalesced_page_size[t],
+        noc_index);
+
+      // After the last chunk of a sub-band, advance dest offset by the sub-band's
+      // per-receiver bytes (each receiver in the subset got rows_per_sub K-rows of
+      // coalesced_num_pages * coalesced_page_size bytes).
+      if (ch + 1 == M[t]):
+        cum_offset_in_page += rows_per_sub[t] * coalesced_num_pages[t]
+                            * coalesced_page_size[t];
+
+      // On block boundary: flush posted writes and finalize (one pages_sent inc per receiver).
+      if (sb + 1 == num_sub[t] and ch + 1 == M[t]):
+        noc_async_posted_writes_flushed();
+        prefetcher_finalize_block<skip_ptr_update=true>(
+          iface, page_bytes_per_recv[t], num_receivers, noc_index);
+
+    if (t == num_tensors - 1):
+      experimental::remote_cb_sender_barrier(remote_cb_id);
+
+experimental::update_remote_cb_config_in_l1(remote_cb_id);
+noc_async_atomic_barrier();
+experimental::drisc_set_noc2axi_mode();
+```
+
+The finalize uses `skip_ptr_update=true` (posted NoC semaphore writes); the
+end-of-stream `update_remote_cb_config_in_l1` + `noc_async_atomic_barrier`
+drain them. `enable_performance_mode` in `DramCorePrefetcherConfig` is
+currently a no-op (this fast-path is always selected); the flag is kept as
+an API hook for future tuning, e.g. wiring a `<false>` instantiation for
+sub-band-grained ptr updates when measured to matter.
+
+When `(rows_per_sub, M) = (k_block_w_tiles, 1)` (fast path), the inner loop
+collapses to a single `prefetcher_write_chunk` followed by
+`prefetcher_finalize_block` — same number of NoC writes and the same one
+`pages_sent` increment per block per receiver as the pre-refactor kernel.
+
+### Layout modes (per-tensor)
+
+The DRAM-core path supports two buffer layouts, selected implicitly per
+tensor based on the buffer's `BufferDistributionSpec::num_shards()`:
+
+- **K-row-major** (`num_shards == num_senders`, or no BDS): the legacy
+  layout. Each DRAM bank holds a single `(K, n_per_bank)` shard,
+  K-row-major. This is what §6.1–§6.6 describe; the manager calls
+  `compute_tensor_geom_krow_major`.
+- **Receiver-contiguous** (`num_shards == ring_size > num_senders`): each
+  bank holds `num_receivers` slabs of shape `(K, n_per_recv)`, stacked
+  vertically (slab `s` at bank-local offset `s * K * n_per_recv * tile_bytes`).
+  Per `(receiver, block)`, the source bytes are a single contiguous DRAM
+  region. The manager calls `compute_tensor_geom_recv_contig`; the kernel
+  takes the receiver-contiguous branch in its per-tensor main loop.
+
+The caller selects receiver-contiguous mode by allocating the weight via
+`ttnn.MemoryConfig(BufferType.DRAM, NdShardSpec(Shape([K, n_per_recv]),
+dram_cores, ROUND_ROBIN_1D))`. BDS round-robin places shard m at bank
+`m % num_senders` slab `m // num_senders`; the caller pairs this with a
+strided GCB topology (bank b → ring positions
+`[b, b + num_senders, b + 2 * num_senders, ...]`) so that shard index ==
+ring position and no host permutation is needed.
+
+#### Per-bank slab layout (receiver-contiguous)
+
+```
+bank b (bank-local offset 0):
+  [ slab 0 : K x n_per_recv tiles, K-row-major ]    <- receiver at ring pos b
+  [ slab 1 : K x n_per_recv tiles, K-row-major ]    <- receiver at ring pos b+num_senders
+  ...
+  [ slab R-1 : K x n_per_recv tiles ]               <- receiver at ring pos b+(R-1)*num_senders
+```
+
+#### Address formula
+
+Per (receiver slab `r`, block `blk`, sub-band `sb`):
+
+```
+src = bank_local_base[t]
+    + r   * recv_stride_bytes        // recv_stride_bytes = K_tiles * n_per_recv * tile_bytes
+    + blk * block_stride_bytes       // block_stride_bytes = k_block_w * n_per_recv * tile_bytes
+    + sb  * sub_stride_bytes         // sub_stride_bytes = rows_per_sub * n_per_recv * tile_bytes
+```
+
+#### Fit ladder (receiver-contiguous)
+
+```
+bytes_per_recv_per_block = k_block_w * n_per_recv * tile_bytes
+
+# Rung 1: full block fits. blocks_per_dma pinned to 1 for now (multi-block
+# batching needs fifo-wrap-aware writes; TODO).
+if bytes_per_recv_per_block <= ring_half:
+    rows_per_sub = k_block_w
+    num_sub      = 1
+    blocks_per_dma = 1
+# Rung 2: single block exceeds ring_half — K-split within one slab.
+else:
+    blocks_per_dma = 1
+    pick rows_per_sub | k_block_w such that
+         rows_per_sub * n_per_recv * tile_bytes <= ring_half
+    num_sub = k_block_w / rows_per_sub
+```
+
+Each DMA serves exactly one receiver. Total DMAs per layer per tensor:
+`num_receivers * num_blocks * num_sub` per sender. NoC writes per block
+per sender: `num_receivers * k_block_w * coalesced_num_pages` — same
+count as the K-row-major fast path, but each write reads from contiguous
+DRAM rather than a row-strided source.
+
+#### Kernel main loop (receiver-contiguous)
+
+```
+for blk in [0, num_blocks):
+  for r in [0, num_receivers):
+    if r == 0: remote_cb_reserve_back(remote_cb_id, 1)
+    if sb == 0 (loop entry): fifo_snapshot = iface.fifo_wr_ptr
+    for sb in [0, num_sub):              // num_sub > 1 only in rung 2
+      DMA: src = (above), dest = stage_slot, size = sub_chunk_bytes
+      prefetcher_write_chunk(num_receivers_in_chunk = 1, recv_xy[r], ...)
+    if r == num_receivers - 1 and sb == num_sub - 1:
+      noc_async_posted_writes_flushed()
+      prefetcher_finalize_block(...)     // bumps pages_sent on every receiver by 1
+```
+
+The current kernel iterates `(blk outer, r middle, sb inner)`. Loop order
+doesn't affect correctness as long as `prefetcher_finalize_block` runs
+once per block after all receivers have been written.
+
+### Extra per-tensor RTA fields (queueable payload)
+
+Each per-tensor block in the H2D socket request page carries 14 words
+instead of 10. Words [10..12] are receiver-contiguous-only (under
+K-row-major they default to `(0, 1, 0)`); word [13] is the per-tensor
+`block_count` (the K-block count — formerly the shared `num_blocks`
+header word, now per-tensor so different tensors can split K differently):
+
+```
+[10] layout_mode        // 0 = KRowMajor, 1 = ReceiverContiguous
+[11] blocks_per_dma     // pinned to 1 in current impl
+[12] recv_stride_bytes  // K_tiles * n_per_recv * tile_bytes (0 under KRowMajor)
+[13] block_count        // K-blocks for this tensor (was the shared num_blocks)
+```
+
+`kRequestPageTensorWords` in `dram_core_prefetcher_manager.hpp` reflects
+this 14-word stride; the kernel reads `payload + 3 + 14*t + i` for word
+`i` of tensor `t` (the header is now 3 words: num_tensors, num_layers,
+gcb_state_addr). The kernel's per-tensor branch on `layout_mode` is
+predicted with 100% accuracy across the inner chunk loop — no hot-path
+cost.
 ## 7. Llama-3.1-8B fit table
 
 Production ring=64 (8 banks x 8 recv/sender), bf8_b (tile_bytes=1088),
@@ -362,6 +585,20 @@ Notes:
 - For O the full block just fits (34 816 ≤ 35 008), so we use the fast path.
 - FF2 isn't fed by this prefetcher in production, but if it were, the ladder
   would pick `(rows_per_sub = 2, M = 1)`.
+
+Under the **receiver-contiguous** layout (`num_shards = ring_size`) the
+per-receiver per-block bytes shrink to
+`k_block_w * n_per_recv * tile_bytes`:
+
+| Op  | n_per_recv | bytes_per_recv_per_block | rung | (rows_per_sub, num_sub, blocks_per_dma) |
+|-----|-----------:|-------------------------:|------|-----------------------------------------|
+| FF1 |          7 |                   15 232 | 1    | (2, 1, 1) — fits easily                 |
+| QKV |          6 |                   13 056 | 1    | (2, 1, 1)                               |
+| O   |          2 |                    4 352 | 1    | (2, 1, 1)                               |
+
+All three Llama production shapes land on rung 1 with `num_sub = 1` — no
+K-row splitting needed. The N-chunking sub-row path required for FF1/QKV
+under K-row-major (`M = 2`) is unnecessary here.
 
 ## 8. Cross-component invariants
 
@@ -384,6 +621,11 @@ Whoever changes prefetcher or receiver code must preserve these:
 5. **The pair `(rows_per_sub > 1, M > 1)` never occurs** in the DRAM-core
    fit ladder. The kernel uses this invariant to assume DMAs are linear
    reads (no row-strided DMA support).
+6. **`page_bytes_per_recv` is layout-mode-invariant.** Both K-row-major
+   and receiver-contiguous push the same
+   `k_block_w * coalesced_num_pages * coalesced_page_size` bytes per
+   receiver per block. Only the GDDR source layout and the per-chunk NoC
+   write granularity differ.
 
 ## 9. Where to look in the code
 
