@@ -545,17 +545,6 @@ tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descripto
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
 
-    // Early format check: when all data formats are identical, reconfig calls can be skipped.
-    const tt::DataFormat q_df_early = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
-    const tt::DataFormat k_df_early = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
-    const tt::DataFormat v_df_early = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
-    const tt::DataFormat out_df_early = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    const tt::DataFormat im_df_early = tt::DataFormat::Float16_b;
-    const tt::DataFormat mask_df_early = tt::DataFormat::Float16_b;
-    const bool uniform_dataformat =
-        (q_df_early == k_df_early && q_df_early == v_df_early && q_df_early == out_df_early &&
-         q_df_early == mask_df_early && q_df_early == im_df_early);
-
     std::vector<uint32_t> compute_compile_time_args = {
         NH,
         DHt,
@@ -586,7 +575,6 @@ tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descripto
         static_cast<std::uint32_t>(use_streaming_compute),
         global_n_partial_col,
         joint_l_partial_col,
-        static_cast<std::uint32_t>(uniform_dataformat),
     };
 
     std::map<std::string, std::string> defines;
