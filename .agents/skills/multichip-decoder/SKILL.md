@@ -7,7 +7,7 @@ description: Parallelize a functional or optimized TTNN decoder layer under mode
 
 ## Mission Context
 
-Read `.agents/notes/model-bringup-mission.md` first. This stage takes a trusted and p single-chip decoder and makes it run tensor-parallel over the full target mesh available on this machine.
+Read `.agents/notes/model-bringup-mission.md` first. This stage takes a trusted single-chip decoder and makes it run tensor-parallel over the full target mesh available on this machine.
 
 Useful reference when needed: `references/parallelization-knowledge.md`. It points to GPT-OSS, `models/common`, CCL, RMSNorm, MoE, and Galaxy examples.
 
@@ -44,7 +44,7 @@ Get correctness before chasing speed. Compare multi-chip TTNN output to the sing
 
 Treat RMSNorm, KV-cache layout, head ownership, bias placement, padding/slicing, and collective axes as first-class correctness questions. Most multi-chip bugs live there.
 
-Async CCLs and semaphores are tricksy little hobbitses. Read the relevant docs and above all look and and consider reusing the CCL/semaphore helper classes that tt_transformers / gpt_oss / deepseek_v3 use.
+Async CCLs and semaphores are subtle. Read the relevant docs and consider reusing the CCL/semaphore helper classes that `tt_transformers`, `gpt_oss`, and `deepseek_v3` use.
 
 ## Evidence To Leave
 
