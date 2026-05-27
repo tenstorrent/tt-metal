@@ -2023,13 +2023,24 @@ std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_routing_planes_in_dir
     return eth_chans;
 }
 
-size_t ControlPlane::get_num_available_routing_planes_in_direction(
+size_t ControlPlane::get_num_unreserved_routing_planes(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction) const {
+    size_t live = 0;
     if (this->router_port_directions_to_num_routing_planes_map_.contains(fabric_node_id) &&
         this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).contains(routing_direction)) {
-        return this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).at(routing_direction);
+        live = this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).at(routing_direction);
     }
-    return 0;
+    size_t reserved = 0;
+    if (this->num_dispatch_reserved_planes_.contains(fabric_node_id) &&
+        this->num_dispatch_reserved_planes_.at(fabric_node_id).contains(routing_direction)) {
+        reserved = this->num_dispatch_reserved_planes_.at(fabric_node_id).at(routing_direction);
+    }
+    return live > reserved ? live - reserved : 0;
+}
+
+void ControlPlane::register_dispatch_reservation(
+    FabricNodeId fabric_node_id, RoutingDirection routing_direction, size_t num_reserved) {
+    this->num_dispatch_reserved_planes_[fabric_node_id][routing_direction] = num_reserved;
 }
 
 void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabric_node_id) const {
