@@ -3,10 +3,17 @@
 """Tests for skills.orchestrator.lib.state — load/save with schema validation."""
 
 import json
+import re
 
 import pytest
 
-from skills.orchestrator.lib.state import SchemaError, load_state, save_state
+from skills.orchestrator.lib.state import (
+    SchemaError,
+    bootstrap,
+    load_state,
+    resume_normalize,
+    save_state,
+)
 
 
 def _valid_state() -> dict:
@@ -154,3 +161,110 @@ def test_save_creates_parent_dirs(tmp_path):
     p = tmp_path / "deep" / "nested" / "state.json"
     save_state(p, _valid_state())
     assert p.exists()
+
+
+# ---------------------------------------------------------------------------
+# bootstrap
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_creates_skeleton():
+    """bootstrap returns a fully-formed state dict with the right defaults."""
+    state = bootstrap("Qwen/Qwen3-TTS-12Hz-1.7B-Base", "n150", "wormhole_b0")
+
+    assert state["schema_version"] == 1
+    assert state["model_id"] == "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+    # Only '/' and '-' are replaced with '_'. '.' is preserved.
+    assert state["model_slug"] == "qwen_qwen3_tts_12hz_1.7b_base"
+    assert state["device"] == "n150"
+    assert state["arch_name"] == "wormhole_b0"
+
+    assert state["components"] == []
+    assert state["locks"]["device"]["held_by"] is None
+    assert state["locks"]["device"]["held_since"] is None
+    assert state["tick_log"] == []
+
+    assert state["config"]["max_parallel_reference"] == 4
+    assert state["config"]["max_attempts_per_phase"] == 10
+    assert state["config"]["tick_interval_sec"] == 60
+
+    iso_re = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+    assert iso_re.match(state["started_at"]), state["started_at"]
+    assert state["started_at"] == state["updated_at"]
+
+
+def test_bootstrap_passes_validate(tmp_path):
+    """A freshly bootstrapped state must satisfy the schema (save_state validates)."""
+    state = bootstrap("Qwen/Qwen3-TTS-12Hz-1.7B-Base", "n150", "wormhole_b0")
+    # save_state runs _validate; if bootstrap is wrong this raises SchemaError.
+    save_state(tmp_path / "s.json", state)
+
+
+# ---------------------------------------------------------------------------
+# resume_normalize
+# ---------------------------------------------------------------------------
+
+
+def test_resume_normalize_demotes_in_progress():
+    """in_progress phases become pending; other statuses are untouched."""
+    state = bootstrap("Qwen/Qwen3-TTS-12Hz-1.7B-Base", "n150", "wormhole_b0")
+    state["components"].append(
+        {
+            "name": "Attention",
+            "reference": {"status": "done"},
+            "ttnn": {"status": "in_progress"},
+            "debug": {"status": "in_progress"},
+            "optimization": {"status": "pending"},
+        }
+    )
+
+    resume_normalize(state)
+
+    comp = state["components"][0]
+    assert comp["reference"]["status"] == "done"
+    assert comp["ttnn"]["status"] == "pending"
+    assert comp["debug"]["status"] == "pending"
+    assert comp["optimization"]["status"] == "pending"
+
+
+def test_resume_normalize_clears_device_lock():
+    """A held device lock is released by resume_normalize."""
+    state = bootstrap("Qwen/Qwen3-TTS-12Hz-1.7B-Base", "n150", "wormhole_b0")
+    state["locks"]["device"] = {
+        "held_by": "tick-42",
+        "held_since": "2026-05-27T15:00:00Z",
+    }
+
+    resume_normalize(state)
+
+    assert state["locks"]["device"]["held_by"] is None
+    assert state["locks"]["device"]["held_since"] is None
+
+
+def test_resume_normalize_handles_missing_phases():
+    """Components missing some phase keys are left alone (no KeyError)."""
+    state = bootstrap("Qwen/Qwen3-TTS-12Hz-1.7B-Base", "n150", "wormhole_b0")
+    state["components"].append(
+        {
+            "name": "Partial",
+            "reference": {"status": "in_progress"},
+            # ttnn / debug / optimization intentionally missing
+        }
+    )
+
+    resume_normalize(state)
+
+    comp = state["components"][0]
+    # The one present phase was in_progress, so it should now be pending.
+    assert comp["reference"]["status"] == "pending"
+    # Missing keys are not synthesized.
+    assert "ttnn" not in comp
+    assert "debug" not in comp
+    assert "optimization" not in comp
+
+
+def test_resume_normalize_returns_same_object():
+    """resume_normalize mutates in place and returns the same dict (for chaining)."""
+    state = bootstrap("Qwen/Qwen3-TTS-12Hz-1.7B-Base", "n150", "wormhole_b0")
+    out = resume_normalize(state)
+    assert out is state
