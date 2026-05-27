@@ -30,7 +30,6 @@ from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXT
 from models.experimental.voxtraltts.reference.voxtral_request import compose_speech_request
 from models.experimental.voxtraltts.tests.common import resolve_voxtral_model_name_or_skip
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
-from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
 
 try:
     from tracy import signpost
@@ -127,28 +126,11 @@ def test_ttnn_voxtral_tts_e2e_trial(device, reset_seeds, request):
     _log_pcc("prefill hidden", float(prefill_pcc), PREFILL_HIDDEN_PCC)
     assert ok_prefill, f"prefill hidden PCC failed: {prefill_pcc}"
 
-    cfg_alpha = torch.tensor(cpu._acoustic_cfg_alpha, dtype=torch.bfloat16)
     current_pos = len(prompt_token_ids)
-    acoustic_matches = 0
-    acoustic_total = 0
 
     for step in range(generate_steps):
         cpu_codes_step = cpu_trace.get(f"step.{step}.acoustic.codes")  # [37] shifted (with special offset)
         cpu_codes_step = cpu_codes_step.reshape(-1).long().unsqueeze(0)  # [1, 37]
-
-        # Informational: TT acoustic agreement on the SAME CPU hidden with synced FM RNG.
-        cpu_hidden_in = cpu_trace.get(f"step.{step}.text.hidden_in").reshape(1, -1).to(torch.bfloat16)
-        torch.manual_seed(acoustic_fm_noise_seed(0, step))
-        tt_codes_step = pipe.acoustic_codes_forward(cpu_hidden_in, cfg_alpha).reshape(-1).long()
-        n_ac = cpu_codes_step.shape[1] - 1
-        step_ac_match = int((tt_codes_step[1:] == cpu_codes_step[0, 1:]).sum().item())
-        acoustic_matches += step_ac_match
-        acoustic_total += n_ac
-        sem_ok = int(tt_codes_step[0].item()) == int(cpu_codes_step[0, 0].item())
-        logger.info(
-            f"  step {step}: semantic={'OK' if sem_ok else 'DIFF'} "
-            f"acoustic={step_ac_match}/{n_ac}  (TT acoustic vs CPU, synced RNG, informational)"
-        )
 
         if int(cpu_codes_step[0, 0].item()) == cpu.end_audio_id:
             break
@@ -169,12 +151,6 @@ def test_ttnn_voxtral_tts_e2e_trial(device, reset_seeds, request):
 
     if use_signpost:
         signpost(header="stop")
-
-    if acoustic_total > 0:
-        logger.info(
-            f"  acoustic-code agreement (informational): "
-            f"{acoustic_matches / acoustic_total:.4f}  ({acoustic_matches}/{acoustic_total})"
-        )
 
     logger.info("=" * 70)
     logger.info("FINAL WAVEFORM PCC (TT tokenizer on CPU reference codes)")
