@@ -1,6 +1,6 @@
 # Output Files
 
-Unless your current bringup skill specifices otherwise, the final result of your work should be organized like this.
+Unless your current bringup skill specifies otherwise, the final result of your work should be organized like this.
 
 ## Files to Commit
 
@@ -36,7 +36,7 @@ This is your working log and the place we will look to learn how to improve next
 
 - model id, HF revision/path, hardware, branch/commit, and environment;
 - decoder layer kinds and representative layer indices;
-- `FunctionalDecoder` constructor/forward contract;
+- Decoder-class constructor/forward contract;
 - state-dict key mapping and real/synthetic weight behavior;
 - prefill/decode PCC against HF, including thresholds and tested shapes;
 - paged KV-cache, page-table, and current-position evidence;

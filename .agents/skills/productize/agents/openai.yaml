@@ -1,0 +1,7 @@
+interface:
+  display_name: "Productize"
+  short_description: "Turn a TTNN decoder into a full model"
+  default_prompt: "Use $productize to implement models/autoports/<model>/tt/model.py, tt/generator.py, and tt/generator_vllm.py from the latest decoder stage, run the readiness checks, and leave a concise work log and final report."
+
+policy:
+  allow_implicit_invocation: true
