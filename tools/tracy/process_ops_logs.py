@@ -490,10 +490,13 @@ def _enrich_ops_from_perf_csv(
         # Build a lookup that matches the C++ ProgramExecutionUID structure:
         # (GLOBAL CALL COUNT, METAL TRACE ID) -> list of perf rows (one per replay session, or one for non-trace)
         perf_rows_by_key: Dict[Tuple[int, Optional[int]], List[Dict[str, Any]]] = {}
+        perf_rows_by_op_id: Dict[int, List[Dict[str, Any]]] = {}
         for (op_id, trace_id, session_id), row in device_perf_by_device[device_id].items():
             perf_rows_by_key.setdefault((op_id, trace_id), []).append(row)
+            perf_rows_by_op_id.setdefault(op_id, []).append(row)
 
         enriched_ops = []
+        skipped_count = 0
         for host_op in host_ops_by_device[device_id]:
             op_id = int(host_op["global_call_count"])
             host_trace_id = host_op.get("metal_trace_id")
@@ -508,15 +511,14 @@ def _enrich_ops_from_perf_csv(
             candidates = perf_rows_by_key.get((op_id, host_trace_id))
             if not candidates:
                 # Fallback: if host didn't record trace id but perf CSV did, allow lookup by op_id only.
-                candidates = []
-                for (cand_op_id, _cand_trace_id), rows in perf_rows_by_key.items():
-                    if cand_op_id == op_id:
-                        candidates.extend(rows)
+                candidates = perf_rows_by_op_id.get(op_id, [])
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                # The device profiler ring buffer only captures a window of ops; ops outside that
+                # window appear in the host Tracy log but have no device-side entry.  Skip them
+                # rather than aborting so the report is still generated for the captured window.
+                skipped_count += 1
+                continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
@@ -541,6 +543,12 @@ def _enrich_ops_from_perf_csv(
                 enriched_op["_device_perf_row"] = perf_row
                 enriched_ops.append(enriched_op)
 
+        if skipped_count:
+            logger.warning(
+                f"Device {device_id}: {skipped_count} host ops had no entry in "
+                f"{PROFILER_CPP_DEVICE_PERF_REPORT} (outside device profiler capture window) "
+                f"and were excluded from the report. {len(enriched_ops)} ops retained."
+            )
         host_ops_by_device[device_id] = enriched_ops
     return host_ops_by_device
 

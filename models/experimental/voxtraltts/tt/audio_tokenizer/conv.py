@@ -481,6 +481,12 @@ class VoxtralTTAudioTokenizerDecoderCausalConv1d:
         if c != self.in_channels:
             raise ValueError(f"Expected C_in={self.in_channels}, got {c}")
 
+        # Move L1 activations to DRAM before conv compile (avoid CB/L1 clash on long seqs).
+        if x_b1tc.memory_config().buffer_type != ttnn.BufferType.DRAM:
+            x_dram = ttnn.to_memory_config(x_b1tc, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(x_b1tc)
+            x_b1tc = x_dram
+
         x_rm = ttnn.to_layout(x_b1tc, ttnn.ROW_MAJOR_LAYOUT)
         x_rm = ttnn.reshape(x_rm, (b, t, c))
 
