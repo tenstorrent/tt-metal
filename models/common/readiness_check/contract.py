@@ -85,22 +85,27 @@ class Generator(Protocol):
         page_table: torch.Tensor,
         kv_cache: Any,
         prompt_lens: List[int],
+        return_all_logits: bool = False,
         **kwargs: Any,
     ) -> torch.Tensor:
         """
         Run prefill on `tokens` and update `kv_cache` in place.
 
         Args:
-            tokens:        [batch, prompt_len_padded] int token ids.
-            page_table:    [batch, max_blocks] virtual-to-physical block map.
-            kv_cache:      List-of-lists of TT tensors (layer × {K, V}), allocated by caller.
-            prompt_lens:   [batch] real (unpadded) prompt length per user.
+            tokens:             [batch, prompt_len_padded] int token ids.
+            page_table:         [batch, max_blocks] virtual-to-physical block map.
+            kv_cache:           List-of-lists of TT tensors (layer × {K, V}), allocated by caller.
+            prompt_lens:        [batch] real (unpadded) prompt length per user.
+            return_all_logits:  If True, return logits at all positions instead of just the last.
+                                Used by batch prefill readiness checks. Default False for vLLM compatibility.
 
         Returns:
-            Logits at the last prompt position, shape [batch, 1, vocab].
-            May alternatively return sampled tokens [batch, 1] if the model
-            samples on device — the readiness runner does not use this
-            return value directly, but `generator_vllm.py` does.
+            If return_all_logits=False (default):
+                Logits at the last prompt position, shape [batch, 1, vocab].
+            If return_all_logits=True:
+                Logits at all positions, shape [batch, prompt_len, vocab].
+
+            May alternatively return sampled tokens if the model samples on device.
         """
 
     def decode_forward(
@@ -233,13 +238,15 @@ class GeneratorBase(ABC):
         page_table: torch.Tensor,
         kv_cache: Any,
         prompt_lens: List[int],
+        return_all_logits: bool = False,
         **kwargs: Any,
     ) -> torch.Tensor:
         """
         Run prefill and update `kv_cache` in place.
 
         This is the **low-level** API. vLLM (via `tt/generator_vllm.py`)
-        calls this directly; the readiness runner does not. Implementations
+        calls this directly; the readiness runner may use it with
+        `return_all_logits=True` for batch prefill checks. Implementations
         must:
 
         - Accept `tokens` of shape ``[batch, prompt_len_padded]``. The
@@ -251,11 +258,14 @@ class GeneratorBase(ABC):
           by the caller (one ``[K, V]`` pair per decoder layer).
         - Accept `prompt_lens` as the **real** (unpadded) prompt length
           per user.
+        - Accept `return_all_logits` to optionally return logits at all
+          positions instead of just the last (for batch prefill readiness checks).
         - Return logits at the final prompt position with shape
-          ``[batch, 1, vocab]``. If the implementation samples on device,
-          it may instead return sampled tokens ``[batch, 1]``; this is
-          allowed because `generator_vllm.py` consumes both forms, but the
-          high-level `generate()` is responsible for normalising.
+          ``[batch, 1, vocab]`` when `return_all_logits=False` (default).
+          When `return_all_logits=True`, return shape ``[batch, prompt_len, vocab]``.
+          If the implementation samples on device, it may instead return sampled
+          tokens; this is allowed because `generator_vllm.py` consumes both forms,
+          but the high-level `generate()` is responsible for normalising.
 
         Implementations must update `kv_cache` in place so the subsequent
         `decode_forward` calls can read prior keys/values.
