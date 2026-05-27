@@ -1,0 +1,87 @@
+/goal Bring up the target HuggingFace model as a TTNN implementation that runs end-to-end in the current tt-metal checkout.
+
+Target model: HF_MODEL
+Output directory: models/autoports/<model_name>/
+
+Work on the current branch and use the full mesh device available on this machine. Choose the implementation path, intermediate checkpoints, and file structure that best fit the model and hardware. Do not treat a partial prototype, diagnostic-only path, reduced-scope run, skipped validation, or unexplained blocker as completion.
+
+The final result should be a clean de-novo TTNN implementation. Read the HuggingFace source and learn from nearby tt-metal model code, but do not blindly copy or import another model's forward pass. Reuse shared helpers where they genuinely fit, and keep the model's forward logic direct, readable, and local to this autoport. Prefer optimized or fused TTNN operations when their contracts fit, especially paged attention and other transformer composites, instead of hand-building them from lower-level primitives. You should use models.common.sampling for on-device sampling.
+
+Implement the model under `models/autoports/<model_name>/` with real weights, end-to-end generation, readiness checks, performance work, and future serving integration. The TTNN path should cover all necessary model components for autoregressive generation, e.g.: embeddings, decoder layers or blocks, attention, RoPE or positional handling, KV cache, MLP or MoE, residual/norm order, final norm, LM head, logits, smpling and any model-specific routing or layer-kind differences.
+
+A single prefill or decode pass must not depend on hidden `torch`, `from_torch`, `to_torch`, or host fallback inside the runtime path, except at explicit test or setup boundaries.
+
+Provide a generator in `models/autoports/<model_name>/tt/generator.py` that exposes `build_generator(model_dir, mesh_device, **kwargs)` and a class implementing `models.common.readiness_check.contract.Generator`.
+
+The generator must expose two API levels:
+
+- Low-level `prefill_forward(tokens, *, page_table, kv_cache, prompt_lens, ...)` and `decode_forward(tokens, start_pos, *, page_table, kv_cache, ...)`, where the caller manages KV cache and page table.
+- High-level `generate(prompt_token_ids, max_new_tokens, *, next_input=None, **kwargs)`, where the generator owns tokenizer loading, page-table setup, KV-cache allocation/reset, trace-side state reset, and greedy/argmax generation state.
+
+The high-level generation path should be a thin deterministic loop over the low-level prefill/decode methods. Add `models/autoports/<model_name>/tt/generator_vllm.py` as a serving-facing adapter that delegates to the same low-level methods wherever possible rather than duplicating model logic.
+
+Correctness requirements:
+
+- Fully-traced decode path that does not need host involvement
+- Paged KV-cache, including page-table handling, current-position handling, prompt lengths, decode positions, and reuse across repeated decode steps.
+- Test the advertised prefill/decode sequence length where feasible. If the full maximum does not fit, test the longest useful length you can fit and record the measured limit.
+- Validate deterministic behavior for repeated identical inputs under argmax sampling.
+- Ensure that running with watcher enabled is clean.
+
+Readiness requirements:
+
+- Generate or reuse a matching reference file under `models/common/readiness_check/references/<model_name>.refpt`.
+- Run both shared readiness checks:
+
+```bash
+python -m models.common.readiness_check.generate \
+  --hf-model <hf-model-id-or-local-path> \
+  --prompt-len 128 \
+  --gen-len 256 \
+  --output models/common/readiness_check/references/<model_name>.refpt
+
+python -m models.common.readiness_check.run_prefill_check \
+  --model-dir models/autoports/<model_name> \
+  --reference models/common/readiness_check/references/<model_name>.refpt \
+  --mesh-device <N150|N300|T3K|TG>
+
+python -m models.common.readiness_check.run_teacher_forcing \
+  --model-dir models/autoports/<model_name> \
+  --reference models/common/readiness_check/references/<model_name>.refpt \
+  --mesh-device <N150|N300|T3K|TG>
+```
+
+- Report top-1, top-5, and top-100 hit rates for prefill and teacher-forcing decode. Expect top-5 >= 98% and top-100 = 100%; top-1 can be acceptable as low as 90% with low-precision weights if top-k behavior is otherwise strong. If the readiness results are below these bars, debug the model path first, then increase dtype precision or compute fidelity where evidence points to numerical loss.
+
+Performance and optimization requirements:
+
+- Measure warmed prefill and warmed decode latency on device.
+- Capture `tt-perf-report` output for the final measured prefill and decode paths, including the command used and the main conclusions about compute, DRAM, communication, and data movement.
+- Improve performance where evidence shows clear opportunities without weakening correctness. Track before/after latency and PCC for material changes.
+- Tune precision and fidelity deliberately. BF16 activations/norms and BFP8 weights or KV cache are reasonable starting points when PCC allows; BFP4 trials need explicit PCC evidence. Use higher fidelity or precision for numerically sensitive paths when required.
+- Prefer width-sharded L1 decode activations where they fit across norm, attention, residual, MLP, and output projection boundaries.
+- Prefer DRAM-interleaved prefill activations and suitable 2D matmul program configs for large prefill matmuls.
+- Explicitly configure important `memory_config`, `program_config`, and `compute_kernel_config` choices rather than relying on opaque defaults for hot ops.
+- If a decode matmul is DRAM-bound and the shape/API allows DRAM sharding, try it and keep or reject it based on measured correctness and latency.
+- For MoE models, validate the real router and active expert path end-to-end. Optimize for useful single-user behavior and avoid loading inactive expert weights in the runtime path when the model and TTNN APIs allow sparse or active-expert execution.
+
+Multi-chip requirements when multiple devices are available:
+
+- Choose a tensor/mesh parallel strategy appropriate to the target hardware and model. For small 1D meshes, 1D tensor parallelism is often the starting point; for Galaxy-class meshes, make a model-specific 2D plan when useful.
+- Preserve a chainable residual input/output layout across layers.
+- Compare the multi-chip TTNN path against a trusted single-device TTNN path with identical weights, inputs, page tables, cache state, and positions before using HF-vs-TTNN differences to debug sharding.
+- Treat RMSNorm, KV-cache layout, head ownership, bias placement, padding/slicing, and collective axes as first-class correctness risks.
+- Validate paged KV-cache behavior, warmed decode trace replay, determinism or stress coverage, runtime fallback audit, and watcher status on the target mesh.
+- Report warmed single-device and target-mesh latency, speedup, efficiency, and `tt-perf-report` conclusions.
+
+Artifacts to leave:
+
+- TTNN code under `models/autoports/<model_name>/tt/`, including the model, generator, and serving adapter.
+- Focused tests under `models/autoports/<model_name>/tests/` covering layer/block parity, prefill, decode, cache behavior, generation, and readiness integration.
+- `models/autoports/<model_name>/doc/bringup/work_log.md` with commands, hardware, branch/commit, environment, failures, fixes, measurements, and important decisions.
+- `models/autoports/<model_name>/doc/bringup/README.md` with final status, model id or local checkpoint, HF revision/path, hardware, layer/block kinds, implementation contract, state-dict mapping, PCC results, readiness results, sequence limits, trace evidence, watcher/fallback status, latency, perf-report conclusions, multi-chip results if applicable, and remaining risks.
+- Perf report artifacts such as `prefill_perf_report.txt`, `prefill_perf_report.csv`, `decode_perf_report.txt`, and `decode_perf_report.csv` under an organized `doc/bringup/tracy/` subdirectory.
+
+Keep full model weights, binary tensors, program-cache directories, giant profiler captures, and noisy exploratory logs out of git. Link to bulky or transient evidence from the work log when needed.
+
+The goal is complete only when the implementation runs end-to-end from tokens through logits/generation on real model weights and passes the shared readiness checks, when auto-regressively generated prompts look sensible and coherent, when an honest checklist shows the model is making use of the full device mesh available, all optimization steps above have been implemented or attempted and rejected and when the model is as close to peak hardware performance as you can reasonably get it whilst using the existing TTNN API.
