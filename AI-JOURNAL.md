@@ -1,5 +1,84 @@
 
 ---
+## AUDIT 2026-05-27 ~10:24 UTC — FIX XY/YZ/VW diagnostic gaps and state hygiene
+
+### Gaps found
+
+- **GAP-A (HIGH)**: `clear_relay_broken()` did NOT clear `phase2_last_wr_req_` or `phase2_frozen_count_` maps.
+  After relay recovery (FIX XY-2 force-reset clears relay_broken_), stale FIX XY state could cause
+  false-positive "PERMANENTLY FROZEN" detection on the same relay core if wr_req happened to match
+  the old value. Fixed by clearing both maps in `clear_relay_broken()`.
+
+- **GAP-B (CLEAN)**: FIX YZ early-exit coverage verified. All three UMD entry points (`read_non_mmio`,
+  `write_to_non_mmio`, `wait_for_non_mmio_flush`) check `relay_broken_` at the top. The queue-full
+  spin loop in `read_non_mmio` also has the check (FIX AF). `remote_chip.cpp:97` checks
+  `is_relay_broken()` before calling `close_device()`. No gap.
+
+- **GAP-C (CLEAN)**: Phase2 target NOC logging already added by GAP-P1 in prior audit.
+  `last_cmd_target_noc=(X,Y)` is in the log. Script already extracts `FIX_VW_PHASE2_TARGET_NOC`.
+
+- **GAP-D (HIGH)**: `analyze_fabric_hang_log.sh` had zero counters for FIX XY "PERMANENTLY FROZEN"
+  fatal escalation, zero counters for FIX YZ early-exit events, and missing `FIX XY|FIX YZ|PERMANENTLY
+  FROZEN` in timeline + phases grep patterns. All invisible in post-mortem analysis.
+
+- **GAP-E (MEDIUM)**: Script only extracted the FIRST relay core and target from Phase2 timeouts.
+  Multi-core failures (multiple relay ERISCs timing out) were collapsed to a single entry. Added
+  `FIX_VW_PHASE2_ALL_RELAYS` and `FIX_VW_PHASE2_ALL_TARGETS` for full breakdown.
+
+- **GAP-F (CLEAN)**: AllGather tests reviewed. `test_gap79_fixxy2_relay_broken_cleared_allgather.py`
+  has proper `@pytest.mark.timeout()` (120s+30s+3s+10s budget), no skip/xfail that shouldn't be
+  there, proper SIGKILL predecessor + testee PCC verification. The minimal AllGather test is a
+  comprehensive parametric test with proper unsupported-case filtering. No gap.
+
+### Fixes applied
+
+- `tt_metal/third_party/umd/device/api/umd/device/tt_device/remote_communication.hpp`:
+  `clear_relay_broken()` now clears `phase2_last_wr_req_` and `phase2_frozen_count_` maps.
+
+- `scripts/analyze_fabric_hang_log.sh`:
+  - Added counters: `FIX_XY_FROZEN`, `FIX_XY_FROZEN_WARNINGS`, `FIX_XY_FROZEN_RELAY`,
+    `FIX_YZ_READ_SKIP`, `FIX_YZ_WRITE_SKIP`, `FIX_YZ_TOTAL`
+  - Added per-relay-core: `FIX_VW_PHASE2_ALL_RELAYS`, `FIX_VW_PHASE2_ALL_TARGETS`
+  - Added interpretation blocks for FIX XY frozen, FIX XY warnings, FIX YZ early-exit
+  - Added `FIX XY|FIX YZ|PERMANENTLY FROZEN` to timeline + phases grep patterns
+  - Added 10 counter summary lines
+
+### Commits
+- UMD: `fe739ca9` (pushed to nsexton/0-metal-racecondition-hunt)
+- tt-metal: `d8b8d0e811d` (pushed to nsexton/0-racecondition-hunt)
+
+---
+## FIX YZ — 2026-05-27: relay_broken_ early-exit in read_non_mmio + write_to_non_mmio
+
+### Problem
+
+After FIX NX fires at ~+45.3s (catches write_core() relay timeout, sets `relay_broken_=true`),
+subsequent calls to `read_non_mmio()` still entered the ETH CMD queue spin loop and waited up to
+`NON_MMIO_RW_TIMEOUT = 30,000ms` before throwing "Timeout waiting for Ethernet core service remote
+IO request." This caused a wasted 30s stall at ~+75.3s in the CI timeline.
+
+`wait_for_non_mmio_flush()` already had the guard (FIX AE):
+```cpp
+if (relay_broken_) { flush_non_mmio_ = false; return; }
+```
+But `read_non_mmio()` and `write_to_non_mmio()` were missing the equivalent check.
+
+### Fix
+
+Added `relay_broken_` early-exit at the top of both `read_non_mmio()` and `write_to_non_mmio()`
+in `remote_communication_legacy_firmware.cpp` (UMD). When `relay_broken_=true`, both functions
+throw `RuntimeError` immediately with a FIX YZ diagnostic message instead of entering the 30s
+CMD queue spin loop.
+
+- UMD commit: `826b4e67` (pushed to `nsexton/0-racecondition-hunt` branch of tt-umd)
+- tt-metal commit: `a07030afe9e` (submodule bump)
+
+### Expected CI impact
+
+Eliminates the 30s stall after FIX NX fires. Total timeout budget for
+subsequent reads/writes to a relay-broken chip drops from 30s to ~0ms.
+
+---
 ## FIX XY — 2026-05-27: Detect permanently frozen Phase2 relay NOC NIC
 
 ### Problem
@@ -6156,3 +6235,151 @@ File: `tt_metal/third_party/umd/device/tt_device/remote_communication_legacy_fir
 Lines 614-643
 
 CI run 26498363449 dispatched at 07:52 UTC.
+
+## FIX XY v2 — 2026-05-27 ~10:50 UTC — Track wr_resp not wr_req
+
+### Root Cause
+FIX XY tracked whether wr_req was identical for 3 cycles. On t3k-10 devices 6/7,
+the relay ERISC kept incrementing wr_req (processing new CMDs into the stuck queue),
+resetting frozen_count each time. Result: 30-40s per device instead of 15s.
+
+### Evidence (run 26505059161)
+device 7, relay (21,17):
+  t=85: wr_req=0x320 wr_resp=0x31d delta=3 → frozen_count=1
+  t=90: wr_req=0x321 wr_resp=0x31d delta=4 → RESET (wr_req changed)
+  t=95: wr_req=0x325 wr_resp=0x31d delta=8 → RESET (wr_req changed)
+  t=100: wr_req=0x325 wr_resp=0x31d → frozen_count=1 (wr_req now stable)
+  t=110: PERMANENTLY FROZEN → device 7 throws after 30s total
+  wr_resp=0x31d from t=85 to t=110 — never moved.
+
+### Fix
+Track wr_resp frozen for 3 cycles instead. Triggers at t=95 (15s) vs t=110 (30s).
+UMD commit: 69fbe7b2
+tt-metal commit: 1efa578b81a
+
+## FIX AB: Topology Re-Discovery Exception (2026-05-27, cycle 6 analysis)
+
+**Root Cause (FIX GS-3):**
+`Cluster::create_cluster_descriptor` (UMD cluster.cpp:1163) forces `device_init_failure_action=THROW`.
+When ControlPlane::init_control_plane_auto_discovery triggers live topology re-discovery AFTER run_launch_phase 
+leaves relays broken, new `RemoteCommunicationLegacyFirmware` objects are created with `relay_broken_=false`.
+These new objects time out (30s) probing remote devices via broken ETH relay → "Timeout waiting for Ethernet 
+core service remote IO request." propagates through:
+
+```
+read_non_mmio → TTDevice::init_tt_device → TopologyDiscovery::discover_remote_devices
+→ Cluster::create_cluster_descriptor → run_local_discovery → run_physical_system_discovery
+→ ControlPlane::init_control_plane_auto_discovery → set_fabric_config → CreateDevices
+```
+
+Python catches this as FIX GS-3 ("initial warm-up failed"). 0/8 chips.
+
+**Fix (tt-metal commit e8064fae9e1):**
+Wrap `Cluster::create_cluster_descriptor()` call in `run_local_discovery()` (physical_system_discovery.cpp:548)
+with try/catch. On exception, fall back to `cluster.get_cluster_description()` (cached from initial Cluster
+construction). ControlPlane proceeds with correct topology; broken devices tracked via relay_broken_.
+
+**Expected outcome cycle 7:** FIX GS-3 should NOT fire. CreateDevices should complete. Tests may still fail 
+due to broken relay hardware, but they will at least run (not be skipped due to 0/8 chips).
+
+**Second init Phase1 stuck (pending):** After FIX TL recovery in cycle 6, devices 6+7 hit Phase1 CMD-queue 
+stuck (30s each) in second init. Root cause: relay ERISCs are truly dead (not just Phase2 NOC ACK stuck). 
+FIX AB should prevent the need for FIX TL recovery entirely in the happy path.
+
+---
+
+## AUDIT 2026-05-27 — Diagnostic Coverage Gap Audit (GAP-R23, GAP-R24)
+
+### Scope
+Comprehensive audit of testing and diagnostic gaps for AllGather hang investigation.
+Focused on: (1) operation-level logging, (2) quiesce Phase 2 MUX tracking,
+(3) analyze_fabric_hang_log.sh pattern coverage, (4) unlogged state.
+
+### GAP-R23: AllGather operation has no INFO-level entry/exit logging
+**File**: `ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_device_operation.cpp`
+**Problem**: Only a single `log_trace` line in `compute_program_hash`. When AllGather hangs,
+CI logs show nothing about which AllGather call was in-progress, on which devices, with what
+parameters. The hang appears as a silent timeout with no context.
+**Fix**: Added `log_info` at ENTRY (shape, dim, num_links, cluster_axis, topology) and EXIT
+in `ttnn::prim::all_gather()`. If ENTRY > EXIT in analyze script, we know an AllGather was
+in-flight at hang time.
+**Analyze script**: Added `ALLGATHER_ENTRY`, `ALLGATHER_EXIT`, `ALLGATHER_IN_FLIGHT` counters.
+Interpretation block warns when in-flight > 0.
+
+### GAP-R24: Phase 2 MUX assert_risc_reset failure not tracked
+**File**: `tt_metal/impl/device/device.cpp` (Phase 2 MUX loop, ~line 1758)
+**Problem**: `assert_risc_reset_at_core FAILED` logged at ERROR but:
+1. No Phase 2 MUX summary line (total channels, reset failures) — analyst must scan every channel
+2. analyze_fabric_hang_log.sh had no dedicated counter for this failure class
+**Fix (device.cpp)**: Added "Phase 2 MUX summary" log_info after the Phase 2 loop with
+channel count and reset failure count.
+**Fix (analyze script)**: Added `PHASE2_MUX_RESET_FAILED`, `PHASE2_MUX_SUMMARY`,
+`PHASE2_MUX_SUMMARY_FAILURES` counters. Interpretation block explains consequence
+(corrupted MUX kernel → AllGather hang).
+
+### Gaps NOT addressed (out of scope or no code change needed)
+- **CCL C++ layer fabric health pre-check**: All `is_fabric_degraded()` checks are in
+  device.cpp or Python test fixtures. The C++ AllGather op itself does not check fabric
+  health before dispatch. This is architectural — adding it would require threading
+  Device* through the operation layer. Existing Python-level guards (conftest.py) are
+  sufficient for test coverage.
+- **No test for Phase 2 MUX reset failure → AllGather hang cascade**: Would require
+  fault injection to force assert_risc_reset failure on specific cores. Deferred.
+
+## AUDIT 2026-05-27 14:24 UTC — Gap Audit Round 2
+
+### Gaps found and fixed
+
+1. **FIX XY v2 frozen counter mismatch** (`scripts/analyze_fabric_hang_log.sh` line ~1231)
+   - FIX XY v2 changed UMD log from `wr_req FROZEN` to `wr_resp FROZEN` (tracking response freeze instead of request)
+   - Script counter `FIX_XY_FROZEN_WARNINGS` still grepped for `wr_req FROZEN` — would miss all v2 frozen warnings
+   - Fix: Changed regex to `wr_re(q|sp) FROZEN` to catch both old and new format
+
+2. **No FIX LM counter** (`scripts/analyze_fabric_hang_log.sh`)
+   - FIX LM fires in bash test runner (`run_t3000_unit_tests.sh`) for cold-start relay-dead detection
+   - TIMELINE caught it via generic "relay-dead" pattern, but no dedicated counter or interpretation
+   - Fix: Added `FIX_LM_FIRES` and `FIX_LM_PERSISTS` counters with interpretation block explaining
+     NIU-SLV VC0 credit exhaustion and host reboot requirement
+
+3. **No FIX AB (#42429) topology fallback tracking** (`scripts/analyze_fabric_hang_log.sh`)
+   - FIX AB topology re-discovery exception (physical_system_discovery.cpp) logs
+     "Falling back to cached cluster descriptor" which was NOT in TIMELINE grep at all
+   - Fix: Added to both TIMELINE and PHASES grep patterns; added `FIX_AB_TOPO_FALLBACK` counter
+     with interpretation block explaining the cascade (30s timeout × N devices → 0/8 chips)
+
+### New analyze_fabric_hang_log.sh patterns
+- TIMELINE grep: `|FIX LM|Falling back to cached cluster descriptor`
+- PHASES grep: `|FIX LM|Falling back to cached cluster descriptor`
+- Counters: `FIX_LM_FIRES`, `FIX_LM_PERSISTS`, `FIX_AB_TOPO_FALLBACK`
+- Fixed: `FIX_XY_FROZEN_WARNINGS` regex now catches `wr_resp FROZEN` (v2 format)
+
+### UMD changed: no
+
+### Note for CI loop agent
+No source code changes — only analyze_fabric_hang_log.sh diagnostics. Safe to merge with any ongoing CI runs.
+
+## AUDIT 2026-05-27 16:24 UTC — Gap Audit Round 3
+
+### Gaps found and fixed
+
+1. **FIX TO missing from TIMELINE grep** (`scripts/analyze_fabric_hang_log.sh` lines ~46 and ~115)
+   - Counter `FIX_TO_BASH_FIRES` existed, but `FIX TO` string was NOT in the TIMELINE or PHASES grep patterns
+   - Warm-up remedial tt-smi -r events ("FIX TO: warm-up ran Xs") were invisible in timeline output
+   - Fix: Added `FIX TO` and `T3K topology degraded` to both TIMELINE and PHASES grep patterns
+
+2. **No HARDWARE_DEGRADED_EXIT counter** (`scripts/analyze_fabric_hang_log.sh`)
+   - The definitive exit message "T3K topology degraded: ERISC relay path dead before reset_cores" had no dedicated counter
+   - This is the key signal that all code fixes worked but hardware is the blocker (NIU-SLV VC0 exhaustion)
+   - Fix: Added `HARDWARE_DEGRADED_EXIT` counter, interpretation block, and counter display entry
+     - Interpretation block: after FIX_TO block, before FIX_UP block
+     - Counter display: after `FIX_AB_TOPO_FALLBACK` line
+
+### New analyze_fabric_hang_log.sh patterns
+- TIMELINE grep: `|FIX TO|T3K topology degraded` (added to both TIMELINE and PHASES greps)
+- Counter: `HARDWARE_DEGRADED_EXIT` (grep for `T3K topology degraded: ERISC relay path dead before reset_cores`)
+- Interpretation: HARDWARE_DEGRADED block explains NIU-SLV VC0 exhaustion + host reboot required
+
+### UMD changed: no
+
+### Note for CI loop agent
+No source code changes — only analyze_fabric_hang_log.sh diagnostics. Safe to merge with any ongoing CI runs.
