@@ -1316,9 +1316,10 @@ class TestForceCacheOverride:
         return tmp_path / "force_cache_override_caches"
 
     def test_forced_cache_miss(self, cache_dir, device):
-        prev_run_sim = TensorCache(cache_dir)  # simulate a "previous" run
+        """force_cache_override should overwrite the previous cache"""
+        cold_cache = TensorCache(cache_dir)  # simulate a "previous" run
 
-        raw_data = torch.randn(16, 16, dtype=torch.bfloat16)
+        data_a = torch.randn(16, 16, dtype=torch.bfloat16)
         preprocess_call_count = [0]
 
         def preprocess(tensors):
@@ -1336,23 +1337,94 @@ class TestForceCacheOverride:
             ),
         )
 
-        result1 = prev_run_sim.get_or_create(
+        result1 = cold_cache.get_or_create(
             fingerprint,
             device,
             preprocess=preprocess,
-            raw_tensors=lambda: {"raw": raw_data},
+            raw_tensors=lambda: {"raw": data_a},
         )
+        paths = cold_cache._content_addressed_paths(compute_artifact_id(fingerprint))
+        mtime0 = paths.data_path.stat().st_mtime_ns
+        with open(paths.object_dir / "metadata.json") as f:
+            meta = json.load(f)
+        hash0 = meta["content_hash"]
+
         assert preprocess_call_count[0] == 1
         assert isinstance(result1, ttnn.Tensor)
 
         override = TensorCache(cache_dir, force_cache_override=True)
+        data_b = torch.randn(16, 16, dtype=torch.bfloat16)
         result2 = override.get_or_create(
             fingerprint,
             device,
             preprocess=preprocess,
-            raw_tensors=lambda: {"raw": raw_data},
+            raw_tensors=lambda: {"raw": data_b},
         )
+        with open(paths.object_dir / "metadata.json") as f:
+            meta = json.load(f)
+        hash1 = meta["content_hash"]
+
         assert preprocess_call_count[0] == 2  # preprocess should be called again due to force_cache_override
+        assert paths.data_path.stat().st_mtime_ns > mtime0  # file should be updated
+        assert hash1 != hash0  # content should be diff (?)
+
+        ttnn.deallocate(result1, force=True)
+        ttnn.deallocate(result2, force=True)
+
+    def test_no_override_no_rewrite(self, cache_dir, device):
+        """Without force_cache_override, a second call should be a pure hit:
+        no rebuild / rewrite should happen"""
+        cache = TensorCache(cache_dir)
+
+        data_a = torch.randn(16, 16, dtype=torch.bfloat16)
+        preprocess_call_count = [0]
+
+        def preprocess(tensors):
+            preprocess_call_count[0] += 1
+            return {"gate_bias": tensors["raw"].reshape(16, 16).T.contiguous()}
+
+        fingerprint = _make_fingerprint(
+            source=SourceTensorSelection(names=("mlp.gate.e_score_correction_bias",)),
+            target=TensorTarget(
+                name="gate_bias",
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                tile_shape=(32, 32),
+            ),
+        )
+
+        result1 = cache.get_or_create(
+            fingerprint,
+            device,
+            preprocess=preprocess,
+            raw_tensors=lambda: {"raw": data_a},
+        )
+        paths = cache._content_addressed_paths(compute_artifact_id(fingerprint))
+        mtime0 = paths.data_path.stat().st_mtime_ns
+        with open(paths.object_dir / "metadata.json") as f:
+            meta = json.load(f)
+        hash0 = meta["content_hash"]
+
+        assert preprocess_call_count[0] == 1
+
+        data_b = torch.randn(
+            16, 16, dtype=torch.bfloat16
+        )  # different from data_a; if cache misbehaved, hash would change
+
+        result2 = cache.get_or_create(
+            fingerprint,
+            device,
+            preprocess=preprocess,
+            raw_tensors=lambda: {"raw": data_b},
+        )
+        with open(paths.object_dir / "metadata.json") as f:
+            meta = json.load(f)
+        hash1 = meta["content_hash"]
+
+        assert preprocess_call_count[0] == 1
+        assert paths.data_path.stat().st_mtime_ns == mtime0
+        assert hash1 == hash0
 
         ttnn.deallocate(result1, force=True)
         ttnn.deallocate(result2, force=True)
