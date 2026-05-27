@@ -4,7 +4,15 @@
 
 #pragma once
 
+#include <string>
+#include <vector>
+
 namespace tt::tt_metal::experimental::metal2_host_api {
+
+// Forward-declare *Name typedefs that AdvancedOptions members reference.
+// Each is also declared in its owning spec header; C++ permits redeclaration
+// of identical typedefs in the same namespace.
+using DFBSpecName = std::string;
 
 //------------------------------------------------------------
 // Advanced options for Metal 2.0 specs
@@ -37,7 +45,16 @@ struct KernelSpecAdvancedOptions {
 };
 
 struct DataflowBufferSpecAdvancedOptions {
-    // No fields yet — populated as features migrate in.
+    // Alias two or more DFBs.
+    // Aliased DFBs are logically distinct, but physically share the same backing memory.
+    // Aliased DFBs offer NO guarantees against data clobbering; kernel logic must ensure safety.
+    //
+    // Rules for aliased DFBs:
+    //   - Every DFB in the alias group must list every other member as an alias
+    //   - Aliased DFBs must have the same total size (num_entries * entry_size).
+    //   - All members must target the same node set
+    //     (derived from their bound kernels' WorkUnitSpecs).
+    std::vector<DFBSpecName> alias_with;
 };
 
 struct TensorParameterAdvancedOptions {
