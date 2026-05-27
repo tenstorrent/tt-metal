@@ -70,6 +70,7 @@ def _largest_divisor_le(value: int, limit: int) -> int:
 _VISION_MATMUL_PC_CACHE: dict = {}
 _VISION_MATMUL_BS_MEM_CACHE: dict = {}
 _VISION_O_PROJ_BS_PC_CACHE: dict = {}
+_VISION_MLP_DOWN_L1_PC_CACHE: dict = {}
 
 
 def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int):
@@ -300,6 +301,43 @@ def _vision_o_proj_bs_program_config(device):
         fuse_batch=False,
     )
     _VISION_O_PROJ_BS_PC_CACHE[cache_key] = pc
+    return pc
+
+
+def _vision_mlp_down_l1_pc(device):
+    """Program config for MLP down-projection when gate_up_mul is L1 interleaved (12288×4224×1536).
+
+    gate_up_mul L1 interleaved occupies 841 KB/core. The generic down_pc picks
+    out_block_h=16 → static CBs ~634 KB → total 1474 KB (only 62 KB margin).
+    Forcing out_block_h=8 cuts CBs to ~487 KB → total 1328 KB (208 KB margin).
+    out_subblock_h=4, out_subblock_w=2 still fills the 8-tile DST register
+    (4×2=8) so compute efficiency is unchanged vs ob_h=16.
+    Returns None when the device grid is smaller than 8×8.
+    """
+    if device is None:
+        return None
+    grid = device.compute_with_storage_grid_size()
+    grid_x, grid_y = int(grid.x), int(grid.y)
+    if grid_x < 8 or grid_y < 8:
+        _VISION_MLP_DOWN_L1_PC_CACHE[(grid_x, grid_y)] = None
+        return None
+    cache_key = (grid_x, grid_y)
+    if cache_key in _VISION_MLP_DOWN_L1_PC_CACHE:
+        return _VISION_MLP_DOWN_L1_PC_CACHE[cache_key]
+    pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=6,
+        out_subblock_h=4,
+        out_subblock_w=2,
+        out_block_h=8,
+        out_block_w=6,
+        per_core_M=48,
+        per_core_N=6,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+    _VISION_MLP_DOWN_L1_PC_CACHE[cache_key] = pc
     return pc
 
 
@@ -806,35 +844,39 @@ class TTNNDotsVisionMLP(TTNNModule):
         # SILU dominates this op (the elementwise mul is cheap; the per-tile
         # exp+sigmoid is the bottleneck). ``fast_and_approximate_mode=True``
         # routes the fused SILU through the polynomial exp/sigmoid path,
-        # cutting the ~2.2 ms BinaryNg time per vision layer. Output goes to
-        # BFP8 so the down-projection matmul reads half the bandwidth (BFP8
-        # weight x BFP8 activation instead of BFP8 x BF16).
+        # cutting the ~2.2 ms BinaryNg time per vision layer. Output to
+        # L1 interleaved so the down-projection reads activation from L1
+        # instead of DRAM (52.6 MB saved from DRAM bandwidth per layer).
+        # gate_up_mul occupies 841 KB/core; down matmul uses ob_h=8 (487 KB
+        # CBs) → 1328 KB peak, 208 KB margin under the 1536 KB L1 cap.
         gate_up_mul = ttnn.mul(
             gate,
             up,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             fast_and_approximate_mode=True,
             dtype=ttnn.bfloat8_b,
-            memory_config=mem,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
 
-        # ``dtype=bfloat8_b`` halves the down-projection writeback (38 MB BF16
-        # -> 21 MB BFP8 per vision layer) and the matching read in the
-        # following residual add. The downstream RMSNorm/attention path
-        # already operates on BFP8 cleanly, so this stays inside the existing
-        # quantization envelope.
+        # Down-projection reads gate_up_mul from L1. Use the dedicated
+        # ob_h=8 program config (vs the auto-selected ob_h=16) so static
+        # CBs stay at ~487 KB and don't overflow when added to the 841 KB
+        # gate_up_mul L1 footprint. Output to DRAM: L1 output would add
+        # another 306 KB/core and push total L1 over 1536 KB.
         down_m = int(gate_up_mul.shape[0]) * int(gate_up_mul.shape[1]) * int(gate_up_mul.shape[2])
         down_k = int(self.tt_fc2_weight.shape[-2])
         down_n = int(self.tt_fc2_weight.shape[-1])
-        down_pc = _vision_matmul_program_config(self.device, down_m, down_k, down_n)
+        down_pc = _vision_mlp_down_l1_pc(self.device) or _vision_matmul_program_config(
+            self.device, down_m, down_k, down_n
+        )
         output = ttnn.linear(
             gate_up_mul,
             self.tt_fc2_weight,
             bias=self.tt_fc2_bias,
             dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
             program_config=down_pc,
         )
@@ -1034,6 +1076,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
                 out,
                 weight=self.tt_norm_weight,
                 epsilon=1e-5,
+                dtype=ttnn.bfloat8_b,
                 compute_kernel_config=self.vision_norm_compute_kernel_config,
             )
 
@@ -1488,7 +1531,9 @@ class TTNNDotsVisionBlock(TTNNModule):
         attention_logical_seq_len: int | None = None,
     ) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            hidden_states = ttnn.to_layout(
+                hidden_states, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
 
         residual = hidden_states
         hidden_states = self.norm1(hidden_states)
