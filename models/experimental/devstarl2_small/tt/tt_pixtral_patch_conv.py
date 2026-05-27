@@ -8,6 +8,7 @@ from __future__ import annotations
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import vision_seq_memcfg
 
 
 class TtPixtralPatchConv(LightweightModule):
@@ -70,6 +71,14 @@ class TtPixtralPatchConv(LightweightModule):
                 }
             ),
             override_sharding_config=True,
+            enable_kernel_stride_folding=False,
+        )
+        self._prep_conv_config = ttnn.Conv2dConfig(
+            weights_dtype=dtype,
+            output_layout=ttnn.TILE_LAYOUT,
+            core_grid=self.conv_config.core_grid,
+            override_sharding_config=True,
+            enable_kernel_stride_folding=True,
         )
 
     def _prepare_weights_if_needed(self, batch_size: int, height: int, width: int) -> None:
@@ -93,7 +102,7 @@ class TtPixtralPatchConv(LightweightModule):
             groups=1,
             device=self.mesh_device,
             input_dtype=ttnn.bfloat16,
-            conv_config=self.conv_config,
+            conv_config=self._prep_conv_config,
             compute_config=self.compute_kernel_config,
         )
 
@@ -120,34 +129,57 @@ class TtPixtralPatchConv(LightweightModule):
         batch_size, _, height, width = x.shape
         self._prepare_weights_if_needed(batch_size, height, width)
 
+        fold_mem = vision_seq_memcfg(1, batch_size * height * width * self.in_channels)
+        use_l1_fold = fold_mem.buffer_type == ttnn.BufferType.L1
+        upload_mem = fold_mem if use_l1_fold else ttnn.DRAM_MEMORY_CONFIG
+
         x = ttnn.as_tensor(
             x,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=upload_mem,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        x = ttnn.permute(x, [0, 2, 3, 1])
+        x = ttnn.permute(x, [0, 2, 3, 1], memory_config=upload_mem)
+
+        if use_l1_fold:
+            x = ttnn.fold(x, self.stride, self.stride, override_memory_config=fold_mem)
+            conv_config = self.conv_config
+            in_channels = self.in_channels * self.stride * self.stride
+            input_height = height // self.stride
+            input_width = width // self.stride
+            kernel_size = (1, 1)
+            stride = (1, 1)
+        else:
+            conv_config = self._prep_conv_config
+            in_channels = self.in_channels
+            input_height = height
+            input_width = width
+            kernel_size = (self.kernel_size, self.kernel_size)
+            stride = (self.stride, self.stride)
+
+        num_patches = (height // self.stride) * (width // self.stride)
+        conv_out_mem = vision_seq_memcfg(num_patches, self.out_channels)
 
         output, [out_height, out_width] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self._conv_weight,
             bias_tensor=self.bias,
-            in_channels=self.in_channels,
+            in_channels=in_channels,
             out_channels=self.out_channels,
             batch_size=batch_size,
-            input_height=height,
-            input_width=width,
-            kernel_size=(self.kernel_size, self.kernel_size),
-            stride=(self.stride, self.stride),
+            input_height=input_height,
+            input_width=input_width,
+            kernel_size=kernel_size,
+            stride=stride,
             padding=(0, 0),
             dilation=(1, 1),
             groups=1,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            conv_config=self.conv_config,
+            memory_config=conv_out_mem,
+            conv_config=conv_config,
             compute_config=self.compute_kernel_config,
             return_output_dim=True,
             return_weights_and_bias=False,

@@ -101,9 +101,10 @@ class MistralTTVisionMLP(LightweightModule):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """SwiGLU FFN with mesh width-sharded w1/w3 (N) and w2 (K) when num_devices > 1."""
-        if x.memory_config().buffer_type != ttnn.BufferType.DRAM:
-            x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         seq_len = int(x.shape[-2])
+        act_mem_cfg = vision_seq_memcfg(seq_len, self.vision_dim)
+        if x.memory_config().buffer_type != act_mem_cfg.buffer_type:
+            x = ttnn.to_memory_config(x, act_mem_cfg)
         mm_seq_len = pixtral_effective_mm_seq_len(self.args, seq_len)
 
         def run_chunk(xc: ttnn.Tensor, m_len: int) -> ttnn.Tensor:
@@ -142,7 +143,7 @@ class MistralTTVisionMLP(LightweightModule):
                 w2_in,
                 self.w2,
                 dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=vision_seq_memcfg(chunk_seq_len, self.vision_dim),
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=pc_w2,
             )

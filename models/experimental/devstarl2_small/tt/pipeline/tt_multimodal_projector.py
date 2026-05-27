@@ -8,11 +8,15 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import pad_by_zero
+from models.experimental.devstarl2_small.devstral_utils.fp8_dequantize_compat import apply_fp8_dequantize_compat
 from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import (
     vision_activation_memcfg,
     vision_rms_norm_memcfg,
+    vision_seq_memcfg,
 )
 from models.experimental.devstarl2_small.tt.tt_patchmerger import TTMistral3PatchMerger
+
+apply_fp8_dequantize_compat()
 
 
 class TTMistral3MultiModalProjector(LightweightModule):
@@ -75,18 +79,24 @@ class TTMistral3MultiModalProjector(LightweightModule):
         x = ttnn.rms_norm(x, epsilon=self.norm_eps, weight=self.norm_weight, memory_config=norm_mem_cfg)
         x = ttnn.reshape(x, image_features.shape)
         x = self.patch_merger(x, image_sizes)
-        x = ttnn.linear(x, self.linear_1_weight, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         m_rows = int(x.shape[0])
+        in_dim = int(x.shape[1])
+        l1_mem = vision_seq_memcfg(m_rows, in_dim)
+        if l1_mem.buffer_type == ttnn.BufferType.L1 and x.memory_config().buffer_type != ttnn.BufferType.L1:
+            x = ttnn.to_memory_config(x, l1_mem)
+        out_dim = int(self.linear_1_weight.shape[-1])
+        x = ttnn.linear(x, self.linear_1_weight, dtype=self.dtype, memory_config=vision_seq_memcfg(m_rows, out_dim))
         act_mem_cfg = vision_activation_memcfg(m_rows)
         if act_mem_cfg.buffer_type == ttnn.BufferType.L1 and x.memory_config().buffer_type != ttnn.BufferType.L1:
             x = ttnn.to_memory_config(x, act_mem_cfg)
         x = ttnn.gelu(x, memory_config=act_mem_cfg)
         x = ttnn.typecast(x, ttnn.bfloat8_b, memory_config=act_mem_cfg)
+        l2_out_dim = int(self.linear_2_weight.shape[-1])
         x = ttnn.linear(
             x,
             self.linear_2_weight,
             dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=vision_seq_memcfg(m_rows, l2_out_dim),
         )
         return x
 

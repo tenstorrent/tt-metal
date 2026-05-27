@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import vision_slice_memcfg
+from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import vision_seq_memcfg, vision_slice_memcfg
 from models.experimental.devstarl2_small.tt.tt_pixtral_patch_conv import TtPixtralPatchConv
 from models.experimental.devstarl2_small.tt.tt_pixtral_rotary_emb import TtPixtralRotaryEmbedding
 from models.experimental.devstarl2_small.tt.tt_pixtral_transformer import TtPixtralTransformer
@@ -113,7 +113,10 @@ class TtPixtralVisionModel(LightweightModule):
             patch_embeds,
             (1, 1, patch_embeds.shape[-2], patch_embeds.shape[-1]),
         )
-        patch_embeds = ttnn.to_memory_config(patch_embeds, ttnn.DRAM_MEMORY_CONFIG)
+        seq_len = int(patch_embeds.shape[-2])
+        ln_mem = vision_seq_memcfg(seq_len, self.hidden_size)
+        if patch_embeds.memory_config().buffer_type != ln_mem.buffer_type:
+            patch_embeds = ttnn.to_memory_config(patch_embeds, ln_mem)
         patch_embeds = self.ln_pre(patch_embeds)
 
         cos, sin = self.patch_positional_embedding(patch_embeds, position_ids_tt)
