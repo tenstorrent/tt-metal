@@ -5,6 +5,7 @@
 """Linear layer implementations for TTNN."""
 
 import math
+import os
 
 from torch import nn
 import torch
@@ -17,6 +18,70 @@ from models.experimental.tt_symbiote.core.module import (
     SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
 )
 from models.experimental.tt_symbiote.core.run_config import trace_disabled, trace_enabled
+
+
+# ---------------------------------------------------------------------------
+# Debug-only env-var overrides for MLP gate_up / down_proj compute kernels.
+# Scoped to those two matmuls only. Used to sweep precision/perf tradeoffs
+# while keeping BFP4 weights across all 28 decoder layers. Defaults match
+# the original ``LoFi, math_approx_mode=False, fp32_dest_acc_en=False,
+# packer_l1_acc=True`` configuration when no env var is set.
+# ---------------------------------------------------------------------------
+def _env_bool(name: str, default: bool) -> bool:
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_math_fidelity(name: str, default: ttnn.MathFidelity) -> ttnn.MathFidelity:
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    val = val.strip().lower()
+    return {
+        "lofi": ttnn.MathFidelity.LoFi,
+        "hifi2": ttnn.MathFidelity.HiFi2,
+        "hifi3": ttnn.MathFidelity.HiFi3,
+        "hifi4": ttnn.MathFidelity.HiFi4,
+    }.get(val, default)
+
+
+def _mlp_bfp4_compute_kernel_config(default_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi):
+    """Build the compute kernel config used by MLP gate_up / down_proj decode.
+
+    Reads four optional env-var overrides so a config sweep can run without
+    code edits:
+      MLP_BFP4_MATH_FIDELITY  in {lofi,hifi2,hifi3,hifi4}
+      MLP_BFP4_MATH_APPROX    {0,1}
+      MLP_BFP4_FP32_DEST      {0,1}
+      MLP_BFP4_PACKER_L1_ACC  {0,1}
+    """
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=_env_math_fidelity("MLP_BFP4_MATH_FIDELITY", default_fidelity),
+        math_approx_mode=_env_bool("MLP_BFP4_MATH_APPROX", False),
+        fp32_dest_acc_en=_env_bool("MLP_BFP4_FP32_DEST", False),
+        packer_l1_acc=_env_bool("MLP_BFP4_PACKER_L1_ACC", True),
+    )
+
+
+def _mlp_gate_up_compute_kernel_config():
+    """Decode compute kernel for the fused gate_up matmul.
+
+    Defaults to the standard BFP4 path (LoFi via ``_mlp_bfp4_compute_kernel_config``).
+    When gate_up weights are forced to BFP8 across all layers
+    (``MLP_GATE_UP_BFP8_WEIGHTS=1`` or the combo alias ``MLP_GATE_UP_BFP8_IO=1``),
+    bump to HiFi2 -- BFP8 carries 7 mantissa bits and LoFi would truncate
+    the multiplier. The input-only knob (``MLP_GATE_UP_BFP8_INPUT=1``) does
+    NOT trigger HiFi2 because the weight is still BFP4 for layers 0-6 in
+    that case and LoFi is the right pairing for BFP4 weights."""
+
+    def _env_truthy(name: str) -> bool:
+        return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+    weights_bfp8 = _env_truthy("MLP_GATE_UP_BFP8_WEIGHTS") or _env_truthy("MLP_GATE_UP_BFP8_IO")
+    default = ttnn.MathFidelity.HiFi2 if weights_bfp8 else ttnn.MathFidelity.LoFi
+    return _mlp_bfp4_compute_kernel_config(default)
 
 
 def _tp_mesh_mapper(device, dim):
@@ -1058,12 +1123,10 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
         self._gate_up_dram_bias = None
         # Decode compute_kernel_config matches the verified DRAM-sharded
         # benchmark (LoFi, 71us). Prefill stays on HiFi2 for BFP4 accuracy.
-        self._gate_up_decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+        # ``_mlp_gate_up_compute_kernel_config`` defaults to LoFi but bumps
+        # to HiFi2 when MLP_GATE_UP_BFP8_IO=1 (both operands carry 7 mantissa
+        # bits, so LoFi would truncate the multiplier).
+        self._gate_up_decode_compute_kernel_config = _mlp_gate_up_compute_kernel_config()
         if use_dram_sharded:
             # gate / up are stored as [out, in] each; concat on axis=0 and
             # transpose to [in, 2*out] for the DRAM-sharded matmul layout.

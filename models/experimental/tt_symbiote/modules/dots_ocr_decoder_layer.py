@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNLayerStack, TTNNModule
@@ -12,6 +14,56 @@ from models.experimental.tt_symbiote.modules.linear import (
     _decode_width_sharded_input_memory_config,
     _tp_requires_ccl,
 )
+
+
+def _env_on(name: str) -> bool:
+    val = os.environ.get(name)
+    return val is not None and val.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _mlp_bfp4_only() -> bool:
+    """Legacy alias for ``MLP_WEIGHT_DTYPE=bfp4``. Kept so previously-recorded
+    sweeps (``MLP_BFP4_ONLY=1 ...``) still work without modification."""
+    return _env_on("MLP_BFP4_ONLY")
+
+
+def _mlp_weight_dtype_mode() -> str:
+    """Debug toggle for the two MLP matmuls' weight dtype. Returns one of:
+
+    - ``'mixed'`` (default): production baseline -- BFP4 for layers 0-6
+      and BFP8 for layers 7-27 (the layer-index promotion in
+      ``_use_bfp8_decoder_weights``). Protects OCR table accuracy.
+    - ``'bfp4'``: BFP4 across ALL 28 layers for both ``gate_up`` and
+      ``down_proj``. Smallest weight footprint; known to drop the 'k' in
+      'Hodgkin' on this checkpoint (BFP4's 3 mantissa bits aren't enough
+      for the late-layer weights).
+    - ``'bfp8'``: BFP8 across ALL 28 layers for both ``gate_up`` and
+      ``down_proj``. Promotes layers 0-6 from BFP4 to BFP8 (doubles those
+      layers' weight footprint); accuracy is at least as good as mixed.
+
+    Controlled by ``MLP_WEIGHT_DTYPE`` (case-insensitive). Accepts the
+    aliases ``bf4`` / ``bfloat4_b`` and ``bf8`` / ``bfloat8_b``.
+
+    Legacy: ``MLP_BFP4_ONLY=1`` is honored as an alias for ``bfp4``."""
+    raw = (os.environ.get("MLP_WEIGHT_DTYPE") or "").strip().lower()
+    if raw in ("bfp4", "bf4", "bfloat4_b"):
+        return "bfp4"
+    if raw in ("bfp8", "bf8", "bfloat8_b"):
+        return "bfp8"
+    if _mlp_bfp4_only():
+        return "bfp4"
+    return "mixed"
+
+
+def _mlp_gate_up_bfp8_weights() -> bool:
+    """Force gate_up weights to BFP8 across all 28 decoder layers (overrides
+    the BFP4 default for layers 0-6). Triggered by ``MLP_GATE_UP_BFP8_WEIGHTS=1``
+    (this knob alone) or ``MLP_GATE_UP_BFP8_IO=1`` (combo alias that also flips
+    the input dtype). Scoped to gate_up only -- down_proj keeps the normal
+    layer-index promotion."""
+    return _env_on("MLP_GATE_UP_BFP8_WEIGHTS") or _env_on("MLP_GATE_UP_BFP8_IO")
+
+
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
 
@@ -169,9 +221,33 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         )
         new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn)
         new_layer.mlp = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
+        # Attention o_proj weight promotion is unchanged: BFP8 for layers
+        # 7-27 (sensitive for OCR table tokens), BFP4 for layers 0-6.
         if _use_bfp8_decoder_weights(getattr(new_layer.self_attn, "layer_idx", None)):
             new_layer.self_attn.o_proj.set_weight_dtype(ttnn.bfloat8_b)
+
+        # MLP weight dtype is driven by ``MLP_WEIGHT_DTYPE`` (a single debug
+        # toggle that applies to BOTH gate_up and down_proj):
+        #   - 'mixed' (default): BFP4 for L<7, BFP8 for L>=7
+        #   - 'bfp4'           : BFP4 for all 28 layers
+        #   - 'bfp8'           : BFP8 for all 28 layers
+        mlp_mode = _mlp_weight_dtype_mode()
+        if mlp_mode == "bfp8":
             new_layer.mlp.set_weight_dtype(ttnn.bfloat8_b)
+        elif mlp_mode == "mixed" and _use_bfp8_decoder_weights(getattr(new_layer.self_attn, "layer_idx", None)):
+            new_layer.mlp.set_weight_dtype(ttnn.bfloat8_b)
+        # mlp_mode == 'bfp4': leave both matmuls at their default BFP4.
+
+        # ``MLP_GATE_UP_BFP8_WEIGHTS=1`` (or the combo alias ``MLP_GATE_UP_BFP8_IO=1``)
+        # forces gate_up weights specifically to BFP8 for ALL layers,
+        # independent of the layer-index promotion above. Useful for isolating
+        # which matmul (gate_up vs down_proj) is the source of a regression
+        # when ``MLP_WEIGHT_DTYPE=bfp4`` introduces one. The input-side typecast
+        # is decoupled and lives behind ``MLP_GATE_UP_BFP8_INPUT=1`` in
+        # dots_ocr_mlp.py so the four (input, weight) combinations can be
+        # measured in isolation.
+        if _mlp_gate_up_bfp8_weights():
+            new_layer.mlp.fused_gate_up_proj.set_weight_dtype(ttnn.bfloat8_b)
         return new_layer
 
     def call(self, *args, **kwds):
