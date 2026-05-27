@@ -1531,8 +1531,8 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelInterScopeFails) {
     spec.program_id = "self_loop_inter";
 
     auto compute = MakeMinimalComputeKernel("compute");
-    compute.dfb_compute_self_loop_scopes.push_back(
-        {.dfb_spec_name = "dfb", .scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTER});
+    compute.advanced_options = KernelSpecAdvancedOptions{
+        .dfb_compute_self_loop_scopes = {{.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTER}}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -1558,8 +1558,8 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnDMKernelFails) {
 
     auto producer = MakeMinimalDMKernel("producer");
     // Misapplied: self-loop scope entries are valid only on compute kernels.
-    producer.dfb_compute_self_loop_scopes.push_back(
-        {.dfb_spec_name = "dfb", .scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+    producer.advanced_options = KernelSpecAdvancedOptions{
+        .dfb_compute_self_loop_scopes = {{.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTRA}}};
     auto consumer = MakeMinimalDMKernel("consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
@@ -1583,8 +1583,8 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeReferencingUnknownDFBFails) {
 
     auto compute = MakeMinimalComputeKernel("compute");
     // Misapplied: there is no DFB named "ghost" in the spec.
-    compute.dfb_compute_self_loop_scopes.push_back(
-        {.dfb_spec_name = "ghost", .scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+    compute.advanced_options = KernelSpecAdvancedOptions{
+        .dfb_compute_self_loop_scopes = {{.dfb_spec_name = "ghost", .scope = DFBComputeSelfLoopScope::Scope::INTRA}}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -1609,8 +1609,8 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnNonSelfLoopedDFBFails) {
 
     auto compute = MakeMinimalComputeKernel("compute");
     // Misapplied: the kernel only produces; it does not self-loop the DFB.
-    compute.dfb_compute_self_loop_scopes.push_back(
-        {.dfb_spec_name = "dfb", .scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+    compute.advanced_options = KernelSpecAdvancedOptions{
+        .dfb_compute_self_loop_scopes = {{.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTRA}}};
     auto dm_consumer = MakeMinimalDMKernel("dm_consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
@@ -1636,10 +1636,13 @@ TEST_F(ProgramSpecTestQuasar, DuplicateSelfLoopScopeEntriesFails) {
 
     auto compute = MakeMinimalComputeKernel("compute");
     // Two entries for the same DFB on the same kernel.
-    compute.dfb_compute_self_loop_scopes.push_back(
-        {.dfb_spec_name = "dfb", .scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
-    compute.dfb_compute_self_loop_scopes.push_back(
-        {.dfb_spec_name = "dfb", .scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+    compute.advanced_options = KernelSpecAdvancedOptions{
+        .dfb_compute_self_loop_scopes =
+            {
+                {.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTRA},
+                {.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTRA},
+            },
+    };
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -1709,8 +1712,8 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelExplicitIntraSucceeds) {
     spec.program_id = "self_loop_explicit_intra";
 
     auto compute = MakeMinimalComputeKernel("compute");
-    compute.dfb_compute_self_loop_scopes.push_back(
-        {.dfb_spec_name = "dfb", .scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+    compute.advanced_options = KernelSpecAdvancedOptions{
+        .dfb_compute_self_loop_scopes = {{.dfb_spec_name = "dfb", .scope = DFBComputeSelfLoopScope::Scope::INTRA}}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
