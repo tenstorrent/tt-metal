@@ -17,19 +17,12 @@ from loguru import logger
 # VBench's internal torch.load calls succeed without patching the library.
 torch.serialization.add_safe_globals([typing.OrderedDict])
 
-DEFAULT_THRESHOLDS = {
-    "subject_consistency": 0.85,
-    "background_consistency": 0.90,
-    "motion_smoothness": 0.95,
-    "dynamic_degree": 0.50,
-}
-
 
 def assert_vbench_quality(
     video_path: str,
     *,
     prompt: str | None = None,
-    thresholds: dict[str, float] | None = None,
+    thresholds: dict[str, float],
     device: str = "cpu",
 ) -> dict[str, float]:
     try:
@@ -38,7 +31,6 @@ def assert_vbench_quality(
         logger.warning(f"VBench import failed ({e}), skipping quality evaluation")
         return {}
 
-    thresholds = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
     dimension_list = list(thresholds.keys())
 
     with tempfile.TemporaryDirectory() as tmp_dir:
