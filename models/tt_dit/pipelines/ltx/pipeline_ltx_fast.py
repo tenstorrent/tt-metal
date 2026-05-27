@@ -292,9 +292,12 @@ class LTXFastPipeline(LTXAVPipeline):
                 logger.info(f"LTX_DECODE_S1_AUDIO: wrote {s1_path}")
             return output_path
 
-        self.transformer = None
-        gc.collect()
-
+        # Keep the transformer alive across stages. Stage 2's `_prepare_transformer()`
+        # short-circuits via ``cache_module.load_model`` → ``tt_model.is_loaded()`` at
+        # ``models/tt_dit/utils/cache.py:79``, skipping the redundant ``Module.load``
+        # (~6 s of disk I/O + tensor placement) that would otherwise run. Cold restart
+        # also works: the gate is a standard ``to_gate_logits`` child Linear so it
+        # round-trips through ``Module.save/load`` like every other parameter.
         latent_frames = (num_frames - 1) // 8 + 1
         s1_h, s1_w = s1_height // 32, s1_width // 32
         s1_spatial = s1_video.reshape(1, latent_frames, s1_h, s1_w, 128).permute(0, 4, 1, 2, 3)
@@ -321,6 +324,10 @@ class LTXFastPipeline(LTXAVPipeline):
         )
         logger.info(f"Stage 2: {time.time() - t0:.1f}s")
 
+        # Free transformer device memory before loading VAE. Unlike the inter-
+        # stage destroy that was just removed, this one is safe because no
+        # second cache load follows — the next cache.load_model is for the VAE
+        # under a different subfolder/model.
         self.transformer = None
         gc.collect()
 

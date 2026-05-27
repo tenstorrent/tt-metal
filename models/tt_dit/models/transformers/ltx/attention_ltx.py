@@ -18,7 +18,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ....layers.linear import ColParallelLinear
+from ....layers.linear import ColParallelLinear, Linear
 from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
@@ -124,13 +124,20 @@ class LTXAttention(Module):
             ccl_manager=ccl_manager,
         )
 
-        # Per-head gate weights stored on host for exact fp32 gate computation.
-        # Gate logits are small (32 outputs), so host F.linear is fast and avoids
-        # bf16 matmul precision issues on the K=4096 reduction that compound over
-        # 48 layers × 40 denoising steps.
+        # Per-head gate on device. dtype=ttnn.float32 routes the matmul through
+        # HiFi4 + fp32 dest acc + packer_l1_acc (see MATH_FIDELITY in
+        # layers/linear.py) so the K=in_features reduction matches the previous
+        # host fp32 F.linear baseline (PCC ≥ 0.997) without the per-call
+        # device→host→device round-trip and SP all-gather.
         self.apply_gated_attention = apply_gated_attention
-        self._gate_weight_host = None  # (num_heads, query_input_dim)
-        self._gate_bias_host = None  # (num_heads,)
+        if apply_gated_attention:
+            self.to_gate_logits = Linear(
+                in_features=self.query_input_dim,
+                out_features=self.num_heads,
+                bias=True,
+                dtype=ttnn.float32,
+                mesh_device=mesh_device,
+            )
 
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
 
@@ -197,14 +204,6 @@ class LTXAttention(Module):
         rename_substate(state, "q_norm", "norm_q")
         rename_substate(state, "k_norm", "norm_k")
 
-        # Extract gate weights to host and remove from device loading.
-        # Gate logits are computed on host (tiny matmul: N×32 vs N×4096 for QKV)
-        # to get exact fp32 precision.
-        gate_state = pop_substate(state, "to_gate_logits")
-        if gate_state:
-            self._gate_weight_host = gate_state["weight"].float()  # (num_heads, query_input_dim)
-            self._gate_bias_host = gate_state.get("bias", torch.zeros(self.num_heads)).float()
-
         def _interleave_heads(tensors: list[torch.Tensor]):
             n_dev = self.parallel_config.tensor_parallel.factor
             tensors = [t.T for t in tensors]
@@ -269,65 +268,29 @@ class LTXAttention(Module):
         return output
 
     def _compute_gate(self, spatial_1BND: ttnn.Tensor) -> ttnn.Tensor | None:
-        """Compute per-head gate on host for exact fp32 precision.
+        """Compute per-head gate on device with HiFi4 fp32 compute.
 
-        Gate logits = linear(x, W_gate, b_gate) → 2*sigmoid(logits)
-        Returns gate tensor on device with shape (B, H_local, N_local, 1) for BHNE broadcast multiply.
-        Returns None if no gate weights are loaded.
-
-        Must gather the full SP sequence before computing gates: ``forward()`` already
-        TP-gathered ``spatial_1BND`` on dim 3, but reading only device 0 leaves SP
-        shard 1 with shard-0 gate values → audible doubling / harmony on bh_2x4sp1tp0.
+        ``spatial_1BND`` is TP-gathered on dim 3 by ``forward()`` and may still be
+        SP-sharded on N. Each device runs the small ``in_features → num_heads``
+        matmul over its local N shard; mesh_partition heads across TP so the
+        result matches the BHNE layout of the SDPA output. Returns bf16
+        ``(B, H_local, N_local, 1)``, or None if gating is disabled.
         """
-        if self._gate_weight_host is None:
+        if not self.apply_gated_attention or self.to_gate_logits.weight._data is None:
             return None
 
-        sp_factor = self.parallel_config.sequence_parallel.factor
-        tp_factor = self.parallel_config.tensor_parallel.factor
-        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
-        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+        gate_logits = self.to_gate_logits(spatial_1BND, dtype=ttnn.float32)
+        gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
 
-        if sp_factor > 1 or tp_factor > 1:
-            from models.tt_dit.utils.mesh_gather import gather_host_1bnd
+        # (1, B, N, H) → (B, H, N, 1) via squeeze + last-two-dim transpose + unsqueeze.
+        gate = ttnn.squeeze(gate, 0)
+        gate = ttnn.transpose(gate, -2, -1)
+        gate = ttnn.unsqueeze(gate, -1)
+        gate = ttnn.typecast(gate, ttnn.bfloat16)
 
-            spatial_host = gather_host_1bnd(
-                spatial_1BND,
-                ccl_manager=self.ccl_manager,
-                parallel_config=self.parallel_config,
-                tp_already_gathered=True,
-                sp_already_gathered=False,
-            )
-        else:
-            spatial_host = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BND)[0]).float()
-
-        gate_logits = torch.nn.functional.linear(spatial_host.float(), self._gate_weight_host, self._gate_bias_host)
-        gate_values = 2.0 * torch.sigmoid(gate_logits)  # (1, B, N, H_total) in fp32
-
-        # Permute to BHNE format: (B, H_total, N, 1)
-        gate_bhne = gate_values.permute(1, 3, 2, 0).contiguous().bfloat16()
-
-        if sp_factor > 1 or tp_factor > 1:
-            mapper = ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                mesh_shape=tuple(self.mesh_device.shape),
-                dims=[
-                    2 if i == sp_axis and sp_factor > 1 else (1 if i == tp_axis and tp_factor > 1 else None)
-                    for i in range(2)
-                ],
-            )
-            return ttnn.from_torch(
-                gate_bhne,
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                mesh_mapper=mapper,
-            )
-        return ttnn.from_torch(
-            gate_bhne,
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-        )
+        if self.parallel_config.tensor_parallel.factor > 1:
+            gate = ttnn.mesh_partition(gate, dim=1, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis)
+        return gate
 
     @staticmethod
     def _apply_split_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, d_half: int) -> ttnn.Tensor:
@@ -483,18 +446,31 @@ class LTXAttention(Module):
         if rope_cos is not None:
             assert rope_sin is not None
 
-        if self.parallel_config.tensor_parallel.factor > 1:
+        # WAN-style branch: Linear topology uses explicit AG + plain matmul; Ring
+        # topology lets `ColParallelLinear` fuse the AG into the matmul via
+        # `all_gather_minimal_matmul_async`.
+        use_nonfused_agmm = (self.ccl_manager.topology == ttnn.Topology.Linear) and (
+            self.parallel_config.tensor_parallel.factor > 1
+        )
+        needs_explicit_ag = use_nonfused_agmm
+        if needs_explicit_ag:
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        # Compute per-head gate on host (exact fp32) before QKV projections modify spatial_1BND.
-        # Reference: gate_logits = to_gate_logits(x), then applied after SDPA as:
-        #   out = out.view(B,T,H,D) * (2*sigmoid(gate_logits)).unsqueeze(-1)
+        # Compute per-head gate on device (HiFi4 + fp32 dest acc) before QKV projections
+        # modify spatial_1BND. Reference: gate_logits = to_gate_logits(x), applied after
+        # SDPA as: out = out.view(B,T,H,D) * (2*sigmoid(gate_logits)).unsqueeze(-1).
         gate_bhne = self._compute_gate(spatial_1BND)
 
+        qkv_parallel_config = None if needs_explicit_ag else self.parallel_config
+
         if self.is_self:
-            q_1BNF, k_1BNF, v_1BNF = self.to_qkv(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+            q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
+                spatial_1BND,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=qkv_parallel_config,
+            )
         else:
             kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
             # Cross K/V: ColParallel to_kv needs TP-replicated context; gather only if still sharded.
@@ -504,12 +480,20 @@ class LTXAttention(Module):
                     kv_input = self.ccl_manager.all_gather_persistent_buffer(
                         kv_input, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
                     )
-            q_1BNF = self.to_q(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+            q_1BNF = self.to_q(
+                spatial_1BND,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=qkv_parallel_config,
+            )
             k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
-        # RMSNorm on Q/K (RoPE applied per-head after head split)
-        q_normed = self.norm_q(q_1BNF)
-        k_normed = self.norm_k(k_1BNF)
+        # RMSNorm on Q/K, fused with head split — `wan_fused_rmsnorm_post_allgather`
+        # accepts `num_heads_per_device` and emits the BHNE layout directly. Saves the
+        # two `nlp_create_qkv_heads` ops we'd otherwise launch for Q/K.
+        # (RoPE can't fuse the same way: LTX-2 interleaved rope is per-head and the
+        # kernel asserts rope shape `[1, 1, seq, head_dim]` — broadcast across heads.)
+        q_BHNE = self.norm_q(q_1BNF, num_heads_per_device=self.n_local_heads)
+        k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads)
 
         def create_heads(inp):
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -517,8 +501,7 @@ class LTXAttention(Module):
             )
             return out
 
-        q_BHNE = create_heads(q_normed)
-        k_BHNE = create_heads(k_normed)
+        # V still goes through the explicit reshape (no norm to fuse with).
         v_BHNE = create_heads(v_1BNF)
 
         # Cross-attn: gather K/V across SP only when still sharded. A↔V passes context
@@ -654,16 +637,25 @@ class LTXAttention(Module):
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 
-        if self.parallel_config.tensor_parallel.factor > 1:
+        # Same use_nonfused_agmm pattern as input QKV. The fused-addcmul path keeps
+        # the explicit AG because `_to_out_fused_addcmul` doesn't yet expose a Ring
+        # fused-AG variant.
+        addcmul_fused = addcmul_residual is not None and addcmul_gate is not None
+        to_out_explicit_ag = self.parallel_config.tensor_parallel.factor > 1 and (use_nonfused_agmm or addcmul_fused)
+        if to_out_explicit_ag:
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        if addcmul_residual is not None and addcmul_gate is not None:
+        if addcmul_fused:
             spatial_1BND = self._to_out_fused_addcmul(
                 spatial_1BND, addcmul_residual, addcmul_gate, compute_kernel_config=self.mm_compute_kernel_config
             )
         else:
-            spatial_1BND = self.to_out(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+            spatial_1BND = self.to_out(
+                spatial_1BND,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=None if to_out_explicit_ag else self.parallel_config,
+            )
 
         return spatial_1BND
