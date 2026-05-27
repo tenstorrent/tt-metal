@@ -28,6 +28,23 @@ def _replicate_mapper(device: ttnn.Device):
     return None
 
 
+def _resolve_tp(device: ttnn.Device, tp: Optional[int]) -> int:
+    """Resolve TP degree from explicit arg or device mesh size.
+
+    ``tp=None`` means "auto": use ``device.get_num_devices()`` when available.
+    """
+    if tp is not None:
+        if tp < 1:
+            raise ValueError(f"tp must be >= 1, got {tp}")
+        return tp
+    try:
+        if hasattr(device, "get_num_devices"):
+            return max(1, int(device.get_num_devices()))
+    except Exception:
+        pass
+    return 1
+
+
 def _conv1d_weight(conv: torch.nn.Conv1d, *, device: ttnn.Device) -> ttnn.Tensor:
     """Host ROW_MAJOR PyTorch-shaped weights (``[out, in/groups, K]``).
 
@@ -858,7 +875,7 @@ def create_text_encoder_parameters(
     *,
     device: ttnn.Device,
     prefill_token_rows: int = 32,
-    tp: int = 1,
+    tp: Optional[int] = None,
 ) -> dict:
     """
     Convert [`SeamlessM4Tv2Encoder`] weights to TTNN tensors on ``device``.
@@ -868,6 +885,7 @@ def create_text_encoder_parameters(
     BFP8 weights for ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``.
     When ``tp > 1``: TP column/row-parallel sharding via ``ShardTensorToMesh``.
     """
+    tp = _resolve_tp(device, tp)
     cfg = encoder.config
     scale = embed_scale_for_config(cfg)
     mm = _replicate_mapper(device)

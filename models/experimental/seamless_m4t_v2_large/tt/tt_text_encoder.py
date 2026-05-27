@@ -505,7 +505,6 @@ class TTSeamlessM4Tv2Encoder:
                 attn_module.qkv.bias,
             )
             qkv_4d = ttnn.reshape(qkv, (batch, 1, seq_q, qkv_dim))
-            ttnn.deallocate(qkv)
         else:
             # Single-device DRAM-sharded path.
             qkv_dim = 3 * hidden_size
@@ -529,6 +528,9 @@ class TTSeamlessM4Tv2Encoder:
             transpose_k_heads=False,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        # ``reshape`` can be a view; keep base ``qkv`` alive until heads are materialized.
+        if tp > 1:
+            ttnn.deallocate(qkv)
         ttnn.deallocate(qkv_4d)
 
         attn_out = ttnn.transformer.scaled_dot_product_attention(
