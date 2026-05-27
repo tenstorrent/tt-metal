@@ -64,15 +64,19 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t K_down_tiles = down_shape[-2] / TILE;         // = hidden / TILE
     const uint32_t N_down_tiles_full = down_shape[-1] / TILE;    // = emb / TILE
 
-    // v2 layout: 11x8 = 88 compute cores. N-axis is rounded UP to a multiple
-    // of GRID_X via ceil_div per_core_N. Phantom tiles past the actual tensor
-    // dims (col 64-65 of hidden, col 224-230 of emb) are zero-padded in the
-    // reader (zero-fill L1 instead of DRAM read). Compute runs uniform
-    // per_core_N; writer skips DRAM writes past actual_N. K dim of the down
-    // matmul is also padded to N_gate_padded so the activated L1 mcast (one
-    // sender per K-block, sender = gx == kb) covers exactly per_core_N_gu
-    // cols per step; activated cols past actual_hidden are 0 (gate/up weight
-    // OOB zero-fill propagates through silu and multiply).
+    // Blackhole compute grid is 13x10 worker cores; we use the bottom-left
+    // 11x8 = 88 to leave headroom for dispatch and to give per_core_M /
+    // per_core_N clean divisors of common chunk sizes (chunk_M_tiles values
+    // {16, 24, ..., 64} all divide by GRID_Y=8). N-axis is rounded UP to a
+    // multiple of GRID_X via ceil_div per_core_N. Phantom tiles past the
+    // actual tensor dims (col 64-65 of hidden, col 224-230 of emb) are
+    // zero-padded in the reader (zero-fill L1 instead of DRAM read).
+    // Compute runs uniform per_core_N; writer skips DRAM writes past
+    // actual_N. K dim of the down matmul is also padded to N_gate_padded so
+    // the activated L1 mcast (one sender per K-block, sender = gx == kb)
+    // covers exactly per_core_N_gu cols per step; activated cols past
+    // actual_hidden are 0 (gate/up weight OOB zero-fill propagates through
+    // silu and multiply).
     constexpr uint32_t GRID_X = 11;
     constexpr uint32_t GRID_Y = 8;
     const uint32_t chunk_M_tiles = op.chunk_M_tiles;
@@ -111,7 +115,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         in0_block_w_d);
     (void)K_down_tiles;  // actual K_down; used by reader for OOB; suppress unused warning here
 
-    // Subblock dims. With bf16 dst (fp32_dest_acc_en=false), capacity is 8.
+    // Subblock dims. DST tile-register file is 16 tiles wide; fp32_dest_acc_en
+    // halves usable capacity (fp32 accumulator occupies two tile slots). With
+    // fp32_dest_acc_en=false (bf16 dst), per-thread DST capacity is 8 tiles.
     constexpr uint32_t DST_CAPACITY = 8;
     const uint32_t gu_out_subblock_h = 1;
     uint32_t gu_sub_w = 1;
@@ -202,15 +208,15 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // mcast-sets `valid` to 1 on all receivers; receivers wait for valid==1.
     // Same sem pair is reused across gate/up/down phases (phases are
     // sequential, sem values reset between K-blocks).
-    const uint32_t in1_ready_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
-    const uint32_t in1_valid_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    const uint32_t in1_ready_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    const uint32_t in1_valid_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
     // in0 (x) multicast within M-row groups: sender at (gx=0, gy) reads x
     // for that M-row, mcasts to (gx=1..GRID_X-1, gy). Used for phases 1 and
     // 2 (gate and up matmul) where every core in a row needs the same x
     // slice. Phase 4 uses cb_in0_down_full (sourced from DRAM scratch) so
     // doesn't use this pair.
-    const uint32_t in0_ready_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
-    const uint32_t in0_valid_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    const uint32_t in0_ready_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    const uint32_t in0_valid_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
     // Activated multicast sems (phase 4): replace the DRAM scratch round-trip
     // with an L1 NoC mcast. For phase-4 K-block kb, sender = core at
     // (gx=kb, my_mt). Sender's reader mcasts its cb_activated block to all
@@ -218,8 +224,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // act_valid_sem; sender waits on act_ready_sem reaching GRID_X-1 incs from
     // the 7 receivers. Sender position rotates per K-block so each core takes
     // a turn as sender exactly once per chunk.
-    const uint32_t act_ready_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
-    const uint32_t act_valid_sem_addr = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    const uint32_t act_ready_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    const uint32_t act_valid_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
 
     // -------------------------- circular buffers --------------------------
     // Double-buffered DRAM-streamed inputs.
@@ -570,8 +576,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             my_nt_gu,
             my_nt_d,
             static_cast<uint32_t>(is_in1_sender),
-            in1_ready_sem_addr,
-            in1_valid_sem_addr,
+            in1_ready_sem_id,
+            in1_valid_sem_id,
             in1_num_receivers,
             in1_mcast_nx_start,
             in1_mcast_ny_start,
@@ -580,8 +586,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             in1_sender_nx,
             in1_sender_ny,
             static_cast<uint32_t>(is_in0_sender),
-            in0_ready_sem_addr,
-            in0_valid_sem_addr,
+            in0_ready_sem_id,
+            in0_valid_sem_id,
             in0_num_receivers,
             in0_mcast_nx_start,
             in0_mcast_ny_start,
@@ -589,8 +595,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             in0_mcast_ny_end,
             in0_sender_nx,
             in0_sender_ny,
-            act_ready_sem_addr,
-            act_valid_sem_addr,
+            act_ready_sem_id,
+            act_valid_sem_id,
             region_offsets_buffer->address(),
         };
         // M-row NoC coord table: for our M-row (gy=my_mt), the NoC (x, y) of
