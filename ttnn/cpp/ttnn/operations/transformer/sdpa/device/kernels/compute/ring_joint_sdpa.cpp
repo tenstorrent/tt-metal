@@ -51,12 +51,11 @@ void kernel_main() {
     constexpr bool use_streaming_compute = get_compile_time_arg_val(33) == 1;
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(34);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(35);
-    constexpr bool uniform_dataformat = get_compile_time_arg_val(36) == 1;
-    constexpr bool is_causal = get_compile_time_arg_val(37) == 1;
-    constexpr bool is_balanced = get_compile_time_arg_val(38) == 1;
-    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(39) == 1;
-    constexpr bool chunked_enabled = get_compile_time_arg_val(40) == 1;
-    constexpr uint32_t chunk_size_t = get_compile_time_arg_val(41);
+    constexpr bool is_causal = get_compile_time_arg_val(36) == 1;
+    constexpr bool is_balanced = get_compile_time_arg_val(37) == 1;
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(38) == 1;
+    constexpr bool chunked_enabled = get_compile_time_arg_val(39) == 1;
+    constexpr uint32_t chunk_size_t = get_compile_time_arg_val(40);
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. kernel_is_causal is masked off by the program factory when chunked is on, so only
     // one of the two paths drives the stamp per program — but they share the CB slot layout.
@@ -94,7 +93,7 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = 42;
+    constexpr uint32_t cb_arg_offset = 41;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -264,7 +263,6 @@ void kernel_main() {
                 cb_max_out,
                 cb_prev_out,
                 cb_out,
-                uniform_dataformat,
                 cb_out,  // cb_normalized_out — output goes directly to cb_out
                 cb_sum_out,
                 cb_sum_in,
@@ -275,7 +273,11 @@ void kernel_main() {
                 chunked_enabled,
                 kv_local_padded_Nt,
                 q_local_padded_Nt,
-                chunk_size_t>(
+                chunk_size_t,
+                global_n_has_padding,
+                local_n_has_padding,
+                joint_has_padding,
+                has_straddle && is_causal && is_balanced>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,
