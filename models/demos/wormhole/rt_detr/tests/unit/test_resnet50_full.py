@@ -5,9 +5,10 @@
 import sys
 from pathlib import Path
 
-import torch
-import ttnn
 import pytest
+import torch
+
+import ttnn
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
@@ -15,14 +16,14 @@ REPO_PATH = Path(__file__).parent.parent.parent / "RT-DETR" / "rtdetr_pytorch"
 sys.path.insert(0, str(REPO_PATH))
 
 from src.core import YAMLConfig
-
 from tt.resnet_backbone import presnet50
 from tt.weight_utils import get_backbone_parameters
+
 from models.common.utility_functions import comp_pcc
 
-REF      = Path(__file__).parent.parent.parent / "reference" / "reference_outputs.pt"
+REF = Path(__file__).parent.parent.parent / "reference" / "reference_outputs.pt"
 CFG_PATH = REPO_PATH / "configs/rtdetr/rtdetr_r50vd_6x_coco.yml"
-CKPT     = Path(__file__).parent.parent.parent / "weights/rtdetr_r50vd.pth"
+CKPT = Path(__file__).parent.parent.parent / "weights/rtdetr_r50vd.pth"
 
 PCC_THRESHOLD = 0.97
 
@@ -41,9 +42,9 @@ def device():
 
 @pytest.fixture(scope="module")
 def torch_model():
-    cfg   = YAMLConfig(str(CFG_PATH))
+    cfg = YAMLConfig(str(CFG_PATH))
     model = cfg.model
-    ckpt  = torch.load(str(CKPT), map_location="cpu")
+    ckpt = torch.load(str(CKPT), map_location="cpu")
     model.load_state_dict(ckpt["ema"]["module"])
     model.eval()
     return model
@@ -51,7 +52,6 @@ def torch_model():
 
 @pytest.fixture(scope="module")
 def backbone_params(torch_model, device):
-
     return get_backbone_parameters(torch_model, device)
 
 
@@ -74,7 +74,6 @@ def _tt_to_nchw(tt_tensor, h, w):
 
 
 class TestResNet50Backbone:
-    
     def test_pcc_s3(self, ref, device, backbone_params):
         x_tt = _to_device(ref["backbone_input"], device)
         s3_tt, _, _ = presnet50(x_tt, backbone_params, device)
@@ -82,8 +81,12 @@ class TestResNet50Backbone:
 
         # compare stats before PCC
         ref_s3 = ref["backbone_s3"]
-        print(f"\nref  s3: shape={tuple(ref_s3.shape)} min={ref_s3.min():.3f} max={ref_s3.max():.3f} mean={ref_s3.mean():.3f}")
-        print(f"ttnn s3: shape={tuple(s3.shape)}     min={s3.min():.3f}     max={s3.max():.3f}     mean={s3.mean():.3f}")
+        print(
+            f"\nref  s3: shape={tuple(ref_s3.shape)} min={ref_s3.min():.3f} max={ref_s3.max():.3f} mean={ref_s3.mean():.3f}"
+        )
+        print(
+            f"ttnn s3: shape={tuple(s3.shape)}     min={s3.min():.3f}     max={s3.max():.3f}     mean={s3.mean():.3f}"
+        )
 
         passing, pcc_msg = comp_pcc(ref_s3, s3, PCC_THRESHOLD)
         print(f"backbone s3 PCC: {pcc_msg}")
@@ -115,10 +118,10 @@ class TestResNet50Backbone:
         passing, pcc_msg = comp_pcc(ref["backbone_s5"], s5, PCC_THRESHOLD)
         print(f"\nbackbone s5 PCC: {pcc_msg}")
         assert passing, f"s5 PCC below threshold — {pcc_msg}"
-    
+
     def test_stage0_pcc(self, ref, device, backbone_params):
-        from tt.resnet_backbone import _stem, _stage
         import torch.nn.functional as F
+        from tt.resnet_backbone import _stage, _stem
 
         # run TTNN stem + stage0
         x_tt = _to_device(ref["backbone_input"], device)
@@ -139,10 +142,14 @@ class TestResNet50Backbone:
             pool_ref = F.max_pool2d(stem_ref, kernel_size=3, stride=2, padding=1)
             stage0_ref = m.backbone.res_layers[0](pool_ref)  # (1, 256, 160, 160)
 
-        print(f"\nref  stage0: shape={tuple(stage0_ref.shape)} "
-            f"min={stage0_ref.min():.3f} max={stage0_ref.max():.3f} mean={stage0_ref.mean():.3f}")
-        print(f"ttnn stage0: shape={tuple(stage0_out.shape)} "
-            f"min={stage0_out.min():.3f} max={stage0_out.max():.3f} mean={stage0_out.mean():.3f}")
+        print(
+            f"\nref  stage0: shape={tuple(stage0_ref.shape)} "
+            f"min={stage0_ref.min():.3f} max={stage0_ref.max():.3f} mean={stage0_ref.mean():.3f}"
+        )
+        print(
+            f"ttnn stage0: shape={tuple(stage0_out.shape)} "
+            f"min={stage0_out.min():.3f} max={stage0_out.max():.3f} mean={stage0_out.mean():.3f}"
+        )
 
         diff = torch.abs(stage0_ref - stage0_out)
         print(f"Max difference:  {diff.max().item():.6f}")
@@ -154,8 +161,8 @@ class TestResNet50Backbone:
         assert passing, f"stage0 PCC failed — {pcc_msg}"
 
     def test_stage1_pcc(self, ref, device, backbone_params):
-        from tt.resnet_backbone import _stem, _stage
         import torch.nn.functional as F
+        from tt.resnet_backbone import _stage, _stem
 
         x_tt = _to_device(ref["backbone_input"], device)
         x_tt, h, w = _stem(x_tt, backbone_params, device)
@@ -179,10 +186,9 @@ class TestResNet50Backbone:
         print(f"stage1 PCC: {pcc_msg}")
         assert passing, f"stage1 PCC failed — {pcc_msg}"
 
-
     def test_stage2_pcc(self, ref, device, backbone_params):
-        from tt.resnet_backbone import _stem, _stage
         import torch.nn.functional as F
+        from tt.resnet_backbone import _stage, _stem
 
         x_tt = _to_device(ref["backbone_input"], device)
         x_tt, h, w = _stem(x_tt, backbone_params, device)
@@ -197,7 +203,7 @@ class TestResNet50Backbone:
         m.eval()
         with torch.no_grad():
             x = ref["backbone_input"]
-            p  = F.max_pool2d(m.backbone.conv1(x), 3, stride=2, padding=1)
+            p = F.max_pool2d(m.backbone.conv1(x), 3, stride=2, padding=1)
             r0 = m.backbone.res_layers[0](p)
             r1 = m.backbone.res_layers[1](r0)
             ref_out = m.backbone.res_layers[2](r1)
@@ -208,10 +214,9 @@ class TestResNet50Backbone:
         print(f"stage2 PCC: {pcc_msg}")
         assert passing, f"stage2 PCC failed — {pcc_msg}"
 
-
     def test_stage3_pcc(self, ref, device, backbone_params):
-        from tt.resnet_backbone import _stem, _stage
         import torch.nn.functional as F
+        from tt.resnet_backbone import _stage, _stem
 
         x_tt = _to_device(ref["backbone_input"], device)
         x_tt, h, w = _stem(x_tt, backbone_params, device)
@@ -227,7 +232,7 @@ class TestResNet50Backbone:
         m.eval()
         with torch.no_grad():
             x = ref["backbone_input"]
-            p  = F.max_pool2d(m.backbone.conv1(x), 3, stride=2, padding=1)
+            p = F.max_pool2d(m.backbone.conv1(x), 3, stride=2, padding=1)
             r0 = m.backbone.res_layers[0](p)
             r1 = m.backbone.res_layers[1](r0)
             r2 = m.backbone.res_layers[2](r1)
@@ -243,10 +248,10 @@ class TestResNet50Backbone:
 if __name__ == "__main__":
     dev = ttnn.open_device(device_id=0, l1_small_size=16384)
     try:
-        r   = torch.load(REF, map_location="cpu")
+        r = torch.load(REF, map_location="cpu")
         cfg = YAMLConfig(str(CFG_PATH))
-        m   = cfg.model
-        ck  = torch.load(str(CKPT), map_location="cpu")
+        m = cfg.model
+        ck = torch.load(str(CKPT), map_location="cpu")
         m.load_state_dict(ck["ema"]["module"])
         m.eval()
 

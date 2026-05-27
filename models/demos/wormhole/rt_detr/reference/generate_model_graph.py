@@ -36,10 +36,10 @@ def generate_graph(config_path, out_path="docs/rtdetr_model_graph"):
 
     dot = make_dot(out_tensor, params=dict(model.named_parameters()))
     dot.format = "pdf"
-    
+
     # ensure the docs directory exists
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    
+
     dot.render(out_path, cleanup=True)
     print(f"graph saved to {out_path}.pdf")
 

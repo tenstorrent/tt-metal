@@ -12,11 +12,11 @@ echo "Setting up RT-DETR environment..."
 mkdir -p weights
 mkdir -p data/coco
 
-# Python dependencies 
+# Python dependencies
 echo "Installing Python dependencies..."
 pip install -r requirements.txt
 
-# Model weights 
+# Model weights
 WEIGHTS_URL="https://github.com/lyuwenyu/storage/releases/download/v0.1/rtdetr_r50vd_6x_coco_from_paddle.pth"
 WEIGHTS_PATH="weights/rtdetr_r50vd.pth"
 
@@ -28,7 +28,7 @@ else
     echo "Weights already exist at $WEIGHTS_PATH, skipping."
 fi
 
-# lyuwenyu RT-DETR repo 
+# lyuwenyu RT-DETR repo
 if [ ! -d "RT-DETR" ]; then
     echo "Cloning RT-DETR repository..."
     git clone https://github.com/lyuwenyu/RT-DETR.git

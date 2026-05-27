@@ -85,7 +85,7 @@ backbone.res_layers.0.blocks.0.branch2c.norm.running_var
 
 pred_logits PCC: 0.9209392794110263
 PASSED
-tests/test_end_to_end_pcc.py::test_pred_boxes_pcc 
+tests/test_end_to_end_pcc.py::test_pred_boxes_pcc
 pred_boxes PCC: 0.9668538109774556
 PASSED
 tests/test_end_to_end_pcc.py::test_top5_labels_and_scores PASSED
@@ -96,7 +96,7 @@ tests/test_end_to_end_pcc.py::test_box_iou_fired_detections PASSED
 =============================== warnings summary ===============================
 ../../../../../../opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py:1434
   /opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py:1434: PytestConfigWarning: Unknown config option: timeout
-  
+
     self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html

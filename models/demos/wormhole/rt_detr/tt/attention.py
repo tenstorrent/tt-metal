@@ -4,6 +4,7 @@
 
 import ttnn
 
+
 def multihead_attention(query, key, value, parameters, device, num_heads=8):
     # 1. Compute Q, K, V projections
     q = ttnn.linear(query, parameters.q_proj.weight, bias=parameters.q_proj.bias, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -17,7 +18,7 @@ def multihead_attention(query, key, value, parameters, device, num_heads=8):
     seq_q = shape_q[2] if len(shape_q) == 4 else shape_q[1]
     seq_kv = shape_k[2] if len(shape_k) == 4 else shape_k[1]
     hidden = shape_q[-1]
-    
+
     head_dim = hidden // num_heads
 
     # 2. Reshape to split heads
@@ -31,10 +32,7 @@ def multihead_attention(query, key, value, parameters, device, num_heads=8):
     v = ttnn.transpose(v, 1, 2)
 
     # 4. Scaled Dot Product Attention
-    attn_out = ttnn.transformer.scaled_dot_product_attention(
-        q, k, v, 
-        is_causal=False
-    )
+    attn_out = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False)
 
     # Deallocate Q, K, V immediately after SDPA.
     # This prevents L1 fragmentation and drastically speeds up the next operations.
@@ -46,7 +44,7 @@ def multihead_attention(query, key, value, parameters, device, num_heads=8):
     # (B, H, seq_q, D) -> (B, seq_q, H, D) -> (B, 1, seq_q, hidden)
     attn_out = ttnn.transpose(attn_out, 1, 2)
     attn_out = ttnn.reshape(attn_out, (b, 1, seq_q, hidden))
-    
+
     # 6. Final output projection
     out = ttnn.linear(
         attn_out,
@@ -54,10 +52,10 @@ def multihead_attention(query, key, value, parameters, device, num_heads=8):
         bias=parameters.out_proj.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    
+
     # Deallocate intermediate attention output
     ttnn.deallocate(attn_out)
-    
+
     return out
 
 

@@ -5,17 +5,19 @@
 import sys
 from pathlib import Path
 
-import torch
-import ttnn
 import pytest
+import torch
+
+import ttnn
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
-from tt.attention import self_attention, multihead_attention
+from tt.attention import self_attention
 from tt.weight_utils import Params, _linear_params
+
 from models.common.utility_functions import comp_pcc
 
-reference = Path(__file__).parent.parent.parent/ "reference" / "reference_outputs.pt"
+reference = Path(__file__).parent.parent.parent / "reference" / "reference_outputs.pt"
 PCC_THRESHOLD = 0.99
 
 
@@ -34,17 +36,20 @@ def device():
 def _attn_params_from_ref(ref, device):
     """Build attention Params from the saved AIFI MHA weight tensors."""
     return Params(
-        q_proj  =_linear_params(ref["attn_q_weight"], ref["attn_q_bias"],   device),
-        k_proj  =_linear_params(ref["attn_k_weight"], ref["attn_k_bias"],   device),
-        v_proj  =_linear_params(ref["attn_v_weight"], ref["attn_v_bias"],   device),
+        q_proj=_linear_params(ref["attn_q_weight"], ref["attn_q_bias"], device),
+        k_proj=_linear_params(ref["attn_k_weight"], ref["attn_k_bias"], device),
+        v_proj=_linear_params(ref["attn_v_weight"], ref["attn_v_bias"], device),
         out_proj=_linear_params(ref["attn_out_weight"], ref["attn_out_bias"], device),
     )
 
 
 def _to_device(t, device):
     return ttnn.from_torch(
-        t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-        device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
+        t,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
 
@@ -78,8 +83,7 @@ class TestMultiheadAttention:
         out_tt = self_attention(q_tt, params, device, num_heads=ref["attn_num_heads"].item())
         out = ttnn.to_torch(out_tt).squeeze(1)
 
-        assert out.shape == (1, 300, 256), \
-            f"expected (1, 300, 256), got {tuple(out.shape)}"
+        assert out.shape == (1, 300, 256), f"expected (1, 300, 256), got {tuple(out.shape)}"
         print(f"\ndecoder self-attention shape: {tuple(out.shape)} - correct")
 
     def test_self_attention_is_deterministic(self, ref, device):

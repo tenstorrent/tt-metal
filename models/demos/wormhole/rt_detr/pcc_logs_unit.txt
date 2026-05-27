@@ -8,13 +8,13 @@ configfile: pytest.ini
 plugins: anyio-4.13.0
 collecting ... collected 20 items
 
-tests/unit/test_attention.py::TestMultiheadAttention::test_self_attention_pcc 
+tests/unit/test_attention.py::TestMultiheadAttention::test_self_attention_pcc
 self_attention PCC: 1.000000
 PASSED
-tests/unit/test_attention.py::TestMultiheadAttention::test_decoder_self_attention_pcc 
+tests/unit/test_attention.py::TestMultiheadAttention::test_decoder_self_attention_pcc
 decoder self-attention shape: (1, 300, 256) - correct
 PASSED
-tests/unit/test_attention.py::TestMultiheadAttention::test_self_attention_is_deterministic 
+tests/unit/test_attention.py::TestMultiheadAttention::test_self_attention_is_deterministic
 determinism max |diff|: 0.00e+00
 PASSED
 tests/unit/test_decoder.py::TestDecoder::test_pcc_layer1_output 2026-05-24 15:36:05.954 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.ETH
@@ -30,10 +30,10 @@ Load PResNet50 state_dict
 
 AIFI (no pos_embed) PCC: 1.000000
 PASSED
-tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_with_pos_embed 
+tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_with_pos_embed
 AIFI (with pos_embed) PCC: 1.000000
 PASSED
-tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_pos_embed_affects_output 
+tests/unit/test_encoder_stack.py::TestEncoderStack::test_aifi_pos_embed_affects_output
 pos_embed effect max |diff|: 2.109375
 PASSED
 tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p3_pcc 2026-05-24 15:36:10.252 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.ETH
@@ -48,10 +48,10 @@ Load PResNet50 state_dict
 
 Encoder P3 (80x80) PCC: 0.9968143466810655
 PASSED
-tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p4_pcc 
+tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p4_pcc
 Encoder P4 (40x40) PCC: 0.9920263424194481
 PASSED
-tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p5_pcc 
+tests/unit/test_hybrid_encoder.py::test_hybrid_encoder_p5_pcc
 Encoder P5 (20x20) PCC: 0.9894247955518263
 PASSED
 tests/unit/test_postprocessor.py::TestPostProcessor::test_postprocessor_logic 2026-05-24 15:36:13.360 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.ETH
@@ -96,10 +96,10 @@ ref  s3: shape=(1, 512, 80, 80) min=0.000 max=5.246 mean=0.109
 ttnn s3: shape=(1, 512, 80, 80)     min=0.000     max=5.219     mean=0.111
 backbone s3 PCC: 0.9949336763801433
 PASSED
-tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s4 
+tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s4
 backbone s4 PCC: 0.9886890402502247
 PASSED
-tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s5 
+tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_pcc_s5
 backbone s5 PCC: 0.9724896010863008
 PASSED
 tests/unit/test_resnet50_full.py::TestResNet50Backbone::test_stage0_pcc Load PResNet50 state_dict
@@ -133,7 +133,7 @@ PASSED
 =============================== warnings summary ===============================
 ../../../../../../opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py:1434
   /opt/venv/lib/python3.10/site-packages/_pytest/config/__init__.py:1434: PytestConfigWarning: Unknown config option: timeout
-  
+
     self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html

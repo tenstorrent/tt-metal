@@ -7,9 +7,10 @@
 import sys
 from pathlib import Path
 
-import torch
-import ttnn
 import pytest
+import torch
+
+import ttnn
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
@@ -17,14 +18,14 @@ repo_path = Path(__file__).parent.parent.parent / "RT-DETR" / "rtdetr_pytorch"
 sys.path.insert(0, str(repo_path))
 
 from src.core import YAMLConfig
-
 from tt.rtdetr_encoder import run_aifi
 from tt.weight_utils import get_encoder_parameters
+
 from models.common.utility_functions import comp_pcc
 
-Ref      = Path(__file__).parent.parent.parent /"reference/reference_outputs.pt"
+Ref = Path(__file__).parent.parent.parent / "reference/reference_outputs.pt"
 cfg_path = repo_path / "configs/rtdetr/rtdetr_r50vd_6x_coco.yml"
-CKPT     = Path(__file__).parent.parent.parent / "weights/rtdetr_r50vd.pth"
+CKPT = Path(__file__).parent.parent.parent / "weights/rtdetr_r50vd.pth"
 
 pcc_threshold = 0.95
 
@@ -44,9 +45,9 @@ def device():
 
 @pytest.fixture(scope="module")
 def torch_model():
-    cfg   = YAMLConfig(str(cfg_path))
+    cfg = YAMLConfig(str(cfg_path))
     model = cfg.model
-    ckpt  = torch.load(str(CKPT), map_location="cpu")
+    ckpt = torch.load(str(CKPT), map_location="cpu")
     model.load_state_dict(ckpt["ema"]["module"])
     model.eval()
     return model
@@ -59,8 +60,11 @@ def enc_params(torch_model, device):
 
 def _to_device(t, device):
     return ttnn.from_torch(
-        t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-        device=device, memory_config=ttnn.L1_MEMORY_CONFIG,
+        t,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
 
@@ -69,24 +73,18 @@ class TestEncoderStack:
         x_tt = _to_device(ref["aifi_input"], device)
 
         out_tt = run_aifi(x_tt, enc_params.encoder_layers, device, pos_embed=None)
-        out = ttnn.to_torch(
-                out_tt, 
-                mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)
-            )[0:1]
+        out = ttnn.to_torch(out_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))[0:1]
 
         pcc, msg = comp_pcc(ref["aifi_output_no_pos"], out, pcc_threshold)
         print(f"\nAIFI (no pos_embed) PCC: {pcc:.6f}")
         assert pcc >= pcc_threshold, f"AIFI no-pos PCC {pcc:.4f} < {pcc_threshold} - {msg}"
 
     def test_aifi_with_pos_embed(self, ref, device, enc_params):
-        x_tt   = _to_device(ref["aifi_input"],    device)
+        x_tt = _to_device(ref["aifi_input"], device)
         pos_tt = _to_device(ref["aifi_pos_embed"], device)
 
         out_tt = run_aifi(x_tt, enc_params.encoder_layers, device, pos_embed=pos_tt)
-        out = ttnn.to_torch(
-            out_tt, 
-            mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)
-        )[0:1]
+        out = ttnn.to_torch(out_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))[0:1]
 
         pcc, msg = comp_pcc(ref["aifi_output_with_pos"], out, pcc_threshold)
         print(f"\nAIFI (with pos_embed) PCC: {pcc:.6f}")
@@ -94,22 +92,16 @@ class TestEncoderStack:
 
     def test_aifi_pos_embed_affects_output(self, ref, device, enc_params):
         # pos_embed must visibly change the output - if not it is being dropped
-        x_tt   = _to_device(ref["aifi_input"],    device)
+        x_tt = _to_device(ref["aifi_input"], device)
         pos_tt = _to_device(ref["aifi_pos_embed"], device)
 
         # Apply mesh composer to the first call
         out_no_pos_tt = run_aifi(x_tt, enc_params.encoder_layers, device, pos_embed=None)
-        out_no_pos = ttnn.to_torch(
-            out_no_pos_tt, 
-            mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)
-        )[0:1]
+        out_no_pos = ttnn.to_torch(out_no_pos_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))[0:1]
 
         # Apply mesh composer to the second call
         out_with_pos_tt = run_aifi(x_tt, enc_params.encoder_layers, device, pos_embed=pos_tt)
-        out_with_pos = ttnn.to_torch(
-            out_with_pos_tt, 
-            mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)
-        )[0:1]
+        out_with_pos = ttnn.to_torch(out_with_pos_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))[0:1]
 
         max_diff = (out_no_pos - out_with_pos).abs().max().item()
         print(f"\npos_embed effect max |diff|: {max_diff:.6f}")
@@ -120,13 +112,14 @@ if __name__ == "__main__":
     mesh_shape = ttnn.MeshShape(1, 2)
     dev = ttnn.open_mesh_device(mesh_shape, l1_small_size=16384)
     try:
-        r   = torch.load(Ref, map_location="cpu")
+        r = torch.load(Ref, map_location="cpu")
         cfg = YAMLConfig(str(cfg_path))
-        m   = cfg.model
-        ck  = torch.load(str(CKPT), map_location="cpu")
+        m = cfg.model
+        ck = torch.load(str(CKPT), map_location="cpu")
         m.load_state_dict(ck["ema"]["module"])
         m.eval()
         from tt.weight_utils import get_encoder_parameters
+
         params = get_encoder_parameters(m, dev)
 
         t = TestEncoderStack()

@@ -5,7 +5,6 @@
 import json
 import sys
 from pathlib import Path
-import inspect
 
 import torch
 import torchvision.transforms as T
@@ -21,65 +20,207 @@ sys.path.insert(0, str(repo_path))
 sys.path.insert(0, str(project))
 
 from src.core import YAMLConfig
-from src.zoo.rtdetr.utils import inverse_sigmoid
-
-from tt.resnet_backbone import presnet50
 from tt.hybrid_encoder import hybrid_encoder
+from tt.resnet_backbone import presnet50
 from tt.rtdetr_decoder import run_decoder
-from tt.weight_utils import (
-    get_backbone_parameters,
-    get_encoder_parameters,
-    get_decoder_parameters,
-    get_head_parameters,
-)
+from tt.weight_utils import get_backbone_parameters, get_decoder_parameters, get_encoder_parameters, get_head_parameters
 
 # COCO category ID mapping (80 classes, non-contiguous IDs)
 coco_class_ids = [
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-    22, 23, 24, 25, 27, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42,
-    43, 44, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61,
-    62, 63, 64, 65, 67, 70, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 84,
-    85, 86, 87, 88, 89, 90,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    27,
+    28,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    67,
+    70,
+    72,
+    73,
+    74,
+    75,
+    76,
+    77,
+    78,
+    79,
+    80,
+    81,
+    82,
+    84,
+    85,
+    86,
+    87,
+    88,
+    89,
+    90,
 ]
 
 coco_class_names = [
-    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
-    "truck", "boat", "traffic light", "fire hydrant", "stop sign",
-    "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
-    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag",
-    "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite",
-    "baseball bat", "baseball glove", "skateboard", "surfboard",
-    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon",
-    "bowl", "banana", "apple", "sandwich", "orange", "broccoli", "carrot",
-    "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant",
-    "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote",
-    "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
-    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
-    "hair drier", "toothbrush",
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "airplane",
+    "bus",
+    "train",
+    "truck",
+    "boat",
+    "traffic light",
+    "fire hydrant",
+    "stop sign",
+    "parking meter",
+    "bench",
+    "bird",
+    "cat",
+    "dog",
+    "horse",
+    "sheep",
+    "cow",
+    "elephant",
+    "bear",
+    "zebra",
+    "giraffe",
+    "backpack",
+    "umbrella",
+    "handbag",
+    "tie",
+    "suitcase",
+    "frisbee",
+    "skis",
+    "snowboard",
+    "sports ball",
+    "kite",
+    "baseball bat",
+    "baseball glove",
+    "skateboard",
+    "surfboard",
+    "tennis racket",
+    "bottle",
+    "wine glass",
+    "cup",
+    "fork",
+    "knife",
+    "spoon",
+    "bowl",
+    "banana",
+    "apple",
+    "sandwich",
+    "orange",
+    "broccoli",
+    "carrot",
+    "hot dog",
+    "pizza",
+    "donut",
+    "cake",
+    "chair",
+    "couch",
+    "potted plant",
+    "bed",
+    "dining table",
+    "toilet",
+    "tv",
+    "laptop",
+    "mouse",
+    "remote",
+    "keyboard",
+    "cell phone",
+    "microwave",
+    "oven",
+    "toaster",
+    "sink",
+    "refrigerator",
+    "book",
+    "clock",
+    "vase",
+    "scissors",
+    "teddy bear",
+    "hair drier",
+    "toothbrush",
 ]
 
 idx_to_name = {i: name for i, name in enumerate(coco_class_names)}
 
 score_threshold = 0.4
-input_size      = (640, 640)
+input_size = (640, 640)
 demo_images_dir = this_dir / "demo_images"
-output_dir      = this_dir / "demo_outputs"
+output_dir = this_dir / "demo_outputs"
+
 
 def _to_device(tensor, device, nchw_to_nhwc=False, mem_config=ttnn.DRAM_MEMORY_CONFIG):
     t = tensor.permute(0, 2, 3, 1).contiguous() if nchw_to_nhwc else tensor.contiguous()
     return ttnn.from_torch(
-        t.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-        device=device, memory_config=mem_config,
+        t.to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
 
+
 def _pull(tt_tensor, device):
     return ttnn.to_torch(
-        tt_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0),
+        tt_tensor,
+        mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0),
     )[0:1].float()
 
 
 # Full TTNN forward pass
+
 
 def run_ttnn_rtdetr_inference(img, torch_model, tt_params, device):
     """End-to-End TTNN forward pass."""
@@ -105,19 +246,16 @@ def run_ttnn_rtdetr_inference(img, torch_model, tt_params, device):
 
     with torch.no_grad():
         # Apply encoder projection and get spatial shapes
-        memory_pt, spatial_shapes, level_start_index = \
-            torch_model.decoder._get_encoder_input([p3_pt, p4_pt, p5_pt])
-       
+        memory_pt, spatial_shapes, level_start_index = torch_model.decoder._get_encoder_input([p3_pt, p4_pt, p5_pt])
+
         spatial_shapes_tensor = torch.tensor(spatial_shapes)
 
         # Generate initial queries and reference points
-        tgt, init_ref_unact, _, _ = torch_model.decoder._get_decoder_input(
-            memory_pt, spatial_shapes_tensor
-        )
+        tgt, init_ref_unact, _, _ = torch_model.decoder._get_decoder_input(memory_pt, spatial_shapes_tensor)
 
     # 4. Convert queries to TTNN
     query_tt = _to_device(tgt.reshape(1, 1, 300, 256), device, mem_config=ttnn.L1_MEMORY_CONFIG)
-   
+
     # 5. Run TTNN Decoder (memory_pt stays as PyTorch tensor)
     query_out, final_ref_points = run_decoder(
         query_tt,
@@ -137,14 +275,15 @@ def run_ttnn_rtdetr_inference(img, torch_model, tt_params, device):
     with torch.no_grad():
         logits = torch_model.decoder.dec_score_head[-1](query_torch)
         boxes = final_ref_points.view(1, 300, 4)
-   
+
     # 8. Clean up remaining TTNN tensors
     ttnn.deallocate(query_tt)
-   
+
     return logits, boxes
 
 
 # Visualisation
+
 
 def draw_detections(image_path: Path, detections: list[dict], out_path: Path):
     """Draw bounding boxes with label + score on the original image."""
@@ -164,7 +303,7 @@ def draw_detections(image_path: Path, detections: list[dict], out_path: Path):
 
         draw.rectangle([x1, y1, x2, y2], outline="red", width=2)
         text = f"{label} {score:.2f}"
-       
+
         bbox_text = draw.textbbox((x1, y1 - 16), text, font=font)
         draw.rectangle(bbox_text, fill="red")
         draw.text((x1, y1 - 16), text, fill="white", font=font)
@@ -175,15 +314,15 @@ def draw_detections(image_path: Path, detections: list[dict], out_path: Path):
 
 # Main
 
+
 def main():
     config_path = project / "RT-DETR/rtdetr_pytorch/configs/rtdetr/rtdetr_r50vd_6x_coco.yml"
-    ckpt_path   = project / "weights/rtdetr_r50vd.pth"
+    ckpt_path = project / "weights/rtdetr_r50vd.pth"
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
     image_paths = sorted(
-        p for p in demo_images_dir.iterdir()
-        if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+        p for p in demo_images_dir.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
     )
     if not image_paths:
         raise FileNotFoundError(f"No images found in {demo_images_dir}")
@@ -197,9 +336,9 @@ def main():
     try:
         #  Load PyTorch model
         print("\nLoading PyTorch model...")
-        cfg   = YAMLConfig(str(config_path))
+        cfg = YAMLConfig(str(config_path))
         model = cfg.model
-        ckpt  = torch.load(str(ckpt_path), map_location="cpu")
+        ckpt = torch.load(str(ckpt_path), map_location="cpu")
         model.load_state_dict(ckpt["ema"]["module"])
         model.eval()
         print("  Model loaded and in eval mode.")
@@ -208,19 +347,21 @@ def main():
         print("\nPushing weights to TTNN device...")
         tt_params = {
             "backbone": get_backbone_parameters(model, device),
-            "encoder":  get_encoder_parameters(model, device),
-            "decoder":  get_decoder_parameters(model, device),
-            "head":     get_head_parameters(model, device),
+            "encoder": get_encoder_parameters(model, device),
+            "decoder": get_decoder_parameters(model, device),
+            "head": get_head_parameters(model, device),
         }
         print("  Weights loaded successfully.")
 
         #  Image transform
-        transform = T.Compose([
-            T.Resize(input_size),
-            T.ToTensor(),
-        ])
+        transform = T.Compose(
+            [
+                T.Resize(input_size),
+                T.ToTensor(),
+            ]
+        )
 
-        all_results = {}  
+        all_results = {}
 
         #  Per-image inference
         for img_path in image_paths:
@@ -230,35 +371,30 @@ def main():
             orig_img = Image.open(img_path).convert("RGB")
             orig_w, orig_h = orig_img.size
 
-            img_tensor = transform(orig_img).unsqueeze(0)  
+            img_tensor = transform(orig_img).unsqueeze(0)
 
             with torch.no_grad():
-                logits, boxes = run_ttnn_rtdetr_inference(
-                    img_tensor, model, tt_params, device
-                )
+                logits, boxes = run_ttnn_rtdetr_inference(img_tensor, model, tt_params, device)
 
             # Post-process
             scores_all, labels_all = torch.max(logits[0].sigmoid(), dim=-1)
             keep = scores_all > score_threshold
 
             detections = []
-            for score, label, box in zip(
-                scores_all[keep], labels_all[keep], boxes[0][keep]
-            ):
+            for score, label, box in zip(scores_all[keep], labels_all[keep], boxes[0][keep]):
                 cx, cy, w, h = box.tolist()
-                x1     = (cx - w / 2) * orig_w
-                y1     = (cy - h / 2) * orig_h
-                w_abs  = w * orig_w
-                h_abs  = h * orig_h
+                x1 = (cx - w / 2) * orig_w
+                y1 = (cy - h / 2) * orig_h
+                w_abs = w * orig_w
+                h_abs = h * orig_h
                 cls_id = int(label.item())
 
                 det = {
-                    "label_idx":   cls_id,
-                    "label_name":  idx_to_name.get(cls_id, f"cls_{cls_id}"),
+                    "label_idx": cls_id,
+                    "label_name": idx_to_name.get(cls_id, f"cls_{cls_id}"),
                     "coco_cat_id": coco_class_ids[cls_id],
-                    "score":       round(float(score.item()), 4),
-                    "bbox":        [round(x1, 2), round(y1, 2),
-                                    round(w_abs, 2), round(h_abs, 2)],
+                    "score": round(float(score.item()), 4),
+                    "bbox": [round(x1, 2), round(y1, 2), round(w_abs, 2), round(h_abs, 2)],
                 }
                 detections.append(det)
 
