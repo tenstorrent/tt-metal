@@ -125,14 +125,47 @@ When you dispatch the workflow, pass `use-artifacts-from-run` as a string equal 
 
 If the source run does not contain the required artifacts (build tarball, and wheel if the pipeline needs one), the downstream test jobs will fail at the "Initialize containers" / artifact-download step — that is the standard signature of an incompatible source run.
 
-### Source run selection rules (unchanged)
+### Source run selection rules (STRICT — read carefully)
 
-- Prefer a successful recent `Merge Gate` run.
-- Source run must match the same build intent (platform, build-type, LTO/Tracy expectations).
-- Source run must contain the required build outputs (build tarball, and wheel if the pipeline needs one).
-- Prefer the same commit, or the nearest compatible commit prior to the disable-only changes.
+Most artifact-reuse failures come from picking the wrong source run. Follow these rules in order; any miss is a hard failure that will surface as "Could not find build artifact matching expected pattern" or "Workflow run X has conclusion: failure (expected: success)".
 
-If no compatible source run exists, do NOT dispatch a fresh build instead. Wait for a compatible source run.
+REQUIREMENT 1 — Source run MUST be a SUCCESS:
+- The source run's `conclusion` must be `success`. Not `failure`, not `cancelled`, not `in_progress`.
+- Verify via the GitHub API / MCP before dispatch. Do NOT pick a source run blindly by recency.
+
+REQUIREMENT 2 — Source run MUST share build intent with the TARGET workflow:
+- Build intent = the values of `tracy`, `build-type`, `platform`, `enable-lto`, `build-wheel` (and any other build-affecting input) used by the TARGET workflow's `build-artifact` job.
+- A tracy mismatch is the most common failure: if the target workflow builds with `tracy: true`, the source MUST also have been built with `tracy: true`. If the target builds with `tracy: false`, the source MUST also have been built with `tracy: false`.
+- Read the target workflow file. Find its `build-artifact` job's `with:` block. Note the explicit build-intent values. If a build-intent input is not set there, it inherits the default from `.github/workflows/build-artifact.yaml` (tracy defaults to `false`, build-wheel defaults to `false`, etc.).
+
+REQUIREMENT 3 — Easiest way to satisfy Requirement 2 (RECOMMENDED):
+- Pick the source run from the SAME WORKFLOW the verification is targeting, on `main`, with `conclusion: success`.
+- Example: verifying a Blackhole post-commit PR? → source = most recent `Blackhole post-commit tests` run on `main` with conclusion `success`.
+- Example: verifying a (T3K) T3000 e2e tests PR? → source = most recent `(T3K) T3000 e2e tests` run on `main` with conclusion `success`.
+- This works because the same workflow always uses the same build intent, so the artifact names match by construction.
+
+REQUIREMENT 4 — Merge Gate is only acceptable when build intent demonstrably matches:
+- Merge Gate runs typically build with `tracy: false` and the default build-type. They are NOT suitable for workflows that build with `tracy: true` (such as Blackhole post-commit).
+- Before using a Merge Gate run, confirm its build intent matches the target workflow's `build-artifact` `with:` block field-by-field.
+- If unsure, fall back to Requirement 3 (same workflow's main runs).
+
+REQUIREMENT 5 — Commit alignment is NOT required:
+- The downloader fetches artifacts by name from the source run; it does not require the source run to be on the same commit as the verification branch.
+- BUT the source run should be reasonably recent so the downloaded build is compatible with the test code on the verification branch. Prefer a source run on a commit no more than a few days older than the verification branch's base.
+
+PRE-DISPATCH SANITY CHECK (DO THIS EVERY TIME):
+Before dispatching, verify all of the following about the chosen source run:
+1. `conclusion == "success"` — confirmed via API.
+2. Same workflow as target OR build intent confirmed to match field-by-field.
+3. Required artifacts present (build tarball; wheel if target needs one). You can list the source run's artifacts via the API and look for the expected name patterns.
+
+If any check fails, pick a different source run. Do NOT proceed with a dispatch that has even one mismatch — the resulting infra-inconclusive run wastes a dispatch slot for no information.
+
+COMMON FAILURE SIGNATURES AND THEIR CAUSES:
+- `Workflow run X has conclusion: failure (expected: success)` → Requirement 1 violated. Pick a successful source.
+- `ERROR: Could not find build artifact matching expected pattern` with `TRACY_ENABLED (requested): true` and the source was built tracy=false → Tracy mismatch (Requirement 2 violated). Pick a source built with the same tracy setting, or fall back to Requirement 3.
+- `ERROR: No ttm_any.tar.zst or ttm_any.tar found after download` → Source run's build job did not publish the expected build artifact. Pick a different source.
+- Test job fails at "Initialize containers" / artifact download → Build intent mismatch or missing artifacts in source. See above.
 
 ### Verifying the patch worked before dispatch
 
