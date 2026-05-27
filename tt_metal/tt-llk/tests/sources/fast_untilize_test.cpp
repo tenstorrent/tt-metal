@@ -41,7 +41,7 @@ static_assert(FULL_CT_DIM >= 2, "fast_untilize_test supports ct>=2; ct=1 uses th
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "experimental/llk_unpack_fast_untilize_api.h"
+#include "experimental/llk_unpack_fast_untilize.h"
 #include "llk_unpack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -55,7 +55,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
-        llk_unpack_fast_untilize_init_with_formats(formats.unpack_A_src, formats.unpack_A_dst, FAST_UNTILIZE_BFP_B_INPUT ? 1 : FAST_UNTILIZE_FIRST_UNIT_DIM);
+        ckernel::_llk_unpack_fast_untilize_init_<DST_ACCUM_MODE>(
+            formats.unpack_A_src, formats.unpack_A_dst, FAST_UNTILIZE_BFP_B_INPUT ? 1 : FAST_UNTILIZE_FIRST_UNIT_DIM);
         PROFILER_SYNC();
     }
     {
@@ -82,11 +83,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         const std::uint32_t address         = L1_ADDRESS(buffer_A[rt * FULL_CT_DIM]);
                         const std::uint32_t tile_stride_16B = L1_ADDRESS(buffer_A[rt * FULL_CT_DIM + 1]) - address;
-                        llk_unpack_fast_untilize_bfp_block_at_address(address, tile_stride_16B, unit_dim);
+                        ckernel::_llk_unpack_fast_untilize_bfp_block_(address, tile_stride_16B, unit_dim);
                     }
                     else
                     {
-                        llk_unpack_fast_untilize_block_at_address(L1_ADDRESS(buffer_A[rt * FULL_CT_DIM]), unit_dim);
+                        ckernel::_llk_unpack_fast_untilize_block_(L1_ADDRESS(buffer_A[rt * FULL_CT_DIM]), unit_dim);
                     }
                 }
             }
@@ -108,16 +109,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         {
                             const std::uint32_t address         = L1_ADDRESS(buffer_A[rt * FULL_CT_DIM + chunk_col]);
                             const std::uint32_t tile_stride_16B = L1_ADDRESS(buffer_A[rt * FULL_CT_DIM + chunk_col + 1]) - address;
-                            llk_unpack_fast_untilize_bfp_block_at_address(address, tile_stride_16B, unit_dim);
+                            ckernel::_llk_unpack_fast_untilize_bfp_block_(address, tile_stride_16B, unit_dim);
                         }
                         else
                         {
                             if (unit_dim != prev_unit_dim)
                             {
-                                llk_unpack_fast_untilize_reinit_unit_dim(unit_dim);
+                                ckernel::_llk_unpack_fast_untilize_reinit_unit_dim_<DST_ACCUM_MODE>(unit_dim);
                                 prev_unit_dim = unit_dim;
                             }
-                            llk_unpack_fast_untilize_block_at_address(L1_ADDRESS(buffer_A[rt * FULL_CT_DIM + chunk_col]), unit_dim);
+                            ckernel::_llk_unpack_fast_untilize_block_(L1_ADDRESS(buffer_A[rt * FULL_CT_DIM + chunk_col]), unit_dim);
                         }
                         chunk_col += unit_dim;
                     }
@@ -128,7 +129,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("UNINIT")
-        llk_unpack_fast_untilize_uninit();
+        ckernel::_llk_unpack_fast_untilize_uninit_();
     }
 }
 
@@ -221,7 +222,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "experimental/llk_pack_fast_untilize_api.h"
+#include "experimental/llk_pack_fast_untilize.h"
 #include "llk_pack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -257,7 +258,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_dest_init_<FAST_UNTILIZE_INTERNAL_DEST_SYNC, is_fp32_dest_acc_en>();
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
             formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
-        llk_pack_fast_untilize_init_with_formats<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst);
+        ckernel::_llk_pack_fast_untilize_init_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst);
         PROFILER_SYNC();
     }
     {
@@ -282,7 +283,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_packer_wait_for_math_done_();
                     }
-                    llk_pack_fast_untilize_block_at_address<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM>(chunk_address, unit_dim, prev_pack_unit_dim);
+                    ckernel::_llk_pack_fast_untilize_block_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM>(chunk_address, unit_dim, prev_pack_unit_dim);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
                         _llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DEST_SYNC, is_fp32_dest_acc_en>();
@@ -312,7 +313,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         {
                             _llk_packer_wait_for_math_done_();
                         }
-                        llk_pack_fast_untilize_block_strided_at_address<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM, FULL_CT_DIM>(
+                        ckernel::_llk_pack_fast_untilize_block_strided_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM, FULL_CT_DIM>(
                             chunk_address, unit_dim, prev_pack_unit_dim);
                         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                         {
@@ -334,7 +335,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("UNINIT")
-        llk_pack_fast_untilize_uninit_with_src_format<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM, FULL_CT_DIM>(formats.pack_src);
+        ckernel::_llk_pack_fast_untilize_uninit_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM, FULL_CT_DIM>(formats.pack_src);
     }
 
     if (NUM_GUARD > 1)
