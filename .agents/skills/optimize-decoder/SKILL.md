@@ -60,4 +60,4 @@ Final optimized evidence should show:
 -[ ] Explicitly configured `memory_config`, `program_config`, and `compute_kernel_config` for important ops.
 -[ ] Shard specs and core grids that divide tensor dimensions cleanly into tiles where possible, code grids as large as this and the model/hardware allows.
 -[ ] DRAM-sharded decode matmuls
--[ ] For MoE models: optimized for single-user performance and only load active experts from DRAM e.g. with ttnn's sparse_matmul op.
+-[ ] For MoE models: optimized the routed active-expert path using `all_to_all_dispatch_metadata` + `moe_compute` where the model/hardware fits, including packed W0/W1/W2 weights, expert mapping, combine/reduce, and no dense all-expert runtime path.

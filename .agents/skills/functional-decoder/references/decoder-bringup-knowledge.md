@@ -13,6 +13,7 @@ Use this reference while bringing up a TTNN decoder layer. It folds in relevant 
 - `models/demos/gpt_oss/tt/layer.py` and `models/demos/gpt_oss/tt/attention/`: model-specific standard attention with paged prefill/decode and MoE-adjacent tests.
 - `models/demos/gemma4/tt/layer.py` and `models/demos/gemma4/tt/attention/`: strong examples for many norms, layer scales, sliding/full layer types, shared KV, and model-specific RoPE.
 - `models/demos/deepseek_v3/tt/decoder_block/` and `models/demos/deepseek_v3/tt/mla/`: examples for dense-vs-MoE decoder kinds, MLA, row-sharded behavior, and specialized paged-cache updates.
+- For MoE decode active-expert execution, read `models/demos/deepseek_v3/tt/moe_optimized.py`, `ttnn/ttnn/_experimental/moe_compute_utils.py`, `tests/nightly/tg/ccl/moe/test_all_to_all_dispatch_metadata_6U.py`, `tests/nightly/tg/ccl/moe/test_moe_compute_6U.py`, and `models/common/modules/moe/tt_moe_decode.py` when it exists.
 - `tech_reports/LLMs/llms.md` and `tech_reports/LLMs/vLLM_integration.md`: TTNN LLM conventions for paged cache, prefill/decode shape differences, tracing, and vLLM integration.
 
 ## TTNN Correctness Defaults
