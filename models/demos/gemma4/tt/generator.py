@@ -7,7 +7,6 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer
 
-import ttnn
 from models.demos.gemma4.tt.common import create_tt_model
 from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import MAX_BATCHED_PREFILL_SEQ_LEN, SUPPORTED_PREFILL_BATCH_SIZES, Generator
@@ -30,8 +29,10 @@ def _patch_model_args(model_args, mesh_device, max_batch_size, max_seq_len, mode
     model_args.base_model_name = Path(model_path).name
     model_args.tokenizer = tokenizer
     model_args.processor = None
+    uses_pli = bool(model_args.hidden_size_per_layer_input)
     model_args.can_enable_trace = (
-        lambda prefill_seq_len, num_cached_tokens=0: num_cached_tokens == 0
+        lambda prefill_seq_len, num_cached_tokens=0: not uses_pli
+        and num_cached_tokens == 0
         and prefill_seq_len in model_args.trace_prefill_supported_seq_lens
     )
     model_args.is_llama_vision = lambda: False
@@ -62,28 +63,30 @@ class Gemma4Generator(Generator):
         """True for E2B/E4B-style models with per-layer-input embeddings."""
         return bool(getattr(model, "hidden_size_per_layer_input", 0))
 
-    def _clear_prefill_traces(self):
-        for trace_key, trace_id in list(self.trace_id_prefill.items()):
-            if trace_id is not None:
-                parts = trace_key.split("_")
-                model_id = int(parts[1]) if len(parts) >= 2 else 0
-                ttnn.release_trace(self.model_args[model_id].mesh_device, trace_id)
-            self.trace_id_prefill[trace_key] = None
-            self.trace_inputs_prefill[trace_key] = None
-            self.trace_output_prefill[trace_key] = None
+    def _maybe_disable_pli_prefill_trace(self, enable_trace: bool, batch_size: int = 1) -> bool:
+        """PLI prefill uploads per-layer inputs via ttnn.from_torch inside forward.
+
+        That host-device traffic during trace capture triggers TT_FATAL
+        (``Writes are not supported during trace capture``). Decode trace is
+        unaffected — PLI is prepared on host and copied in out-of-trace.
+        """
+        if enable_trace and self._model_uses_pli(self.model[0]):
+            logger.info(
+                "Disabling prefill trace on PLI model (batch_size={}): "
+                "in-forward ttnn.from_torch PLI upload is incompatible with trace capture",
+                batch_size,
+            )
+            return False
+        return enable_trace
 
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device):
+        enable_trace = self._maybe_disable_pli_prefill_trace(enable_trace)
         super().warmup_model_prefill(
             kv_cache=kv_cache,
             enable_trace=enable_trace,
             can_sample_on_device=can_sample_on_device,
             non_greedy_decoding_on_device=non_greedy_decoding_on_device,
         )
-        if enable_trace and self._model_uses_pli(self.model[0]):
-            # PLI models compute prompt-specific per-layer inputs on CPU and upload
-            # them during forward; captured traces must not be reused for a different
-            # prompt at runtime. Non-PLI models (26B-A4B, 31B) can reuse warmup traces.
-            self._clear_prefill_traces()
 
     def prefill_forward_text(
         self,
@@ -101,15 +104,7 @@ class Gemma4Generator(Generator):
         **kwargs,
     ):
         batch_size, batch_seq_len = tokens.shape
-        if batch_size > 1 and enable_trace and self._model_uses_pli(self.model[0]):
-            # PLI (E2B/E4B) uploads per-layer inputs via ttnn.from_torch inside forward;
-            # that host-device traffic during trace capture triggers TT_FATAL.
-            # Non-PLI MoE variants have no PLI path and can use batched prefill trace.
-            logger.info(
-                "Disabling prefill trace for batched prefill on PLI model (batch_size={})",
-                batch_size,
-            )
-            enable_trace = False
+        enable_trace = self._maybe_disable_pli_prefill_trace(enable_trace, batch_size=batch_size)
 
         prompt_lens_list = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch_size)
         if not isinstance(prompt_lens_list, list):
