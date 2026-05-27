@@ -180,10 +180,41 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
     Program& command_queue_program = *this->command_queue_programs_[0];
     std::uint8_t num_hw_cqs = this->num_hw_cqs();
 
-    // Reset host-side command queue pointers for all channels controlled by this mmio device
-    if (this->is_mmio_capable()) {
-        for (ChipId serviced_device_id :
-             MetalEnvAccessor(*env_).impl().get_cluster().get_devices_controlled_by_mmio_device(device_id)) {
+    // Reset host-side command queue pointers for all channels controlled by this mmio device.
+    //
+    // In real hardware / hugepage mode the MMIO chip stages every tunnel chip's
+    // CQ pointer storage into its own hugepage via PCIe and the dispatch FW for
+    // each tunnel chip reads from that single shared hugepage. Non-MMIO chips
+    // therefore correctly skip this branch.
+    //
+    // In DRAM-backed simulator mode (per-chip dram_region_staging_buffer) every
+    // chip - MMIO or tunnel - has its own DRAM-resident CQ pointer region, and
+    // the ttsim RPC layer can reach any chip's DRAM regardless of MMIO. We must
+    // therefore initialize EACH chip's own pointer storage directly, instead of
+    // funneling everything through the MMIO chip's loop. Without this the
+    // tunnel-chip COMPLETION_Q_WR word stays zero, completion_queue_wait_front
+    // observes wr_ptr=0 != rd_ptr=issue_fifo_limit on the first read and exits
+    // immediately, then the host reads uninitialized zeros from the completion
+    // FIFO and trips the CQ_DISPATCH_CMD_ILLEGAL fatal in mesh_socket and other
+    // tunnel-dispatch tests.
+    const bool dram_backed_sim = this->sysmem_manager_->is_dram_backed();
+    const bool init_pointers = this->is_mmio_capable() || dram_backed_sim;
+    if (init_pointers) {
+        std::vector<ChipId> serviced_device_ids;
+        if (dram_backed_sim) {
+            // In dram-backed sim each chip owns its own dram_region; only init
+            // THIS chip's pointers into THIS chip's DRAM. The MMIO-loop variant
+            // below would write tunnel-chip pointer values into the MMIO chip's
+            // DRAM at addresses the tunnel chip's dispatch FW never reads,
+            // leaving the tunnel chip's actual pointers zero (same class of bug
+            // as the tunnel-chip init being skipped entirely).
+            serviced_device_ids = {device_id};
+        } else {
+            const auto& mmio_devices =
+                MetalEnvAccessor(*env_).impl().get_cluster().get_devices_controlled_by_mmio_device(device_id);
+            serviced_device_ids.assign(mmio_devices.begin(), mmio_devices.end());
+        }
+        for (ChipId serviced_device_id : serviced_device_ids) {
             std::uint16_t channel =
                 MetalEnvAccessor(*env_).impl().get_cluster().get_assigned_channel_for_device(serviced_device_id);
             std::uint32_t host_issue_q_rd_ptr =

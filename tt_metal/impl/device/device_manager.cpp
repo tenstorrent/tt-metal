@@ -8,6 +8,8 @@
 #include <pthread.h>
 #include <tracy/Tracy.hpp>
 #include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
+#include <cstdio>
+#include <ctime>
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -32,6 +34,7 @@
 #include "dispatch/system_memory_manager.hpp"
 
 #include <device.hpp>
+#include <cstdint>
 #include "device_impl.hpp"
 
 using namespace tt::tt_metal;
@@ -39,8 +42,9 @@ using namespace tt::tt_metal;
 namespace tt {
 
 namespace device_cpu_allocator {
-std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(std::unordered_set<uint32_t>& free_cores) {
-    std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = {};
+std::unordered_map<int, std::vector<std::uint32_t>> get_cpu_cores_per_numa_node(
+    std::unordered_set<std::uint32_t>& free_cores) {
+    std::unordered_map<int, std::vector<std::uint32_t>> cpu_cores_per_numa_node = {};
     if (numa_available() != -1) {
         // Host has NUMA enabled. Group CPU IDs by the NUMA nodes they belong to.
         for (int cpu = 0; cpu < numa_num_configured_cpus(); ++cpu) {
@@ -64,13 +68,13 @@ std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(std::
 std::pair<int, int> get_cpu_cores_for_dispatch_threads(
     ContextId context_id,
     int mmio_controlled_device_id,
-    const std::unordered_map<int, std::vector<uint32_t>>& cpu_cores_per_numa_node,
-    std::unordered_set<uint32_t>& free_cores,
-    uint32_t num_devices,
+    const std::unordered_map<int, std::vector<std::uint32_t>>& cpu_cores_per_numa_node,
+    std::unordered_set<std::uint32_t>& free_cores,
+    std::uint32_t num_devices,
     bool use_separate_procs) {
     int core_assigned_to_device_worker_thread = 0;
     int core_assigned_to_device_completion_queue_reader = 0;
-    uint32_t num_online_processors = sysconf(_SC_NPROCESSORS_ONLN);
+    std::uint32_t num_online_processors = sysconf(_SC_NPROCESSORS_ONLN);
     // Get NUMA node that the current device is mapped to through UMD
     int numa_node_for_device = tt::tt_metal::MetalContext::instance(context_id)
                                    .get_cluster()
@@ -111,7 +115,7 @@ std::pair<int, int> get_cpu_cores_for_dispatch_threads(
     return std::make_pair(core_assigned_to_device_worker_thread, core_assigned_to_device_completion_queue_reader);
 }
 
-void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_cores) {
+void bind_current_thread_to_free_cores(const std::unordered_set<std::uint32_t>& free_cores) {
     cpu_set_t cpuset;
     pthread_t current_thread = pthread_self();
     CPU_ZERO(&cpuset);
@@ -128,24 +132,24 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
     }
 }
 
-std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(
+std::unordered_map<std::uint32_t, std::uint32_t> get_device_id_to_core_map(
     ContextId context_id,
-    const uint8_t num_hw_cqs,
-    std::unordered_map<uint32_t, uint32_t>& completion_queue_reader_to_cpu_core_map) {
+    const std::uint8_t num_hw_cqs,
+    std::unordered_map<std::uint32_t, std::uint32_t>& completion_queue_reader_to_cpu_core_map) {
     std::vector<ChipId> device_ids;
     for (ChipId device_id : tt::tt_metal::MetalContext::instance(context_id).get_cluster().all_chip_ids()) {
         device_ids.emplace_back(device_id);
     }
     bool use_numa_node_based_thread_binding =
         tt::tt_metal::MetalContext::instance(context_id).rtoptions().get_numa_based_affinity();
-    std::unordered_set<uint32_t> free_cores = {};
-    uint32_t num_online_processors = sysconf(_SC_NPROCESSORS_ONLN);
-    constexpr uint32_t max_num_procs_per_device = 2;
+    std::unordered_set<std::uint32_t> free_cores = {};
+    std::uint32_t num_online_processors = sysconf(_SC_NPROCESSORS_ONLN);
+    constexpr std::uint32_t max_num_procs_per_device = 2;
     // When using multiple command queues, assign separate CPU cores to worker and completion queue reader threads,
     // if enough processors exist on host. At least one core is given to the main thread.
     bool separate_procs_for_worker_and_reader =
         (num_hw_cqs > 1) && (max_num_procs_per_device * device_ids.size() <= num_online_processors - 1);
-    std::unordered_map<uint32_t, uint32_t> worker_thread_to_cpu_core_map = {};
+    std::unordered_map<std::uint32_t, std::uint32_t> worker_thread_to_cpu_core_map = {};
     if (use_numa_node_based_thread_binding) {
         auto cpu_cores_per_numa_node = device_cpu_allocator::get_cpu_cores_per_numa_node(free_cores);
         for (const auto& device_id : device_ids) {
@@ -163,10 +167,10 @@ std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(
     } else {
         // Round Robin CPU assignment for worker and completion queue reader threads
         for (const auto& device_id : device_ids) {
-            uint32_t worker_thread_proc = device_id % num_online_processors;
+            std::uint32_t worker_thread_proc = device_id % num_online_processors;
             worker_thread_to_cpu_core_map.insert({device_id, worker_thread_proc});
             if (separate_procs_for_worker_and_reader) {
-                uint32_t completion_queue_reader_proc = (device_id + device_ids.size()) % num_online_processors;
+                std::uint32_t completion_queue_reader_proc = (device_id + device_ids.size()) % num_online_processors;
                 completion_queue_reader_to_cpu_core_map.insert({device_id, completion_queue_reader_proc});
             } else {
                 completion_queue_reader_to_cpu_core_map.insert({device_id, worker_thread_proc});
@@ -235,9 +239,28 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
         // Must open all devices in cluster to use fabric
         if (any_remote_devices) {
             device_ids_to_open.clear();
-            for (int id = 0; id < env_impl_.get_cluster().number_of_devices(); ++id) {
+            // With TT_METAL_NO_CHIP_ID_REMAP (simulator multi-rank), chip IDs are not
+            // necessarily 0..N-1 — use the cluster's actual target set.
+            for (ChipId id : ctx_.get_cluster().all_chip_ids()) {
                 device_ids_to_open.push_back(id);
             }
+            // #region agent log
+            {
+                std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+                if (f) {
+                    std::fprintf(
+                        f,
+                        "{\"sessionId\":\"ae7d0a\",\"hypothesisId\":\"H_NONCONSEC_CHIP_IDS\","
+                        "\"location\":\"device_manager.cpp:open_devices\","
+                        "\"message\":\"fabric_open_all_target_chips\",\"data\":{\"pid\":%d,"
+                        "\"num_devices\":%zu},\"timestamp\":%ld}\n",
+                        (int)getpid(),
+                        device_ids_to_open.size(),
+                        (long)std::time(nullptr));
+                    std::fclose(f);
+                }
+            }
+            // #endregion
         }
     }
 
@@ -445,7 +468,7 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
         this,
         [this]() -> tt::tt_fabric::ControlPlane& { return env_impl_.get_control_plane(); },
         [this]() -> const tt::tt_metal::DispatchQueryManager& { return ctx_.get_dispatch_query_manager(); },
-        [this]() { return static_cast<uint32_t>(this->get_max_num_eth_cores_across_all_devices()); },
+        [this]() { return static_cast<std::uint32_t>(this->get_max_num_eth_cores_across_all_devices()); },
         [this](ChipId id) {
             auto& s = ctx_.dprint_server();
             return s && s.get() && s->reads_dispatch_cores(id);
@@ -507,7 +530,7 @@ void DeviceManager::initialize_dispatch_firmware(bool force_recreate_topology) {
             this,
             [this]() -> tt::tt_fabric::ControlPlane& { return env_impl_.get_control_plane(); },
             [this]() -> const tt::tt_metal::DispatchQueryManager& { return ctx_.get_dispatch_query_manager(); },
-            [this]() { return static_cast<uint32_t>(this->get_max_num_eth_cores_across_all_devices()); },
+            [this]() { return static_cast<std::uint32_t>(this->get_max_num_eth_cores_across_all_devices()); },
             [this](ChipId id) {
                 auto& s = ctx_.dprint_server();
                 return s && s.get() && s->reads_dispatch_cores(id);
@@ -616,8 +639,8 @@ std::vector<ChipId> DeviceManager::get_all_active_device_ids() const {
 // Get all command queue event infos for all active devices
 // The key is the device id and the value is a vector of event ids for each command queue
 // This function needs to be thread-safe as its called in inspector::data on a different thread
-std::unordered_map<ChipId, std::vector<uint32_t>> DeviceManager::get_all_command_queue_event_infos() const {
-    std::unordered_map<ChipId, std::vector<uint32_t>> cq_to_event_by_device;
+std::unordered_map<ChipId, std::vector<std::uint32_t>> DeviceManager::get_all_command_queue_event_infos() const {
+    std::unordered_map<ChipId, std::vector<std::uint32_t>> cq_to_event_by_device;
     std::lock_guard<std::mutex> lock(lock_);
     cq_to_event_by_device.reserve(devices_.size());
     for (const auto& device : devices_) {
@@ -626,7 +649,7 @@ std::unordered_map<ChipId, std::vector<uint32_t>> DeviceManager::get_all_command
             const auto num_hw_cqs = device->num_hw_cqs();
             vec.resize(num_hw_cqs);
             for (size_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-                const auto event_id = device->sysmem_manager().get_last_event(static_cast<uint8_t>(cq_id));
+                const auto event_id = device->sysmem_manager().get_last_event(static_cast<std::uint8_t>(cq_id));
                 vec[cq_id] = event_id;
             }
         }
@@ -689,7 +712,7 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
         // iterate over all tunnels origination from this mmio device
         for (auto t : tunnels_from_mmio) {
             // iterate over all tunneled devices (tunnel stops) in this tunnel
-            for (uint32_t ts = t.size() - 1; ts > 0; ts--) {
+            for (std::uint32_t ts = t.size() - 1; ts > 0; ts--) {
                 if (this->is_device_active(t[ts])) {
                     devices_to_close.push_back(t[ts]);
                 }

@@ -10,7 +10,10 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <cstdio>
+#include <ctime>
 #include <chrono>
+#include <unistd.h>
 #include <cstdlib>
 #include <optional>
 #include <thread>
@@ -167,10 +170,37 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
         this->cq_size = dram_backed_command_queues_size / num_hw_cqs;
         TT_ASSERT((this->cq_size % ctx.hal().get_alignment(tt::tt_metal::HalMemType::DRAM)) == 0);
         const IDevice* device = ctx.device_manager()->get_active_device(this->device_id);
-        TT_FATAL(device->is_mmio_capable(), "Device {} is not an MMIO device", this->device_id);
+        // DRAM-backed CQ originally required this chip to be MMIO because host
+        // staging is delivered into the chip's own DRAM via a PCIe BAR write.
+        // In multi-process simulator runs every rank loads a constrained
+        // cluster descriptor whose chips_with_mmio only covers its local
+        // visible chips, but the dispatch CQ initializer still drives
+        // initialize_host on tunnel (peer-rank) chips. Those host writes do
+        // not go through PCIe; they go through the ttsim RPC layer, which can
+        // reach any chip's DRAM regardless of MMIO. Without this relaxation
+        // every MP suite trips a fatal on the first tunnel chip
+        // (e.g. rank 0 on t3k 2x2: chip 2). Real silicon still asserts MMIO.
+        TT_FATAL(
+            device->is_mmio_capable() || ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Simulator,
+            "Device {} is not an MMIO device",
+            this->device_id);
         this->dram_region_staging_buffer = std::make_unique<char[]>(dram_backed_command_queues_size);
         this->cq_sysmem_start = this->dram_region_staging_buffer.get();
         this->channel_offset = 0;
+        // Mirror the hardware path's free_region carveout. Without this, D2HSocket
+        // (and any other consumer of SystemMemoryManager::allocate_region) gets
+        // {nullptr, 0} back, then memsets the null pointer and segfaults. Reserve
+        // the same AUX_PAGES_PER_CQ pages per CQ that real hardware reserves at
+        // the tail of the per-CQ hugepage region, but inside the DRAM staging
+        // buffer instead of the hugepage.
+        static constexpr std::uint32_t AUX_PAGES_PER_CQ_SIM = 2;
+        std::uint32_t per_cq_reduction_sim = AUX_PAGES_PER_CQ_SIM * DispatchSettings::TRANSFER_PAGE_SIZE;
+        this->cq_size -= per_cq_reduction_sim;
+        std::uint32_t total_cq_space_sim = static_cast<std::uint32_t>(num_hw_cqs) * this->cq_size;
+        this->free_region_start_ = this->channel_offset + total_cq_space_sim;
+        this->free_region_size_ = static_cast<std::uint32_t>(num_hw_cqs) * per_cq_reduction_sim;
+        this->free_region_host_ptr_ = this->cq_sysmem_start + total_cq_space_sim;
+        this->free_region_bump_ = 0;
         this->init_dispatch_core_interfaces(num_hw_cqs, 0);
         return;
     }
@@ -590,6 +620,26 @@ void SystemMemoryManager::issue_queue_push_back(std::uint32_t push_size_B, const
     } else {
         cq_interface.issue_fifo_wr_ptr += push_size_16B;
     }
+    // #region agent log
+    {
+        std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+        if (f) {
+            std::fprintf(
+                f,
+                "{\"sessionId\":\"ae7d0a\",\"hypothesisId\":\"H_DISPATCH_STUCK\","
+                "\"location\":\"system_memory_manager.cpp:issue_queue_push_back\","
+                "\"message\":\"PUSH\",\"data\":{\"device_id\":%u,\"cq_id\":%u,"
+                "\"push_size_B\":%u,\"issue_fifo_wr_ptr_after\":%u,\"pid\":%d},\"timestamp\":%ld}\n",
+                (unsigned)this->device_id,
+                (unsigned)cq_id,
+                (unsigned)push_size_B,
+                (unsigned)cq_interface.issue_fifo_wr_ptr,
+                (int)getpid(),
+                (long)std::time(nullptr));
+            std::fclose(f);
+        }
+    }
+    // #endregion
 
     if (is_dram_backed()) {
         const IDevice* device = ctx.device_manager()->get_active_device(this->device_id);
@@ -744,14 +794,81 @@ std::uint32_t SystemMemoryManager::completion_queue_wait_front(
     std::uint32_t write_ptr;
     std::uint32_t write_toggle;
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
+    // #region agent log
+    {
+        std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+        if (f) {
+            std::fprintf(
+                f,
+                "{\"sessionId\":\"ae7d0a\",\"hypothesisId\":\"H_WAIT_FRONT_ENTRY\","
+                "\"location\":\"system_memory_manager.cpp:completion_queue_wait_front\","
+                "\"message\":\"WAIT_FRONT_ENTRY\",\"data\":{\"device_id\":%u,\"cq_id\":%u,"
+                "\"is_dram_backed\":%u,\"rd_ptr_16B\":%u,\"rd_toggle\":%u,\"pid\":%d},\"timestamp\":%ld}\n",
+                (unsigned)this->device_id,
+                (unsigned)cq_id,
+                (unsigned)this->is_dram_backed(),
+                (unsigned)cq_interface.completion_fifo_rd_ptr,
+                (unsigned)cq_interface.completion_fifo_rd_toggle,
+                (int)getpid(),
+                (long)std::time(nullptr));
+            std::fclose(f);
+        }
+    }
+    // #endregion
 
     // Body of the operation to be timed out
-    auto wait_operation_body = [this, cq_id, &write_ptr_and_toggle, &write_ptr, &write_toggle]() {
+    int poll_count = 0;
+    auto wait_operation_body = [this,
+                                cq_id,
+                                &write_ptr_and_toggle,
+                                &write_ptr,
+                                &write_toggle,
+                                &cq_interface,
+                                &poll_count]() {
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
         // Yield to clock the simulator when running on TTSim; no-op on real hardware.
         tt::tt_metal::MetalContext::instance(this->context_id).get_cluster().advance_device_execution(this->device_id);
+        // #region agent log
+        // Log first poll and every 5000th poll to track wr_ptr from device + rd_ptr expectation.
+        if (poll_count == 0 || (poll_count % 5000) == 0) {
+            std::uint32_t issue_rd = 0;
+            std::uint32_t issue_wr = 0;
+            std::uint32_t dispatch_progress = 0;
+            if (poll_count == 0) {
+                issue_rd = get_cq_issue_rd_ptr<true>(this->device_id, cq_id, this->cq_size);
+                issue_wr = get_cq_issue_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
+                dispatch_progress = get_cq_dispatch_progress(this->device_id, cq_id);
+            }
+            std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+            if (f) {
+                std::fprintf(
+                    f,
+                    "{\"sessionId\":\"ae7d0a\",\"hypothesisId\":\"H_CQ_STALL_DIAG\","
+                    "\"location\":\"system_memory_manager.cpp:wait_operation_body\","
+                    "\"message\":\"POLL\",\"data\":{\"device_id\":%u,\"cq_id\":%u,"
+                    "\"poll_count\":%d,\"wr_ptr_raw\":%u,\"wr_ptr\":%u,\"wr_toggle\":%u,"
+                    "\"rd_ptr\":%u,\"rd_toggle\":%u,\"issue_rd\":%u,\"issue_wr\":%u,"
+                    "\"dispatch_progress\":%u,\"pid\":%d},\"timestamp\":%ld}\n",
+                    (unsigned)this->device_id,
+                    (unsigned)cq_id,
+                    poll_count,
+                    (unsigned)write_ptr_and_toggle,
+                    (unsigned)write_ptr,
+                    (unsigned)write_toggle,
+                    (unsigned)cq_interface.completion_fifo_rd_ptr,
+                    (unsigned)cq_interface.completion_fifo_rd_toggle,
+                    (unsigned)issue_rd,
+                    (unsigned)issue_wr,
+                    (unsigned)dispatch_progress,
+                    (int)getpid(),
+                    (long)std::time(nullptr));
+                std::fclose(f);
+            }
+        }
+        poll_count++;
+        // #endregion
     };
 
     // Condition to check if the operation should continue
@@ -780,6 +897,37 @@ std::uint32_t SystemMemoryManager::completion_queue_wait_front(
         tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations(),
         get_dispatch_progress);
 
+    // #region agent log
+    {
+        FILE* f = fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+        if (f) {
+            fprintf(
+                f,
+                "{\"sessionId\":\"ae7d0a\",\"hypothesisId\":\"H_wait_front\",\"location\":\"system_memory_manager.cpp:"
+                "completion_queue_wait_front\","
+                "\"message\":\"WAIT_FRONT_DONE\",\"data\":{\"device_id\":%u,\"cq_id\":%u,\"is_dram_backed\":%u,"
+                "\"write_ptr_raw\":%u,\"write_ptr\":%u,\"write_toggle\":%u,"
+                "\"rd_ptr_16B\":%u,\"rd_toggle\":%u,"
+                "\"completion_fifo_size_16B\":%u,\"completion_fifo_limit_16B\":%u,"
+                "\"issue_fifo_limit_16B\":%u,\"cq_start\":%u,\"cq_size\":%u},\"timestamp\":%lu}\n",
+                (unsigned)this->device_id,
+                (unsigned)cq_id,
+                (unsigned)this->is_dram_backed(),
+                (unsigned)write_ptr_and_toggle,
+                (unsigned)write_ptr,
+                (unsigned)write_toggle,
+                (unsigned)cq_interface.completion_fifo_rd_ptr,
+                (unsigned)cq_interface.completion_fifo_rd_toggle,
+                (unsigned)cq_interface.completion_fifo_size,
+                (unsigned)cq_interface.completion_fifo_limit,
+                (unsigned)cq_interface.issue_fifo_limit,
+                (unsigned)cq_interface.cq_start,
+                (unsigned)this->cq_size,
+                (unsigned long)time(nullptr));
+            fclose(f);
+        }
+    }
+    // #endregion
     return write_ptr_and_toggle;
 }
 

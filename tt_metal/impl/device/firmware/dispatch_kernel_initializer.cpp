@@ -4,10 +4,15 @@
 
 #include "dispatch_kernel_initializer.hpp"
 
+#include <cstdio>
+#include <ctime>
+#include <string>
+#include <unistd.h>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <tt_metal.hpp>
+#include <cstdint>
 #include "common/executor.hpp"
 #include "device/firmware/firmware_initializer.hpp"
 #include "impl/context/context_descriptor.hpp"
@@ -137,8 +142,8 @@ void DispatchKernelInitializer::compile_dispatch_kernels() {
         auto tunnels_from_mmio = cluster_.get_tunnels_from_mmio_device(dev->id());
         dispatch_topology_->populate_cq_static_args(dev);
         for (const auto& tunnel : tunnels_from_mmio) {
-            for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
-                uint32_t mmio_controlled_device_id = tunnel[ts];
+            for (std::uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
+                std::uint32_t mmio_controlled_device_id = tunnel[ts];
                 auto it = std::find_if(
                     devices_.begin(), devices_.end(), [&](IDevice* d) { return d->id() == mmio_controlled_device_id; });
                 if (it != devices_.end()) {
@@ -157,8 +162,8 @@ void DispatchKernelInitializer::compile_dispatch_kernels() {
         dispatch_topology_->create_cq_program(dev);
         auto tunnels_from_mmio = cluster_.get_tunnels_from_mmio_device(dev->id());
         for (const auto& tunnel : tunnels_from_mmio) {
-            for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
-                uint32_t mmio_controlled_device_id = tunnel[ts];
+            for (std::uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
+                std::uint32_t mmio_controlled_device_id = tunnel[ts];
                 auto it = std::find_if(
                     devices_.begin(), devices_.end(), [&](IDevice* d) { return d->id() == mmio_controlled_device_id; });
                 if (it != devices_.end()) {
@@ -178,6 +183,34 @@ void DispatchKernelInitializer::init_device_command_queues() {
     if (descriptor_->is_mock_device()) {
         return;
     }
+    // #region agent log
+    {
+        std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+        if (f) {
+            std::string visible_ids;
+            for (auto* d : devices_) {
+                visible_ids += std::to_string(d->id()) + ",";
+            }
+            const char* env_visible = std::getenv("TT_VISIBLE_DEVICES");
+            const char* env_mesh_id = std::getenv("TT_MESH_ID");
+            const char* env_mesh_rank = std::getenv("TT_MESH_HOST_RANK");
+            std::fprintf(
+                f,
+                "{\"sessionId\":\"ae7d0a\",\"hypothesisId\":\"H_DUAL_INIT_CONFLICT\","
+                "\"location\":\"dispatch_kernel_initializer.cpp:init_device_command_queues\","
+                "\"message\":\"INIT_DCQ_START\",\"data\":{\"pid\":%d,\"visible_devices_actual\":\"%s\","
+                "\"TT_VISIBLE_DEVICES_env\":\"%s\",\"TT_MESH_ID\":\"%s\",\"TT_MESH_HOST_RANK\":\"%s\"},\"timestamp\":%"
+                "ld}\n",
+                (int)getpid(),
+                visible_ids.c_str(),
+                env_visible ? env_visible : "(unset)",
+                env_mesh_id ? env_mesh_id : "(unset)",
+                env_mesh_rank ? env_mesh_rank : "(unset)",
+                (long)std::time(nullptr));
+            std::fclose(f);
+        }
+    }
+    // #endregion
 
     std::vector<std::shared_future<void>> events;
     for (auto* dev : devices_) {
@@ -188,15 +221,69 @@ void DispatchKernelInitializer::init_device_command_queues() {
         events.emplace_back(detail::async([this, dev, mmio_device_id]() {
             auto tunnels_from_mmio = cluster_.get_tunnels_from_mmio_device(mmio_device_id);
             dev->init_command_queue_device_with_topology(dispatch_topology_.get());
+            // #region agent log
+            {
+                std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+                if (f) {
+                    std::fprintf(
+                        f,
+                        "{\"sessionId\":\"ae7d0a\",\"hypothesisId\":\"H_DISPATCH_NOT_LAUNCHED_TUNNEL\","
+                        "\"location\":\"dispatch_kernel_initializer.cpp:init_device_command_queues\","
+                        "\"message\":\"INIT_DCQ_MMIO\",\"data\":{\"pid\":%d,\"device_id\":%u,\"is_tunnel\":0},"
+                        "\"timestamp\":%ld}\n",
+                        (int)getpid(),
+                        (unsigned)dev->id(),
+                        (long)std::time(nullptr));
+                    std::fclose(f);
+                }
+            }
+            // #endregion
             log_debug(tt::LogMetal, "Command Queue initialized on Device {}", dev->id());
             for (const auto& tunnel : tunnels_from_mmio) {
-                for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
-                    uint32_t mmio_controlled_device_id = tunnel[ts];
+                for (std::uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
+                    std::uint32_t mmio_controlled_device_id = tunnel[ts];
                     auto it = std::find_if(devices_.begin(), devices_.end(), [&](IDevice* d) {
                         return d->id() == mmio_controlled_device_id;
                     });
+                    // #region agent log
+                    {
+                        std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+                        if (f) {
+                            std::fprintf(
+                                f,
+                                "{\"sessionId\":\"ae7d0a\",\"hypothesisId\":\"H_DISPATCH_NOT_LAUNCHED_TUNNEL\","
+                                "\"location\":\"dispatch_kernel_initializer.cpp:init_device_command_queues\","
+                                "\"message\":\"TUNNEL_CHECK\",\"data\":{\"pid\":%d,\"mmio_device_id\":%u,"
+                                "\"tunnel_chip\":%u,\"found_in_devices_\":%d},\"timestamp\":%ld}\n",
+                                (int)getpid(),
+                                (unsigned)mmio_device_id,
+                                (unsigned)mmio_controlled_device_id,
+                                (int)(it != devices_.end()),
+                                (long)std::time(nullptr));
+                            std::fclose(f);
+                        }
+                    }
+                    // #endregion
                     if (it != devices_.end()) {
                         (*it)->init_command_queue_device_with_topology(dispatch_topology_.get());
+                        // #region agent log
+                        {
+                            std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+                            if (f) {
+                                std::fprintf(
+                                    f,
+                                    "{\"sessionId\":\"ae7d0a\",\"hypothesisId\":\"H_DISPATCH_NOT_LAUNCHED_TUNNEL\","
+                                    "\"location\":\"dispatch_kernel_initializer.cpp:init_device_command_queues\","
+                                    "\"message\":\"INIT_DCQ_TUNNEL\",\"data\":{\"pid\":%d,\"device_id\":%u,\"mmio_"
+                                    "device_id\":%u,\"is_tunnel\":1},\"timestamp\":%ld}\n",
+                                    (int)getpid(),
+                                    (unsigned)mmio_controlled_device_id,
+                                    (unsigned)mmio_device_id,
+                                    (long)std::time(nullptr));
+                                std::fclose(f);
+                            }
+                        }
+                        // #endregion
                         log_debug(tt::LogMetal, "Command Queue initialized on Device {}", (*it)->id());
                     }
                 }
@@ -255,7 +342,7 @@ void DispatchKernelInitializer::process_termination_signals() const {
     for (auto* dev : devices_) {
         const auto& info = dispatch_topology_->get_registered_termination_cores(dev->id());
         for (const auto& core_to_terminate : info) {
-            std::vector<uint32_t> val{core_to_terminate.val};
+            std::vector<std::uint32_t> val{core_to_terminate.val};
             detail::WriteToDeviceL1(
                 dev, core_to_terminate.logical_core, core_to_terminate.address, val, core_to_terminate.core_type);
         }
