@@ -26,6 +26,20 @@ if TYPE_CHECKING:
     from ..parallel.manager import CCLManager
 
 
+# Best compute core grid per shape from flux2 dual-grid sweep (2026-05-27).
+# See flux2_dual_grid_mm_sweep.md "Best grid per shape".
+_FLUX2_MATMUL_CORE_GRIDS: dict[tuple[int, int, int], tuple[int, int]] = {
+    (1024, 128, 768): ttnn.CoreCoord(11, 10),
+    (512, 15360, 768): ttnn.CoreCoord(12, 9),
+    (1024, 6144, 768): ttnn.CoreCoord(11, 10),
+    (512, 6144, 768): ttnn.CoreCoord(12, 9),
+    (1024, 6144, 4608): ttnn.CoreCoord(12, 9),
+    (512, 6144, 4608): ttnn.CoreCoord(12, 9),
+    (1024, 6144, 2304): ttnn.CoreCoord(12, 9),
+    (512, 6144, 2304): ttnn.CoreCoord(12, 9),
+}
+
+
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
 class Attention(Module):
     # SDPA chunk sizes keyed by (is_blackhole, sp_factor, tp_factor). Resolution priority for
@@ -350,6 +364,8 @@ class Attention(Module):
             N = weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
             core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
+            # core_grid = _FLUX2_MATMUL_CORE_GRIDS.get((M, K, N)) or ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
+            # print(f"Using core grid {core_grid} for matmul config (M, K, N) = ({M}, {K}, {N})", flush=True)
             matmul_config = get_matmul_config(
                 M, K, N, core_grid, use_heuristic=True, num_k_shards=self.parallel_config.tensor_parallel.factor
             )
@@ -385,6 +401,7 @@ class Attention(Module):
             M = x.padded_shape[-2]
             K = x.padded_shape[-1]
             N = weight.padded_shape[-1]
+            # core_grid = _FLUX2_MATMUL_CORE_GRIDS.get((M, K, N)) or self.mesh_device.compute_with_storage_grid_size()
             core_grid = self.mesh_device.compute_with_storage_grid_size()
             matmul_config = get_matmul_config(
                 M, K, N, core_grid, use_heuristic=True, num_k_shards=self.parallel_config.tensor_parallel.factor
