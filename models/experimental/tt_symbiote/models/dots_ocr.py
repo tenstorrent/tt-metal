@@ -1053,6 +1053,15 @@ class TTNNDotsOCRPipeline(TTNNModule):
                     ttnn.copy_host_to_device_tensor(token_host_tt, self._decode_token_buffer)
 
             self._decode_seq_counter += 1
+            # DEBUG: log generation step + the cache_position SDPA will see
+            # on the NEXT decode iteration. Throttled to keep host output
+            # readable. ``_decode_seq_counter`` is the next-token cache pos.
+            _gen_step = self._decode_seq_counter - int(self._decode_cache_pos_host.item())
+            if _gen_step == 1 or _gen_step % 100 == 0:
+                print(
+                    f"[decode] gen_step={_gen_step}  " f"cache_position={self._decode_seq_counter}",
+                    flush=True,
+                )
             # Device-side cache_position increment for both DP and non-DP.
             # ``_decode_cache_position`` is REPLICATED across the mesh (a
             # single global counter, see ``_init_decode_buffers``) so the

@@ -458,6 +458,128 @@ def test_dots_ocr_decode_one_layer_l1_boundaries(mesh_device):
     [_resolve_mesh_device_shape()],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "num_decode_steps",
+    [int(os.environ.get("DOTS_OCR_DECODE_STEPS", "1440"))],
+)
+def test_dots_ocr_decode_one_layer_sdpa_cost_sweep(mesh_device, num_decode_steps):
+    """Benchmark one decoder layer across N decode steps to characterise SDPA
+    cost as ``cache_position`` grows.
+
+    Loops the same layer ``num_decode_steps`` times, incrementing the cache
+    position each step (mirrors what the full vision pipeline does, but with
+    a single layer so the profiler buffer can capture every SDPA invocation
+    cleanly). Per-step wall-time is sampled at a few cache positions and
+    printed at the end so the SDPA cost ramp from 0 -> num_decode_steps is
+    visible without running the full ~100s vision pipeline.
+
+    Default N = 1440 matches the demo OCR run length; override with
+    ``DOTS_OCR_DECODE_STEPS=200`` for a faster iteration loop. There is no
+    PCC check here (the ``..._l1_boundaries`` test covers correctness at
+    pos 0 -- per-step accuracy at growing cache lengths is not the point
+    of this benchmark).
+    """
+    import time
+
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    torch.manual_seed(0)
+    torch.set_grad_enabled(False)
+
+    model_config = AutoConfig.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
+    model_config.num_hidden_layers = 1
+    hf_model = AutoModelForCausalLM.from_config(model_config, trust_remote_code=True).to(dtype=torch.bfloat16).eval()
+    model_config = hf_model.config
+    layer = TTNNDotsOCRDecoderLayer.from_torch(hf_model.model.layers[0])
+    layer._unique_name = "model.layers.0"
+    layer.override_children_module_names()
+    del hf_model
+
+    set_device(layer, mesh_device, register_forward_hook=False, dump_visualization=False)
+    layer.preprocess_weights()
+    layer.move_weights_to_device()
+
+    paged_cache = _create_paged_kv_cache(model_config, mesh_device, batch_size=1)
+    hidden_states = ttnn.from_torch(
+        torch.randn(1, 1, model_config.hidden_size, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    # Sample wall-time at these cache_position values. The first step is
+    # always sampled (pos 0 floor); the rest are spread roughly evenly to
+    # capture the ramp.
+    sample_positions = sorted(
+        set(
+            [0, 1, 50, 100, 200, 400, 800, 1200, num_decode_steps - 1]
+            if num_decode_steps > 200
+            else [0, 1, 25, 50, 100, num_decode_steps - 1]
+        )
+    )
+    sample_positions = [p for p in sample_positions if 0 <= p < num_decode_steps]
+    timings: dict[int, float] = {}
+
+    print(
+        f"\n[sdpa-sweep] Running {num_decode_steps} decode steps on layer 0; "
+        f"sampling wall-time at positions: {sample_positions}",
+        flush=True,
+    )
+
+    for step_idx in range(num_decode_steps):
+        cache_position = ttnn.from_torch(
+            torch.tensor([step_idx], dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        if step_idx in sample_positions:
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
+            output = layer.forward(hidden_states, past_key_value=paged_cache, cache_position=cache_position)[0]
+            ttnn.synchronize_device(mesh_device)
+            timings[step_idx] = (time.perf_counter() - t0) * 1e6  # us
+            print(
+                f"[sdpa-sweep] cache_position={step_idx:5d}  " f"layer-forward wall-time={timings[step_idx]:.1f} us",
+                flush=True,
+            )
+            ttnn.deallocate(output)
+        else:
+            output = layer.forward(hidden_states, past_key_value=paged_cache, cache_position=cache_position)[0]
+            ttnn.deallocate(output)
+
+        ttnn.deallocate(cache_position)
+
+    ttnn.synchronize_device(mesh_device)
+
+    # Summary: floor vs peak + linear-fit slope (approx SDPA cost per unit
+    # cache_position growth). The per-step wall time also includes LN,
+    # QKV, MLP -- those are constant in cache_position, so the *delta*
+    # between samples is essentially the SDPA scaling cost.
+    floor_us = timings[sample_positions[0]]
+    peak_us = timings[sample_positions[-1]]
+    delta_us = peak_us - floor_us
+    print(
+        f"\n[sdpa-sweep] floor (pos {sample_positions[0]}) = {floor_us:.1f} us, "
+        f"peak (pos {sample_positions[-1]}) = {peak_us:.1f} us, "
+        f"delta = {delta_us:.1f} us (~SDPA growth across {sample_positions[-1]} positions)",
+        flush=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [_dots_ocr_device_params()],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [_resolve_mesh_device_shape()],
+    indirect=True,
+)
 def test_dots_ocr_prefill_one_layer(mesh_device):
     """Exercise one decoder layer in prefill mode with a paged KV cache."""
     from transformers import AutoConfig, AutoModelForCausalLM
@@ -646,7 +768,14 @@ def test_dots_ocr_vision_one_layer(mesh_device):
     indirect=True,
 )
 def test_dots_ocr_decode_full_decoder_l1_boundaries(mesh_device):
-    """Exercise all decoder layers in decode mode and require L1 attn/MLP boundaries."""
+    """Exercise all decoder layers in decode mode and require L1 attn/MLP boundaries.
+
+    Also runs the same input through all 28 HF reference layers and compares
+    the final output via PCC. This is the regression gate for accumulated
+    multi-layer numerical drift (e.g. pushing BFP4 onto too many layers) that
+    the single-layer PCC test cannot detect.
+    """
+    from tests.ttnn.utils_for_testing import assert_with_pcc
     from transformers import AutoConfig, AutoModelForCausalLM
 
     torch.manual_seed(0)
@@ -655,6 +784,33 @@ def test_dots_ocr_decode_full_decoder_l1_boundaries(mesh_device):
     model_config = AutoConfig.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
     assert model_config.num_hidden_layers == 28, "dots.ocr decoder should have 28 layers"
     hf_model = AutoModelForCausalLM.from_config(model_config, trust_remote_code=True).to(dtype=torch.bfloat16).eval()
+
+    # Compute the HF reference output BEFORE building TTNN layers. The
+    # ``TTNNDotsOCRDecoderLayer.from_torch`` + ``preprocess_weights`` path
+    # mutates the HF layers in-place (e.g. permutes QKV weights to the
+    # KV-group-interleaved layout that ``nlp_create_qkv_heads`` expects),
+    # so running HF inference after that step crashes inside
+    # ``apply_rotary_pos_emb`` with a head_dim/num_heads shape mismatch.
+    hidden_states_torch = torch.randn(1, 1, model_config.hidden_size, dtype=torch.bfloat16)
+    position_ids = torch.zeros((1, 1), dtype=torch.long)
+    cos, sin = hf_model.model.rotary_emb(hidden_states_torch, position_ids)
+    torch_hidden = hidden_states_torch
+    for hf_layer in hf_model.model.layers:
+        torch_hidden = hf_layer(
+            torch_hidden,
+            attention_mask=None,
+            position_ids=position_ids,
+            past_key_values=None,
+            use_cache=False,
+            position_embeddings=(cos, sin),
+        )[0]
+        # The HF Qwen2DecoderLayer can drop the seq dim on its output for
+        # seq_len=1 (returns ``(batch, hidden)`` instead of ``(batch, seq,
+        # hidden)``); re-add it so the next layer's q_proj reshape lands
+        # the right number of heads on the right axis.
+        if torch_hidden.dim() == 2:
+            torch_hidden = torch_hidden.unsqueeze(1)
+    torch_output = torch_hidden
 
     decoder_layers = []
     for layer_idx, hf_layer in enumerate(hf_model.model.layers):
@@ -672,7 +828,7 @@ def test_dots_ocr_decode_full_decoder_l1_boundaries(mesh_device):
 
     paged_cache = _create_paged_kv_cache(model_config, mesh_device, batch_size=1)
     hidden_states = ttnn.from_torch(
-        torch.randn(1, 1, model_config.hidden_size, dtype=torch.bfloat16),
+        hidden_states_torch,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
@@ -715,6 +871,33 @@ def test_dots_ocr_decode_full_decoder_l1_boundaries(mesh_device):
 
     _assert_l1_resident(output, "decoder stack output")
     assert all(boundaries == {"attn": True, "mlp": True} for boundaries in seen_boundaries.values())
+
+    # ------------------------------------------------------------------
+    # PCC verification across all 28 layers at cache_position=0.
+    # ------------------------------------------------------------------
+    # ``torch_output`` was computed at the top of the test, before any
+    # TTNN setup, so the HF reference is unaffected by ``from_torch`` /
+    # ``preprocess_weights`` in-place mutations on the HF layers.
+    num_devices = int(mesh_device.get_num_devices()) if hasattr(mesh_device, "get_num_devices") else 1
+    if num_devices > 1:
+        # Multi-device mesh (T3K DP (8,1) or TP (1,8)): DP-with-batch=1 and
+        # TP-after-all-reduce both produce identical data on every device.
+        # ``ConcatMeshToTensor(dim=0)`` stacks per-device slices along batch;
+        # take the first as the canonical output.
+        ttnn_output_torch = ttnn.to_torch(
+            output,
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+        )[:1]
+    else:
+        ttnn_output_torch = ttnn.to_torch(output)
+    ttnn_output_torch = ttnn_output_torch.to(torch.bfloat16).reshape(torch_output.shape)
+
+    # 28-layer accumulated bf16 + BFP4-weight + paged-SDPA drift is larger
+    # than the single-layer case; 0.95 is the tight-but-survivable bar that
+    # still catches the failures this test guards against (silent layout/
+    # sharding bugs, wrong RoPE, accumulated BFP4 corruption like the OCR
+    # demo's dropped 'K' in tabular data).
+    assert_with_pcc(torch_output, ttnn_output_torch, pcc=0.95)
 
 
 @pytest.mark.parametrize(
