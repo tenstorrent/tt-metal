@@ -532,7 +532,8 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         def _to_list(value):
             if isinstance(value, torch.Tensor):
-                return value.detach().cpu().tolist()
+                tensor_value = value.detach().cpu().tolist()
+                return tensor_value if isinstance(tensor_value, list) else [tensor_value]
             if isinstance(value, (list, tuple)):
                 return list(value)
             return [value]
