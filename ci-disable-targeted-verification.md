@@ -56,7 +56,7 @@ Examining PRs are existing open draft disable PRs that need maintenance but shou
 
 - Rebase the PR branch onto the latest `origin/main` and push the merge.
 - Revalidate every currently-disabled test against the latest `main` runs; remove disables for tests that have been fixed on `main`.
-- **Log-analyze any verification run that completed since the previous session**, and transition the PR's lifecycle to `verified-pass`, `verified-fail`, or `verification-inconclusive` based on the result.
+- **Log-analyze any verification run that completed since the previous session**, and transition the PR's lifecycle to `verified-pass`, `verified-fail`, or `verification-inconclusive` based on the result. This includes runs that completed at the artifact-acquisition step (build-artifact failure for fresh build, download-artifacts failure for reuse, runner allocation failure, or any other infra failure that prevented pytest from running on the previously-passing jobs) — those are classified `verification-inconclusive`, do NOT consume the PR's one-verification-run budget, and are retry-eligible. See `Verification run inspection (next-session)` under `## Build Reuse (Optional, Strongly Preferred)` below for the full classification rule and example commands.
 - Comment on the PR with what changed this session.
 - Sync the disable-tracking issue with the current disable set.
 - Update the PR's entry in the state log (`disabling-work-so-far.md`).
@@ -248,7 +248,7 @@ If the source run does not contain the required artifacts (build tarball, and wh
 
 Most artifact-reuse failures come from picking the wrong source run. Follow these rules in order; any miss is a hard failure that will surface as "Could not find build artifact matching expected pattern" or "Workflow run X has conclusion: failure (expected: success)".
 
-> See also: **End-of-session verification of dispatched runs (mandatory)** below — even after a careful pre-dispatch source-run pick, the agent MUST confirm the dispatched run's artifact-acquisition step finished with `success` before ending its session. Otherwise the run is treated as infra-inconclusive and is retry-eligible.
+> See also: **Verification run inspection (next-session)** below — the dispatched run's artifact-acquisition step is observed and classified by the examining lane in the *next* session, not in the dispatching session. The agent does NOT poll or wait on it before ending the current session.
 
 REQUIREMENT 1 — Source run MUST be a SUCCESS:
 - The source run's `conclusion` must be `success`. Not `failure`, not `cancelled`, not `in_progress`.
@@ -324,32 +324,30 @@ After committing the workflow edits on the temporary branch, you can sanity-chec
 
 If either is missing, the dispatch will run a fresh build instead of reusing artifacts.
 
-### End-of-session verification of dispatched runs (mandatory)
+### Verification run inspection (next-session)
 
-This section applies to every targeted verification run the agent dispatches, regardless of whether the agent chose artifact reuse or the fresh-build fallback. When reuse was chosen, it is the post-dispatch counterpart of "Source run selection rules (STRICT)" above (in particular Requirement 5's SHA-parity check, which must already have been satisfied *before* dispatch). When the fresh-build fallback was chosen, the checks below are still required — they confirm that the fresh build itself completed cleanly.
+This section applies to every targeted verification run the agent dispatches, regardless of whether the agent chose artifact reuse or the fresh-build fallback. The pre-dispatch sanity checks (in particular Requirement 5's SHA-parity check under "Source run selection rules (STRICT)" above when reuse was chosen) remain mandatory because they happen *before* dispatch. What changes here is the *post*-dispatch behavior.
 
-Before the agent ends its session, for every targeted verification run it dispatched during that session, the agent MUST poll the run until its artifact-acquisition step is no longer queued or in progress. The agent is NOT allowed to end the session by simply reporting "verification dispatched" — it must confirm the artifact step reached a terminal state and report that state.
+**The agent does NOT poll or wait on the dispatched run's artifact-acquisition step before ending its session. Dispatching the verification run and immediately ending the session is acceptable and expected.**
 
-Specifically, the agent must confirm one of the following:
+Why this matters: queued build jobs in this repo can sit in queue for well over an hour before they actually start. If the agent waits in-session for the artifact-acquisition step to reach a terminal state, the next hourly automation cycle starts before the current cycle has ended, producing overlapping sessions and race conditions on the state log, PR comments, and the `disabling-work-so-far.md` file. Dispatch-and-end avoids that overlap by design.
 
-- When the run was dispatched with `use-artifacts-from-run` (artifact reuse), the `download-artifacts` job inside `build-artifact.yaml` completed with `conclusion: success`.
-- When the run is building artifacts fresh, the `build-artifact` job completed with `conclusion: success`.
+Instead, the dispatched run's outcome is observed and classified by the **examining lane in the next session** — see `Operating Procedure (One Run Per PR)` and the examining-lane log-analysis step under `Session Scope (Two Lanes — Focus and Examining)` → Lane A. Specifically, in the next session that runs after the dispatched run has reached a terminal state, the examining lane MUST log-analyze the completed run and classify it as one of:
 
-The agent only needs the artifact-acquisition job to reach a terminal state. The remaining test jobs may still be in progress when the session ends — this rule is specifically about the artifact step not being left in an unknown state.
+- `verified-pass` — the verification run completed with `conclusion: success` AND every job that was passing on `main` immediately before the PR is still passing on the verification run.
+- `verified-fail` — the verification run completed AND at least one previously-passing job is now failing on the PR branch (a real regression — not an out-of-scope failure per "Interpreting Verification Results" above).
+- `verification-inconclusive` — the run finished in any state that prevented pytest from actually exercising the previously-passing jobs. This includes the artifact-acquisition step itself failing (`build-artifact` for fresh build, or `download-artifacts` for artifact reuse, finishing with `conclusion: failure` or `cancelled`, "Could not find build artifact matching expected pattern", "Workflow run X has conclusion: failure (expected: success)", source run not found, build-intent mismatch), runner allocation failure, container-init failure, network/download faults, or any other infra failure. Per "Interpreting Verification Results" above, infra-inconclusive runs do NOT consume the PR's one-verification-run budget and ARE retry-eligible (still subject to the per-session dispatch cap).
 
-If the artifact step did NOT succeed — for example `conclusion: failure` or `cancelled`, "Could not find build artifact matching expected pattern", "Workflow run X has conclusion: failure (expected: success)", source run not found, or any build-intent mismatch — the run is treated as **infra-inconclusive**:
+The classification belongs to the *next* session. The dispatching session is done as soon as it has dispatched, recorded the run URL, and updated `disabling-work-so-far.md`.
 
-- The agent MUST say so explicitly in the PR comment and in `disabling-work-so-far.md`.
-- Per "Interpreting Verification Results" above, infra-inconclusive runs do NOT consume the PR's one-verification-run budget and ARE retry-eligible (still subject to the per-session dispatch cap).
-- The session is not considered complete until that inconclusive classification has been recorded for the run.
-
-Concrete check the agent should run (substitute the dispatched run ID):
+Concrete commands the next-session examining lane uses to log-analyze a completed run (substitute the dispatched run ID):
 
 ```bash
+gh run view <run-id> --json status,conclusion,jobs
 gh run view <run-id> --json jobs --jq '.jobs[] | select(.name | test("build-artifact|download-artifacts")) | {name, status, conclusion}'
 ```
 
-The agent may also use `gh run view <run-id> --json jobs,conclusion,status` and inspect the `jobs` array directly. Poll until the relevant job's `status` is `completed`, then read its `conclusion`. Only `conclusion: success` lets the session end as "verification dispatched and artifact step healthy". Anything else means "infra-inconclusive, retry-eligible" and the session ends in that state — not as a normal completion.
+If the run is still `in_progress` or `queued` when the next session starts, leave the PR's lifecycle as `verifying` and re-check on the session after that. The PR's verification budget is not consumed until the run actually reaches a non-inconclusive terminal state.
 
 ## In-Scope vs Out-of-Scope Failures
 
