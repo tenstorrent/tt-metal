@@ -370,9 +370,12 @@ def ensure_interleaved_bsh(
     """Normalize activations to interleaved ``[B, S, C]`` (handles 2-D/4-D tile layouts)."""
     x = width_sharded_to_l1_interleaved(x)
     rank = len(x.shape)
-    if rank == 4 and int(x.shape[1]) == 1:
-        x = ttnn.reshape(x, (batch, seq, channels))
-    elif rank == 2:
+    if rank == 4:
+        flat_seq = int(x.shape[1]) * int(x.shape[2])
+        c = int(x.shape[3])
+        x = ttnn.reshape(x, (int(x.shape[0]), flat_seq, c))
+        rank = 3
+    if rank == 2:
         x = ttnn.reshape(x, (batch, seq, channels))
     elif rank == 3:
         if int(x.shape[0]) != batch or int(x.shape[1]) != seq or int(x.shape[2]) != channels:

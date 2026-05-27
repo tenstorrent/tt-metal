@@ -34,6 +34,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     all_reduce_sum_replicate,
     core_grid,
     dram_matmul_program_config,
+    ensure_interleaved_bsh,
     ensure_l1_width_sharded_activation,
     matmul_program_config,
     MATMUL_1D_SEQ_THRESHOLD,
@@ -46,6 +47,11 @@ from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, me
 
 # Chunk ``H @ enc`` along upsampled rows (same row count as speech-encoder long mel matmuls).
 _HARD_UPSAMPLE_MATMUL_CHUNK_ROWS = TILE
+
+# TP long-seq self-attn: fused SDPA L1 scratch scales with full ``S`` on 1×4 meshes (decoder @ 4096).
+# Use DRAM chunked Q@K^T like speech-encoder relative scores (``scores_mc = DRAM`` when ``tp>1, S>=128``).
+_T2U_LONG_SDPA_TP_THRESHOLD = 128
+_T2U_SDPA_Q_CHUNK_ROWS = 256
 
 # HF ``torch.finfo(torch.bfloat16).min`` additive padding mask floor (approx.).
 _BF16_MASK_FLOOR = -3.3895313892565356e38
@@ -65,8 +71,12 @@ def _weight_is_dram_width_sharded(weight: ttnn.Tensor) -> bool:
 
 
 def _bias_token_rows(bias: ttnn.Tensor) -> int:
+    """Tile-padded M for matmul; TP mesh biases are ``[tp, 1, 1, out]`` (use TILE, not 1)."""
     if len(bias.shape) == 4:
-        return int(bias.shape[2])
+        m = int(bias.shape[2])
+        if m < TILE:
+            return TILE
+        return m
     return TILE
 
 
@@ -101,6 +111,95 @@ def _t2u_sdpa_program_config(
     )
     cache[key] = out
     return out
+
+
+def _t2u_dram_matmul_attention(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    v: ttnn.Tensor,
+    attn_mask: Optional[ttnn.Tensor],
+    *,
+    seq: int,
+    scale: float,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+    q_chunk: int = _T2U_SDPA_Q_CHUNK_ROWS,
+) -> ttnn.Tensor:
+    """Chunked DRAM attention for TP long sequences (avoids fused SDPA L1 workspace at ``S≈4096``)."""
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    batch = int(q.shape[0])
+    nh = int(q.shape[1])
+    hd = int(q.shape[-1])
+    k_t = ttnn.permute(k, (0, 1, 3, 2), memory_config=mc)
+    ttnn.deallocate(k)
+    out_chunks: list[ttnn.Tensor] = []
+    for start in range(0, seq, q_chunk):
+        end = min(start + q_chunk, seq)
+        q_c = ttnn.slice(q, [0, 0, start, 0], [batch, nh, end, hd], [1, 1, 1, 1], memory_config=mc)
+        scores = ttnn.matmul(q_c, k_t, memory_config=mc, compute_kernel_config=compute_kernel_config)
+        ttnn.deallocate(q_c)
+        if scale != 1.0:
+            scores = ttnn.multiply(scores, scale, memory_config=mc)
+        if attn_mask is not None:
+            mask_c = ttnn.slice(attn_mask, [0, 0, start, 0], [1, 1, end, seq], [1, 1, 1, 1], memory_config=mc)
+            scores = ttnn.add(scores, mask_c, memory_config=mc)
+            ttnn.deallocate(mask_c)
+        probs = ttnn.softmax(scores, dim=-1, numeric_stable=True, memory_config=mc)
+        ttnn.deallocate(scores)
+        out_c = ttnn.matmul(probs, v, memory_config=mc, compute_kernel_config=compute_kernel_config)
+        ttnn.deallocate(probs)
+        out_chunks.append(out_c)
+    ttnn.deallocate(q)
+    ttnn.deallocate(k_t)
+    if len(out_chunks) == 1:
+        return out_chunks[0]
+    attn_out = ttnn.concat(out_chunks, dim=2, memory_config=mc)
+    for c in out_chunks:
+        ttnn.deallocate(c)
+    return attn_out
+
+
+def _t2u_scaled_dot_product_attention(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    v: ttnn.Tensor,
+    attn_mask: Optional[ttnn.Tensor],
+    *,
+    seq: int,
+    head_dim: int,
+    tp: int,
+    sdpa_cfg: ttnn.SDPAProgramConfig,
+    sdpa_compute_cfg: ttnn.DeviceComputeKernelConfig,
+    attn_matmul_compute_cfg: ttnn.DeviceComputeKernelConfig,
+) -> ttnn.Tensor:
+    """Prefill self-attention: fused SDPA (short / single-device) or DRAM matmul chunks (TP long-seq)."""
+    scale = 1.0 / math.sqrt(head_dim)
+    if tp > 1 and seq >= _T2U_LONG_SDPA_TP_THRESHOLD:
+        return _t2u_dram_matmul_attention(
+            q,
+            k,
+            v,
+            attn_mask,
+            seq=seq,
+            scale=scale,
+            compute_kernel_config=attn_matmul_compute_cfg,
+        )
+
+    attn_mc = ttnn.DRAM_MEMORY_CONFIG if seq > TILE else ttnn.L1_MEMORY_CONFIG
+    attn_out = ttnn.transformer.scaled_dot_product_attention(
+        q,
+        k,
+        v,
+        attn_mask=attn_mask,
+        is_causal=False,
+        scale=scale,
+        program_config=sdpa_cfg,
+        compute_kernel_config=sdpa_compute_cfg,
+        memory_config=attn_mc,
+    )
+    ttnn.deallocate(q)
+    ttnn.deallocate(k)
+    ttnn.deallocate(v)
+    return attn_out
 
 
 def _t2u_layer_norm(
@@ -506,6 +605,16 @@ class T2UTraceHardUpsampleCumsums:
     unit_hidden_pad_tail_bf16: Optional[ttnn.Tensor] = None
 
 
+@dataclass
+class T2UForwardTraceRuntime:
+    """Captured Metal trace for one full T2U ``forward`` (fixed inputs + ``T2UTraceHardUpsampleCumsums``)."""
+
+    trace_id: int
+    logits_tt: ttnn.Tensor
+    padding_tt: ttnn.Tensor
+    hard_upsample_cums: T2UTraceHardUpsampleCumsums
+
+
 def make_t2u_trace_prealloc_tensors(
     device: ttnn.Device,
     *,
@@ -772,7 +881,8 @@ def _hard_upsample_matmul(
     """``H @ enc`` with 1D multicast chunks when ``sum_r`` exceeds the 2D L1 budget."""
     if sum_r <= MATMUL_1D_SEQ_THRESHOLD:
         mm_pc = matmul_program_config(device, token_rows=sum_r, in_dim=enc_seq, out_dim=hidden_size)
-        return ttnn.matmul(H, enc, program_config=mm_pc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.matmul(H, enc, program_config=mm_pc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ensure_interleaved_bsh(out, batch=1, seq=sum_r, channels=hidden_size)
 
     chunk_m = _HARD_UPSAMPLE_MATMUL_CHUNK_ROWS
     chunks: list[ttnn.Tensor] = []
@@ -795,13 +905,26 @@ def _hard_upsample_matmul(
         out_chunk = ttnn.matmul(H_chunk, enc, program_config=mm_pc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(H_chunk)
         if chunk_rows < chunk_m:
+            rank = len(out_chunk.shape)
+            begins = [0] * rank
+            ends = list(out_chunk.shape)
+            strides = [1] * rank
+            if rank == 4:
+                ends[2] = chunk_rows
+                ends[3] = hidden_size
+            elif rank == 3:
+                ends[1] = chunk_rows
+                ends[2] = hidden_size
+            else:
+                raise RuntimeError(f"_hard_upsample_matmul: unexpected rank {rank}, shape {tuple(out_chunk.shape)}")
             out_chunk = ttnn.slice(
                 out_chunk,
-                [0, 0, 0],
-                [1, chunk_rows, hidden_size],
-                [1, 1, 1],
+                begins,
+                ends,
+                strides,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+        out_chunk = ensure_interleaved_bsh(out_chunk, batch=1, seq=chunk_rows, channels=hidden_size)
         chunks.append(out_chunk)
 
     if len(chunks) == 1:
@@ -916,7 +1039,7 @@ def _hard_upsample_nlc(
         hidden_size=hidden_size,
     )
     ttnn.deallocate(H)
-    return out
+    return ensure_interleaved_bsh(out, batch=1, seq=sum_r, channels=hidden_size)
 
 
 def _discrete_duration_counts(log_dur: ttnn.Tensor, *, batch: int, seq: int) -> list[int]:
@@ -951,6 +1074,29 @@ def _discrete_duration_counts(log_dur: ttnn.Tensor, *, batch: int, seq: int) -> 
 
 # Chunk wide decoder conv along sequence when single-shot L1 still overflows (hidden=1024, seq=4096).
 _CONV1D_CHUNK_ROWS = MATMUL_1D_SEQ_THRESHOLD
+
+
+def _slice_nlc_bsc(
+    t: ttnn.Tensor,
+    *,
+    batch: int,
+    start: int,
+    end: int,
+    channels: int,
+) -> ttnn.Tensor:
+    """Slice ``[B, S, C]`` (or mesh ``[B, 1, S, C]``) along sequence."""
+    rank = len(t.shape)
+    if rank == 4:
+        begins = [0, 0, start, 0]
+        ends = [batch, 1, end, channels]
+        strides = [1, 1, 1, 1]
+    elif rank == 3:
+        begins = [0, start, 0]
+        ends = [batch, end, channels]
+        strides = [1, 1, 1]
+    else:
+        raise RuntimeError(f"_slice_nlc_bsc: expected rank 3 or 4, got {rank} shape {tuple(t.shape)}")
+    return ttnn.slice(t, begins, ends, strides, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 def _conv1d_out_to_nlc(out: ttnn.Tensor, *, batch: int, out_channels: int) -> ttnn.Tensor:
@@ -1126,12 +1272,12 @@ def _conv1d_same(
         in_start = max(0, start - padding)
         in_end = min(seq, end + padding)
         win_len = in_end - in_start
-        x_win = ttnn.slice(
+        x_win = _slice_nlc_bsc(
             x_rm,
-            [0, in_start, 0],
-            [batch, in_end, in_channels],
-            [1, 1, 1],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            batch=batch,
+            start=in_start,
+            end=in_end,
+            channels=in_channels,
         )
         out_win = _conv1d_same_impl(
             device,
@@ -1150,12 +1296,12 @@ def _conv1d_same(
         )
         out_start = start - in_start
         if out_start > 0 or chunk_rows < win_len:
-            out_chunk = ttnn.slice(
+            out_chunk = _slice_nlc_bsc(
                 out_win,
-                [0, out_start, 0],
-                [batch, out_start + chunk_rows, out_channels],
-                [1, 1, 1],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                batch=batch,
+                start=out_start,
+                end=out_start + chunk_rows,
+                channels=out_channels,
             )
             ttnn.deallocate(out_win)
         else:
@@ -1266,7 +1412,7 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
             seq = seq if seq is not None else m_actual
 
         m = _bias_token_rows(bias) if bias is not None else TILE
-        if m_actual > m or _weight_is_dram_width_sharded(weight):
+        if self._tp == 1 and (m_actual > m or _weight_is_dram_width_sharded(weight)):
             out, self._chunked_linear_compute_cfg = _linear_dram_chunked(
                 self.device,
                 dram_matmul_pc_cache=self._dram_matmul_pc_cache,
@@ -1285,13 +1431,29 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
                 n=n,
             )
             return out
+        if self._tp > 1 and m_actual > TILE:
+            return _linear_matmul_1d_chunked(
+                self.device,
+                x,
+                weight,
+                bias,
+                activation=activation,
+                batch=batch,
+                seq=seq,
+                m_actual=m_actual,
+                k=k,
+                n=n,
+                logical_out_dim=logical_out_dim,
+                compute_kernel_config=self._linear_ln_compute_cfg,
+            )
 
         if program_config is None:
             program_config = self._matmul_pc(m_actual, k, n)
+        linear_mc = ttnn.DRAM_MEMORY_CONFIG if m_actual > TILE else ttnn.L1_MEMORY_CONFIG
         kwargs: dict = dict(
             bias=bias,
             activation=activation,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=linear_mc,
             compute_kernel_config=self._linear_ln_compute_cfg,
         )
         if program_config is not None:
@@ -1344,31 +1506,30 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
         )
         qkv_4d = ttnn.reshape(qkv, (batch, 1, seq, qkv_out_dim))
 
+        attn_mc = ttnn.DRAM_MEMORY_CONFIG if seq > TILE else ttnn.L1_MEMORY_CONFIG
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv_4d,
             num_heads=num_heads,
             num_kv_heads=num_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=attn_mc,
         )
         ttnn.deallocate(qkv_4d)
 
-        attn_out = ttnn.transformer.scaled_dot_product_attention(
+        attn_out = _t2u_scaled_dot_product_attention(
             q,
             k,
             v,
-            attn_mask=attn_mask,
-            is_causal=False,
-            scale=1.0 / math.sqrt(head_dim),
-            program_config=sdpa_cfg,
-            compute_kernel_config=self._sdpa_compute_cfg,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            attn_mask,
+            seq=seq,
+            head_dim=head_dim,
+            tp=self._tp,
+            sdpa_cfg=sdpa_cfg,
+            sdpa_compute_cfg=self._sdpa_compute_cfg,
+            attn_matmul_compute_cfg=self._sdpa_compute_cfg,
         )
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
 
-        merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=attn_mc)
         ttnn.deallocate(attn_out)
         # For TP>1: merged dim = num_local_heads * head_dim = hidden_size // tp.
         local_hidden = num_heads * head_dim
@@ -1387,8 +1548,10 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
         ttnn.deallocate(merged)
         # TP all_reduce: row-parallel out_proj gives partial sums; sum to full hidden.
         if self._tp > 1:
-            proj = all_reduce_sum_replicate(proj, self.device, cluster_axis=self._cluster_axis)
-        return proj
+            reduce_mc = ttnn.DRAM_MEMORY_CONFIG if seq > TILE else ttnn.L1_MEMORY_CONFIG
+            proj = ensure_interleaved_bsh(proj, batch=batch, seq=seq, channels=hidden_size)
+            proj = all_reduce_sum_replicate(proj, self.device, cluster_axis=self._cluster_axis, memory_config=reduce_mc)
+        return ensure_interleaved_bsh(proj, batch=batch, seq=seq, channels=hidden_size)
 
     def forward(self, inputs_embeds: ttnn.Tensor, attention_mask_4d: ttnn.Tensor) -> ttnn.Tensor:
         parameters = self.parameters
@@ -1449,6 +1612,8 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
                 seq=seq,
             )
             ttnn.deallocate(normed)
+            if self._tp > 1:
+                ff = ensure_interleaved_bsh(ff, batch=batch, seq=seq, channels=ffn_dim)
             ff = self._linear(
                 ff,
                 layer.ffn.fc2.weight,
@@ -1459,7 +1624,10 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
             )
             # TP all_reduce: row-parallel fc2 gives partial sums; sum to full hidden.
             if self._tp > 1:
-                ff = all_reduce_sum_replicate(ff, self.device, cluster_axis=self._cluster_axis)
+                reduce_mc = ttnn.DRAM_MEMORY_CONFIG if seq > TILE else ttnn.L1_MEMORY_CONFIG
+                ff = ensure_interleaved_bsh(ff, batch=batch, seq=seq, channels=hidden_size)
+                ff = all_reduce_sum_replicate(ff, self.device, cluster_axis=self._cluster_axis, memory_config=reduce_mc)
+                ff = ensure_interleaved_bsh(ff, batch=batch, seq=seq, channels=hidden_size)
             hidden = ttnn.add(hidden, ff, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(ff)
 
@@ -1510,7 +1678,16 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         # TP: number of devices in tensor-parallel group.
         self._tp = get_tp(device)
         self._cluster_axis = mesh_cluster_axis(device)
+        if encoder_attention_heads % self._tp != 0:
+            raise ValueError(
+                f"T2U encoder_attention_heads ({encoder_attention_heads}) must be divisible by tp ({self._tp})."
+            )
+        if decoder_attention_heads % self._tp != 0:
+            raise ValueError(
+                f"T2U decoder_attention_heads ({decoder_attention_heads}) must be divisible by tp ({self._tp})."
+            )
         self._num_local_dec_heads = decoder_attention_heads // self._tp
+        self._forward_trace_rt: Optional[T2UForwardTraceRuntime] = None
 
         self.encoder = TTSeamlessM4Tv2TextToUnitEncoder(
             device,
@@ -1724,7 +1901,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             seq = seq if seq is not None else m_actual
 
         m = _bias_token_rows(bias) if bias is not None else TILE
-        if dtype is None and (m_actual > m or _weight_is_dram_width_sharded(weight)):
+        if dtype is None and self._tp == 1 and (m_actual > m or _weight_is_dram_width_sharded(weight)):
             out, self._chunked_linear_compute_cfg = _linear_dram_chunked(
                 self.device,
                 dram_matmul_pc_cache=self._dram_matmul_pc_cache,
@@ -1743,14 +1920,30 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
                 n=n,
             )
             return out
+        if dtype is None and self._tp > 1 and m_actual > TILE:
+            return _linear_matmul_1d_chunked(
+                self.device,
+                x,
+                weight,
+                bias,
+                activation=activation,
+                batch=batch,
+                seq=seq,
+                m_actual=m_actual,
+                k=k,
+                n=n,
+                logical_out_dim=logical_out_dim,
+                compute_kernel_config=self._linear_ln_compute_cfg,
+            )
 
         if program_config is None:
             program_config = self._matmul_pc(m_actual, k, n)
-        mem = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
+        if memory_config is None:
+            memory_config = ttnn.DRAM_MEMORY_CONFIG if m_actual > TILE else ttnn.L1_MEMORY_CONFIG
         kwargs: dict = dict(
             bias=bias,
             activation=activation,
-            memory_config=mem,
+            memory_config=memory_config,
             compute_kernel_config=self._linear_ln_compute_cfg,
         )
         if program_config is not None:
@@ -1816,31 +2009,30 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         )
         qkv_4d = ttnn.reshape(qkv, (batch, 1, seq, qkv_out_dim))
 
+        attn_mc = ttnn.DRAM_MEMORY_CONFIG if seq > TILE else ttnn.L1_MEMORY_CONFIG
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv_4d,
             num_heads=num_heads,
             num_kv_heads=num_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=attn_mc,
         )
         ttnn.deallocate(qkv_4d)
 
-        attn_out = ttnn.transformer.scaled_dot_product_attention(
+        attn_out = _t2u_scaled_dot_product_attention(
             q,
             k,
             v,
-            attn_mask=attn_mask,
-            is_causal=False,
-            scale=1.0 / math.sqrt(head_dim),
-            program_config=sdpa_cfg,
-            compute_kernel_config=self._sdpa_compute_cfg,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            attn_mask,
+            seq=seq,
+            head_dim=head_dim,
+            tp=self._tp,
+            sdpa_cfg=sdpa_cfg,
+            sdpa_compute_cfg=self._sdpa_compute_cfg,
+            attn_matmul_compute_cfg=self._sdpa_compute_cfg,
         )
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
 
-        merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=attn_mc)
         ttnn.deallocate(attn_out)
         # For TP>1: local hidden = num_local_heads * head_dim = hidden_size // tp.
         local_hidden = num_heads * head_dim
@@ -1859,8 +2051,10 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         ttnn.deallocate(merged)
         # TP all_reduce: sum partial row-parallel results across devices.
         if self._tp > 1:
-            proj = all_reduce_sum_replicate(proj, self.device, cluster_axis=self._cluster_axis)
-        return proj
+            reduce_mc = ttnn.DRAM_MEMORY_CONFIG if seq > TILE else ttnn.L1_MEMORY_CONFIG
+            proj = ensure_interleaved_bsh(proj, batch=batch, seq=seq, channels=hidden_size)
+            proj = all_reduce_sum_replicate(proj, self.device, cluster_axis=self._cluster_axis, memory_config=reduce_mc)
+        return ensure_interleaved_bsh(proj, batch=batch, seq=seq, channels=hidden_size)
 
     def _duration_predictor(
         self, char_hidden: ttnn.Tensor, char_padding_mask_tt: ttnn.Tensor, *, seq: int
@@ -2072,10 +2266,10 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             frame_idx_f32=char_frame_f32,
             frame_idx_cache=None if full_trace_prebuf else self._frame_idx_cache,
         )
-        # Upsampled character length equals ``sum(char_count_per_id)`` (batch 1); do not rely on
-        # ``up1.shape[1]`` alone — tile layout can report incorrect logical widths to Python.
+        # Upsampled character length equals ``sum(char_count_per_id)`` (batch 1). On multi-device
+        # meshes ``up1.shape[1]`` may reflect a single shard, not the logical width.
         char_len = char_seq_total
-        if int(up1.shape[1]) != char_len:
+        if self._tp == 1 and int(up1.shape[1]) != char_len:
             raise RuntimeError(
                 f"char upsample width mismatch: up1.shape[1]={int(up1.shape[1])} vs sum(char_count)={char_len}."
             )
@@ -2147,7 +2341,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         )
         ttnn.deallocate(char_h)
         unit_seq = int(sum(dur_list))
-        if int(up2.shape[1]) != unit_seq:
+        if self._tp == 1 and int(up2.shape[1]) != unit_seq:
             raise RuntimeError(
                 f"unit upsample width mismatch: up2.shape[1]={int(up2.shape[1])} vs sum(dur_list)={unit_seq}."
             )
@@ -2217,6 +2411,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         num_heads = self._num_local_dec_heads
         head_dim = self.hidden_size // self.decoder_attention_heads
         sdpa_cfg = self._sdpa_program_config(padded_unit_seq, padded_unit_seq)
+        self._long_seq_mc = ttnn.DRAM_MEMORY_CONFIG if padded_unit_seq > TILE else None
 
         for i in range(self.decoder_layers):
             hidden = self._decoder_layer(
@@ -2283,3 +2478,91 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         # Return a copy so callers may ``deallocate`` without invalidating ``_decoder_mask_cache``.
         pad_out = ttnn.clone(pad_unit, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits, pad_out
+
+    def release_forward_trace(self) -> None:
+        """Release a captured T2U forward Metal trace (safe if none is active)."""
+        rt = self._forward_trace_rt
+        if rt is None:
+            return
+        try:
+            ttnn.release_trace(self.device, rt.trace_id)
+        except Exception:
+            pass
+        self._forward_trace_rt = None
+
+    def capture_forward_trace(
+        self,
+        inputs_embeds: ttnn.Tensor,
+        encoder_attention_mask_4d: ttnn.Tensor,
+        char_input_ids: ttnn.Tensor,
+        char_count_per_id: Sequence[int],
+        *,
+        reference_discrete_durations: Sequence[int],
+        hard_upsample_cums: T2UTraceHardUpsampleCumsums,
+    ) -> None:
+        """Capture Metal trace for one T2U forward (compile outside trace, then capture on CQ0).
+
+        Inputs and ``hard_upsample_cums`` must be fully pre-built on device (see
+        ``make_t2u_trace_prealloc_tensors``). Call ``prewarm_conv1d_weights`` before capture.
+        """
+        if self._forward_trace_rt is not None:
+            return
+
+        cc_list = [int(x) for x in char_count_per_id]
+        char_len = int(sum(cc_list))
+        unit_seq = int(sum(int(x) for x in reference_discrete_durations))
+        padded_unit_seq = ((unit_seq + 31) // 32) * 32
+
+        self.prewarm_conv1d_weights(char_len=char_len, padded_unit_seq=padded_unit_seq)
+        ttnn.synchronize_device(self.device)
+
+        fwd_kw = dict(
+            reference_discrete_durations=reference_discrete_durations,
+            hard_upsample_cums=hard_upsample_cums,
+            trace_no_profiler=True,
+        )
+
+        compile_logits, compile_pad = self.forward(
+            inputs_embeds,
+            encoder_attention_mask_4d,
+            char_input_ids,
+            cc_list,
+            **fwd_kw,
+        )
+        ttnn.synchronize_device(self.device)
+        ttnn.deallocate(compile_logits)
+        ttnn.deallocate(compile_pad)
+
+        capture_logits: Optional[ttnn.Tensor] = None
+        capture_pad: Optional[ttnn.Tensor] = None
+
+        def traced_step() -> None:
+            nonlocal capture_logits, capture_pad
+            capture_logits, capture_pad = self.forward(
+                inputs_embeds,
+                encoder_attention_mask_4d,
+                char_input_ids,
+                cc_list,
+                **fwd_kw,
+            )
+
+        trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        traced_step()
+        ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+        if capture_logits is None or capture_pad is None:
+            raise RuntimeError("T2U forward trace capture produced no outputs.")
+        ttnn.synchronize_device(self.device)
+        self._forward_trace_rt = T2UForwardTraceRuntime(
+            trace_id=trace_id,
+            logits_tt=capture_logits,
+            padding_tt=capture_pad,
+            hard_upsample_cums=hard_upsample_cums,
+        )
+
+    def execute_forward_trace(self) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Replay a captured T2U forward trace on CQ0 (inputs must match capture)."""
+        rt = self._forward_trace_rt
+        if rt is None:
+            raise RuntimeError("T2U forward trace not captured; call capture_forward_trace first.")
+        ttnn.execute_trace(self.device, rt.trace_id, cq_id=0, blocking=True)
+        return rt.logits_tt, rt.padding_tt
