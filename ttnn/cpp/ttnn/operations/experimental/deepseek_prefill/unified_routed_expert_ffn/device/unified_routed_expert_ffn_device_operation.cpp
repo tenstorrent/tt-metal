@@ -4,6 +4,9 @@
 
 #include "unified_routed_expert_ffn_device_operation.hpp"
 
+#include <initializer_list>
+#include <utility>
+
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
@@ -22,10 +25,12 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& op, const tensor_args_t& t) {
     TT_FATAL(t.x.storage_type() == tt::tt_metal::StorageType::DEVICE, "x must be on device");
-    TT_FATAL(
-        t.x.dtype() == tt::tt_metal::DataType::BFLOAT8_B || t.x.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "x must be BFLOAT8_B or BFLOAT16, got {}",
-        t.x.dtype());
+    // x is restricted to BFLOAT8_B for v1 — the only dtype the existing
+    // callers (TtRoutedExpert typecasts the dispatched buffer to BF8_B
+    // before this op) and tests exercise. The kernel CB-size config can
+    // also accept BFLOAT16, but that path is untested; reintroduce when
+    // a real caller + PCC test for BF16 lands.
+    TT_FATAL(t.x.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "x must be BFLOAT8_B, got {}", t.x.dtype());
     TT_FATAL(t.x.layout() == tt::tt_metal::Layout::TILE, "x must be TILE layout");
     TT_FATAL(is_dram_interleaved(t.x), "x must be DRAM-interleaved");
     TT_FATAL(t.x.logical_shape().rank() >= 2, "x must have rank >= 2, got rank {}", t.x.logical_shape().rank());
@@ -57,9 +62,26 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(x_shape[-2] % TILE == 0, "x M ({}) must be tile-aligned", x_shape[-2]);
     TT_FATAL(op.chunk_M_tiles > 0, "chunk_M_tiles must be > 0");
 
-    TT_FATAL(t.counts.dtype() == tt::tt_metal::DataType::UINT32, "counts must be UINT32");
-    TT_FATAL(
-        t.global_expert_idx_table.dtype() == tt::tt_metal::DataType::UINT32, "global_expert_idx_table must be UINT32");
+    // Weight tensors share x's storage / layout / memory contract — fail
+    // host-side if the caller forgot to upload one, picked the wrong layout,
+    // or sharded weights (the kernel reader assumes DRAM-interleaved).
+    for (const auto& [name, w] : std::initializer_list<std::pair<const char*, const ttnn::Tensor&>>{
+             {"gate_proj", t.gate_proj}, {"up_proj", t.up_proj}, {"down_proj", t.down_proj}}) {
+        TT_FATAL(w.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+        TT_FATAL(w.layout() == tt::tt_metal::Layout::TILE, "{} must be TILE layout", name);
+        TT_FATAL(is_dram_interleaved(w), "{} must be DRAM-interleaved", name);
+    }
+
+    // Aux tensors: counts / global_expert_idx_table / expert_region_offsets
+    // are all small UINT32 vectors the reader fetches via DRAM accessor.
+    for (const auto& [name, a] : std::initializer_list<std::pair<const char*, const ttnn::Tensor&>>{
+             {"counts", t.counts},
+             {"global_expert_idx_table", t.global_expert_idx_table},
+             {"expert_region_offsets", t.expert_region_offsets}}) {
+        TT_FATAL(a.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+        TT_FATAL(a.dtype() == tt::tt_metal::DataType::UINT32, "{} must be UINT32", name);
+        TT_FATAL(is_dram_interleaved(a), "{} must be DRAM-interleaved", name);
+    }
     TT_FATAL(
         op.local_expert_id < t.global_expert_idx_table.logical_shape()[-1],
         "local_expert_id ({}) >= idx_table size ({})",
