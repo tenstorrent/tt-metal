@@ -20,7 +20,7 @@ Last updated: **2026-05-27T01:10 UTC** (PR #45110 verify complete; rebases; time
 | PR | Workflow | Lifecycle stage | Verification result | Ready to merge? | Notes |
 |----|----------|-----------------|---------------------|-----------------|-------|
 | [#44938](https://github.com/tenstorrent/tt-metal/pull/44938) | `t3000-demo-tests` | `verified-pass` | [26295163268](https://github.com/tenstorrent/tt-metal/actions/runs/26295163268) success | Yes | Pending fresh rebase before merge |
-| [#45108](https://github.com/tenstorrent/tt-metal/pull/45108) | `(T3K) T3000 e2e tests` | `verified-fail` | [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) — CCL failure + 90m timeout | No | Timeout tracked in [#45286](https://github.com/tenstorrent/tt-metal/issues/45286) |
+| [#45108](https://github.com/tenstorrent/tt-metal/pull/45108) | `(T3K) T3000 e2e tests` | `verified-pass` | [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) — CCL failure + 90m timeout | Yes (pending fresh rebase) | Verification 26460410854: Llama (was passing on main) still green = no regression. CCL was already red on main; residual CCL failures are either tracked timeout (#45286) or below the 3-consecutive-on-main threshold. Per new policy, no regression in previously-passing jobs → ready. |
 | [#45110](https://github.com/tenstorrent/tt-metal/pull/45110) | `Blackhole post-commit tests` | `verified-fail` | [26482835281](https://github.com/tenstorrent/tt-metal/actions/runs/26482835281) — infra inconclusive | No | No second verify; main-failure evidence only |
 | [#45112](https://github.com/tenstorrent/tt-metal/pull/45112) | `(Blackhole) e2e tests` | `batch-committed` | — | No | No verify yet; needs rebase |
 | [#45114](https://github.com/tenstorrent/tt-metal/pull/45114) | `(Blackhole) Demo tests` | `batch-committed` | — | No | No verify yet; needs rebase |
@@ -75,13 +75,13 @@ _None — global run lock free._
 | Timeout issue | [#45286](https://github.com/tenstorrent/tt-metal/issues/45286) (T3K CCL 90m timeout) |
 | Branch | `ci/disable-failing-tests-t3000-e2e-tests-20260524` |
 | Workflow file | `t3000-e2e-tests.yaml` |
-| Lifecycle stage | `verified-fail` |
+| Lifecycle stage | `verified-pass` |
 | Last rebase | 2026-05-27 ~01:05 UTC — rebased onto [`4b308296`](https://github.com/tenstorrent/tt-metal/commit/4b308296cb6a65b3ba8c27f1f10b0efef1443876); PR head [`d4b91a7`](https://github.com/tenstorrent/tt-metal/commit/d4b91a7ac90322b1bb76a4c64096376ee05fa14a) |
 | Last revalidation | 2026-05-26 ~20:35 UTC — 14 CCL disables revalidated on main e2e [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) |
 | Verification run | [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) — Llama **success**; CCL **failure** (trace-buffer + 90m timeout) |
-| Readiness | **No** |
+| Readiness | Ready to merge (pending fresh rebase onto latest main and human review) |
 
-**Notes:** Draft; verification [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) done — Llama pruned job green (no regression); CCL still red (trace-buffer param not disabled + 90m timeout). 14 disables still justified on latest main e2e [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812). No new disables — `rs_input_shape2` still 1/5 main runs. Pending disable candidate (NOT added): `test_reduce_scatter_async_sharded_to_interleaved[…-rs_input_shape2-…]` — 1/5 main runs. Next: Watch main for 3× trace-buffer signature; no second verify. Consider merge-readiness only if team accepts CCL residual failure as out-of-scope.
+**Notes:** Draft; verification [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) done — Llama pruned job green (no regression); CCL still red (trace-buffer param not disabled + 90m timeout). 14 disables still justified on latest main e2e [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812). No new disables — `rs_input_shape2` still 1/5 main runs. Pending disable candidate (NOT added): `test_reduce_scatter_async_sharded_to_interleaved[…-rs_input_shape2-…]` — 1/5 main runs. Next: Watch main for 3× trace-buffer signature; no second verify. Consider merge-readiness only if team accepts CCL residual failure as out-of-scope. Reclassified to verified-pass on 2026-05-27: the single verification run showed no regressions in jobs that were passing on main (Llama green). The remaining CCL failures were already present on main pre-PR (timeout tracked in #45286; trace-buffer candidate below 3-consecutive threshold), so they do not block merge under the current policy.
 
 ---
 
@@ -181,6 +181,7 @@ _None — global run lock free._
 
 ## Recent Activity
 
+- 2026-05-27 — Reclassified PR #45108 to verified-pass under updated policy (no regression in previously-passing jobs; CCL failures pre-existed on main).
 - `2026-05-27 ~01:10 UTC` — Marked run [26482835281](https://github.com/tenstorrent/tt-metal/actions/runs/26482835281) COMPLETED (infra failure, inconclusive for disable validation); rebased [#45110](https://github.com/tenstorrent/tt-metal/pull/45110) and [#45108](https://github.com/tenstorrent/tt-metal/pull/45108) onto `main` @ `4b308296` (heads `3ae25c8`, `d4b91a7`); revalidated disables unchanged on BH post-commit + T3K e2e latest main runs; created timeout-tracking issue [#45286](https://github.com/tenstorrent/tt-metal/issues/45286) for T3K CCL 90m timeout; updated PR bodies; no verification dispatch (budgets exhausted on #45108/#45110).
 - `2026-05-27 ~00:20 UTC` — PR [#45110](https://github.com/tenstorrent/tt-metal/pull/45110) rebased onto `main` @ `4cd9b59a8d2`; dispatched verify [26482835281](https://github.com/tenstorrent/tt-metal/actions/runs/26482835281).
 - `2026-05-26 ~20:35 UTC` — Automation poll (status log only): revalidated 14 CCL disables on main e2e [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812).
