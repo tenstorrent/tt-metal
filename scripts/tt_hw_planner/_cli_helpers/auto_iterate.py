@@ -1866,8 +1866,16 @@ def _run_auto_iterate_loop(
                 _exclude = set([iter_target_component]) | set(permanently_skipped)
                 _at_cap_now = {c for c in _ungraduated_now if _is_at_cap(c)}
                 _exclude |= _at_cap_now
+                _ungraduated_ranked = sorted(
+                    _ungraduated_now,
+                    key=lambda c: (
+                        attempts_per_component.get(c, 0),
+                        consecutive_same_class_attempts.get(c, 0),
+                        c,
+                    ),
+                )
                 _extra_targets = pick_n_distinct_targets(
-                    _ungraduated_now, n=parallel_agents - 1, exclude=list(_exclude)
+                    _ungraduated_ranked, n=parallel_agents - 1, exclude=list(_exclude)
                 )
                 if _at_cap_now:
                     print(f"  [parallel] skipping at-cap component(s) from extras: " f"{sorted(_at_cap_now)}")
