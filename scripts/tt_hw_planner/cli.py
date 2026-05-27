@@ -7676,15 +7676,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     pup.add_argument(
         "--parallel-agents",
         type=int,
-        default=1,
+        default=6,
         help=(
-            "Number of LLM agents to run concurrently per iter (default: 1, "
-            "serial). When >1, the loop picks N distinct ungraduated "
-            "components, builds a prompt for each, and spawns N concurrent "
-            "agent calls in the same worktree. After all return, the loop "
-            "continues with the normal apply + validation sweep. Lifts the "
-            "per-iter throughput from 1 to N at the cost of N concurrent "
-            "Anthropic API calls (mind rate limits)."
+            "Number of LLM agents to run concurrently per iter (default: 6). "
+            "The loop picks N distinct ungraduated components, builds a "
+            "prompt for each, and spawns N concurrent agent calls in the "
+            "same worktree. After all return, the loop continues with the "
+            "normal apply + validation sweep. Pass 1 for legacy serial "
+            "behaviour. Past 6, prompts begin to dilute and concurrent "
+            "Anthropic API calls risk rate-limit throttling."
         ),
     )
     pup.add_argument(

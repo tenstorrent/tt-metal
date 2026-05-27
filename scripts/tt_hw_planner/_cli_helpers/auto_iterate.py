@@ -1851,9 +1851,13 @@ def _run_auto_iterate_loop(
 
             _parallel_extra_jobs = []
             if parallel_agents > 1 and iter_target_component:
+                from .iter_prompt import (
+                    assemble_iter_prompt,
+                    build_per_target_blocks,
+                    build_target_header,
+                )
                 from .parallel_iterate import (
                     AgentJob,
-                    build_target_focused_prompt,
                     pick_n_distinct_targets,
                     run_parallel_agents,
                 )
@@ -1865,14 +1869,34 @@ def _run_auto_iterate_loop(
                 )
                 for _extra in _extra_targets:
                     _extra_attempts = attempts_per_component.get(_extra, 0)
-                    _extra_failure_class = last_failure_class_per_component.get(_extra, "")
-                    _extra_failure_block = per_comp_failure.get(_extra, "")
-                    _extra_prompt = build_target_focused_prompt(
-                        base_prompt=prompt,
+                    _extra_blocks = build_per_target_blocks(
+                        demo_dir=demo_dir,
+                        target_component=_extra,
+                        per_comp_failure=per_comp_failure,
+                        last_failure_class_per_component=last_failure_class_per_component,
+                        attempts_per_component=attempts_per_component,
+                        focused_stub_excerpts=focused_stub_excerpts if any_wrapper_seen else [],
+                        strict_native=strict_native,
+                    )
+                    _extra_target_header = build_target_header(
                         target_component=_extra,
                         attempts_so_far=_extra_attempts,
-                        prior_failure_class=_extra_failure_class,
-                        prior_failure_block=_extra_failure_block,
+                        prior_failure_class=_extra_blocks["failure_class"],
+                    )
+                    _extra_prompt = assemble_iter_prompt(
+                        hw_header=hw_header,
+                        task_block=task_block,
+                        systemic_block=systemic_block,
+                        shape_probe_block=shape_probe_block,
+                        agentic_block=agentic_block,
+                        budget_clause=budget_clause,
+                        failure_context=_extra_blocks["failure_context"],
+                        strategy_directive=_extra_blocks["strategy_directive"],
+                        escalated_scope_block=_extra_blocks["escalated_scope_block"],
+                        native_directive=_extra_blocks["native_directive"],
+                        cross_component_block=_extra_blocks["cross_component_block"],
+                        components_block=components_block,
+                        target_header=_extra_target_header,
                     )
                     _parallel_extra_jobs.append(
                         AgentJob(
