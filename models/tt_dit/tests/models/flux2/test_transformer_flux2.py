@@ -259,7 +259,7 @@ def test_transformer(
         (1, 1024, 1024, 512),
     ],
 )
-@pytest.mark.parametrize("xformer_idx", [0, 1, 3], ids=["x_single", "x_double", "x_both"])
+@pytest.mark.parametrize("xformer_idx", [0, 1, 3, 4], ids=["x_single", "x_double", "x_both", "x_all"])
 def test_transformer_profile(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -286,10 +286,13 @@ def test_transformer_profile(
         model_name, subfolder="transformer", torch_dtype=torch.bfloat16
     )
     torch_model.eval()
-    torch_model.transformer_blocks = torch.nn.ModuleList([torch_model.transformer_blocks[0]] if xformer_idx > 0 else [])
-    torch_model.single_transformer_blocks = torch.nn.ModuleList(
-        [torch_model.single_transformer_blocks[0]] if xformer_idx != 1 else []
-    )
+    if xformer_idx != 4:
+        torch_model.transformer_blocks = torch.nn.ModuleList(
+            [torch_model.transformer_blocks[0]] if xformer_idx > 0 else []
+        )
+        torch_model.single_transformer_blocks = torch.nn.ModuleList(
+            [torch_model.single_transformer_blocks[0]] if xformer_idx != 1 else []
+        )
 
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
