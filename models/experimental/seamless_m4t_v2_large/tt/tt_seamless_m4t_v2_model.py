@@ -822,8 +822,12 @@ class TTSeamlessM4Tv2Model:
             rt.token_tt,
             cq_id=1,
         )
-        # Position IDs for a single-token decode step: [position] for each batch element.
-        pos_cpu = torch.full((batch_size, 1), position, dtype=torch.int32)
+        # Position IDs must match what ``tt_position_ids_decode_step`` computes on CQ0.
+        # For a non-pad decode token the formula is: (cumsum + position) * mask + pad_id
+        # = (1 + position) * 1 + pad_id = 1 + position + pad_id.
+        # We compute this on the host to avoid issuing CQ0 device ops during the CQ1 window.
+        pos_val = 1 + position + self.pad_token_id
+        pos_cpu = torch.full((batch_size, 1), pos_val, dtype=torch.int32)
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(pos_cpu, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
             rt.pos_tt,
@@ -1842,6 +1846,16 @@ class TTSeamlessM4Tv2Model:
                 else:
                     decode_steps_remaining = max_new_tokens - 1
 
+            # 2CQ event state — initialized once before the decode loop so the CQ0-done
+            # signal persists across iterations.  ``_2cq_op_event`` represents "CQ0 has
+            # finished the previous trace; CQ1 is safe to overwrite the decode buffers."
+            # After each execute_trace we record a fresh op_event so the next iteration
+            # waits for the correct execution boundary.
+            _2cq_op_event = None
+            if use_decode_trace and use_2cq and not do_sample:
+                # CQ0 is idle after prefill; record the initial "done" event.
+                _2cq_op_event = ttnn.record_event(self.device, 0)
+
             for _decode_step in range(decode_steps_remaining):
                 cur_tok = int(seq_host[cur_pos])
                 # Sampling does not use the trace (random token breaks the traced path).
@@ -1861,13 +1875,17 @@ class TTSeamlessM4Tv2Model:
                                 batch_size=batch_size,
                             )
                         else:
-                            # Upload on CQ1 while previous trace finished on CQ0.
-                            op_event = ttnn.record_event(self.device, 0)
-                            ttnn.wait_for_event(1, op_event)
+                            # CQ1 waits until CQ0 has finished the previous trace
+                            # (decode input buffers are free to be overwritten).
+                            ttnn.wait_for_event(1, _2cq_op_event)
+                            # Upload next-step token + position on CQ1 while CQ0 is idle.
                             self._upload_kv_decode_step_inputs_cq1(cur_tok, cur_pos, batch_size)
                             write_event = ttnn.record_event(self.device, 1)
+                            # CQ0 waits for CQ1 uploads before executing the trace.
                             ttnn.wait_for_event(0, write_event)
                             ttnn.execute_trace(self.device, rt.trace_id, cq_id=0, blocking=True)
+                            # Update op_event: CQ0 has finished this trace step.
+                            _2cq_op_event = ttnn.record_event(self.device, 0)
                             logits = rt.logits_tt
                     else:
                         logits = self._decode_token_with_kv_cache_traced(

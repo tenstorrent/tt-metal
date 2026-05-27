@@ -710,14 +710,24 @@ def all_reduce_sum_replicate(
     # all_gather concatenates along last dim: [B, S, H] → [B, S, tp*H]
     H = int(x.shape[-1])
     rank = len(x.shape)
-    gathered = ttnn.all_gather(
-        x,
-        dim=rank - 1,
-        num_links=1,
-        cluster_axis=cluster_axis,
-        mesh_device=mesh_device,
-        memory_config=memory_config,
-    )
+    try:
+        gathered = ttnn.all_gather(
+            x,
+            dim=rank - 1,
+            num_links=1,
+            cluster_axis=cluster_axis,
+            mesh_device=mesh_device,
+            memory_config=memory_config,
+        )
+    except TypeError:
+        # Newer TTNN all_gather API infers mesh from ``x`` and no longer accepts ``mesh_device``.
+        gathered = ttnn.all_gather(
+            x,
+            dim=rank - 1,
+            num_links=1,
+            cluster_axis=cluster_axis,
+            memory_config=memory_config,
+        )
 
     # Sum tp slices: each slice [B, S, H] contributes to the full output.
     tp = num_devices
