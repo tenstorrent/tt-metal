@@ -25,13 +25,14 @@ import math
 import os as _os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 
 import ttnn
 
 from .math_perf_env import (
+    ace_step_attn_qo_weight_dtype,
     ace_step_cond_linear_program_config,
     ace_step_cond_mlp_gate_up_linear_program_config,
     ace_step_cond_rms_norm_kwargs,
@@ -253,6 +254,8 @@ class TtQwen3EncoderMLP:
         linear_output_l1_memory_config=None,
         use_cond_linear_program_config: bool = True,
         mlp_weight_dtype=None,
+        mlp_gate_weight_dtype=None,
+        mlp_down_weight_dtype=None,
     ):
         self.device = device
         self.mem = mem
@@ -268,18 +271,24 @@ class TtQwen3EncoderMLP:
 
         _proj_dtype = ace_step_linear_weight_dtype(ttnn, dtype)
         w_dtype = mlp_weight_dtype if mlp_weight_dtype is not None else _proj_dtype
+        _gate_dtype = (
+            mlp_gate_weight_dtype if mlp_gate_weight_dtype is not None else ace_step_attn_qo_weight_dtype(ttnn, dtype)
+        )
+        _down_dtype = (
+            mlp_down_weight_dtype if mlp_down_weight_dtype is not None else ace_step_attn_qo_weight_dtype(ttnn, dtype)
+        )
 
-        def as_w(name: str):
+        def as_w(name: str, *, dtype: Any | None = None):
             return ttnn.as_tensor(
                 weights_np[f"{base}.{name}.weight"],
                 device=device,
-                dtype=w_dtype,
+                dtype=dtype if dtype is not None else w_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=mem,
                 mesh_mapper=mapper,
             )
 
-        self.w_down = as_w("down_proj")
+        self.w_down = as_w("down_proj", dtype=_down_dtype)
         # Wide cond MLPs (e.g. timbre 6144×2048 gate/up): L1 linear outputs clash with matmul
         # static CBs (L1 buffer @ 1096832 vs CB end @ 1167872 on Blackhole). Keep DRAM activations.
         self._mlp_keep_dram_activations = int(intermediate_size) >= 4608
@@ -291,7 +300,7 @@ class TtQwen3EncoderMLP:
             self.w_gate_up = ttnn.as_tensor(
                 gate_up_host,
                 device=device,
-                dtype=w_dtype,
+                dtype=_gate_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=mem,
                 mesh_mapper=mapper,
@@ -299,8 +308,8 @@ class TtQwen3EncoderMLP:
             self.w_gate = None
             self.w_up = None
         else:
-            self.w_gate = as_w("gate_proj")
-            self.w_up = as_w("up_proj")
+            self.w_gate = as_w("gate_proj", dtype=_gate_dtype)
+            self.w_up = as_w("up_proj", dtype=_gate_dtype)
             self.w_gate_up = None
 
     def _l1_activation(self, t: ttnn.Tensor) -> ttnn.Tensor:
@@ -423,6 +432,7 @@ class _TtQwen3EncoderLayer:
         linear_output_l1_memory_config=None,
         use_cond_linear_program_config: bool = True,
         projection_dtype=None,
+        attn_qo_dtype=None,
         mlp_weight_dtype=None,
     ):
         self.device = device
@@ -431,6 +441,7 @@ class _TtQwen3EncoderLayer:
         self._proj_dtype = (
             projection_dtype if projection_dtype is not None else ace_step_linear_weight_dtype(ttnn, dtype)
         )
+        self._attn_qo_dtype = attn_qo_dtype if attn_qo_dtype is not None else ace_step_attn_qo_weight_dtype(ttnn, dtype)
         self._mlp_weight_dtype = (
             mlp_weight_dtype if mlp_weight_dtype is not None else ace_step_linear_weight_dtype(ttnn, dtype)
         )
@@ -455,10 +466,15 @@ class _TtQwen3EncoderLayer:
         # Keys: (batch, seq, in_dim, out_dim) — GQA makes q's N (nh*dh) wider than k/v (nkv*dh).
         self._attn_pc_cache: dict = {}
 
-        def as_t(suffix: str, *, row_major: bool = False, proj: bool = False):
+        def as_t(suffix: str, *, row_major: bool = False, proj: bool = False, qo: bool = False):
             key = f"{prefix}.{suffix}"
             layout = ttnn.ROW_MAJOR_LAYOUT if row_major else ttnn.TILE_LAYOUT
-            _d = self._proj_dtype if proj else dtype
+            if qo:
+                _d = self._attn_qo_dtype
+            elif proj:
+                _d = self._proj_dtype
+            else:
+                _d = dtype
             return ttnn.as_tensor(
                 weights_np[key],
                 device=device,
@@ -470,19 +486,19 @@ class _TtQwen3EncoderLayer:
 
         self.input_ln_w = as_t("input_layernorm.weight")
         self.post_ln_w = as_t("post_attention_layernorm.weight")
-        self.wq = as_t("self_attn.q_proj.weight", proj=True)
+        self.wq = as_t("self_attn.q_proj.weight", qo=True)
         wk_host = weights_np[f"{prefix}.self_attn.k_proj.weight"]
         wv_host = weights_np[f"{prefix}.self_attn.v_proj.weight"]
         wkv_host = np.concatenate([wk_host, wv_host], axis=0)
         self.wkv = ttnn.as_tensor(
             wkv_host,
             device=device,
-            dtype=self._proj_dtype,
+            dtype=self._attn_qo_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
             mesh_mapper=mapper,
         )
-        self.wo = as_t("self_attn.o_proj.weight", proj=True)
+        self.wo = as_t("self_attn.o_proj.weight", qo=True)
         self.q_norm_w = as_t("self_attn.q_norm.weight")
         self.k_norm_w = as_t("self_attn.k_norm.weight")
         _mlp_kw = dict(
@@ -501,6 +517,8 @@ class _TtQwen3EncoderLayer:
             mem=mem,
             mapper=mapper,
             mlp_weight_dtype=self._mlp_weight_dtype,
+            mlp_gate_weight_dtype=self._attn_qo_dtype,
+            mlp_down_weight_dtype=self._attn_qo_dtype,
             **_mlp_kw,
         )
 
@@ -659,6 +677,9 @@ class TtQwen3EmbeddingEncoder:
             raise RuntimeError("bfloat16 required")
         _w8 = ace_step_linear_weight_dtype(ttnn, self.dtype)
         self.projection_dtype = projection_dtype if projection_dtype is not None else _w8
+        self.attn_qo_dtype = (
+            projection_dtype if projection_dtype is not None else ace_step_attn_qo_weight_dtype(ttnn, self.dtype)
+        )
         self.mlp_weight_dtype = mlp_weight_dtype if mlp_weight_dtype is not None else _w8
         self.mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         mapper = ttnn.ReplicateTensorToMesh(device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
@@ -720,6 +741,7 @@ class TtQwen3EmbeddingEncoder:
                 mem=self.mem,
                 mapper=mapper,
                 projection_dtype=self.projection_dtype,
+                attn_qo_dtype=self.attn_qo_dtype,
                 mlp_weight_dtype=self.mlp_weight_dtype,
                 **_layer_kw,
             )

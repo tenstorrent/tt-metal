@@ -21,6 +21,7 @@ Production defaults (PCC + perf + E2E — no env toggle):
 - **LoFi** matmul / RMSNorm / SDPA via :func:`ace_step_init_dit_linear_compute_kernel_config`,
   :func:`ace_step_init_cond_linear_compute_kernel_config`, :func:`ace_step_qwen3_optimizations`
 - **``bfloat8_b``** linear projection weights via :func:`ace_step_linear_weight_dtype`
+  (attn ``q_proj`` / ``o_proj`` use ``bfloat4_b`` when available — :func:`ace_step_attn_qo_weight_dtype`)
   (embedding tables / norm scales / conv kernels stay BF16 unless noted)
 - **L1 interleaved** activations via :func:`ace_step_linear_l1_memory_config` /
   :func:`ace_step_ensure_l1_activation` / :func:`ace_step_ensure_cond_activation`
@@ -43,9 +44,10 @@ Other expected DRAM in DiT/VAE traces:
 
 DiT linears are often DRAM-bound at HiFi4 without tuning (reference path only):
 
-- ``256×1024×1024`` — attn ``q_proj`` / ``o_proj``
-- ``256×2048×2048`` — fused attn ``wkv``
-- ``256×3072×3072`` — MLP ``gate_proj`` / ``up_proj`` / ``down_proj``
+- ``256×1024×1024`` @ 64c — attn ``q_proj`` / ``k``+``v`` (``bfloat4_b`` weights when available)
+- ``256×2048×2048`` @ 32c — attn ``o_proj`` (``bfloat4_b`` weights when available)
+- ``256×1024×1024`` @ 96c — MLP fused ``gate_up`` (``bfloat4_b`` gate weights; ``down_proj`` stays ``bfloat8_b``)
+- ``256×3072×3072`` @ 32c — MLP ``down_proj`` (``bfloat4_b`` weights when available)
 
 VAE decode exposes large-M matmuls inside ``conv1d`` / ``conv_transpose2d`` im2col (e.g.
 ``1920×512×512``, ``30720×128×128``, ``61440×128×128``). Production VAE uses **LoFi** conv compute + **BF16** activations; **``bfloat8_b``** weights on
@@ -132,6 +134,27 @@ def ace_step_use_nlp_create_qkv_heads() -> bool:
 def ace_step_use_bfloat4_weights() -> bool:
     """Opt-in ``bfloat4_b`` linear weights (validate PCC on submodule before full DiT)."""
     return os.environ.get("ACE_STEP_DIT_BFLOAT4_WEIGHTS", "").lower() in ("1", "true", "yes")
+
+
+def ace_step_bfloat8_attn_qo_weights() -> bool:
+    """Force attn ``q_proj`` / ``o_proj`` weights to stay ``bfloat8_b`` (opt-out of default ``bfloat4_b``)."""
+    return os.environ.get("ACE_STEP_DIT_BFLOAT8_ATTN_QO", "").lower() in ("1", "true", "yes")
+
+
+def ace_step_attn_qo_weight_dtype(ttnn: Any, default_dtype: Any) -> Any:
+    """Weight dtype for attn ``q_proj`` / ``o_proj`` (e.g. DiT/Qwen ``256×1024×1024``).
+
+    Defaults to ``bfloat4_b`` when the build exposes it (halves DRAM weight BW vs ``bfloat8_b``).
+    Set ``ACE_STEP_DIT_BFLOAT8_ATTN_QO=1`` to keep BFP8; ``ACE_STEP_DIT_BFLOAT4_WEIGHTS=1`` forces
+    bf4 on all linears via :func:`ace_step_linear_weight_dtype`.
+    """
+    if ace_step_use_bfloat4_weights():
+        return ace_step_linear_weight_dtype(ttnn, default_dtype)
+    if not ace_step_bfloat8_attn_qo_weights():
+        bf4 = getattr(ttnn, "bfloat4_b", None)
+        if bf4 is not None:
+            return bf4
+    return ace_step_linear_weight_dtype(ttnn, default_dtype)
 
 
 def ace_step_linear_weight_dtype(ttnn: Any, default_dtype: Any) -> Any:
@@ -985,7 +1008,7 @@ def ace_step_qwen3_optimizations(model_args: Any):
                 TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
                 TensorGroup.FF2: PrecisionSetting.BFP8,
                 TensorGroup.WQKV: PrecisionSetting.BFP8,
-                TensorGroup.WO: PrecisionSetting.BFP8,
+                TensorGroup.WO: PrecisionSetting.BFP4,
                 TensorGroup.KV_CACHE: PrecisionSetting.BF16,
             },
             "OpFidelity": {

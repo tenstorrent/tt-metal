@@ -110,6 +110,7 @@ from ._ttnn import get_ttnn
 from .math_perf_env import (
     _mcast_1d_linear_program_config,
     ace_step_add_one,
+    ace_step_attn_qo_weight_dtype,
     ace_step_binary_kwargs,
     ace_step_dense_linear_program_config,
     ace_step_dit_attn_linear_program_config,
@@ -629,12 +630,13 @@ class TtAceStepAttentionSDPA:
         mapper = ace_step_dit_weight_mesh_mapper(mesh_device)
 
         w_dtype = ace_step_dit_weight_dtype(ttnn, self.dtype)
+        qo_dtype = ace_step_attn_qo_weight_dtype(ttnn, self.dtype)
 
-        def as_w(suffix: str):
+        def as_w(suffix: str, *, dtype: Any | None = None):
             return ttnn.as_tensor(
                 _maybe_get(state_dict, f"{base_address}.{suffix}.weight"),
                 device=mesh_device,
-                dtype=w_dtype,
+                dtype=dtype if dtype is not None else w_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=mem,
                 mesh_mapper=mapper,
@@ -656,7 +658,7 @@ class TtAceStepAttentionSDPA:
             )
 
         wq_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.q_proj.weight"))
-        self.wq, self.bq = as_w("q_proj"), as_b("q_proj")
+        self.wq, self.bq = as_w("q_proj", dtype=qo_dtype), as_b("q_proj")
         # Fused KV projection: identical K/V sequence length + one DRAM read of activations.
         wk_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.k_proj.weight"))
         wv_host = _to_numpy_host_array(_maybe_get(state_dict, f"{base_address}.v_proj.weight"))
@@ -712,7 +714,7 @@ class TtAceStepAttentionSDPA:
         else:
             self.b_qwkv = None
 
-        self.wo, self.bo = as_w("o_proj"), as_b("o_proj")
+        self.wo, self.bo = as_w("o_proj", dtype=qo_dtype), as_b("o_proj")
 
         # Per-head RMSNorm weights (shape [Dh]).
         qn = _maybe_get(state_dict, f"{base_address}.q_norm.weight")
