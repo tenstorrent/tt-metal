@@ -78,6 +78,7 @@ def _run_auto_iterate_loop(
         _list_component_pcc_tests,
         _load_attempt_history,
         _native_directive,
+        _format_captured_shape_contract_block,
         _numerical_constraints_block,
         _only_pcc_threshold_failures,
         _op_synth_manifest,
@@ -1585,6 +1586,7 @@ def _run_auto_iterate_loop(
             )
 
             test_source_block = _read_test_source(demo_dir, comp, max_lines=80)
+            captured_shape_block = _format_captured_shape_contract_block(demo_dir, comp)
             constraints_block = _numerical_constraints_block(
                 stub_path,
                 model_id=MODEL,
@@ -1640,6 +1642,9 @@ def _run_auto_iterate_loop(
                 f"\n"
                 f"--- HANDOFF FROM PRIOR ITERATIONS (what was tried, what failed, what to try next) ---\n"
                 f"{history_block}\n"
+                f"\n"
+                f"--- CAPTURED I/O CONTRACT (real shapes from HF forward — match exactly) ---\n"
+                f"{captured_shape_block if captured_shape_block else '(no capture — infer shapes from torch reference)'}\n"
                 f"\n"
                 f"--- NUMERICAL HARDWARE CONSTRAINTS (act on these BEFORE writing the stub) ---\n"
                 f"{constraints_block}\n"

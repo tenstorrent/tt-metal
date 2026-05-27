@@ -5020,6 +5020,73 @@ def _component_metadata(demo_dir: Path, component_name: str) -> Optional[Dict[st
     return None
 
 
+def _format_captured_shape_contract_block(demo_dir: Path, component_name: str) -> str:
+    """Surface the captured forward IO shapes from `_captured/<safe>/manifest.json`
+    so the agent sees ground-truth tensor shapes BEFORE writing code.
+
+    Without this block the agent has to infer shapes from torch reference
+    source (where shapes are runtime values like `x.size(-1)`) and only sees
+    real shape data via the post-hoc SHAPE_PROBE block on iter 2+. v12 audit
+    showed SHAPE-class failures (encoder_stack, hiera_det_model) persist
+    across iters partly because the agent guesses wrong reshape/permute
+    orientations that compile but scramble dimensions.
+
+    Returns "" when no captured manifest exists -- harmless for components
+    whose capture failed (the test scaffold's _make_arg_for path still
+    provides validation, just less precisely)."""
+    safe = _safe_id(component_name)
+    manifest_path = demo_dir / "_captured" / safe / "manifest.json"
+    if not manifest_path.is_file():
+        return ""
+    try:
+        m = json.loads(manifest_path.read_text())
+    except Exception:
+        return ""
+
+    def _render(v: object, indent: int = 0) -> str:
+        if not isinstance(v, dict):
+            return repr(v)
+        pad = "  " * indent
+        kind = v.get("kind", "?")
+        if kind == "tensor":
+            shape = tuple(v.get("shape", []) or [])
+            return f"Tensor shape={shape} dtype={v.get('dtype', '?')}"
+        if kind in ("list", "tuple"):
+            items = v.get("items", []) or []
+            if not items:
+                return f"empty {kind}"
+            inner = "\n".join(f"{pad}  [{i}]: {_render(it, indent + 1)}" for i, it in enumerate(items))
+            return f"{kind}({len(items)}):\n{inner}"
+        if kind == "dict":
+            items = v.get("items", {}) or {}
+            if not items:
+                return "empty dict"
+            inner = "\n".join(f"{pad}  {k}: {_render(it, indent + 1)}" for k, it in items.items())
+            return f"dict({len(items)}):\n{inner}"
+        if kind == "none":
+            return "None"
+        if kind == "scalar":
+            return f"{v.get('type', '?')}({v.get('repr', '')})"
+        return str(v)
+
+    args = m.get("args") or {"kind": "tuple", "items": []}
+    kwargs = m.get("kwargs") or {"kind": "dict", "items": {}}
+    output = m.get("output") or {"kind": "none"}
+    submodule_path = str(m.get("submodule_path", "?"))
+
+    return (
+        f"CAPTURED I/O CONTRACT for `{component_name}` "
+        f"(from a real HF forward pass — your forward path will receive these exact shapes):\n"
+        f"  submodule resolved at : {submodule_path}\n"
+        f"  positional args       : {_render(args, indent=1)}\n"
+        f"  keyword args          : {_render(kwargs, indent=1)}\n"
+        f"  expected output       : {_render(output, indent=1)}\n"
+        f"  Match these shapes/dtypes exactly. Reshape / permute / view operations "
+        f"must preserve total element count AND semantic axis ordering. If torch "
+        f"uses NCHW and ttnn op needs NHWC, permute explicitly.\n"
+    )
+
+
 def _op_synth_manifest(demo_dir: Path, component_name: str) -> Optional[Dict[str, object]]:
     """Load the op-synth manifest for a component, if one was written by
     `autofill_stubs(..., op_synth=True)`.
