@@ -1682,7 +1682,7 @@ public:
         for (const auto& direction : FabricContext::routing_directions) {
             size_t routing_planes = tt::tt_metal::MetalContext::instance()
                                         .get_control_plane()
-                                        .get_num_available_routing_planes_in_direction(node_id, direction);
+                                        .get_num_unreserved_routing_planes(node_id, direction);
             if (routing_planes > 0) {  // Only consider directions that have routing planes
                 min_routing_planes = std::min(min_routing_planes, static_cast<uint32_t>(routing_planes));
             }
