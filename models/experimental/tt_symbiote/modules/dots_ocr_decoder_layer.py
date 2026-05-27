@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import torch
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNLayerStack, TTNNModule
@@ -12,60 +10,8 @@ from models.experimental.tt_symbiote.modules.dots_ocr_mlp import TTNNDotsOCRMLP
 from models.experimental.tt_symbiote.modules.linear import (
     _decode_rmsnorm_program_config,
     _decode_width_sharded_input_memory_config,
-    _prefill_block_sharded_input_memory_config,
-    _prefill_rmsnorm_program_config,
     _tp_requires_ccl,
 )
-
-
-def _env_on(name: str) -> bool:
-    val = os.environ.get(name)
-    return val is not None and val.strip().lower() in ("1", "true", "yes", "on")
-
-
-def _mlp_bfp4_only() -> bool:
-    """Legacy alias for ``MLP_WEIGHT_DTYPE=bfp4``. Kept so previously-recorded
-    sweeps (``MLP_BFP4_ONLY=1 ...``) still work without modification."""
-    return _env_on("MLP_BFP4_ONLY")
-
-
-def _mlp_weight_dtype_mode() -> str:
-    """Debug toggle for the two MLP matmuls' weight dtype. Returns one of:
-
-    - ``'mixed'`` (default): production baseline -- BFP4 for layers 0-6
-      and BFP8 for layers 7-27 (the layer-index promotion in
-      ``_use_bfp8_decoder_weights``). Protects OCR table accuracy.
-    - ``'bfp4'``: BFP4 across ALL 28 layers for both ``gate_up`` and
-      ``down_proj``. Smallest weight footprint; known to drop the 'k' in
-      'Hodgkin' on this checkpoint (BFP4's 3 mantissa bits aren't enough
-      for the late-layer weights).
-    - ``'bfp8'``: BFP8 across ALL 28 layers for both ``gate_up`` and
-      ``down_proj``. Promotes layers 0-6 from BFP4 to BFP8 (doubles those
-      layers' weight footprint); accuracy is at least as good as mixed.
-
-    Controlled by ``MLP_WEIGHT_DTYPE`` (case-insensitive). Accepts the
-    aliases ``bf4`` / ``bfloat4_b`` and ``bf8`` / ``bfloat8_b``.
-
-    Legacy: ``MLP_BFP4_ONLY=1`` is honored as an alias for ``bfp4``."""
-    raw = (os.environ.get("MLP_WEIGHT_DTYPE") or "").strip().lower()
-    if raw in ("bfp4", "bf4", "bfloat4_b"):
-        return "bfp4"
-    if raw in ("bfp8", "bf8", "bfloat8_b"):
-        return "bfp8"
-    if _mlp_bfp4_only():
-        return "bfp4"
-    return "mixed"
-
-
-def _mlp_gate_up_bfp8_weights() -> bool:
-    """Force gate_up weights to BFP8 across all 28 decoder layers (overrides
-    the BFP4 default for layers 0-6). Triggered by ``MLP_GATE_UP_BFP8_WEIGHTS=1``
-    (this knob alone) or ``MLP_GATE_UP_BFP8_IO=1`` (combo alias that also flips
-    the input dtype). Scoped to gate_up only -- down_proj keeps the normal
-    layer-index promotion."""
-    return _env_on("MLP_GATE_UP_BFP8_WEIGHTS") or _env_on("MLP_GATE_UP_BFP8_IO")
-
-
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
 
@@ -178,85 +124,6 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
             tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
         return tt_out
 
-    _PREFILL_SHARDED_GRID_X = 8
-    _PREFILL_SHARDED_GRID_Y = 8
-
-    def _forward_prefill_sharded(self, inp, original_shape, logical_seq_len):
-        # Sharded LayerNorm for **prefill** (multi-token). Block-sharded on
-        # the full 8x8 worker grid: split seq across rows and hidden across
-        # columns. This is the 2D path of the sharded LN kernel
-        # (``layernorm_device_operation.cpp:282-302``), distinct from the
-        # mcast_1d width-sharded path decode uses. The block-sharded layout
-        # keeps the per-CB tile count small (66 tiles at seq=2816 /
-        # hidden=1536), which is what makes it fit L1 -- the simpler
-        # width-shard with block_h=88 blew the 1.5 MB L1 budget by 2x.
-        #
-        # Downstream prefill QKV / gate_up matmuls run on the 2D-mcast
-        # kernel which wants DRAM_INTERLEAVED input, so we sharded ->
-        # interleaved before returning -- the reshard cost is recovered by
-        # running the LN compute on 64 cores in parallel instead of the
-        # single-core interleaved variant.
-        hidden_size = int(self.torch_layer.weight.shape[0])
-        eps = getattr(self.torch_layer, "variance_epsilon", getattr(self.torch_layer, "eps", 1e-6))
-        if len(original_shape) == 3:
-            inp = ttnn.unsqueeze(inp, 1)
-        if inp.layout != ttnn.TILE_LAYOUT:
-            inp = ttnn.to_layout(inp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # The on-device tensor is padded to a tile boundary. Use the padded
-        # shape for the shard spec / program config so block_h * grid_y is
-        # tile-aligned; use the logical seq separately to scale the output
-        # back to compensate the padded-vs-logical RMS bias.
-        seq_len_logical_padded = int(inp.shape[-2])
-        seq_len = ((seq_len_logical_padded + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-        seq_len_tiles = seq_len // ttnn.TILE_SIZE
-        grid_x = self._PREFILL_SHARDED_GRID_X
-        grid_y = self._PREFILL_SHARDED_GRID_Y
-        shard_in_cfg = _prefill_block_sharded_input_memory_config(hidden_size, seq_len, grid_x, grid_y)
-        if inp.memory_config() != shard_in_cfg:
-            if inp.is_sharded():
-                inp = ttnn.to_memory_config(inp, shard_in_cfg)
-            else:
-                inp = ttnn.interleaved_to_sharded(inp, shard_in_cfg)
-        sharded_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-        tt_out = ttnn.rms_norm(
-            inp,
-            epsilon=eps,
-            weight=self.tt_weight_sharded,
-            program_config=_prefill_rmsnorm_program_config(hidden_size, seq_len_tiles, grid_x, grid_y),
-            memory_config=shard_in_cfg,
-            compute_kernel_config=sharded_compute_kernel_config,
-        )
-        # Convert back to DRAM_INTERLEAVED for the prefill QKV / gate_up
-        # matmul kernels. The 2D-mcast kernel does accept BLOCK_SHARDED in0
-        # (matmul_device_operation.cpp:686-750) with ``fuse_batch=True``, but
-        # for this shape (M=2816, K=1536, N=2048, BF16xBFP8 HiFi2) the sharded
-        # path runs +54 μs slower than DRAM mcast (compute-bound at 41% FPU,
-        # not bandwidth-bound, so eliminating the in0 DRAM read doesn't help),
-        # and routing gate_up's input through L1 silently flips its matmul to
-        # HiFi4 (33.8 ms vs 1.9 ms). Keep the S2I.
-        tt_out = ttnn.sharded_to_interleaved(tt_out, ttnn.DRAM_MEMORY_CONFIG)
-        # Compensate the padded-vs-logical RMS bias. The block-sharded LN
-        # kernel computed mean(x^2) over the full padded shape (seq_len),
-        # which equals mean_logical(x^2) * N_logical / N_padded when the
-        # tile-padding rows are zero (true after tilize and preserved
-        # through residual-add chains -- but NOT after embedding lookup
-        # if pad-token-id != 0). The LN output is therefore over-amplified
-        # by sqrt(N_padded / N_logical); multiplying by sqrt(N_logical /
-        # N_padded) restores the correct logical-normalized values on the
-        # real rows. For tile-aligned logical seq (logical == padded) the
-        # factor is exactly 1.0 and this is a no-op.
-        if logical_seq_len != seq_len:
-            comp = (float(logical_seq_len) / float(seq_len)) ** 0.5
-            tt_out = ttnn.multiply(tt_out, comp)
-        if len(original_shape) == 3 and len(tt_out.shape) == 4:
-            tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
-        return tt_out
-
     def forward(self, inp):
         original_shape = inp.shape
         # Sharded LN fast path: decode-shape (M=1) and single-device or pure DP
@@ -265,28 +132,6 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
         is_decode = len(original_shape) >= 2 and int(original_shape[-2]) == 1
         if is_decode and not _tp_requires_ccl(self.device):
             return self._forward_decode_sharded(inp, original_shape)
-
-        # Prefill block-sharded fast path. Uses the tile-PADDED seq for the
-        # shard spec (logical 2814 -> padded 2816 = 88 tiles = 256 * 11), and
-        # passes the logical seq into _forward_prefill_sharded so the kernel
-        # output can be rescaled to compensate the padded-vs-logical RMS
-        # bias (block-shard LN computes mean(x^2) over the full padded
-        # shape, which under-estimates the true logical mean by factor
-        # N_logical / N_padded -> output over-amplified by sqrt of the
-        # reciprocal; we multiply the output by sqrt(N_logical/N_padded)
-        # to undo it).
-        if not _tp_requires_ccl(self.device):
-            logical_seq_len = int(original_shape[-2]) if len(original_shape) >= 2 else 0
-            seq_len_padded = ((logical_seq_len + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-            hidden_size = int(self.torch_layer.weight.shape[0])
-            grid_x = self._PREFILL_SHARDED_GRID_X
-            grid_y = self._PREFILL_SHARDED_GRID_Y
-            if (
-                seq_len_padded >= grid_y * ttnn.TILE_SIZE
-                and seq_len_padded % (grid_y * ttnn.TILE_SIZE) == 0
-                and hidden_size % (grid_x * ttnn.TILE_SIZE) == 0
-            ):
-                return self._forward_prefill_sharded(inp, original_shape, logical_seq_len)
 
         if len(original_shape) == 3:
             inp = ttnn.unsqueeze(inp, 1)
@@ -324,33 +169,9 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         )
         new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn)
         new_layer.mlp = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
-        # Attention o_proj weight promotion is unchanged: BFP8 for layers
-        # 7-27 (sensitive for OCR table tokens), BFP4 for layers 0-6.
         if _use_bfp8_decoder_weights(getattr(new_layer.self_attn, "layer_idx", None)):
             new_layer.self_attn.o_proj.set_weight_dtype(ttnn.bfloat8_b)
-
-        # MLP weight dtype is driven by ``MLP_WEIGHT_DTYPE`` (a single debug
-        # toggle that applies to BOTH gate_up and down_proj):
-        #   - 'mixed' (default): BFP4 for L<7, BFP8 for L>=7
-        #   - 'bfp4'           : BFP4 for all 28 layers
-        #   - 'bfp8'           : BFP8 for all 28 layers
-        mlp_mode = _mlp_weight_dtype_mode()
-        if mlp_mode == "bfp8":
             new_layer.mlp.set_weight_dtype(ttnn.bfloat8_b)
-        elif mlp_mode == "mixed" and _use_bfp8_decoder_weights(getattr(new_layer.self_attn, "layer_idx", None)):
-            new_layer.mlp.set_weight_dtype(ttnn.bfloat8_b)
-        # mlp_mode == 'bfp4': leave both matmuls at their default BFP4.
-
-        # ``MLP_GATE_UP_BFP8_WEIGHTS=1`` (or the combo alias ``MLP_GATE_UP_BFP8_IO=1``)
-        # forces gate_up weights specifically to BFP8 for ALL layers,
-        # independent of the layer-index promotion above. Useful for isolating
-        # which matmul (gate_up vs down_proj) is the source of a regression
-        # when ``MLP_WEIGHT_DTYPE=bfp4`` introduces one. The input-side typecast
-        # is decoupled and lives behind ``MLP_GATE_UP_BFP8_INPUT=1`` in
-        # dots_ocr_mlp.py so the four (input, weight) combinations can be
-        # measured in isolation.
-        if _mlp_gate_up_bfp8_weights():
-            new_layer.mlp.fused_gate_up_proj.set_weight_dtype(ttnn.bfloat8_b)
         return new_layer
 
     def call(self, *args, **kwds):

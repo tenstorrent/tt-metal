@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import torch
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
@@ -11,32 +9,6 @@ from models.experimental.tt_symbiote.core.module import (
     run_on_devices,
     SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
 )
-
-
-def _mlp_force_interleaved() -> bool:
-    """``MLP_BFP4_FORCE_INTERLEAVED=1`` skips the DRAM_WIDTH_SHARDED fast
-    path for both gate_up and down_proj in decode and uses the interleaved
-    fallback (``DRAM_INTERLEAVED`` weight, 1D-mcast program config). Used
-    to test whether the BFP4 accuracy drop is sharding-specific."""
-    val = os.environ.get("MLP_BFP4_FORCE_INTERLEAVED")
-    return val is not None and val.strip().lower() in ("1", "true", "yes", "on")
-
-
-def _env_on(name: str) -> bool:
-    val = os.environ.get(name)
-    return val is not None and val.strip().lower() in ("1", "true", "yes", "on")
-
-
-def _mlp_gate_up_bfp8_input() -> bool:
-    """Typecast the gate_up activation from BF16 -> BFP8 in L1 immediately
-    before the matmul. Triggered by ``MLP_GATE_UP_BFP8_INPUT=1`` (this knob
-    in isolation) or ``MLP_GATE_UP_BFP8_IO=1`` (the combo alias that also
-    flips weights to BFP8 across all layers). Independent of weight dtype:
-    when only this is set, layers 0-6 stay BFP4 and layers 7-27 stay BFP8
-    while the input is BFP8 for every layer."""
-    return _env_on("MLP_GATE_UP_BFP8_INPUT") or _env_on("MLP_GATE_UP_BFP8_IO")
-
-
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWAllReducedFusedGateUp,
     TTNNLinearLLamaIColShardedWRowSharded,
@@ -45,7 +17,6 @@ from models.experimental.tt_symbiote.modules.linear import (
     _decode_gate_up_dram_sharded_program_config,
     _dp_matmul_program_config,
     _dram_sharded_mem_config_2d,
-    _mlp_bfp4_compute_kernel_config,
     _tp_requires_ccl,
     _tp_mesh_mapper,
     _linear_mesh_num_devices,
@@ -133,8 +104,6 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         # output of post_attention_layernorm — no reshard needed). Output lands
         # L1 width-sharded on the same 16c 8x2 grid, BFP8.
         dram_shard_cfg = getattr(self, "_gate_up_dram_input_shard_cfg", None)
-        if _mlp_force_interleaved():
-            dram_shard_cfg = None
         dram_pc = (
             _decode_gate_up_dram_sharded_program_config(input_shape, self.tt_weight.shape)
             if (not needs_ccl and dram_shard_cfg is not None)
@@ -142,16 +111,6 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         )
         if dram_pc is not None and dram_shard_cfg is not None:
             dram_weight, dram_bias = self._get_gate_up_dram_sharded_weight()
-            # MLP_GATE_UP_BFP8_IO=1 -- cast BF16 activation to BFP8 BEFORE
-            # the final reshard. The ttnn typecast sharded kernel asserts
-            # equal input/output tile sizes (BF16 tile = 2 KB, BFP8 tile =
-            # ~1.1 KB), so the cast itself has to happen in interleaved
-            # form; we then let ``to_memory_config`` do the I2S into the
-            # gate_up dram_shard_cfg.
-            if _mlp_gate_up_bfp8_input() and input_tensor.dtype != ttnn.bfloat8_b:
-                if input_tensor.is_sharded():
-                    input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
-                input_tensor = ttnn.typecast(input_tensor, ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
             input_tensor = ttnn.to_memory_config(input_tensor, dram_shard_cfg)
             tt_output = ttnn.linear(
                 input_tensor,
@@ -168,26 +127,13 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         # Fuse bias into the matmul kernel on single-device (no CCL would scale
         # the bias by num_devices). Saves one BinaryNg per layer when bias is set.
         fused_bias = None if needs_ccl else self.tt_bias
-        # The interleaved fallback expects an interleaved input. The DP fast
-        # path leaves the MLP input L1_WIDTH_SHARDED (from sharded RMSNorm),
-        # so when MLP_BFP4_FORCE_INTERLEAVED=1 forces this branch we must
-        # unshard first.
-        if input_tensor.is_sharded():
-            input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
-        # When debugging via MLP_BFP4_FORCE_INTERLEAVED, route the env-var
-        # compute config (default LoFi) so the interleaved-vs-DRAM-sharded
-        # comparison uses identical fidelity. Production fallback (TP+CCL,
-        # prefill) keeps the existing ``self.compute_kernel_config`` (HiFi2).
-        fallback_ckc = (
-            self._gate_up_decode_compute_kernel_config if _mlp_force_interleaved() else self.compute_kernel_config
-        )
         tt_output = ttnn.linear(
             input_tensor,
             self.tt_weight,
             bias=fused_bias,
             dtype=ttnn.bfloat8_b,
             memory_config=matmul_mc,
-            compute_kernel_config=fallback_ckc,
+            compute_kernel_config=self.compute_kernel_config,
             program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
         if needs_ccl:
@@ -243,10 +189,12 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             )
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
-        # ``_mlp_bfp4_compute_kernel_config`` reads optional MLP_BFP4_*
-        # env-var overrides so the down_proj precision/perf knobs can be
-        # swept without re-editing source.
-        self.compute_kernel_config = _mlp_bfp4_compute_kernel_config(ttnn.MathFidelity.LoFi)
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
         # Second weight (DRAM_WIDTH_SHARDED) for the decode DRAM-sharded matmul.
         # Allocated via ``as_tensor`` so no reshard kernel is launched. Prefill
         # uses ``self.tt_weight`` (DRAM_INTERLEAVED). Memory cost: ~7 MB / layer
@@ -301,8 +249,6 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
         # ``down_proj``); if it didn't, ``to_memory_config`` does the I2S
         # here as a defensive fallback.
         dram_shard_cfg = getattr(self, "_down_proj_dram_input_shard_cfg", None)
-        if _mlp_force_interleaved():
-            dram_shard_cfg = None
         dram_pc = (
             _decode_down_proj_dram_sharded_program_config(input_shape, self.tt_weight.shape)
             if (not needs_ccl and dram_shard_cfg is not None)
@@ -323,12 +269,6 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
 
         matmul_mc = ttnn.DRAM_MEMORY_CONFIG if needs_ccl else (output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
-        # When MLP_BFP4_FORCE_INTERLEAVED=1 routes this branch in decode, the
-        # caller may still hand us an L1_WIDTH_SHARDED input (the I2S the MLP
-        # does for the DRAM-sharded path is unconditional). Unshard before
-        # ttnn.linear so the 1D-mcast program config sees an interleaved input.
-        if input_tensor.is_sharded():
-            input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
         tt_output = ttnn.linear(
             input_tensor,
             self.tt_weight,
@@ -432,14 +372,7 @@ class TTNNDotsOCRMLP(TTNNModule):
         # the "preshard gate+up" variant needed) and lets down_proj engage
         # its faster DRAM-sharded 8c kernel (~44us, vs the mcast1d 8x3
         # interleaved-I/O variant's ~52us).
-        # When MLP_BFP4_FORCE_INTERLEAVED=1, skip the I2S so down_proj sees
-        # a plain interleaved input (matches its 1D-mcast fallback program
-        # config).
-        down_dram_shard_cfg = (
-            getattr(self.down_proj, "_down_proj_dram_input_shard_cfg", None)
-            if (is_decode and not _mlp_force_interleaved())
-            else None
-        )
+        down_dram_shard_cfg = getattr(self.down_proj, "_down_proj_dram_input_shard_cfg", None) if is_decode else None
 
         # ``fast_and_approximate_mode=True`` routes the fused SILU through
         # the polynomial exp/sigmoid path. SILU dominates this op (the
