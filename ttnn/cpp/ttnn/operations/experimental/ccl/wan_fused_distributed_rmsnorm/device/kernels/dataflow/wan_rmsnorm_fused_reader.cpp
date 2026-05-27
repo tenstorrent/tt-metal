@@ -43,7 +43,9 @@ void kernel_main() {
     constexpr uint32_t fuse_rope = get_compile_time_arg_val(13);
     constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(14);
     constexpr uint32_t chunk_size_rows = get_compile_time_arg_val(15);
-    constexpr auto input_args = TensorAccessorArgs<16>();
+    constexpr uint32_t per_head_rope = get_compile_time_arg_val(16);
+    constexpr uint32_t rope_seqlen_tiles = get_compile_time_arg_val(17);
+    constexpr auto input_args = TensorAccessorArgs<18>();
     constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto transformation_mat_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto rope_cos_args = TensorAccessorArgs<transformation_mat_args.next_compile_time_args_offset()>();
@@ -122,24 +124,49 @@ void kernel_main() {
 
             if constexpr (fuse_rope) {
                 if (col_tile == 0) {
-                    uint32_t rope_tile_start_idx = tile_row * head_dim_tiles;
-                    cb_reserve_back(rope_cos_cb, head_dim_tiles);
-                    uint32_t rope_cos_wr_ptr = get_write_ptr(rope_cos_cb);
-                    for (uint32_t i = 0; i < head_dim_tiles; i++) {
-                        noc_async_read_tile(rope_tile_start_idx + i, rope_cos_accessor, rope_cos_wr_ptr);
-                        rope_cos_wr_ptr += rope_cos_tile_bytes;
+                    // Per-head RoPE: cos/sin shape [B, num_heads, N, head_dim].
+                    // Push all heads' head_dim_tiles tiles for this tile_row,
+                    // packed contiguously. Tile idx for head h, tile t, col c:
+                    //   h * rope_seqlen_tiles * head_dim_tiles + t * head_dim_tiles + c
+                    //
+                    // Broadcast RoPE (per_head_rope=0): cos/sin shape
+                    // [B, 1, N, head_dim], indexed by t * head_dim_tiles + c.
+                    if constexpr (per_head_rope != 0) {
+                        const uint32_t num_heads_per_device = num_tile_cols / head_dim_tiles;
+                        const uint32_t total_tiles = num_heads_per_device * head_dim_tiles;
+                        cb_reserve_back(rope_cos_cb, total_tiles);
+                        cb_reserve_back(rope_sin_cb, total_tiles);
+                        uint32_t rope_cos_wr_ptr = get_write_ptr(rope_cos_cb);
+                        uint32_t rope_sin_wr_ptr = get_write_ptr(rope_sin_cb);
+                        for (uint32_t h = 0; h < num_heads_per_device; h++) {
+                            const uint32_t head_base =
+                                h * rope_seqlen_tiles * head_dim_tiles + tile_row * head_dim_tiles;
+                            for (uint32_t i = 0; i < head_dim_tiles; i++) {
+                                noc_async_read_tile(head_base + i, rope_cos_accessor, rope_cos_wr_ptr);
+                                rope_cos_wr_ptr += rope_cos_tile_bytes;
+                                noc_async_read_tile(head_base + i, rope_sin_accessor, rope_sin_wr_ptr);
+                                rope_sin_wr_ptr += rope_sin_tile_bytes;
+                            }
+                        }
+                        noc_async_read_barrier();
+                        cb_push_back(rope_cos_cb, total_tiles);
+                        cb_push_back(rope_sin_cb, total_tiles);
+                    } else {
+                        uint32_t rope_tile_start_idx = tile_row * head_dim_tiles;
+                        cb_reserve_back(rope_cos_cb, head_dim_tiles);
+                        cb_reserve_back(rope_sin_cb, head_dim_tiles);
+                        uint32_t rope_cos_wr_ptr = get_write_ptr(rope_cos_cb);
+                        uint32_t rope_sin_wr_ptr = get_write_ptr(rope_sin_cb);
+                        for (uint32_t i = 0; i < head_dim_tiles; i++) {
+                            noc_async_read_tile(rope_tile_start_idx + i, rope_cos_accessor, rope_cos_wr_ptr);
+                            rope_cos_wr_ptr += rope_cos_tile_bytes;
+                            noc_async_read_tile(rope_tile_start_idx + i, rope_sin_accessor, rope_sin_wr_ptr);
+                            rope_sin_wr_ptr += rope_sin_tile_bytes;
+                        }
+                        noc_async_read_barrier();
+                        cb_push_back(rope_cos_cb, head_dim_tiles);
+                        cb_push_back(rope_sin_cb, head_dim_tiles);
                     }
-                    noc_async_read_barrier();
-                    cb_push_back(rope_cos_cb, head_dim_tiles);
-
-                    cb_reserve_back(rope_sin_cb, head_dim_tiles);
-                    uint32_t rope_sin_wr_ptr = get_write_ptr(rope_sin_cb);
-                    for (uint32_t i = 0; i < head_dim_tiles; i++) {
-                        noc_async_read_tile(rope_tile_start_idx + i, rope_sin_accessor, rope_sin_wr_ptr);
-                        rope_sin_wr_ptr += rope_sin_tile_bytes;
-                    }
-                    noc_async_read_barrier();
-                    cb_push_back(rope_sin_cb, head_dim_tiles);
                 }
             }
         }
