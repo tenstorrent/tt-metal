@@ -508,8 +508,5 @@
     wh_n150:
       timeout: 5
       tier: 3
-    wh_n300:
-      timeout: 5
-      tier: 3
-  owner_id: U06ECNVR0EN # Evan Smal
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models

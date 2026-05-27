@@ -418,7 +418,6 @@ def run_mamba_demo(
     ),
 )
 def test_demo(user_input, device, get_tt_cache_path, model_version, max_gen_len, no_assert_perf):
-
     return run_mamba_demo(
         prompts=user_input,
         device=device,
