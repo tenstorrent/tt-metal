@@ -153,7 +153,7 @@ inline bool is_gen1_arch() {
     return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
 }
 
-NodeRangeSet to_node_range_set(const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes) {
+NodeRangeSet to_node_range_set(const Nodes& nodes) {
     return std::visit(
         [](const auto& n) -> NodeRangeSet {
             using T = std::decay_t<decltype(n)>;
@@ -169,9 +169,7 @@ NodeRangeSet to_node_range_set(const std::variant<NodeCoord, NodeRange, NodeRang
         nodes);
 }
 
-bool nodes_intersect(
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& a,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& b) {
+bool nodes_intersect(const Nodes& a, const Nodes& b) {
     NodeRangeSet a_set = to_node_range_set(a);
     NodeRangeSet b_set = to_node_range_set(b);
     return a_set.intersects(b_set);
@@ -525,7 +523,7 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
     // No need for dispatch-specific checks (and dispatch-specific error messages confuse users)
     const CoreCoord compute_grid = tt::get_compute_grid_size(env_impl, chip_id, num_hw_cqs, dispatch_core_config);
 
-    auto check_target_nodes = [&](const std::variant<NodeCoord, NodeRange, NodeRangeSet>& target_nodes,
+    auto check_target_nodes = [&](const Nodes& target_nodes,
                                   std::string_view entity_type,
                                   std::string_view entity_name) {
         const NodeRangeSet range_set = to_node_range_set(target_nodes);

@@ -33,7 +33,6 @@ struct SemaphoreSpec {
     SemaphoreSpecName unique_id;
 
     // Target nodes
-    using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
     Nodes target_nodes;
 
     //////////////////////////////

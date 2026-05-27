@@ -40,7 +40,7 @@ struct WorkUnitSpec {
     std::vector<KernelSpecName> kernels;
 
     // The set of nodes configured by this WorkUnitSpec.
-    std::variant<NodeCoord, NodeRange, NodeRangeSet> target_nodes;
+    Nodes target_nodes;
 };
 
 // A ProgramSpec describes the immutable properties of a Program:
