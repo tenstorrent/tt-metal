@@ -226,13 +226,13 @@ def test_log(device, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_sinh(device, h, w):
-    run_unary_test(device, h, w, ttnn.sinh, pcc_check=True)
+    run_unary_test(device, h, w, ttnn.sinh, ulp=3)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_cosh(device, h, w):
-    run_unary_test(device, h, w, ttnn.cosh, pcc_check=True, pcc=0.999)
+    run_unary_test(device, h, w, ttnn.cosh, ulp=1)
 
 
 @pytest.mark.parametrize("h", [64])

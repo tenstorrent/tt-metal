@@ -225,7 +225,9 @@ ALWI void acos_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(acos, true)); }
 /**
 * Please refer to documentation for any_init.
 */
-ALWI void cosh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(cosh, ckernel::sfpu::init_hyperbolic_trig, APPROX)); }
+ALWI void cosh_tile_init() {
+    MATH(SFPU_TWO_TEMPLATE_PARAM_INIT(cosh, ckernel::sfpu::cosh_init, APPROX, DST_ACCUM_MODE));
+}
 
 // clang-format off
 /**
@@ -248,7 +250,9 @@ ALWI void cosh_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sinh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(sinh, ckernel::sfpu::init_hyperbolic_trig, APPROX)); }
+ALWI void sinh_tile_init() {
+    MATH(SFPU_TWO_TEMPLATE_PARAM_INIT(sinh, ckernel::sfpu::sinh_init, APPROX, DST_ACCUM_MODE));
+}
 
 // clang-format off
 /**
