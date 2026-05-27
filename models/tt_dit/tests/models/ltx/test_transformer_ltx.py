@@ -40,6 +40,14 @@ _LTX_TRANSFORMER_MESH_PARAMS = [
     pytest.param((4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
 ]
 
+# 1080p (1088x1920, 145f) fast-pipeline latent grids — half-res / full-res.
+# Derived from `pipeline_ltx_fast.py:49-50`
+# (latent_frames=(num_frames-1)//8+1, latent_h=H//32, latent_w=W//32).
+_LTX_TRANSFORMER_BLOCK_SHAPE_PARAMS = [
+    pytest.param(19, 17, 30, id="stage_1"),
+    pytest.param(19, 34, 60, id="stage_2"),
+]
+
 
 def _make_parallel_config(mesh_device, sp_axis, tp_axis):
     return DiTParallelConfig(
@@ -54,6 +62,7 @@ def _make_parallel_config(mesh_device, sp_axis, tp_axis):
     _LTX_TRANSFORMER_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_BLOCK_SHAPE_PARAMS)
 def test_ltx_transformer_block(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -61,6 +70,9 @@ def test_ltx_transformer_block(
     num_links: int,
     topology: ttnn.Topology,
     is_fsdp: bool,
+    F: int,
+    H: int,
+    W: int,
     reset_seeds,
 ) -> None:
     """
@@ -74,7 +86,6 @@ def test_ltx_transformer_block(
     head_dim = dim // num_heads
     context_dim = 4096
     B = 1
-    F, H, W = 4, 8, 8  # seq_len = 256
     seq_len = F * H * W
     prompt_len = 32
 
