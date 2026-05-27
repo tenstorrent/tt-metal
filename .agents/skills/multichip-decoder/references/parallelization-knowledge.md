@@ -78,6 +78,10 @@ Do not phrase distributed RMSNorm as always mandatory. Correct RMSNorm is mandat
 
 For TP up to 8 devices, the default is to run each active expert selected by the gate with tensor parallelism. Keep the gate-selected active-expert path from the single-chip baseline; do not run every expert densely as the final path unless there is no practical alternative.
 
+For routed MoE decode, the preferred current pattern is `ttnn.experimental.all_to_all_dispatch_metadata` -> `ttnn.experimental.moe_compute` -> model-appropriate score-weighted combine/reduce. If `models/common/modules/moe/tt_moe_decode.py` exists in the checkout, read it first; it wraps dispatch, packed expert compute, fast reduce/combine, shared experts, and reduce-scatter behind a config. Otherwise use `models/demos/deepseek_v3/tt/moe_optimized.py`, `ttnn/ttnn/_experimental/moe_compute_utils.py`, `tests/nightly/tg/ccl/moe/test_all_to_all_dispatch_metadata_6U.py`, and `tests/nightly/tg/ccl/moe/test_moe_compute_6U.py`.
+
+Treat expert mapping, `cluster_axis`, shared expert placement, packed W0/W1/W2 layout, DRAM-sharded weight memory configs, semaphores/preallocated buffers, and final residual layout as correctness contracts. A multi-chip MoE path is not done just because the gate and expert MLPs pass separately; validate the routed dispatch -> compute -> combine/reduce sequence.
+
 For Galaxy 4x8 MoE, read GPT-OSS throughput experts:
 
 - `models/demos/gpt_oss/tt/experts_throughput/config.py`
