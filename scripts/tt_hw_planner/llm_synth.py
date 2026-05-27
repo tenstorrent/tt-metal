@@ -82,6 +82,26 @@ ttnn.transformer.attention_softmax(scores, *, scale=None, attention_mask=None)
 # Convention: every TTNN op returns a new ttnn.Tensor on-device; chain them.
 # Convention: weight tensors are loaded once in __init__ via ttnn.from_torch
 #             from torch_module.state_dict(); do NOT re-upload per call.
+
+# COMMON MISTAKES — ttnn.Tensor has a DIFFERENT API than torch.Tensor.
+# Calling torch methods on a ttnn.Tensor raises AttributeError at runtime.
+# These are typical hallucinations the agent makes after reading the torch
+# reference; substitute the listed ttnn replacement instead.
+ttnn_t.float()              # WRONG  -> ttnn.typecast(t, ttnn.float32)
+                            #          OR ttnn.to_torch(t).float() if you need torch
+ttnn_t.to(device)           # WRONG  -> ttnn.to_device(t, device)
+ttnn_t.cpu()                # WRONG  -> ttnn.to_torch(t).cpu()
+ttnn_t.numpy()              # WRONG  -> ttnn.to_torch(t).numpy()
+ttnn_t.detach()             # WRONG  -> ttnn tensors are already detached
+ttnn_t.contiguous()         # WRONG  -> ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+ttnn_t + 0.5                # WRONG  -> ttnn.add(t, 0.5)
+ttnn_t * 2.0                # WRONG  -> ttnn.mul(t, 2.0)
+ttnn_t / 2.0                # WRONG  -> ttnn.div(t, 2.0)
+ttnn_t - other              # WRONG  -> ttnn.sub(t, other)
+ttnn_t @ other              # WRONG  -> ttnn.matmul(t, other)
+torch.cat([ttnn_t, ...])    # WRONG  -> ttnn.concat([t, ...], dim=...)
+torch.matmul(ttnn_t, ...)   # WRONG  -> ttnn.matmul(t, ...)
+torch.nn.functional.relu(ttnn_t)  # WRONG  -> ttnn.relu(t)
 """.strip()
 
 
@@ -704,6 +724,32 @@ def _looks_like_python(body: str) -> bool:
         return True
     except SyntaxError:
         return False
+
+
+def _detect_self_inheriting_classes(body: str) -> List[str]:
+    """Return class names that inherit from `_stub_mod.<same_name>` (or any
+    submodule attribute matching the class's own name). This pattern is a
+    runtime recursion trap: the agent reuses `_stub_mod.X` as a base for the
+    new `class X`, but once the new stub is written, `_stub_mod` resolves
+    to itself and the class becomes its own ancestor. v11 saw
+    `class EncoderStack(_stub_mod.EncoderStack)` cause RecursionError on
+    every PCC test call.
+    """
+    import ast
+
+    try:
+        tree = ast.parse(body)
+    except SyntaxError:
+        return []
+    bad: List[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for base in node.bases:
+            if isinstance(base, ast.Attribute) and base.attr == node.name:
+                bad.append(node.name)
+                break
+    return bad
 
 
 @dataclass
@@ -1986,6 +2032,24 @@ def apply_response(
             note=(
                 "Response did not parse as Python. Inspect the file, fix the "
                 "syntax (likely a stray fence or prose paragraph), and retry."
+            ),
+        )
+
+    self_inheriting = _detect_self_inheriting_classes(body)
+    if self_inheriting:
+        return ApplyResponseResult(
+            component=component_name,
+            stub_path="",
+            backup_path=None,
+            response_chars=len(raw),
+            status="recursion-trap",
+            note=(
+                f"Response defines class(es) {self_inheriting} that inherit "
+                f"from `<module>.<same_name>`. Once the stub is written, the "
+                f"base resolves back to the new class itself, causing "
+                f"RecursionError on every call. Rewrite the class to inherit "
+                f"directly from `object` (or `torch.nn.Module` if needed) "
+                f"and copy any logic from the existing stub explicitly."
             ),
         )
 
