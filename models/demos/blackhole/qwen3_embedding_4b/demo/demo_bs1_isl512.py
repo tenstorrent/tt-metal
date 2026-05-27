@@ -20,13 +20,13 @@ bs=1 ISL=512 activation = 512 * 2560 * 2 = 2.5 MB -> fits in L1 single-user path
 (no TT_BATCHED_L1_PREFILL needed for bs=1).
 
 Usage:
-    pytest models/demos/wormhole/qwen3_embedding_4b/demo/demo_bs1_isl512.py -sv
-    python models/demos/wormhole/qwen3_embedding_4b/demo/demo_bs1_isl512.py
+    pytest models/demos/blackhole/qwen3_embedding_4b/demo/demo_bs1_isl512.py -sv
+    python models/demos/blackhole/qwen3_embedding_4b/demo/demo_bs1_isl512.py
 """
 
 import pytest
 
-from models.demos.wormhole.qwen3_embedding_4b.demo._common import apply_recommended_env, run_perf, standalone_main
+from models.demos.blackhole.qwen3_embedding_4b.demo._common import apply_recommended_env, run_perf, standalone_main
 
 BATCH_SIZE = 1
 SEQ_LEN = 512

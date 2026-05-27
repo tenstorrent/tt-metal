@@ -17,14 +17,14 @@ Usage (Tracy device profile):
     MESH_DEVICE=P150 \\
       TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \\
       python -m tracy -p -r -v -m pytest \\
-      models/demos/wormhole/qwen3_embedding_4b/tests/perf/new_perf_bs1_isl512.py -sv
+      models/demos/blackhole/qwen3_embedding_4b/tests/perf/new_perf_bs1_isl512.py -sv
 
 Filter the resulting `ops_perf_results_*.csv` between `start`/`stop` signposts.
 """
 
 import pytest
 
-from models.demos.wormhole.qwen3_embedding_4b.demo._common import apply_recommended_env, run_perf
+from models.demos.blackhole.qwen3_embedding_4b.demo._common import apply_recommended_env, run_perf
 
 BATCH_SIZE = 1
 SEQ_LEN = 512

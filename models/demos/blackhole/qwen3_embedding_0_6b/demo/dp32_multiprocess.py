@@ -1,0 +1,270 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Multi-process DP=32 Qwen3-Embedding-0.6B benchmark.
+
+Each chip runs in its own subprocess with TT_VISIBLE_DEVICES isolation,
+eliminating ttnn's internal dispatch serialization that limits the single-
+process phased approach to ~20ms (vs 7.8ms single-device).
+
+Workers synchronize via a multiprocessing.Barrier after warmup so that no
+worker's build/compile phase overlaps with another worker's measurement
+phase — eliminating CPU contention during timed iterations. Each worker
+is also pinned to dedicated CPU cores.
+
+Usage:
+    python models/demos/blackhole/qwen3_embedding_0_6b/demo/dp32_multiprocess.py
+    python models/demos/blackhole/qwen3_embedding_0_6b/demo/dp32_multiprocess.py \\
+        --num-devices 32 --iterations 10 --warmup 2
+"""
+from __future__ import annotations
+
+import argparse
+import multiprocessing as mp
+import os
+import statistics
+import sys
+import time
+
+BATCH_SIZE = 1
+SEQ_LEN = 512
+
+
+def _worker(
+    chip_id: int,
+    iterations: int,
+    warmup: int,
+    barrier: mp.Barrier,
+    result_dict: dict,
+    cores_per_worker: int,
+) -> None:
+    """Single-chip: build model, warmup, barrier-sync, measure, report."""
+    os.environ["TT_VISIBLE_DEVICES"] = str(chip_id)
+
+    total_cores = os.cpu_count() or 64
+    start_core = (chip_id * cores_per_worker) % total_cores
+    affinity = set(range(start_core, min(start_core + cores_per_worker, total_cores)))
+    try:
+        os.sched_setaffinity(0, affinity)
+    except (OSError, AttributeError):
+        pass
+
+    try:
+        from models.demos.blackhole.qwen3_embedding_0_6b.demo._common import (
+            _run_prefill,
+            apply_recommended_env,
+            build_single_device_model,
+            generate_synthetic_inputs,
+        )
+
+        apply_recommended_env(batched_l1=False)
+        os.environ.setdefault("QWEN_FF2_BFP4", "1")
+
+        import ttnn
+
+        wall0 = time.perf_counter()
+
+        t_open0 = time.perf_counter()
+        device = ttnn.open_device(
+            device_id=0,
+            l1_small_size=32768,
+            trace_region_size=200_000_000,
+            num_command_queues=1,
+        )
+        open_sec = time.perf_counter() - t_open0
+
+        t_build0 = time.perf_counter()
+        generator, model_args, kv_caches, page_table = build_single_device_model(
+            device, batch_size=BATCH_SIZE, seq_len=SEQ_LEN
+        )
+        build_sec = time.perf_counter() - t_build0
+
+        input_ids, prompt_lens = generate_synthetic_inputs(model_args.tokenizer, BATCH_SIZE, SEQ_LEN)
+
+        t_compile0 = time.perf_counter()
+        _ = _run_prefill(generator, input_ids, page_table, kv_caches, prompt_lens, warmup=True)
+        compile_sec = time.perf_counter() - t_compile0
+
+        for _ in range(warmup):
+            generator.prev_page_table = None
+            _ = _run_prefill(generator, input_ids, page_table, kv_caches, prompt_lens, warmup=False)
+            ttnn.synchronize_device(device)
+
+        # ---- All workers rendezvous here before measurement ----
+        barrier.wait()
+
+        device_secs: list[float] = []
+        for _ in range(iterations):
+            generator.prev_page_table = None
+            t0 = time.perf_counter()
+            _ = _run_prefill(generator, input_ids, page_table, kv_caches, prompt_lens, warmup=False)
+            ttnn.synchronize_device(device)
+            device_secs.append(time.perf_counter() - t0)
+
+        try:
+            ttnn.synchronize_device(device)
+        except Exception:
+            pass
+        try:
+            ttnn.close_device(device)
+        except Exception:
+            pass
+
+        result_dict[chip_id] = {
+            "chip": chip_id,
+            "ok": True,
+            "open_sec": open_sec,
+            "build_sec": build_sec,
+            "compile_sec": compile_sec,
+            "warmup_iters": warmup,
+            "measured_iters": iterations,
+            "device_sec": statistics.mean(device_secs),
+            "device_sec_min": min(device_secs),
+            "device_sec_max": max(device_secs),
+            "device_sec_median": statistics.median(device_secs),
+            "device_secs": device_secs,
+            "total_sec": time.perf_counter() - wall0,
+        }
+    except Exception as exc:
+        result_dict[chip_id] = {
+            "chip": chip_id,
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _orchestrate(args: argparse.Namespace) -> None:
+    n = args.num_devices
+    iterations = args.iterations
+    warmup = args.warmup
+
+    total_cores = os.cpu_count() or 64
+    cores_per_worker = max(1, total_cores // n)
+
+    print(
+        f"Multi-process DP={n} Qwen3-Embedding-0.6B (bs={BATCH_SIZE}, ISL={SEQ_LEN})\n"
+        f"  warmup={warmup}  measured_iters={iterations}\n"
+        f"  CPU cores: {total_cores} total, {cores_per_worker}/worker\n"
+        f"  Barrier sync: all workers rendezvous after warmup\n"
+        f"  Each worker: TT_VISIBLE_DEVICES=<chip>, open_device(0), "
+        f"independent model + trace\n"
+    )
+
+    ctx = mp.get_context("spawn")
+    barrier = ctx.Barrier(n)
+    manager = ctx.Manager()
+    result_dict = manager.dict()
+
+    wall0 = time.perf_counter()
+    procs: list[mp.Process] = []
+    for i in range(n):
+        p = ctx.Process(
+            target=_worker,
+            args=(i, iterations, warmup, barrier, result_dict, cores_per_worker),
+            name=f"chip-{i}",
+        )
+        p.start()
+        procs.append(p)
+
+    for p in procs:
+        p.join(timeout=600)
+        if p.is_alive():
+            print(f"  WARNING: {p.name} hung — terminating")
+            p.terminate()
+            p.join(timeout=10)
+
+    wall_sec = time.perf_counter() - wall0
+
+    results = []
+    for i in range(n):
+        if i in result_dict:
+            results.append(dict(result_dict[i]))
+        else:
+            results.append({"chip": i, "ok": False, "error": "no result (crash?)"})
+
+    results.sort(key=lambda r: r.get("chip", 0))
+
+    for r in results:
+        chip = r.get("chip", "?")
+        if r.get("ok"):
+            print(
+                f"  chip {chip:>2}: mean={r['device_sec']*1000:.1f}ms "
+                f"median={r['device_sec_median']*1000:.1f}ms "
+                f"min={r['device_sec_min']*1000:.1f}ms "
+                f"max={r['device_sec_max']*1000:.1f}ms"
+            )
+        else:
+            print(f"  chip {chip:>2}: FAILED - {r.get('error', '')[:200]}")
+
+    oks = [r for r in results if r.get("ok")]
+    bads = [r for r in results if not r.get("ok")]
+
+    if not oks:
+        print(f"\nAll {n} workers failed!")
+        for r in bads:
+            print(f"  chip {r.get('chip')}: {r.get('error', r)}")
+        sys.exit(1)
+
+    def _mean(key: str) -> float:
+        return sum(float(r[key]) for r in oks) / len(oks)
+
+    global_batch = BATCH_SIZE * len(oks)
+    device_mean = _mean("device_sec")
+    device_median = _mean("device_sec_median")
+    device_min = min(r["device_sec_min"] for r in oks)
+    device_max = max(r["device_sec_max"] for r in oks)
+    slowest_mean = max(r["device_sec"] for r in oks)
+    slowest_median = max(r["device_sec_median"] for r in oks)
+
+    emb_per_sec_mean = global_batch / slowest_median
+    emb_per_sec_best = global_batch / device_min
+    tok_per_sec_mean = global_batch * SEQ_LEN / slowest_median
+    tok_per_sec_best = global_batch * SEQ_LEN / device_min
+
+    print()
+    print("=" * 60)
+    print(f"  Qwen3-Embedding-0.6B Multi-Process DP={len(oks)}")
+    print("=" * 60)
+    print(f"  Batch size (per chip):  {BATCH_SIZE}")
+    print(f"  Chips active:           {len(oks)}/{n}")
+    print(f"  Global batch size:      {global_batch}")
+    print(f"  Input seq length:       {SEQ_LEN}")
+    print(f"  Warmup iters:           {warmup}")
+    print(f"  Measured iters:         {iterations}")
+    print(f"  CPU pinning:            {cores_per_worker} cores/worker")
+    print("-" * 60)
+    print(f"  Avg open_device time:   {_mean('open_sec'):.1f}s")
+    print(f"  Avg model build time:   {_mean('build_sec'):.1f}s")
+    print(f"  Avg compile time:       {_mean('compile_sec'):.2f}s")
+    print("-" * 60)
+    print(f"  Per-chip mean:          {device_mean * 1000:.1f}ms")
+    print(f"  Per-chip median:        {device_median * 1000:.1f}ms")
+    print(f"  Per-chip min:           {device_min * 1000:.1f}ms")
+    print(f"  Per-chip max:           {device_max * 1000:.1f}ms")
+    print(f"  Slowest chip (mean):    {slowest_mean * 1000:.1f}ms")
+    print(f"  Slowest chip (median):  {slowest_median * 1000:.1f}ms")
+    print("-" * 60)
+    print(f"  Throughput (median):    {emb_per_sec_mean:.0f} embeddings/s  " f"({tok_per_sec_mean:.0f} tokens/s)")
+    print(f"  Throughput (best):      {emb_per_sec_best:.0f} embeddings/s  " f"({tok_per_sec_best:.0f} tokens/s)")
+    print("-" * 60)
+    print(f"  Wall time (all):        {wall_sec:.1f}s")
+    print("=" * 60)
+
+    if bads:
+        print(f"\nFailed chips ({len(bads)}):")
+        for r in bads:
+            print(f"  chip {r.get('chip')}: {r.get('error', r)[:300]}")
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description="Multi-process DP=32 Qwen3-Embedding-0.6B benchmark")
+    p.add_argument("--num-devices", type=int, default=32)
+    p.add_argument("--iterations", type=int, default=10)
+    p.add_argument("--warmup", type=int, default=2)
+    args = p.parse_args()
+    _orchestrate(args)
+
+
+if __name__ == "__main__":
+    main()

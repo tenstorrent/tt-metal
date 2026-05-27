@@ -15,14 +15,14 @@ Usage:
     HF_MODEL=Qwen/Qwen3-Embedding-0.6B MESH_DEVICE=P150 \\
       TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \\
       python -m tracy -p -r -v -m pytest \\
-      models/demos/wormhole/qwen3_embedding_0_6b/tests/perf/new_perf_bs8_isl512.py -sv
+      models/demos/blackhole/qwen3_embedding_0_6b/tests/perf/new_perf_bs8_isl512.py -sv
 
 Filter the resulting CSV between the `start`/`stop` signposts.
 """
 
 import pytest
 
-from models.demos.wormhole.qwen3_embedding_0_6b.demo._common import apply_recommended_env, run_perf
+from models.demos.blackhole.qwen3_embedding_0_6b.demo._common import apply_recommended_env, run_perf
 
 BATCH_SIZE = 8
 SEQ_LEN = 512

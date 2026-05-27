@@ -14,13 +14,13 @@ because the generic path already has enough sequence/batch blocks, but keeping
 it on makes the workload match the bs=1/bs=32 optimized path.
 
 Usage:
-    pytest models/demos/wormhole/qwen3_embedding_0_6b/demo/demo_bs8_isl512.py -sv
-    python models/demos/wormhole/qwen3_embedding_0_6b/demo/demo_bs8_isl512.py
+    pytest models/demos/blackhole/qwen3_embedding_0_6b/demo/demo_bs8_isl512.py -sv
+    python models/demos/blackhole/qwen3_embedding_0_6b/demo/demo_bs8_isl512.py
 """
 
 import pytest
 
-from models.demos.wormhole.qwen3_embedding_0_6b.demo._common import apply_recommended_env, run_perf, standalone_main
+from models.demos.blackhole.qwen3_embedding_0_6b.demo._common import apply_recommended_env, run_perf, standalone_main
 
 BATCH_SIZE = 8
 SEQ_LEN = 512

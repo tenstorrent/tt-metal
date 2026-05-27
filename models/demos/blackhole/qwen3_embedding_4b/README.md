@@ -1,6 +1,6 @@
 # Qwen3-Embedding-4B on Tenstorrent
 
-Optimized inference of [Qwen/Qwen3-Embedding-4B](https://huggingface.co/Qwen/Qwen3-Embedding-4B) on Tenstorrent Wormhole (P150/Blackhole) hardware.
+Optimized inference of [Qwen/Qwen3-Embedding-4B](https://huggingface.co/Qwen/Qwen3-Embedding-4B) on Tenstorrent Blackhole (P150) hardware.
 
 ## Model overview
 
@@ -47,10 +47,10 @@ Activation = 512 x 2560 x 2 = 2.5 MB -- fits in L1 (single-user path, no `TT_BAT
 
 ```bash
 # Via pytest
-pytest models/demos/wormhole/qwen3_embedding_4b/demo/demo_bs1_isl512.py -sv
+pytest models/demos/blackhole/qwen3_embedding_4b/demo/demo_bs1_isl512.py -sv
 
 # Standalone
-MESH_DEVICE=P150 python models/demos/wormhole/qwen3_embedding_4b/demo/demo_bs1_isl512.py
+MESH_DEVICE=P150 python models/demos/blackhole/qwen3_embedding_4b/demo/demo_bs1_isl512.py
 ```
 
 ### Batch size 32
@@ -59,10 +59,10 @@ Activation = 32 x 512 x 2560 x 2 = 80 MB -- DRAM-resident. Uses the full 130-cor
 
 ```bash
 # Via pytest
-pytest models/demos/wormhole/qwen3_embedding_4b/demo/demo_bs32_isl512.py -sv
+pytest models/demos/blackhole/qwen3_embedding_4b/demo/demo_bs32_isl512.py -sv
 
 # Standalone
-MESH_DEVICE=P150 python models/demos/wormhole/qwen3_embedding_4b/demo/demo_bs32_isl512.py
+MESH_DEVICE=P150 python models/demos/blackhole/qwen3_embedding_4b/demo/demo_bs32_isl512.py
 ```
 
 ### Common options (standalone mode)
@@ -77,7 +77,7 @@ The evaluation script runs both the HuggingFace reference model and the TT model
 
 ```bash
 # Default: ArguAna + STS-Benchmark, 100-sample subset, both HF and TT
-MESH_DEVICE=P150 python models/demos/wormhole/qwen3_embedding_4b/demo/mteb_evaluation.py
+MESH_DEVICE=P150 python models/demos/blackhole/qwen3_embedding_4b/demo/mteb_evaluation.py
 
 # Full ArguAna dataset
 MESH_DEVICE=P150 python .../mteb_evaluation.py --datasets mteb/ArguAna --max-samples 0
@@ -101,13 +101,13 @@ These scripts run a single measured iteration with `tracy.signpost("start"/"stop
 MESH_DEVICE=P150 \
   TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \
   python -m tracy -p -r -v -m pytest \
-  models/demos/wormhole/qwen3_embedding_4b/tests/perf/new_perf_bs1_isl512.py -sv
+  models/demos/blackhole/qwen3_embedding_4b/tests/perf/new_perf_bs1_isl512.py -sv
 
 # bs=32 Tracy profile
 MESH_DEVICE=P150 \
   TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \
   python -m tracy -p -r -v -m pytest \
-  models/demos/wormhole/qwen3_embedding_4b/tests/perf/new_perf_bs32_isl512.py -sv
+  models/demos/blackhole/qwen3_embedding_4b/tests/perf/new_perf_bs32_isl512.py -sv
 ```
 
 Filter the resulting `ops_perf_results_*.csv` to ops between the `start` and `stop` signposts.

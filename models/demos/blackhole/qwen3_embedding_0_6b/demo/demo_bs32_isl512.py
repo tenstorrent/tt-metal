@@ -17,15 +17,15 @@ LN block-sharding auto-disables for this shape (per-core block_h=64 > 16) so
 QWEN_LN_BLOCK_SHARDED=1 is set but inert.
 
 Usage:
-    pytest models/demos/wormhole/qwen3_embedding_0_6b/demo/demo_bs32_isl512.py -sv
-    python models/demos/wormhole/qwen3_embedding_0_6b/demo/demo_bs32_isl512.py
+    pytest models/demos/blackhole/qwen3_embedding_0_6b/demo/demo_bs32_isl512.py -sv
+    python models/demos/blackhole/qwen3_embedding_0_6b/demo/demo_bs32_isl512.py
 """
 
 import os
 
 import pytest
 
-from models.demos.wormhole.qwen3_embedding_0_6b.demo._common import apply_recommended_env, run_perf, standalone_main
+from models.demos.blackhole.qwen3_embedding_0_6b.demo._common import apply_recommended_env, run_perf, standalone_main
 
 BATCH_SIZE = 32
 SEQ_LEN = 512

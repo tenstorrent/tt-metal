@@ -1,6 +1,6 @@
 # Qwen3-Embedding-0.6B on Tenstorrent
 
-Optimized inference of [Qwen/Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B) on Tenstorrent Wormhole (P150/Blackhole) hardware.
+Optimized inference of [Qwen/Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B) on Tenstorrent Blackhole (P150) hardware.
 
 ## Model overview
 
@@ -23,6 +23,7 @@ qwen3_embedding_0_6b/
 │   ├── demo_bs1_isl512.py         # Perf demo — batch=1, ISL=512
 │   ├── demo_bs8_isl512.py         # Perf demo — batch=8, ISL=512
 │   ├── demo_bs32_isl512.py        # Perf demo — batch=32, ISL=512
+│   ├── dp32_multiprocess.py       # Multi-process DP=32 Galaxy benchmark
 │   └── mteb_evaluation.py         # MTEB accuracy eval (TT vs HF reference)
 ├── tt/
 │   └── attention.py               # Qwen3EmbeddingAttention — bs=1/ISL=512 graph opts
@@ -49,10 +50,10 @@ The demo scripts measure prefill latency over multiple iterations with all optim
 
 ```bash
 # Via pytest
-pytest models/demos/wormhole/qwen3_embedding_0_6b/demo/demo_bs1_isl512.py -sv
+pytest models/demos/blackhole/qwen3_embedding_0_6b/demo/demo_bs1_isl512.py -sv
 
 # Standalone
-MESH_DEVICE=P150 python models/demos/wormhole/qwen3_embedding_0_6b/demo/demo_bs1_isl512.py
+MESH_DEVICE=P150 python models/demos/blackhole/qwen3_embedding_0_6b/demo/demo_bs1_isl512.py
 ```
 
 The BS1 entrypoint also enables `QWEN_FF2_BFP4=1` by default (via `setdefault`)
@@ -62,20 +63,58 @@ because it consistently improves BS1/ISL512 prefill throughput on P150.
 
 ```bash
 # Via pytest
-pytest models/demos/wormhole/qwen3_embedding_0_6b/demo/demo_bs8_isl512.py -sv
+pytest models/demos/blackhole/qwen3_embedding_0_6b/demo/demo_bs8_isl512.py -sv
 
 # Standalone
-MESH_DEVICE=P150 python models/demos/wormhole/qwen3_embedding_0_6b/demo/demo_bs8_isl512.py
+MESH_DEVICE=P150 python models/demos/blackhole/qwen3_embedding_0_6b/demo/demo_bs8_isl512.py
 ```
 
 ### Batch size 32
 
 ```bash
 # Via pytest
-pytest models/demos/wormhole/qwen3_embedding_0_6b/demo/demo_bs32_isl512.py -sv
+pytest models/demos/blackhole/qwen3_embedding_0_6b/demo/demo_bs32_isl512.py -sv
 
 # Standalone
-MESH_DEVICE=P150 python models/demos/wormhole/qwen3_embedding_0_6b/demo/demo_bs32_isl512.py
+MESH_DEVICE=P150 python models/demos/blackhole/qwen3_embedding_0_6b/demo/demo_bs32_isl512.py
+```
+
+### Data-parallel DP=32 on Galaxy (8x4 mesh)
+
+The multi-process benchmark runs 32 independent model replicas across all chips
+in a Blackhole Galaxy machine. Each chip runs in its own subprocess with
+`TT_VISIBLE_DEVICES` isolation, a `multiprocessing.Barrier` synchronizes all
+workers after warmup, and CPU affinity pins 2 cores per worker.
+
+```bash
+# Single-process DP=32 (submesh-based, via pytest)
+HF_MODEL=Qwen/Qwen3-Embedding-0.6B MESH_DEVICE=TG pytest \
+  models/demos/blackhole/qwen3_embedding_0_6b/demo/demo_bs1_isl512.py -sv -k dp32
+
+# Multi-process DP=32 (process-per-chip, best throughput)
+python models/demos/blackhole/qwen3_embedding_0_6b/demo/dp32_multiprocess.py
+
+# With custom options
+python models/demos/blackhole/qwen3_embedding_0_6b/demo/dp32_multiprocess.py \
+  --num-devices 32 --iterations 10 --warmup 2
+```
+
+**Measured performance (BH Galaxy, 32 chips):**
+
+| Approach | Per-chip mean | Slowest chip | Throughput (median) | Tokens/s |
+|---|---|---|---|---|
+| Single-process (phased) | 20.3 ms | n/a | ~1,097 emb/s | ~561K |
+| Multi-process (barrier) | 8.8 ms | 9.2 ms | ~3,483 emb/s | ~1.8M |
+
+The multi-process approach achieves near-linear scaling: each chip runs at
+~8.2-9.2 ms (vs 7.8 ms single-device baseline), yielding ~3.3x throughput
+improvement over the single-process approach.
+
+### Single-device baseline on Galaxy
+
+```bash
+HF_MODEL=Qwen/Qwen3-Embedding-0.6B MESH_DEVICE=TG pytest \
+  models/demos/blackhole/qwen3_embedding_0_6b/demo/demo_bs1_isl512.py -sv -k galaxy_dp1
 ```
 
 ### Common options (standalone mode)
@@ -90,7 +129,7 @@ The evaluation script runs both the HuggingFace reference model and the TT model
 
 ```bash
 # Default: ArguAna + STS-Benchmark, 100-sample subset, both HF and TT
-MESH_DEVICE=P150 python models/demos/wormhole/qwen3_embedding_0_6b/demo/mteb_evaluation.py
+MESH_DEVICE=P150 python models/demos/blackhole/qwen3_embedding_0_6b/demo/mteb_evaluation.py
 
 # Full ArguAna dataset
 MESH_DEVICE=P150 python .../mteb_evaluation.py --datasets mteb/ArguAna --max-samples 0
@@ -114,19 +153,19 @@ These scripts run a single measured iteration with `tracy.signpost("start"/"stop
 MESH_DEVICE=P150 \
   TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \
   python -m tracy -p -r -v -m pytest \
-  models/demos/wormhole/qwen3_embedding_0_6b/tests/perf/new_perf_bs1_isl512.py -sv
+  models/demos/blackhole/qwen3_embedding_0_6b/tests/perf/new_perf_bs1_isl512.py -sv
 
 # bs=8 Tracy profile
 MESH_DEVICE=P150 \
   TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \
   python -m tracy -p -r -v -m pytest \
-  models/demos/wormhole/qwen3_embedding_0_6b/tests/perf/new_perf_bs8_isl512.py -sv
+  models/demos/blackhole/qwen3_embedding_0_6b/tests/perf/new_perf_bs8_isl512.py -sv
 
 # bs=32 Tracy profile
 MESH_DEVICE=P150 \
   TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \
   python -m tracy -p -r -v -m pytest \
-  models/demos/wormhole/qwen3_embedding_0_6b/tests/perf/new_perf_bs32_isl512.py -sv
+  models/demos/blackhole/qwen3_embedding_0_6b/tests/perf/new_perf_bs32_isl512.py -sv
 ```
 
 Filter the resulting `ops_perf_results_*.csv` to ops between the `start` and `stop` signposts.

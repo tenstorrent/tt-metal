@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""MTEB (Multilingual) evaluation for Qwen3-Embedding-4B on Tenstorrent hardware.
+"""MTEB (Multilingual) evaluation for Qwen3-Embedding-0.6B on Tenstorrent hardware.
 
 Runs both the HuggingFace reference model and the TT-accelerated model on the
 same MTEB datasets, then displays a comparison table with TT/HF accuracy ratio.
@@ -17,7 +17,7 @@ Supported task types (auto-detected from dataset columns):
 
 Examples:
     # Default: run ArguAna retrieval + STS-Benchmark, both HF and TT
-    MESH_DEVICE=P150 python models/demos/wormhole/qwen3_embedding_4b/demo/mteb_evaluation.py
+    MESH_DEVICE=P150 python models/demos/blackhole/qwen3_embedding_0_6b/demo/mteb_evaluation.py
 
     # Retrieval only, full dataset
     MESH_DEVICE=P150 python .../mteb_evaluation.py --datasets mteb/ArguAna --max-samples 0
@@ -27,11 +27,6 @@ Examples:
 
     # Skip HF reference (TT-only, faster)
     MESH_DEVICE=P150 python .../mteb_evaluation.py --skip-hf-reference
-
-4B-specific notes:
-  - hidden_size=2560 (vs 1024 for 0.6B), 36 layers (vs 28)
-  - bs=1 activations fit in L1; bs>=11 spills to DRAM
-  - bs=32 uses the full 130-core (13x10) matmul grid
 """
 
 from __future__ import annotations
@@ -49,7 +44,7 @@ from scipy.stats import spearmanr
 from tqdm import tqdm
 
 import ttnn
-from models.demos.wormhole.qwen3_embedding_4b.demo._common import (
+from models.demos.blackhole.qwen3_embedding_0_6b.demo._common import (
     MODEL_NAME,
     apply_recommended_env,
     build_single_device_model,
@@ -64,6 +59,8 @@ DEFAULT_QUERY_INSTRUCTION = (
 
 DEFAULT_DATASETS = ["mteb/ArguAna", "mteb/stsbenchmark-sts"]
 
+# Published MTEB (Multilingual) scores from the Qwen3-Embedding model card.
+# These are per-task-type averages across all datasets in MTEB(Multilingual, v2).
 PUBLISHED_MTEB_SCORES = {
     "0.6B": {
         "Mean (Task)": 64.33,
@@ -315,6 +312,7 @@ def _last_token_pool(hidden: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
 
 
 def _build_hf_reference():
+    """Load HF reference model using AutoModel (matches the Transformers Usage on the model card)."""
     from transformers import AutoModel, AutoTokenizer
 
     logger.info(f"Loading HF reference model: {MODEL_NAME}")
@@ -426,10 +424,20 @@ def _encode_ttnn(
 # ---------------------------------------------------------------------------
 
 
-def _eval_retrieval(queries, documents, rel_ids, encode_fn, *, batch_size, seq_len, label):
+def _eval_retrieval(
+    queries,
+    documents,
+    rel_ids,
+    encode_fn,
+    *,
+    batch_size: int,
+    seq_len: int,
+    label: str,
+):
     logger.info(f"[{label}] Encoding {len(queries)} queries + {len(documents)} documents...")
     q_emb = encode_fn(queries, batch_size=batch_size, seq_len=seq_len, desc=f"{label} queries")
     d_emb = encode_fn(documents, batch_size=batch_size, seq_len=seq_len, desc=f"{label} docs")
+
     sims = torch.mm(_normalize(q_emb), _normalize(d_emb).t()).numpy()
     return {
         "recall@10": _recall_at_k(sims, rel_ids, k=10) * 100,
@@ -439,17 +447,28 @@ def _eval_retrieval(queries, documents, rel_ids, encode_fn, *, batch_size, seq_l
     }
 
 
-def _eval_sts(s1, s2, gold, encode_fn, *, batch_size, seq_len, label):
+def _eval_sts(
+    s1,
+    s2,
+    gold,
+    encode_fn,
+    *,
+    batch_size: int,
+    seq_len: int,
+    label: str,
+):
     logger.info(f"[{label}] Encoding {len(s1)} sentence pairs...")
     e1 = encode_fn(s1, batch_size=batch_size, seq_len=seq_len, desc=f"{label} sent1")
     e2 = encode_fn(s2, batch_size=batch_size, seq_len=seq_len, desc=f"{label} sent2")
+
     cos = (_normalize(e1) * _normalize(e2)).sum(dim=1).numpy()
     sp, _ = spearmanr(cos, gold)
     return {"spearman": float(sp) * 100}
 
 
 def _embedding_alignment(ref: torch.Tensor, cand: torch.Tensor) -> float:
-    return float((_normalize(ref) * _normalize(cand)).sum(dim=1).mean().item())
+    sim = (_normalize(ref) * _normalize(cand)).sum(dim=1)
+    return float(sim.mean().item())
 
 
 # ---------------------------------------------------------------------------
@@ -467,11 +486,13 @@ def run_mteb_evaluation(
     query_instruction: str = DEFAULT_QUERY_INSTRUCTION,
     skip_hf_reference: bool = False,
 ):
+    # Build TT model
     generator, tt_tokenizer, kv_caches, page_table = _build_tt_model(device, batch_size, seq_len)
 
     def tt_encode(texts, *, batch_size, seq_len, desc):
         return _encode_ttnn(texts, generator, tt_tokenizer, page_table, kv_caches, batch_size, seq_len, desc=desc)
 
+    # Build HF reference
     hf_model, hf_tokenizer = (None, None)
     if not skip_hf_reference:
         hf_model, hf_tokenizer = _build_hf_reference()
@@ -491,10 +512,12 @@ def run_mteb_evaluation(
 
         if task_type == "retrieval":
             queries, docs, rel_ids = _extract_retrieval_samples(ds_name, test_ds, query_instruction)
+
             tt_metrics = _eval_retrieval(
                 queries, docs, rel_ids, tt_encode, batch_size=batch_size, seq_len=seq_len, label="TT"
             )
-            hf_metrics, alignment = None, None
+            hf_metrics = None
+            alignment = None
             if not skip_hf_reference:
                 hf_metrics = _eval_retrieval(
                     queries, docs, rel_ids, hf_encode, batch_size=batch_size, seq_len=seq_len, label="HF"
@@ -506,6 +529,7 @@ def run_mteb_evaluation(
                     queries[: min(64, len(queries))], batch_size=batch_size, seq_len=seq_len, desc="align-q"
                 )
                 alignment = _embedding_alignment(q_hf, q_tt)
+
             results.append(
                 {
                     "dataset": ds_name,
@@ -521,13 +545,16 @@ def run_mteb_evaluation(
 
         elif task_type == "sts":
             s1, s2, gold = _extract_sts_samples(ds_name, test_ds)
+
             tt_metrics = _eval_sts(s1, s2, gold, tt_encode, batch_size=batch_size, seq_len=seq_len, label="TT")
-            hf_metrics, alignment = None, None
+            hf_metrics = None
+            alignment = None
             if not skip_hf_reference:
                 hf_metrics = _eval_sts(s1, s2, gold, hf_encode, batch_size=batch_size, seq_len=seq_len, label="HF")
                 e_tt = tt_encode(s1[: min(64, len(s1))], batch_size=batch_size, seq_len=seq_len, desc="align")
                 e_hf = hf_encode(s1[: min(64, len(s1))], batch_size=batch_size, seq_len=seq_len, desc="align")
                 alignment = _embedding_alignment(e_hf, e_tt)
+
             results.append(
                 {
                     "dataset": ds_name,
@@ -541,12 +568,13 @@ def run_mteb_evaluation(
                 }
             )
 
+    # --- Display comparison table ---
     _print_comparison_table(results, skip_hf_reference)
     return results
 
 
 def _print_comparison_table(results: list[dict], skip_hf: bool):
-    model_size = "4B"
+    model_size = "0.6B"
     published = PUBLISHED_MTEB_SCORES.get(model_size, {})
 
     logger.info("")
@@ -567,6 +595,7 @@ def _print_comparison_table(results: list[dict], skip_hf: bool):
         pub = published.get(r["task_type"], None)
         pub_str = f"{pub:.2f}" if pub is not None else "—"
         tt_str = f"{r['tt']:.2f}"
+
         if not skip_hf and r["hf"] is not None:
             hf_str = f"{r['hf']:.2f}"
             ratio = r["tt"] / r["hf"] if r["hf"] != 0 else float("nan")
@@ -580,11 +609,13 @@ def _print_comparison_table(results: list[dict], skip_hf: bool):
     if not skip_hf:
         alignments = [r["alignment"] for r in results if r["alignment"] is not None]
         if alignments:
+            avg_align = sum(alignments) / len(alignments)
             logger.info("-" * len(header))
-            logger.info(f"  Mean embedding alignment (cosine) TT vs HF: {sum(alignments)/len(alignments):.4f}")
+            logger.info(f"  Mean embedding alignment (cosine) TT vs HF: {avg_align:.4f}")
 
     logger.info("=" * 90)
 
+    # Print published MTEB table for reference
     logger.info("")
     logger.info("Published MTEB (Multilingual) scores from model card:")
     logger.info(f"  {'Category':<28} {'0.6B':>8} {'4B':>8} {'8B':>8}")
@@ -615,13 +646,18 @@ def _print_comparison_table(results: list[dict], skip_hf: bool):
 
 
 def _parse_args():
-    parser = argparse.ArgumentParser(description="MTEB evaluation for Qwen3-Embedding-4B: TT vs HF comparison")
-    parser.add_argument("--datasets", nargs="+", default=DEFAULT_DATASETS)
+    parser = argparse.ArgumentParser(description="MTEB evaluation for Qwen3-Embedding-0.6B: TT vs HF comparison")
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=DEFAULT_DATASETS,
+        help="MTEB dataset names (default: ArguAna + STS-Benchmark)",
+    )
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--seq-len", type=int, default=DEFAULT_SEQ_LEN)
     parser.add_argument("--max-samples", type=int, default=100, help="Max samples per dataset (0 = all)")
     parser.add_argument("--query-instruction", default=DEFAULT_QUERY_INSTRUCTION)
-    parser.add_argument("--skip-hf-reference", action="store_true")
+    parser.add_argument("--skip-hf-reference", action="store_true", help="Skip HF reference (TT-only)")
     parser.add_argument("--device-id", type=int, default=0)
     return parser.parse_args()
 
