@@ -535,6 +535,11 @@ jobs:
             local tg="${TEST_GROUP_NAME:-}"
             local is_galaxy=0
             [[ "$tg" == *galaxy* ]] && is_galaxy=1
+            # Derive device series from test group for precise hw filtering
+            local hw_series_filter=""
+            for series in n150 n300 p150b p100a galaxy; do
+              if [[ "$tg" == *"$series"* ]]; then hw_series_filter="$series"; break; fi
+            done
             if [[ -n "$arch_tag" ]]; then
               local arch_base="${arch_tag%%_*}"  # e.g. wormhole from wormhole_b0
               local arch_matched=0
@@ -546,10 +551,12 @@ jobs:
                 # Galaxy exclusion: skip galaxy vectors on non-galaxy and vice versa
                 if [[ $is_galaxy -eq 1 && "$bname" != *galaxy* ]]; then continue; fi
                 if [[ $is_galaxy -eq 0 && "$bname" == *galaxy* ]]; then continue; fi
+                # Device series filter: only match files for this runner's hw series
+                if [[ -n "$hw_series_filter" && "$bname" != *"$hw_series_filter"* ]]; then continue; fi
                 arch_matched=1; break
               done
               if [[ "$arch_matched" == "0" ]]; then
-                echo "[two-pass] $axis partition has no vectors for $arch_tag (galaxy=$is_galaxy) — skipping"
+                echo "[two-pass] $axis partition has no vectors for $arch_tag/$hw_series_filter (galaxy=$is_galaxy) — skipping"
                 return 0
               fi
             fi
