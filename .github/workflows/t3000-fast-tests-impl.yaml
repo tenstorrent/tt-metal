@@ -97,14 +97,17 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         if: ${{ inputs.run-fabric-tests == 'true' }}
         run: |
-          mkdir -p generated/test_reports
-          python3 tools/tt-power-sidecar/tt_power_sidecar.py \
-            --backend sysfs \
-            --out /work/power_report_fabric.json \
-            -- bash -c '
-              source tests/scripts/t3000/run_t3000_unit_tests.sh
-              run_t3000_ttfabric_tests
-            '
+          mkdir -p generated/test_reports generated/test_logs
+          {
+            python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+              --backend sysfs \
+              --out /work/power_report_fabric.json \
+              -- bash -c '
+                source tests/scripts/t3000/run_t3000_unit_tests.sh
+                run_t3000_ttfabric_tests
+              '
+          } 2>&1 | tee "generated/test_logs/t3k_fabric_${{ job.check_run_id }}.log"
+          exit "${PIPESTATUS[0]}"
       # The multiprocess tests are currently disabled as they are not stable. We will re-enable them once we have improved their stability.
       # - name: Run t3k ttnn multiprocess tests
       #   id: t3k-ttnn-multiprocess-tests
@@ -125,14 +128,17 @@ jobs:
         timeout-minutes: 10
         if: ${{ inputs.run-ccl-tests == 'true' }}
         run: |
-          mkdir -p generated/test_reports
-          python3 tools/tt-power-sidecar/tt_power_sidecar.py \
-            --backend sysfs \
-            --out /work/power_report_ccl.json \
-            -- bash -c '
-              source tests/scripts/t3000/run_t3000_unit_tests.sh
-              run_t3000_ccl_tests
-            '
+          mkdir -p generated/test_reports generated/test_logs
+          {
+            python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+              --backend sysfs \
+              --out /work/power_report_ccl.json \
+              -- bash -c '
+                source tests/scripts/t3000/run_t3000_unit_tests.sh
+                run_t3000_ccl_tests
+              '
+          } 2>&1 | tee "generated/test_logs/t3k_ccl_${{ job.check_run_id }}.log"
+          exit "${PIPESTATUS[0]}"
 
       - name: Upload fabric power report
         if: ${{ inputs.run-fabric-tests == 'true' && !cancelled() }}
@@ -170,6 +176,23 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: "T3000 fast tests"
+
       - name: Check for benchmark and latency data
         id: check-data
         if: ${{ !cancelled() && github.ref_name == 'main' }}
