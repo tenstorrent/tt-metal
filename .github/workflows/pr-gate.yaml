@@ -416,6 +416,7 @@ jobs:
       platform: "Ubuntu 22.04"
       ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
       dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
+      force-scan: true
 
   # LLK PR Labeling — auto-apply labels based on which LLK directories changed
   llk-label-pr:
