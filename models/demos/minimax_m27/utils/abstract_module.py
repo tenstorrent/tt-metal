@@ -31,7 +31,7 @@ class AbstractModule(ABC):
     - `prefill_model_config` - generates the model configuration for prefill mode.
     - `convert_weights` - converts PyTorch weights to TTNN format and saves them to the specified path.
       The weights are in a form of a list of PyTorch state dictionaries. For submodules that can act as a collection
-      of layers, for example MLP, the length of the list is expected to be the same as the dimension 0 of the mesh device.
+      of layers, the length of the list is expected to be the same as the dimension 0 of the mesh device.
       Use `{get_state_dicts.__module__}` for a convenient way to concatenate the weights from the state dictionaries into
       a single PyTorch tensor.
     - `create_state` (optional) - creates a new state for the module, which is used to store persistent model state.

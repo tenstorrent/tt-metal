@@ -165,7 +165,7 @@ class MLA2D(MLA1D):
             page_table: Page table tensor for paged attention
 
         Returns:
-            Output tensor after MLP computation
+            Output tensor after MLA computation
         """
 
         scale = 1 / cfg["mla1d"]["mesh_shape"][0]

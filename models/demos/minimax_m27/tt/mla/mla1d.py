@@ -156,7 +156,7 @@ class MLA1D(AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
     ) -> ModelPrefillConfig:
-        """Prefill model config for an MLP with 1D tensor parallelism.
+        """Prefill model config for MLA with 1D tensor parallelism.
 
         Args:
             hf_config: HuggingFace model configuration object
@@ -496,7 +496,7 @@ class MLA1D(AbstractModule):
             row_idx: Row index in the mesh
 
         Returns:
-            Output tensor after MLP computation
+            Output tensor after MLA computation
         """
         mesh_shape = cfg["mesh_shape"]
 

@@ -4,7 +4,7 @@ This folder contains a small, self‑contained CLI demo that runs DeepSeek‑V3 
 
 The script supports two practical modes:
 - Full‑model mode using local Hugging Face safetensors (accuracy‑oriented)
-- Single‑layer with random weights (fast, no safetensors; useful for quick pipeline/hardware checks)
+- Random‑weights smoke mode (fast, no safetensors; useful for quick pipeline/hardware checks)
 
 ## Requirements
 - TT‑Metalium / TT‑NN installed and working (see INSTALLING.md)
@@ -36,8 +36,8 @@ python models/demos/deepseek_v3/demo/demo.py \
   --max-new-tokens 64
 ```
 
-### 2) Single‑layer with random weights (fast)
-Runs a minimal single‑layer pipeline with randomly initialized weights. This does not require `.safetensors`, and the tokenizer is optional. If no tokenizer is found, the demo synthesizes simple token IDs. The prompt is not used in this mode, so you don’t need to provide one.
+### 2) Random weights smoke mode (fast)
+Runs a minimal random‑weights pipeline. This does not require `.safetensors`, and the tokenizer is optional. If no tokenizer is found, the demo synthesizes simple token IDs. The prompt is not used in this mode, so you don’t need to provide one.
 
 ```bash
 # Point to a local HF model directory (contains tokenizer + .safetensors)
@@ -47,14 +47,13 @@ export MESH_DEVICE=DUAL
 
 # Model path only needs config (tokenizer optional)
 python models/demos/deepseek_v3/demo/demo.py \
-  --random-weights --single-layer mlp \
+  --random-weights \
   --model-path $DEEPSEEK_V3_HF_MODEL \
   --cache-dir $DEEPSEEK_V3_CACHE \
   --max-new-tokens 16
 ```
 
 Notes:
-- `--single-layer=mlp` is supported; `--single-layer=moe` is not supported and will error out.
 - Output will be nonsense (random weights); this mode is for quick validation of the data path, caching, and device bring‑up.
 
 ## CLI Reference
@@ -62,7 +61,7 @@ Notes:
 ```text
 usage: DeepSeek-V3 Demo on TT-NN [-h] [--model-path PATH] [--max-new-tokens N]
                                  [--cache-dir PATH] [--random-weights]
-                                 [--single-layer {mlp,moe}] [prompt]
+                                 [prompt]
 ```
 
 - `prompt`: Text prompt to generate from (required in full‑model mode; ignored in `--random-weights`).
@@ -72,7 +71,6 @@ usage: DeepSeek-V3 Demo on TT-NN [-h] [--model-path PATH] [--max-new-tokens N]
 - `--max-new-tokens N`: Number of tokens to generate (default: 32). Greedy decoding only.
 - `--cache-dir PATH`: Where to store converted TTNN weights and caches.
 - `--random-weights`: Use randomly initialized weights derived from the HF config (no safetensors).
-- `--single-layer {mlp,moe}`: With `--random-weights`, request a single‑layer run. `mlp` is supported; `moe` is not.
 
 ## Behavior and Output
 - The demo opens a mesh device based on specified system type (`TG`, `DUAL`, `QUAD`).
@@ -88,8 +86,7 @@ usage: DeepSeek-V3 Demo on TT-NN [-h] [--model-path PATH] [--max-new-tokens N]
 - "Tokenizer files not found": Ensure the `--model-path` (or `$DEEPSEEK_V3_HF_MODEL`) directory includes tokenizer assets
   such as `tokenizer.model` or `tokenizer.json`.
 - "No .safetensors files found": You are in full‑model mode. Either provide a directory with safetensors or use
-  `--random-weights --single-layer mlp` for a quick run without weights.
-- "--single-layer=moe not supported": Only `mlp` is supported in the single‑layer random‑weights demo.
+  `--random-weights` for a quick run without weights.
 
 ## Notes
 - Converted weights are cached under `--cache-dir/weights` to speed up subsequent runs.

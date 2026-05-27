@@ -47,7 +47,7 @@ def run_test_matmul_dram_sharded(
     """
     Test matmul with DRAM sharded weights using MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.
 
-    This test mirrors the model's approach in MLP.decode_model_config:
+    This test mirrors the model's decode matmul configuration approach:
     - InputA (activation) is L1 width sharded
     - InputB (weights) is DRAM width sharded
     - Uses the same helper functions as the model
@@ -174,9 +174,9 @@ def run_test_matmul_dram_sharded(
 @pytest.mark.parametrize(
     "M, K, N",
     [
-        # InputA: (1, 1, 32, 7168), InputB: (1, 1, 7168, 2304) - MLP w1/w3 style
+        # InputA: (1, 1, 32, 7168), InputB: (1, 1, 7168, 2304) - expert w1/w3 style
         (32, 7168, 2304),
-        # InputA: (1, 1, 32, 2304), InputB: (1, 1, 2304, 7168) - MLP w2 style
+        # InputA: (1, 1, 32, 2304), InputB: (1, 1, 2304, 7168) - expert w2 style
         (32, 2304, 7168),
         # InputA: (1, 1, 32, 7168), InputB: (1, 1, 7168, 256) - smaller output
         (32, 7168, 256),
@@ -186,8 +186,8 @@ def run_test_matmul_dram_sharded(
         (32, 7168, 4064),
     ],
     ids=[
-        "32x7168x2304_mlp_w1_style",
-        "32x2304x7168_mlp_w2_style",
+        "32x7168x2304_expert_w1_style",
+        "32x2304x7168_expert_w2_style",
         "32x7168x256_small_output",
         "32x256x7168_small_input",
         "32x7168x4064_lm_head_style",
@@ -225,9 +225,9 @@ def test_matmul_dram_sharded_single_device(
 @pytest.mark.parametrize(
     "M, K, N",
     [
-        # InputA: (1, 1, 32, 7168), InputB: (1, 1, 7168, 2304) - MLP w1/w3 style
+        # InputA: (1, 1, 32, 7168), InputB: (1, 1, 7168, 2304) - expert w1/w3 style
         (32, 7168, 2304),
-        # InputA: (1, 1, 32, 2304), InputB: (1, 1, 2304, 7168) - MLP w2 style
+        # InputA: (1, 1, 32, 2304), InputB: (1, 1, 2304, 7168) - expert w2 style
         (32, 2304, 7168),
         # InputA: (1, 1, 32, 7168), InputB: (1, 1, 7168, 256) - smaller output
         (32, 7168, 256),
@@ -237,8 +237,8 @@ def test_matmul_dram_sharded_single_device(
         (32, 7168, 4064),
     ],
     ids=[
-        "32x7168x2304_mlp_w1_style",
-        "32x2304x7168_mlp_w2_style",
+        "32x7168x2304_expert_w1_style",
+        "32x2304x7168_expert_w2_style",
         "32x7168x256_small_output",
         "32x256x7168_small_input",
         "32x7168x4064_lm_head_style",

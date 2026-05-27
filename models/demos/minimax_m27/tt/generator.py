@@ -77,9 +77,7 @@ class DeepseekGenerator:
         batch_size: int = USERS_PER_ROW,
         tokenizer=None,
         random_weights: bool = False,
-        dense_layers: int | None = None,
         override_num_layers: int | None = None,
-        single_layer: str | None = None,
         enable_trace: bool = False,
     ) -> None:
         self.mesh_device = mesh_device
@@ -98,11 +96,6 @@ class DeepseekGenerator:
                 self.hf_config.num_hidden_layers = int(override_num_layers)
             except Exception as e:
                 logger.warning(f"Failed to override num_hidden_layers with value '{override_num_layers}': {e}")
-        if dense_layers is not None:
-            try:
-                self.hf_config.first_k_dense_replace = int(dense_layers)
-            except Exception as e:
-                logger.warning(f"Failed to override first_k_dense_replace with value '{dense_layers}': {e}")
         # Tokenizer is optional; caller can pass a tokenizer or handle failure.
         self.tokenizer = tokenizer
 
@@ -118,7 +111,6 @@ class DeepseekGenerator:
         self.paged_config = MLA2D.get_valid_paged_config(self.hf_config.max_seq_len, self.batch_size, self.dp_factor)
 
         self.random_weights = random_weights
-        self.single_layer = single_layer
 
         # Trace state (decode)
         self._trace_id: int | None = None
@@ -166,7 +158,6 @@ class DeepseekGenerator:
             force_recalculate=False,
             random_weights=self.random_weights,
             model_path=self.model_path,
-            single_layer=self.single_layer,
         )
 
     def _prepare_model_states(self, kv_cache_override: KvCacheConfig | None = None) -> None:
@@ -698,7 +689,7 @@ class DeepseekGenerator:
         assert self.model_state is not None, "Model state is not initialized"
 
         kv_cache_list = []
-        for decoder_type in ["mlp_decoder_block", "moe_decoder_block"]:
+        for decoder_type in ["moe_decoder_block"]:
             if decoder_type in self.model_run_config_prefill:
                 decoder_blocks = self.model_run_config_prefill[decoder_type]
                 for block_cfg in decoder_blocks:
@@ -722,7 +713,7 @@ class DeepseekGenerator:
         assert len(kv_cache_list) > 0, "kv_cache_list cannot be empty"
 
         cache_idx = 0
-        for decoder_type in ["mlp_decoder_block", "moe_decoder_block"]:
+        for decoder_type in ["moe_decoder_block"]:
             if decoder_type in self.model_run_config_prefill:
                 decoder_blocks = self.model_run_config_prefill[decoder_type]
                 for block_cfg in decoder_blocks:

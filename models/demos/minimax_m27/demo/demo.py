@@ -67,14 +67,9 @@ def create_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--max-new-tokens", type=int, default=32, help="Number of tokens to generate")
     p.add_argument("--cache-dir", type=str, required=True)
-    # Random-weights mode options (reuse Model1D pipeline; single dense layer only)
+    # Random-weights mode options
     p.add_argument(
         "--random-weights", action="store_true", help="Use randomly initialized weights instead of loading safetensors"
-    )
-    p.add_argument(
-        "--single-layer",
-        choices=["mlp", "moe"],
-        help="When using --random-weights, request a single layer (mlp supported)",
     )
     # Teacher-forcing / accuracy verification options
     p.add_argument("--token-accuracy", action="store_true", help="Enable teacher-forced decode and report accuracy")
@@ -216,7 +211,6 @@ def run_demo(
     max_new_tokens: int = 32,
     cache_dir: str | Path | None = None,
     random_weights: bool = False,
-    single_layer: str | None = None,
     token_accuracy: bool = False,
     reference_file: str | Path | None = None,
     tf_prompt_len: int | None = None,
@@ -278,12 +272,6 @@ def run_demo(
             raise
 
     try:
-        # If random single-layer requested with 'moe', fail fast (Model1D demo is MLP-only)
-        if random_weights and single_layer and single_layer.lower() == "moe":
-            raise SystemExit(
-                "--single-layer=moe not supported by Model1D-based demo. Use --single-layer=mlp or drop --random-weights."
-            )
-
         token_acc = None
         if token_accuracy:
             if random_weights:
@@ -304,11 +292,9 @@ def run_demo(
                 cache_dir=cache_dir,
                 tokenizer=tokenizer,
                 random_weights=bool(random_weights),
-                dense_layers=(1 if random_weights and single_layer else None),
                 override_num_layers=(
                     override_num_layers if override_num_layers is not None else (1 if random_weights else None)
                 ),
-                single_layer=(single_layer if random_weights else None),
                 enable_trace=enable_trace,
             )
         # Build the prompt list
@@ -398,7 +384,6 @@ def main() -> None:
         max_new_tokens=args.max_new_tokens,
         cache_dir=args.cache_dir,
         random_weights=bool(args.random_weights),
-        single_layer=args.single_layer,
         token_accuracy=bool(args.token_accuracy),
         reference_file=args.reference_file,
         tf_prompt_len=args.tf_prompt_len,

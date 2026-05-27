@@ -235,17 +235,14 @@ def prepare_model_state_dict(
         hf_config: HuggingFace model configuration
         random_weights: If True, generate random weights from reference model. If False, load from model_path.
         model_path: Path to HuggingFace model directory containing safetensors files
-        single_layer: Optional single layer name (used for validation with random weights)
+        single_layer: Optional compatibility argument (currently ignored)
 
     Returns:
         Dictionary containing model state dict with keys filtered to model components
         (embed_tokens, layers, norm, lm_head)
     """
+    del single_layer
     if random_weights:
-        if single_layer and single_layer.lower() == "moe":
-            raise NotImplementedError(
-                "Random weights with 'moe' single layer is not supported by RowBatchedModel demo yet. Use 'mlp' or disable random mode."
-            )
         logger.info("Building random weights from HF reference model (ForCausalLM)...")
         from models.demos.minimax_m27.utils.test_utils import add_inv_scale_to_state_dict
 
@@ -253,7 +250,7 @@ def prepare_model_state_dict(
         # Ensure parameter/buffer dtype matches downstream expectations (bfloat16)
         ref_model = ref_model.to(dtype=torch.bfloat16)
         torch_state = ref_model.state_dict()
-        # Quantize MLP weights as expected by TT converters
+        # Quantize expert projection weights as expected by TT converters
         torch_state = add_inv_scale_to_state_dict(
             torch_state,
             block_shape=hf_config.quantization_config["weight_block_size"],
