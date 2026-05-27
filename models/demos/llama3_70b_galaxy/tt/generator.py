@@ -1361,8 +1361,20 @@ class Generator(WarmupForwardMixin):
             sampling_module.reset_output_state(output_tokens)
         if slot_remap is not None:
             sm_bs = sampling_module.seed_manager.max_batch_size
-            # Galaxy decode currently uses a single sampling module/rank, so slot_remap is local [0:sm_bs].
-            rank_remap = slot_remap[0:sm_bs]
+            remap = torch.as_tensor(slot_remap, dtype=torch.int32)
+            # vLLM gathered-DP sends compact per-rank remaps concatenated as
+            # [rank0 B, rank1 B, ...], where values are local to each rank
+            # (0..B-1). Galaxy uses one physical sampling module for the global
+            # batch, so expand compact rank-local values back to global slot
+            # indices before remapping RNG state.
+            if remap.numel() == sm_bs and remap.numel() > 0:
+                local_slots = int(remap.max().item()) + 1
+                if 0 < local_slots < sm_bs and sm_bs % local_slots == 0:
+                    expanded = remap.clone()
+                    for start in range(0, sm_bs, local_slots):
+                        expanded[start : start + local_slots] += start
+                    remap = expanded
+            rank_remap = remap[:sm_bs]
             sampling_module.seed_manager.apply_slot_remap(rank_remap)
         sampling_module.seed_manager.get_new_values()
         if bitmask is not None:
