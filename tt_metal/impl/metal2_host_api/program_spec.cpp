@@ -175,6 +175,12 @@ bool nodes_intersect(const Nodes& a, const Nodes& b) {
     return a_set.intersects(b_set);
 }
 
+// Helper: return a DFB's alias-with list (empty vector if not set in advanced_options).
+const std::vector<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) {
+    static const std::vector<DFBSpecName> empty;
+    return dfb.advanced_options.has_value() ? dfb.advanced_options->alias_with : empty;
+}
+
 // Local accessor names for kernel resource bindings must be valid C++ identifiers
 // They are used verbatim in the generated kernel source code.
 // TODO: Move this to ttsl in a follow up PR
@@ -1194,7 +1200,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         // The "extended group" of a DFB is its alias_with plus the DFB itself. Two DFBs
         // are in the same alias group iff their extended groups are equal.
         auto extended_group = [](const DataflowBufferSpec& d) {
-            std::set<DFBSpecName> s(d.alias_with.begin(), d.alias_with.end());
+            std::set<DFBSpecName> s(dfb_alias_with(d).begin(), dfb_alias_with(d).end());
             s.insert(d.unique_id);
             return s;
         };
@@ -1202,7 +1208,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         // Pre-pass: every name in every alias_with must refer to a real DFB and must not
         // be self-referential.
         for (const auto& dfb : spec.dataflow_buffers) {
-            for (const auto& alias_name : dfb.alias_with) {
+            for (const auto& alias_name : dfb_alias_with(dfb)) {
                 TT_FATAL(
                     collected.dfb_by_name.contains(alias_name),
                     "DFB '{}' lists unknown alias '{}' in alias_with",
@@ -1213,14 +1219,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
 
         for (const auto& dfb : spec.dataflow_buffers) {
-            if (dfb.alias_with.empty()) {
+            if (dfb_alias_with(dfb).empty()) {
                 continue;
             }
             const size_t total_size_a = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
             const auto group_a = extended_group(dfb);
             const auto& nodes_a = collected.dfb_node_set.at(dfb.unique_id);
 
-            for (const auto& alias_name : dfb.alias_with) {
+            for (const auto& alias_name : dfb_alias_with(dfb)) {
                 const DataflowBufferSpec* alias_spec = collected.dfb_by_name.at(alias_name);
 
                 // Rule 1: full clique declaration.
@@ -2461,11 +2467,11 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
             if (handled_as_secondary.contains(dfb_spec.unique_id)) {
                 continue;
             }
-            if (dfb_spec.alias_with.empty()) {
+            if (dfb_alias_with(dfb_spec).empty()) {
                 continue;
             }
             const uint32_t primary_id = dfb_name_to_id.at(dfb_spec.unique_id);
-            for (const auto& alias_name : dfb_spec.alias_with) {
+            for (const auto& alias_name : dfb_alias_with(dfb_spec)) {
                 if (handled_as_secondary.contains(alias_name)) {
                     continue;
                 }

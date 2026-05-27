@@ -132,14 +132,14 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
         .entry_size = entry_size_a,
         .num_entries = num_entries_a,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .alias_with = {"dfb_b"},
+        .advanced_options = DataflowBufferSpecAdvancedOptions{.alias_with = {"dfb_b"}},
     };
     DataflowBufferSpec dfb_b{
         .unique_id = "dfb_b",
         .entry_size = entry_size_b,
         .num_entries = num_entries_b,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .alias_with = {"dfb_a"},
+        .advanced_options = DataflowBufferSpecAdvancedOptions{.alias_with = {"dfb_a"}},
     };
 
     KernelSpec producer{
@@ -347,7 +347,7 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
         .num_entries = num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .borrowed_from = "ring_tensor",
-        .alias_with = {"dfb_alias"},
+        .advanced_options = DataflowBufferSpecAdvancedOptions{.alias_with = {"dfb_alias"}},
     };
     DataflowBufferSpec dfb_alias_spec{
         .unique_id = "dfb_alias",
@@ -355,7 +355,7 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
         .num_entries = num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .borrowed_from = "ring_tensor",
-        .alias_with = {"dfb_borrowed"},
+        .advanced_options = DataflowBufferSpecAdvancedOptions{.alias_with = {"dfb_borrowed"}},
     };
 
     KernelSpec producer{

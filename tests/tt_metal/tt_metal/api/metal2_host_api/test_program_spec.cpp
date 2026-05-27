@@ -3222,8 +3222,8 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnMismatchedTotalSize) {
     // DFB_A: 512 * 8 = 4096 bytes, DFB_B: 256 * 8 = 2048 bytes — different totals → TT_FATAL
     auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
     auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/256, /*num_entries=*/8);
-    dfb_a.alias_with = {"dfb_b"};
-    dfb_b.alias_with = {"dfb_a"};
+    dfb_a.advanced_options = DataflowBufferSpecAdvancedOptions{.alias_with = {"dfb_b"}};
+    dfb_b.advanced_options = DataflowBufferSpecAdvancedOptions{.alias_with = {"dfb_a"}};
 
     const NodeCoord node{0, 0};
     auto spec = MakeAliasProgramSpec(node, dfb_a, dfb_b);
@@ -3238,7 +3238,7 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnAsymmetricDeclaration) {
     // DFB_A lists DFB_B but DFB_B does not list DFB_A — clique violation → TT_FATAL
     auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
     auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/256, /*num_entries=*/16);
-    dfb_a.alias_with = {"dfb_b"};
+    dfb_a.advanced_options = DataflowBufferSpecAdvancedOptions{.alias_with = {"dfb_b"}};
     // dfb_b.alias_with intentionally left empty
 
     const NodeCoord node{0, 0};
@@ -3264,8 +3264,8 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBMatmulStyleSucceeds) {
 
     auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
     auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/512, /*num_entries=*/8);
-    dfb_a.alias_with = {"dfb_b"};
-    dfb_b.alias_with = {"dfb_a"};
+    dfb_a.advanced_options = DataflowBufferSpecAdvancedOptions{.alias_with = {"dfb_b"}};
+    dfb_b.advanced_options = DataflowBufferSpecAdvancedOptions{.alias_with = {"dfb_a"}};
 
     KernelSpec producer = MakeMinimalDMKernel("producer_kernel");
     KernelSpec consumer = MakeMinimalDMKernel("consumer_kernel");
@@ -3294,8 +3294,8 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnDifferentNodeCoverage) {
 
     auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
     auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/512, /*num_entries=*/8);
-    dfb_a.alias_with = {"dfb_b"};
-    dfb_b.alias_with = {"dfb_a"};
+    dfb_a.advanced_options = DataflowBufferSpecAdvancedOptions{.alias_with = {"dfb_b"}};
+    dfb_b.advanced_options = DataflowBufferSpecAdvancedOptions{.alias_with = {"dfb_a"}};
 
     KernelSpec producer_a = MakeMinimalDMKernel("producer_a");
     KernelSpec consumer_a = MakeMinimalDMKernel("consumer_a");
@@ -3326,8 +3326,8 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnInconsistentBorrowedFrom) {
 
     auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/16, /*num_entries=*/2);
     auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/16, /*num_entries=*/2);
-    dfb_a.alias_with = {"dfb_b"};
-    dfb_b.alias_with = {"dfb_a"};
+    dfb_a.advanced_options = DataflowBufferSpecAdvancedOptions{.alias_with = {"dfb_b"}};
+    dfb_b.advanced_options = DataflowBufferSpecAdvancedOptions{.alias_with = {"dfb_a"}};
     dfb_a.borrowed_from = "borrowed_tensor";
     // dfb_b.borrowed_from intentionally left unset
 

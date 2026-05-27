@@ -90,18 +90,6 @@ struct DataflowBufferSpec {
     // (TODO: this should become std::variant<TensorParameterName, BufferParameterName>.)
     std::optional<TensorParameterName> borrowed_from = std::nullopt;
 
-    // Alias two or more DFBs
-    // Aliased DFBs are logically distinct, but physically share the same backing memory.
-    // Aliased DFBs offer NO guarantees against data clobbering; kernel logic must ensure safety.
-    //
-    // Rules for aliased DFBs:
-    //   - Every DFB in the alias group must list every other member as an alias
-    //   - Aliased DFBs must have the same total size (num_entries * entry_size).
-    //   - All members must target the same node set
-    //     (derived from their bound kernels' WorkUnitSpecs).
-    using DFBIdentifiers = std::vector<DFBSpecName>;
-    DFBIdentifiers alias_with;  // empty vector means no aliasing
-
     //////////////////////////////
     // Advanced options (see advanced_options.hpp)
     //////////////////////////////
