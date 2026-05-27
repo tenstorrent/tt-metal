@@ -23,7 +23,7 @@ Each PR gets exactly one targeted verification run total.
 - The single run exists only to confirm no regressions in jobs that were passing on `main`.
 - Do not use PR-branch verification output to discover, justify, or add new disables.
 - Plan and scope that one run carefully before dispatch.
-- Keep existing artifact-reuse/no-rebuild requirements for that one run.
+- Apply the artifact-reuse policy (optional, strongly preferred — see "Build Reuse (Optional, Strongly Preferred)" below) to that one run.
 
 ### Interpreting Verification Results
 
@@ -60,9 +60,33 @@ If any test no longer fails on latest `main`:
 
 Rationale: PRs may remain open for days, and we must avoid disabling tests that have already been fixed and are now passing.
 
-## Build Reuse Requirement (No Rebuilds)
+## Build Reuse (Optional, Strongly Preferred)
 
-For this project, verification runs must reuse existing build artifacts. Do not run fresh build steps for targeted verification.
+Reusing existing build artifacts via `use-artifacts-from-run` is **strongly preferred** for targeted verification runs because it skips the build step and significantly shortens the iteration loop. However, it is **NOT mandatory**.
+
+If the agent cannot find a successful source run that satisfies REQUIREMENT 5 below (head SHA equals the feature branch's rebase base on `main`) AND the target workflow's build intent (tracy / build-type / platform), the agent MUST fall back to dispatching the verification run WITHOUT `use-artifacts-from-run`. The workflow will then build artifacts fresh — this is an acceptable outcome and is NOT a blocker on the dispatch.
+
+This is a deliberate policy reversal from the previous "If no compatible artifact source run exists: DO NOT dispatch" rule. That rule is gone. Fresh-build dispatch is now an allowed (and expected) outcome when SHA-matching reuse is not possible.
+
+The agent MUST NOT silently substitute a SHA-mismatched run just to "get reuse working". Reuse is allowed ONLY when SHA parity holds. If parity does not hold, fresh build is the correct fallback, NOT a soft block on the dispatch.
+
+### Decision flow
+
+```
+1. Compute FEATURE_BASE = $(git merge-base origin/main <feature-branch>)
+2. Look for a successful target-workflow run on main with headSha == FEATURE_BASE
+   AND matching build intent (tracy/build-type/platform).
+3. If found → dispatch with use-artifacts-from-run = <that run id>
+   (apply the two YAML edits described below to the temp verification branch).
+4. If not found → dispatch WITHOUT use-artifacts-from-run.
+   The workflow will build artifacts fresh. This is acceptable and is NOT a blocker.
+   Record the reason ("no SHA-matching successful source run for <workflow>") in the
+   PR comment and disabling-work-so-far.md.
+```
+
+### When reuse IS chosen: required YAML edits
+
+Everything below in this section — the YAML edits, the strict source-run selection rules, the pre-dispatch sanity checks, and the common-failure signatures — applies ONLY when the agent has chosen artifact reuse via step 3 of the decision flow above. When the agent takes the fresh-build fallback (step 4), skip the YAML edits and skip the source-run selection rules (including Requirement 5) entirely for that dispatch.
 
 The reusable mechanism is the `use-artifacts-from-run` input on `.github/workflows/build-artifact.yaml`. It is ALREADY DEFINED there — you do NOT need to modify `build-artifact.yaml`. You only modify the PIPELINE workflow file being dispatched (for example `.github/workflows/t3000-e2e-tests.yaml`) so it accepts the input and threads it into its `build-artifact` job.
 
@@ -166,8 +190,8 @@ REQUIREMENT 5 — Source run's head SHA MUST equal the feature branch's rebase b
   The returned `headSha` MUST equal `FEATURE_BASE`, `headBranch` MUST be `main`, and `conclusion` MUST be `success`.
 - If no successful run on the exact rebase-base commit exists for the target workflow, the agent MUST do one of:
   (a) rebase the feature branch onto a slightly older `main` commit that DOES have a matching successful run for the target workflow (then re-run the session-start revalidation), OR
-  (b) skip the verification dispatch this session and record the reason (no SHA-matching source run available) in `disabling-work-so-far.md`.
-- The agent MUST NOT silently fall back to a "close enough" / "recent successful" / "tracy matches" source run on a different commit. A SHA mismatch is a hard failure of this requirement, not a soft preference.
+  (b) take the fresh-build fallback: dispatch the verification run WITHOUT `use-artifacts-from-run` (skip these strict source-run rules and skip the YAML edits) so the workflow builds artifacts fresh. Record the reason ("no SHA-matching successful source run for <workflow>") in the PR comment and `disabling-work-so-far.md`. This is acceptable per the "Build Reuse (Optional, Strongly Preferred)" header — it is NOT a blocker.
+- The agent MUST NOT silently fall back to a "close enough" / "recent successful" / "tracy matches" source run on a different commit just to keep reuse. A SHA mismatch is a hard failure of THIS requirement (REQUIREMENT 5), not a soft preference. The correct response to SHA mismatch is option (a) or (b) above, NOT a SHA-mismatched reuse.
 
 Rationale: when the source run was built from a different `main` commit than the feature branch's base, the downloaded build artifacts encode different source code than the tests being executed on the verification branch. The resulting test diffs cannot be cleanly attributed to the disable change — they may instead reflect drift between the build SHA and the test SHA. Agents have repeatedly picked "successful and tracy-matching" runs on a different commit and produced misleading verification results; SHA parity eliminates that failure mode.
 
@@ -207,7 +231,7 @@ If either is missing, the dispatch will run a fresh build instead of reusing art
 
 ### End-of-session verification of dispatched runs (mandatory)
 
-This section is the post-dispatch counterpart of "Source run selection rules (STRICT)" above. See those rules — and in particular Requirement 5 — for the same-commit (head-SHA == feature-branch rebase base) requirement that MUST already be satisfied *before* dispatch; the checks below only confirm the artifact step landed cleanly after a properly-selected source run.
+This section applies to every targeted verification run the agent dispatches, regardless of whether the agent chose artifact reuse or the fresh-build fallback. When reuse was chosen, it is the post-dispatch counterpart of "Source run selection rules (STRICT)" above (in particular Requirement 5's SHA-parity check, which must already have been satisfied *before* dispatch). When the fresh-build fallback was chosen, the checks below are still required — they confirm that the fresh build itself completed cleanly.
 
 Before the agent ends its session, for every targeted verification run it dispatched during that session, the agent MUST poll the run until its artifact-acquisition step is no longer queued or in progress. The agent is NOT allowed to end the session by simply reporting "verification dispatched" — it must confirm the artifact step reached a terminal state and report that state.
 
