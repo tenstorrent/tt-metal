@@ -204,6 +204,7 @@ class ModelArgs:
         prompt_length: int | None = None,
         *,
         attention_mask_4d: bool = True,
+        inputs_mesh_mapper: ttnn.TensorToMesh | None = None,
     ) -> ttnn.Tensor:
         """Tokenize ``prompts`` and build BGE-M3 model inputs.
 
@@ -218,6 +219,14 @@ class ModelArgs:
 
         ``tokenizer_attention_mask`` is always populated with the raw 2D
         keep-mask regardless of this flag.
+
+        ``inputs_mesh_mapper`` (default None) controls how device inputs are
+        distributed across a multi-device mesh:
+          * None — ttnn default (replicate to every chip). Use for single
+            device or when every chip processes the same batch.
+          * ``ttnn.ShardTensorToMesh(mesh_device, dim=0)`` — shard the global
+            batch along dim 0 across the mesh (data parallel). Built via
+            ``models.demos.utils.common_demo_utils.get_mesh_mappers(device)``.
         """
         if isinstance(prompts, str):
             prompts = [prompts]
@@ -273,6 +282,7 @@ class ModelArgs:
                     device=self.mesh_device,
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=inputs_mesh_mapper,
                 ),
                 "attention_mask": (
                     ttnn.from_torch(
@@ -281,6 +291,7 @@ class ModelArgs:
                         dtype=self.attention_mask_dtype,
                         layout=ttnn.TILE_LAYOUT,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=inputs_mesh_mapper,
                     )
                     if attention_mask_4d
                     else ttnn.from_torch(
@@ -288,6 +299,7 @@ class ModelArgs:
                         device=self.mesh_device,
                         dtype=ttnn.uint32,
                         layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=inputs_mesh_mapper,
                     )
                 ),
                 "token_type_ids": ttnn.from_torch(
@@ -295,12 +307,14 @@ class ModelArgs:
                     device=self.mesh_device,
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=inputs_mesh_mapper,
                 ),
                 "position_ids": ttnn.from_torch(
                     encoded["position_ids"].int(),
                     device=self.mesh_device,
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=inputs_mesh_mapper,
                 ),
             }
         return encoded
