@@ -140,9 +140,17 @@ def _t2u_dram_matmul_attention(
         if scale != 1.0:
             scores = ttnn.multiply(scores, scale, memory_config=mc)
         if attn_mask is not None:
-            mask_c = ttnn.slice(attn_mask, [0, 0, start, 0], [1, 1, end, seq], [1, 1, 1, 1], memory_config=mc)
+            # A full-range slice (single chunk, i.e. q_chunk >= seq) returns a view aliasing
+            # ``attn_mask`` rather than a copy; deallocating it would free the shared mask and
+            # break the next encoder layer (use-after-free). Use the mask directly in that case
+            # and only deallocate genuine partial-slice copies.
+            if start == 0 and end == seq:
+                mask_c = attn_mask
+            else:
+                mask_c = ttnn.slice(attn_mask, [0, 0, start, 0], [1, 1, end, seq], [1, 1, 1, 1], memory_config=mc)
             scores = ttnn.add(scores, mask_c, memory_config=mc)
-            ttnn.deallocate(mask_c)
+            if mask_c is not attn_mask:
+                ttnn.deallocate(mask_c)
         probs = ttnn.softmax(scores, dim=-1, numeric_stable=True, memory_config=mc)
         ttnn.deallocate(scores)
         out_c = ttnn.matmul(probs, v, memory_config=mc, compute_kernel_config=compute_kernel_config)
