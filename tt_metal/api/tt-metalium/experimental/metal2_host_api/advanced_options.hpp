@@ -96,6 +96,7 @@ struct KernelAdvancedOptions {
     // TODO: This feature is truly bizarre. It will be removed from the API once
     //       existing uses are refactored to avoid it.
     using NumVarargsPerNode = std::vector<std::pair<Nodes, size_t>>;
+    [[deprecated("Per-node-vararg-count feature is deprecated and will be removed.")]]
     std::optional<NumVarargsPerNode> num_runtime_varargs_per_node = std::nullopt;
 
     ////////////////////////////////////////////////////////////////////////////////
@@ -180,6 +181,7 @@ struct SemaphoreAdvancedOptions {
     // NOTE: Setting a non-zero initial value is not supported on Gen2 architectures.
     // NOTE: Runtime wants to deprecate this feature for ALL architectures.
     //       When remote DFB becomes available, non-zero initial values will be removed.
+    [[deprecated("Non-zero semaphore initialization is deprecated and will be removed.")]]
     uint32_t initial_value = 0;
 };
 
