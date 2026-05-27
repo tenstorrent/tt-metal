@@ -15,7 +15,12 @@ from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
     ace_step_enable_tracy_profiler_env,
     ace_step_profiler_flush_every_layer,
     ace_step_vae_conv1d_im2col_matmul_program_config,
+    ace_step_vae_k1_height_sharded_eligible,
+    ace_step_vae_k1_height_sharded_program_config,
+    ace_step_vae_k1_mid_m_matmul_program_config,
+    ace_step_vae_k1_prefer_conv1d_l1,
     ace_step_vae_large_m_matmul_program_config,
+    ace_step_vae_sharded_matmul_enabled,
 )
 
 
@@ -153,3 +158,61 @@ def test_device_profiler_enabled(monkeypatch):
 
     monkeypatch.setenv("TT_METAL_DEVICE_PROFILER", "1")
     assert ace_step_device_profiler_enabled() is True
+
+
+def test_sharded_matmul_opt_in(monkeypatch):
+    monkeypatch.delenv("ACE_STEP_VAE_SHARDED_MATMUL", raising=False)
+    assert ace_step_vae_sharded_matmul_enabled() is False
+    monkeypatch.setenv("ACE_STEP_VAE_SHARDED_MATMUL", "1")
+    assert ace_step_vae_sharded_matmul_enabled() is True
+    monkeypatch.setenv("ACE_STEP_VAE_SHARDED_MATMUL", "0")
+    assert ace_step_vae_sharded_matmul_enabled() is False
+
+
+@pytest.mark.parametrize(
+    "m_dim,k_dim,n_dim,eligible",
+    [
+        (1920, 512, 512, True),
+        (320, 1024, 1024, False),  # M < 512 — separate bucket, not in v1 path
+        (511, 512, 512, False),
+        (7680, 512, 512, False),
+        (1920, 256, 256, False),
+    ],
+)
+def test_k1_height_sharded_eligibility(m_dim, k_dim, n_dim, eligible):
+    assert ace_step_vae_k1_height_sharded_eligible(m_dim=m_dim, k_dim=k_dim, n_dim=n_dim) is eligible
+
+
+def test_k1_mid_m_matmul_program_config_1920(monkeypatch):
+    monkeypatch.delenv("TT_METAL_DEVICE_PROFILER", raising=False)
+    pc = ace_step_vae_k1_mid_m_matmul_program_config(
+        _FakeGridDevice(),
+        m_dim=1920,
+        k_dim=512,
+        n_dim=512,
+    )
+    assert pc is not None
+    assert pc.mcast_in0 is False
+    assert pc.per_core_M == 1  # ceil(60 M-tiles / 110 cores)
+    assert pc.compute_with_storage_grid_size == (11, 10)
+
+
+def test_k1_height_sharded_program_config_alias_1920(monkeypatch):
+    monkeypatch.delenv("TT_METAL_DEVICE_PROFILER", raising=False)
+    pc = ace_step_vae_k1_height_sharded_program_config(
+        _FakeGridDevice(),
+        m_dim=1920,
+        k_dim=512,
+        n_dim=512,
+    )
+    assert pc is not None
+    assert pc.mcast_in0 is False
+    assert pc.compute_with_storage_grid_size == (11, 10)
+
+
+def test_k1_prefer_conv1d_l1(monkeypatch):
+    monkeypatch.delenv("ACE_STEP_VAE_SHARDED_MATMUL", raising=False)
+    assert ace_step_vae_k1_prefer_conv1d_l1(m_dim=1920, k_dim=512, n_dim=512) is False
+    monkeypatch.setenv("ACE_STEP_VAE_SHARDED_MATMUL", "1")
+    assert ace_step_vae_k1_prefer_conv1d_l1(m_dim=1920, k_dim=512, n_dim=512) is True
+    assert ace_step_vae_k1_prefer_conv1d_l1(m_dim=256, k_dim=128, n_dim=128) is False
