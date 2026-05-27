@@ -871,7 +871,7 @@ ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_reduce,
-        (pool_type, reduce_dim, format),
+        (pool_type, reduce_dim, format, DST_ACCUM_MODE),
         RC_custom,
         idst,
         ct_dim,
@@ -896,7 +896,7 @@ ALWI void sfpu_reduce_init() {
             format == DataFormat::UInt16 || format == DataFormat::Float16_b,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
 
-    MATH(SFPU_INIT_CB_ARGS(reduce, sfpu::init_reduce, (pool_type, format), 1 /* block_ct_dim */));
+    MATH(SFPU_INIT_CB_ARGS(reduce, sfpu::init_reduce, (pool_type, format, DST_ACCUM_MODE), 1 /* block_ct_dim */));
 }
 
 // clang-format off
