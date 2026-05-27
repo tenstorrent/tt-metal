@@ -181,11 +181,32 @@ public:
     // `get_backing_tensor().tensor_spec()`.
     const TensorSpec& get_per_shard_spec() const;
 
+    // ===== Tensor-free size accessors =====
+    // Bytes-only callers (e.g. cross-process connectors that don't link any
+    // tensor headers) use these to size their `forward_to_tensor(bytes, ...)`
+    // arguments without pulling `TensorSpec` into their compile unit.
+
+    // Bytes the caller must hand to `forward_to_tensor(bytes[, metadata])`
+    // per call — equal to the packed size of one full global tensor.
+    std::size_t payload_size_bytes() const;
+
+    // Bytes of metadata that must be attached to each call. Zero means the
+    // metadata path is disabled and the single-arg `forward_to_tensor(bytes)`
+    // overload must be used.
+    std::size_t metadata_size_bytes() const;
+
     std::vector<distributed::H2DSocket*> get_sockets() const;
 
     // ===== Worker-sync handshake accessors =====
     // Only meaningful when `Config::worker_cores` was set. Both address getters
     // TT_FATAL if worker-sync wasn't enabled at construction.
+
+    // Worker CoreRange the service synchronizes with. Same grid that was
+    // passed via `Config::worker_cores` at construction. Consumers building
+    // a peer MeshWorkload around the service use this to size their
+    // `pages_per_worker` partitioning and to multicast destinations.
+    // TT_FATALs if `Config::worker_cores` was not set.
+    CoreRange get_worker_cores() const;
 
     // L1 address of the data-ready GlobalSemaphore on every worker core in
     // Config::worker_cores. Same value across (device, worker core) by
