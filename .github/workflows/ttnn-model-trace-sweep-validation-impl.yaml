@@ -542,8 +542,12 @@ jobs:
           # Two-pass run: COL first, then ROW. generic_ops_tracer appends to
           # the same -o trace file across both passes, so the validation
           # aggregator sees a unified trace covering both dispatch axes.
-          # Skip a pass when the matching partition has no vectors for any
-          # module in this batch (sweeps_runner errors on empty inputs).
+          #
+          # Each pass filters MODULE_SELECTOR down to only the modules that
+          # have vector files in that axis partition. This prevents the
+          # sweep runner from falling back to sample configs (and producing
+          # 0 trace files) for modules whose vectors live in the other
+          # partition. A pass is skipped entirely when no modules match.
           run_pass() {
             local axis="$1"
             local vectors_dir="tests/sweep_framework/vectors_export_${axis}"
@@ -551,15 +555,19 @@ jobs:
               echo "[two-pass] $axis partition missing — skipping"
               return 0
             fi
-            local matched=0
+            # Filter MODULE_SELECTOR to only modules with vectors in this axis
+            local filtered_modules=""
             local _IFS_old="$IFS"; IFS=','
             for module in $MODULE_SELECTOR; do
               for f in "$vectors_dir/${module}".*.json "$vectors_dir/${module}.json"; do
-                [[ -f "$f" ]] && matched=1 && break 2
+                if [[ -f "$f" ]]; then
+                  filtered_modules="${filtered_modules:+$filtered_modules,}$module"
+                  break
+                fi
               done
             done
             IFS="$_IFS_old"
-            if [[ "$matched" == "0" ]]; then
+            if [[ -z "$filtered_modules" ]]; then
               echo "[two-pass] $axis partition has no vectors for batch modules — skipping"
               return 0
             fi
@@ -588,7 +596,7 @@ jobs:
                 return 0
               fi
             fi
-            echo "[two-pass] === axis=$axis ==="
+            echo "[two-pass] === axis=$axis modules=$filtered_modules ==="
             TTNN_DISPATCH_AXIS="$axis" \
               TTNN_VECTORS_EXPORT_DIR="$vectors_dir" \
               TTNN_MASTER_JSON_PATH="/work/model_tracer/traced_operations/ttnn_operations_master.json" \
@@ -596,7 +604,7 @@ jobs:
                 tests/sweep_framework/sweeps_runner.py \
                 -o "$TRACE_OUT" \
                 -- \
-                --module-name "$MODULE_SELECTOR" \
+                --module-name "$filtered_modules" \
                 --suite-name "${{ matrix.suite_name }}" \
                 --vector-source vectors_export \
                 --result-dest results_export \
