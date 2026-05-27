@@ -3953,7 +3953,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
                 in1_sender_variant[0] = in1_tensor;
                 in1_sender_variant[7] = out_tensor;
                 if (bias_mesh_tensor.has_value()) {
-                    in1_sender_variant[18] = bias_mesh_tensor;
+                    in1_sender_variant[18] = *bias_mesh_tensor;
                 }
                 in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_sender_variant);
             }
@@ -4735,7 +4735,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
                 (std::uint32_t)0};
 
             if (bias_mesh_tensor.has_value()) {
-                mm_in1_sender_writer_args.push_back(bias_mesh_tensor);
+                mm_in1_sender_writer_args.push_back(*bias_mesh_tensor);
                 mm_in1_sender_writer_args.push_back(
                     (std::uint32_t)per_core_N * output_idx_x);  // in3_tensor_start_tile_id
             } else {
@@ -4752,7 +4752,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
                 in1_sender_variant[0] = in1_tensor;
                 in1_sender_variant[7] = out_tensor;
                 if (bias_mesh_tensor.has_value()) {
-                    in1_sender_variant[18] = bias_mesh_tensor;
+                    in1_sender_variant[18] = *bias_mesh_tensor;
                 }
                 in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_sender_variant);
             }
