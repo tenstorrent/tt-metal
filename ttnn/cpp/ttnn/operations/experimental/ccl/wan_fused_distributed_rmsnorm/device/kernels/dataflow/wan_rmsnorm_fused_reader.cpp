@@ -47,7 +47,13 @@ void kernel_main() {
     constexpr uint32_t rope_seqlen_tiles = get_compile_time_arg_val(17);
     constexpr uint32_t bias_cb = get_compile_time_arg_val(18);
     constexpr uint32_t has_bias = get_compile_time_arg_val(19);
-    constexpr auto input_args = TensorAccessorArgs<20>();
+    // Per-token weight/bias: shape [N, H] (vs broadcast [1, H]). Read pattern
+    // is per-row (after each row's input is pushed) using noc_async_read_tile
+    // for full 4 KB/tile (vs face_row_bytes for the broadcast case). Compute
+    // uses mul_tiles / add_tiles directly (no _bcast_rows).
+    constexpr uint32_t per_token_weight = get_compile_time_arg_val(20);
+    constexpr uint32_t per_token_bias = get_compile_time_arg_val(21);
+    constexpr auto input_args = TensorAccessorArgs<22>();
     constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto transformation_mat_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
@@ -182,48 +188,85 @@ void kernel_main() {
             }
         }
 
-        // After chunk 0's rows are pushed (or at end-of-worker if the worker
-        // has fewer rows than chunk_size_rows), issue the weight + bias reads.
-        // Weight comes first because the compute kernel consumes it first
-        // (sub-phase 2: x_rms * weight). Bias is consumed in sub-phase 2.5
-        // (+ bias) immediately after.
-        const uint32_t rows_pushed = tile_row + 1 - tile_row_start;
-        const bool first_chunk_done = (rows_pushed >= chunk_size_rows);
-        const bool last_row = (tile_row + 1 == tile_row_end);
-        const bool should_issue_side_inputs = first_chunk_done || last_row;
-        if (!weight_pushed && should_issue_side_inputs) {
+        // Per-token weight / bias: push this row's slice now, in block_size
+        // tiles. Full-tile reads since per-token data isn't face-row sparse.
+        // Compute kernel pops these per-row.
+        if constexpr (per_token_weight != 0) {
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 const uint32_t tiles_in_block =
                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
                 cb_reserve_back(weight_cb, tiles_in_block);
                 uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
-                    uint64_t weight_noc_addr = get_noc_addr(col_tile + i, weight_accessor);
-                    noc_async_read(weight_noc_addr, weight_wr_ptr, face_row_bytes);
-                    noc_async_read(weight_noc_addr + face_bytes, weight_wr_ptr + face_bytes, face_row_bytes);
+                    const uint32_t w_idx = tile_row * num_tile_cols + col_tile + i;
+                    noc_async_read_tile(w_idx, weight_accessor, weight_wr_ptr);
                     weight_wr_ptr += weight_tile_bytes;
                 }
                 noc_async_read_barrier();
                 cb_push_back(weight_cb, tiles_in_block);
             }
-            weight_pushed = true;
         }
-        if (!bias_pushed && should_issue_side_inputs) {
+        if constexpr (per_token_bias != 0) {
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 const uint32_t tiles_in_block =
                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
                 cb_reserve_back(bias_cb, tiles_in_block);
                 uint32_t bias_wr_ptr = get_write_ptr(bias_cb);
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
-                    uint64_t bias_noc_addr = get_noc_addr(col_tile + i, bias_accessor);
-                    noc_async_read(bias_noc_addr, bias_wr_ptr, face_row_bytes);
-                    noc_async_read(bias_noc_addr + face_bytes, bias_wr_ptr + face_bytes, face_row_bytes);
+                    const uint32_t b_idx = tile_row * num_tile_cols + col_tile + i;
+                    noc_async_read_tile(b_idx, bias_accessor, bias_wr_ptr);
                     bias_wr_ptr += bias_tile_bytes;
                 }
                 noc_async_read_barrier();
                 cb_push_back(bias_cb, tiles_in_block);
             }
-            bias_pushed = true;
+        }
+
+        // Broadcast weight + bias: after chunk 0's rows are pushed (or at
+        // end-of-worker if the worker has fewer rows than chunk_size_rows),
+        // issue the reads once for the whole worker. Latency hides behind
+        // chunk 0's pre compute + fabric mcast + fabric wait.
+        const uint32_t rows_pushed = tile_row + 1 - tile_row_start;
+        const bool first_chunk_done = (rows_pushed >= chunk_size_rows);
+        const bool last_row = (tile_row + 1 == tile_row_end);
+        const bool should_issue_side_inputs = first_chunk_done || last_row;
+        if constexpr (per_token_weight == 0) {
+            if (!weight_pushed && should_issue_side_inputs) {
+                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                    const uint32_t tiles_in_block =
+                        ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                    cb_reserve_back(weight_cb, tiles_in_block);
+                    uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
+                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                        uint64_t weight_noc_addr = get_noc_addr(col_tile + i, weight_accessor);
+                        noc_async_read(weight_noc_addr, weight_wr_ptr, face_row_bytes);
+                        noc_async_read(weight_noc_addr + face_bytes, weight_wr_ptr + face_bytes, face_row_bytes);
+                        weight_wr_ptr += weight_tile_bytes;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(weight_cb, tiles_in_block);
+                }
+                weight_pushed = true;
+            }
+        }
+        if constexpr (per_token_bias == 0) {
+            if (!bias_pushed && should_issue_side_inputs) {
+                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                    const uint32_t tiles_in_block =
+                        ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                    cb_reserve_back(bias_cb, tiles_in_block);
+                    uint32_t bias_wr_ptr = get_write_ptr(bias_cb);
+                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                        uint64_t bias_noc_addr = get_noc_addr(col_tile + i, bias_accessor);
+                        noc_async_read(bias_noc_addr, bias_wr_ptr, face_row_bytes);
+                        noc_async_read(bias_noc_addr + face_bytes, bias_wr_ptr + face_bytes, face_row_bytes);
+                        bias_wr_ptr += bias_tile_bytes;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(bias_cb, tiles_in_block);
+                }
+                bias_pushed = true;
+            }
         }
     }
 }
