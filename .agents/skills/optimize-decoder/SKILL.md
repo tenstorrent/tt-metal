@@ -43,7 +43,7 @@ Also read the target model's `doc/functional_decoder/` artifacts before changing
 - Try BFP4 for MLP weights, especially FF1/FF3; test FF2/down-projection carefully because it is often more sensitive and may need to remain BFP8.
 - Use compute-kernel configs appropriate to datatype and measured bottleneck.
 - Install and run `tt-perf-report`; follow every actionable item until no useful advice remains or evidence shows a specific item does not improve performance.
-- Avoid adding runtime torch, `ttnn.from_torch`, `ttnn.to_torch`, or host-device fallback inside prefill/decode.
+- No runtime torch, `ttnn.from_torch`, `ttnn.to_torch`, or host-device fallback inside prefill/decode.
 
 ## Autoport Output Contract
 
