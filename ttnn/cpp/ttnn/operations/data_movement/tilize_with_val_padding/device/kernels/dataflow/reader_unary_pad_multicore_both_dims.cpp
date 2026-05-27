@@ -5,6 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+
+using tt::data_movement::common::tt_memmove;
 
 // Alignment-aware fill: writes 4 bytes at a time for the aligned middle,
 // and uses element-sized writes for unaligned start/end to avoid rv32 unaligned faults.
@@ -65,6 +68,7 @@ FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t 
 
 void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t cb_id_in1 = 1;
 
     constexpr uint32_t total_num_rows = get_compile_time_arg_val(0);
     constexpr uint32_t third_dim = get_compile_time_arg_val(1);
@@ -77,6 +81,10 @@ void kernel_main() {
     const uint32_t pad_value = get_arg_val<uint32_t>(1);
 
     const auto s = TensorAccessor(src_args, src_addr);
+
+    cb_reserve_back(cb_id_in1, 1);
+    uint32_t temp_addr = get_write_ptr(cb_id_in1);
+    cb_push_back(cb_id_in1, 1);
 
     auto read_block = [&](uint32_t num_rows,
                           uint32_t start_row_id,
@@ -93,19 +101,44 @@ void kernel_main() {
         uint32_t original_addr = get_write_ptr(cb_id_in0);
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
             uint64_t src_noc_addr = s.get_noc_addr(size_2d + k);
+            if (((src_noc_addr + (uint64_t)start_column_id) & MASK_64) == ((uint64_t)l1_write_addr & MASK_64)) {
+                // Read from DRAM to tmp buffer
+                noc_async_read(src_noc_addr + (uint64_t)start_column_id, (uint64_t)l1_write_addr, width_size);
 
-            // Read from DRAM to tmp buffer
-            noc_async_read(src_noc_addr + start_column_id, l1_write_addr, width_size);
+                // Block before copying data from tmp to cb buffer
+                noc_async_read_barrier();
 
-            uint32_t prev_size = start_column_id;
-            uint32_t this_block_size = unpadded_X_size - prev_size;
-            if (this_block_size < width_size) {
-                uint32_t to_pad = width_size - this_block_size;
-                fill_with_val<element_size>(l1_write_addr + this_block_size, to_pad, pad_value);
+                uint32_t prev_size = start_column_id;
+                uint32_t this_block_size = unpadded_X_size - prev_size;
+                if (this_block_size < width_size) {
+                    uint32_t to_pad = width_size - this_block_size;
+                    fill_with_val<element_size>(l1_write_addr + this_block_size, to_pad, pad_value);
+                }
+            } else {
+                // If there is a mis-alignment, we first load the data to a middle L1 cb, then copy to the final cb
+                // buffer
+                noc_async_read(
+                    (src_noc_addr + (uint64_t)start_column_id) & MASK_64, (uint64_t)temp_addr, width_size + 64);
+
+                // Block before copying data from tmp to cb buffer
+                noc_async_read_barrier();
+
+                uint32_t prev_size = start_column_id;
+                uint32_t this_block_size = unpadded_X_size - prev_size;
+                if (this_block_size < width_size) {
+                    uint32_t to_pad = width_size - this_block_size;
+                    fill_with_val<element_size>(
+                        temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & OFFSET_64) + this_block_size,
+                        to_pad,
+                        pad_value);
+                }
+
+                tt_memmove<false, false, true, 0>(
+                    (uint64_t)l1_write_addr,
+                    (uint64_t)temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & OFFSET_64),
+                    width_size);
             }
 
-            // Block before copying data from tmp to cb buffer
-            noc_async_read_barrier();
             l1_write_addr += width_size;
         }
 
