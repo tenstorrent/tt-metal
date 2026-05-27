@@ -363,6 +363,27 @@ class TTSeamlessM4Tv2SpeechEncoder:
         return self._matmul_program_config(chunk_rows, in_dim, out_dim)
 
     @staticmethod
+    def _trim_matmul_rows(out: ttnn.Tensor, rows: int, cols: int) -> ttnn.Tensor:
+        """Trim a linear output to ``[rows, cols]``; handles 2-D and 4-D ``[1,1,M,N]`` layouts."""
+        if len(out.shape) == 4:
+            m = int(out.shape[2]) if int(out.shape[1]) == 1 else int(out.shape[1])
+            if m > rows:
+                out = ttnn.slice(
+                    out,
+                    [0, 0, 0, 0],
+                    [1, 1, rows, cols],
+                    [1, 1, 1, 1],
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                m = rows
+            return ttnn.reshape(out, (m, cols))
+        if len(out.shape) == 2 and int(out.shape[0]) > rows:
+            return ttnn.slice(out, [0, 0], [rows, cols], [1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+        if len(out.shape) == 2:
+            return out
+        return ttnn.reshape(out, (rows, cols))
+
+    @staticmethod
     def _pad_linear_rows(x_2d: ttnn.Tensor, actual_rows: int, pad_to: int) -> ttnn.Tensor:
         if actual_rows >= pad_to:
             return x_2d
@@ -413,7 +434,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
             raise ValueError(f"chunked linear expects rank 2/3/4, got {input_rank} shape {x.shape}")
         pc = self._chunked_linear_matmul_pc(k, n)
         chunk_m = _LONG_SEQ_LINEAR_CHUNK_ROWS
-        concat_mc = ttnn.DRAM_MEMORY_CONFIG if m_actual > _LONG_SEQ_LINEAR_DRAM_ROWS else ttnn.L1_MEMORY_CONFIG
+        # At exactly 256 rows L1 concat can diverge on TP; use DRAM for ``m_actual >= 256``.
+        concat_mc = ttnn.DRAM_MEMORY_CONFIG if m_actual >= _LONG_SEQ_LINEAR_DRAM_ROWS else ttnn.L1_MEMORY_CONFIG
         chunks: list[ttnn.Tensor] = []
         for start in range(0, m_actual, chunk_m):
             end = min(start + chunk_m, m_actual)
@@ -432,14 +454,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
             )
             if chunk is not x_flat:
                 ttnn.deallocate(chunk)
-            if chunk_rows < chunk_m:
-                out_chunk = ttnn.slice(
-                    out_chunk,
-                    [0, 0],
-                    [chunk_rows, n],
-                    [1, 1],
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
+            # Linear may return ``[1,1,M,N]``; normalize to ``[chunk_rows, N]`` before concat.
+            out_chunk = self._trim_matmul_rows(out_chunk, chunk_rows, n)
             if concat_mc is ttnn.DRAM_MEMORY_CONFIG:
                 out_chunk = ttnn.to_memory_config(out_chunk, ttnn.DRAM_MEMORY_CONFIG)
             chunks.append(out_chunk)
@@ -1160,7 +1176,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
         # Very long audio: a single table is hundreds of MB (seq=2125, head_dim=64 → ~578 MB).
         # Caching 24 of them across conformer layers blows DRAM. Skip the cache here so the caller
         # treats the result as a one-shot tensor and deallocates after each layer's attention.
-        if table_bytes > _MAX_CACHED_REL_POS_TABLE_BYTES:
+        # On TP meshes, also skip cache at S>=256: the cached L1/DRAM table can diverge on 1×4.
+        if table_bytes > _MAX_CACHED_REL_POS_TABLE_BYTES or (self._tp > 1 and seq_len >= 256):
             return emb
         self._rel_pos_tab_cache[tab_key] = emb
         return emb
@@ -1245,9 +1262,12 @@ class TTSeamlessM4Tv2SpeechEncoder:
             ttnn.deallocate(k)
             ttnn.deallocate(v)
         else:
-            # Stage 4: scores [B, H, S, S] — L1 fits for seq<=256 (1×16×256×256×2B = 2MB).
-            # Larger sequences fall back to DRAM to avoid L1 spills.
-            scores_mc = ttnn.L1_MEMORY_CONFIG if seq_len <= 256 else ttnn.DRAM_MEMORY_CONFIG
+            # Stage 4: scores [B, H, S, S] — L1 fits for short seq on single device.
+            # TP at S>=128 and long audio use DRAM (L1 scores diverge on 1×4 at S=256).
+            if self._tp > 1 and seq_len >= 128:
+                scores_mc = ttnn.DRAM_MEMORY_CONFIG
+            else:
+                scores_mc = ttnn.L1_MEMORY_CONFIG if seq_len <= 256 else ttnn.DRAM_MEMORY_CONFIG
 
             # Stage 17: k is already [B, H, D, S] — no permute needed.
             # Stage 8: Q weights are pre-scaled by 1/√head_dim during preprocessing so
@@ -1272,7 +1292,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
             # Long-audio: ``_relative_embedding_table`` returns an uncached table at this seq.
             # Deallocate after the BMM so the next layer's table fits in DRAM.
             head_dim_local = self.hidden_size // self.speech_encoder_attention_heads  # per-head, constant
-            uncached_pos_bmm = seq_len * seq_len * head_dim_local * 2 > _MAX_CACHED_REL_POS_TABLE_BYTES
+            pos_table_bytes = seq_len * seq_len * head_dim_local * 2
+            uncached_pos_bmm = pos_table_bytes > _MAX_CACHED_REL_POS_TABLE_BYTES or (self._tp > 1 and seq_len >= 256)
             rel_logits = self._relative_logits_bmm(
                 q,
                 pos_bmm,

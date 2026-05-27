@@ -1263,7 +1263,7 @@ def create_speech_encoder_parameters(
     *,
     device: ttnn.Device,
     dram_width_sharded_weights: bool = False,
-    tp: int = 1,
+    tp: Optional[int] = None,
 ) -> dict:
     """
     Convert [`SeamlessM4Tv2SpeechEncoder`] weights to TTNN tensors for [`TTSeamlessM4Tv2SpeechEncoder`].
@@ -1274,6 +1274,7 @@ def create_speech_encoder_parameters(
     When ``tp > 1``: conformer self-attn and FFN use TP column/row-parallel sharding;
     depthwise conv (groups=hidden_size) remains replicated (per-channel, not GEMM-bound).
     """
+    tp = _resolve_tp(device, tp)
     matmul_bf8 = ttnn.bfloat8_b
     use_dram = dram_width_sharded_weights and (tp == 1)
     linear_pair = _linear_pair_dram_sharded if use_dram else _linear_pair
