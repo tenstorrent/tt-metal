@@ -1577,6 +1577,7 @@ def _run_auto_iterate_loop(
                 "exemplar_used": exemplar_source,
                 "model_used": model,
             }
+            print(f"  [exemplar] {comp}: source = {exemplar_source}")
 
             history = _load_attempt_history(demo_dir, comp, max_entries=3)
             history_block = _format_attempt_history_block(history)
