@@ -412,3 +412,187 @@ service.barrier()
 # Destruction runs: barrier -> signal_termination -> Finish -> wait_done.
 del service
 ```
+
+## Cross-process C++ connector API
+
+The producer does not have to be the process that constructed the service. A separate process — for example a host-side inference scheduler driving IO into a model workload owned by another process — can attach to an exported `H2DStreamService` via shared memory and push bytes into the same backing tensor.
+
+### When to use it
+
+- The owner process holds the `MeshDevice`, builds the workload, and constructs the service. It calls `service.export_descriptor(id)` once.
+- The connector process attaches with `H2DStreamService::connect(id)`. It does **not** open a `MeshDevice`, does **not** initialize `MetalContext`, and does **not** need to link MPI or the dispatch stack.
+- The connector pushes raw bytes. It does not need access to `Tensor`, `TensorSpec`, or any mapper type — the service's getters return everything in plain scalar units.
+
+### Surface
+
+Three query getters tell the connector what to push:
+
+| Getter | Returns | Use |
+|---|---|---|
+| `payload_size_bytes()` | `std::size_t` | Size of the buffer to hand to `forward_to_tensor` per call. |
+| `metadata_size_bytes()` | `std::size_t` | Size of the trailing metadata buffer per call. Zero ⇒ metadata path disabled; use the single-arg `forward_to_tensor` overload. |
+| `get_worker_cores()` | `CoreRange` | The worker grid the owner-side consumer op runs on. `TT_FATAL`s if `worker_cores` was unset at construction. |
+
+Two data-path methods:
+
+- `forward_to_tensor(ttsl::Span<const std::byte> bytes)` — bytes-only; pushes one full tensor's worth of payload.
+- `forward_to_tensor(ttsl::Span<const std::byte> bytes, ttsl::Span<const std::byte> metadata)` — bytes + metadata; both sizes must match the getters above exactly.
+
+One sync method:
+
+- `barrier()` — blocks until every socket's `bytes_sent == bytes_acked`. Call before exit, and before any host read of the backing tensor.
+
+### Owner / connector contract
+
+- `service_id` is the string passed to `export_descriptor` and re-used in `connect`. It must agree on both sides; no namespacing or filesystem path is exposed to the caller.
+- The descriptor file at `/dev/shm/tt_h2d_stream_service_<id>.bin` is the rendezvous point. `connect` waits for it to appear (timeout default 10s).
+- Owner-only getters (`get_backing_tensor`, `get_data_ready_sem_addr`, `get_consumed_counter_addr`, `get_service_core`, `get_metadata_addr`, `export_descriptor`) `TT_FATAL` if called on a connector-side service. The query getters above and the data path do not.
+- Lifetime: the connector's `H2DStreamService` destructor marks each socket's SHM connector-state `clean_shutdown=1` and detaches the SHM regions. It does **not** tear down owner-side resources. Crash exits without running the destructor are observable on the owner via `H2DSocket::had_clean_prior_shutdown()`.
+
+### Minimal connector example
+
+Canonical reference for an inference-scheduler producer:
+
+```cpp
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// Minimal standalone connector binary for an exported H2DStreamService.
+//
+// Does NOT open a MeshDevice, NOT initialize MetalContext, NOT link MPI,
+// and NEVER touches any Tensor / TensorSpec type. Operates purely on raw
+// byte buffers — the service's `payload_size_bytes()` /
+// `metadata_size_bytes()` getters tell the connector exactly how big a
+// buffer to hand to `forward_to_tensor` per call.
+//
+// Expects an owner process (the one with the device handle) to have
+// already constructed an `H2DStreamService` and called
+// `export_descriptor(id)`. The descriptor lives at
+// `/dev/shm/tt_h2d_stream_service_<id>.bin`; `H2DStreamService::connect(id)`
+// blocks until it appears, then attaches every per-coord H2DSocket via
+// shared memory + a process-local UMD Cluster.
+//
+// Usage:
+//   ./minimal_h2d_connector <service_id> <num_iterations> [timeout_ms]
+
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <iostream>
+#include <string>
+#include <vector>
+
+#include <tt_stl/span.hpp>
+
+#include <ttnn/tensor/socket_services.hpp>
+
+namespace {
+
+// Fill a byte buffer with whatever deterministic pattern the owner-side
+// consumer expects. Real connectors will pull from a file / network / model
+// output — this is just a placeholder.
+void fill_payload(std::vector<std::byte>& buf, uint32_t iter) {
+    const uint8_t seed = static_cast<uint8_t>(iter & 0xFF);
+    std::memset(buf.data(), seed, buf.size());
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    if (argc < 3) {
+        std::cerr << "usage: " << argv[0]
+                  << " <service_id> <num_iterations> [timeout_ms]\n";
+        return 1;
+    }
+    const std::string service_id = argv[1];
+    const uint32_t num_iterations = static_cast<uint32_t>(std::stoul(argv[2]));
+    const uint32_t timeout_ms =
+        (argc >= 4) ? static_cast<uint32_t>(std::stoul(argv[3])) : 30'000u;
+
+    // ---- 1. Attach to the exported service. -----------------------------
+    // Blocks until the descriptor file appears in /dev/shm/, or throws on
+    // timeout. After this returns, every per-coord H2DSocket is connected
+    // through shared memory + the process-local UMD Cluster.
+    auto service = tt::tt_metal::H2DStreamService::connect(service_id, timeout_ms);
+
+    // ---- 2. Query the bytes-only contract. ------------------------------
+    // payload_size_bytes(): bytes to push per `forward_to_tensor` call.
+    // metadata_size_bytes(): trailing metadata bytes per call (0 if disabled).
+    // No Tensor / TensorSpec types involved.
+    const std::size_t payload_bytes = service->payload_size_bytes();
+    const std::size_t metadata_bytes = service->metadata_size_bytes();
+
+    std::cout << "[connector] attached. service_id=" << service_id
+              << " payload_bytes=" << payload_bytes
+              << " metadata_bytes=" << metadata_bytes << std::endl;
+
+    std::vector<std::byte> payload(payload_bytes);
+    std::vector<std::byte> metadata(metadata_bytes);
+
+    // ---- 3. Iteration loop. ---------------------------------------------
+    for (uint32_t iter = 0; iter < num_iterations; ++iter) {
+        // Refresh payload from your data source. Replace with the real I/O.
+        fill_payload(payload, iter);
+
+        auto payload_span = ttsl::Span<const std::byte>(payload.data(), payload.size());
+
+        // Synchronous up to the SHM/L1 write — returns as soon as bytes are
+        // in the FIFO / pinned host buffer. The FIFO's flow control blocks
+        // here naturally if the device kernel hasn't drained the previous
+        // push yet.
+        if (metadata_bytes == 0) {
+            service->forward_to_tensor(payload_span);
+        } else {
+            auto metadata_span = ttsl::Span<const std::byte>(metadata.data(), metadata.size());
+            service->forward_to_tensor(payload_span, metadata_span);
+        }
+
+        // (Optional) per-iter sync — uncomment if a downstream consumer
+        // needs every iter to be fully drained before the next is pushed.
+        // The hot-path default is pipelined (no per-iter barrier).
+        //
+        // service->barrier();
+    }
+
+    // ---- 4. Drain. -------------------------------------------------------
+    // Wait until every socket's bytes_sent == bytes_acked before exiting.
+    // Without this, process exit could tear down SHM while the device kernel
+    // is mid-read (DEVICE_PULL) or mid-fence (HOST_PUSH).
+    service->barrier();
+
+    std::cout << "[connector] " << num_iterations << " iters complete, "
+              << (static_cast<std::size_t>(num_iterations) * payload_bytes)
+              << " B pushed total" << std::endl;
+
+    // ~H2DStreamService runs the connector dtor path: marks each socket's
+    // SHM connector-state clean_shutdown=1 and detaches the SHM regions.
+    return 0;
+}
+```
+
+Step-by-step:
+
+1. **Attach.** `H2DStreamService::connect(service_id, timeout_ms)` blocks until the descriptor is visible. After it returns, every per-coord socket is mapped into this process via shared memory and a single shared `umd::Cluster`.
+2. **Query the contract.** `payload_size_bytes()` and `metadata_size_bytes()` are the only sizing inputs the connector needs. Allocate two `std::vector<std::byte>` of those sizes once, reuse across iterations.
+3. **Push.** Refresh the payload buffer from the scheduler's data source, call `forward_to_tensor`. Backpressure from the FIFO blocks the call when the device hasn't drained the previous push — no flow-control logic in the scheduler.
+4. **Drain.** Call `barrier()` once before exit so the SHM regions can be detached cleanly.
+
+### Build
+
+Link only `TTNN::CPP` and `tt_metal`. No MPI, no dispatch fixture. Add to `tests/tt_metal/distributed/multiprocess/CMakeLists.txt` (or wherever the scheduler lives):
+
+```cmake
+add_executable(minimal_h2d_connector minimal_h2d_connector.cpp)
+target_link_libraries(minimal_h2d_connector PRIVATE TTNN::CPP tt_metal)
+target_include_directories(minimal_h2d_connector
+    PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
+```
+
+### Footguns
+
+- **Owner must call `export_descriptor` before the connector calls `connect`.** Otherwise `connect` waits the full timeout and throws.
+- **Payload size must match exactly.** `forward_to_tensor` `TT_FATAL`s on a mismatch — the connector cannot push partial tensors.
+- **Metadata is opt-in but enforced.** If the owner constructed the service with `metadata_size_bytes > 0`, the connector must use the two-arg overload on every call with exactly that many bytes; the single-arg overload `TT_FATAL`s.
+- **One connector at a time per socket.** Two concurrent connectors attached to the same descriptor will both write into the same FIFO and corrupt each other's flow control. Use distinct service IDs for distinct producers.
+- **Always `barrier()` before exit.** Skipping it can leave the device kernel reading from an SHM region the connector has already detached.

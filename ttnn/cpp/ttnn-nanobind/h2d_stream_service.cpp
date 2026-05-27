@@ -221,6 +221,43 @@ void py_module_types(nb::module_& mod) {
                 Same as `get_backing_tensor().tensor_spec()`.
             )doc")
         .def(
+            "payload_size_bytes",
+            &tt::tt_metal::H2DStreamService::payload_size_bytes,
+            R"doc(
+                Bytes the caller must hand to `forward_to_tensor_bytes` per call —
+                equal to the packed size of one full global tensor.
+
+                Returns:
+                    int: Required payload size in bytes.
+            )doc")
+        .def(
+            "metadata_size_bytes",
+            &tt::tt_metal::H2DStreamService::metadata_size_bytes,
+            R"doc(
+                Bytes of metadata that must be attached to each `forward_to_tensor*`
+                call. Zero means the metadata path is disabled and the no-metadata
+                overload must be used.
+
+                Returns:
+                    int: Required metadata size in bytes (0 if disabled).
+            )doc")
+        .def(
+            "get_worker_cores",
+            &tt::tt_metal::H2DStreamService::get_worker_cores,
+            R"doc(
+                Worker CoreRange the service synchronizes with — same grid passed
+                via `worker_cores` at construction. Consumers building a peer
+                MeshWorkload around the service use this to size their
+                `pages_per_worker` partitioning and to multicast destinations.
+
+                Raises:
+                    RuntimeError: If the service was constructed without
+                        `worker_cores`.
+
+                Returns:
+                    CoreRange: The worker grid.
+            )doc")
+        .def(
             "get_sockets",
             &tt::tt_metal::H2DStreamService::get_sockets,
             R"doc(

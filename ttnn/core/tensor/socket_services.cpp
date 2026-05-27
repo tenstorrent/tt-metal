@@ -729,6 +729,13 @@ inline void require_owner(bool is_owner, const char* api) {
 }
 }  // namespace
 
+CoreRange H2DStreamService::get_worker_cores() const {
+    TT_FATAL(
+        cfg_.worker_cores.has_value(),
+        "H2DStreamService::get_worker_cores: worker-sync was not configured (Config::worker_cores unset).");
+    return *cfg_.worker_cores;
+}
+
 DeviceAddr H2DStreamService::get_data_ready_sem_addr() const {
     require_owner(is_owner_, "H2DStreamService::get_data_ready_sem_addr");
     TT_FATAL(
@@ -777,6 +784,14 @@ const TensorSpec& H2DStreamService::get_per_shard_spec() const {
 const Tensor& H2DStreamService::get_backing_tensor() const {
     require_owner(is_owner_, "H2DStreamService::get_backing_tensor");
     return device_tensor_;
+}
+
+std::size_t H2DStreamService::payload_size_bytes() const {
+    return cfg_.global_spec.compute_packed_buffer_size_bytes();
+}
+
+std::size_t H2DStreamService::metadata_size_bytes() const {
+    return cfg_.metadata_size_bytes;
 }
 
 std::string H2DStreamService::export_descriptor(const std::string& service_id) {
