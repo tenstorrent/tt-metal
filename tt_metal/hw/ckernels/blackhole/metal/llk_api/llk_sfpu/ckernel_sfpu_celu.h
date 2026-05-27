@@ -6,8 +6,8 @@
 
 #include <cstdint>
 
-#include "ckernel_sfpu_converter.h"
-#include "ckernel_sfpu_expm1_cw.h"
+#include "sfpu/ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_expm1_cw.h"
 
 namespace ckernel::sfpu {
 
