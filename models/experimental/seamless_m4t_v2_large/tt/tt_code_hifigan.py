@@ -11,6 +11,7 @@ Output waveform lengths are computed on host from ``t_audio`` and uploaded as in
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 import torch
@@ -23,6 +24,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     MATMUL_1D_SEQ_THRESHOLD,
     to_torch_replicated_first_shard,
 )
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, mesh_cluster_axis
 
 # Both matmul dims must stay small on BH; ``t_audio`` alone can be thousands of frames.
 _VOCODER_EXPAND_MATMUL_CHUNK = TILE
@@ -41,6 +43,31 @@ def _vocoder_dram_slice_count(input_length: int) -> int:
         return 16
     target_rows = 48
     return min(128, max(16, (il + target_rows - 1) // target_rows))
+
+
+def _as_batch_time_2d(x: ttnn.Tensor, *, batch: int, seq: int) -> ttnn.Tensor:
+    """Normalize ``[B, T]`` or mesh-broadcast ``[B, 1, T]`` to logical ``[B, T]``."""
+    rank = len(x.shape)
+    if rank == 2:
+        return x
+    if rank == 3:
+        if int(x.shape[1]) == 1:
+            return ttnn.reshape(x, (batch, int(x.shape[2])))
+        return ttnn.reshape(x, (batch, seq))
+    raise RuntimeError(f"expected batch-time rank 2 or 3, got shape {tuple(x.shape)}")
+
+
+def _slice_batch_time(x: ttnn.Tensor, *, batch: int, seq: int) -> ttnn.Tensor:
+    """Slice the logical ``[batch, seq]`` prefix (rank-aware for replicated TP meshes)."""
+    rank = len(x.shape)
+    if rank == 2:
+        return ttnn.slice(x, [0, 0], [batch, seq], (1, 1))
+    if rank == 3:
+        mid = int(x.shape[1])
+        if mid == 1:
+            return ttnn.slice(x, [0, 0, 0], [batch, 1, seq], (1, 1, 1))
+        return ttnn.slice(x, [0, 0, 0], [batch, seq, int(x.shape[2])], (1, 1, 1))
+    raise RuntimeError(f"cannot slice batch-time tensor with shape {tuple(x.shape)}")
 
 
 def _vocoder_hf_gather_index(input_ids: ttnn.Tensor, *, batch: int, seq: int, pad_id: int) -> int:
@@ -150,6 +177,15 @@ def _host_hifigan_output_length(cfg: Any, unit_length: int) -> int:
     return _host_conv_out_length(x, 7, 1, 3)
 
 
+@dataclass
+class VocoderForwardTraceRuntime:
+    """Captured Metal trace for one vocoder ``forward`` (fixed inputs)."""
+
+    trace_id: int
+    waveform_tt: ttnn.Tensor
+    lengths_tt: ttnn.Tensor
+
+
 class TTSeamlessM4Tv2CodeHifiGan:
     """Inference forward for HF ``SeamlessM4Tv2CodeHifiGan``."""
 
@@ -172,6 +208,12 @@ class TTSeamlessM4Tv2CodeHifiGan:
         self._matmul_pc_cache: dict = {}
         # Populated only by ``prewarm_conv1d_weights`` (trace/E2E). Forward without prewarm uses raw weights (PCC path).
         self._conv1d_prepared_cache: Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]] = {}
+        # TP: vocoder weights are replicated on every device; ``tp`` is mesh width for shape/readback helpers.
+        self._tp = get_tp(device)
+        self._cluster_axis = mesh_cluster_axis(device)
+        self._forward_trace_rt: Optional[VocoderForwardTraceRuntime] = None
+        self._last_t_audio: Optional[int] = None
+        self._last_gather_idx: Optional[int] = None
 
     def _expand_unit_embeddings_matmul(
         self,
@@ -899,9 +941,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
         h = self._layer_norm(h, weight=dp.ln2.weight, bias=dp.ln2.bias, eps=dp.ln2.eps)
         log_dur = self._linear(h, dp.proj.weight, dp.proj.bias)  # [B, T_units, 1]
         ttnn.deallocate(h)
-        log_dur_2d = ttnn.squeeze(log_dur, -1)  # [B, T_units]
+        log_dur_2d = ttnn.squeeze(log_dur, -1)  # [B, T_units] (may be [B, 1, T] on mesh)
         # Caller frees after ``expm1`` (``squeeze`` may alias ``log_dur``).
-        return log_dur_2d
+        return _as_batch_time_2d(log_dur_2d, batch=batch, seq=seq)
 
     def _resblock(self, x_nlc: ttnn.Tensor, rb: Any, *, batch: int, tlen: int, channels: int) -> ttnn.Tensor:
         """One HF ``HifiGanResidualBlock``; ``x`` is ``[B,T,C]``."""
@@ -1016,6 +1058,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         lang_id: ttnn.Tensor,
         *,
         input_ids_torch: Optional[torch.Tensor] = None,
+        trace_no_profiler: bool = False,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Args:
@@ -1041,8 +1084,14 @@ class TTSeamlessM4Tv2CodeHifiGan:
         del input_ids_torch  # API-compat stub.
         batch = int(input_ids.shape[0])
         if batch == 1:
-            return self._forward_one(input_ids, speaker_id, lang_id)
-        return self._forward_batched(input_ids, speaker_id, lang_id, batch=batch)
+            return self._forward_one(input_ids, speaker_id, lang_id, trace_no_profiler=trace_no_profiler)
+        return self._forward_batched(
+            input_ids,
+            speaker_id,
+            lang_id,
+            batch=batch,
+            trace_no_profiler=trace_no_profiler,
+        )
 
     # ------------------------------------------------------------------------------- B == 1
 
@@ -1051,6 +1100,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
         input_ids: ttnn.Tensor,
         speaker_id: ttnn.Tensor,
         lang_id: ttnn.Tensor,
+        *,
+        trace_no_profiler: bool = False,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Single-sample forward (``B == 1``); fully on device modulo one shape int."""
         batch = int(input_ids.shape[0])
@@ -1092,21 +1143,33 @@ class TTSeamlessM4Tv2CodeHifiGan:
         ttnn.deallocate(dur_f32)
         ttnn.deallocate(dur_bf)
 
+        cumsum_inc_bt = _as_batch_time_2d(cumsum_inc, batch=batch, seq=seq)
+        cumsum_prev_bt = _as_batch_time_2d(cumsum_prev, batch=batch, seq=seq)
+
         # ``t_audio`` from HF gather index (not last TILE column, which may be padding).
-        cumsum_pre_seq = ttnn.slice(cumsum_inc, [0, 0], [batch, seq], (1, 1))
-        cs_t = to_torch_replicated_first_shard(cumsum_pre_seq).float()
-        pad_id = int(self.cfg.t2u_pad_token_id)
-        idx = _vocoder_hf_gather_index(input_ids, batch=batch, seq=seq, pad_id=pad_id)
-        t_audio = int(cs_t[0, idx].item())
-        if t_audio < 1:
-            raise RuntimeError(f"Computed t_audio={t_audio}; expected positive duration sum.")
+        # Metal trace capture forbids host readbacks — reuse values cached on the compile forward.
+        if trace_no_profiler and self._last_t_audio is not None:
+            t_audio = int(self._last_t_audio)
+        else:
+            cumsum_pre_seq = _slice_batch_time(cumsum_inc_bt, batch=batch, seq=seq)
+            cs_t = to_torch_replicated_first_shard(cumsum_pre_seq).float().reshape(batch, -1)
+            pad_id = int(self.cfg.t2u_pad_token_id)
+            idx = _vocoder_hf_gather_index(input_ids, batch=batch, seq=seq, pad_id=pad_id)
+            t_audio = int(cs_t[0, idx].item())
+            if t_audio < 1:
+                raise RuntimeError(f"Computed t_audio={t_audio}; expected positive duration sum.")
+            self._last_t_audio = t_audio
+            self._last_gather_idx = idx
+
+        if not trace_no_profiler:
+            ttnn.ReadDeviceProfiler(self.device)
 
         # ---------- expansion via embeddings @ H (device) ----------
         # Defer dealloc of views (slice/permute/reshape) until after concat — aliases are common.
         frame_idx = self._cached_frame_idx_f32(t_audio)
         # Reshape for broadcasting: [B, T_units, 1] vs [1, 1, t_audio].
-        c_b = ttnn.reshape(cumsum_inc, (batch, seq, 1))
-        cp_b = ttnn.reshape(cumsum_prev, (batch, seq, 1))
+        c_b = ttnn.reshape(cumsum_inc_bt, (batch, seq, 1))
+        cp_b = ttnn.reshape(cumsum_prev_bt, (batch, seq, 1))
         f_b = ttnn.reshape(frame_idx, (1, 1, t_audio))
 
         lower = ttnn.ge(f_b, cp_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1170,6 +1233,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         lang_id: ttnn.Tensor,
         *,
         batch: int,
+        trace_no_profiler: bool = False,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Multi-sample forward for any ``B > 1``. Mirrors HF's per-sample loop in
@@ -1189,7 +1253,12 @@ class TTSeamlessM4Tv2CodeHifiGan:
             spk_b = ttnn.slice(speaker_id, [b, 0], [b + 1, 1])
             lang_b = ttnn.slice(lang_id, [b, 0], [b + 1, 1])
 
-            wav_b, len_b = self._forward_one(ids_b, spk_b, lang_b)
+            wav_b, len_b = self._forward_one(
+                ids_b,
+                spk_b,
+                lang_b,
+                trace_no_profiler=trace_no_profiler,
+            )
             ttnn.deallocate(ids_b)
             ttnn.deallocate(spk_b)
             ttnn.deallocate(lang_b)
@@ -1229,3 +1298,87 @@ class TTSeamlessM4Tv2CodeHifiGan:
             ttnn.deallocate(l)
 
         return waveform, lengths
+
+    def release_forward_trace(self) -> None:
+        """Release a captured vocoder forward Metal trace (safe if none is active)."""
+        rt = self._forward_trace_rt
+        if rt is None:
+            return
+        try:
+            ttnn.release_trace(self.device, rt.trace_id)
+        except Exception:
+            pass
+        self._forward_trace_rt = None
+
+    def capture_forward_trace(
+        self,
+        input_ids: ttnn.Tensor,
+        speaker_id: ttnn.Tensor,
+        lang_id: ttnn.Tensor,
+        *,
+        after_compile: bool = False,
+    ) -> None:
+        """Capture Metal trace for one vocoder forward (compile outside trace, then capture on CQ0).
+
+        When ``after_compile=True``, skip the compile forward and use ``_last_t_audio`` left by a
+        prior ``forward()`` on the same inputs (trace PCC tests call ``forward`` once, then capture).
+        Otherwise this method runs one compile ``forward`` to discover ``t_audio``, then prewarms.
+        """
+        if self._forward_trace_rt is not None:
+            return
+
+        batch = int(input_ids.shape[0])
+        seq = int(input_ids.shape[1])
+        if batch != 1:
+            raise ValueError("capture_forward_trace supports batch == 1 only.")
+
+        if not after_compile:
+            compile_wav, compile_len = self.forward(
+                input_ids,
+                speaker_id,
+                lang_id,
+                trace_no_profiler=True,
+            )
+            ttnn.synchronize_device(self.device)
+            ttnn.deallocate(compile_wav)
+            ttnn.deallocate(compile_len)
+        elif self._last_t_audio is None:
+            raise RuntimeError("after_compile=True requires a prior forward() that set _last_t_audio.")
+
+        t_audio = self._last_t_audio
+        if t_audio is None or t_audio < 1:
+            raise RuntimeError("compile forward did not set _last_t_audio.")
+        self.prewarm_conv1d_weights(batch=batch, seq=seq, t_audio=int(t_audio))
+        ttnn.synchronize_device(self.device)
+
+        capture_wav: Optional[ttnn.Tensor] = None
+        capture_len: Optional[ttnn.Tensor] = None
+
+        def traced_step() -> None:
+            nonlocal capture_wav, capture_len
+            capture_wav, capture_len = self.forward(
+                input_ids,
+                speaker_id,
+                lang_id,
+                trace_no_profiler=True,
+            )
+
+        trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        traced_step()
+        ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+        if capture_wav is None or capture_len is None:
+            raise RuntimeError("vocoder forward trace capture produced no outputs.")
+        ttnn.synchronize_device(self.device)
+        self._forward_trace_rt = VocoderForwardTraceRuntime(
+            trace_id=trace_id,
+            waveform_tt=capture_wav,
+            lengths_tt=capture_len,
+        )
+
+    def execute_forward_trace(self) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Replay a captured vocoder forward trace on CQ0 (inputs must match capture)."""
+        rt = self._forward_trace_rt
+        if rt is None:
+            raise RuntimeError("vocoder forward trace not captured; call capture_forward_trace first.")
+        ttnn.execute_trace(self.device, rt.trace_id, cq_id=0, blocking=True)
+        return rt.waveform_tt, rt.lengths_tt
