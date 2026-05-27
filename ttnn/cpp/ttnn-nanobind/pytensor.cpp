@@ -1962,6 +1962,117 @@ void pytensor_module(nb::module_& mod) {
                 >>> cores = ttnn.get_optimal_worker_cores_for_sharded_tensor(sharded_tensor)
                 >>> # cores will have a list of CoreCoords in shard-orientation order. These are the optimal worker cores on which programs/kernels can be launched for the sharded tensor.
         )doc");
+
+    // ------------------------------------------------------------------------
+    // copy_device_to_torch  -  fused PCIe D2H -> torch.Tensor (BGE-M3 fast path)
+    // ------------------------------------------------------------------------
+    //
+    // Reads a sharded device tensor directly into a pre-allocated torch.Tensor,
+    // bypassing the usual intermediate ttnn host_staging tensor. Eliminates the
+    // second host-to-host memcpy (host_staging -> dest_torch) that the standard
+    // copy_device_to_host_tensor + batch_to_torch pipeline incurs.
+    //
+    // Data flow:
+    //   device DRAM
+    //     --PCIe DMA-->  pinned hugepage (completion queue)
+    //     --memcpy in read_from_sysmem-->  dest_torch's data buffer  (1 memcpy)
+    //
+    // vs. A10 path (copy_device_to_host_tensor + batch_to_torch):
+    //   device DRAM --PCIe--> hugepage --memcpy--> host_staging --memcpy--> dest_torch (2 memcpys)
+    //
+    // Requires the dest_torch tensor to be sized for the device tensor's logical
+    // shape and dtype, contiguous in memory. For multi-shard meshes, each shard
+    // writes to its row-major slice (shards along dim 0 by convention).
+    mod.def(
+        "copy_device_to_torch",
+        [](const ttnn::Tensor& device_tensor,
+           nb::ndarray<nb::pytorch> dest,
+           std::optional<ttnn::QueueId> cq_id,
+           bool blocking) {
+            using namespace CMAKE_UNIQUE_NAMESPACE;
+
+            TT_FATAL(
+                device_tensor.storage_type() == StorageType::DEVICE,
+                "copy_device_to_torch requires a device tensor, got {}",
+                device_tensor.storage_type());
+
+            // Bytes-per-shard from the tensor spec (covers padding/tile alignment).
+            const auto& spec = device_tensor.tensor_spec();
+            const size_t per_shard_bytes = spec.compute_packed_buffer_size_bytes();
+
+            // Enumerate the device coords this tensor occupies.
+            std::vector<tt::tt_metal::distributed::MeshCoordinate> coords;
+            if (device_tensor.device_storage().is_uniform_storage()) {
+                auto* mesh_device = device_tensor.device();
+                tt::tt_metal::distributed::MeshCoordinateRange all(mesh_device->shape());
+                for (const auto& c : all) {
+                    coords.push_back(c);
+                }
+            } else {
+                auto coords_span = device_tensor.device_storage().get_coords();
+                coords.assign(coords_span.begin(), coords_span.end());
+            }
+            const size_t n_shards = coords.size();
+
+            // Sanity-check the destination buffer.
+            const size_t total_bytes = per_shard_bytes * n_shards;
+            TT_FATAL(
+                dest.nbytes() >= total_bytes,
+                "copy_device_to_torch: dest buffer too small ({} bytes vs {} needed: {} shards x {} bytes each)",
+                dest.nbytes(),
+                total_bytes,
+                n_shards,
+                per_shard_bytes);
+
+            auto* dst_base = static_cast<std::byte*>(dest.data());
+            // get_mesh_buffer_leak_ownership() is the public accessor for the
+            // underlying shared_ptr<MeshBuffer>; we don't need to touch the
+            // MeshTensorImpl (which is only forward-declared in this TU).
+            auto mesh_buffer = device_tensor.device_storage().get_mesh_buffer_leak_ownership();
+            auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
+
+            // Build one ShardDataTransfer per coord, each pointing into the right
+            // slice of `dest`. Coords are enumerated in MeshCoordinateRange order,
+            // matching the shard ordering produced by
+            // `concat_mesh_to_tensor_composer(dim=0)`.
+            std::vector<tt::tt_metal::distributed::ShardDataTransfer> transfers;
+            transfers.reserve(n_shards);
+            for (size_t i = 0; i < n_shards; ++i) {
+                tt::tt_metal::distributed::ShardDataTransfer t{coords[i]};
+                t.host_data(dst_base + i * per_shard_bytes);
+                t.region(BufferRegion(0, per_shard_bytes));
+                transfers.push_back(std::move(t));
+            }
+
+            {
+                nb::gil_scoped_release release;
+                cq.enqueue_read_shards(transfers, mesh_buffer, blocking);
+            }
+        },
+        nb::arg("device_tensor"),
+        nb::arg("dest"),
+        nb::arg("cq_id") = nb::none(),
+        nb::arg("blocking") = true,
+        R"doc(
+        Read a device tensor directly into a pre-allocated torch.Tensor.
+
+        Eliminates the intermediate ttnn host_staging tensor used by the
+        ``copy_device_to_host_tensor + Tensor.batch_to_torch`` pipeline,
+        saving one host-to-host memcpy on the D2H critical path.
+
+        The PCIe DMA still lands in a pinned hugepage (completion queue),
+        and is then memcpy'd into ``dest`` by the UMD inside ``read_from_sysmem``.
+        That single memcpy is unavoidable without changes to the dispatch layer.
+
+        Args:
+            device_tensor: A device tensor (single or multi-chip mesh).
+            dest: Pre-allocated torch.Tensor whose bytes match the device tensor's
+                packed shard layout. For multi-shard meshes, must hold
+                ``n_shards * compute_packed_buffer_size_bytes()`` bytes; shards are
+                written contiguously in MeshCoordinateRange order along dim 0.
+            cq_id: Command queue id to use (defaults to the default queue).
+            blocking: If True, block until the read completes.
+    )doc");
 }
 
 }  // namespace ttnn::tensor
