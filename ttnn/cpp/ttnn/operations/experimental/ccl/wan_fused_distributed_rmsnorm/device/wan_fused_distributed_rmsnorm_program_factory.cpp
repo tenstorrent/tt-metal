@@ -104,7 +104,10 @@ WanFusedDistributedRmsnormSizing compute_sizing(const WanFusedDistributedRmsnorm
     const uint32_t W = padded[-1];
     const uint32_t folded_H = input.physical_volume() / W;
     s.num_tile_rows = folded_H / TILE_HEIGHT;
-    s.is_tp_1 = (args.ring_size == 1);
+    // per_head_norm reduces locally over head_dim per head — no AG needed even
+    // when ring_size > 1. From the kernel's perspective, this is "is_tp_1" =
+    // no fabric, no MUX, legacy writer path.
+    s.is_tp_1 = (args.ring_size == 1) || args.per_head_norm;
     s.num_workers = s.is_tp_1 ? 1u : pick_num_workers_tp_gt_1(s.num_tile_rows);
     s.use_mux = !s.is_tp_1 && (s.num_workers > 1);
     const uint32_t rows_per_worker = tt::div_up(s.num_tile_rows, s.num_workers);
@@ -220,7 +223,9 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         }
     }
 
-    const bool is_tp_1 = (args.ring_size == 1);
+    // per_head_norm reduces over head_dim locally per head — no AG, no fabric,
+    // legacy writer path even with ring_size > 1.
+    const bool is_tp_1 = (args.ring_size == 1) || args.per_head_norm;
     // Will be finalized after we pick num_workers below — set initial estimate.
     bool use_mux = !is_tp_1;
 
@@ -412,9 +417,16 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const uint32_t input_cb_tiles = 2 * chunk_input_tiles;
     create_cb(input_cb_id, program, worker_core_set, input_tile_size, input_cb_tiles, input_format);
 
-    const uint32_t stats_local_tiles = (args.ring_size > 1) ? chunk_size_rows : 1;
+    // per_head_norm produces num_heads_per_device stat tiles per row instead
+    // of one. is_tp_1 already captures the "no AG needed" path for both
+    // ring_size==1 and per_head_norm, so the compute kernel pushes directly
+    // into stats_gathered_cb (skipping stats_local). When per_head_norm is on
+    // but is_tp_1 path is used we still need stats_gathered_cb sized for the
+    // per-head fan-out.
+    const uint32_t per_row_stats_count = args.per_head_norm ? args.num_heads_per_device : args.ring_size;
+    const uint32_t stats_local_tiles = (args.ring_size > 1 && !args.per_head_norm) ? chunk_size_rows : 1;
     create_cb(stats_local_cb_id, program, worker_core_set, fp32_tile_size, stats_local_tiles, fp32_format);
-    const uint32_t stats_gathered_tiles = chunk_size_rows * args.ring_size;
+    const uint32_t stats_gathered_tiles = chunk_size_rows * per_row_stats_count;
     create_cb(stats_gathered_cb_id, program, worker_core_set, fp32_tile_size, stats_gathered_tiles, fp32_format);
 
     // Phase 9 packed-page AG: dedicated CBs only when the MUX writer runs.
@@ -504,6 +516,9 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // Reader kernel (on worker cores)
     // ------------------------------------------------------------------------
     const uint32_t H_full = W * args.ring_size;
+    // Per-head norm reduces over head_dim only, so the AVG scalar divides by
+    // head_dim instead of H_full.
+    const uint32_t reduce_factor = args.per_head_norm ? (W / args.num_heads_per_device) : H_full;
     std::vector<uint32_t> reader_compile_args = {
         input_cb_id,
         weight_cb_id,
@@ -515,7 +530,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         rope_sin_cb_id,
         num_tile_cols,
         block_size,
-        /*reduce_factor=*/H_full,
+        reduce_factor,
         float_to_u32(args.epsilon),
         static_cast<uint32_t>(has_weight),
         static_cast<uint32_t>(fuse_rope),
@@ -690,6 +705,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(per_head_rope),
         bias_cb_id,
         static_cast<uint32_t>(has_bias),
+        static_cast<uint32_t>(args.per_head_norm ? 1u : 0u),
+        args.num_heads_per_device,
     };
 
     KernelHandle compute_kernel_id = CreateKernel(

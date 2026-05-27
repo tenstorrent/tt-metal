@@ -24,6 +24,10 @@ namespace ttnn::experimental::prim {
 struct WanFusedDistributedRmsnormParams {
     float epsilon;
     uint32_t num_heads_per_device;
+    // Per-head normalization (FLUX.2 path): reduce over head_dim per
+    // (token, head) instead of the full row. When true, AG is skipped
+    // entirely — each head is assumed local to chip.
+    bool per_head_norm;
 
     // Output dtype override (defaults to input dtype if unset).
     std::optional<DataType> dtype;
@@ -42,6 +46,7 @@ struct WanFusedDistributedRmsnormParams {
     WanFusedDistributedRmsnormParams(
         float epsilon,
         uint32_t num_heads_per_device,
+        bool per_head_norm,
         std::optional<DataType> dtype,
         MemoryConfig output_mem_config,
         uint32_t cluster_axis,
@@ -53,6 +58,7 @@ struct WanFusedDistributedRmsnormParams {
         DeviceComputeKernelConfig compute_kernel_config) :
         epsilon(epsilon),
         num_heads_per_device(num_heads_per_device),
+        per_head_norm(per_head_norm),
         dtype(dtype),
         output_mem_config(std::move(output_mem_config)),
         cluster_axis(cluster_axis),
@@ -68,6 +74,7 @@ struct WanFusedDistributedRmsnormParams {
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("epsilon", epsilon);
         attrs.emplace_back("num_heads_per_device", num_heads_per_device);
+        attrs.emplace_back("per_head_norm", per_head_norm);
         attrs.emplace_back("dtype", dtype);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("cluster_axis", cluster_axis);

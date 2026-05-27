@@ -27,6 +27,7 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     float epsilon = 1e-5,
     uint32_t num_heads_per_device = 1,
+    bool per_head_norm = false,
     const std::optional<const ttnn::Tensor>& weight = std::nullopt,
     const std::optional<const ttnn::Tensor>& bias = std::nullopt,
     const std::optional<const ttnn::Tensor>& transformation_mat = std::nullopt,
