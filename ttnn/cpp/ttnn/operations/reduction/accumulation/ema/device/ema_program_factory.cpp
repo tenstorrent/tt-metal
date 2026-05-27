@@ -21,7 +21,7 @@ constexpr auto ema_buffer_depth = 2;
 tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_descriptor(
     const EmaParams& operation_attributes, const EmaInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input.mesh_tensor();
-    auto& output = tensor_return_value;
+    const MeshTensor& output = tensor_return_value.mesh_tensor();
     IDevice* device = &input.device_mut();
 
     // Grid sizing
@@ -52,7 +52,7 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
     auto all_cores = CoreRangeSet(grid_to_cores(num_cores, grid_size.x, grid_size.y, false));
 
     validate_reduce_op_program_grid(
-        "EMA", all_cores, device->compute_with_storage_grid_size(), nullptr, false, {{&output, "output"}});
+        "EMA", all_cores, device->compute_with_storage_grid_size(), nullptr, false, {{&tensor_return_value, "output"}});
     log_debug(
         tt::LogOp,
         "EmaProgramFactory: grid_size=({}, {}), num_cores={}, total_batch_channel_tiles={}",
@@ -80,11 +80,10 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
     constexpr auto prev_cb_index = tt::CBIndex::c_2;
 
     auto src_data_format = datatype_to_dataformat_converter(input.dtype());
-    const auto& output_mesh = output.mesh_tensor();
-    auto dst_data_format = datatype_to_dataformat_converter(output_mesh.dtype());
+    auto dst_data_format = datatype_to_dataformat_converter(output.dtype());
 
     auto src_tile_size = input.tensor_spec().tile().get_tile_size(src_data_format);
-    auto dst_tile_size = output_mesh.tensor_spec().tile().get_tile_size(dst_data_format);
+    auto dst_tile_size = output.tensor_spec().tile().get_tile_size(dst_data_format);
 
     auto src_cb_size = src_tile_size * ema_buffer_depth;
     auto dst_cb_size = dst_tile_size * ema_buffer_depth;
@@ -126,7 +125,7 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
     TensorAccessorArgs(input).append_to(reader_compile_args);
 
     std::vector<uint32_t> writer_compile_args = {total_tiles_per_core};
-    TensorAccessorArgs(output_mesh).append_to(writer_compile_args);
+    TensorAccessorArgs(output).append_to(writer_compile_args);
 
     std::vector<uint32_t> compute_compile_args = {
         total_batch_channel_tiles_per_core,
@@ -183,7 +182,7 @@ tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_de
     for (const auto& range : all_cores.ranges()) {
         for (const auto& core : range) {
             reader_desc.emplace_runtime_args(core, {input, src_start_tile});
-            writer_desc.emplace_runtime_args(core, {output_mesh, dst_start_tile});
+            writer_desc.emplace_runtime_args(core, {output, dst_start_tile});
             src_start_tile += total_tiles_per_core;
             dst_start_tile += total_tiles_per_core;
         }
