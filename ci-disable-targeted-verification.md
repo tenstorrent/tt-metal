@@ -25,6 +25,15 @@ Each PR gets exactly one targeted verification run total.
 - Plan and scope that one run carefully before dispatch.
 - Keep existing artifact-reuse/no-rebuild requirements for that one run.
 
+### Interpreting Verification Results
+
+- "Verification failure" in this policy means: a job that was passing on `main` immediately before the PR is now failing on the PR branch.
+- A "failure" conclusion on the verification workflow run as a whole does NOT by itself mean the PR has a regression.
+- If a job was already failing on `main` before the PR, its continued failure on the PR branch is NOT a regression and does NOT block merge.
+- If a job's failure on the PR is fully attributable to an out-of-scope cause (timeout tracked in the timeout-tracking issue, infra/runner faults, or flaky non-consecutive failures), it does NOT block merge.
+- If the verification run could not actually exercise the previously-passing jobs (for example, infra failure during artifact download or container init), treat the verification as inconclusive: do NOT mark the PR as `verified-pass`, do NOT dispatch a second run, and flag it for human decision in `disabling-work-so-far.md`.
+- Merge-readiness decision rule: a PR is `verified-pass` (ready to merge) iff every job that was passing on `main` immediately before the PR is still passing on the PR's single verification run.
+
 ## PR Disable Batch Policy (Exactly One Initial Batch)
 
 Each PR gets exactly one initial disable batch.
