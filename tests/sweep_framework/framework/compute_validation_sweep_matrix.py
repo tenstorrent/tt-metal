@@ -189,7 +189,7 @@ def compute_validation_matrix(
             mesh_str = f"{mesh[0]}x{mesh[1]}" if mesh else ""
             mesh_to_modules[mesh_str].add(base)
 
-        needs_mesh_split = len(mesh_to_modules) > 1
+        needs_mesh_split = len(mesh_to_modules) > 1 and hardware_group is not None and hardware_group[1] == "n300"
 
         hardware_label = _get_hardware_display_label(hardware_group)
         if validation_scope == "lead_models":
