@@ -241,3 +241,8 @@ class TtMistral3ForConditionalGenerationUnified:
         """Pass-through to the text model's decode."""
         assert self.text_model is not None, "load_text() must be called first"
         return self.text_model.decode_next_token(input_id, current_pos)
+
+    def capture_decode_trace(self) -> None:
+        """Pass-through: capture the text model's decode step as a replayable trace."""
+        assert self.text_model is not None, "load_text() must be called first"
+        self.text_model.capture_decode_trace()
