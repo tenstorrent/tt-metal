@@ -279,6 +279,45 @@ void validate_matmul_compute_grid_and_per_core_dims(
         chosen_program_config);
 }
 
+void validate_matmul_reuse_sharded_output_block_divisibility(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const ttnn::Shape& a_shape_padded,
+    const ttnn::Shape& b_shape_padded,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
+    std::visit(
+        [&](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
+                const Tensor* sharded = nullptr;
+                if (input_tensor_a.is_sharded() && input_tensor_a.memory_config().buffer_type() != BufferType::DRAM) {
+                    sharded = &input_tensor_a;
+                } else if (
+                    input_tensor_b.is_sharded() && input_tensor_b.memory_config().buffer_type() != BufferType::DRAM) {
+                    sharded = &input_tensor_b;
+                }
+                if (sharded == nullptr) {
+                    return;
+                }
+                const uint32_t B = get_batch_size(a_shape_padded);
+                const uint32_t Mt = operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, false);
+                const uint32_t Nt = operations::matmul::utilities::get_N_dim(b_shape_padded, in1_tile);
+                const uint32_t num_output_blocks =
+                    (B * Mt / program_config.per_core_M) * (Nt / program_config.per_core_N);
+                const uint32_t num_cores = sharded->shard_spec().value().grid.num_cores();
+                TT_FATAL(
+                    num_output_blocks % num_cores == 0,
+                    "MatmulMultiCoreReuseProgramConfig: num_output_blocks ({}) must be evenly divisible by the "
+                    "number of cores in the input shard grid ({})",
+                    num_output_blocks,
+                    num_cores);
+            }
+        },
+        chosen_program_config);
+}
+
 void validate_matmul_work_distribution_and_gather_ring_topology(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
