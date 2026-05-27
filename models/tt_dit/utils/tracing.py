@@ -303,15 +303,6 @@ class Tracer:
         """
         self._function = None
 
-    @staticmethod
-    def warn_if_live(device: ttnn.MeshDevice) -> None:
-        """Log a warning if there are any live traces that have not been released."""
-        live = Tracer._traces_live.get(device.id(), 0)
-        if live > 0:
-            frame = inspect.stack()[1]
-            location = f"{frame.filename}:{frame.lineno} in {frame.function}"
-            logger.warning(f"{live} live trace(s) at: {location}")
-
     def _tensor_to_device(self, value: Any, *, path_label: str) -> Any:
         if not isinstance(value, ttnn.Tensor):
             return value

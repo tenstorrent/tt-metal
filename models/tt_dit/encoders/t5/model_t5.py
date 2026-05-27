@@ -15,7 +15,7 @@ from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.substate import pop_substate, rename_substate
-from ...utils.tracing import Tracer, traced_function
+from ...utils.tracing import traced_function
 
 
 # Make this a dataclass. Also consider using HF config directly.
@@ -536,7 +536,6 @@ class RelativePositionEmbeddings(Module):
                 relative_attention_max_distance=self.config.relative_attention_max_distance,
             )
             r = ttnn.embedding(position_ids, self.weight.data, layout=ttnn.TILE_LAYOUT)
-            Tracer.warn_if_live(self.mesh_device)
             self.relative_bias_cache = ttnn.unsqueeze(ttnn.permute(r, (2, 0, 1)), 0)
         return self.relative_bias_cache
 

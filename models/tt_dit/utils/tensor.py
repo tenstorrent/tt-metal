@@ -11,8 +11,6 @@ import torch
 
 import ttnn
 
-from .tracing import Tracer
-
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from types import EllipsisType
@@ -775,7 +773,6 @@ def tril(
     else:
         mask = full(mask_shape, 1.0, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
         mask = ttnn.tril(mask, diagonal=diagonal)
-        Tracer.warn_if_live(device)
         _tril_cache[cache_key] = mask
 
     return ttnn.mul(x, mask, memory_config=memory_config, output_tensor=output_tensor)
@@ -804,7 +801,6 @@ def triu(
     else:
         mask = full(mask_shape, 1.0, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
         mask = ttnn.triu(mask, diagonal=diagonal)
-        Tracer.warn_if_live(device)
         _triu_cache[cache_key] = mask
 
     return ttnn.mul(x, mask, memory_config=memory_config, output_tensor=output_tensor)
