@@ -17,6 +17,7 @@ from typing import Optional
 
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -405,7 +406,11 @@ class TtRoutedExpert(LightweightModule):
         # count sync). Each per-expert FFN program is still a separate device
         # op; the FFN's reader/compute/writer kernels read the device-resident
         # `expert_token_counts` and `global_expert_idx_table` to bound their
-        # chunk loops.
+        # chunk loops. The signpost marks the composite's boundary in
+        # tt-perf-report so profile diffs can still spot the routed-expert
+        # block without the per-expert "Expert N/M" landmarks from the
+        # pre-PR Python loop.
+        signpost(header="UnifiedRoutedExpertMoe")
         expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
             dispatched_buffer,
             expert_region_offsets,
