@@ -11,6 +11,7 @@ Decode-shaped LM head (batch dim = 32, issue #44953 / 31B bringup) lives in
 ``test_lm_head_decode_batch32`` and uses the same ``MatmulMultiCoreReuseMultiCast1DProgramConfig``
 as ``Gemma4Model`` (``_get_lm_head_program_config``).
 
+    pytest -k "1x4"   # Blackhole quietbox (TP=4, column-parallel lm_head)
     pytest -k "1x8"   # T3K (TP=8, column-parallel lm_head)
     HF_MODEL=google/gemma-4-31B-it pytest .../test_lm_head.py -k "decode_batch32"
 """
@@ -106,12 +107,13 @@ def test_lm_head(mesh_device, reset_seeds, request):
     assert passing, f"LM head PCC too low: {pcc_msg}"
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 8)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4), (1, 8)])
 def test_lm_head_decode_batch32(mesh_device, reset_seeds, request):
     """LM head at decode contract [1,1,32,H] x [H,V/TP] with explicit program config (31B: H=5376).
 
     Matches ``Gemma4Model`` decode path after batch padding to 32 for sampling.
-    PCC threshold ≥ 0.999 is keyed under ``gemma-4-31B-it`` / ``1x8`` in
+    PCC threshold ≥ 0.999 is keyed under ``gemma-4-31B-it`` / ``1x4`` (Blackhole
+    quietbox, TP=4, V/TP = 65536) and ``1x8`` (T3K, TP=8, V/TP = 32768) in
     ``pcc_thresholds.json`` when using that checkpoint (``HF_MODEL``).
     """
     model_path = _get_model_path()

@@ -184,7 +184,21 @@ def is_moe_model():
     """Check if the current model has MoE enabled."""
     from transformers import AutoConfig
 
-    config = AutoConfig.from_pretrained(_get_model_path(), trust_remote_code=True)
+    try:
+        config = AutoConfig.from_pretrained(_get_model_path(), trust_remote_code=True)
+    except Exception as e:
+        # IMPORTANT: this helper is evaluated at import time (see skip_if_not_moe),
+        # so any failure here breaks *collection* for the whole Gemma4 unit-test suite.
+        #
+        # In environments where the HF checkpoint's `model_type="gemma4"` is not
+        # recognized by the installed Transformers version (or where the model's
+        # remote code isn't available offline), default to "not MoE" so only the
+        # MoE-specific tests are skipped rather than crashing collection.
+        import warnings
+
+        warnings.warn(f"Unable to load HF config for is_moe_model(): {e}. Treating model as non-MoE.")
+        return False
+
     tc = getattr(config, "text_config", config)
     return getattr(tc, "enable_moe_block", False)
 
