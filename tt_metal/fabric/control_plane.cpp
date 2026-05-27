@@ -194,6 +194,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     }
 
     this->router_port_directions_to_num_routing_planes_map_.clear();
+    this->num_dispatch_reserved_planes_.clear();
 
     auto topology = FabricContext::get_topology_from_config(fabric_config);
     auto apply_min =
@@ -301,6 +302,13 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                 apply_count(fabric_node_id, RoutingDirection::N, col_min_planes.at(mesh_coord_y));
                 apply_count(fabric_node_id, RoutingDirection::S, col_min_planes.at(mesh_coord_y));
             }
+        }
+    }
+
+    // Pre-populate the map since it gets updated concurrently
+    for (const auto& [fabric_node_id, direction_counts] : this->router_port_directions_to_num_routing_planes_map_) {
+        for (const auto& [direction, _] : direction_counts) {
+            this->num_dispatch_reserved_planes_[fabric_node_id][direction] = 0;
         }
     }
 }
@@ -2040,7 +2048,7 @@ size_t ControlPlane::get_num_unreserved_routing_planes(
 
 void ControlPlane::register_dispatch_reserved_planes(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction, size_t num_reserved) {
-    this->num_dispatch_reserved_planes_[fabric_node_id][routing_direction] = num_reserved;
+    this->num_dispatch_reserved_planes_.at(fabric_node_id).at(routing_direction) = num_reserved;
 }
 
 void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabric_node_id) const {
