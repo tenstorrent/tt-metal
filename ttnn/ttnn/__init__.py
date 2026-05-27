@@ -216,7 +216,6 @@ from ttnn.types import (
     bfloat8_b,
     bfloat4_b,
     bfloat16,
-    fp8_e4m3,
     float32,
     MathFidelity,
     MemoryConfig,
@@ -459,6 +458,7 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseOptimizedProgramFactory,
     create_matmul_attributes,
 )
+from ttnn.operations import matmul_auto_tune  # noqa: F401
 
 from ttnn.operations.normalization import (
     SoftmaxProgramConfig,
