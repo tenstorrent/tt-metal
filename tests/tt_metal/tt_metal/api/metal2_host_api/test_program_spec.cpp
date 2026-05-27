@@ -582,10 +582,8 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingSelfLoopWithMatchingSidesSucceeds) 
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    // INTRA-tensix self-loop DFBs require implicit_sync disabled (a lower-layer constraint
-    // enforced in dataflow_buffer.cpp). This matches the pattern real self-loop DFBs use
-    // (e.g. ACC_DFB / INEG_DFB in the reduction op factory's negate path).
-    dfb.disable_implicit_sync = true;
+    // INTRA-tensix self-loop DFBs have no DM endpoint; the spec-to-impl translation produces
+    // enable_{producer,consumer}_implicit_sync=false automatically (no DM kernel to vote for it).
 
     BindDFBToKernel(self_loop_1, "dfb", "p", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(self_loop_1, "dfb", "c", KernelSpec::DFBEndpointType::CONSUMER);
@@ -709,7 +707,11 @@ TEST_F(ProgramSpecTestQuasar, ComputeKernelExceedingMaxThreadsFails) {
             "KernelSpec 'kernel' has too many threads. The architecture supports up to 4 for compute kernels")));
 }
 
-TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigFails) {
+TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigSucceeds) {
+    // Gen2 config is fully optional even on Quasar: absence is treated as "use defaults"
+    // (empty disable_implicit_sync_for). A Gen1-only DM kernel building on Quasar is
+    // permitted at the spec layer (whether such a kernel actually does anything useful on
+    // Gen2 hardware is a separate question, outside the validator's scope).
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -730,10 +732,7 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigFails) {
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("KernelSpec 'kernel' must specify a Gen2 DM config when targeting Quasar")));
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestQuasar, DMKernelWithNoConfigAtAllFails) {
@@ -1537,7 +1536,6 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelInterScopeFails) {
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    dfb.disable_implicit_sync = true;
 
     BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -1590,7 +1588,6 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeReferencingUnknownDFBFails) {
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    dfb.disable_implicit_sync = true;
 
     BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -1646,7 +1643,6 @@ TEST_F(ProgramSpecTestQuasar, DuplicateSelfLoopScopeEntriesFails) {
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    dfb.disable_implicit_sync = true;
 
     BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -1690,8 +1686,8 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelImplicitIntraSucceeds) {
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    // INTRA requires implicit-sync OFF at the lower DFB layer.
-    dfb.disable_implicit_sync = true;
+    // INTRA-tensix self-loop: no DM endpoint, so the spec-to-impl translation produces
+    // enable_{producer,consumer}_implicit_sync=false at the lower DFB layer automatically.
 
     BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -1718,7 +1714,6 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelExplicitIntraSucceeds) {
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    dfb.disable_implicit_sync = true;
 
     BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -2336,11 +2331,9 @@ TEST(AggregateSpecTypes, DataflowBufferSpecDesignatedInitializers) {
         .entry_size = 1024,
         .num_entries = 8,
         .borrowed_from = "input_tensor",
-        .disable_implicit_sync = true,
     };
 
     EXPECT_EQ(borrowed_dfb.borrowed_from, std::optional<TensorParameterName>{"input_tensor"});
-    EXPECT_TRUE(borrowed_dfb.disable_implicit_sync);
 }
 
 TEST(AggregateSpecTypes, WorkUnitSpecDesignatedInitializers) {
