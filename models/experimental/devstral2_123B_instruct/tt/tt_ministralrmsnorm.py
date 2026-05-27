@@ -12,8 +12,9 @@ Matches ``Ministral3RMSNorm``::
 Weight is replicated across the mesh. RMS is computed per-token, so the op is local — no
 collective is needed even under TP.
 
-Prefill and decode use **width-sharded** RMSNorm on a 32-core grid (hidden=12288); activations
-stay DRAM/L1 interleaved outside the norm (see ``get_activation_mem_config``).
+Prefill and decode use **width-sharded** RMSNorm (hidden=12288). For prefill with
+``seq_len <= kv_block_size``, input and post-attention norms keep WIDTH-sharded L1 for QKV / gate /
+up matmuls on the same 8×8 grid; other paths revert to interleaved via ``get_activation_mem_config``.
 """
 
 from __future__ import annotations

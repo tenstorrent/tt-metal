@@ -39,6 +39,9 @@ from models.experimental.devstral2_123B_instruct.tt.mem_config import (
     get_compute_kernel_config,
     get_compute_kernel_config_hifi4,
     get_linear_program_config,
+    get_prefill_qkv_matmul_output_mem_config,
+    get_prefill_qkv_matmul_program_config,
+    use_width_sharded_prefill_norm_matmul,
     get_sdpa_decode_compute_kernel_config,
     get_sdpa_decode_output_mem_config,
     get_sdpa_decode_program_config,
@@ -269,22 +272,28 @@ class TtAttention:
         activation: Optional[str] = None,
         output_dtype: Optional[ttnn.DataType] = None,
         compute_kernel_config=None,
+        memory_config: Optional[ttnn.MemoryConfig] = None,
+        program_config: Optional[ttnn.ProgramConfig] = None,
     ) -> ttnn.Tensor:
-        return ttnn.linear(
-            x,
-            weight,
-            dtype=output_dtype if output_dtype is not None else self.args.activation_dtype,
-            memory_config=self._act_mem(mode),
-            activation=activation,
-            program_config=get_linear_program_config(
+        n = int(weight.shape[-1])
+        k = int(weight.shape[-2])
+        if program_config is None:
+            program_config = get_linear_program_config(
                 self.args,
                 self.mesh_device,
                 mode=mode,
                 kind=kind,
                 seq_len=seq_len,
-                k=int(weight.shape[-2]),
-                n=int(weight.shape[-1]),
-            ),
+                k=k,
+                n=n,
+            )
+        return ttnn.linear(
+            x,
+            weight,
+            dtype=output_dtype if output_dtype is not None else self.args.activation_dtype,
+            memory_config=memory_config if memory_config is not None else self._act_mem(mode),
+            activation=activation,
+            program_config=program_config,
             compute_kernel_config=compute_kernel_config
             if compute_kernel_config is not None
             else self._compute_kernel_config,
@@ -292,6 +301,23 @@ class TtAttention:
 
     def _project_qkv_prefill(self, x: ttnn.Tensor, *, seq_len: int) -> ttnn.Tensor:
         """Return fused ``[Q | K | V]`` for ``nlp_create_qkv_heads``."""
+        act_mem = self._act_mem("prefill")
+        n = int(self.qkv_proj.shape[-1])
+        if use_width_sharded_prefill_norm_matmul(self.args, "prefill", seq_len):
+            qkv = self._linear(
+                x,
+                self.qkv_proj,
+                mode="prefill",
+                kind="qkv",
+                seq_len=seq_len,
+                output_dtype=self.qkv_proj_output_dtype,
+                compute_kernel_config=self._compute_kernel_config_hifi4,
+                memory_config=get_prefill_qkv_matmul_output_mem_config(),
+                program_config=get_prefill_qkv_matmul_program_config(self.args, self.mesh_device, seq_len=seq_len, n=n),
+            )
+            if qkv.memory_config().is_sharded():
+                qkv = ttnn.sharded_to_interleaved(qkv, act_mem)
+            return qkv
         return self._linear(
             x,
             self.qkv_proj,

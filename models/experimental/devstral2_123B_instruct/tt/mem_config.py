@@ -256,6 +256,83 @@ def get_activation_mem_config(args: Devstral2Args, mode: str, mesh_device) -> tt
     return ttnn.L1_MEMORY_CONFIG
 
 
+def get_prefill_width_sharded_matmul_output_mem_config() -> ttnn.MemoryConfig:
+    """WIDTH-sharded L1 matmul output (N sharded across the prefill norm 8×8 grid)."""
+    return ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+    )
+
+
+def get_prefill_qkv_matmul_output_mem_config() -> ttnn.MemoryConfig:
+    """Alias for :func:`get_prefill_width_sharded_matmul_output_mem_config`."""
+    return get_prefill_width_sharded_matmul_output_mem_config()
+
+
+def get_prefill_width_sharded_matmul_program_config(
+    args: Devstral2Args,
+    mesh_device,
+    *,
+    seq_len: int,
+    n: int,
+    fused_activation: Optional[str] = None,
+) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    """1D mcast matmul on the prefill RMSNorm 8×8 grid (ws in0 from norm, ws out).
+
+    Used for QKV and MLP gate/up when ``K == hidden_size``. Uses 64 cores so ``Kt=384`` divides
+    evenly for width-sharded activations from norm.
+    """
+    _ = mesh_device
+    m_padded = pad_to_tile(max(1, int(seq_len)))
+    m_tiles = m_padded // ttnn.TILE_SIZE
+    n_tiles = max(1, math.ceil(n / ttnn.TILE_SIZE))
+    k_tiles = max(1, math.ceil(args.hidden_size / ttnn.TILE_SIZE))
+    grid = _pick_prefill_width_shard_grid(args.hidden_size)
+    grid_x, grid_y = grid.x, grid.y
+    num_cores = grid_x * grid_y
+    if k_tiles % num_cores != 0:
+        raise ValueError(
+            f"width-sharded prefill matmul (K=hidden) requires Kt={k_tiles} divisible by "
+            f"norm grid cores={num_cores}"
+        )
+    per_core_M = m_tiles
+    per_core_N = max(1, math.ceil(n_tiles / num_cores))
+    kt_per_core = k_tiles // num_cores
+    cap = min(8, max(1, 64 // per_core_M), max(1, 128 // per_core_N))
+    in0_block_w = _largest_divisor_at_most(kt_per_core, cap)
+    out_subblock_h = 1
+    out_subblock_w = _largest_divisor_at_most(per_core_N, 4)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=_fused_activation_param(fused_activation),
+        mcast_in0=True,
+    )
+
+
+def get_prefill_qkv_matmul_program_config(
+    args: Devstral2Args,
+    mesh_device,
+    *,
+    seq_len: int,
+    n: int,
+) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    """Alias for QKV (no fused activation)."""
+    return get_prefill_width_sharded_matmul_program_config(
+        args, mesh_device, seq_len=seq_len, n=n, fused_activation=None
+    )
+
+
+def use_width_sharded_prefill_norm_matmul(args: Devstral2Args, mode: str, seq_len: int) -> bool:
+    """True when prefill linears may consume width-sharded RMSNorm output (QKV, gate, up)."""
+    return mode == "prefill" and int(seq_len) <= args.kv_block_size
+
+
 def _pick_1d_grid(mesh_device, *, n_tiles: int) -> tuple[int, int]:
     """Pick a 1D-on-N matmul grid: smallest ``(gx, gy)`` with ``gx*gy >= n_tiles`` inside the device grid."""
     grid = mesh_device.compute_with_storage_grid_size()
