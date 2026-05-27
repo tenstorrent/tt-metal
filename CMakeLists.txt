@@ -248,7 +248,6 @@ string(REPLACE ${PROJECT_NAME} ${PROJECT_NAME_LOWER} CMAKE_INSTALL_DOCDIR ${CMAK
 if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
-include(tracy)
 
 if(ENABLE_TRACY AND TARGET TracyClient)
     message(STATUS "Adding -Wno-unused-variable to TracyClient")
