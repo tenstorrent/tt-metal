@@ -374,6 +374,9 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       dispatch-mode: sd
+      # Disabled by issue #45320: MeshDeviceFixture.Top32RmDevPipelineCompletes fails deterministically
+      # in 3 consecutive scheduled runs (May 25-27 2026) across all platforms (WH N150/N300, BH P100/P150).
+      gtest-filter: "-MeshDeviceFixture.Top32RmDevPipelineCompletes"
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # TTNN Tutorials
   test-ttnn-tutorials:
