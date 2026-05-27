@@ -430,9 +430,10 @@ def test_bench_dram_core_repeats(device, op_name, shape):
         )
 
     # One long-lived DRISC stream: 1 warmup/correctness layer + trace_repeats traced layers.
-    ttnn.experimental.start_dram_core_prefetcher(
+    ttnn.experimental.start_dram_core_prefetcher(device)
+    ttnn.experimental.queue_dram_core_prefetcher_request(
         device,
-        [tt_weight, addrs],
+        [tt_weight],
         num_layers=num_prefetch_layers,
         global_cb=gcb,
     )

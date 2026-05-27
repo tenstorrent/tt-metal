@@ -65,6 +65,9 @@ public:
 
 private:
     void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender);
+    // Allocates and writes the per-GCB sender state block in DRISC L1. DRAM-sender flavour only.
+    void initialize_dram_sender_state_block(
+        distributed::MeshDevice* mesh_device, uint32_t max_num_receivers_per_sender);
 
     // Tag for the private experimental DRAM-sender constructor; only the experimental
     // factory (a friend) can name this type. Takes MeshDevice because the DRAM-sender
@@ -94,11 +97,21 @@ private:
     uint8_t sender_core_type_value_ = 0;
     DeviceAddr pages_sent_drisc_l1_base_ = 0;
     DeviceAddr pages_sent_worker_l1_base_ = 0;
+    // DRISC L1 base of the per-GCB "sender state block" (RemoteSenderCBInterface
+    // bytes + prefetcher mutable state + sender config block + receiver NOC XY
+    // table). Pre-initialized at GCB construction; the DRAM-core prefetcher
+    // kernel memcpys this block into its static cb_interface[] slot on each
+    // request that targets this GCB, runs the chunk loop, and writes the mutable
+    // fields back so state survives multi-GCB request switching. Layout in
+    // tt_metal/impl/buffers/dram_sender_state_block.hpp.
+    DeviceAddr sender_state_drisc_l1_base_ = 0;
     std::vector<std::vector<CoreCoord>> receiver_coords_per_sender_;
     // RAII handle for the DRAM-sender's pages_sent allocation in the per-mesh DriscL1Arena.
     // Held via shared_ptr so copies of the GCB share the same backing range; released
     // when the last GCB copy goes out of scope. Empty for worker-sender GCBs.
     std::shared_ptr<::tt::tt_metal::DriscL1Allocation> drisc_pages_sent_alloc_;
+    // RAII handle for the sender state block allocation; same lifetime model.
+    std::shared_ptr<::tt::tt_metal::DriscL1Allocation> drisc_sender_state_alloc_;
 
     friend struct global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals;
 };

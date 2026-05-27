@@ -1458,7 +1458,6 @@ DramCorePrefetcherManager& MeshDeviceImpl::dram_core_prefetcher(MeshDevice* mesh
     return *dram_core_prefetcher_;
 }
 
-
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const {
     const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());
     const uint32_t num_banks = soc_desc.get_num_dram_views();

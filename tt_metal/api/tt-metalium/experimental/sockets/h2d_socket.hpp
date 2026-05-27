@@ -13,6 +13,11 @@ namespace tt::umd {
 class TlbWindow;
 }
 
+namespace tt::tt_metal::experimental::detail {
+struct H2DSocketTryWriteAccess;
+struct H2DSocketDramRecvAccess;
+}  // namespace tt::tt_metal::experimental::detail
+
 namespace tt::tt_metal::distributed {
 
 class NamedShm;
@@ -151,6 +156,20 @@ public:
 private:
     H2DSocket() = default;
 
+    // Tag for the private ctor used by H2DSocketDramRecvAccess. Bypasses the
+    // MeshBuffer paths (which have no DRAM-core L1 allocator) and consumes
+    // pre-allocated DRISC-L1 offsets for the config and data buffers, plus the
+    // DRAM-L1 NOC offset that host writes need to add on top.
+    struct DramRecvCtorTag {};
+    H2DSocket(
+        DramRecvCtorTag,
+        const std::shared_ptr<MeshDevice>& mesh_device,
+        const MeshCoreCoord& recv_core,
+        uint32_t fifo_size,
+        uint32_t config_l1_local_addr,
+        uint32_t data_l1_local_addr,
+        uint64_t dram_l1_noc_offset);
+
     struct PinnedBufferInfo {
         uint32_t pcie_xy_enc = 0;
         uint32_t addr_lo = 0;
@@ -182,6 +201,13 @@ private:
     void push_bytes(uint32_t num_bytes);
     void notify_receiver();
 
+    // Non-blocking write. Returns false immediately if the FIFO can't fit `num_pages`
+    // without spinning. Accessible only via tt::tt_metal::experimental::detail::try_write.
+    bool try_write_impl(void* data, uint32_t num_pages);
+
+    friend struct tt::tt_metal::experimental::detail::H2DSocketTryWriteAccess;
+    friend struct tt::tt_metal::experimental::detail::H2DSocketDramRecvAccess;
+
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
     std::shared_ptr<MeshBuffer> data_buffer_ = nullptr;
     MeshCoreCoord recv_core_;
@@ -210,6 +236,12 @@ private:
     HDSocketConnectorState* connector_state_ = nullptr;
     uint32_t connector_state_offset_ = 0;
     bool prior_clean_shutdown_ = true;
+    // Non-zero when the recv_core is a DRAM programmable core: every NOC write
+    // from host to its L1 must add this offset on top of the local L1 address.
+    // Zero for worker recv cores (worker L1 has local==NOC space). Captured
+    // into the pcie_writer lambda in init_receiver_tlb so write() can keep
+    // passing local addresses.
+    uint64_t dram_l1_noc_offset_ = 0;
 };
 
 }  // namespace tt::tt_metal::distributed

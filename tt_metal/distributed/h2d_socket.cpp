@@ -9,6 +9,7 @@
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/distributed/pcie_core_writer.hpp"
 #include "tt_metal/distributed/shm_resource_tracker.hpp"
+#include "tt_metal/impl/buffers/h2d_socket_internal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -21,6 +22,17 @@
 #include <unistd.h>
 
 namespace tt::tt_metal::distributed {
+
+namespace {
+
+// True if the logical recv core resolves to a DRAM programmable core on this mesh
+// (e.g. a Blackhole DRAM-DRISC core), rather than a Tensix worker core.
+bool recv_core_is_dram(const std::shared_ptr<MeshDevice>& mesh_device, const CoreCoord& logical_core) {
+    auto dram_cores = mesh_device->worker_cores(HalProgrammableCoreType::DRAM, SubDeviceId{0});
+    return dram_cores.contains(logical_core);
+}
+
+}  // namespace
 
 H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
@@ -179,33 +191,58 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
 
     const auto& cluster = MetalContext::instance().get_cluster();
 
+    // dram_l1_noc_offset_ is non-zero exactly when this socket was built via
+    // H2DSocketDramRecvAccess for a DRAM-core recv; that's our authoritative
+    // signal that we should resolve via CoreType::DRAM. (The SubDeviceManager
+    // worker_cores(DRAM,…) query doesn't always cover the cores returned by
+    // pick_unused_dram_logical_core, so a coord-based check was unreliable.)
+    const bool is_dram_recv =
+        dram_l1_noc_offset_ != 0 || (mesh_device && recv_core_is_dram(mesh_device, recv_core_.core_coord));
+    const CoreType recv_umd_core_type = is_dram_recv ? CoreType::DRAM : CoreType::TENSIX;
+
     if (mesh_device) {
         recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
-        recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core_.core_coord);
-        receiver_core_tlb_ = cluster.get_driver()
-                                 ->get_chip(recv_device_id)
-                                 ->get_tlb_manager()
-                                 ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
+        recv_virtual_core = mesh_device->virtual_core_from_logical_core(recv_core_.core_coord, recv_umd_core_type);
+        // DRAM cores don't have static TLB windows on Blackhole; skip TLB
+        // acquisition and force the cluster.write_core path below.
+        if (!is_dram_recv) {
+            receiver_core_tlb_ = cluster.get_driver()
+                                     ->get_chip(recv_device_id)
+                                     ->get_tlb_manager()
+                                     ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
+        }
     } else {
         recv_device_id = device_id.value();
         recv_virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
-            recv_device_id, recv_core_.core_coord, CoreType::TENSIX);
+            recv_device_id, recv_core_.core_coord, recv_umd_core_type);
     }
+    // For DRAM-core recv, every host NOC write to the DRISC L1 needs the DRAM-L1
+    // NOC offset added on top of the local L1 address (DRAM cores have two NOC
+    // spaces: low addresses route to DRAM bank, high addresses route to L1).
+    // Captured into the lambdas below so write() can keep passing local addresses.
+    const uint64_t l1_offset = dram_l1_noc_offset_;
     auto arch = MetalContext::instance().hal().get_arch();
-    if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
+    if (arch == tt::ARCH::BLACKHOLE && mesh_device && l1_offset == 0) {
         // This process owns a mesh_device and hence has statically initialized TLBs.
         // Entire device address space for Blackhole is statically mapped.
         // Safe to use static TLBs without requiring the driver to do a reconfig.
-        pcie_writer = [&](void* data, uint32_t num_bytes, uint64_t device_addr) {
-            receiver_core_tlb_->write_block(device_addr, data, num_bytes);
+        // Skip the TLB path for DRAM recv: the DRAM-L1 NOC offset puts the target
+        // address (e.g. 0x2000000000+0xe000) outside the per-core TLB window's
+        // bounds. Fall through to cluster.write_core below.
+        pcie_writer = [this, l1_offset](void* data, uint32_t num_bytes, uint64_t device_addr) {
+            receiver_core_tlb_->write_block(device_addr + l1_offset, data, num_bytes);
         };
     } else {
         // Mesh Device not owned - use dynamic TLBs through UMD.
         // Wormhole B0 may require the driver to do a reconfig of the TLB for each write,
-        // since the device address space is not statically mapped.
-        pcie_writer = [recv_device_id, recv_virtual_core](void* data, uint32_t num_bytes, uint64_t device_addr) {
+        // since the device address space is not statically mapped. Also used for the
+        // DRAM-recv path above, since the DRAM-L1 NOC offset is outside any static TLB
+        // window on Blackhole.
+        pcie_writer = [recv_device_id, recv_virtual_core, l1_offset](
+                          void* data, uint32_t num_bytes, uint64_t device_addr) {
             const auto& cluster = MetalContext::instance().get_cluster();
-            cluster.write_core(data, num_bytes, tt_cxy_pair(recv_device_id, recv_virtual_core), device_addr);
+            cluster.write_core(
+                data, num_bytes, tt_cxy_pair(recv_device_id, recv_virtual_core), device_addr + l1_offset);
         };
     }
 }
@@ -264,6 +301,69 @@ H2DSocket::H2DSocket(
         reinterpret_cast<HDSocketConnectorState*>(static_cast<uint8_t*>(shm_->ptr()) + connector_state_offset_);
     connector_state_->version = kHDSocketConnectorStateVersion;
     connector_state_->clean_shutdown = 1;
+}
+
+H2DSocket::H2DSocket(
+    DramRecvCtorTag,
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoreCoord& recv_core,
+    uint32_t fifo_size,
+    uint32_t config_l1_local_addr,
+    uint32_t data_l1_local_addr,
+    uint64_t dram_l1_noc_offset) :
+    recv_core_(recv_core),
+    buffer_type_(BufferType::L1),
+    fifo_size_(fifo_size),
+    pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
+    pinned_memory_(nullptr),
+    h2d_mode_(H2DMode::HOST_PUSH),
+    mesh_device_(mesh_device.get()),
+    dram_l1_noc_offset_(dram_l1_noc_offset) {
+    MeshCoordinateRangeSet recv_device_range_set;
+    recv_device_range_set.merge(MeshCoordinateRange(recv_core_.device_coord));
+
+    TT_FATAL(fifo_size_ % pcie_alignment_ == 0, "FIFO size must be PCIE-aligned.");
+
+    // Allocate the bytes_acked host-pinned buffer (same path as the worker ctor).
+    std::string shm_name = generate_shm_name("h2d");
+    PinnedBufferInfo bytes_acked_info =
+        init_bytes_acked_buffer(mesh_device, recv_device_range_set, pcie_alignment_, shm_name);
+    bytes_acked_ptr_ = host_buffer_.get();
+
+    // Take the caller-supplied DRISC L1 offsets verbatim. No MeshBuffer allocation:
+    // the framework's L1 allocator is worker-only, and host writes to DRAM-L1 go
+    // through the DRAM_L1_NOC_OFFSET path below.
+    config_buffer_address_ = config_l1_local_addr;
+    aligned_data_buf_start_ = data_l1_local_addr;
+    write_ptr_ = 0;
+
+    // Initialize the TLB / pcie_writer before writing socket metadata — the
+    // metadata write goes through the same NOC-offset path as subsequent data
+    // writes, so we use cluster.write_core directly here rather than via
+    // pcie_writer to keep the dependency order simple.
+    init_receiver_tlb(mesh_device);
+
+    receiver_socket_md md{};
+    md.bytes_sent = 0;
+    md.bytes_acked = 0;
+    md.read_ptr = aligned_data_buf_start_;
+    md.fifo_addr = aligned_data_buf_start_;
+    md.fifo_total_size = fifo_size_;
+    md.is_h2d = 1;
+    md.h2d.bytes_acked_addr_lo = bytes_acked_info.addr_lo;
+    md.h2d.bytes_acked_addr_hi = bytes_acked_info.addr_hi;
+    // For DEVICE_PULL we'd populate data_addr_*; HOST_PUSH-only here.
+    md.h2d.data_addr_lo = 0;
+    md.h2d.data_addr_hi = 0;
+    md.h2d.pcie_xy_enc = bytes_acked_info.pcie_xy_enc;
+
+    const CoreCoord virtual_core = mesh_device->get_device(recv_core_.device_coord)
+                                       ->virtual_core_from_logical_core(recv_core_.core_coord, CoreType::DRAM);
+    MetalContext::instance().get_cluster().write_core(
+        mesh_device->get_device(recv_core_.device_coord)->id(),
+        tt_cxy_pair(mesh_device->get_device(recv_core_.device_coord)->id(), virtual_core),
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&md), sizeof(md)),
+        static_cast<uint64_t>(config_buffer_address_) + dram_l1_noc_offset_);
 }
 
 H2DSocket::~H2DSocket() noexcept {
@@ -384,6 +484,36 @@ void H2DSocket::write(void* data, uint32_t num_pages) {
     this->notify_receiver();
 }
 
+bool H2DSocket::try_write_impl(void* data, uint32_t num_pages) {
+    TT_FATAL(page_size_ > 0, "Page size must be set before writing.");
+    uint32_t num_bytes = num_pages * page_size_;
+    TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot write more pages than the socket FIFO size.");
+
+    // Non-blocking variant of reserve_bytes(): if there's not enough room, bail.
+    uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
+    if (bytes_free < num_bytes) {
+        tt_driver_atomics::mfence();
+        volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
+        bytes_acked_ = bytes_acked_value;
+        bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
+        if (bytes_free < num_bytes) {
+            return false;
+        }
+    }
+
+    auto data_addr = aligned_data_buf_start_ + write_ptr_;
+    if (h2d_mode_ == H2DMode::HOST_PUSH) {
+        pcie_writer(data, num_bytes, data_addr);
+        tt_driver_atomics::sfence();
+    } else {
+        uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
+        std::memcpy(data_ptr, data, num_bytes);
+    }
+    this->push_bytes(num_bytes);
+    this->notify_receiver();
+    return true;
+}
+
 std::vector<MeshCoreCoord> H2DSocket::get_active_cores() const { return {recv_core_}; }
 
 MeshDevice* H2DSocket::get_mesh_device() const { return mesh_device_; }
@@ -483,3 +613,28 @@ std::unique_ptr<H2DSocket> H2DSocket::connect(const std::string& socket_id, std:
 }
 
 }  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental::detail {
+
+bool H2DSocketTryWriteAccess::try_write(distributed::H2DSocket& socket, void* data, uint32_t num_pages) {
+    return socket.try_write_impl(data, num_pages);
+}
+
+std::unique_ptr<distributed::H2DSocket> H2DSocketDramRecvAccess::create(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const distributed::MeshCoreCoord& recv_core,
+    uint32_t fifo_size,
+    uint32_t config_l1_local_addr,
+    uint32_t data_l1_local_addr,
+    uint64_t dram_l1_noc_offset) {
+    return std::unique_ptr<distributed::H2DSocket>(new distributed::H2DSocket(
+        distributed::H2DSocket::DramRecvCtorTag{},
+        mesh_device,
+        recv_core,
+        fifo_size,
+        config_l1_local_addr,
+        data_l1_local_addr,
+        dram_l1_noc_offset));
+}
+
+}  // namespace tt::tt_metal::experimental::detail

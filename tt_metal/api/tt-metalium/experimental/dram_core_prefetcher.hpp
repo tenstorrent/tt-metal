@@ -2,15 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Experimental Start/Stop lifecycle API for the DRAM-core (DRISC) prefetcher.
-// The prefetcher streams tensor shards from DRAM into a receiver ring via a
-// DRAM-sender GlobalCircularBuffer; only one prefetcher may be active on a
-// mesh device at a time. State (in-flight Program, runtime args, lifetime
-// references to inputs and the GCB) lives on MeshDeviceImpl.
+// Experimental Start / Queue / Stop lifecycle API for the queueable DRAM-core
+// (DRISC) prefetcher. A long-running DRISC kernel on every DRAM sender core
+// reads requests off a per-core H2D socket; each request identifies a
+// DRAM-sender GlobalCircularBuffer and a per-tensor work list. The host can
+// keep queueing new requests after Start returns; per-GCB ring-buffer state
+// (fifo_wr_ptr, pages_sent) is preserved in DRISC L1 so successive requests
+// can target different GCBs and switch back and forth across requests.
+//
+// State (Program(s), sockets, host worker thread, held tensor refs) lives on
+// MeshDeviceImpl. Only one prefetcher may be active per mesh device at a time.
 
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -19,6 +25,7 @@ class MeshTensor;
 
 namespace distributed {
 class MeshDevice;
+class MeshCoordinateRangeSet;
 }  // namespace distributed
 
 namespace experimental {
@@ -26,54 +33,47 @@ namespace experimental {
 class GlobalCircularBuffer;
 
 struct DramCorePrefetcherConfig {
-    uint32_t num_layers = 1;
+    bool enable_performance_mode = false;
 };
 
-// Launch the DRAM-core prefetcher on `mesh_device`. The prefetcher streams
-// each tensor in `input_tensors` from its DRAM bank into the receivers
-// configured in `gcb` for `config.num_layers` iterations. Non-blocking — the
-// host thread returns immediately and is free to enqueue consumer programs
-// (matmuls) that read from the GCB while the prefetcher kernel runs.
+// Build per-device Programs (one DRISC kernel per DRAM sender core), allocate
+// the per-(device, sender) H2D sockets, and spawn the host worker thread that
+// drains the request queue. Returns immediately. No prefetch work is scheduled
+// yet — kernels park on socket_wait_for_pages.
 //
-// Input tensor layout:
-//   Each data tensor in `input_tensors` (all entries except the last; the last
-//   is the addrs tensor, kept for op-contract parity with the worker-core
-//   path and unused on this path) must be:
-//     - DRAM-resident, TILE layout,
-//     - width-sharded across all DRAM banks (one shard per bank; each shard
-//       holds the full K dimension and `N / num_dram_banks` columns),
-//     - tile-aligned in both K and N (validated at Start).
+// Receiver count is owned by each GCB (read from the per-GCB sender state
+// block on every request), so a single prefetcher can serve GCBs with
+// different num_receivers values.
 //
-//   Interaction with `gcb`:
-//     - Bank `b` is paired with the receiver CoreRangeSet at index `b` in
-//       the GCB's sender_receiver_core_mapping.
-//     - Per (layer, tensor), each receiver is pushed `num_blocks = num_senders
-//       * num_receivers_per_sender` pages, one per K-block (= ceil(K_tiles /
-//       num_blocks) tile-rows).
-//     - The N-stripe a given receiver sees is its per-bank slice:
-//       receiver r within bank b owns columns
-//       `[b * N_per_bank + r * N_per_recv, b * N_per_bank + (r+1) * N_per_recv)`,
-//       where N_per_bank = N / num_dram_banks and
-//       N_per_recv = N_per_bank / num_receivers_per_sender.
-//
-// Preconditions (TT_FATAL on violation):
-//   - sender_core_type(gcb) == SenderCoreType::Dram.
-//   - No other DRAM-core prefetcher is currently active on this mesh device
-//     (single-prefetcher-at-a-time invariant).
-//   - All MeshTensors live on `mesh_device` and outlive the Stop call.
-void StartDramCorePrefetcher(
-    distributed::MeshDevice& mesh_device,
-    const std::vector<const MeshTensor*>& input_tensors,
-    const GlobalCircularBuffer& gcb,
-    const DramCorePrefetcherConfig& config);
+// Preconditions (TT_FATAL):
+//   - No other prefetcher is currently active on this mesh device.
+//   - DRAM programmable cores are available on this mesh
+//     (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1).
+void StartDramCorePrefetcher(distributed::MeshDevice* mesh_device, const DramCorePrefetcherConfig& config);
 
-// Block until the active DRAM-core prefetcher finishes the natural exit of
-// its `num_layers` loop, then tear down the held Program and release the
-// resources it held. No-op if no prefetcher is active.
+// Queue one prefetch request. Non-blocking.
 //
-// Callers invoke Stop after enqueuing all the consuming matmuls — Stop is
-// what drains the pipeline.
-void StopDramCorePrefetcher(distributed::MeshDevice& mesh_device);
+//   - `gcb` must be a DRAM-sender GlobalCircularBuffer constructed against the
+//     same mesh device.
+//   - `device_subset` defaults to the full mesh when std::nullopt. Devices
+//     outside the subset do not process this request.
+//   - `input_tensors` is the list of weight tensors to prefetch (at least one).
+//   - Per-GCB ring-buffer state is preserved across requests, so successive
+//     Queue calls against the same GCB resume where the previous call left off.
+//
+// The caller is responsible for keeping `input_tensors` and `gcb` alive until
+// Stop returns.
+void QueueDramCorePrefetcherRequest(
+    distributed::MeshDevice* mesh_device,
+    const GlobalCircularBuffer& gcb,
+    const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
+    const std::vector<const MeshTensor*>& input_tensors,
+    uint32_t num_layers);
+
+// Block until all previously queued requests have been delivered and the
+// kernels have exited, then release the prefetcher's resources. No-op if no
+// prefetcher is active.
+void StopDramCorePrefetcher(distributed::MeshDevice* mesh_device);
 
 }  // namespace experimental
 }  // namespace tt::tt_metal
