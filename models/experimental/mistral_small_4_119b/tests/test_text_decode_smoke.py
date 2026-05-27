@@ -61,7 +61,7 @@ def _state_dict_prefixes(n_layers: int) -> tuple:
 
 def _mesh_params():
     shape = mesh_device_request_param()
-    base = {"trace_region_size": 30000000, "num_command_queues": 1}
+    base = {"trace_region_size": 128 * 1024 * 1024, "num_command_queues": 1}  # 36-layer decode trace ~66 MB
     fabric = ttnn.FabricConfig.DISABLED if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D
     return [pytest.param(shape, {**base, "fabric_config": fabric}, id=f"mesh{shape[0]}x{shape[1]}")]
 
