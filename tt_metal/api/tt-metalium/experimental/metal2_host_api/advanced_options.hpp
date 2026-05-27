@@ -79,6 +79,29 @@ struct KernelSpecAdvancedOptions {
 
     // Self-loop DFBs on compute kernels — see DFBComputeSelfLoopScope above.
     std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
+
+    // Runtime varargs: dynamic RTAs.
+    // Some kernels are designed to take a variable number of arguments — e.g. N
+    // arguments representing the dimensions of an N-dimensional tensor, where N
+    // is passed to the kernel as a CTA. Varargs are accessed positionally since
+    // the kernel does not know how many to expect. Set the vararg values per
+    // node via ProgramRunParams.
+    // (Slated for eventual removal in favor of typed array runtime args.)
+    size_t num_runtime_varargs = 0;
+
+    // Common runtime varargs: dynamic CRTAs.
+    // Like runtime varargs, but the same values are broadcast to every node the
+    // kernel runs on.
+    // (Slated for eventual removal in favor of typed array common runtime args.)
+    size_t num_common_runtime_varargs = 0;
+
+    // Per-node vararg-count override.
+    // In very rare cases a kernel needs a DIFFERENT number of runtime varargs on
+    // different nodes. Each entry pairs a node set with its vararg count; nodes
+    // not listed default to num_runtime_varargs.
+    // TODO: This feature is truly bizarre. Investigate removing it from the API.
+    using NumVarargsPerNode = std::vector<std::pair<Nodes, size_t>>;
+    std::optional<NumVarargsPerNode> num_runtime_varargs_per_node = std::nullopt;
 };
 
 struct DataflowBufferSpecAdvancedOptions {

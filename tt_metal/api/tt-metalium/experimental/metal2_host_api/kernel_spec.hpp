@@ -143,44 +143,16 @@ struct KernelSpec {
     // Schema for runtime arguments (RTA) and common runtime arguments (CRTA)
     // (The VALUES of these arguments are set as ProgramRunParams.)
     //
-    // Two mechanisms are supported per kernel:
-    //   - Named RTAs/CRTAs: referenced by name in kernel code via `args::<name>`.
-    //     (Currently, only uint32_t type is supported.)
-    //   - Vararg RTAs/CRTAs: positional, variable-count, always uint32_t.
-    //     Indexed from 0 in kernel code via `get_vararg(idx)` / `get_common_vararg(idx)`.
-    //     Vararg indices are stable across schema changes (e.g., moving a named arg from RTA→CRTA).
+    // Named RTAs/CRTAs: referenced by name in kernel code via `args::<name>`.
+    // (Currently, only uint32_t type is supported.)
+    //
+    // For vararg-style positional RTAs/CRTAs, see KernelSpecAdvancedOptions.
     struct RuntimeArgSchema {
         // Named RTAs: names in declaration order. Must be unique valid C++ identifiers.
         std::vector<std::string> named_runtime_args;
 
         // Named CRTAs: names in declaration order. Must be unique valid C++ identifiers.
         std::vector<std::string> named_common_runtime_args;
-
-        //----------------------
-        // Advanced options
-
-        // Runtime varargs: dynamic RTAs
-        // Some kernels are designed to take a variable number of arguments.
-        //  e.g. N arguments representing the dimensions of an N-dimensional tensor,
-        //       where N is passed to the kernel as a CTA.
-        // Varargs are accessed positionally, since the kernel does not know how many to expect.
-        // The vararg schema specifies the number of RTA varargs for this kernel.
-        // Use ProgramRunParams to set the vararg values (per node).
-        size_t num_runtime_varargs = 0;
-
-        // Per-node vararg number override: different per-node vararg counts
-        // In very rare cases, the kernel running on different nodes requires a DIFFERENT
-        // number of varargs on different nodes.
-        // Use num_runtime_varargs_per_node to override the number of varargs.
-        // Any kernel target node not specified in the override defaults to num_runtime_varargs.
-        using NumVarargsPerNode = std::vector<std::pair<Nodes, size_t>>;  // {nodes, num_varargs}
-        std::optional<NumVarargsPerNode> num_runtime_varargs_per_node = std::nullopt;
-        // TODO: This feature is truly bizarre. Investigate removing it from the API.
-
-        // Common runtime varargs: dynamic number of CRTAs
-        // These are similar to runtime varargs. However, when specifying the argument values
-        // (in ProgramRunParams), all nodes of the kernel receive the common values.
-        size_t num_common_runtime_varargs = 0;
     };
     RuntimeArgSchema runtime_arguments_schema{};
 

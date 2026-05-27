@@ -274,9 +274,12 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
         .unique_id = DM_KERNEL_NAME,
         .source = rta_crta_kernel_path,
         .num_threads = is_quasar ? static_cast<uint8_t>(num_dms_) : uint8_t{1},
-        .runtime_arguments_schema =
-            {.num_runtime_varargs = default_rtas.size(), .num_common_runtime_varargs = default_crtas.size()},
         .config_spec = dm_cfg,
+        .advanced_options =
+            experimental::metal2_host_api::KernelSpecAdvancedOptions{
+                .num_runtime_varargs = default_rtas.size(),
+                .num_common_runtime_varargs = default_crtas.size(),
+            },
     };
     if (is_quasar) {
         dm_spec.compile_time_arg_bindings = {{"dm_id", 0}, {"l1_scratch_addr", l1_unreserved_base}};
@@ -386,18 +389,18 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
 
     // RTA test reads index == default_rtas.size() (one past the end), so the kernel must declare
     // exactly default_rtas.size() varargs to make that access OOB.
-    experimental::metal2_host_api::KernelSpec::RuntimeArgSchema schema;
+    experimental::metal2_host_api::KernelSpecAdvancedOptions adv_opts;
     if (params.test_rta) {
-        schema.num_runtime_varargs = default_rtas.size();
+        adv_opts.num_runtime_varargs = default_rtas.size();
     } else {
-        schema.num_common_runtime_varargs = default_crtas.size();
+        adv_opts.num_common_runtime_varargs = default_crtas.size();
     }
 
     experimental::metal2_host_api::KernelSpec kspec{
         .unique_id = OOB_KERNEL_NAME,
         .source = rta_crta_kernel_path,
         .compiler_options = {.defines = m2_defines},
-        .runtime_arguments_schema = schema,
+        .advanced_options = adv_opts,
     };
     if (params.processor_class == HalProcessorClassType::DM) {
         if (is_quasar) {
@@ -473,11 +476,14 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
         .compiler_options =
             {.defines = {{"MAX_RTA_IDX", std::to_string(default_rtas.size())}, {"TEST_MULTI_DM_RTA", "1"}}},
         .compile_time_arg_bindings = {{"num_dms", num_dms_}, {"l1_sync_addr", l1_unreserved_base}},
-        .runtime_arguments_schema = {.num_runtime_varargs = default_rtas.size()},
         .config_spec =
             experimental::metal2_host_api::DataMovementConfiguration{
                 .gen2_data_movement_config =
                     experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .advanced_options =
+            experimental::metal2_host_api::KernelSpecAdvancedOptions{
+                .num_runtime_varargs = default_rtas.size(),
+            },
     };
     experimental::metal2_host_api::WorkUnitSpec wu{
         .unique_id = "main",

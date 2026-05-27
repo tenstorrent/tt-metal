@@ -1885,8 +1885,8 @@ TEST_F(ProgramSpecTestQuasar, RuntimeArgsSchemaSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Add runtime args schema
-    spec.kernels[0].runtime_arguments_schema.num_runtime_varargs = 3;
-    spec.kernels[0].runtime_arguments_schema.num_common_runtime_varargs = 2;
+    spec.kernels[0].advanced_options =
+        KernelSpecAdvancedOptions{.num_runtime_varargs = 3, .num_common_runtime_varargs = 2};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -1894,7 +1894,6 @@ TEST_F(ProgramSpecTestQuasar, RuntimeArgsSchemaSucceeds) {
 TEST_F(ProgramSpecTestQuasar, VarargPerNodeOverlapFails) {
     // Rule: overlapping entries in num_runtime_varargs_per_node are an error, even when
     // their counts agree. Overlap suggests a user mistake.
-    using NumVarargsPerNode = KernelSpec::RuntimeArgSchema::NumVarargsPerNode;
     NodeCoord node_a{0, 0};
     NodeCoord node_b{1, 0};
     NodeRangeSet both{std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}}};
@@ -1902,8 +1901,10 @@ TEST_F(ProgramSpecTestQuasar, VarargPerNodeOverlapFails) {
     ProgramSpec spec;
     spec.program_id = "vararg_overlap_test";
     auto kernel = MakeMinimalDMKernel("dm_kernel");
-    kernel.runtime_arguments_schema.num_runtime_varargs_per_node =
-        NumVarargsPerNode{{both, 3}, {node_a, 3}};  // node_a listed twice
+    kernel.advanced_options = KernelSpecAdvancedOptions{
+        .num_runtime_varargs_per_node =
+            KernelSpecAdvancedOptions::NumVarargsPerNode{{both, 3}, {node_a, 3}},  // node_a listed twice
+    };
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", both, {"dm_kernel"})};
 
@@ -2352,31 +2353,39 @@ TEST(AggregateSpecTypes, WorkUnitSpecDesignatedInitializers) {
 }
 
 TEST(AggregateSpecTypes, RuntimeArgSchemaDesignatedInitializers) {
-    // Named RTAs + CRTAs + scalar vararg counts, all via designated initializers.
+    // Named RTAs + CRTAs via designated initializers; vararg counts now live on
+    // KernelSpecAdvancedOptions (see VarargCountsOnAdvancedOptions below).
     KernelSpec::RuntimeArgSchema schema{
         .named_runtime_args = {"input_ptr", "output_ptr"},
         .named_common_runtime_args = {"tile_count"},
-        .num_runtime_varargs = 4,
-        .num_common_runtime_varargs = 2,
     };
 
     EXPECT_EQ(schema.named_runtime_args.size(), 2u);
     EXPECT_EQ(schema.named_common_runtime_args.size(), 1u);
-    EXPECT_EQ(schema.num_runtime_varargs, 4u);
-    EXPECT_EQ(schema.num_common_runtime_varargs, 2u);
-    EXPECT_FALSE(schema.num_runtime_varargs_per_node.has_value());
 }
 
-TEST(AggregateSpecTypes, RuntimeArgSchemaPerNodeOverrideDesignatedInitializers) {
+TEST(AggregateSpecTypes, VarargCountsOnAdvancedOptions) {
+    // Scalar vararg counts via designated initializers on KernelSpecAdvancedOptions.
+    KernelSpecAdvancedOptions adv{
+        .num_runtime_varargs = 4,
+        .num_common_runtime_varargs = 2,
+    };
+
+    EXPECT_EQ(adv.num_runtime_varargs, 4u);
+    EXPECT_EQ(adv.num_common_runtime_varargs, 2u);
+    EXPECT_FALSE(adv.num_runtime_varargs_per_node.has_value());
+}
+
+TEST(AggregateSpecTypes, VarargPerNodeOverrideOnAdvancedOptions) {
     // Per-node override path (advanced): ensure designated-init through std::optional works.
-    using NumVarargsPerNode = KernelSpec::RuntimeArgSchema::NumVarargsPerNode;
-    KernelSpec::RuntimeArgSchema schema{
+    using NumVarargsPerNode = KernelSpecAdvancedOptions::NumVarargsPerNode;
+    KernelSpecAdvancedOptions adv{
         .num_runtime_varargs_per_node = NumVarargsPerNode{{NodeCoord{0, 0}, 4}, {NodeCoord{1, 0}, 7}},
     };
 
-    ASSERT_TRUE(schema.num_runtime_varargs_per_node.has_value());
-    EXPECT_EQ(schema.num_runtime_varargs_per_node->size(), 2u);
-    EXPECT_EQ(schema.num_runtime_varargs, 0u);  // scalar left at default in this example
+    ASSERT_TRUE(adv.num_runtime_varargs_per_node.has_value());
+    EXPECT_EQ(adv.num_runtime_varargs_per_node->size(), 2u);
+    EXPECT_EQ(adv.num_runtime_varargs, 0u);  // scalar left at default in this example
 }
 
 TEST(AggregateSpecTypes, KernelSpecNamedRuntimeArgsDesignatedInitializers) {
@@ -3112,7 +3121,7 @@ TEST_F(ProgramSpecTestGen1, KernelCrtaLayout_AllThreeSectionsConsistent) {
     // Section 1: named CRTAs on the DM kernel.
     spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"foo", "bar"};
     // Section 3: vararg CRTAs on the DM kernel.
-    spec.kernels[0].runtime_arguments_schema.num_common_runtime_varargs = 3;
+    spec.kernels[0].advanced_options.emplace().num_common_runtime_varargs = 3;
 
     // Section 2: two bindings — one plain (1 word), one sharded+dynamic_tensor_shape
     // (1 word + tensor_shape_in_pages rank words).

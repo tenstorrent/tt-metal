@@ -2627,16 +2627,25 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // (via tensor_binding_handles) and its slot offsets are baked into each binding handle's
         // addr_crta_offset; SetProgramRunParameters uses BOTH to assemble the per-enqueue CRTA buffer.
         runtime_schema.named_common_runtime_args = user_named_crtas;
-        if (user_schema.num_runtime_varargs > 0) {
+
+        // Varargs schema now lives on KernelSpecAdvancedOptions.
+        const size_t num_runtime_varargs =
+            kernel_spec.advanced_options.has_value() ? kernel_spec.advanced_options->num_runtime_varargs : 0;
+        const size_t num_common_runtime_varargs =
+            kernel_spec.advanced_options.has_value() ? kernel_spec.advanced_options->num_common_runtime_varargs : 0;
+        const bool has_per_node_override = kernel_spec.advanced_options.has_value() &&
+                                           kernel_spec.advanced_options->num_runtime_varargs_per_node.has_value();
+
+        if (num_runtime_varargs > 0) {
             for (const NodeRange& range : node_ranges.ranges()) {
                 for (const NodeCoord& node : range) {
-                    runtime_schema.num_runtime_varargs_per_node[node] = user_schema.num_runtime_varargs;
+                    runtime_schema.num_runtime_varargs_per_node[node] = num_runtime_varargs;
                 }
             }
         }
-        if (user_schema.num_runtime_varargs_per_node.has_value()) {
+        if (has_per_node_override) {
             std::unordered_set<NodeCoord> seen_overrides;
-            for (const auto& [nodes_spec, num_varargs] : *user_schema.num_runtime_varargs_per_node) {
+            for (const auto& [nodes_spec, num_varargs] : *kernel_spec.advanced_options->num_runtime_varargs_per_node) {
                 const NodeRangeSet expanded = to_node_range_set(nodes_spec);
                 for (const NodeRange& range : expanded.ranges()) {
                     for (const NodeCoord& node : range) {
@@ -2658,7 +2667,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                 }
             }
         }
-        runtime_schema.num_common_runtime_varargs = user_schema.num_common_runtime_varargs;
+        runtime_schema.num_common_runtime_varargs = num_common_runtime_varargs;
         program_impl->register_kernel_rta_schema(kernel_spec.unique_id, runtime_schema);
     }
 

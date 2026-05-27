@@ -138,12 +138,12 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
             "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp",
         .num_threads = num_threads,
         .compiler_options = {.defines = dm_defines},
-        .runtime_arguments_schema =
-            {
+        .config_spec = dm_cfg,
+        .advanced_options =
+            experimental::metal2_host_api::KernelSpecAdvancedOptions{
                 .num_runtime_varargs = num_unique_rt_args,
                 .num_common_runtime_varargs = common_rtas ? num_unique_rt_args : 0u,
             },
-        .config_spec = dm_cfg,
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
@@ -216,15 +216,15 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
                 "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp",
             .num_threads = static_cast<uint8_t>(dm_processors_per_kernel),
             .compiler_options = {.defines = defines_vec},
-            .runtime_arguments_schema =
-                {
-                    .num_runtime_varargs = num_runtime_args,
-                    .num_common_runtime_varargs = common_rtas ? num_runtime_args : 0,
-                },
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
                     .gen2_data_movement_config =
                         experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            .advanced_options =
+                experimental::metal2_host_api::KernelSpecAdvancedOptions{
+                    .num_runtime_varargs = num_runtime_args,
+                    .num_common_runtime_varargs = common_rtas ? static_cast<size_t>(num_runtime_args) : size_t{0},
+                },
         });
         wu_kernel_names.push_back(kernel_names[k]);
     }
