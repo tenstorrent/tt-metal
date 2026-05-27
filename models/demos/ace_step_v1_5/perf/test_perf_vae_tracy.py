@@ -25,13 +25,22 @@ CSV / Tracy artifacts land under ``generated/profiler/reports/<timestamp>/`` —
 Production defaults (``math_perf_env``): LoFi conv compute + BF16 activations/weights + L1 interleaved
 buffers on conv / Snake / overlap-add glue — same path as PCC (no env toggle).
 
-Set ``ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=1`` for opt-in ``bfloat8_b`` conv/Snake **compute** (inter-op
-buffers stay BF16 ``ROW_MAJOR``). Validate with ``tests/test_vae_decoder_pcc.py -k bfloat8_activations``.
+``bfloat8_b`` conv/Snake **compute** is **on by default** (inter-op buffers stay BF16 ``ROW_MAJOR``).
+Set ``ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=0`` to fall back to full BF16 compute.
 
 Large ``1×1`` conv im2col matmuls (``61440×128``, ``30720×128``, ``7680×256``) use tuned 1D
 reuse (**tall-M** ``MultiCast1D``, ``mcast_in0=0``) by default — including under Tracy — so
 ``ttnn.conv1d`` does not probe 640 M-tiles as 640 cores. Set ``ACE_STEP_VAE_LARGE_M_MATMUL=0``
 to force the default conv path.
+
+**TILE layout contracts (residual unit, no env toggle):**
+
+- **conv1(k=7)→snake2:** ``return_sharded=True`` → HEIGHT_SHARDED L1 TILE when
+  ``ACE_STEP_VAE_K7_SHARDED_OUTPUT=1``, else **DRAM TILE** (automatic ``return_tile`` fallback).
+  Tracy targets: ``TilizeDeviceOperation|1920×512|DRAM→L1`` on snake2 input.
+- **snake2→conv2(k=1):** ``snake2(..., return_tile=True)`` → **L1 TILE** out; ``TtConv1d`` accepts
+  TILE L1 in0 on ``ttnn.linear`` (no Tilize) or untilizes once before ``ttnn.conv1d``.
+  Tracy targets: ``UntilizeDeviceOperation`` on snake2 output + ``TilizeDeviceOperation`` on conv2 input.
 
 
 **Important:** do **not** set ``ACE_STEP_USE_TRACE=1`` for this test (device profiler flush and TTNN

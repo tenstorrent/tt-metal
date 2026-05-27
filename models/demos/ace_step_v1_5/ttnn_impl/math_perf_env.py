@@ -54,8 +54,8 @@ VAE decode exposes large-M matmuls inside ``conv1d`` / ``conv_transpose2d`` im2c
 ``k>1`` conv / conv-transpose im2col (DRAM BW). ``k=1`` projections use ``ttnn.conv1d`` with tuned
 1D mcast matmul configs on large im2col ``M`` (``61440`` / ``30720`` / ``7680`` buckets via
 :func:`ace_step_vae_conv1d_im2col_matmul_program_config`).
-Opt-in **``bfloat8_b`` activation compute** (conv output dtype + Snake TILE chain) via
-``ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=1``; inter-op buffers stay BF16 ``ROW_MAJOR`` (TTNN layout limit).
+**``bfloat8_b`` activation compute** (conv output dtype + Snake TILE chain) is **on by default**;
+inter-op buffers stay BF16 ``ROW_MAJOR`` (TTNN layout limit). Set ``ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=0`` to disable.
 
 Memory policy (VAE):
 
@@ -63,7 +63,12 @@ Memory policy (VAE):
 - **Snake eltwise chain** (multiply, sin, square, multiply, add + Tilize/Untilize) runs in L1
   (params in L1, intermediates in L1) — eliminates ~5 DRAM round-trips per call vs the
   original all-DRAM path.  Snake **output** is staged back to DRAM inside ``TtSnake1d``
-  before returning so the caller always receives a DRAM tensor.
+  before returning so the caller always receives a DRAM tensor — **except** residual
+  ``snake2`` which uses ``return_tile=True`` to hand **L1 TILE** activations to ``conv2``
+  (k=1), skipping snake Untilize and conv2 Tilize on the linear path.
+- **conv1(k=7)→snake2 TILE contract:** ``TtConv1d(return_sharded=True)`` tries HEIGHT_SHARDED
+  L1 when ``ACE_STEP_VAE_K7_SHARDED_OUTPUT=1``; otherwise falls back to **DRAM TILE**
+  (``return_tile`` behaviour) so snake2 avoids Tilize on ROW_MAJOR DRAM.
 - **k>1 ``conv1d`` input/output** stays in DRAM (static CB region extends to ~180 KiB on
   Blackhole — any live L1 activation in that band fails program validation at compile time;
   k>1 output also exceeds per-bank L1 budget).
@@ -286,13 +291,15 @@ def ace_step_init_vae_conv_compute_kernel_config(device: Any):
 
 
 def ace_step_vae_bfloat8_activations_enabled() -> bool:
-    """Opt-in ``bfloat8_b`` for VAE conv im2col + Snake eltwise compute (``ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=1``).
+    """``bfloat8_b`` for VAE conv im2col + Snake eltwise compute — **on by default**.
 
     TTNN does not support ``bfloat8_b`` with ``ROW_MAJOR`` activations (conv1d / slice / residual
     trim). Inter-op buffers stay **BF16 ROW_MAJOR**; :func:`ace_step_vae_activation_compute_dtype`
     applies inside conv/Snake kernels only.
+
+    Set ``ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=0`` to fall back to full BF16 compute.
     """
-    return os.environ.get("ACE_STEP_VAE_BFLOAT8_ACTIVATIONS", "0").lower() in ("1", "true", "yes", "on")
+    return os.environ.get("ACE_STEP_VAE_BFLOAT8_ACTIVATIONS", "1").lower() not in ("0", "false", "no", "off")
 
 
 def ace_step_vae_activation_storage_dtype(ttnn: Any) -> Any:
@@ -347,6 +354,46 @@ def ace_step_vae_conv1d_memory_config(ttnn: Any, *, kernel_size: int):
     if int(kernel_size) == 1:
         return ace_step_vae_activation_memory_config(ttnn)
     return getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+
+def ace_step_vae_k7_sharded_output_config(ttnn: Any, device: Any, out_length: int, out_channels: int) -> Any:
+    """HEIGHT_SHARDED L1 memory config for the k=7 conv1d output (``return_sharded=True``).
+
+    Distributes ``[out_length, out_channels]`` TILE across all cores so each core holds
+    ``ceil(T_tiles / num_cores) × C_tiles`` tiles — well within each core's 1.5 MB L1 budget
+    on Blackhole.  Returns ``None`` if the config cannot be constructed (caller falls back to
+    ``return_tile=True`` DRAM output).
+
+    Gated by ``ACE_STEP_VAE_K7_SHARDED_OUTPUT=1`` (default off).  The env var lets users
+    opt in only after verifying that ``ttnn.conv1d`` honours a HEIGHT_SHARDED output
+    memory_config on the target firmware.
+    """
+    if os.environ.get("ACE_STEP_VAE_K7_SHARDED_OUTPUT", "").strip() != "1":
+        return None
+    import math as _math
+
+    try:
+        grid = device.compute_with_storage_grid_size()
+        num_cores = int(grid.x) * int(grid.y)
+        T_tiles = _math.ceil(int(out_length) / 32)
+        C_tiles = _math.ceil(int(out_channels) / 32)
+        shard_T_tiles = _math.ceil(T_tiles / num_cores)
+        shard_H = max(1, shard_T_tiles) * 32  # in elements
+        shard_W = max(1, C_tiles) * 32  # in elements
+        core_grid = ttnn.CoreRangeSet(
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(int(grid.x) - 1, int(grid.y) - 1),
+            )
+        )
+        return ttnn.create_sharded_memory_config(
+            shape=(shard_H, shard_W),
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+    except Exception:
+        return None
 
 
 def ace_step_vae_conv_weight_dtype(ttnn: Any, default_dtype: Any, *, kernel_size: int) -> Any:
@@ -422,6 +469,82 @@ def ace_step_vae_conv1d_im2col_matmul_enabled() -> bool:
     if flag is not None:
         return flag.lower() not in ("0", "false", "no", "off")
     return True
+
+def ace_step_vae_sharded_matmul_enabled() -> bool:
+    """Whether midsize wide ``1×1`` conv (e.g. ``1920×512×512``) skips ``ttnn.linear`` for ``ttnn.conv1d`` L1.
+
+    ``ttnn.linear`` with L1 interleaved ``in0`` overflows Blackhole L1 / probes invalid core counts
+    at ``C≥512``; the validated path is ``conv1d`` ``k=1`` with L1 activations (snake2→conv2 chain).
+    Set ``ACE_STEP_VAE_SHARDED_MATMUL=1`` to enable.
+    """
+    flag = os.environ.get("ACE_STEP_VAE_SHARDED_MATMUL")
+    if flag is not None:
+        return flag.lower() not in ("0", "false", "no", "off")
+    return False
+
+
+def ace_step_vae_k1_prefer_conv1d_l1(
+    *,
+    m_dim: int,
+    k_dim: int,
+    n_dim: int,
+) -> bool:
+    """True when ``ACE_STEP_VAE_SHARDED_MATMUL`` should route ``k=1`` wide conv through ``conv1d`` L1."""
+    if not ace_step_vae_sharded_matmul_enabled():
+        return False
+    return ace_step_vae_k1_mid_m_eligible(m_dim=m_dim, k_dim=k_dim, n_dim=n_dim)
+
+
+def ace_step_vae_k1_mid_m_eligible(*, m_dim: int, k_dim: int, n_dim: int) -> bool:
+    """``M`` in ``[512, 7680)`` with wide ``K/N`` — Tracy ``1920×512`` / ``320×1024`` buckets."""
+    m = int(m_dim)
+    if m < 512 or m >= 7680:
+        return False
+    return max(int(k_dim), int(n_dim)) >= 512
+
+
+def ace_step_vae_k1_height_sharded_eligible(*, m_dim: int, k_dim: int, n_dim: int) -> bool:
+    """Alias for :func:`ace_step_vae_k1_mid_m_eligible` (residual add / legacy name)."""
+    return ace_step_vae_k1_mid_m_eligible(m_dim=m_dim, k_dim=k_dim, n_dim=n_dim)
+
+
+def ace_step_vae_k1_mid_m_matmul_program_config(
+    device: Any,
+    *,
+    m_dim: int,
+    k_dim: int,
+    n_dim: int,
+):
+    """Tall-M ``MultiCast1D`` (``mcast_in0=False``) with L1 **interleaved** ``in0``."""
+    if not ace_step_vae_k1_mid_m_eligible(m_dim=m_dim, k_dim=k_dim, n_dim=n_dim):
+        return None
+    return _mcast_1d_vae_im2col_tall_m_program_config(
+        device,
+        m_dim=int(m_dim),
+        k_dim=int(k_dim),
+        n_dim=int(n_dim),
+        in0_block_w_cap=2,
+        out_subblock_h_cap=4,
+        out_subblock_w=1,
+    )
+
+
+def ace_step_vae_k1_height_sharded_program_config(
+    device: Any,
+    *,
+    m_dim: int,
+    k_dim: int,
+    n_dim: int,
+    compute_grid_size: tuple[int, int] | None = None,
+):
+    """Alias for :func:`ace_step_vae_k1_mid_m_matmul_program_config` (ignores ``compute_grid_size``)."""
+    _ = compute_grid_size
+    return ace_step_vae_k1_mid_m_matmul_program_config(
+        device,
+        m_dim=m_dim,
+        k_dim=k_dim,
+        n_dim=n_dim,
+    )
 
 
 def ace_step_vae_max_per_core_m_tiles() -> int:

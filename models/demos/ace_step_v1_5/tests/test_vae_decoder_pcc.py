@@ -9,11 +9,17 @@ from the same state dict, runs both, and checks PCC. The tests use small
 channel counts and short time axes to keep them cheap; the full-decoder test
 is gated to a reduced configuration so it can run on a single Wormhole.
 
-**Opt-in ``bfloat8_b`` activation compute:** set ``ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=1``
-and run ``test_*_pcc_bfloat8_activations`` (relaxed PCC floor — inter-op buffers stay BF16).
+**``bfloat8_b`` activation compute is on by default.** Set ``ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=0``
+to fall back to full BF16. The ``test_*_pcc_bfloat8_activations`` tests explicitly force the flag on
+(relaxed PCC floor — inter-op buffers stay BF16).
 
-Default VAE dtype policy: **BF16 ROW_MAJOR** inter-op buffers + **``bfloat8_b``** conv weights (``k>1``);
-with the env flag, conv im2col outputs and Snake TILE eltwise use **``bfloat8_b``** internally.
+Default VAE dtype policy: **BF16 ROW_MAJOR** inter-op buffers + **``bfloat8_b``** conv weights (``k>1``)
++ **``bfloat8_b``** conv im2col outputs and Snake TILE eltwise (activation compute).
+
+**TILE layout contracts (residual unit):** ``conv1(k=7)`` returns TILE to ``snake2`` (DRAM TILE by
+default, L1 HEIGHT_SHARDED when ``ACE_STEP_VAE_K7_SHARDED_OUTPUT=1``). ``snake2`` uses
+``return_tile=True`` so ``conv2(k=1)`` consumes L1 TILE without snake Untilize + conv Tilize on
+the ``ttnn.linear`` path.
 """
 
 from __future__ import annotations
@@ -95,6 +101,38 @@ def test_snake1d_pcc(device, torch_seed):
     y_tt_torch = ttnn.to_torch(y_tt).float()
 
     assert_pcc_print("vae_snake1d", y_ref_btc, y_tt_torch)
+
+
+def test_snake1d_return_tile_pcc(device, torch_seed):
+    """``return_tile=True`` matches default ROW_MAJOR output (residual snake2→conv2 contract)."""
+    _ = torch_seed
+    c = 64
+    t = 33
+    snake_t = Snake1d(c).eval()
+    with torch.no_grad():
+        snake_t.alpha.copy_(torch.randn_like(snake_t.alpha) * 0.5)
+        snake_t.beta.copy_(torch.randn_like(snake_t.beta) * 0.5)
+
+    x_bct = torch.randn(1, c, t, dtype=torch.bfloat16).float()
+    y_ref_bct = snake_t(x_bct)
+    y_ref_btc = _bct_to_btc(y_ref_bct)
+
+    sd = snake_t.state_dict()
+    tt_snake = TtSnake1d(
+        alpha_host=_param_to_f32_numpy(sd["alpha"]),
+        beta_host=_param_to_f32_numpy(sd["beta"]),
+        device=device,
+        output_memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    x_btc = _bct_to_btc(x_bct)
+    x_tt = ttnn.from_torch(x_btc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    y_tile = tt_snake(x_tt, return_tile=True)
+    assert y_tile.layout == ttnn.TILE_LAYOUT
+    y_tt = ttnn.to_layout(y_tile, ttnn.ROW_MAJOR_LAYOUT)
+    y_tt_torch = ttnn.to_torch(y_tt).float()
+
+    assert_pcc_print("vae_snake1d_return_tile", y_ref_btc, y_tt_torch)
 
 
 def _residual_weights_dict(mod: OobleckResidualUnit) -> dict:
@@ -216,7 +254,7 @@ _BFLOAT8_ACT_PCC = 0.99
 
 @pytest.fixture
 def vae_bfloat8_activations(monkeypatch):
-    """Enable opt-in VAE bfloat8 activation compute for one test."""
+    """Ensure VAE bfloat8 activation compute is on for one test (now the default; fixture guards the skip)."""
     if not hasattr(ttnn, "bfloat8_b"):
         pytest.skip("ttnn.bfloat8_b not available on this build")
     monkeypatch.setenv("ACE_STEP_VAE_BFLOAT8_ACTIVATIONS", "1")
