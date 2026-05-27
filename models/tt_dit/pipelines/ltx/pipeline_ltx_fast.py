@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import gc
 import os
+import sys
 import time
 
 import torch
@@ -31,6 +32,80 @@ class LTXFastPipeline(LTXAVPipeline):
         kwargs.setdefault("mode", "av")
         kwargs["pipeline_class"] = LTXFastPipeline
         return LTXPipeline.create_pipeline(mesh_device, **kwargs)
+
+    def warmup_buffers(
+        self,
+        *,
+        num_frames: int,
+        height: int,
+        width: int,
+        num_inference_steps: int = 2,
+        stages: tuple[str, ...] = ("s1", "s2"),
+    ) -> None:
+        """Compile every program both stages will hit. Both stages use variant 0
+        (Fast doesn't swap weights between stages); only the sequence length
+        differs. Pass ``stages=("s1",)`` to skip the full-res s2 warmup."""
+        assert height % 64 == 0 and width % 64 == 0, f"H/W must be div by 64 (got {height}x{width})"
+        assert num_frames > 0, f"num_frames must be > 0 (got {num_frames})"
+        valid = {"s1", "s2"}
+        assert set(stages).issubset(valid), f"stages must be subset of {valid} (got {stages})"
+
+        t0 = time.time()
+        logger.info(
+            f"warmup (Fast 2-stage): {num_frames}f@{height}x{width}, "
+            f"stages={stages}, {num_inference_steps} steps/stage"
+        )
+
+        results = self.encode_prompts_reference(["warmup"])
+        v_p = results[0].video_encoding.float()
+        a_p = results[0].audio_encoding.float()
+
+        # Sigma schedules from the real distilled paths so warmup exercises the
+        # same math branches generate() does (incl. the sigma_next == 0 final step).
+        s1_sigmas = list(DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0]
+        s2_sigmas = list(STAGE_2_DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0]
+
+        if "s1" in stages:
+            s1_h, s1_w = height // 2, width // 2
+            logger.info(f"warmup stage 1: {s1_h}x{s1_w}, σ={s1_sigmas}")
+            self._denoise_no_guidance(
+                v_p,
+                a_p,
+                num_frames=num_frames,
+                height=s1_h,
+                width=s1_w,
+                sigma_values=s1_sigmas,
+                seed=0,
+            )
+
+        if "s2" in stages:
+            # Zero-dummies at the exact shapes the real stage-2 call uses.
+            latent_frames = (num_frames - 1) // 8 + 1
+            full_latent_count = latent_frames * (height // 32) * (width // 32)
+            dummy_v_init = torch.zeros(1, full_latent_count, self.in_channels)
+
+            vps = VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
+            als = AudioLatentShape.from_video_pixel_shape(vps)
+            dummy_a_init = torch.zeros(1, als.frames, self.in_channels)
+
+            logger.info(f"warmup stage 2: {height}x{width}, σ={s2_sigmas}")
+            self._denoise_no_guidance(
+                v_p,
+                a_p,
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                sigma_values=s2_sigmas,
+                seed=0,
+                initial_video_latent=dummy_v_init,
+                initial_audio_latent=dummy_a_init,
+            )
+
+            # Compile VAE decode at full-res (only s2 feeds decode in generate).
+            self._warmup_decode(num_frames, height, width)
+            self._prepare_transformer(0)
+
+        logger.info(f"warmup (Fast 2-stage) done in {time.time() - t0:.1f}s")
 
     def _denoise_no_guidance(
         self,
@@ -222,8 +297,7 @@ class LTXFastPipeline(LTXAVPipeline):
         v_embeds = results[0].video_encoding.float()
         a_embeds = results[0].audio_encoding.float()
 
-        self._prepare_transformer()
-        gc.collect()
+        self._prepare_transformer(0)
 
         s1_video, s1_audio = self._denoise_no_guidance(
             v_embeds,
@@ -247,8 +321,6 @@ class LTXFastPipeline(LTXAVPipeline):
         return s1_video, s1_audio
 
     def _upsample_latent_reference(self, video_latent: torch.Tensor, upsampler_path: str) -> torch.Tensor:
-        import sys
-
         sys.path.insert(0, "LTX-2/packages/ltx-core/src")
         sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
         from ltx_pipelines.utils.blocks import VideoUpsampler
@@ -298,10 +370,10 @@ class LTXFastPipeline(LTXAVPipeline):
         v_embeds = results[0].video_encoding.float()
         a_embeds = results[0].audio_encoding.float()
 
+        # Both Fast stages share variant 0 (no weight swap between stages).
         t0 = time.time()
-        self._prepare_transformer()
-        gc.collect()
-        logger.info(f"Transformer prepare (S1): {time.time() - t0:.1f}s")
+        self._prepare_transformer(0)
+        logger.info(f"Transformer prepare: {time.time() - t0:.1f}s")
 
         logger.info(f"Stage 1: {s1_height}x{s1_width}, {len(DISTILLED_SIGMA_VALUES) - 1} steps")
         t0 = time.time()
@@ -324,12 +396,6 @@ class LTXFastPipeline(LTXAVPipeline):
                 logger.info(f"LTX_DECODE_S1_AUDIO: wrote {s1_path}")
             return output_path
 
-        # Keep the transformer alive across stages. Stage 2's `_prepare_transformer()`
-        # short-circuits via ``cache_module.load_model`` → ``tt_model.is_loaded()`` at
-        # ``models/tt_dit/utils/cache.py:79``, skipping the redundant ``Module.load``
-        # (~6 s of disk I/O + tensor placement) that would otherwise run. Cold restart
-        # also works: the gate is a standard ``to_gate_logits`` child Linear so it
-        # round-trips through ``Module.save/load`` like every other parameter.
         latent_frames = (num_frames - 1) // 8 + 1
         s1_h, s1_w = s1_height // 32, s1_width // 32
         s1_spatial = s1_video.reshape(1, latent_frames, s1_h, s1_w, 128).permute(0, 4, 1, 2, 3)
@@ -339,11 +405,6 @@ class LTXFastPipeline(LTXAVPipeline):
         upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
             1, latent_frames * (height // 32) * (width // 32), 128
         )
-
-        t0 = time.time()
-        self._prepare_transformer()
-        gc.collect()
-        logger.info(f"Transformer prepare (S2): {time.time() - t0:.1f}s")
 
         logger.info(f"Stage 2: {height}x{width}, {len(STAGE_2_DISTILLED_SIGMA_VALUES) - 1} steps")
         t0 = time.time()
@@ -360,17 +421,8 @@ class LTXFastPipeline(LTXAVPipeline):
         )
         logger.info(f"Stage 2 denoise: {time.time() - t0:.1f}s")
 
-        # Free transformer device memory before loading VAE. Unlike the inter-
-        # stage destroy that was just removed, this one is safe because no
-        # second cache load follows — the next cache.load_model is for the VAE
-        # under a different subfolder/model.
         t0 = time.time()
-        self.transformer = None
-        gc.collect()
-        logger.info(f"Transformer free: {time.time() - t0:.1f}s")
-
-        t0 = time.time()
-        self._prepare_vae(num_frames=num_frames, height=height, width=width)
+        self._prepare_vae()
         logger.info(f"VAE prepare: {time.time() - t0:.1f}s")
 
         latent_h, latent_w = height // 32, width // 32
@@ -379,10 +431,6 @@ class LTXFastPipeline(LTXAVPipeline):
         logger.info(f"VAE decode (forward): {time.time() - t0:.1f}s — {tuple(video_pixels.shape)}")
 
         t0 = time.time()
-        # NOTE: on-device path exists (self.decode_audio_device) and runs end-to-end,
-        # but the LTXVocoder composition has a magnitude bug (per-component PCC
-        # 99-100% with wrong scale) that produces saturated audio at the clamp(-1,1).
-        # Gated to host reference until Stage B vocoder is debugged.
         audio_obj = self.decode_audio_reference(s2_audio, num_frames, fps=fps)
         logger.info(f"Audio decode: {time.time() - t0:.1f}s")
 

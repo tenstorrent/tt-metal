@@ -432,21 +432,12 @@ class LTXTransformerBlock(Module):
             # V→A: video provides context for audio
             audio_q_v2a = audio_normed_xattn * (1.0 + a_scale_v2a) + a_shift_v2a
             video_kv_v2a = video_normed_xattn * (1.0 + a_ca_scale_v) + a_ca_shift_v
-            if self.parallel_config.sequence_parallel.factor > 1:
-                video_kv_v2a = self.ccl_manager.all_gather_persistent_buffer(
-                    video_kv_v2a, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
-                )
-            # Zero padded video tokens in the (gathered) K so they contribute nothing to
-            # V→A cross-attention. This is the ONLY mask that protects the audio side
-            # from padded-video leakage — `video_kv_v2a[padded] = norm(*)*(1+scale)+shift`
-            # is non-zero even when the input residual is zero, so we have to multiply
-            # by the mask after the affine transform. In the sp>1 case we use the
-            # replicated full mask (other chips' slices were just gathered in); in the
-            # sp==1 case the sharded and full masks are identical, so the fallback is
-            # safe. Mirrors `pad_mask_a2v` on the audio side.
-            pad_mask_v2a = video_padding_mask_full if video_padding_mask_full is not None else video_padding_mask
-            if pad_mask_v2a is not None:
-                video_kv_v2a = ttnn.multiply(video_kv_v2a, pad_mask_v2a)
+            # Mask on the SP-local shard so `to_kv` runs at M=video_N/sp instead of M=video_N.
+            # `norm(*)*(1+scale)+shift` is non-zero in padded slots even when the input
+            # residual is zero, so the multiply has to follow the affine. The cross-attn
+            # module's post-projection SP AllGather propagates these zeros to other chips.
+            if video_padding_mask is not None:
+                video_kv_v2a = ttnn.multiply(video_kv_v2a, video_padding_mask)
             if self.parallel_config.tensor_parallel.factor > 1:
                 video_kv_v2a = self.ccl_manager.all_gather_persistent_buffer(
                     video_kv_v2a, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis

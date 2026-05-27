@@ -402,14 +402,21 @@ _BLOCKINGS = {
     (4, 32, 384, 32, (3, 3, 3), 6, 22, 5): (96, 32, 1, 16, 2),  # conv_out_enc
     # ===================================================================
     # LTX-2.3 22B Video VAE decoder, BH Loud Box 2x4 (h_factor=2, w_factor=4)
-    # Production target: 121 frames @ 512x768, latent (1, 16, 16, 24, 128).
-    # Per-device (H,W) after h=2/w=4 shard: lat(8,6) up0(8,6) up1(16,12)
-    # up2(32,24) up3(64,48). T grows 16 → 31 → 61 → 121 across upsamples.
-    # Initial entries deliberately omitted: first hand-picks (Cout_block=128
-    # with K=27*256 patch) blew the BH L1 budget (~1.7MB weight CB > 1.5MB).
-    # Channel-only fallback handles correctness; sweep refinement to land
-    # performant entries is tracked in wiki/VAE_BLOCKING_SWEEP_LTX.md.
+    # 1080p production target: 1088x1920, 145 frames. Per-device (T, H, W)
+    # extracted from a `bh_2x4sp1tp0` run log. Placeholder blockings
+    # (mirroring `_DEFAULT_BLOCKINGS`) — replace via sweep in
+    # `bruteforce_conv3d_sweep.py::test_bruteforce_sweep_ltx_h2w4_1080p`.
     # ===================================================================
+    (2, 4, 128, 1024, (3, 3, 3), 21, 17, 15): (64, 256, 1, 2, 16),  # ltx_s0_conv_in — 778us (was 5971us, 7.7x)
+    (2, 4, 1024, 1024, (3, 3, 3), 21, 17, 15): (128, 64, 5, 2, 16),  # ltx_s0_res — 7956us (was 229400us, 28.8x)
+    (2, 4, 1024, 4096, (3, 3, 3), 21, 17, 15): (128, 64, 5, 4, 8),  # ltx_s0_up — 22149us (was 693335us, 31.3x)
+    (2, 4, 512, 512, (3, 3, 3), 39, 34, 30): (64, 256, 1, 4, 8),  # ltx_s1_res — 8966us (was 74836us, 8.3x)
+    (2, 4, 512, 4096, (3, 3, 3), 39, 34, 30): (128, 64, 5, 2, 16),  # ltx_s1_up — 89486us (was 2965740us, 33.1x)
+    (2, 4, 512, 512, (3, 3, 3), 75, 68, 60): (64, 256, 1, 8, 4),  # ltx_s2_res — 60810us (was 693783us, 11.4x)
+    (2, 4, 256, 256, (3, 3, 3), 147, 68, 60): (64, 256, 1, 8, 4),  # ltx_s3_res — 25688us (was 68450us, 2.7x)
+    (2, 4, 256, 512, (3, 3, 3), 147, 68, 60): (64, 256, 1, 8, 4),  # ltx_s3_chg — 48772us (was 144012us, 3.0x)
+    (2, 4, 128, 128, (3, 3, 3), 147, 136, 120): (64, 128, 6, 4, 8),  # ltx_s4_res — 22798us (was 73586us, 3.2x)
+    (2, 4, 128, 48, (3, 3, 3), 147, 136, 120): (128, 64, 6, 4, 8),  # ltx_s4_out — 13833us (was 36855us, 2.7x)
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.
