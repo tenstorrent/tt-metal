@@ -194,11 +194,13 @@ def _inject_missing_kv_shared_attention_weights(state_dict, hf_config, kv_shared
 
 
 class Gemma4Model:
-    # Generator-interface flags. Decode refreshes host-staged token IDs (+ PLI
-    # when enabled) every step, so trace input buffers are updated on every
-    # replay rather than only after a shape change. On-device sampling stays
-    # off until the host-sampling path is solid; flip once verified end-to-end.
+    # Generator-interface flags. Decode inputs are recomputed on host every
+    # token (host embedding + PLI), so the captured trace's input buffers
+    # have to be refreshed on every replay rather than just on the first
+    # call after a token-shape change.
     _tt_vllm_always_refresh_decode_trace_inputs = True
+    # NOTE: This is a runtime capability (depends on mesh shape / per-device vocab).
+    # It is set during __init__ after the sampling module is constructed.
     _supports_on_device_sampling = False
 
     def __init__(
@@ -480,6 +482,8 @@ class Gemma4Model:
                 logger.info(
                     f"On-device sampling initialized (vocab={hf_config.vocab_size}, per_device={per_device_padded})"
                 )
+        # Generator/vLLM entry points gate on this flag (and sampling != None).
+        self._supports_on_device_sampling = self.sampling is not None
 
     @staticmethod
     def _make_sampling_args(hf_config, mesh_device, tp):
