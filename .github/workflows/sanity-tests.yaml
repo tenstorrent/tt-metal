@@ -426,3 +426,62 @@ jobs:
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       run-ttsim-integration-tests: true
       run-metal-cpp-unit-tests: false
+
+  ai-run-summary:
+    name: "AI Run Summary"
+    needs:
+      - build-artifact
+      - ttnn-unit-tests
+      - models-unit-tests
+      - tt-train-cpp-unit-tests
+      - run-profiler-regression
+      - t3000-apc-fast-tests
+      - ops-unit-tests
+      - ttsim-integration-tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 15
+      - name: Aggregate job results
+        id: aggregate
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          RESULT=$(jq -rn --argjson n "$NEEDS" '
+            [$n[].result] as $r |
+            if   any($r[]; . == "failure")   then "failure"
+            elif any($r[]; . == "cancelled") then "cancelled"
+            elif any($r[]; . == "success")   then "success"
+            else                                  "skipped"
+            end')
+          echo "run-result=$RESULT" >> "$GITHUB_OUTPUT"
+          echo "Combined run-result: $RESULT"
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: []
+          run-result: ${{ steps.aggregate.outputs.run-result }}
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi
