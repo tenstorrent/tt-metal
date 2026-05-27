@@ -1,6 +1,6 @@
 # CI Disable Work — Status Log
 
-Last updated: **2026-05-27T09:15 UTC** (session: BH systematic blocker persists (25+ consecutive failures). Investigated `(Single-card) Demo tests` and `(Single-card) Frequent model and ttnn tests` for new disable PR — both show non-consecutive/flaky failures, not ≥3-consecutive-same-error. No new disable PR possible. 0 dispatches.)
+Last updated: **2026-05-27T10:00 UTC** (session: BH systematic blocker persists (27+ consecutive failures, most recent run 26501610173 failure 09:01–09:51 UTC). All PRs unchanged. PR #44938 verified-pass awaiting human review. PR #45108 SKIP (<4h, verified-pass). PRs #45110/#45112/#45114 BH-blocked. 0 dispatches.)
 
 ---
 
@@ -40,6 +40,8 @@ Last updated: **2026-05-27T09:15 UTC** (session: BH systematic blocker persists 
 
 | Run | Pipeline | Branch | Started | Ended | Result | Notes |
 |-----|----------|--------|---------|-------|--------|-----------|
+| [26501610173](https://github.com/tenstorrent/tt-metal/actions/runs/26501610173) | `Blackhole post-commit tests` | `main` | 2026-05-27 09:01 UTC | 2026-05-27 09:51 UTC | **failure** | BH systematic blocker: 27th+ consecutive failure (SHA `9cc43ddcad215256d199f4bd456604a1f2045b64`). Still no successful BH post-commit run. |
+| [26499906125](https://github.com/tenstorrent/tt-metal/actions/runs/26499906125) | `Blackhole post-commit tests (P100 nightly)` | `main` | 2026-05-27 08:25 UTC | 2026-05-27 09:39 UTC | **failure** | BH systematic blocker: failure (SHA `2c0072ef33f24c4f51f6a2b4b11a1aa376c0939b`). |
 | [26494921196](https://github.com/tenstorrent/tt-metal/actions/runs/26494921196) | `(Single-card) Demo tests` | `main` | 2026-05-27 06:31 UTC | 2026-05-27 07:36 UTC | **success** | Single-card demo main run — overall SUCCESS (SHA `b4f5ed4f`). Confirms no deterministic single-card demo failures. |
 | [26492593059](https://github.com/tenstorrent/tt-metal/actions/runs/26492593059) | `Blackhole post-commit tests` | `main` | 2026-05-27 05:25 UTC | 2026-05-27 06:07 UTC | **failure** | BH systematic blocker: 25th+ consecutive failure (SHA `c68e6ee16713ace55d0fd4d677f418d4add39f8d`). No new successful BH post-commit run. |
 | [26490261745](https://github.com/tenstorrent/tt-metal/actions/runs/26490261745) | `Blackhole post-commit tests` | `verify/ci-disable-blackhole-post-commit-20260527` | 2026-05-27 04:11 UTC | 2026-05-27 04:15 UTC | **failure** | PR #45110 third verify: **infra inconclusive** — `build-artifact/download-artifacts` failed (`ERROR: Could not find build artifact matching expected pattern`, `TRACY_ENABLED: true`); all test jobs failed at Initialize containers; pytest never ran. Source run `26482998463` (attempt 2) had no build tarball — artifacts expired (~1 day retention). |
@@ -61,7 +63,7 @@ Last updated: **2026-05-27T09:15 UTC** (session: BH systematic blocker persists 
 | Workflow file | `t3000-demo-tests` |
 | Lifecycle stage | `verified-pass` |
 | Last rebase | 2026-05-27 02:42 UTC — PR is NOT behind main (mergeable_state: `blocked`, not `behind`); up-to-date per GitHub API |
-| Last revalidation | 2026-05-27 09:00 UTC — lightweight check; mergeable_state `unknown` (GitHub computing); no action needed |
+| Last revalidation | 2026-05-27 10:00 UTC — lightweight check; no new t3000-demo-tests main runs since last session; no action needed |
 | Verification run | [26295163268](https://github.com/tenstorrent/tt-metal/actions/runs/26295163268) — **success** (2026-05-22) |
 | Readiness | **Yes** (pending CI checks passing and human review) |
 
@@ -80,11 +82,11 @@ Last updated: **2026-05-27T09:15 UTC** (session: BH systematic blocker persists 
 | Workflow file | `t3000-e2e-tests.yaml` |
 | Lifecycle stage | `verified-pass` |
 | Last rebase | 2026-05-27 ~07:01 UTC — rebased via `update_pull_request_branch` onto latest main (`c68e6ee16713ace55d0fd4d677f418d4add39f8d`); branch now up-to-date |
-| Last revalidation | 2026-05-26 ~20:35 UTC — 14 CCL disables revalidated on main e2e [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812); no newer T3000 e2e main run as of 09:00 UTC 2026-05-27 |
+| Last revalidation | 2026-05-26 ~20:35 UTC — 14 CCL disables revalidated on main e2e [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812); no newer T3000 e2e main run as of 10:00 UTC 2026-05-27 |
 | Verification run | [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) — Llama **success**; CCL **failure** (trace-buffer + 90m timeout) |
 | Readiness | **Yes** (rebased and up-to-date; awaiting human review) |
 
-**Notes:** Draft; verification [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) done — Llama pruned job green (no regression); CCL still red (trace-buffer param not disabled + 90m timeout). 14 disables still justified on latest main e2e [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812). Reclassified to verified-pass on 2026-05-27: the single verification run showed no regressions in jobs that were passing on main. Rebased 2026-05-27 07:01 UTC via `update_pull_request_branch` — now up-to-date with main. Ready for human undraft + merge. PR was <2h old at session start → SKIP.
+**Notes:** Draft; verification [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) done — Llama pruned job green (no regression); CCL still red (trace-buffer param not disabled + 90m timeout). 14 disables still justified on latest main e2e [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812). Reclassified to verified-pass on 2026-05-27: the single verification run showed no regressions in jobs that were passing on main. Rebased 2026-05-27 07:01 UTC via `update_pull_request_branch` — now up-to-date with main. Ready for human undraft + merge. PR was <4h old at 10:00 UTC session start → SKIP (lightweight only).
 
 ---
 
@@ -113,7 +115,7 @@ Last updated: **2026-05-27T09:15 UTC** (session: BH systematic blocker persists 
 
 The `blackhole-post-commit` workflow builds with `TRACY_ENABLED=true` and uploads build artifacts with short retention (~1 day). By the time verification is dispatched, the source run's build tarball has already expired. Error signature: `ERROR: Could not find build artifact matching expected pattern` + `TRACY_ENABLED (requested): true`. Confirmed by checking artifacts of the only recent successful BH post-commit main run (`26324273581`, May 23): that run's `🛠️ Build Release ubuntu 22.04` job uploaded a tarball, but the artifact is absent from the run's artifact list 4 days later.
 
-**Re-dispatch is eligible when** a fresh successful BH post-commit main run on `main` completes, and the session runs **within ~24 hours** of that run (before the build artifact expires). BH post-commit main runs: most recent 25+ runs have all concluded `failure`. Last successful: run `26324273581` (May 23 05:10 UTC, SHA `79925a3f`).
+**Re-dispatch is eligible when** a fresh successful BH post-commit main run on `main` completes, and the session runs **within ~24 hours** of that run (before the build artifact expires). BH post-commit main runs: most recent 27+ runs have all concluded `failure`. Last successful: run `26324273581` (May 23 05:10 UTC, SHA `79925a3f`).
 
 ---
 
@@ -181,16 +183,17 @@ The `blackhole-post-commit` workflow builds with `TRACY_ENABLED=true` and upload
 
 | Blocker | Status | Notes |
 |---------|--------|-------|
-| **Systematic: Blackhole artifact expiry** | **Open** | BH post-commit, BH e2e, BH demo-tests workflows all use ~1-day build artifact retention. Verification can only succeed if dispatched within ~24h of a fresh successful BH main run. BH post-commit last success: run `26324273581` (May 23 05:10 UTC, SHA `79925a3f`). Currently 4+ days since last success; 25+ consecutive failure runs (most recent: [26492593059](https://github.com/tenstorrent/tt-metal/actions/runs/26492593059), May 27 05:25 UTC). Until a new successful run completes, PRs #45110/#45112/#45114 are all blocked. |
+| **Systematic: Blackhole artifact expiry** | **Open** | BH post-commit, BH e2e, BH demo-tests workflows all use ~1-day build artifact retention. Verification can only succeed if dispatched within ~24h of a fresh successful BH main run. BH post-commit last success: run `26324273581` (May 23 05:10 UTC, SHA `79925a3f`). Currently 4+ days since last success; 27+ consecutive failure runs (most recent: [26501610173](https://github.com/tenstorrent/tt-metal/actions/runs/26501610173), May 27 09:01–09:51 UTC). Until a new successful run completes, PRs #45110/#45112/#45114 are all blocked. |
 | PR #45110 infra-inconclusive (×3) | **Open** | Three consecutive `build-artifact/download-artifacts` failures due to expired TRACY=true tarball. Re-dispatch eligible; requires fresh artifact source within 24h of a successful BH post-commit main run. |
 | Trace-buffer disable candidate (#45108) | **Watch** | `rs_input_shape2` — 1/5 main runs (below 3-consecutive threshold, not added) |
 | CCL job 90m timeout (#45108) | **Tracked** | [#45286](https://github.com/tenstorrent/tt-metal/issues/45286) |
-| New disable PR opportunity | **Investigated** | `all-model-tests.yaml` = manually dispatched only (not suitable). `(Single-card) Demo tests` = recent runs non-consecutive failures/successes (run #6078 is SUCCESS as of 07:36 UTC today). `(Single-card) Frequent model and ttnn tests` = scattered failures mostly fixed by retry/attempt-2 (not ≥3-consecutive-same-error). No suitable WH single-card scheduled workflow with ≥3 consecutive same-error failures found. New disable PR deferred until a qualifying candidate emerges. |
+| New disable PR opportunity | **Investigated** | `all-model-tests.yaml` = manually dispatched only (not suitable). `(Single-card) Demo tests` = recent runs non-consecutive failures/successes (run 26494921196 is SUCCESS as of 07:36 UTC today). `(Single-card) Frequent model and ttnn tests` = scattered failures mostly fixed by retry/attempt-2 (not ≥3-consecutive-same-error). No suitable WH single-card scheduled workflow with ≥3 consecutive same-error failures found. New disable PR deferred until a qualifying candidate emerges. |
 
 ---
 
 ## Recent Activity
 
+- `2026-05-27 ~10:00 UTC` — SESSION: BH systematic blocker persists: runs [26501610173](https://github.com/tenstorrent/tt-metal/actions/runs/26501610173) (SHA `9cc43ddc`, 09:01–09:51 UTC, failure) and [26499906125](https://github.com/tenstorrent/tt-metal/actions/runs/26499906125) (SHA `2c0072ef`, 08:25–09:39 UTC, failure) — 27th+ consecutive BH post-commit failures. PR [#44938](https://github.com/tenstorrent/tt-metal/pull/44938) CANDIDATE (7.3h old, verified-pass): updated_at 02:42 UTC; confirmed no action needed — awaiting human review. PR [#45108](https://github.com/tenstorrent/tt-metal/pull/45108) SKIP (<4h old, verified-pass, updated 07:04 UTC): lightweight only — no new completed runs since last session. PRs #45110/#45112/#45114: BH-blocked, no change. No new disable PR opportunity found (continuing from prior session investigation). 0 dispatches. State log updated.
 - `2026-05-27 ~09:00 UTC` — SESSION: BH systematic blocker still persists: BH post-commit run [26492593059](https://github.com/tenstorrent/tt-metal/actions/runs/26492593059) (May 27 05:25–06:07 UTC, SHA `c68e6ee`) = failure; 25+ consecutive failures; no in-progress BH runs. PR [#44938](https://github.com/tenstorrent/tt-metal/pull/44938) CANDIDATE (6.3h old, verified-pass): no action, awaiting human review. PR [#45108](https://github.com/tenstorrent/tt-metal/pull/45108) SKIP (<2h old). PRs #45110/#45112/#45114: BH-blocked. New disable PR investigation: `(Single-card) Demo tests` — latest run 26494921196 (May 27 07:36) SUCCESS; recent runs show non-consecutive pass/fail pattern, no ≥3 consecutive same-error failures. `(Single-card) Frequent model and ttnn tests` — scattered failures (most fixed by retry at attempt 2), no ≥3 consecutive same-error. No qualifying WH single-card workflow found. 0 dispatches this session. State log updated.
 - `2026-05-27 ~08:01 UTC` — SESSION: PRs #44938 and #45108 SKIP (< 1h old, `verified-pass`). PRs #45112 and #45114 SKIP (< 3h old, BH-blocked). PR [#45110](https://github.com/tenstorrent/tt-metal/pull/45110) CANDIDATE (verification-inconclusive): BH systematic blocker persists — latest BH post-commit main run [26492593059](https://github.com/tenstorrent/tt-metal/actions/runs/26492593059) (May 27 05:25–06:07 UTC, SHA `c68e6ee`) = failure; 23+ consecutive failures; no re-dispatch possible. Investigated `all-model-tests.yaml` for new disable PR — determined it is `workflow_dispatch` only (no scheduled main runs); not suitable for ≥3-consecutive-same-error disable pattern. New disable PR for non-BH WH single-card scheduled workflow deferred (context budget). 0 dispatches this session. State log updated.
 - `2026-05-27 ~07:01 UTC` — SESSION: PR [#45108](https://github.com/tenstorrent/tt-metal/pull/45108) CANDIDATE (4.3h old, `verified-pass`): rebased via `update_pull_request_branch` onto latest main `c68e6ee16713ace55d0fd4d677f418d4add39f8d`; PR now up-to-date; no new T3000 e2e main runs since [26438570812](https://github.com/tenstorrent/tt-metal/actions/runs/26438570812) (2026-05-26 07:27 UTC); CCL disables still valid (last revalidation 2026-05-26 20:35 UTC). PR [#44938](https://github.com/tenstorrent/tt-metal/pull/44938) CANDIDATE (4.3h old): confirmed not-behind-main (mergeable_state: `blocked`); no action needed — awaiting human review. BH systematic blocker: confirmed 22+ consecutive failures; most recent run [26492593059](https://github.com/tenstorrent/tt-metal/actions/runs/26492593059) (May 27 05:25–06:07 UTC, SHA `c68e6ee`) = failure. No in-flight runs. 0 dispatches. State log updated.
