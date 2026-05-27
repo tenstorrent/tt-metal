@@ -20,7 +20,7 @@ from models.demos.minimax_m27.utils.run_config import (
 
 
 class AbstractModule(ABC):
-    f"""Abstract base class for Deepseek submodules.
+    f"""Abstract base class for MiniMax M2 submodules.
 
     This class defines the common interface for submodules. The modules are not instantiated directly, but rather
     used as a namespace for the methods that define the model's behavior in prefill. This is to make it easy

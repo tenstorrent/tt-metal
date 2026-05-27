@@ -8,9 +8,9 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.tt.rms_norm.rms_norm_base import RMSNormBase
-from models.demos.deepseek_v3.utils.config_dataclass import (
+from models.demos.minimax_m27.tt.ccl import CCL
+from models.demos.minimax_m27.tt.rms_norm.rms_norm_base import RMSNormBase
+from models.demos.minimax_m27.utils.config_dataclass import (
     AllGatherAsyncConfig,
     FromWeightConfig,
     MeshDeviceStub,
@@ -18,8 +18,8 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     RMSNormPostAllGatherConfig,
     RMSNormPreAllGatherConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import get_state_dicts, shard_and_save
-from models.demos.deepseek_v3.utils.run_config import (
+from models.demos.minimax_m27.utils.config_helpers import get_state_dicts, shard_and_save
+from models.demos.minimax_m27.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelPrefillConfig,
     ModelState,

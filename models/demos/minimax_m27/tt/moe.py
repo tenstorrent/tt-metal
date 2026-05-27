@@ -7,11 +7,11 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.tt.experts import Experts as MoEExperts
-from models.demos.deepseek_v3.tt.moe_gate import MoEGate
-from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_dataclass import (
+from models.demos.minimax_m27.tt.ccl import CCL
+from models.demos.minimax_m27.tt.experts import Experts as MoEExperts
+from models.demos.minimax_m27.tt.moe_gate import MoEGate
+from models.demos.minimax_m27.utils.abstract_module import AbstractModule
+from models.demos.minimax_m27.utils.config_dataclass import (
     AllGatherAsyncConfig,
     AllToAllCombineConfig,
     AllToAllDispatchConfig,
@@ -20,13 +20,13 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReduceScatterAsyncMinimalConfig,
     RepeatConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import SPARSITY_BLOCK_SIZE
-from models.demos.deepseek_v3.utils.run_config import ModelPrefillConfig, ModelState, RunPrefillConfig, WeightConfig
-from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
+from models.demos.minimax_m27.utils.config_helpers import SPARSITY_BLOCK_SIZE
+from models.demos.minimax_m27.utils.run_config import ModelPrefillConfig, ModelState, RunPrefillConfig, WeightConfig
+from models.demos.minimax_m27.utils.shared_state_addon import SharedStateAddOn
 
 
 class MoE(SharedStateAddOn, AbstractModule):
-    """MoE module from DeepSeek-R1.
+    """MoE module for MiniMax M2.
     See the `AbstractModule` docstring for usage info.
     """
 
@@ -45,9 +45,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         assert state_dict is not None
 
         return {
-            "moe_gate": MoEGate.convert_weights(
-                hf_config, (state_dict,), output_path / "moe_gate", mesh_device, "gate."
-            ),
+            "moe_gate": MoEGate.convert_weights(hf_config, (state_dict,), output_path / "moe_gate", mesh_device),
             "moe_experts": MoEExperts.convert_weights(
                 hf_config, (state_dict,), output_path / "moe_experts", mesh_device
             ),
@@ -87,7 +85,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
 
         remap_topk_mask = ttnn.from_torch(
-            torch.ones((1, num_dispatch_device_rows, 1, hf_config.n_routed_experts), dtype=torch.bfloat16),
+            torch.ones((1, num_dispatch_device_rows, 1, hf_config.num_local_experts), dtype=torch.bfloat16),
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             dtype=ttnn.bfloat16,

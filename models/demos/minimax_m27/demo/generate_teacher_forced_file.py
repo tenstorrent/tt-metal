@@ -14,8 +14,8 @@ from pathlib import Path
 import torch
 from transformers import AutoConfig, AutoTokenizer
 
-from models.demos.deepseek_v3.utils.config_helpers import dequantize
-from models.demos.deepseek_v3.utils.hf_model_utils import (
+from models.demos.minimax_m27.utils.config_helpers import dequantize
+from models.demos.minimax_m27.utils.hf_model_utils import (
     apply_with_names,
     load_model_uninitialized,
     load_model_weights,

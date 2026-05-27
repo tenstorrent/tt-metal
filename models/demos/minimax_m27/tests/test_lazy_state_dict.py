@@ -11,9 +11,9 @@ import pytest
 import safetensors.torch
 import torch
 
-from models.demos.deepseek_v3.utils import lazy_state_dict as lsd
-from models.demos.deepseek_v3.utils.config_helpers import get_state_dicts, sub_state_dict
-from models.demos.deepseek_v3.utils.test_utils import load_state_dict
+from models.demos.minimax_m27.utils import lazy_state_dict as lsd
+from models.demos.minimax_m27.utils.config_helpers import get_state_dicts, sub_state_dict
+from models.demos.minimax_m27.utils.test_utils import load_state_dict
 
 
 def _write_index(model_dir: Path, weight_map: dict[str, str]) -> None:
@@ -123,25 +123,25 @@ def test_lazy_cache_does_not_collide_across_views(tmp_path: Path):
     # Create keys with identical suffix under different prefixes
     file1 = model_dir / "model-00001-of-00002.safetensors"
     file2 = model_dir / "model-00002-of-00002.safetensors"
-    key_shared = "model.layers.3.block_sparse_moe.shared_experts.gate_proj.weight"
-    key_exp = "model.layers.3.block_sparse_moe.experts.0.gate_proj.weight"
-    t_shared = torch.randn(32, 32, dtype=torch.bfloat16)
+    key_moe = "model.layers.3.block_sparse_moe.w1.weight"
+    key_exp = "model.layers.3.block_sparse_moe.experts.0.w1.weight"
+    t_moe = torch.randn(32, 32, dtype=torch.bfloat16)
     t_exp = torch.randn(9, 5, dtype=torch.bfloat16)
-    safetensors.torch.save_file({key_shared: t_shared}, str(file1))
+    safetensors.torch.save_file({key_moe: t_moe}, str(file1))
     safetensors.torch.save_file({key_exp: t_exp}, str(file2))
-    _write_index(model_dir, {key_shared: file1.name, key_exp: file2.name})
+    _write_index(model_dir, {key_moe: file1.name, key_exp: file2.name})
 
     # Load lazily and create two different sub-views
     state = load_state_dict(model_dir, "")
-    sub_shared = sub_state_dict(state, "model.layers.3.block_sparse_moe.shared_experts.")
+    sub_moe = sub_state_dict(state, "model.layers.3.block_sparse_moe.")
     sub_exp = sub_state_dict(state, "model.layers.3.block_sparse_moe.experts.0.")
 
-    # Access the shared-expert key first, caching it
-    v_shared = sub_shared["gate_proj.weight"]
-    assert v_shared.shape == t_shared.shape
+    # Access the outer key first, caching it
+    v_moe = sub_moe["w1.weight"]
+    assert v_moe.shape == t_moe.shape
 
-    # Then access the routed expert key; should not collide with shared-expert cache
-    v_exp = sub_exp["gate_proj.weight"]
+    # Then access the expert key; should not collide with the outer cache entry
+    v_exp = sub_exp["w1.weight"]
     assert v_exp.shape == t_exp.shape
 
 

@@ -10,18 +10,19 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
-from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d import DecoderBlock1D
-from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d_base import DecoderBlock1DBase
-from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d import DecoderBlock2D
-from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
-from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_1d import MoEDecoderBlock1D
-from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
-from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
-from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
-from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import (
+from models.demos.minimax_m27.conftest import PREFILL_SEQ_LENS
+from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2DecoderLayer
+from models.demos.minimax_m27.tt.decoder_block.decoder_block_1d import DecoderBlock1D
+from models.demos.minimax_m27.tt.decoder_block.decoder_block_1d_base import DecoderBlock1DBase
+from models.demos.minimax_m27.tt.decoder_block.decoder_block_2d import DecoderBlock2D
+from models.demos.minimax_m27.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
+from models.demos.minimax_m27.tt.decoder_block.moe_decoder_block_1d import MoEDecoderBlock1D
+from models.demos.minimax_m27.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
+from models.demos.minimax_m27.tt.mla.mla1d import MLA1D
+from models.demos.minimax_m27.tt.mla.mla2d import MLA2D
+from models.demos.minimax_m27.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.minimax_m27.utils.run_config import create_run_config
+from models.demos.minimax_m27.utils.test_utils import (
     add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
     dequantize_state_dict,
@@ -32,7 +33,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_reference_with_attention,
     torch_cache_from_transformers_single_layer,
 )
-from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2DecoderLayer
 
 
 def generate_reference_io(

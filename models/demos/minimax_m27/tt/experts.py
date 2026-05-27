@@ -9,21 +9,21 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_dataclass import (
+from models.demos.minimax_m27.utils.abstract_module import AbstractModule
+from models.demos.minimax_m27.utils.config_dataclass import (
     FromWeightConfig,
     MeshDeviceStub,
     MulConfig,
     SparseMatmulConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import (
+from models.demos.minimax_m27.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     SPARSITY_BLOCK_SIZE,
     dequantize,
     even_int_div,
     shard_and_save,
 )
-from models.demos.deepseek_v3.utils.run_config import ModelPrefillConfig, RunPrefillConfig, WeightConfig
+from models.demos.minimax_m27.utils.run_config import ModelPrefillConfig, RunPrefillConfig, WeightConfig
 
 
 class Experts(AbstractModule):
@@ -32,7 +32,7 @@ class Experts(AbstractModule):
     @classmethod
     def _get_num_experts_per_device(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> int:
         """Calculate the number of experts per device based on the total number of experts and the device shape."""
-        return even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
+        return even_int_div(hf_config.num_local_experts, mesh_device.get_num_devices())
 
     @classmethod
     def convert_weights(
@@ -42,13 +42,15 @@ class Experts(AbstractModule):
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        assert hf_config.n_routed_experts % mesh_device.get_num_devices() == 0, (
-            f"Number of experts ({hf_config.n_routed_experts}) must be divisible by the number of devices "
+        num_local_experts = hf_config.num_local_experts
+        assert num_local_experts % mesh_device.get_num_devices() == 0, (
+            f"Number of experts ({num_local_experts}) must be divisible by the number of devices "
             f"({mesh_device.get_num_devices()})"
         )
         (state_dict,) = state_dicts
         assert state_dict is not None
 
+        # MiniMax M2.7 reference MLP names: w1 (gate), w3 (up), w2 (down).
         return {
             ttnn_name: {
                 "input_tensor_b": shard_and_save(
@@ -57,13 +59,13 @@ class Experts(AbstractModule):
                         torch.stack(
                             [
                                 state_dict[f"experts.{expert_id}.{hf_name}.weight"]
-                                for expert_id in range(hf_config.n_routed_experts)
+                                for expert_id in range(num_local_experts)
                             ]
                         ),
                         torch.stack(
                             [
                                 state_dict[f"experts.{expert_id}.{hf_name}.weight_scale_inv"]
-                                for expert_id in range(hf_config.n_routed_experts)
+                                for expert_id in range(num_local_experts)
                             ]
                         ),
                         (1, *hf_config.quantization_config["weight_block_size"]),
@@ -77,9 +79,9 @@ class Experts(AbstractModule):
                 )
             }
             for hf_name, ttnn_name in [
-                ("gate_proj", "w1_experts"),
-                ("down_proj", "w2_experts"),
-                ("up_proj", "w3_experts"),
+                ("w1", "w1_experts"),
+                ("w2", "w2_experts"),
+                ("w3", "w3_experts"),
             ]
         }
 
@@ -108,13 +110,23 @@ class Experts(AbstractModule):
         Returns:
             MatmulMultiCoreReuseMultiCast1DProgramConfig for sparse_matmul
         """
+        n_tiles = int(math.ceil(n / ttnn.TILE_SIZE))
+        num_cores = core_x * core_y
+        assert n_tiles % num_cores == 0, (
+            f"sparse_matmul program config: n_tiles ({n_tiles}, from n={n}) must be divisible by the "
+            f"core grid size ({core_x}x{core_y}={num_cores}). Pick a grid that evenly divides n_tiles."
+        )
+        per_core_N = n_tiles // num_cores
+        assert (
+            per_core_N > 0
+        ), f"sparse_matmul program config: per_core_N must be > 0; got n_tiles={n_tiles} on {num_cores} cores"
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
             in0_block_w=2,
             out_subblock_h=1,
             out_subblock_w=1,
             per_core_M=1,
-            per_core_N=int(math.ceil(n / ttnn.TILE_SIZE)) // (core_x * core_y),
+            per_core_N=per_core_N,
             fuse_batch=False,
             fused_activation=None,
             mcast_in0=True,
@@ -124,20 +136,22 @@ class Experts(AbstractModule):
     def _create_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelPrefillConfig:
         num_experts_per_device = cls._get_num_experts_per_device(hf_config, mesh_device)
 
-        # Calculate dimensions
+        # MiniMax M2.7 uses a single FFN dim (`intermediate_size`) for both dense MLPs and MoE experts.
         hidden_size = hf_config.hidden_size
-        moe_intermediate_size = hf_config.moe_intermediate_size
+        moe_intermediate_size = hf_config.intermediate_size
 
         input_memory_config = ttnn.DRAM_MEMORY_CONFIG
         output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         # Construct the config
         return {
+            # MiniMax M2.7 dims: intermediate_size=1536 -> 48 N-tiles; hidden_size=3072 -> 96 N-tiles.
+            # 8x6=48 cores evenly divides both (per_core_N=1 for w1/w3, per_core_N=2 for w2).
             "w1_experts": SparseMatmulConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
-                program_config=cls._get_sparse_pc(core_x=8, core_y=8, n=moe_intermediate_size),
+                program_config=cls._get_sparse_pc(core_x=8, core_y=6, n=moe_intermediate_size),
                 is_input_a_sparse=False,
                 is_input_b_sparse=True,
                 output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
@@ -146,7 +160,7 @@ class Experts(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
-                program_config=cls._get_sparse_pc(core_x=8, core_y=7, n=hidden_size),
+                program_config=cls._get_sparse_pc(core_x=8, core_y=6, n=hidden_size),
                 is_input_a_sparse=True,
                 is_input_b_sparse=False,
                 output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
@@ -155,7 +169,7 @@ class Experts(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
-                program_config=cls._get_sparse_pc(core_x=8, core_y=8, n=moe_intermediate_size),
+                program_config=cls._get_sparse_pc(core_x=8, core_y=6, n=moe_intermediate_size),
                 is_input_a_sparse=False,
                 is_input_b_sparse=True,
                 output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),

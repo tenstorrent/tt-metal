@@ -8,12 +8,10 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
-from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
-from models.demos.deepseek_v3.tt.moe import MoE
-from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
-from models.demos.deepseek_v3.utils.run_config import ModelPrefillConfig, ModelState, RunPrefillConfig, WeightConfig
+from models.demos.minimax_m27.tt.ccl import CCL
+from models.demos.minimax_m27.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
+from models.demos.minimax_m27.tt.moe import MoE
+from models.demos.minimax_m27.utils.run_config import ModelPrefillConfig, ModelState, RunPrefillConfig, WeightConfig
 
 
 class MoEDecoderBlock2D(DecoderBlock2DBase):
@@ -27,12 +25,6 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         mesh_device: ttnn.MeshDevice,
     ) -> WeightConfig:
         return {
-            "shared_expert": SharedExpert.convert_weights(
-                hf_config,
-                (sub_state_dict(state_dict, "shared_experts."),) * mesh_device.shape[0],
-                output_path / "shared_experts",
-                mesh_device,
-            ),
             "moe": MoE.convert_weights(hf_config, (state_dict,), output_path / "moe", mesh_device),
         }
 
@@ -44,7 +36,6 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         mesh_device: ttnn.MeshDevice,
     ) -> ModelPrefillConfig:
         return {
-            "shared_expert": SharedExpert.prefill_model_config(hf_config, mesh_device),
             "moe": MoE.prefill_model_config(hf_config, mesh_device),
         }
 
@@ -66,7 +57,6 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         ccl: CCL,
     ) -> ModelState:
         return {
-            "shared_expert": SharedExpert.create_state(hf_config, mesh_device, ccl),
             "moe": MoE.create_state(hf_config, mesh_device, ccl),
         }
 
@@ -78,16 +68,13 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         mesh_device: ttnn.MeshDevice,
     ) -> ModelState:
         return {
-            "shared_expert": {},
             "moe": MoE.create_shared_state(hf_config, mesh_device),
         }
 
     @classmethod
     @abstractmethod
     def forward_mlp_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        mlp_out = MoE.forward_prefill(x, cfg["moe"])
-        mlp_out += SharedExpert.forward_prefill(x, cfg["shared_expert"])
-        return mlp_out
+        return MoE.forward_prefill(x, cfg["moe"])
 
     @classmethod
     @abstractmethod

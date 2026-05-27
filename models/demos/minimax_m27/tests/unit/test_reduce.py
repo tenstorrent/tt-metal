@@ -6,8 +6,8 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3.tests.unit.utils import random_torch_tensor, run_test
-from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_SDPA
+from models.demos.minimax_m27.tests.unit.utils import random_torch_tensor, run_test
+from models.demos.minimax_m27.utils.config_helpers import COMPUTE_KERNEL_CONFIG_SDPA
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

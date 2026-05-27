@@ -7,8 +7,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.tests.unit.utils import run_test
-from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_LOFI, create_sharded_norm_config
+from models.demos.minimax_m27.tests.unit.utils import run_test
+from models.demos.minimax_m27.utils.config_helpers import COMPUTE_KERNEL_CONFIG_LOFI, create_sharded_norm_config
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # =============================================================================

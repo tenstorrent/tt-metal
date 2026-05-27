@@ -9,17 +9,17 @@ from loguru import logger
 import ttnn
 
 # Import from local reference files instead of HuggingFace
-from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
-from models.demos.deepseek_v3.tt.moe import MoE
-from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import (
+from models.demos.minimax_m27.conftest import PREFILL_SEQ_LENS
+from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2SparseMoeBlock
+from models.demos.minimax_m27.tt.moe import MoE
+from models.demos.minimax_m27.utils.run_config import create_run_config
+from models.demos.minimax_m27.utils.test_utils import (
     add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
     get_model_config,
     get_test_weight_config,
     run_module_forward,
 )
-from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2SparseMoeBlock
 
 
 @pytest.fixture
@@ -72,6 +72,8 @@ def test_forward_pass(
     topk_fallback,
 ):
     """Test forward pass against reference model."""
+    if mode == "decode":
+        pytest.skip("Decode mode is not supported for MiniMax M2.7 MoE")
 
     batch_size = 1
 

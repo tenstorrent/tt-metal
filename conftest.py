@@ -1234,7 +1234,7 @@ def pytest_timeout_set_timer(item, settings):
 # This is a hook used in pytest-xdist to handle when a worker crashes out
 # In our case, combined with pytest-timeout thread method, the worker will crash out for a hang and
 # then it should get cleaned up by the controller through this fixture
-@pytest.hookimpl(tryfirst=True)
+@pytest.hookimpl(tryfirst=True, optionalhook=True)
 def pytest_handlecrashitem(crashitem, report, sched):
     reset_tensix()
 
@@ -1262,7 +1262,7 @@ def reset_tensix(tt_open_devices=None):
     logger.info(f"tt-smi reset status: {smi_reset_result.returncode}")
 
 
-@pytest.hookimpl(tryfirst=True)
+@pytest.hookimpl(tryfirst=True, optionalhook=True)
 def pytest_xdist_auto_num_workers(config):
     return 1
 

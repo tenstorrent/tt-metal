@@ -12,9 +12,9 @@ from pathlib import Path
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
-from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
-from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
+from models.demos.minimax_m27.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
+from models.demos.minimax_m27.utils.hf_model_utils import load_tokenizer
+from models.demos.minimax_m27.utils.test_utils import system_name_to_mesh_shape
 
 
 def _print_performance_metrics(results: dict) -> None:
@@ -282,7 +282,7 @@ def run_demo(
                 raise SystemExit("--token-accuracy requires --reference-file pointing to a .pt/.refpt file")
 
             # Lazy import to avoid overhead when not used
-            from models.demos.deepseek_v3.demo.token_accuracy import TokenAccuracy
+            from models.demos.minimax_m27.demo.token_accuracy import TokenAccuracy
 
             token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
         if generator == "bp":

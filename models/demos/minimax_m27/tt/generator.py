@@ -12,14 +12,14 @@ from loguru import logger
 from transformers import AutoConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
-from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
-from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
-from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.weight_config import get_weight_config
+from models.demos.minimax_m27.tt.ccl import CCL
+from models.demos.minimax_m27.tt.mla.mla2d import MLA2D
+from models.demos.minimax_m27.tt.model.row_batched_model import RowBatchedModel
 from models.demos.minimax_m27.tt.rope import RotarySetup
+from models.demos.minimax_m27.utils.config_dataclass import KvCacheConfig
+from models.demos.minimax_m27.utils.config_helpers import USERS_PER_ROW, even_int_div
+from models.demos.minimax_m27.utils.run_config import create_run_config
+from models.demos.minimax_m27.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 

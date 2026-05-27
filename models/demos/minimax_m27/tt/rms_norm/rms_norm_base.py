@@ -5,8 +5,8 @@
 from abc import abstractmethod
 
 import ttnn
-from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.run_config import RunPrefillConfig
+from models.demos.minimax_m27.utils.abstract_module import AbstractModule
+from models.demos.minimax_m27.utils.run_config import RunPrefillConfig
 
 
 class RMSNormBase(AbstractModule):

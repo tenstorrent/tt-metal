@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3.tests.unit.utils import random_torch_tensor, run_test
+from models.demos.minimax_m27.tests.unit.utils import random_torch_tensor, run_test
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

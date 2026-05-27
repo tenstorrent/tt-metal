@@ -55,7 +55,7 @@ def get_cos_sin_matrix(hf_config):
 
 class RotarySetup:
     """
-    Class to set up rotary positional embeddings for DeepSeek/MiniMax models.
+    Class to set up rotary positional embeddings for MiniMax M2 models.
 
     Duplicate + changes from TTT rope.py
     NOTE: it would be better to re-migrate this class to TTT rope.py at some point

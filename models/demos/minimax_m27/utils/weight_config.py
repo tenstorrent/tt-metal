@@ -51,7 +51,7 @@ def locked_file(file_path: Path, mode: str = "r", exclusive: bool = False):
 # JSON serializer for the weight config
 class WeightConfigEncoder(json.JSONEncoder):
     def default(self, obj):
-        if isinstance(obj, SavedWeight):
+        if _is_saved_weight(obj):
             obj = {
                 "path": str(obj.path),
                 "memory_config": None if obj.memory_config is None else json.loads(obj.memory_config.to_json()),
@@ -71,6 +71,16 @@ def try_decode_saved_weight(obj: dict[str, Any]) -> Any:
     }.issubset(memory_config_dict.keys()):
         return obj
     return SavedWeight(path=Path(path_str), memory_config=ttnn.MemoryConfig.from_json(json.dumps(memory_config_dict)))
+
+
+def _is_saved_weight(obj: Any) -> bool:
+    # Accept SavedWeight objects coming from either minimax_m27 or deepseek_v3 config_dataclass modules.
+    return (
+        obj is not None
+        and obj.__class__.__name__ == "SavedWeight"
+        and hasattr(obj, "path")
+        and hasattr(obj, "memory_config")
+    )
 
 
 def _try_load_cached_config(config_path: Path, weight_cache_path: Path, force_recalculate: bool) -> WeightConfig | None:
@@ -195,19 +205,47 @@ def validate_weight_config_paths(root_path: Path, weight_config: WeightConfig, p
     Raises:
         ValueError: If any SavedWeight path is invalid (missing file, wrong suffix, etc.)
     """
-    if isinstance(weight_config, dict):
+    if _is_saved_weight(weight_config):
+        current_prefix = path_prefix or "<root>"
+
+        # Reject absolute paths - configs should only contain relative paths for portability
+        if weight_config.path.is_absolute():
+            raise ValueError(
+                f"SavedWeight at '{current_prefix}' has absolute path '{weight_config.path}'. "
+                f"Only relative paths are allowed in weight configs for portability."
+            )
+
+        # Resolve effective path
+        effective_path = root_path / weight_config.path
+
+        # Validate suffix
+        if weight_config.path.suffix != TENSOR_CACHE_EXTENSION:
+            raise ValueError(
+                f"SavedWeight at '{current_prefix}' has invalid suffix '{weight_config.path.suffix}'. "
+                f"Expected '{TENSOR_CACHE_EXTENSION}'. Path: {weight_config.path}"
+            )
+
+        # Validate file exists
+        if not effective_path.exists():
+            raise ValueError(
+                f"SavedWeight at '{current_prefix}' references missing file. "
+                f"Resolved path: {effective_path} (original: {weight_config.path})"
+            )
+        return
+    elif isinstance(weight_config, dict):
         entries = weight_config.items()
     elif isinstance(weight_config, (list, tuple)):
         entries = enumerate(weight_config)
     else:
-        raise ValueError(f"Invalid weight config type: {type(weight_config)}")
+        # Primitive / non-container leaves do not require path validation.
+        return
 
     for key, entry in entries:
         if entry is None:
             continue
         current_prefix = f"{path_prefix}.{key}" if path_prefix else str(key)
 
-        if isinstance(entry, SavedWeight):
+        if _is_saved_weight(entry):
             # Reject absolute paths - configs should only contain relative paths for portability
             if entry.path.is_absolute():
                 raise ValueError(
@@ -258,7 +296,7 @@ def normalize_weight_config_paths(root_path: Path, weight_config: WeightConfig) 
         ]
         # Preserve tuple type if input was a tuple
         return tuple(normalized) if isinstance(weight_config, tuple) else normalized
-    elif isinstance(weight_config, SavedWeight):
+    elif _is_saved_weight(weight_config):
         # Create a new SavedWeight with absolute path
         if weight_config.path.is_absolute():
             normalized_path = weight_config.path

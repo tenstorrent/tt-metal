@@ -164,7 +164,7 @@ python models/demos/deepseek_v3/demo/demo.py --prompts-file models/demos/deepsee
 ### Programmatic usage
 
 ```python
-from models.demos.deepseek_v3.demo.demo import run_demo
+from models.demos.minimax_m27.demo.demo import run_demo
 
 # Full-model generation (prompt required)
 run_demo(["Write a haiku about hardware"], model_path="/abs/path/to/deepseek-v3")

@@ -7,10 +7,10 @@ from pathlib import Path
 import pytest
 import torch
 
-from models.demos.deepseek_v3.demo.demo import run_demo
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
-from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
-from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
+from models.demos.minimax_m27.demo.demo import run_demo
+from models.demos.minimax_m27.utils.config_helpers import USERS_PER_ROW
+from models.demos.minimax_m27.utils.hf_model_utils import load_tokenizer
+from models.demos.minimax_m27.utils.test_utils import system_name_to_mesh_shape
 
 MODEL_PATH = Path(
     os.getenv(

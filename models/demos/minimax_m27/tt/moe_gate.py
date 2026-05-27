@@ -8,32 +8,29 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_dataclass import (
+from models.demos.minimax_m27.reference.reference_utils import topk_bitonic
+from models.demos.minimax_m27.utils.abstract_module import AbstractModule
+from models.demos.minimax_m27.utils.config_dataclass import (
     BinaryOpConfig,
     FromWeightConfig,
     LinearConfig,
     LinearFallbackConfig,
     MeshDeviceStub,
-    MulConfig,
-    ReshapeConfig,
-    ScatterConfig,
     TopKConfig,
     TopKFallbackConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import (
-    COMPUTE_KERNEL_CONFIG_HIFI2,
-    TOPK_MIN_WIDTH,
-    even_int_div,
-    shard_and_save,
-)
-from models.demos.deepseek_v3.utils.run_config import ModelPrefillConfig, RunPrefillConfig, WeightConfig
-from models.demos.minimax_m27.reference.reference_utils import topk_bitonic
+from models.demos.minimax_m27.utils.config_helpers import COMPUTE_KERNEL_CONFIG_HIFI2, shard_and_save
+from models.demos.minimax_m27.utils.run_config import ModelPrefillConfig, RunPrefillConfig, WeightConfig
 
 
 class MoEGate(AbstractModule):
-    """MoE gate module from DeepSeek-R1.
-    See the `AbstractModule` docstring for usage info.
+    """MoE gate module for MiniMax M2.7.
+
+    Implements the flat sigmoid + correction-bias top-k routing used by
+    ``MiniMaxM2MoEGate`` / ``MiniMaxM2SparseMoeBlock`` (no grouped routing,
+    no routed scaling factor).
+
+    See the ``AbstractModule`` docstring for usage info.
     """
 
     @classmethod
@@ -45,13 +42,21 @@ class MoEGate(AbstractModule):
         mesh_device: ttnn.Device,
         prefix: str = "",
     ) -> WeightConfig:
+        """Convert MoE-gate weights.
+
+        Expected state-dict keys (under ``prefix``, which should be the
+        block-level prefix, e.g. ``""`` for the standalone gate or for a
+        ``MiniMaxM2SparseMoeBlock``):
+            - ``gate.weight``                  (router projection)
+            - ``e_score_correction_bias``      (additive routing bias)
+        """
         (state_dict,) = state_dicts
         assert state_dict is not None
         return {
             "gate_proj": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"gate_proj.input_tensor_b",
-                    state_dict[f"{prefix}weight"].T.unsqueeze(0).unsqueeze(0),
+                    state_dict[f"{prefix}gate.weight"].T.unsqueeze(0).unsqueeze(0),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat16,
@@ -70,40 +75,6 @@ class MoEGate(AbstractModule):
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
             },
-            "multiply_expert_scale": {
-                "input_tensor_b": shard_and_save(
-                    output_path / f"multiply_expert_scale.input_tensor_b",
-                    torch.tensor([hf_config.routed_scaling_factor])
-                    .repeat(1, hf_config.num_experts_per_tok)
-                    .unsqueeze(0)
-                    .unsqueeze(0),
-                    shard_dims=(None, None),
-                    mesh_device=mesh_device,
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-            },
-            "scatter_top_expert_groups": {
-                "input": shard_and_save(
-                    output_path / f"scatter_top_expert_groups.input",
-                    torch.full((1, 1, 1, hf_config.n_group), -float("inf")),
-                    shard_dims=(None, None),
-                    mesh_device=mesh_device,
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                ),
-                "src": shard_and_save(
-                    output_path / f"scatter_top_expert_groups.src",
-                    torch.ones((1, 1, 1, hf_config.topk_group)),
-                    shard_dims=(None, None),
-                    mesh_device=mesh_device,
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                ),
-            },
         }
 
     @classmethod
@@ -115,7 +86,9 @@ class MoEGate(AbstractModule):
         use_bitonic_sort: bool = True,
     ) -> ModelPrefillConfig:
         """Generate prefill configuration for this module.
-        Note: topk_fallback and use_bitonic_sort are defaulted to True and not required in future when we have equivalent topk op.
+
+        Note: ``topk_fallback`` and ``use_bitonic_sort`` exist as a workaround
+        until we have an equivalent on-device top-k op.
 
         Args:
             hf_config: HuggingFace model configuration object
@@ -127,48 +100,21 @@ class MoEGate(AbstractModule):
         """
         memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-        # Construct the config
         return {
             "gate_proj": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
+            # Bias is stored as fp32 (see convert_weights). Keep the add in fp32 to match the
+            # reference, which runs sigmoid + bias + normalize in fp32 and only casts back to
+            # the input dtype at the very end.
             "add_score_correction_bias": BinaryOpConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=memory_config,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.float32,
             ),
-            "multiply_expert_scale": BinaryOpConfig(
-                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=memory_config,
-                dtype=ttnn.bfloat16,
-            ),
-            "reshape_scores": ReshapeConfig(
-                shape=(1, -1, hf_config.n_group, even_int_div(hf_config.n_routed_experts, hf_config.n_group)),
-            ),
-            "topk_within_expert_groups": TopKConfig(
-                k=2,  # no hf config for this
-                dim=-1,
-            ),
-            "topk_expert_groups": TopKConfig(
-                k=hf_config.topk_group,
-                dim=-1,
-            ),
-            "scatter_top_expert_groups": ScatterConfig(
-                input=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                src=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                dim=3,
-            ),
-            "reshape_group_mask": ReshapeConfig(
-                shape=(1, -1, hf_config.n_group, 1),
-            ),
-            "reshape_active_experts": ReshapeConfig(
-                shape=(1, 1, -1, hf_config.n_routed_experts),
-            ),
-            "mul_scores_with_mask": MulConfig(
-                memory_config=memory_config,
-            ),
+            "output_dtype": ttnn.bfloat16,
             "topk_experts": TopKConfig(
                 k=hf_config.num_experts_per_tok,
                 dim=-1,
@@ -212,135 +158,71 @@ class MoEGate(AbstractModule):
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """MiniMax M2.7 routing.
+
+        Steps (matches reference ``MiniMaxM2MoEGate.forward``):
+            1. logits = x @ gate_proj.T
+            2. scores = sigmoid(logits.float())        # run sigmoid + downstream math in fp32
+            3. scores_for_choice = scores + e_score_correction_bias
+            4. top_k_index = topk(scores_for_choice).indices
+            5. top_k_weights = gather(scores, top_k_index)  # original (unbiased) scores
+            6. top_k_weights /= top_k_weights.sum() + 1e-20
+            7. cast back to bfloat16
+        """
         assert x.memory_config() == cfg["input_memory_config"]
 
-        # Gate projections
+        # 1) Gate projection
         if cfg["linear_fallback"]:
             logits = cls.linear_fallback_op(x, **cfg["linear_fallback_config"], **cfg["gate_proj"])
         else:
             logits = ttnn.linear(x, **cfg["gate_proj"])
-        # Sigmoid activation
-        scores = ttnn.sigmoid(logits)
+
+        # 2) Sigmoid scoring in fp32 (matches reference's `sigmoid(router_logits.float())`).
+        # `ttnn.sigmoid` does accept fp32 input despite its docstring only listing bfloat16 --
+        # the device op validator (`unary_device_operation.cpp::validate_supported_arch_dtype`)
+        # has no dtype restriction for `SIGMOID`, and on fp32 it matches `torch.sigmoid`
+        # bit-exactly. Casting to fp32 here keeps the whole routing path in fp32.
+        logits_fp32 = ttnn.typecast(logits, dtype=ttnn.float32)
         ttnn.deallocate(logits)
-        # Add score correction bias
-        # Expand bias to match scores shape(dynamic shape)
+        scores = ttnn.sigmoid(logits_fp32)
+        ttnn.deallocate(logits_fp32)
+
+        # 3) Add score correction bias (broadcast bias across token dim) -- fp32.
         scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
         scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((1, 1, scores.shape[2], 1)))
         scores_correction_bias = ttnn.to_layout(scores_correction_bias, ttnn.TILE_LAYOUT)
-        scores_with_bias = ttnn.add(
+        scores_for_choice = ttnn.add(
             scores,
             scores_correction_bias,
             memory_config=cfg["add_score_correction_bias"]["memory_config"],
             dtype=cfg["add_score_correction_bias"]["dtype"],
         )
-        # Reshape scores to expert groups
-        expert_scores_grouped = ttnn.reshape(scores_with_bias, **cfg["reshape_scores"])
-        num_experts_per_group = expert_scores_grouped.shape[3]
 
-        # calculate top-2 scores with expert groups
+        # 4) Top-k expert selection (we only need indices from the biased scores)
         if cfg["topk_fallback"]:
-            topk_scores_within_expert_groups, topk_indices_within_expert_groups = cls.topk_fallback_op(
-                expert_scores_grouped, **cfg["topk_fallback_config"], **cfg["topk_within_expert_groups"]
+            topk_biased_scores, topk_experts_indices = cls.topk_fallback_op(
+                scores_for_choice, **cfg["topk_fallback_config"], **cfg["topk_experts"]
             )
         else:
-            if expert_scores_grouped.shape[3] < TOPK_MIN_WIDTH:
-                # Pad to 64 for topk op
-                expert_scores_grouped = ttnn.pad(
-                    expert_scores_grouped,
-                    [(0, 0), (0, 0), (0, 0), (0, TOPK_MIN_WIDTH - expert_scores_grouped.shape[3])],
-                    value=-float("inf"),
-                )
-            topk_scores_within_expert_groups, topk_indices_within_expert_groups = ttnn.topk(
-                expert_scores_grouped, **cfg["topk_within_expert_groups"]
-            )
-        ttnn.deallocate(expert_scores_grouped)
-        ttnn.deallocate(topk_indices_within_expert_groups)
-        # sum top-2 scores within expert groups
-        expert_group_scores = ttnn.sum(topk_scores_within_expert_groups, dim=3)
-        ttnn.deallocate(topk_scores_within_expert_groups)
-        # reshape to 4D tensor
-        expert_group_scores = ttnn.unsqueeze(expert_group_scores, dim=0)
+            topk_biased_scores, topk_experts_indices = ttnn.topk(scores_for_choice, **cfg["topk_experts"])
+        ttnn.deallocate(scores_for_choice)
+        ttnn.deallocate(topk_biased_scores)
 
-        # calculate top-k expert groups
-        if cfg["topk_fallback"]:
-            topk_expert_groups_scores, topk_expert_groups_indices = cls.topk_fallback_op(
-                expert_group_scores, **cfg["topk_fallback_config"], **cfg["topk_expert_groups"]
-            )
-        else:
-            if expert_group_scores.shape[3] < TOPK_MIN_WIDTH:
-                expert_group_scores = ttnn.pad(
-                    expert_group_scores,
-                    [(0, 0), (0, 0), (0, 0), (0, TOPK_MIN_WIDTH - expert_group_scores.shape[3])],
-                    value=-float("inf"),
-                )
-            topk_expert_groups_scores, topk_expert_groups_indices = ttnn.topk(
-                expert_group_scores, **cfg["topk_expert_groups"]
-            )
-        ttnn.deallocate(expert_group_scores)
-        ttnn.deallocate(topk_expert_groups_scores)
-
-        # create full expert_groups_mask(dynamic shape)
-        input_mask = cfg["scatter_top_expert_groups"]["input"]
-        input_mask = ttnn.repeat(input_mask, ttnn.Shape((1, 1, scores.shape[2], 1)))
-
-        # create full src tensor of ones
-        src_tensor = cfg["scatter_top_expert_groups"]["src"]
-        src_tensor = ttnn.repeat(src_tensor, ttnn.Shape((1, 1, scores.shape[2], 1)))
-
-        # scatter top-k expert groups indices to full expert_groups_mask
-        active_groups_mask = ttnn.scatter(
-            input=input_mask,
-            index=topk_expert_groups_indices,
-            src=src_tensor,
-            dim=cfg["scatter_top_expert_groups"]["dim"],
-        )
-        ttnn.deallocate(topk_expert_groups_indices)
-        active_groups_mask = ttnn.reshape(active_groups_mask, **cfg["reshape_group_mask"])
-
-        # expand active_groups_mask to all the experts
-        active_experts_mask = ttnn.repeat(active_groups_mask, ttnn.Shape((1, 1, 1, num_experts_per_group)))
-        ttnn.deallocate(active_groups_mask)
-        active_experts_mask = ttnn.reshape(active_experts_mask, **cfg["reshape_active_experts"])
-        active_experts_scores = ttnn.mul(scores_with_bias, active_experts_mask, **cfg["mul_scores_with_mask"])
-        ttnn.deallocate(scores_with_bias)
-        ttnn.deallocate(active_experts_mask)
-
-        # calculate top-k experts
-        if cfg["topk_fallback"]:
-            topk_experts_scores_with_bias, topk_experts_indices = cls.topk_fallback_op(
-                active_experts_scores, **cfg["topk_fallback_config"], **cfg["topk_experts"]
-            )
-        else:
-            topk_experts_scores_with_bias, topk_experts_indices = ttnn.topk(
-                active_experts_scores, **cfg["topk_experts"]
-            )
-        ttnn.deallocate(active_experts_scores)
-        ttnn.deallocate(topk_experts_scores_with_bias)
-
-        # gather original scores without bias
+        # 5) Gather *unbiased* sigmoid scores at the selected expert indices (still fp32).
         topk_experts_scores = ttnn.gather(scores, dim=3, index=topk_experts_indices)
         ttnn.deallocate(scores)
 
-        # normalize scores
-        topk_expert_scores_sum = ttnn.sum(topk_experts_scores, dim=3, keepdim=True) + 1e-20  # add norm eps
+        # 6) Normalize in fp32.
+        topk_expert_scores_sum = ttnn.sum(topk_experts_scores, dim=3, keepdim=True) + 1e-20
         topk_experts_scores_normalized = ttnn.div(topk_experts_scores, topk_expert_scores_sum)
         ttnn.deallocate(topk_expert_scores_sum)
         ttnn.deallocate(topk_experts_scores)
 
-        # multiply by expert scale
-        expert_scale = cfg["multiply_expert_scale"]["input_tensor_b"]
-        # expand expert_scale to match topk_experts_scores_normalized shape(dynamic shape)
-        expert_scale = ttnn.repeat(expert_scale, ttnn.Shape((1, 1, topk_experts_scores_normalized.shape[2], 1)))
-        expert_scale = ttnn.to_layout(expert_scale, ttnn.TILE_LAYOUT)
-        topk_experts_scores_normalized = ttnn.mul(
-            topk_experts_scores_normalized,
-            expert_scale,
-            memory_config=cfg["multiply_expert_scale"]["memory_config"],
-            dtype=cfg["multiply_expert_scale"]["dtype"],
-        )
-        ttnn.deallocate(expert_scale)
+        # 7) Cast back to bf16 to match the reference's final `.to(input_dtype)`.
+        topk_experts_scores_bf16 = ttnn.typecast(topk_experts_scores_normalized, dtype=cfg["output_dtype"])
+        ttnn.deallocate(topk_experts_scores_normalized)
 
-        return topk_experts_scores_normalized, topk_experts_indices
+        return topk_experts_scores_bf16, topk_experts_indices
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:

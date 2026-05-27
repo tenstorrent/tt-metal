@@ -6,18 +6,18 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
-from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
-from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
-from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
-from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import (
+from models.demos.minimax_m27.conftest import PREFILL_SEQ_LENS
+from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2RMSNorm
+from models.demos.minimax_m27.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
+from models.demos.minimax_m27.tt.rms_norm.rms_norm import RMSNorm
+from models.demos.minimax_m27.utils.config_helpers import sub_state_dict
+from models.demos.minimax_m27.utils.run_config import create_run_config
+from models.demos.minimax_m27.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
     get_test_weight_config,
     run_module_forward,
 )
-from models.demos.minimax_m27.reference.modeling_minimax_m2 import MiniMaxM2RMSNorm
 
 
 @pytest.mark.parametrize(

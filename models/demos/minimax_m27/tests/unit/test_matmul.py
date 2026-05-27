@@ -7,8 +7,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.tests.unit.utils import run_test
-from models.demos.deepseek_v3.utils.config_helpers import (
+from models.demos.minimax_m27.tests.unit.utils import run_test
+from models.demos.minimax_m27.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
     COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
     COMPUTE_KERNEL_CONFIG_LOFI,

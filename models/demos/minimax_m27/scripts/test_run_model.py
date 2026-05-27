@@ -5,7 +5,7 @@ import argparse
 
 import torch
 
-from models.demos.deepseek_v3.utils.hf_model_utils import (
+from models.demos.minimax_m27.utils.hf_model_utils import (
     add_dynamic_weight_loading_hooks,
     load_model_uninitialized,
     load_model_weights,

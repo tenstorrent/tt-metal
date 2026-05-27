@@ -9,13 +9,12 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d_base import DecoderBlock1DBase
-from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
-from models.demos.deepseek_v3.tt.moe import MoE
-from models.demos.deepseek_v3.utils.config_dataclass import AllGatherAsyncConfig
-from models.demos.deepseek_v3.utils.config_helpers import even_int_div, sub_state_dicts
-from models.demos.deepseek_v3.utils.run_config import ModelPrefillConfig, ModelState, RunPrefillConfig, WeightConfig
+from models.demos.minimax_m27.tt.ccl import CCL
+from models.demos.minimax_m27.tt.decoder_block.decoder_block_1d_base import DecoderBlock1DBase
+from models.demos.minimax_m27.tt.moe import MoE
+from models.demos.minimax_m27.utils.config_dataclass import AllGatherAsyncConfig
+from models.demos.minimax_m27.utils.config_helpers import even_int_div
+from models.demos.minimax_m27.utils.run_config import ModelPrefillConfig, ModelState, RunPrefillConfig, WeightConfig
 
 
 class MoEDecoderBlock1D(DecoderBlock1DBase):
@@ -32,9 +31,6 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
             state_dicts
         ), "Number of state dicts must match the number of mesh device rows"
         return {
-            "shared_expert": SharedExpert.convert_weights(
-                hf_config, sub_state_dicts(state_dicts, "shared_experts."), output_path / "shared_experts", mesh_device
-            ),
             "moe": [
                 (
                     MoE.convert_weights(hf_config, (state_dict,), output_path / f"moe_{i}", mesh_device)
@@ -53,7 +49,6 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
         mesh_device: ttnn.MeshDevice,
     ) -> ModelPrefillConfig:
         return {
-            "shared_expert": SharedExpert.prefill_model_config(hf_config, mesh_device),
             "moe": [MoE.prefill_model_config(hf_config, mesh_device)],
             "apply_dp": {
                 "mesh_shape": tuple(mesh_device.shape),
@@ -91,7 +86,6 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
             "moe": [
                 None if is_padding else MoE.create_state(hf_config, mesh_device, ccl) for is_padding in is_padding_layer
             ],
-            "shared_expert": SharedExpert.create_state(hf_config, mesh_device, ccl),
             "ccl": ccl,
         }
 
@@ -173,7 +167,6 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
     ) -> ModelState:
         return {
             "moe": [MoE.create_shared_state(hf_config, mesh_device)],
-            "shared_expert": {},
         }
 
     @classmethod
@@ -189,7 +182,6 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
         if apply_dp:
             ttnn.deallocate(x_dp)
             mlp_out = cls.revert_data_parallelism(mlp_out, row_idx, cfg)
-        mlp_out += SharedExpert.forward_prefill(x, cfg["shared_expert"])
         return mlp_out
 
     @classmethod
