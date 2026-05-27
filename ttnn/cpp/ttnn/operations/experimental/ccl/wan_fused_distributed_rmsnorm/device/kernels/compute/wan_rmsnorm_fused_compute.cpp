@@ -77,6 +77,11 @@ void kernel_main() {
     constexpr uint32_t stats_transposed_local_cb = get_compile_time_arg_val(24);
     constexpr uint32_t stats_transposed_gathered_cb = get_compile_time_arg_val(25);
     constexpr uint32_t packed_ag_enabled = get_compile_time_arg_val(26);
+    // Per-head RoPE: reader pushes num_tile_cols (num_heads * head_dim_tiles)
+    // cos/sin tiles per row (one per col). The post phase reads them by
+    // absolute index (col_tile + i) — no wrap-cycling. Broadcast RoPE
+    // (per_head_rope=0) pushes only head_dim_tiles and wraps.
+    constexpr uint32_t per_head_rope = get_compile_time_arg_val(27);
 
     constexpr uint32_t stats_dest_cb = (is_tp_1 != 0) ? stats_gathered_cb : stats_local_cb;
     // Per-row post reduce reads ring_size tiles. With packed AG enabled the
@@ -291,24 +296,31 @@ void kernel_main() {
                 }
 
                 // ----- Sub-phase 3b: intermediate * cos → intermediate (in-place) -----
-                // Cumulative wait on rope_cos_cb so compute can start as soon
-                // as the first cos tiles arrive. rope_cos_tile_in_head wraps
-                // at head_dim_tiles, so we never need more than head_dim_tiles
-                // tiles in CB.
+                // Per-head RoPE (per_head_rope=1): rope_cos_cb holds
+                // num_tile_cols tiles (one per col), indexed directly by
+                // col_tile+i. Broadcast RoPE (per_head_rope=0): rope_cos_cb
+                // holds head_dim_tiles tiles, cycled with rope_cos_tile_in_head.
+                // Cumulative wait lets compute start as soon as first cos
+                // tiles arrive.
                 reconfig_data_format(intermediate_cb, rope_cos_cb);
                 pack_reconfig_data_format(intermediate_cb);
                 mul_tiles_init(intermediate_cb, rope_cos_cb);
                 for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                     const uint32_t cos_tiles_needed =
-                        ((col_tile + block_size) < head_dim_tiles) ? (col_tile + block_size) : head_dim_tiles;
+                        (per_head_rope != 0)
+                            ? ((col_tile + block_size <= num_tile_cols) ? (col_tile + block_size) : num_tile_cols)
+                            : (((col_tile + block_size) < head_dim_tiles) ? (col_tile + block_size) : head_dim_tiles);
                     cb_wait_front(rope_cos_cb, cos_tiles_needed);
                     cb_wait_front(intermediate_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                        mul_tiles(intermediate_cb, rope_cos_cb, i, rope_cos_tile_in_head, i);
-                        rope_cos_tile_in_head++;
-                        if (rope_cos_tile_in_head == head_dim_tiles) {
-                            rope_cos_tile_in_head = 0;
+                        const uint32_t cos_idx = (per_head_rope != 0) ? (col_tile + i) : rope_cos_tile_in_head;
+                        mul_tiles(intermediate_cb, rope_cos_cb, i, cos_idx, i);
+                        if constexpr (per_head_rope == 0) {
+                            rope_cos_tile_in_head++;
+                            if (rope_cos_tile_in_head == head_dim_tiles) {
+                                rope_cos_tile_in_head = 0;
+                            }
                         }
                     }
                     tile_regs_commit();
@@ -323,21 +335,27 @@ void kernel_main() {
                 }
 
                 // ----- Sub-phase 3c: rotated * sin → rotated (in-place) -----
-                // Cumulative wait on rope_sin_cb (same pattern as rope_cos).
+                // Same pattern as cos: per_head_rope=1 uses col_tile+i index
+                // directly; per_head_rope=0 cycles within head_dim_tiles.
                 reconfig_data_format(rotated_input_cb, rope_sin_cb);
                 pack_reconfig_data_format(rotated_input_cb);
                 mul_tiles_init(rotated_input_cb, rope_sin_cb);
                 for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                     const uint32_t sin_tiles_needed =
-                        ((col_tile + block_size) < head_dim_tiles) ? (col_tile + block_size) : head_dim_tiles;
+                        (per_head_rope != 0)
+                            ? ((col_tile + block_size <= num_tile_cols) ? (col_tile + block_size) : num_tile_cols)
+                            : (((col_tile + block_size) < head_dim_tiles) ? (col_tile + block_size) : head_dim_tiles);
                     cb_wait_front(rope_sin_cb, sin_tiles_needed);
                     cb_wait_front(rotated_input_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                        mul_tiles(rotated_input_cb, rope_sin_cb, i, rope_sin_tile_in_head, i);
-                        rope_sin_tile_in_head++;
-                        if (rope_sin_tile_in_head == head_dim_tiles) {
-                            rope_sin_tile_in_head = 0;
+                        const uint32_t sin_idx = (per_head_rope != 0) ? (col_tile + i) : rope_sin_tile_in_head;
+                        mul_tiles(rotated_input_cb, rope_sin_cb, i, sin_idx, i);
+                        if constexpr (per_head_rope == 0) {
+                            rope_sin_tile_in_head++;
+                            if (rope_sin_tile_in_head == head_dim_tiles) {
+                                rope_sin_tile_in_head = 0;
+                            }
                         }
                     }
                     tile_regs_commit();
@@ -378,8 +396,11 @@ void kernel_main() {
             cb_pop_front(reduce_result_cb, 1);
 
             if constexpr (fuse_rope) {
-                cb_pop_front(rope_cos_cb, head_dim_tiles);
-                cb_pop_front(rope_sin_cb, head_dim_tiles);
+                // Pop matches per-row push count: num_tile_cols for per-head
+                // RoPE, head_dim_tiles for broadcast RoPE.
+                constexpr uint32_t rope_pop_per_row = (per_head_rope != 0) ? num_tile_cols : head_dim_tiles;
+                cb_pop_front(rope_cos_cb, rope_pop_per_row);
+                cb_pop_front(rope_sin_cb, rope_pop_per_row);
             }
         }
 

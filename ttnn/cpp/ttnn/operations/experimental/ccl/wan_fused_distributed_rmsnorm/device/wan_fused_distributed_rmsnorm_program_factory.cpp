@@ -167,6 +167,16 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const bool has_weight = weight.has_value();
     const bool fuse_rope = trans_mat.has_value() && rope_cos.has_value() && rope_sin.has_value();
 
+    // Per-head RoPE: cos/sin shape[1] == num_heads_per_device gives each head
+    // its own cos/sin block. shape[1] == 1 means broadcast (current default).
+    // rope_seqlen_tiles = cos sequence length in tiles, used by reader as the
+    // per-head stride when computing tile indices.
+    const bool per_head_rope = fuse_rope && (rope_cos->logical_shape()[1] == num_heads_per_device);
+    const uint32_t rope_seqlen_tiles = fuse_rope ? (rope_cos->logical_shape()[2] / TILE_HEIGHT) : 0u;
+    // Per-row RoPE push count: num_tile_cols for per-head (all heads' cos for
+    // this row, packed contiguously), head_dim_tiles for broadcast.
+    const uint32_t rope_tiles_per_row = per_head_rope ? num_tile_cols : head_dim_tiles;
+
     // ------------------------------------------------------------------------
     // Ring topology: my position + forward/backward fabric neighbors.
     // ------------------------------------------------------------------------
@@ -440,10 +450,13 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
 
     if (fuse_rope) {
         // Size rope CBs to hold a whole chunk's worth — reader pushes
-        // head_dim_tiles per row eagerly, compute pops them only at end of
-        // each row in post phase. Without chunk-sized buffering the reader
+        // rope_tiles_per_row per row eagerly, compute pops them only at end
+        // of each row in post phase. Without chunk-sized buffering the reader
         // blocks at row 1 and chunk_size_rows>1 input never fully arrives.
-        const uint32_t rope_cb_tiles = chunk_size_rows * head_dim_tiles;
+        // For per-head RoPE, rope_tiles_per_row = num_tile_cols
+        // (num_heads_per_device * head_dim_tiles); for the broadcast default
+        // it's just head_dim_tiles.
+        const uint32_t rope_cb_tiles = chunk_size_rows * rope_tiles_per_row;
         create_cb(rope_cos_cb_id, program, worker_core_set, fp32_tile_size, rope_cb_tiles, fp32_format);
         create_cb(rope_sin_cb_id, program, worker_core_set, fp32_tile_size, rope_cb_tiles, fp32_format);
     } else {
@@ -500,6 +513,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(fuse_rope),
         head_dim_tiles,
         chunk_size_rows,
+        static_cast<uint32_t>(per_head_rope),
+        rope_seqlen_tiles,
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     if (has_weight) {
@@ -653,6 +668,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         stats_transposed_local_cb_id,
         stats_transposed_gathered_cb_id,
         static_cast<uint32_t>(use_mux ? 1u : 0u),  // packed_ag_enabled
+        static_cast<uint32_t>(per_head_rope),
     };
 
     KernelHandle compute_kernel_id = CreateKernel(
