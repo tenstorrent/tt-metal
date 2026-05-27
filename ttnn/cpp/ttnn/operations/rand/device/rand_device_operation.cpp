@@ -47,7 +47,10 @@ ttsl::hash::hash_t RandDeviceOperation::compute_program_hash(
         operation_attributes.shape,
         operation_attributes.dtype,
         operation_attributes.layout,
-        operation_attributes.memory_config);
+        operation_attributes.memory_config,
+        operation_attributes.seed,
+        operation_attributes.from,
+        operation_attributes.to);
 }
 
 }  // namespace ttnn::operations::rand

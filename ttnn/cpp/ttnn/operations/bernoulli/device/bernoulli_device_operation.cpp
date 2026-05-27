@@ -66,6 +66,7 @@ ttsl::hash::hash_t BernoulliDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     return ttsl::hash::hash_objects_with_default_seed(
         ttsl::hash::type_hash<BernoulliDeviceOperation>,
+        attrs.seed,
         attrs.dtype,
         attrs.memory_config,
         attrs.compute_kernel_config,

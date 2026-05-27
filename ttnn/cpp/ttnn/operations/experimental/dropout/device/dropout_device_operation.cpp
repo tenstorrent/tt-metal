@@ -110,15 +110,9 @@ ttsl::hash::hash_t DropoutDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();
-    auto args_without_seed = args;
-    args_without_seed.seed = 0;
     auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<DropoutDeviceOperation>(
-        args_without_seed,
-        program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_shape.volume());
+        args, program_factory.index(), input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
 
     return hash;
 }
