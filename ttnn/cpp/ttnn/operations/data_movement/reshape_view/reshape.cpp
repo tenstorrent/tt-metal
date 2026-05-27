@@ -83,14 +83,14 @@ MemoryConfig recompute_shard_spec_for_output(
     bool explicit_memory_config = false,
     const std::optional<tt::tt_metal::ShardSpec>& input_shard_spec = std::nullopt) {
     // Auto-derive: caller asked for a sharded output but didn't pin a shard_spec. Seed
-    // from input_shard_spec (typically the input tensor's) and re-enter; on the
-    // recursion the layout/buffer_type from the caller is preserved while the grid
-    // comes from the input.
+    // from input_shard_spec (typically the input tensor's) and re-enter. The caller's
+    // layout and buffer_type are preserved; the full ShardSpec (grid, orientation, and
+    // per-core shape) comes from the input and will be re-derived for the output shape.
     if (!memory_config.shard_spec().has_value() && input_shard_spec.has_value()) {
         MemoryConfig seeded{memory_config.memory_layout(), memory_config.buffer_type(), input_shard_spec.value()};
-        return recompute_shard_spec_for_output(seeded, output_shape, explicit_memory_config, std::nullopt);
+        // Layout-only request: re-derive shard_spec for output_shape; skip BLOCK explicit override.
+        return recompute_shard_spec_for_output(seeded, output_shape, /*explicit_memory_config=*/false, std::nullopt);
     }
-
     auto output_mem_config = memory_config;
     TT_FATAL(
         memory_config.shard_spec().has_value(),
@@ -107,13 +107,19 @@ MemoryConfig recompute_shard_spec_for_output(
     auto phys_h = output_shape.physical_shape().height();
     auto phys_w = output_shape.physical_shape().width();
 
+    // bounding_box() TT_FATALs on an empty grid; guard before calling it.
+    if (source_shard_spec.grid.num_cores() == 0) {
+        log_warning(tt::LogOp, "ttnn.reshape: shard grid is empty; falling back to INTERLEAVED");
+        return MemoryConfig{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
+    }
+
     // Reject non-rectangular grids; bounding_box() would silently include extra cores.
     // TODO: search for a rectangular sub-grid inside the input before falling back.
     auto input_bbox = source_shard_spec.grid.bounding_box();
     if (input_bbox.size() != source_shard_spec.grid.num_cores()) {
         log_warning(
             tt::LogOp,
-            "ttnn.reshape: input shard grid is non-rectangular "
+            "ttnn.reshape: shard grid is non-rectangular "
             "(bbox cores={}, grid cores={}); falling back to INTERLEAVED",
             input_bbox.size(),
             source_shard_spec.grid.num_cores());
@@ -170,17 +176,13 @@ MemoryConfig recompute_shard_spec_for_output(
         const uint32_t num_cores = source_shard_spec.grid.num_cores();
         const uint32_t phys_dim = is_height ? phys_h : phys_w;
 
-        // Degenerate inputs cannot form a valid sharded spec; fall back to INTERLEAVED
-        // (mirrors the BLOCK_SHARDED safety net above).
-        if (num_cores == 0 || phys_dim == 0) {
+        // phys_dim == 0 cannot form a valid sharded spec; fall back to INTERLEAVED.
+        if (phys_dim == 0) {
             log_warning(
                 tt::LogOp,
-                "ttnn.reshape: cannot form valid {} spec for output "
-                "(phys_{}={}, num_cores={}); falling back to INTERLEAVED",
+                "ttnn.reshape: cannot form valid {} spec for output (phys_{}=0); falling back to INTERLEAVED",
                 layout,
-                is_height ? 'h' : 'w',
-                phys_dim,
-                num_cores);
+                is_height ? 'h' : 'w');
             return MemoryConfig{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
         }
 
@@ -197,7 +199,7 @@ MemoryConfig recompute_shard_spec_for_output(
             const auto& out_shape = output_mem_config.shard_spec().value().shape;
             const uint32_t shard_dim = is_height ? out_shape[0] : out_shape[1];
             const uint32_t data_per_core = (phys_dim + num_cores - 1) / num_cores;
-            if (data_per_core > 0 && shard_dim >= kOverpadWarnThreshold * data_per_core) {
+            if (data_per_core > 0 && shard_dim / data_per_core >= kOverpadWarnThreshold) {
                 log_warning(
                     tt::LogOp,
                     "ttnn.reshape: {} output per-core shard ({} {}) is {}x its per-core data "
