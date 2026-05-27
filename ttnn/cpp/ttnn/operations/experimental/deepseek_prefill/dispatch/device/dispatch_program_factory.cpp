@@ -87,10 +87,10 @@ void create_tensor_cb(
 
 namespace {
 
-// Tile-layout path: TILE inputs, fused untilize across N untilize cores per sender
-// (num_untilizers_per_sender), sender is fabric-only.  Per-entry handshake on the
-// writer CBs lets each untilize core feed its sender writer in lockstep:
-//   u1 (local_core_id=0): drives c_4/c_5/c_6   (sender writer's first  CB set)
+// Tile-layout path: TILE inputs, fused untilize across exactly 2 untilize cores per
+// sender (u1 and u2); sender is fabric-only.  Per-entry handshake on the writer CBs
+// lets each untilize core feed its sender writer in lockstep:
+//   u1 (local_core_id=0): drives c_4/c_5/c_6    (sender writer's first  CB set)
 //   u2 (local_core_id=1): drives c_16/c_17/c_18 (sender writer's second CB set)
 // Sender writer (RISCV_0) consumes both CB sets round-robin and fans out via fabric.
 tt::tt_metal::ProgramDescriptor create_at_tile_layout(
@@ -161,8 +161,8 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
 
     // ==================== Core layout: senders + untilize cores ====================
     // Collect all cores in the first row (y == subdevice_cores[0].y), sorted by x.
-    // Each sender owns num_untilizers consecutive untilize cores: cores are laid out
-    // [sender, u1, u2, ...] consecutively along x per sender group.
+    // Each sender owns exactly 2 consecutive untilize cores (u1, u2): cores are laid
+    // out [sender, u1, u2] consecutively along x per sender group.
     uint32_t sender_row_y = subdevice_cores.at(0).y;
     std::vector<CoreCoord> all_row_cores;
     for (const auto& core : subdevice_cores) {
@@ -174,7 +174,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         all_row_cores.begin(), all_row_cores.end(), [](const CoreCoord& a, const CoreCoord& b) { return a.x < b.x; });
 
     uint32_t total_row_cores = static_cast<uint32_t>(all_row_cores.size());
-    uint32_t cores_per_sender = 1 + num_untilizers;  // 1 sender + num_untilizers untilize cores
+    uint32_t cores_per_sender = 1 + num_untilizers;  // 1 sender + 2 untilize cores (u1, u2)
     TT_FATAL(
         total_row_cores >= cores_per_sender * num_cores,
         "Same-row has only {} cores for {} senders — need {} cores per sender (>= {} required)",
@@ -239,18 +239,15 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     uint32_t total_batches = (tokens_per_device + read_batch_size - 1) / read_batch_size;
 
-    // ==================== Semaphores (per-entry pipeline + address handshake) ====================
-    // Per-entry pipeline (untilize → sender writer CB → fabric):
-    //   Sender writer CBs (c_4/c_5/c_6 for u1, c_16/c_17/c_18 for u2) are writer_cb_size slots deep.
-    //   data_avail_semaphore_id  (on sender L1, init=0):              untilize NOC-incs per entry.
-    //   space_avail_semaphore_id (on untilize L1, init=writer_cb_size): sender writer NOC-incs per
-    //     entry that has been fabric-sent.  Initial value seeds untilize so it can fill all slots
-    //     before the first writer credit lands.
-    // Address handshake (sender writer → untilize):
-    //   addr_ready_semaphore_id: signals untilize that writer CB base addresses are valid.
-    //   cross_c{4,5,6}_addr_semaphore_id: hold the writer CB L1 base addresses (1×u32 scratch).
-    // ProgramDescriptor semaphores carry an explicit `.id` field — legacy CreateSemaphore()
-    // auto-assigned the next available ID per core, so we mirror that with a monotonic counter.
+    // ==================== Semaphores ====================
+    // Per-entry credit, each kept on the consumer's L1 (producer NOC-incs):
+    //   data_avail  (sender L1, init=0):                untilize → sender, "entry ready".
+    //   space_avail (untilize L1, init=writer_cb_size): sender → untilize, "slot freed".
+    //   Seeding space_avail with the CB depth lets untilize prefill all slots cold-start.
+    // Boot-time address handshake: sender writes its c_4/c_5/c_6 base addresses into
+    // cross_c{4,5,6}_addr scratch slots on untilize, then noc-incs addr_ready.
+    // u2 mirrors the same protocol on c_16/c_17/c_18 with a separate semaphore set.
+    // SemaphoreDescriptor takes an explicit .id; add_sema feeds it from a monotonic counter.
     constexpr uint32_t writer_cb_size = read_batch_size;  // 32 slots — one batch deep
     uint32_t next_sema_id = 0;
     auto add_sema = [&](const CoreRangeSet& crs, uint32_t init_val = 0) -> uint32_t {
@@ -623,8 +620,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     writer_untilize_kernel_ids.reserve(num_untilize_cores);
     for (uint32_t j = 0; j < num_untilize_cores; j++) {
         uint32_t s = untilize_sender_map[j];
-        // Each sender has num_untilizers untilize cores. core_id within the group determines
-        // which batches it handles (round-robin: core_id, core_id+num_untilizers, ...).
+        // Each sender has exactly 2 untilize cores; local_core_id alternates per batch:
         // u1 (core_id=0): even batches, increments offset from start.
         // u2 (core_id=1): odd  batches, decrements offset from end.
         uint32_t local_core_id = j % num_untilizers;

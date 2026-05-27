@@ -24,8 +24,8 @@
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 
 // Compile-time args:
-//   0: cb_signal_id    - CB for reader->compute signaling (c_17)
-//   1: cb_untilize_id  - CB for compute untilized output (c_18)
+//   0: cb_signal_id    - CB for reader->compute signaling (c_10)
+//   1: cb_untilize_id  - CB for compute untilized output (c_11)
 //   2: cb_in_id        - CB for untilize input tile data (c_0)
 //   3: hidden_size     - hidden dimension (e.g., 7168)
 //   4: read_batch_size - number of rows per untilize batch (32)

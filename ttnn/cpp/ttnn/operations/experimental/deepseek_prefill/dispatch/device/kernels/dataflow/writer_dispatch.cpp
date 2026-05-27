@@ -28,7 +28,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
+
 #define ENABLE_DISPATCH_DEBUG 0
 
 #if ENABLE_DISPATCH_DEBUG
@@ -45,6 +45,7 @@ void kernel_main() {
     using namespace ttnn::operations::ccl::common;
 
     // ===== Compile Time Args =====
+    // CB IDs (indices 0-9)
     constexpr uint32_t cb_input_id = get_compile_time_arg_val(0);
     constexpr uint32_t cb_indices_id = get_compile_time_arg_val(1);
     constexpr uint32_t cb_weights_id = get_compile_time_arg_val(2);
@@ -56,6 +57,7 @@ void kernel_main() {
     constexpr uint32_t cb_packet_header_id = get_compile_time_arg_val(8);
     constexpr uint32_t cb_dispatch_table_id = get_compile_time_arg_val(9);
 
+    // Page counts (indices 10-16)
     constexpr uint32_t input_pages = get_compile_time_arg_val(10);
     constexpr uint32_t indices_pages = get_compile_time_arg_val(11);
     constexpr uint32_t weights_pages = get_compile_time_arg_val(12);
@@ -64,6 +66,7 @@ void kernel_main() {
     constexpr uint32_t metadata_pages = get_compile_time_arg_val(15);
     constexpr uint32_t dispatch_table_pages = get_compile_time_arg_val(16);
 
+    // Page sizes (indices 17-23)
     constexpr uint32_t input_page_size = get_compile_time_arg_val(17);
     constexpr uint32_t indices_page_size = get_compile_time_arg_val(18);
     constexpr uint32_t weights_page_size = get_compile_time_arg_val(19);
@@ -72,20 +75,18 @@ void kernel_main() {
     constexpr uint32_t metadata_page_size = get_compile_time_arg_val(22);
     constexpr uint32_t dispatch_table_page_size = get_compile_time_arg_val(23);
 
+    // Operation parameters (indices 24-30)
     constexpr uint32_t num_devices = get_compile_time_arg_val(24);
     constexpr uint32_t hidden_size = get_compile_time_arg_val(25);
-    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(26);
-    constexpr uint32_t n_routed_experts = get_compile_time_arg_val(27);
-    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(28);
-    constexpr uint32_t metadata_len = get_compile_time_arg_val(29);
-    constexpr uint32_t tokens_per_device = get_compile_time_arg_val(30);
 
+    // Mesh information (indices 31-35)
     constexpr uint32_t src_mesh_id = get_compile_time_arg_val(31);
     constexpr uint32_t src_chip_id = get_compile_time_arg_val(32);
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(33);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(34);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(35);
 
+    // Aligned page sizes (indices 36-42)
     constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(36);
     constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(37);
     constexpr uint32_t aligned_weights_page_size = get_compile_time_arg_val(38);
@@ -94,11 +95,13 @@ void kernel_main() {
     constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(41);
     constexpr uint32_t aligned_dispatch_table_page_size = get_compile_time_arg_val(42);
 
+    // Fabric configuration (indices 43-46)
     constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(43);
     constexpr uint32_t l1_alignment = get_compile_time_arg_val(44);
     constexpr uint32_t num_links = get_compile_time_arg_val(45);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(46);
 
+    // TensorAccessorArgs for all 7 tensors (starting at index 49)
     constexpr auto input_args = TensorAccessorArgs<49>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
@@ -132,6 +135,10 @@ void kernel_main() {
     uint32_t token_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t dispatch_core_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_dispatch_cores = get_arg_val<uint32_t>(rt_args_idx++);
+    // Separate semaphore for the exit handshake. Reusing init_semaphore_address
+    // for both phases is racy: a fast partner's exit-inc can land inside the
+    // post-init noc_semaphore_set(0) window and get wiped, deadlocking the
+    // pair on dispatch_devices==2 (mesh-2x4 column pair). Mirrors the combine fix.
     uint32_t exit_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
 
 #ifdef IS_TILE_LAYOUT
@@ -244,6 +251,7 @@ void kernel_main() {
 
     open_direction_connections_barrier(directions, fabric_connections);
 
+    // Init semaphore exchange
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
     send_init_semaphore_to_configured_targets<
         linearized_mesh_coord,
@@ -255,10 +263,9 @@ void kernel_main() {
         num_devices>(fabric_connections, sem_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
     volatile tt_l1_ptr uint32_t* init_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
-    {
-        DeviceZoneScopedN("wait_for_init") noc_semaphore_wait(init_sem_ptr, dispatch_devices - 1);
-        noc_semaphore_set(init_sem_ptr, 0);
-    }
+    noc_semaphore_wait(init_sem_ptr, dispatch_devices - 1);
+    noc_semaphore_set(init_sem_ptr, 0);
+
     DPRINT_DISPATCH << "Fabric setup complete" << ENDL();
 #endif
 
@@ -280,8 +287,6 @@ void kernel_main() {
     bool done_1 = false;
     bool done_2 = false;
 
-    {
-        DeviceZoneScopedSumN2("main_writer_loop");
         while (!done_1 || !done_2) {
             // ---- u1 entry ----
             if (!done_1) {
@@ -298,28 +303,26 @@ void kernel_main() {
                     uint32_t metadata_addr = writer_metadata_base + slot * aligned_metadata_page_size;
                     DPRINT_DISPATCH << "u1 send: route=" << route_info[0] << " page=" << page_idx << ENDL();
 #ifdef DEST_CHIP_ID
-                    {
-                        DeviceZoneScopedN("fabric_send1");
-                        fabric_set_unicast_route<false>(
-                            (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
-                        fabric_send_noc_unicast<fabric_max_packet_size>(
-                            output_addr_gen,
-                            fabric_connections[route_info[0]],
-                            unicast_packet_header,
-                            payload_addr,
-                            page_idx,
-                            (int)aligned_output_page_size,
-                            l1_alignment);
-                        fabric_send_noc_unicast<fabric_max_packet_size>(
-                            metadata_addr_gen,
-                            fabric_connections[route_info[0]],
-                            unicast_packet_header,
-                            metadata_addr,
-                            page_idx,
-                            (int)aligned_metadata_page_size,
-                            l1_alignment);
-                        noc_async_writes_flushed();
-                    }
+
+                    fabric_set_unicast_route<false>(
+                        (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+                    fabric_send_noc_unicast<fabric_max_packet_size>(
+                        output_addr_gen,
+                        fabric_connections[route_info[0]],
+                        unicast_packet_header,
+                        payload_addr,
+                        page_idx,
+                        (int)aligned_output_page_size,
+                        l1_alignment);
+                    fabric_send_noc_unicast<fabric_max_packet_size>(
+                        metadata_addr_gen,
+                        fabric_connections[route_info[0]],
+                        unicast_packet_header,
+                        metadata_addr,
+                        page_idx,
+                        (int)aligned_metadata_page_size,
+                        l1_alignment);
+                    noc_async_writes_flushed();
 #endif
                     noc_semaphore_inc<true>(untilize_space_avail_noc_addr, 1);
                     consumed_1++;
@@ -340,35 +343,31 @@ void kernel_main() {
                     uint32_t metadata_addr = writer_metadata_base_2 + slot * aligned_metadata_page_size;
                     DPRINT_DISPATCH << "u2 send: route=" << route_info[0] << " page=" << page_idx << ENDL();
 #ifdef DEST_CHIP_ID
-                    {
-                        DeviceZoneScopedN("fabric_send2");
-                        fabric_set_unicast_route<false>(
-                            (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
-                        fabric_send_noc_unicast<fabric_max_packet_size>(
-                            output_addr_gen,
-                            fabric_connections[route_info[0]],
-                            unicast_packet_header,
-                            payload_addr,
-                            page_idx,
-                            (int)aligned_output_page_size,
-                            l1_alignment);
-                        fabric_send_noc_unicast<fabric_max_packet_size>(
-                            metadata_addr_gen,
-                            fabric_connections[route_info[0]],
-                            unicast_packet_header,
-                            metadata_addr,
-                            page_idx,
-                            (int)aligned_metadata_page_size,
-                            l1_alignment);
-                        noc_async_writes_flushed();
-                    }
+                    fabric_set_unicast_route<false>(
+                        (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+                    fabric_send_noc_unicast<fabric_max_packet_size>(
+                        output_addr_gen,
+                        fabric_connections[route_info[0]],
+                        unicast_packet_header,
+                        payload_addr,
+                        page_idx,
+                        (int)aligned_output_page_size,
+                        l1_alignment);
+                    fabric_send_noc_unicast<fabric_max_packet_size>(
+                        metadata_addr_gen,
+                        fabric_connections[route_info[0]],
+                        unicast_packet_header,
+                        metadata_addr,
+                        page_idx,
+                        (int)aligned_metadata_page_size,
+                        l1_alignment);
+                    noc_async_writes_flushed();
 #endif
                     noc_semaphore_inc<true>(untilize_u2_space_avail_noc_addr, 1);
                     consumed_2++;
                 }
             }
         }
-    }
 #else
     // ===== Row-major path: standard CB protocol on c_4/c_5/c_6 pushed by the sender reader.
     while (true) {
@@ -423,30 +422,32 @@ void kernel_main() {
 #endif
 
 #ifdef DEST_CHIP_ID
-    noc_async_write_barrier();
+        // Defensive: drain any pending local NOC writes before fabric atomic-inc traffic,
+        // so the exit-sem signal cannot reach peers ahead of the last metadata/payload writes.
+        noc_async_write_barrier();
 
-    {
-        const uint64_t exit_noc_semaphore_addr = get_noc_addr(exit_semaphore_address);
-        send_init_semaphore_to_configured_targets<
-            linearized_mesh_coord,
-            topology,
-            src_chip_id,
-            mesh_rows,
-            mesh_cols,
-            axis,
-            num_devices>(
-            fabric_connections,
-            sem_packet_header,
-            dest_chip_ids,
-            dest_mesh_ids,
-            exit_noc_semaphore_addr,
-            /*flush=*/true);
+        {
+            const uint64_t exit_noc_semaphore_addr = get_noc_addr(exit_semaphore_address);
+            send_init_semaphore_to_configured_targets<
+                linearized_mesh_coord,
+                topology,
+                src_chip_id,
+                mesh_rows,
+                mesh_cols,
+                axis,
+                num_devices>(
+                fabric_connections,
+                sem_packet_header,
+                dest_chip_ids,
+                dest_mesh_ids,
+                exit_noc_semaphore_addr,
+                /*flush=*/true);
 
-        volatile tt_l1_ptr uint32_t* exit_sem_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exit_semaphore_address);
-        noc_semaphore_wait(exit_sem_ptr, dispatch_devices - 1);
-        noc_semaphore_set(exit_sem_ptr, 0);
-    }
+            volatile tt_l1_ptr uint32_t* exit_sem_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exit_semaphore_address);
+            noc_semaphore_wait(exit_sem_ptr, dispatch_devices - 1);
+            noc_semaphore_set(exit_sem_ptr, 0);
+        }
 
     noc_async_full_barrier();
 

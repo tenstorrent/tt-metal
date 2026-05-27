@@ -5,26 +5,33 @@
 //
 // Untilize core RISCV_1 — input prefetch + per-token routing.
 //
-// At startup: read the full expert offsets[] and expert dispatch_table[] tensors
-// from DRAM into local L1 scratch (c_3, c_9). offsets[] is owned and mutated
-// exclusively by this RISC — there is no cross-core synchronization because each
-// sender (and thus its single owning untilize core) processes a disjoint set of
-// experts via the dispatch_core_idx & core_mask filter.
+// Each sender owns 2 untilize cores (u1, u2). Both share the same expert subset
+// (filtered via dispatch_core_idx & core_mask) but split work by:
+//   * batches:  u1 (core_id=0) takes even batches, u2 (core_id=1) takes odd.
+//   * offsets:  u1 loads tt_expert_offsets and increments from start (left→right),
+//               u2 loads tt_end_offsets    and decrements from end  (right→left).
+// Each core keeps its own L1 copy of offsets[]; they never collide because they
+// grow page_idx from opposite ends of each expert's token range — so no cross-
+// core synchronization is needed on the offsets[] array.
+//
+// At startup: read the full per-expert offsets tensor (tt_expert_offsets for u1,
+// tt_end_offsets for u2) plus the expert dispatch_table[] tensor from DRAM into
+// local L1 scratch (c_3, c_9).
 //
 // Per batch:
-//   1. Signal compute to untilize this batch (existing).
-//   2. Stream tiled input from DRAM → c_0 (existing).
+//   1. Signal compute to untilize this batch.
+//   2. Stream tiled input from DRAM → c_0.
 //   3. Read this batch's indices and weights pages from DRAM → c_1, c_2.
 //   4. Walk each token's top-k:
 //        * filter out experts not handled by this sender (core_mask),
 //        * filter out experts with dispatch_table == -1,
-//        * compute page_idx from the local offsets[expert] counter (mirrors what
-//          the old sender's main routing loop did),
+//        * compute page_idx from the local offsets[expert] counter,
 //        * classify local vs cross-device, record route/distance for cross-device.
 //      Build the per-batch route plan into c_14.
-//   5. cb_push_back(c_14) — writer RISC drains the plan and executes the data
-//      movement (NOC1 → DRAM for local, 2-slot push to sender c_4/c_5/c_6 for
-//      cross-device).
+//   5. cb_push_back(c_14) — writer RISC (this same core, RISCV_0) drains the plan
+//      and executes the data movement (NOC → DRAM for local, per-entry push into
+//      this core's owning sender CB set — c_4/c_5/c_6 for u1, c_16/c_17/c_18 for
+//      u2, writer_cb_size slots deep — for cross-device).
 //
 // After the last batch: push a single sentinel entry on c_14 so the writer
 // knows to forward the final ROUTE_INFO_SENTINEL to the sender.
@@ -35,7 +42,7 @@
 #include "api/debug/dprint.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+
 #define ENABLE_DISPATCH_DEBUG 0
 #if ENABLE_DISPATCH_DEBUG
 #define DPRINT_DISPATCH DPRINT
@@ -192,29 +199,23 @@ void kernel_main() {
         cb_push_back(cb_signal_id, 1);
 
         // 2. Stream tiled input stripe from DRAM in blocks of 8 tiles
-        {
-            // DeviceZoneScopedN("read_input_for_current_batch")
-            for (uint32_t blk = 0; blk < num_tile_blocks; blk++) {
-                cb_reserve_back(cb_input_id, block_ct_dim);
-                uint32_t blk_write_ptr = get_write_ptr(cb_input_id);
-                uint32_t blk_start = tile_base_page + blk * block_ct_dim;
-                for (uint32_t col = 0; col < block_ct_dim; col++) {
-                    noc_async_read_page(blk_start + col, input_addr_gen, blk_write_ptr + col * aligned_input_page_size);
-                }
-                noc_async_read_barrier();
-                cb_push_back(cb_input_id, block_ct_dim);
+        for (uint32_t blk = 0; blk < num_tile_blocks; blk++) {
+            cb_reserve_back(cb_input_id, block_ct_dim);
+            uint32_t blk_write_ptr = get_write_ptr(cb_input_id);
+            uint32_t blk_start = tile_base_page + blk * block_ct_dim;
+            for (uint32_t col = 0; col < block_ct_dim; col++) {
+                noc_async_read_page(blk_start + col, input_addr_gen, blk_write_ptr + col * aligned_input_page_size);
             }
+            noc_async_read_barrier();
+            cb_push_back(cb_input_id, block_ct_dim);
         }
 
         // 3. Read this batch's indices and weights pages
-        {
-            // DeviceZoneScopedN("read_indices_and_weights")
-            for (uint32_t t = 0; t < batch_count; t++) {
-                noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
-                noc_async_read_page(batch_start + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
-            }
-            noc_async_read_barrier();
+        for (uint32_t t = 0; t < batch_count; t++) {
+            noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
+            noc_async_read_page(batch_start + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
         }
+        noc_async_read_barrier();
 
         // 4. Build per-batch route plan into c_14.
         cb_reserve_back(cb_plan_id, 1);
@@ -223,77 +224,73 @@ void kernel_main() {
         uint32_t entry_count = 0;
         uint32_t entry_off = 8;  // entries start at u32 offset 8 (32B header)
 
-        {
-            // DeviceZoneScopedN("build_plan_for_32_tokens")
-            for (uint32_t t = 0; t < batch_count; t++) {
-                int32_t* indices_t = reinterpret_cast<int32_t*>(indices_base + t * aligned_indices_page_size);
-                uint16_t* weights_t = reinterpret_cast<uint16_t*>(weights_base + t * aligned_weights_page_size);
-                uint32_t token_idx = batch_start + t;
+        for (uint32_t t = 0; t < batch_count; t++) {
+            int32_t* indices_t = reinterpret_cast<int32_t*>(indices_base + t * aligned_indices_page_size);
+            uint16_t* weights_t = reinterpret_cast<uint16_t*>(weights_base + t * aligned_weights_page_size);
+            uint32_t token_idx = batch_start + t;
 
-                for (uint32_t k = 0; k < num_experts_per_tok; k++) {
-                    int32_t routed_expert = indices_t[k];
-                    if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
+            for (uint32_t k = 0; k < num_experts_per_tok; k++) {
+                int32_t routed_expert = indices_t[k];
+                if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
+                    continue;
+                }
+                int32_t expert_chip_og = expert_dispatch_table[routed_expert];
+                if (expert_chip_og == -1) {
+                    continue;
+                }
+
+                uint32_t& offset = offsets[routed_expert];
+                uint32_t page_idx;
+                if constexpr (IS_RIGHT_UNTILIZER) {
+                    // Decrement before use: end is exclusive, so first write is at end-1.
+                    // Guard: if offset is 0 it would wrap to UINT32_MAX; if the result
+                    // exceeds the buffer it is out-of-bounds — both are skipped.
+                    if (offset == 0) {
                         continue;
                     }
-                    int32_t expert_chip_og = expert_dispatch_table[routed_expert];
-                    if (expert_chip_og == -1) {
+                    page_idx = --offset;
+                    if (page_idx >= max_dispatch_buffer_token_size) {
+                        offset++;
                         continue;
                     }
-
-                    uint32_t& offset = offsets[routed_expert];
-                    uint32_t page_idx;
-                    if constexpr (IS_RIGHT_UNTILIZER) {
-                        // Decrement before use: end is exclusive, so first write is at end-1.
-                        // Guard: if offset is 0 it would wrap to UINT32_MAX; if the result
-                        // exceeds the buffer it is out-of-bounds — both are skipped.
-                        if (offset == 0) {
-                            continue;
-                        }
-                        page_idx = --offset;
-                        if (page_idx >= max_dispatch_buffer_token_size) {
-                            offset++;
-                            continue;
-                        }
-                    } else {
-                        if (offset >= max_dispatch_buffer_token_size) {
-                            offset++;
-                            continue;
-                        }
-                        page_idx = offset++;
+                } else {
+                    if (offset >= max_dispatch_buffer_token_size) {
+                        offset++;
+                        continue;
                     }
+                    page_idx = offset++;
+                }
 
-                    uint32_t expert_chip = device_begin_idx + (uint32_t)expert_chip_og * device_stride;
-                    bool is_local = (expert_chip == linearized_mesh_coord);
-                    int16_t weight = (int16_t)weights_t[k];
+                uint32_t expert_chip = device_begin_idx + (uint32_t)expert_chip_og * device_stride;
+                bool is_local = (expert_chip == linearized_mesh_coord);
+                int16_t weight = (int16_t)weights_t[k];
 
-                    uint32_t base = entry_off;
-                    plan[base + 0] = is_local ? PLAN_FLAG_LOCAL : 0;
-                    plan[base + 1] = t;
-                    plan[base + 2] = (uint32_t)routed_expert;
-                    plan[base + 3] = page_idx;
-                    plan[base + 4] = token_idx;
-                    plan[base + 5] = (k << 16) | ((uint32_t)(uint16_t)weight);
+                uint32_t base = entry_off;
+                plan[base + 0] = is_local ? PLAN_FLAG_LOCAL : 0;
+                plan[base + 1] = t;
+                plan[base + 2] = (uint32_t)routed_expert;
+                plan[base + 3] = page_idx;
+                plan[base + 4] = token_idx;
+                plan[base + 5] = (k << 16) | ((uint32_t)(uint16_t)weight);
 
-                    if (!is_local) {
-                        if constexpr (is_1d_topology<topology>()) {
-                            uint32_t route =
-                                get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
-                            uint32_t distance =
-                                manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
-                            plan[base + 6] = route;
-                            plan[base + 7] = distance;
-                        } else {
-                            plan[base + 6] = 0;
-                            plan[base + 7] = 0;
-                        }
+                if (!is_local) {
+                    if constexpr (is_1d_topology<topology>()) {
+                        uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
+                        uint32_t distance =
+                            manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
+                        plan[base + 6] = route;
+                        plan[base + 7] = distance;
                     } else {
                         plan[base + 6] = 0;
                         plan[base + 7] = 0;
                     }
-
-                    entry_count++;
-                    entry_off += PLAN_ENTRY_U32S;
+                } else {
+                    plan[base + 6] = 0;
+                    plan[base + 7] = 0;
                 }
+
+                entry_count++;
+                entry_off += PLAN_ENTRY_U32S;
             }
         }
 

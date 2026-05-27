@@ -15,6 +15,7 @@
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+
 #define ENABLE_DISPATCH_DEBUG 0
 
 #if ENABLE_DISPATCH_DEBUG
@@ -90,11 +91,14 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(45);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(46);
 
-    // Batch configuration (indices 47-48)
+    // Batch configuration (indices 47)
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(47);
+
+    // Total dispatch buffer token capacity (shared across all local experts).
     constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(48);
 
-    // Tensor accessor args (indices 49-54)
+    // TensorAccessorArgs for all 7 tensors (starting at index 49, after the
+    // trailing max_dispatch_buffer_token_size arg).
     constexpr auto input_args = TensorAccessorArgs<49>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
@@ -138,6 +142,7 @@ void kernel_main() {
     DPRINT_DISPATCH << "Reader kernel: tokens=[" << token_start_idx << "," << token_end_idx << ")"
                     << " dispatch_core=" << dispatch_core_idx << "/" << num_dispatch_cores << ENDL();
 
+    // Read offsets tensor into local scratch
     const auto offsets_addr_gen = TensorAccessor(offsets_args, offsets_tensor_address);
     cb_reserve_back(cb_offsets_id, offsets_pages);
     uint32_t offsets_base_addr = get_write_ptr(cb_offsets_id);
@@ -278,7 +283,7 @@ void kernel_main() {
             }
         }
 
-        // Issue next batch reads BEFORE write barrier to overlap DMA reads with NOC writes
+        // Issue next batch DRAM reads BEFORE write barrier to overlap read/write NOC channels
         uint32_t next_batch_start = batch_start + read_batch_size;
         bool has_next_batch = (next_batch_start < token_end_idx);
         if (has_next_batch) {

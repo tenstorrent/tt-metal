@@ -6,18 +6,20 @@
 // Untilize core RISCV_0 — data movement.
 //
 // At startup: receive the L1 base addresses of the owning sender's writer CBs
-// (c_4/c_5/c_6) via addr-handshake semaphores written by the sender's reader RISC.
+// (c_4/c_5/c_6) via addr-handshake semaphores written by the sender's writer RISC
+// (RISCV_0 — tile-layout has no sender reader RISC).
 //
 // Per batch: drain the per-batch route plan published by the reader (this same core,
 // RISCV_1) on c_14 and execute the data movement:
 //
 //   * Local entries: noc_async_write_page payload + metadata directly to DRAM.
-//   * Cross-device entries: per-entry into sender writer CBs (c_4/c_5/c_6, writer_cb_size=2).
+//   * Cross-device entries: per-entry into sender writer CBs (c_4/c_5/c_6, writer_cb_size
+//     slots deep — = read_batch_size = 32, one batch worth).
 //     Synchronization:
-//       data_avail (sender L1, init=0): untilize NOC-incs per entry written.
-//       space_avail (this core's L1, init=2): sender reader NOC-incs per entry that has
-//         been fabric-sent (slot free to overwrite). Initial 2 seeds untilize for both
-//         slots before the first reader credit.
+//       data_avail  (sender L1, init=0):              untilize NOC-incs per entry written.
+//       space_avail (this core's L1, init=writer_cb_size): sender writer NOC-incs per entry
+//         that has been fabric-sent (slot free to overwrite). The full-depth seed lets this
+//         core prefill all slots before the first credit lands.
 //     Per-data-entry steps:
 //       1. noc_semaphore_wait_min(local space_avail, produced + 1)
 //       2. slot = produced % writer_cb_size
@@ -30,14 +32,12 @@
 //       8. produced++
 //
 // After the last cross-device entry: write ROUTE_INFO_SENTINEL into the next available
-// slot. Sender writer sees SENTINEL and exits the fabric send loop; sender reader sees
-// the SENTINEL slot and exits the credit loop.
+// slot. Sender writer sees SENTINEL and exits the fabric send loop.
 //
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 #define ENABLE_DISPATCH_DEBUG 0
 #if ENABLE_DISPATCH_DEBUG
@@ -70,9 +70,9 @@ void kernel_main() {
     constexpr uint32_t cb_plan_id = get_compile_time_arg_val(8);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(9);
 
-    // Per-entry CB protocol on sender side (sender writer CBs, double-buffered).
+    // Per-entry CB protocol on sender side (sender writer CBs, writer_cb_size slots deep).
     constexpr uint32_t route_info_slot_stride = get_compile_time_arg_val(10);    // l1_alignment
-    constexpr uint32_t writer_cb_size = get_compile_time_arg_val(11);            // 2 (double-buffer)
+    constexpr uint32_t writer_cb_size = get_compile_time_arg_val(11);            // = read_batch_size = 32
     constexpr uint32_t cb_route_info_scratch_id = get_compile_time_arg_val(12);  // 16B local scratch
     constexpr uint32_t meta_scratch_slots = get_compile_time_arg_val(13);
 
@@ -124,7 +124,7 @@ void kernel_main() {
     uint32_t route_info_scratch_addr = get_write_ptr(cb_route_info_scratch_id);
     volatile tt_l1_ptr uint32_t* route_info_scratch =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(route_info_scratch_addr);
-    // Per-entry CB credits: sender reader NOC-incs space_avail per entry consumed by fabric.
+    // Per-entry CB credits: sender writer NOC-incs space_avail per entry consumed by fabric.
     // Before producing slot N (= produced_count), wait for space_avail >= produced_count + 1.
     uint32_t produced_count = 0;
     // Per-batch local-entry index into the metadata scratch ring (meta_scratch_slots deep,
@@ -137,10 +137,8 @@ void kernel_main() {
     // ===== Per-batch loop — drains the route plan published by the reader RISC =====
     for (uint32_t batch_idx = core_id; batch_idx < total_batches; batch_idx += total_workers) {
         // Wait for compute to finish untilizing this batch
-        {
-            // DeviceZoneScopedN("wait_for_32_tokens")
-            cb_wait_front(cb_untilize_id, read_batch_size);
-        }
+        cb_wait_front(cb_untilize_id, read_batch_size);
+
         uint32_t untilize_read_ptr = get_read_ptr(cb_untilize_id);
 
         // Wait for reader to publish the per-batch route plan
@@ -165,7 +163,6 @@ void kernel_main() {
                 bool is_local = (flags & PLAN_FLAG_LOCAL) != 0;
 
                 if (is_local) {
-                    // DeviceZoneScopedN("local_write")
                     //  Local: NOC1 write payload + metadata directly to DRAM.
                     //  No in-loop flush — payload source (src_addr) is unique per token,
                     //  and metadata source rotates through meta_scratch_slots ring slots.
@@ -186,57 +183,48 @@ void kernel_main() {
                     uint32_t distance = plan[base + 7];
 
                     // Per-entry credit: wait until the sender has fabric-sent the slot we're
-                    // about to overwrite (sender reader inc's space_avail once per slot freed).
-                    {
-                        // DeviceZoneScopedN("wait_for_space_avail")
-                        noc_semaphore_wait_min(space_avail_sem_ptr, produced_count + 1);
-                    }
+                    // about to overwrite (sender writer inc's space_avail once per slot freed).
+                    noc_semaphore_wait_min(space_avail_sem_ptr, produced_count + 1);
 
-                    {
-                        // DeviceZoneScopedN("send_cross_device")
-                        uint32_t slot = produced_count % writer_cb_size;
+                    uint32_t slot = produced_count % writer_cb_size;
 
-                        // Build route_info (4 × u32) in local scratch, send as one NOC write.
-                        route_info_scratch[0] = route;
-                        route_info_scratch[1] = distance;
-                        route_info_scratch[2] = page_idx;
-                        route_info_scratch[3] = 0;
-                        uint64_t c4_slot = sender_c4_base_noc_addr + slot * route_info_slot_stride;
+                    // Build route_info (4 × u32) in local scratch, send as one NOC write.
+                    route_info_scratch[0] = route;
+                    route_info_scratch[1] = distance;
+                    route_info_scratch[2] = page_idx;
+                    route_info_scratch[3] = 0;
+                    uint64_t c4_slot = sender_c4_base_noc_addr + slot * route_info_slot_stride;
+                    noc_async_write_one_packet_with_trid(
+                        route_info_scratch_addr, c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);
+
+                    // Payload: chunk to NOC_MAX_BURST_SIZE packets, each tagged with TRID.
+                    uint64_t c5_slot = sender_c5_base_noc_addr + slot * aligned_output_page_size;
+                    uint32_t off = 0;
+                    while (off < aligned_output_page_size) {
+                        uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
+                                             ? (uint32_t)NOC_MAX_BURST_SIZE
+                                             : (aligned_output_page_size - off);
                         noc_async_write_one_packet_with_trid(
-                            route_info_scratch_addr, c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);
-
-                        // Payload: chunk to NOC_MAX_BURST_SIZE packets, each tagged with TRID.
-                        uint64_t c5_slot = sender_c5_base_noc_addr + slot * aligned_output_page_size;
-                        uint32_t off = 0;
-                        while (off < aligned_output_page_size) {
-                            uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
-                                                 ? (uint32_t)NOC_MAX_BURST_SIZE
-                                                 : (aligned_output_page_size - off);
-                            noc_async_write_one_packet_with_trid(
-                                src_addr + off, c5_slot + off, chunk, TRID_NON_LOCAL_WRITE);
-                            off += chunk;
-                        }
-
-                        volatile tt_l1_ptr int32_t* meta =
-                            reinterpret_cast<volatile tt_l1_ptr int32_t*>(xdev_metadata_scratch_addr);
-                        meta[0] = (int32_t)linearized_mesh_coord;
-                        meta[1] = (int32_t)token_idx;
-                        meta[2] = (int32_t)k;
-                        meta[3] = (int32_t)routed_expert;
-                        meta[4] = (int32_t)weight;
-                        uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
-                        noc_async_write_one_packet_with_trid(
-                            xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);
-
-                        // Wait only on this entry's cross-device writes — in-flight local
-                        // DRAM writes are tagged-out by TRID and keep flying.
-                        noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
+                            src_addr + off, c5_slot + off, chunk, TRID_NON_LOCAL_WRITE);
+                        off += chunk;
                     }
 
-                    {
-                        // DeviceZoneScopedN("signal_sender_core")
-                        noc_semaphore_inc<true>(sender_data_avail_noc_addr, 1);
-                    }
+                    volatile tt_l1_ptr int32_t* meta =
+                        reinterpret_cast<volatile tt_l1_ptr int32_t*>(xdev_metadata_scratch_addr);
+                    meta[0] = (int32_t)linearized_mesh_coord;
+                    meta[1] = (int32_t)token_idx;
+                    meta[2] = (int32_t)k;
+                    meta[3] = (int32_t)routed_expert;
+                    meta[4] = (int32_t)weight;
+                    uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
+                    noc_async_write_one_packet_with_trid(
+                        xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);
+
+                    // Wait only on this entry's cross-device writes — in-flight local
+                    // DRAM writes are tagged-out by TRID and keep flying.
+                    noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
+
+                    noc_semaphore_inc<true>(sender_data_avail_noc_addr, 1);
 
                     produced_count++;
                 }
