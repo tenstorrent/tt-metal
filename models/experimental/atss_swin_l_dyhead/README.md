@@ -65,7 +65,8 @@ models/experimental/atss_swin_l_dyhead/
 │   ├── demo_inference.py              #   Single-image inference + visualization
 │   ├── demo_batch.py                  #   Multi-image batch inference
 │   ├── demo_perf.py                   #   Performance benchmark (PyTorch vs TTNN)
-│   └── demo_slice_4dev.py             #   4-device slice demo (1280x1280 → 2x2 of 640, 1x4 mesh)
+│   ├── demo_slice_4dev.py             #   4-device slice demo (1280x1280 → 2x2 of 640, 1x4 mesh)
+│   └── sweep_merge_4dev.py            #   Sweep cross-tile merge configs (CPU-only post-process)
 └── README.md
 
 models/experimental/swin_l/             # Reusable Swin-L backbone (separate module)
@@ -194,26 +195,38 @@ Output is saved to `atss_swin_l_dyhead/results/` by default. Override with `--ou
 `demo_slice_4dev.py` runs sliced inference on a **1×4 Wormhole sub-mesh** (Galaxy or T3K).
 The input image is resized to 1280×1280, sliced into a 2×2 grid of 640×640 tiles, and
 all 4 tiles run **in parallel** across the 4 devices with 2 command queues + trace.
-Per-tile detections are post-processed on the host and merged via cross-tile greedy NMM
-into a single 1280×1280 frame.
+Per-tile detections are post-processed on the host and deduped across tiles into a
+single 1280×1280 frame.
+
+The defaults (`--overlap 128 --merge-mode nms --merge-match iou --merge-iou 0.55
+--max-per-tile 300 --max-per-frame 500`) were tuned on dense aerial harbor scenes and
+are the recommended starting point — they roughly double the visible detection count
+over the previous defaults (`overlap=0`, `IoS-NMM`, per-image cap of 100) while
+eliminating the wrap-around "clubbed" boxes that the IoS merger produced.
 
 ```bash
-# Baseline — exact 2x2 of 640x640 (no overlap, no seam-merge).
-# Best for aerial/top-down scenes with many small objects that don't cross tile seams.
+# Recommended defaults — 128 px overlap, plain NMS dedup, IoU=0.55, caps 300/500.
+# Best for dense aerial/top-down scenes (harbors, parking lots, crowds from above).
 python models/experimental/atss_swin_l_dyhead/demo/demo_slice_4dev.py \
     --image path/to/1280x1280_image.jpg \
     --output-dir path/to/output_dir
 
-# Overlapping tiles + seam-aware merge.
-# Best for street-level scenes where large objects (persons, buses) span tile boundaries.
-# The input is resized to (2*640 - overlap) = 1200x1200 before tiling so adjacent
-# tiles share an 80px band; boxes are scaled back to 1280x1280 for output.
+# Exact 2x2 (no overlap, no seam-merge) — faster (skips the pre-tile resize) but
+# misses objects sitting on tile seams. Use when you know objects don't cross seams.
 python models/experimental/atss_swin_l_dyhead/demo/demo_slice_4dev.py \
     --image path/to/1280x1280_image.jpg \
-    --overlap 80 --seam-merge \
+    --overlap 0 \
     --output-dir path/to/output_dir
 
-# Batch over a folder of 1280x1280 images.
+# Clipped-half regime: switch to NMM so half-detections from adjacent tiles are
+# unioned into the full extent. Best for street-level scenes where a single large
+# object (person, bus) lands as two half-boxes from neighbouring tiles.
+python models/experimental/atss_swin_l_dyhead/demo/demo_slice_4dev.py \
+    --image path/to/1280x1280_image.jpg \
+    --merge-mode nmm --merge-match iou --merge-iou 0.55 \
+    --output-dir path/to/output_dir
+
+# Batch over a folder of images.
 for img in path/to/your/images/*.jpg; do
   name=$(basename "$img" .jpg)
   python models/experimental/atss_swin_l_dyhead/demo/demo_slice_4dev.py \
@@ -227,25 +240,51 @@ done
 | Flag | Default | Description |
 |---|---|---|
 | `--image` | *(required)* | Input image (auto-resized to 1280×1280 if needed). |
-| `--overlap` | `0` | Tile overlap in px. `0` = exact 2×2 of 640×640 (no overlap). When `> 0`, image is resized to `(2*640 - overlap)` so tiles overlap by that many px in each axis. |
-| `--seam-merge` | off | Run a second merge pass that knows the exact seam positions. Catches objects split across a tile seam that don't have enough IoS for the normal merger. See "Choosing flags" below. |
+| `--overlap` | `128` | Tile overlap in px. `0` = exact 2×2 of 640×640 (faster but loses objects on seams). When `> 0`, image is resized to `(2*640 - overlap)` so tiles overlap by that many px in each axis. |
+| `--merge-mode` | `nms` | Cross-tile dedup strategy. `nms` runs `torchvision.batched_nms` and drops duplicates (safest for dense same-class scenes — structurally cannot produce wrap-around boxes). `nmm` runs greedy non-max merging and unions overlapping detections (recovers clipped halves but at low thresholds / `ios` matching can union unrelated objects). |
+| `--merge-iou` | `0.55` | IoU (or IoS, see below) threshold for the cross-tile merge. |
+| `--merge-match` | `iou` | `iou` or `ios` (intersection-over-smaller). Only used by `--merge-mode nmm`. `ios` is more aggressive — useful for clipped-half merging but biases toward wrap-around boxes in dense scenes. |
+| `--max-per-tile` | `300` | Per-tile post-NMS detection cap. Larger than the single-image `ATSS_MAX_PER_IMG=100` because each tile is a separate 640×640 forward and dense scenes routinely saturate the cap. |
+| `--max-per-frame` | `500` | Final per-frame detection cap after cross-tile dedup. |
+| `--seam-merge` | off | Run a second merge pass that knows the exact seam positions. Catches objects split across a tile seam that don't share enough IoU to merge normally. **Off by default** because in dense same-class scenes (e.g. boats moored parallel to a seam) it can reintroduce wrap-around boxes. Use when you have known large objects spanning seams and few neighbours nearby. |
 | `--seam-tol` | `-1` (auto) | Abutting-edge tolerance in px for seam-merge. `-1` auto-picks `max(overlap, 20)`. |
-| `--merge-iou` | `0.5` | IoU/IoS threshold for the first-pass cross-tile NMM. |
-| `--merge-match` | `ios` | `iou` or `ios` (intersection-over-smaller). |
-| `--score-thr` | `0.3` | Visualization-only score threshold; postprocess uses `ATSS_SCORE_THR=0.05`. |
-| `--class-agnostic` | off | If set, the merger ignores class labels. |
-| `--no-trace` | off | Disable trace (2CQ only). |
+| `--score-thr` | `0.3` | Visualization-only score threshold (boxes drawn). Post-process internally uses `ATSS_SCORE_THR=0.05`; raising it does not help recall, lowering it just draws more low-confidence boxes. |
+| `--class-agnostic` | off | If set, the merger ignores class labels (NMS/NMM treats all classes as one). |
+| `--no-trace` | off | Disable trace (2CQ only). Adds ~40 ms per iteration; useful for matching the no-trace perf numbers. |
+| `--overlay` | off | Draw a short title bar (`atss_swin_l_dyhead \| 4 devices \| infer: XX ms`) and the four tile-seam rectangles onto the saved JPEG. By default the output is just the image with bounding boxes. |
+| `--checkpoint` | auto | Override the mmdet `.pth` checkpoint path. Defaults to the auto-downloaded one in `weights/`. |
 | `--output-dir` | `results/slice_4dev/` | Output directory for the annotated JPEG (`atss_slice_4dev_detections.jpg`). |
 
 **Choosing flags by scene type:**
 
-- **Aerial / top-down / small dense objects (boats from above, parking lots)**:
-  *no overlap, no seam-merge* — objects rarely cross tile seams; overlap and seam-merge
-  would just risk merging adjacent small objects.
-- **Street-level with large objects spanning seams (persons, vehicles)**:
-  `--overlap 80 --seam-merge` — overlap gives each tile a wider context so a single
-  object isn't split, and seam-merge catches the residual cases (e.g. a person tall
-  enough that head + body land in different tiles).
+- **Dense aerial / top-down with many same-class objects (harbors, parking lots, crowds)**:
+  *use the defaults* — `--overlap 128 --merge-mode nms --merge-match iou --merge-iou 0.55
+  --max-per-tile 300 --max-per-frame 500`. The 128 px overlap recovers boats/cars that
+  sit on tile seams, and plain NMS cannot fuse two distinct objects into a single
+  wrap-around box. Keep `--seam-merge` **off** here.
+- **Street-level with large objects spanning seams (persons, buses, single subject)**:
+  add `--merge-mode nmm --merge-match iou --merge-iou 0.55` and optionally
+  `--seam-merge`. NMM unions half-detections from adjacent tiles into the full extent;
+  seam-merge picks up the residual cases (e.g. a person tall enough that head + body
+  land in different tiles). The risk of unioning unrelated objects is low when objects
+  are sparse.
+- **Speed-first**: `--overlap 0` skips the input resize (and uses the input as-is at
+  1280×1280) and gives marginally faster end-to-end time. Per-device compute is
+  identical at all overlap settings — the only cost of overlap is the resize and a
+  slightly busier CPU post-process.
+
+#### Sweeping merge configurations
+
+`sweep_merge_4dev.py` opens the mesh **once**, runs ATSS inference per image at the
+overlap settings you ask for, then sweeps cross-tile merge configurations on CPU
+only — every config gets its own annotated JPEG and a row in a JSON summary. This
+is what the recommended defaults above were tuned on.
+
+```bash
+python models/experimental/atss_swin_l_dyhead/demo/sweep_merge_4dev.py \
+    --images path/to/img1.jpg path/to/img2.jpg \
+    --output-dir path/to/sweep_out
+```
 
 **Expected performance** on a healthy T3K 1×4 sub-mesh (measured on a dense
 harbor-shot frame ~90 detections, after merging adding DCN addalpha fusion,
@@ -258,6 +297,11 @@ Stage 0/1/2 fc1/fc2 program_configs):
 | `DEVICE KERNEL DURATION` (pure compute, per tile, parallel × 4) | ~163 ms (6.12 samples/s) |
 | `DEVICE FW DURATION` (kernel + per-op dispatch overhead, no-trace pipeline) | ~210 ms (4.77 samples/s) |
 | `E2E DURATION` (kernel + DMA, trace replay skips dispatch) | ~172 ms (5.81 samples/s) |
+
+Per-device compute is invariant to `--overlap`: every tile is still a 640×640 forward,
+so `overlap=0` and `overlap=128` both report ~172 ms steady-state E2E on a 4-device run
+(measured median over 10 harbor shots). Raising `--max-per-tile`/`--max-per-frame`
+only affects the CPU post-process, which is negligible relative to device time.
 
 ### Usage
 

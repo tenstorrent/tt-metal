@@ -5,14 +5,27 @@
 """
 ATSS Swin-L DyHead 4-device slice demo (T3K, 1x4 mesh).
 
-Slices a 1280x1280 image into 4 tiles of 640x640 (2x2, no overlap — exact fit),
-runs all 4 tiles in parallel across a 1x4 sub-mesh of Wormhole devices with
-2CQ + trace, then merges per-tile detections via greedy NMM into the original
-1280x1280 frame.
+Slices a 1280x1280 image into 4 tiles of 640x640 (2x2 with a default 128 px
+overlap band), runs all 4 tiles in parallel across a 1x4 sub-mesh of Wormhole
+devices with 2CQ + trace, then dedups per-tile detections via class-aware NMS
+into the original 1280x1280 frame.
 
-Slicing/merge logic transferred from the upstream yolov8l demo at
+Defaults (the recipe verified on dense aerial harbor shots):
+    --overlap 128            # adjacent tiles share a 128 px band, recovers
+                             # objects sitting on tile seams
+    --merge-mode nms         # plain torchvision batched_nms; safest dedup
+                             # for dense same-class scenes
+    --merge-iou 0.55         # iou threshold for NMS
+    --max-per-tile 300       # per-tile cap (vs 100 in single-image demos)
+    --max-per-frame 500      # final per-frame cap
+
+For a clipped-half-object regime, switch to --merge-mode nmm to union the
+half-detections into the full extent. For sparse scenes set --overlap 0 to
+skip the input resize.
+
+Slicing/merge utilities ported from the upstream yolov8l demo at
   models/demos/yolo_eval/yolov8l_sahi_640_pipelined.py  (sdawle/yolo_bh_demos)
-adapted for the ATSS detector (per-tile postprocess instead of yolo decode).
+and adapted for the ATSS detector (per-tile postprocess instead of yolo decode).
 
 Usage:
   cd $TT_METAL_HOME
@@ -34,6 +47,7 @@ from typing import List, Tuple
 import cv2
 import numpy as np
 import torch
+from torchvision.ops import batched_nms
 
 import ttnn
 from loguru import logger
@@ -48,7 +62,6 @@ from models.experimental.atss_swin_l_dyhead.common import (
     ATSS_PIXEL_STD,
     ATSS_SCORE_THR,
     ATSS_NMS_IOU_THR,
-    ATSS_MAX_PER_IMG,
 )
 from models.experimental.atss_swin_l_dyhead.tt.tt_atss_model import TtATSSModel
 from models.experimental.atss_swin_l_dyhead.reference.postprocess import atss_postprocess
@@ -57,6 +70,13 @@ from models.experimental.atss_swin_l_dyhead.demo.demo_inference import COCO_CLAS
 
 TILE_SIZE = 640
 FRAME_SIZE = 1280
+
+# Slice-demo-specific detection caps. Bigger than the per-image
+# ATSS_MAX_PER_IMG=100 used by single-image demos because each tile is a
+# separate ATSS forward and a 1280x1280 marina easily exceeds 100 detections
+# per tile, which silently saturates the global cap and hides true positives.
+SLICE_MAX_PER_TILE = 300
+SLICE_MAX_PER_FRAME = 500
 
 
 @dataclass(frozen=True)
@@ -127,7 +147,7 @@ def cross_tile_greedy_nmm(
     threshold: float = 0.5,
     match_metric: str = "ios",
     class_agnostic: bool = False,
-    max_det: int = ATSS_MAX_PER_IMG,
+    max_det: int = SLICE_MAX_PER_FRAME,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Greedy non-maximum-merging: for each top-scoring box, union-of-extents
     merge with overlapping boxes (above ``threshold`` on ``match_metric``).
@@ -431,14 +451,30 @@ def postprocess_and_merge(
     frame_size: int = FRAME_SIZE,
     score_thr: float = ATSS_SCORE_THR,
     per_tile_nms_iou: float = ATSS_NMS_IOU_THR,
-    merge_iou_thr: float = 0.5,
-    merge_match: str = "ios",
+    merge_mode: str = "nms",
+    merge_iou_thr: float = 0.55,
+    merge_match: str = "iou",
     class_agnostic: bool = False,
     seam_merge: bool = False,
     seam_tol: int = 20,
+    max_per_tile: int = SLICE_MAX_PER_TILE,
+    max_per_frame: int = SLICE_MAX_PER_FRAME,
 ):
     """Per-tile atss_postprocess (anchors cached internally), shift boxes to frame
-    coordinates, then greedy NMM across tiles."""
+    coordinates, then merge across tiles.
+
+    ``merge_mode``:
+      - ``"nms"``  (default): plain torchvision ``batched_nms`` at ``merge_iou_thr``.
+        Drops duplicates; keeps the highest-score box untouched. Safest choice for
+        dense same-class scenes — structurally cannot produce wrap-around boxes.
+      - ``"nmm"``: greedy non-max merging via :func:`cross_tile_greedy_nmm`. Output
+        box is the bounding box of the union of every matched detection in the
+        group (using ``merge_match`` IoU or IoS). Useful when one tile sees a
+        clipped-half-object and another sees the whole object — NMM unions them
+        into the full extent. With low IoU thresholds or IoS matching this can
+        produce wrap-around boxes that span multiple real objects, so the
+        defaults intentionally bias toward NMS.
+    """
     n_tiles = len(tiles)
     all_boxes, all_scores, all_labels = [], [], []
 
@@ -455,7 +491,7 @@ def postprocess_and_merge(
             img_shape=(TILE_SIZE, TILE_SIZE),
             score_thr=score_thr,
             nms_iou_thr=per_tile_nms_iou,
-            max_per_img=ATSS_MAX_PER_IMG,
+            max_per_img=max_per_tile,
         )
         b = res["bboxes"]
         s = res["scores"]
@@ -481,15 +517,24 @@ def postprocess_and_merge(
     boxes[:, 0::2].clamp_(0, frame_size)
     boxes[:, 1::2].clamp_(0, frame_size)
 
-    mb, ms, mc = cross_tile_greedy_nmm(
-        boxes,
-        scores,
-        labels.float(),
-        threshold=merge_iou_thr,
-        match_metric=merge_match,
-        class_agnostic=class_agnostic,
-        max_det=ATSS_MAX_PER_IMG,
-    )
+    if merge_mode == "nms":
+        keep = batched_nms(boxes, scores, labels, merge_iou_thr)
+        if max_per_frame > 0:
+            keep = keep[:max_per_frame]
+        mb, ms, mc = boxes[keep], scores[keep], labels[keep]
+    elif merge_mode == "nmm":
+        mb, ms, mc = cross_tile_greedy_nmm(
+            boxes,
+            scores,
+            labels.float(),
+            threshold=merge_iou_thr,
+            match_metric=merge_match,
+            class_agnostic=class_agnostic,
+            max_det=max_per_frame,
+        )
+        mc = mc.long()
+    else:
+        raise ValueError(f"merge_mode must be 'nms' or 'nmm', got {merge_mode!r}")
 
     if seam_merge:
         seams_x, seams_y = compute_seams(tiles, frame_size, frame_size)
@@ -498,11 +543,12 @@ def postprocess_and_merge(
             mb, ms, mc = merge_seam_adjacent(
                 mb,
                 ms,
-                mc,
+                mc.float() if mc.dtype != torch.float else mc,
                 seams_x=seams_x,
                 seams_y=seams_y,
                 tol=seam_tol,
             )
+            mc = mc.long()
             logger.info(
                 f"seam-merge: {n_before} -> {mb.shape[0]} dets (seams_x={seams_x}, seams_y={seams_y}, tol={seam_tol})"
             )
@@ -514,31 +560,75 @@ def main():
     parser = argparse.ArgumentParser(description="ATSS Swin-L DyHead 4-device slice demo (1280x1280)")
     parser.add_argument("--image", required=True, help="Input image (will be resized to 1280x1280 if needed)")
     parser.add_argument("--checkpoint", default=None, help="mmdet .pth checkpoint")
-    parser.add_argument("--score-thr", type=float, default=0.3)
-    parser.add_argument("--merge-iou", type=float, default=0.5, help="Cross-tile greedy NMM IoU/IoS threshold")
-    parser.add_argument("--merge-match", choices=["iou", "ios"], default="ios")
+    parser.add_argument("--score-thr", type=float, default=0.3, help="Visualization score threshold (boxes drawn).")
+    parser.add_argument(
+        "--merge-mode",
+        choices=["nms", "nmm"],
+        default="nms",
+        help="Cross-tile dedup strategy. 'nms' (default) drops duplicate detections "
+        "via torchvision batched_nms — safest for dense same-class scenes. "
+        "'nmm' is greedy non-max merging (union of extents); useful when adjacent "
+        "tiles see clipped halves of the same object, but at low thresholds or with "
+        "ios matching it can produce wrap-around boxes spanning multiple objects.",
+    )
+    parser.add_argument(
+        "--merge-iou",
+        type=float,
+        default=0.55,
+        help="Cross-tile NMS/NMM IoU (or IoS) threshold.",
+    )
+    parser.add_argument(
+        "--merge-match",
+        choices=["iou", "ios"],
+        default="iou",
+        help="Match metric for --merge-mode nmm. Ignored when --merge-mode nms.",
+    )
+    parser.add_argument(
+        "--max-per-tile",
+        type=int,
+        default=SLICE_MAX_PER_TILE,
+        help=f"Per-tile post-NMS detection cap (default {SLICE_MAX_PER_TILE}). The single-image "
+        "ATSS_MAX_PER_IMG=100 silently saturates on dense marina shots; tile-level NMS at "
+        "640x640 needs more headroom.",
+    )
+    parser.add_argument(
+        "--max-per-frame",
+        type=int,
+        default=SLICE_MAX_PER_FRAME,
+        help=f"Final per-frame detection cap (default {SLICE_MAX_PER_FRAME}).",
+    )
     parser.add_argument("--class-agnostic", action="store_true")
     parser.add_argument("--no-trace", action="store_true", help="Disable trace (2CQ only)")
     parser.add_argument(
         "--overlap",
         type=int,
-        default=0,
-        help="Tile overlap in pixels (0 = exact 2x2 of 640x640). When >0 the input is "
-        "resized to (2*640 - overlap) before tiling so adjacent tiles overlap by `overlap` "
-        "px; detections are scaled back to 1280x1280 for output.",
+        default=128,
+        help="Tile overlap in pixels (default 128). When >0 the input is resized to "
+        "(2*640 - overlap) before tiling so adjacent tiles overlap by `overlap` px; "
+        "detections are scaled back to 1280x1280 for output. Recovers objects sitting "
+        "on tile seams that would otherwise be sliced and missed. Set to 0 for the "
+        "exact 2x2 of 640x640 (faster but loses seam objects on dense scenes).",
     )
     parser.add_argument(
         "--seam-merge",
         action="store_true",
-        help="Run seam-adjacent merge pass after IoS-NMM — catches wide/tall objects "
-        "split across a tile seam that don't have enough IoS to merge normally. Ported "
-        "from sdawle/yolo_bh_demos/yolov8l_sahi_640_pipelined.py.",
+        help="Run seam-adjacent merge pass after the cross-tile dedup. Catches wide/tall "
+        "objects split across a tile seam that don't share enough IoU to merge normally. "
+        "OFF by default because on dense same-class scenes (e.g. boats moored along a "
+        "dock parallel to the seam) it can union unrelated objects into a wrap-around box.",
     )
     parser.add_argument(
         "--seam-tol",
         type=int,
         default=-1,
         help="Seam-merge abutting tolerance in px. -1 (default) auto-picks max(overlap, 20).",
+    )
+    parser.add_argument(
+        "--overlay",
+        action="store_true",
+        help="Draw a short title bar ('atss_swin_l_dyhead | 4 devices | infer: XX ms') "
+        "and the four tile-seam rectangles onto the saved JPEG. Off by default — the "
+        "default output is just the image with bounding boxes.",
     )
     _default_out = str(Path(__file__).resolve().parent.parent / "results" / "slice_4dev")
     parser.add_argument("--output-dir", default=_default_out)
@@ -596,11 +686,14 @@ def main():
             centernesses,
             frame_size=infer_size,
             score_thr=ATSS_SCORE_THR,
+            merge_mode=args.merge_mode,
             merge_iou_thr=args.merge_iou,
             merge_match=args.merge_match,
             class_agnostic=args.class_agnostic,
             seam_merge=args.seam_merge,
             seam_tol=(max(overlap, 20) if args.seam_tol < 0 else args.seam_tol),
+            max_per_tile=args.max_per_tile,
+            max_per_frame=args.max_per_frame,
         )
     finally:
         ttnn.close_mesh_device(mesh_device)
@@ -620,25 +713,16 @@ def main():
         b = results["bboxes"][i].tolist()
         logger.info(f"  {name:>14}  {sc:.3f}  [{b[0]:.0f},{b[1]:.0f},{b[2]:.0f},{b[3]:.0f}]")
 
-    title_suffix = ""
-    if overlap > 0:
-        title_suffix += f" overlap={overlap}px"
-    if args.seam_merge:
-        title_suffix += " seam-merge"
-    vis = draw_detections(
-        img_bgr,
-        results,
-        title=f"atss_swin_l_dyhead slice 4 WH devices (infer {timings['infer_ms']:.0f}ms){title_suffix}",
-        score_thr=args.score_thr,
-    )
-    # Draw tile seams in faint white to make slicing visible.
-    vis_scale = FRAME_SIZE / infer_size
-    for ts in tiles:
-        x0 = int(round(ts.col_start * vis_scale))
-        y0 = int(round(ts.row_start * vis_scale))
-        x1 = int(round((ts.col_start + TILE_SIZE) * vis_scale)) - 1
-        y1 = int(round((ts.row_start + TILE_SIZE) * vis_scale)) - 1
-        cv2.rectangle(vis, (x0, y0), (x1, y1), (200, 200, 200), 1)
+    title = f"atss_swin_l_dyhead | 4 devices | infer: {timings['infer_ms']:.0f} ms" if args.overlay else ""
+    vis = draw_detections(img_bgr, results, title=title, score_thr=args.score_thr)
+    if args.overlay:
+        vis_scale = FRAME_SIZE / infer_size
+        for ts in tiles:
+            x0 = int(round(ts.col_start * vis_scale))
+            y0 = int(round(ts.row_start * vis_scale))
+            x1 = int(round((ts.col_start + TILE_SIZE) * vis_scale)) - 1
+            y1 = int(round((ts.row_start + TILE_SIZE) * vis_scale)) - 1
+            cv2.rectangle(vis, (x0, y0), (x1, y1), (200, 200, 200), 1)
     out_path = out_dir / "atss_slice_4dev_detections.jpg"
     cv2.imwrite(str(out_path), vis)
     logger.info(f"Saved: {out_path}")
