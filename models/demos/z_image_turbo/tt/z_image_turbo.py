@@ -135,7 +135,9 @@ def _make_scheduler(template, steps):
 class ZImageTurbo(LightweightModule):
     """Z-Image-Turbo pipeline with Metal Trace on TE, DIT, and VAE."""
 
-    def __init__(self):
+    DEFAULT_MESH_SHAPE = (1, 4)
+
+    def __init__(self, mesh_device=None):
         t0 = time.time()
 
         print("[1/5] Loading CPU components ...")
@@ -144,13 +146,15 @@ class ZImageTurbo(LightweightModule):
         self.scheduler_template = FlowMatchEulerDiscreteScheduler.from_pretrained(MODEL_ID, subfolder="scheduler")
         self.scheduler_template.sigma_min = 0.0
 
-        print("[2/5] Opening TTNN (1,4) mesh device ...")
-        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-        self.mesh_device = ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape((1, 4)),
-            l1_small_size=1 << 15,
-            trace_region_size=70_000_000,
-        )
+        if mesh_device is None:
+            print(f"[2/5] Opening TTNN {self.DEFAULT_MESH_SHAPE} mesh device ...")
+            ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+            self.mesh_device = ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(*self.DEFAULT_MESH_SHAPE),
+            )
+        else:
+            print("[2/5] Using caller-provided mesh device ...")
+            self.mesh_device = mesh_device
         self.mesh_device.enable_program_cache()
 
         print("[3/5] Building Text Encoder ...")
