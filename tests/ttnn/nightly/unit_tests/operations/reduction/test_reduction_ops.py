@@ -599,33 +599,87 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
     else:
         torch_result = torch_op(scalar * torch_input, dim=dim)
 
-    if dtype == torch.float32:
-        # FP32 eps = 2^-23 ~= 1.19e-7. Tree-reduction of N values gives
-        # relative error bounded by O(log2(N) * eps); for N up to 53328 this is
-        # ~2e-6. Welford-style variance has a tighter bound of O(sqrt(N) * eps) ~ 3e-5
-        # in the worst case. rtol = 1e-4 covers all of these with margin, and the
-        # default atol = 1e-4 handles the small-magnitude regime. The one corner case
-        # is sum reduced over all dims of the largest shape: randn input has mean 0,
-        # so the expected sum can sit very close to 0 while the accumulated absolute
-        # error reaches log2(N) * eps * sqrt(N) ~ 4e-4 (scaled up to ~2e-3
-        # by the largest test scalar); for that case atol is raised to 1e-2.
+    if dtype == torch.float32 and op in ("var", "std"):
+        # var/std with scalar == 1.0 uses the Welford single-pass path, which
+        # avoids the FPU scale-mul and operates at full FP32 precision
+        # (eps = 2^-23 ~= 1.19e-7). Welford has relative error bounded by
+        # O(sqrt(N) * eps); for N up to 177408 this is ~5e-5. rtol = 1e-4 covers
+        # this with margin, and atol = 1e-4 handles the small-magnitude regime.
         rtol = 1e-4
-        if op == "sum" and shape == (3, 4, 8, 56, 33):
-            atol = 1e-2
-            # Same justification as atol: dim=None gives a scalar output whose
-            # magnitude can be small, so the relative Frobenius norm can be
-            # elevated even when allclose passes. 1e-2 mirrors the atol bound.
-            frobenius_threshold = 1e-2
-        else:
-            atol = 1e-4
-            # Per-element relative error after reduction is bounded by
-            # sqrt(N) * eps ~= 3e-5 (Welford var/std is the worst op); the
-            # relative Frobenius norm is bounded by the same magnitude. 1e-4
-            # gives ~3x margin.
-            frobenius_threshold = 1e-4
-        # With per-element relative errors of ~1e-5 the population correlation is
-        # essentially 1; 0.9999 provides a safe lower bound.
+        atol = 1e-4
+        frobenius_threshold = 1e-4
         pcc = 0.9999
+    elif dtype == torch.float32:
+        # sum/mean/max/min on FP32 go through the FPU SrcA TF32 floor: inputs
+        # are loaded at TF32 precision (10-bit mantissa, eps_TF32 = 2^-10 ~= 1e-3)
+        # before any arithmetic. This is the precision floor; FP32 accumulation
+        # after the truncated load does not recover it.
+        #
+        # Notation used in the comments below:
+        #   x_i = an individual input element (after the implicit scalar*input
+        #         applied by the ttnn op); the test feeds randn samples so
+        #         |x_i| has unit stddev pre-scaling and |scalar| stddev post-scaling.
+        #   y, y_i = the reduction output (scalar for dim=None, otherwise an
+        #            element of the output tensor).
+        #   N = number of input elements reduced into a single output (the full
+        #       input count for dim=None, the product of the reduced axes for
+        #       a tuple, the single axis size for an int dim).
+        #
+        # Per-element TF32 quantization error: |TF32(x_i) - x_i| <= eps_TF32 * |x_i| ~ 1e-3 * |x_i|.
+        #   - max/min: output relative error <= eps_TF32 ~ 1e-3.
+        #   - sum of N values: typical (random-walk) ||error||_inf ~ eps_TF32 * ||x||_2
+        #     = eps_TF32 * sqrt(N) * |scalar| ~ 1e-3 * 421 * 4 ~ 1.68 for N = 177408.
+        #     Relative error ~ eps_TF32 ~ 1e-3 (output magnitude scales with sqrt(N)).
+        #   - mean: same relative error as sum; absolute error is sum_error / N.
+        #
+        # rtol = 5e-3 gives ~5x safety over eps_TF32, covering cascaded TF32
+        # truncations (scaler mul + accumulation) and worst-of-six-scalars cases.
+        # pcc = 0.999 is preserved because TF32 noise is uniform-relative and
+        # doesn't bias the output pattern.
+        rtol = 5e-3
+        pcc = 0.999
+        if op in ("sum", "mean") and shape == (3, 4, 8, 56, 33) and dim is None:
+            # Scalar output of zero-mean reduction (sum or mean of 177408 randn
+            # samples). mean = sum/N preserves relative errors, so both share
+            # the same relative-error distribution. Per-element half-ULP TF32
+            # error treated as uniform on [-eps_TF32*|x|/2, eps_TF32*|x|/2] gives
+            # sum-error stddev = eps_TF32 / (2*sqrt(3)) * sqrt(N) * |scalar|
+            # ~ 0.49 for N=177408, |scalar|_max=4 (1-sigma); 3-sigma ~ 1.46.
+            # bf16 with the same formula gives 1-sigma ~ 3.89, and the user's
+            # atol=1.5 covers ~0.4-sigma; atol=0.3 here covers ~0.6-sigma, the
+            # same tuning style (rtol*|y| carries typical |sum|).
+            # Mean inherits the default atol since its absolute error is
+            # sum_error/N ~ 3e-6.
+            #
+            # Frobenius on a scalar output degenerates to |error|/|y|, and |y|
+            # follows a zero-mean Gaussian (sqrt(N)*|scalar|-stddev for sum,
+            # |scalar|/sqrt(N)-stddev for mean) that can land in the lower tail
+            # of its distribution and inflate the ratio. 1e-1 covers the
+            # practical-unlucky regime where |y| is a small fraction of its stddev.
+            atol = 0.3 if op == "sum" else 5e-2
+            frobenius_threshold = 1e-1
+        elif op == "sum" and shape == (3, 4, 8, 56, 33):
+            # Tensor-output sum on the largest shape. Per-element error scales
+            # with sqrt(N_reduce); the worst non-None reduction is dim=(0,-2,-1)
+            # (N_reduce=5544) with 1-sigma random walk eps_TF32 * sqrt(N_reduce)
+            # * |scalar|_max / (2*sqrt(3)) ~ 0.086, so 3-sigma ~ 0.26. Output
+            # elements can land near zero by randn cancellation, so atol (not
+            # rtol*|y|) must absorb that per-element error: atol = 0.3 covers
+            # ~3-sigma. Frobenius is RMS-style on tensor output and stays at
+            # ~eps_TF32, so the default threshold applies.
+            atol = 0.3
+            frobenius_threshold = 5e-3
+        else:
+            # Smaller shapes (N <= 60), or non-sum ops on the largest shape:
+            # max/min absolute error bounded by eps_TF32 * 3 * |scalar|_max ~
+            # 0.012; sum on smaller shapes bounded by 1-sigma random walk
+            # eps_TF32 * sqrt(N_max) * |scalar|_max / (2*sqrt(3)) ~ 9e-3 for
+            # N=60; mean on the largest shape with a non-None dim has
+            # per-element error sum_error / N_reduce, smaller still. atol = 5e-2
+            # covers all with margin. Per-element relative error of ~eps_TF32
+            # ~ 1e-3 gives a relative Frobenius norm of the same order; 5e-3 = 5x margin.
+            atol = 5e-2
+            frobenius_threshold = 5e-3
     else:
         rtol = 0.05
         if op == "sum" and shape == (3, 4, 8, 56, 33):
