@@ -10,9 +10,6 @@
 
 namespace tt::tt_metal {
 
-thread_local std::vector<std::shared_ptr<IGraphProcessor>> GraphTracker::processors;
-thread_local std::shared_ptr<IGraphHooks> GraphTracker::hook;
-
 nlohmann::json IGraphProcessor::end_capture() { return nullptr; }
 
 GraphTracker& GraphTracker::instance() {
@@ -170,10 +167,7 @@ void GraphTracker::clear() {
 }
 
 void GraphTracker::clear_hook() {
-    {
-        std::lock_guard<std::mutex> lock(hooked_buffers_mutex);
-        hooked_buffers.clear();
-    }
+    hooked_buffers.clear();
     hook = nullptr;
 }
 

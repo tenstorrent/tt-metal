@@ -384,10 +384,145 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                 ? CreateKernel(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config)
                 : CreateKernelFromString(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config);
 
-        for (const auto& [core_coord, core_runtime_args] : kernel_descriptor.runtime_args) {
-            SetRuntimeArgs(*this, kernel_handle, core_coord, core_runtime_args);
+        // Set per-core runtime args: positional values followed by named values.
+        if (!kernel_descriptor.named_per_core_runtime_args.empty() ||
+            !kernel_descriptor.named_per_core_runtime_arg_arrays.empty()) {
+            // Start with positional args per core
+            std::map<CoreCoord, std::vector<uint32_t>> core_to_args;
+            for (const auto& [core, positional] : kernel_descriptor.runtime_args) {
+                core_to_args[core] = positional;
+            }
+            // Append named per-core scalar values in order (index = position)
+            for (const auto& arg : kernel_descriptor.named_per_core_runtime_args) {
+                for (const auto& [core, value] : arg.core_values) {
+                    core_to_args[core].push_back(value);
+                }
+            }
+            // Append named per-core array values (N contiguous slots per core)
+            for (const auto& arg : kernel_descriptor.named_per_core_runtime_arg_arrays) {
+                for (const auto& [core, values] : arg.core_values) {
+                    core_to_args[core].insert(core_to_args[core].end(), values.begin(), values.end());
+                }
+            }
+            for (const auto& [core, merged] : core_to_args) {
+                SetRuntimeArgs(*this, kernel_handle, core, merged);
+            }
+        } else {
+            for (const auto& [core_coord, core_runtime_args] : kernel_descriptor.runtime_args) {
+                SetRuntimeArgs(*this, kernel_handle, core_coord, core_runtime_args);
+            }
         }
-        SetCommonRuntimeArgs(*this, kernel_handle, kernel_descriptor.common_runtime_args);
+
+        // Set common runtime args: positional values followed by named scalars, then named arrays.
+        if (!kernel_descriptor.named_common_runtime_args.empty() ||
+            !kernel_descriptor.named_common_runtime_arg_arrays.empty()) {
+            std::vector<uint32_t> merged_common_rt_args;
+            merged_common_rt_args.insert(
+                merged_common_rt_args.end(),
+                kernel_descriptor.common_runtime_args.begin(),
+                kernel_descriptor.common_runtime_args.end());
+            for (const auto& arg : kernel_descriptor.named_common_runtime_args) {
+                merged_common_rt_args.push_back(arg.value);
+            }
+            for (const auto& arg : kernel_descriptor.named_common_runtime_arg_arrays) {
+                merged_common_rt_args.insert(merged_common_rt_args.end(), arg.values.begin(), arg.values.end());
+            }
+            SetCommonRuntimeArgs(*this, kernel_handle, merged_common_rt_args);
+        } else {
+            SetCommonRuntimeArgs(*this, kernel_handle, kernel_descriptor.common_runtime_args);
+        }
+
+        // Build namespace maps for JIT header generation.
+        // Names use "ns.field" convention — split on '.' to produce namespace hierarchy.
+        auto validate_identifier = [](const std::string& id, const std::string& context) {
+            TT_FATAL(
+                !id.empty() && (std::isalpha((unsigned char)id[0]) || id[0] == '_') &&
+                    std::all_of(
+                        id.begin(), id.end(), [](char c) { return std::isalnum((unsigned char)c) || c == '_'; }),
+                "Named arg {}: '{}' is not a valid C++ identifier",
+                context,
+                id);
+        };
+        auto split_name = [&validate_identifier](const std::string& name) -> std::pair<std::string, std::string> {
+            auto dot = name.find('.');
+            if (dot == std::string::npos) {
+                validate_identifier(name, "field");
+                return {"", name};
+            }
+            auto ns = name.substr(0, dot);
+            auto field = name.substr(dot + 1);
+            validate_identifier(ns, "namespace");
+            validate_identifier(field, "field");
+            return {ns, field};
+        };
+
+        auto kernel = internal_->get_kernel(kernel_handle);
+
+        // RT namespace map: rt_args::get<rt_args::ns::field>()
+        if (!kernel_descriptor.named_common_runtime_args.empty() ||
+            !kernel_descriptor.named_per_core_runtime_args.empty() ||
+            !kernel_descriptor.named_common_runtime_arg_arrays.empty() ||
+            !kernel_descriptor.named_per_core_runtime_arg_arrays.empty()) {
+            NamedRuntimeArgNamespaces rt_ns_map;
+
+            // Common scalars: one slot each
+            uint32_t common_index = static_cast<uint32_t>(kernel_descriptor.common_runtime_args.size());
+            for (const auto& arg : kernel_descriptor.named_common_runtime_args) {
+                auto [ns, field] = split_name(arg.name);
+                rt_ns_map[ns].push_back({field, common_index, 1, RuntimeArgDispatch::COMMON});
+                common_index += 1;
+            }
+            // Common arrays: N contiguous slots each
+            for (const auto& arg : kernel_descriptor.named_common_runtime_arg_arrays) {
+                auto [ns, field] = split_name(arg.name);
+                uint32_t len = static_cast<uint32_t>(arg.values.size());
+                rt_ns_map[ns].push_back({field, common_index, len, RuntimeArgDispatch::COMMON});
+                common_index += len;
+            }
+
+            // Per-core scalars: one slot each
+            uint32_t per_core_index = 0;
+            if (!kernel_descriptor.runtime_args.empty()) {
+                per_core_index = static_cast<uint32_t>(kernel_descriptor.runtime_args[0].second.size());
+            }
+            for (const auto& arg : kernel_descriptor.named_per_core_runtime_args) {
+                auto [ns, field] = split_name(arg.name);
+                rt_ns_map[ns].push_back({field, per_core_index, 1, RuntimeArgDispatch::PER_CORE});
+                per_core_index += 1;
+            }
+            // Per-core arrays: N contiguous slots each
+            for (const auto& arg : kernel_descriptor.named_per_core_runtime_arg_arrays) {
+                auto [ns, field] = split_name(arg.name);
+                uint32_t len = arg.core_values.empty() ? 0 : static_cast<uint32_t>(arg.core_values[0].second.size());
+                rt_ns_map[ns].push_back({field, per_core_index, len, RuntimeArgDispatch::PER_CORE});
+                per_core_index += len;
+            }
+
+            kernel->set_named_runtime_arg_namespaces(rt_ns_map);
+        }
+
+        // CT namespace map: ct_args::ns::field (plain constexpr values)
+        if (!kernel_descriptor.named_compile_time_args.empty()) {
+            NamedCTArgNamespaces ct_ns_map;
+            std::unordered_map<std::string, uint32_t> seen_ct_args;
+            for (const auto& [name, value] : kernel_descriptor.named_compile_time_args) {
+                auto it = seen_ct_args.find(name);
+                if (it != seen_ct_args.end()) {
+                    TT_FATAL(
+                        it->second == value,
+                        "named_compile_time_arg '{}' is defined twice with conflicting values ({} vs {}). "
+                        "Each CT arg name must be unique across all sub-lists.",
+                        name,
+                        it->second,
+                        value);
+                    continue;  // same value — silently skip the duplicate
+                }
+                seen_ct_args.emplace(name, value);
+                auto [ns, field] = split_name(name);
+                ct_ns_map[ns].emplace_back(field, value);
+            }
+            kernel->set_named_ct_arg_namespaces(ct_ns_map);
+        }
     }
 }
 
