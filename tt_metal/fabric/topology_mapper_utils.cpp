@@ -34,6 +34,231 @@
 
 namespace tt::tt_metal::experimental::tt_fabric {
 
+namespace {
+
+using tt::tt_metal::AsicID;
+using tt::tt_metal::PortType;
+
+std::set<AsicID> physical_asics_from_adjacency(const PhysicalAdjacencyMap& physical_adjacency) {
+    std::set<AsicID> asics;
+    for (const auto& [asic, _] : physical_adjacency) {
+        asics.insert(asic);
+    }
+    return asics;
+}
+
+std::set<AsicID> asics_with_host_rank(
+    const std::map<AsicID, MeshHostRankId>& asic_to_host_rank,
+    MeshHostRankId rank,
+    const std::set<AsicID>& physical_asics) {
+    std::set<AsicID> asics;
+    for (const auto& asic : physical_asics) {
+        const auto it = asic_to_host_rank.find(asic);
+        if (it != asic_to_host_rank.end() && it->second == rank) {
+            asics.insert(asic);
+        }
+    }
+    return asics;
+}
+
+std::optional<MeshHostRankId> fabric_node_rank(
+    const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank, FabricNodeId fabric_node) {
+    const auto it = node_to_host_rank.find(fabric_node);
+    if (it == node_to_host_rank.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+}  // namespace
+
+int port_type_preference_rank(tt::tt_metal::PortType port_type) {
+    using tt::tt_metal::PortType;
+    switch (port_type) {
+        case PortType::TRACE: return 0;
+        case PortType::WARP400: return 1;
+        case PortType::QSFP_DD: return 2;
+        case PortType::WARP100: return 3;
+        case PortType::LINKING_BOARD_1:
+        case PortType::LINKING_BOARD_2:
+        case PortType::LINKING_BOARD_3: return 50;
+        case PortType::UNKNOWN: return 100;
+    }
+    return 100;
+}
+
+PortTypeLinkKey canonical_port_type_link_key(tt::tt_metal::AsicID a, tt::tt_metal::AsicID b) {
+    if (a < b) {
+        return {a, b};
+    }
+    return {b, a};
+}
+
+namespace {
+
+bool port_type_link_has_type(const PortTypeLinkMap& port_type_links, AsicID a, AsicID b, PortType port_type) {
+    const auto key = canonical_port_type_link_key(a, b);
+    const auto it = port_type_links.find(key);
+    return it != port_type_links.end() && it->second == port_type;
+}
+
+}  // namespace
+
+PortTypeLinkMap build_port_type_link_map(
+    const tt::tt_metal::PhysicalSystemDescriptor& psd, const std::set<tt::tt_metal::AsicID>& mesh_asics) {
+    using tt::tt_metal::AsicID;
+    using tt::tt_metal::PortType;
+    PortTypeLinkMap port_type_links;
+    for (const auto& src : mesh_asics) {
+        for (const auto& dst : psd.get_asic_neighbors(src)) {
+            if (src == dst || !mesh_asics.contains(dst)) {
+                continue;
+            }
+            for (const auto& eth_conn : psd.get_eth_connections(src, dst)) {
+                if (eth_conn.port_type == PortType::UNKNOWN) {
+                    continue;
+                }
+                const auto key = canonical_port_type_link_key(src, dst);
+                const auto it = port_type_links.find(key);
+                if (it == port_type_links.end() ||
+                    port_type_preference_rank(eth_conn.port_type) < port_type_preference_rank(it->second)) {
+                    port_type_links[key] = eth_conn.port_type;
+                }
+            }
+        }
+    }
+    return port_type_links;
+}
+
+LogicalEdgePortRequirement infer_logical_edge_port_requirement(MeshHostRankId rank_a, MeshHostRankId rank_b) {
+    LogicalEdgePortRequirement requirement;
+    if (rank_a == ::tt::tt_fabric::MESH_HOST_RANK_UNSET || rank_b == ::tt::tt_fabric::MESH_HOST_RANK_UNSET) {
+        return requirement;
+    }
+    if (rank_a == rank_b) {
+        requirement.preferred = tt::tt_metal::PortType::TRACE;
+    } else {
+        requirement.required = tt::tt_metal::PortType::QSFP_DD;
+    }
+    return requirement;
+}
+
+std::set<tt::tt_metal::AsicID> compute_preferred_asics_for_fabric_node(
+    FabricNodeId fabric_node,
+    const LogicalAdjacencyMap& logical_adjacency,
+    const PhysicalAdjacencyMap& physical_adjacency,
+    const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank,
+    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
+    const PortTypeLinkMap& port_type_links) {
+    using tt::tt_metal::AsicID;
+    const auto fabric_rank = fabric_node_rank(node_to_host_rank, fabric_node);
+    if (!fabric_rank.has_value()) {
+        return {};
+    }
+
+    const auto logical_it = logical_adjacency.find(fabric_node);
+    if (logical_it == logical_adjacency.end()) {
+        return {};
+    }
+
+    const auto physical_asics = physical_asics_from_adjacency(physical_adjacency);
+    std::optional<std::set<AsicID>> preferred_asics;
+
+    for (const auto& neighbor : logical_it->second) {
+        const auto neighbor_rank = fabric_node_rank(node_to_host_rank, neighbor);
+        if (!neighbor_rank.has_value()) {
+            continue;
+        }
+
+        const auto edge_requirement = infer_logical_edge_port_requirement(fabric_rank.value(), neighbor_rank.value());
+        if (!edge_requirement.preferred.has_value()) {
+            continue;
+        }
+
+        const auto neighbor_rank_asics = asics_with_host_rank(asic_to_host_rank, neighbor_rank.value(), physical_asics);
+        std::set<AsicID> candidates_for_neighbor;
+        for (const auto& candidate : physical_asics) {
+            for (const auto& neighbor_asic : neighbor_rank_asics) {
+                if (port_type_link_has_type(port_type_links, candidate, neighbor_asic, *edge_requirement.preferred)) {
+                    candidates_for_neighbor.insert(candidate);
+                    break;
+                }
+            }
+        }
+
+        if (!preferred_asics.has_value()) {
+            preferred_asics = std::move(candidates_for_neighbor);
+        } else {
+            std::set<AsicID> intersection;
+            std::set_intersection(
+                preferred_asics->begin(),
+                preferred_asics->end(),
+                candidates_for_neighbor.begin(),
+                candidates_for_neighbor.end(),
+                std::inserter(intersection, intersection.begin()));
+            preferred_asics = std::move(intersection);
+        }
+    }
+
+    return preferred_asics.value_or(std::set<AsicID>{});
+}
+
+std::set<tt::tt_metal::AsicID> compute_required_asics_for_fabric_node(
+    FabricNodeId fabric_node,
+    const LogicalAdjacencyMap& logical_adjacency,
+    const PhysicalAdjacencyMap& physical_adjacency,
+    const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank,
+    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
+    const PortTypeLinkMap& port_type_links) {
+    using tt::tt_metal::AsicID;
+    const auto fabric_rank = fabric_node_rank(node_to_host_rank, fabric_node);
+    if (!fabric_rank.has_value()) {
+        return {};
+    }
+
+    const auto logical_it = logical_adjacency.find(fabric_node);
+    if (logical_it == logical_adjacency.end()) {
+        return {};
+    }
+
+    const auto physical_asics = physical_asics_from_adjacency(physical_adjacency);
+    std::set<AsicID> required_asics = physical_asics;
+    bool has_cross_host_neighbor = false;
+
+    for (const auto& neighbor : logical_it->second) {
+        const auto neighbor_rank = fabric_node_rank(node_to_host_rank, neighbor);
+        if (!neighbor_rank.has_value()) {
+            continue;
+        }
+
+        const auto edge_requirement = infer_logical_edge_port_requirement(fabric_rank.value(), neighbor_rank.value());
+        if (!edge_requirement.required.has_value()) {
+            continue;
+        }
+
+        has_cross_host_neighbor = true;
+        const auto neighbor_rank_asics = asics_with_host_rank(asic_to_host_rank, neighbor_rank.value(), physical_asics);
+        std::set<AsicID> candidates_for_neighbor;
+        for (const auto& candidate : required_asics) {
+            for (const auto& neighbor_asic : neighbor_rank_asics) {
+                if (port_type_link_has_type(port_type_links, candidate, neighbor_asic, *edge_requirement.required)) {
+                    candidates_for_neighbor.insert(candidate);
+                    break;
+                }
+            }
+        }
+        required_asics = std::move(candidates_for_neighbor);
+        if (required_asics.empty()) {
+            break;
+        }
+    }
+
+    if (!has_cross_host_neighbor) {
+        return physical_asics;
+    }
+    return required_asics;
+}
+
 TopologyMappingResult map_mesh_to_physical(
     MeshId mesh_id,
     const LogicalAdjacencyMap& logical_adjacency,

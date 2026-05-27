@@ -501,6 +501,20 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
             config.asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
         }
 
+        std::set<tt::tt_metal::AsicID> physical_mesh_asics;
+        for (const auto& [_, physical_mesh_graph] : adjacency_map_physical_multi_mesh.mesh_adjacency_graphs_) {
+            for (const auto& asic_id : physical_mesh_graph.get_nodes()) {
+                physical_mesh_asics.insert(asic_id);
+            }
+        }
+        if (!physical_mesh_asics.empty()) {
+            config.port_type_links = build_port_type_link_map(physical_system_descriptor_, physical_mesh_asics);
+            log_debug(
+                tt::LogFabric,
+                "Port-type link map: {} undirected ASIC pair(s) with port type metadata",
+                config.port_type_links->size());
+        }
+
         // Use multi-mesh topology solver to map all meshes at once
         auto mapping_result = ::tt::tt_metal::experimental::tt_fabric::map_multi_mesh_to_physical(
             adjacency_map_logical_multi_mesh,
