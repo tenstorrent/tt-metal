@@ -81,9 +81,6 @@ void FabricBuilder::discover_channels() {
 }
 
 void FabricBuilder::create_routers() {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-
     // Create router builders
     for (const auto& [direction, eth_channels] : channels_by_direction_) {
         const auto& neighbor_node = chip_neighbors_.at(direction);
@@ -99,8 +96,12 @@ void FabricBuilder::create_routers() {
             };
 
 #ifdef TT_UMD_BUILD_SIMULATION
-            cluster.register_sim_fabric_endpoint_direction(
-                device_->id(), eth_chan, control_plane.routing_direction_to_eth_direction(direction));
+            {
+                const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+                auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+                cluster.register_sim_fabric_endpoint_direction(
+                    device_->id(), eth_chan, control_plane.routing_direction_to_eth_direction(direction));
+            }
 #endif  // TT_UMD_BUILD_SIMULATION
 
             auto router_builder = FabricRouterBuilder::create(device_, program_, local_node_, location);
