@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_device_operation.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
-#include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_program_factory.hpp"
-#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
+#include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_program_factory.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::experimental::prim {
 void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
