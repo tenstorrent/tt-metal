@@ -172,8 +172,26 @@ class Llama31_8BReadinessGenerator(GeneratorBase):
         page_table: torch.Tensor,
         kv_cache: Any,
         prompt_lens: List[int],
+        return_all_logits: bool = False,
         **kwargs: Any,
     ) -> torch.Tensor:
+        """
+        Run prefill forward pass.
+
+        Args:
+            return_all_logits: If True, return logits at all positions [batch, seq_len, vocab].
+                             If False (default), return logits at last position [batch, 1, vocab].
+        """
+        if return_all_logits:
+            # For batch prefill check: need logits at all positions
+            # tt_transformers doesn't expose this directly, so we need to handle it
+            raise NotImplementedError(
+                "return_all_logits=True is not yet implemented for the Llama shim. "
+                "The underlying tt_transformers Generator.prefill_forward_text only returns "
+                "last-position logits. To support batch prefill checks, this would need to "
+                "either call the model directly or extend tt_transformers' Generator API."
+            )
+
         return self._inner.prefill_forward_text(
             tokens,
             page_table=page_table,
