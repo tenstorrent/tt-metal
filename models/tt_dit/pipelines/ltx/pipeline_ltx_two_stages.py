@@ -19,8 +19,8 @@ Text-only; image conditioning is not wired here yet.
 
 from __future__ import annotations
 
-import gc
 import os
+import sys
 import time
 
 import torch
@@ -29,6 +29,7 @@ from loguru import logger
 import ttnn
 
 from ...utils.lora import LoraSpec
+from ...utils.ltx import AudioLatentShape, VideoPixelShape
 from .pipeline_ltx import LTXPipeline
 from .pipeline_ltx_av import LTXAVPipeline
 from .pipeline_ltx_fast import LTXFastPipeline
@@ -37,10 +38,29 @@ STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
 
 
 class LTXAVTwoStagesPipeline(LTXAVPipeline):
-    """Two-stage AV pipeline: full-guidance stage 1 + distilled-LoRA stage 2 refine."""
+    """Two-stage AV pipeline: full-guidance s1 (variant 0 = base 22B) +
+    distilled-LoRA s2 refine (variant 1 = LoRA-fused base)."""
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        distilled_lora_path: str | None = None,
+        distilled_lora_strength: float = 1.0,
+        **kwargs,
+    ) -> None:
         kwargs.setdefault("mode", "av")
+        if distilled_lora_path is not None:
+            kwargs.setdefault(
+                "extra_transformer_variants",
+                [
+                    (
+                        f"distilled_lora_strength_{distilled_lora_strength}",
+                        [LoraSpec(path=distilled_lora_path, strength=distilled_lora_strength)],
+                    )
+                ],
+            )
+        self._distilled_lora_path = distilled_lora_path
+        self._distilled_lora_strength = distilled_lora_strength
         super().__init__(*args, **kwargs)
 
     @staticmethod
@@ -49,14 +69,109 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
         kwargs["pipeline_class"] = LTXAVTwoStagesPipeline
         return LTXPipeline.create_pipeline(mesh_device, **kwargs)
 
+    def warmup_buffers(
+        self,
+        *,
+        num_frames: int,
+        height: int,
+        width: int,
+        num_inference_steps: int = 2,
+    ) -> None:
+        """Compile every program both stages will hit. Stage 1: variant 0
+        (base, half-res, full guidance). Stage 2: variant 1 (LoRA-fused,
+        full-res, neutral guidance). Stage 2 is skipped if ``__init__`` was
+        called without a ``distilled_lora_path``."""
+        assert height % 64 == 0 and width % 64 == 0, f"H/W must be div by 64 (got {height}x{width})"
+        assert num_frames > 0, f"num_frames must be > 0 (got {num_frames})"
+
+        has_s2 = len(self.transformer_states) > 1
+        t0 = time.time()
+        logger.info(
+            f"warmup (2-stage): {num_frames}f@{height}x{width}, "
+            f"s1={num_inference_steps} steps" + (f" + s2={num_inference_steps} steps" if has_s2 else " (s2 skipped)")
+        )
+
+        s1_h, s1_w = height // 2, width // 2
+        self._prepare_transformer(0)
+
+        results = self.encode_prompts_reference(["warmup", "warmup"])
+        v_p = results[0].video_encoding.float()
+        a_p = results[0].audio_encoding.float()
+        v_n = results[1].video_encoding.float()
+        a_n = results[1].audio_encoding.float()
+
+        logger.info(f"warmup stage 1: {s1_h}x{s1_w}")
+        self.call_av(
+            video_prompt_embeds=v_p,
+            audio_prompt_embeds=a_p,
+            neg_video_prompt_embeds=v_n,
+            neg_audio_prompt_embeds=a_n,
+            num_frames=num_frames,
+            height=s1_h,
+            width=s1_w,
+            num_inference_steps=num_inference_steps,
+            seed=0,
+            ge_gamma=0.0,
+        )
+
+        if not has_s2:
+            # Decode runs at s1 half-res when there's no s2 stage.
+            self._warmup_decode(num_frames, s1_h, s1_w)
+            self._prepare_transformer(0)
+            logger.info(f"warmup (s1-only) done in {time.time() - t0:.1f}s")
+            return
+
+        self._prepare_transformer(1)
+
+        s2_sigmas = list(STAGE_2_DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0]
+        s2_sigmas_t = torch.tensor(s2_sigmas, dtype=torch.float32)
+
+        latent_frames = (num_frames - 1) // 8 + 1
+        full_latent_count = latent_frames * (height // 32) * (width // 32)
+        dummy_v_init = torch.zeros(1, full_latent_count, self.in_channels)
+        vps = VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
+        als = AudioLatentShape.from_video_pixel_shape(vps)
+        dummy_a_init = torch.zeros(1, als.frames, self.in_channels)
+
+        logger.info(f"warmup stage 2: {height}x{width}, σ={s2_sigmas}")
+        self.call_av(
+            video_prompt_embeds=v_p,
+            audio_prompt_embeds=a_p,
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            num_inference_steps=num_inference_steps,
+            video_cfg_scale=1.0,
+            audio_cfg_scale=1.0,
+            video_stg_scale=0.0,
+            audio_stg_scale=0.0,
+            video_modality_scale=1.0,
+            audio_modality_scale=1.0,
+            rescale_scale=0.0,
+            seed=0,
+            ge_gamma=0.0,
+            sigmas=s2_sigmas_t,
+            initial_video_latent=dummy_v_init,
+            initial_audio_latent=dummy_a_init,
+            noise_scale=s2_sigmas[0],
+        )
+        # Compile VAE decode at full-res (only s2 feeds decode in generate).
+        self._warmup_decode(num_frames, height, width)
+        # Re-prime variant 0 so it's resident when the real generate starts stage 1.
+        self._prepare_transformer(0)
+        logger.info(f"warmup (2-stage) done in {time.time() - t0:.1f}s")
+
     def generate(
         self,
         prompt: str,
         *,
         output_path: str,
         upsampler_path: str,
-        distilled_lora_path: str,
-        distilled_lora_strength: float = 1.0,
+        # LoRA path / strength are consumed by ``__init__`` (variant 1 is built
+        # there). Optional here for back-compat; if passed they must match what
+        # ``__init__`` saw or generate raises.
+        distilled_lora_path: str | None = None,
+        distilled_lora_strength: float | None = None,
         negative_prompt: str | None = None,
         num_frames: int = 121,
         height: int = 512,
@@ -102,9 +217,22 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
         rescale_scale = _env_float("RESCALE_SCALE", rescale_scale)
         if os.environ.get("GE_GAMMA") is not None:
             ge_gamma = float(os.environ["GE_GAMMA"])
-        distilled_lora_strength = _env_float("DISTILLED_LORA_STRENGTH", distilled_lora_strength)
 
-        import sys
+        if len(self.transformer_states) < 2:
+            raise RuntimeError("Variant 1 (LoRA-fused) not registered — pass distilled_lora_path to create_pipeline")
+        if distilled_lora_path is not None and distilled_lora_path != self._distilled_lora_path:
+            raise ValueError(
+                f"distilled_lora_path mismatch: generate got {distilled_lora_path!r}, "
+                f"__init__ used {self._distilled_lora_path!r}"
+            )
+        if distilled_lora_strength is None:
+            distilled_lora_strength = self._distilled_lora_strength
+        distilled_lora_strength = _env_float("DISTILLED_LORA_STRENGTH", distilled_lora_strength)
+        if distilled_lora_strength != self._distilled_lora_strength:
+            raise ValueError(
+                f"distilled_lora_strength mismatch: generate got {distilled_lora_strength}, "
+                f"__init__ used {self._distilled_lora_strength}"
+            )
 
         sys.path.insert(0, "LTX-2/packages/ltx-core/src")
         sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
@@ -125,10 +253,8 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
         v_n = results[1].video_encoding.float()
         a_n = results[1].audio_encoding.float()
 
-        # 2) Stage 1: base weights, half resolution, full guidance.
-        self._lora_specs = []
-        self._prepare_transformer()
-        gc.collect()
+        # Stage 1: variant 0 (base), half-res, full guidance.
+        self._prepare_transformer(0)
         logger.info(f"Stage 1: {s1_h}x{s1_w}, {num_inference_steps} guided steps")
         t0 = time.time()
         s1_video, s1_audio = self.call_av(
@@ -153,10 +279,7 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
         )
         logger.info(f"Stage 1: {time.time() - t0:.1f}s")
 
-        # 3) Free transformer (BH LB can't hold transformer + upsampler at once).
-        self.transformer = None
-        gc.collect()
-
+        # CPU upsample — transformer stays put in DRAM.
         latent_frames = (num_frames - 1) // 8 + 1
         s1_lh, s1_lw = s1_h // 32, s1_w // 32
         s1_spatial = s1_video.reshape(1, latent_frames, s1_lh, s1_lw, 128).permute(0, 4, 1, 2, 3)
@@ -167,12 +290,9 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
             1, latent_frames * (height // 32) * (width // 32), 128
         )
 
-        # 4) Stage 2: distilled LoRA fused into transformer; no guidance; refine
-        #    from the upsampled video latent + stage-1 audio latent renoised at
-        #    sigmas[0]. Reuses call_av by neutralising all guidance scales.
-        self._lora_specs = [LoraSpec(path=distilled_lora_path, strength=distilled_lora_strength)]
-        self._prepare_transformer()
-        gc.collect()
+        # Stage 2: variant 1 (LoRA-fused), full-res, neutral guidance. Refines
+        # upsampled video + renoised stage-1 audio.
+        self._prepare_transformer(1)
         s2_sigmas = torch.tensor(s2_sigma_values, dtype=torch.float32)
         n_s2_steps = len(s2_sigma_values) - 1
         logger.info(
@@ -203,12 +323,8 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
         )
         logger.info(f"Stage 2: {time.time() - t0:.1f}s")
 
-        # 5) Free transformer; load VAE; decode + export.
-        self.transformer = None
-        gc.collect()
-
         t0 = time.time()
-        self._prepare_vae(num_frames=num_frames, height=height, width=width)
+        self._prepare_vae()
         logger.info(f"VAE loaded in {time.time() - t0:.0f}s")
 
         latent_h, latent_w = height // 32, width // 32
