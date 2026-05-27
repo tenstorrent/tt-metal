@@ -140,34 +140,49 @@ def _b_is_batched(b) -> bool:
     return len(shape) > 2 and any(d > 1 for d in shape[:-2])
 
 
+# Toggle to test the DST-budget effect on perf.
+# False: DST window holds 8 tiles → out_subblock h×w ≤ 8 → pick (4, 2).
+# True:  DST window holds 4 tiles → out_subblock h×w ≤ 4 → pick (2, 2).
+_FP32_DEST_ACC = True
+
+
 def _ttnn_matmul_silu(a, b):
     """Apples-to-apples vs Makora's fused matmul+silu.
 
-    bf16 in/out, DRAM-interleaved output, HiFi2 + fp32_dest_acc_en.
+    Hand-built MatmulMultiCoreReuseMultiCastProgramConfig with fused SILU
+    activation (single device program, in-kernel via the PACK-thread SFPU
+    overlap pattern). Block geometry mirrors what test_matmul_2d_host_perf
+    picks: per_core_M=Mt/grid_y, per_core_N=Nt/grid_x, subblock sized to fit
+    the DST window (8 tiles if fp32_dest_acc=False, 4 if True).
 
-    Routing:
-      - If b is NOT batched: pass `core_grid=device.core_grid` to trigger
-        the in-kernel fused path (single device program, SiLU applied on
-        DST between matmul accumulate and pack via
-        bmm_large_block_zm_fused_bias_activation.cpp with SFPU_ACTIVATION=1).
-      - If b IS batched: TTNN's in-kernel fused activation refuses
-        (matmul_program_config.cpp:454: !fused_activation when batched B);
-        omit core_grid so matmul.cpp:294 falls through to the 2-program
-        post-op path (matmul then unary_chain SiLU, DRAM round-trip
-        between).
+    Works for shapes where Mt % grid_y == 0 and Nt % grid_x == 0 on 8×8.
     """
+    Mt = a.shape[-2] // 32
+    Nt = b.shape[-1] // 32
+    grid_x, grid_y = 8, 8
+    per_core_M = Mt // grid_y
+    per_core_N = Nt // grid_x
+    if _FP32_DEST_ACC:
+        out_subblock_h, out_subblock_w = 2, 2  # 2×2=4 fits DST=4 (fp32_dest_acc=True)
+    else:
+        out_subblock_h, out_subblock_w = 4, 2  # 4×2=8 fits DST=8 (fp32_dest_acc=False)
+    in0_block_w = 2
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        fuse_batch=True,
+    )
     cfg = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=_FP32_DEST_ACC,
     )
-    kwargs = dict(
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        activation="silu",
-        compute_kernel_config=cfg,
-    )
-    if not _b_is_batched(b):
-        kwargs["core_grid"] = a.device().core_grid
-    return ttnn.matmul(a, b, **kwargs)
+    return ttnn.matmul(a, b, program_config=program_config, compute_kernel_config=cfg)
 
 
 def _path_label(shape) -> str:
