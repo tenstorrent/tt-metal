@@ -6,7 +6,6 @@ from models.common.readiness_check.contract import (
     GENERATOR_MODULE_RELPATH,
     BuildGeneratorFn,
     Generator,
-    GeneratorBase,
     NextInputFn,
 )
 from models.common.readiness_check.generate import generate_reference, DEFAULT_K
@@ -26,7 +25,6 @@ __all__ = [
     "FORMAT_VERSION",
     "GENERATOR_MODULE_RELPATH",
     "Generator",
-    "GeneratorBase",
     "NextInputFn",
     "Reference",
     "ReferenceEntry",

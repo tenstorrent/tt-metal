@@ -5,7 +5,7 @@
 Generator contract for the model-readiness check (and vLLM integration).
 
 Every model that the readiness check can drive must expose a generator that
-satisfies the `Generator` Protocol below. The same generator is the
+inherits from the `Generator` ABC below. The same generator is the
 delegation target for `tt/generator_vllm.py` for vLLM serving.
 
 # Two API levels, one file
@@ -50,7 +50,7 @@ If `next_input is None`, the generator feeds its own prediction back
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Callable, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, List, Optional
 
 import torch
 
@@ -58,154 +58,21 @@ NextInputFn = Callable[[int, int], int]
 """(step_index, model_predicted_token_id) -> token_id_to_feed_next"""
 
 
-@runtime_checkable
-class Generator(Protocol):
+class Generator(ABC):
     """
-    Required surface for a tt-metal generator usable by both vLLM and the
-    readiness check.
+    Abstract base class defining the readiness-check Generator contract.
 
-    Implementations must expose the attributes and methods below. Extra
-    methods (e.g. for multimodal preprocessing or model-specific warmup)
-    are fine; the contract only mandates the minimum.
-    """
+    All generator implementations must inherit from this ABC. Benefits:
 
-    # --- Attributes ------------------------------------------------------
-
-    tokenizer: Any
-    """HuggingFace-compatible tokenizer. Must support .encode / .decode and
-    chat templating if the model uses it. The readiness check uses it for
-    debug decoding only; it does not assume a specific class."""
-
-    # --- Low-level: caller-managed KV cache + page table ----------------
-
-    def prefill_forward(
-        self,
-        tokens: torch.Tensor,
-        *,
-        page_table: torch.Tensor,
-        kv_cache: Any,
-        prompt_lens: List[int],
-        return_all_logits: bool = False,
-        **kwargs: Any,
-    ) -> torch.Tensor:
-        """
-        Run prefill on `tokens` and update `kv_cache` in place.
-
-        Args:
-            tokens:             [batch, prompt_len_padded] int token ids.
-            page_table:         [batch, max_blocks] virtual-to-physical block map.
-            kv_cache:           List-of-lists of TT tensors (layer × {K, V}), allocated by caller.
-            prompt_lens:        [batch] real (unpadded) prompt length per user.
-            return_all_logits:  If True, return logits at all positions instead of just the last.
-                                Used by batch prefill readiness checks. Default False for vLLM compatibility.
-
-        Returns:
-            If return_all_logits=False (default):
-                Logits at the last prompt position, shape [batch, 1, vocab].
-            If return_all_logits=True:
-                Logits at all positions, shape [batch, prompt_len, vocab].
-
-            May alternatively return sampled tokens if the model samples on device.
-        """
-
-    def decode_forward(
-        self,
-        tokens: torch.Tensor,
-        start_pos: torch.Tensor,
-        *,
-        page_table: torch.Tensor,
-        kv_cache: Any,
-        **kwargs: Any,
-    ) -> torch.Tensor:
-        """
-        Run one decode step on `tokens` and update `kv_cache` in place.
-
-        Args:
-            tokens:     [batch, 1] int token ids to decode.
-            start_pos:  [batch] current position per user.
-            page_table: [batch, max_blocks].
-            kv_cache:   Same handles passed to `prefill_forward`.
-
-        Returns:
-            Logits at the current position, shape [batch, vocab].
-            May alternatively return sampled tokens [batch] if sampling on
-            device — same caveat as `prefill_forward`.
-        """
-
-    # --- High-level: generator-managed KV cache + page table ------------
-
-    def generate(
-        self,
-        prompt_token_ids: List[int],
-        max_new_tokens: int,
-        *,
-        next_input: Optional[NextInputFn] = None,
-        **kwargs: Any,
-    ) -> List[int]:
-        """
-        HF-style host driver: prefill on `prompt_token_ids`, then run
-        greedy/argmax decode for up to `max_new_tokens` steps. Manages KV
-        cache and page table internally.
-
-        Args:
-            prompt_token_ids: 1D list of prompt token ids (single user).
-            max_new_tokens:   Decode-step budget. Generation may stop early
-                              on EOS — see Returns.
-            next_input:       Optional callback. If provided, after each
-                              decode step the generator calls
-                              `next_input(step, predicted_token)` and feeds
-                              the returned token into the next step instead
-                              of its own prediction. Use this for teacher
-                              forcing.
-            **kwargs:         Per-model extras (e.g. `stop_on_eos: bool`).
-                              Implementations should ignore unknown kwargs.
-
-        Returns:
-            List of the model's predicted token ids, one per decode step
-            attempted. Length is `<= max_new_tokens` (less if EOS hit, when
-            `stop_on_eos=True`).
-
-            The list contains the model's *own* predictions even when
-            teacher forcing overrode the next input. The readiness check
-            relies on this to score accuracy.
-        """
-
-    # --- Lifecycle ------------------------------------------------------
-
-    def reset(self) -> None:
-        """
-        Wipe per-prompt state (KV cache, decode position counters, traces
-        that depend on prompt length). Called between prompts by the
-        readiness runner. After `reset()`, the generator must be ready to
-        accept a new `generate()` or `prefill_forward()` call.
-
-        Device weights, allocated KV cache buffers, and compiled traces
-        should NOT be freed here — only their contents.
-        """
-
-
-# --- Abstract base (recommended parent for implementations) -------------
-
-
-class GeneratorBase(ABC):
-    """
-    Abstract base class documenting the readiness-check Generator contract.
-
-    Inheriting from `GeneratorBase` is **optional** — the runner only needs
-    the `Generator` Protocol to be satisfied structurally. But concrete
-    implementations are encouraged to subclass this ABC because:
-
-    - The docstrings on each abstract method spell out the expected shapes,
-      ownership rules, and side effects in detail. Subclassers see those
-      in their IDE.
+    - Detailed docstrings on each abstract method spell out expected shapes,
+      ownership rules, and side effects. Subclassers see those in their IDE.
     - Missing methods cause a clean `TypeError` at construction rather than
       a late `AttributeError` deep inside the runner.
-    - The skill (`.agents/skills/decoder-to-productized`) emits generators
-      that subclass this base so the expected interface is explicit.
+    - Explicit contract makes the expected interface clear.
 
     A typical implementation:
 
-        class LlamaGenerator(GeneratorBase):
+        class LlamaGenerator(Generator):
             def __init__(self, mesh_device, model_args, ...):
                 self._inner = tt_transformers.Generator(...)
                 self._kv_cache = ...
@@ -372,15 +239,10 @@ BuildGeneratorFn = Callable[..., Generator]
 """Signature: build_generator(model_dir: str | Path, mesh_device, **kwargs) -> Generator"""
 
 
-def _ensure_protocol(_: Generator) -> None:
-    """Type-check sentinel; not invoked at runtime."""
-
-
 __all__ = [
     "BUILD_GENERATOR_FUNCTION_NAME",
     "BuildGeneratorFn",
     "GENERATOR_MODULE_RELPATH",
     "Generator",
-    "GeneratorBase",
     "NextInputFn",
 ]
