@@ -1188,7 +1188,11 @@ class TTNNDotsVisionAttention(TTNNModule):
             q_chunk = 256
             k_chunk = 512
         # q_chunk = 256
-        # k_chunk = 1024
+        # k_chunk = 1024  -- TT_THROW CB clash, L1 region ends
+        # at 1,375,520 (allocator at 1,179,200) -- the 256x1024 fp32 acc CB plus
+        # Q/K/V chunk buffers exceed L1 by ~196 KB on 8x8 grid. Stay at k=512.
+        # q_chunk = 512
+        # k_chunk = 512   -- same product (256K), overflow..
         return SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
             q_chunk_size=q_chunk,

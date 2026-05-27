@@ -13,11 +13,98 @@ from models.experimental.tt_symbiote.modules.attention import (
     TTNNPagedAttentionKVCache,
     TTNNSDPAAttention,
 )
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWAllReduced,
     TTNNLinearLLamaIReplicatedWColSharded,
+    _tp_mesh_mapper,
 )
 from models.experimental.tt_symbiote.modules.rope import BailingRotarySetup
+
+
+class TTNNDotsOCRQKVLinear(TTNNLinearLLamaIColShardedWAllReduced):
+    """QKV linear that keeps two weight copies on device.
+
+    ``self.tt_weight`` (and the DRAM_WIDTH_SHARDED copy at
+    ``self._qkv_dram_weight``) stays in **KV-group-interleaved** layout
+    ``[Q_g0|K_0|V_0|Q_g1|K_1|V_1|...]`` so decode's single width-shard of
+    the matmul output can be consumed directly by the *Sharded* program
+    factory of ``nlp_create_qkv_heads`` (one core per Q head).
+
+    ``self.tt_weight_prefill`` stores the same weight in the **standard
+    ``[Q_all|K_all|V_all]`` block layout** the *Interleaved* factory
+    expects. Prefill swaps to this weight at matmul time so the per-layer
+    258 \u03bcs of slice+concat undo (``_undo_qkv_kv_group_permute``) can be
+    dropped.
+
+    Memory cost: ~3 MB / layer (1536\u00d72048 BFP8) on top of the existing
+    KV-group copies (~84 MB across 28 layers per device on T3K). Only the
+    QKV linear gets this; o_proj / gate_up / down_proj are unaffected.
+    """
+
+    @classmethod
+    def from_fused(
+        cls,
+        fused_linear: torch.nn.Linear,
+        prefill_weight_torch: torch.Tensor,
+        prefill_bias_torch: "torch.Tensor | None",
+    ):
+        new_module = cls.from_torch(fused_linear)
+        new_module._prefill_weight_torch = prefill_weight_torch
+        new_module._prefill_bias_torch = prefill_bias_torch
+        return new_module
+
+    def move_weights_to_device_impl(self):
+        super().move_weights_to_device_impl()
+        prefill_w = getattr(self, "_prefill_weight_torch", None)
+        prefill_b = getattr(self, "_prefill_bias_torch", None)
+        if prefill_w is None:
+            self.tt_weight_prefill = None
+            self.tt_bias_prefill = None
+            return
+        prefill_w_host = preprocess_linear_weight(
+            prefill_w,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            weights_mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
+        )
+        self.tt_weight_prefill = ttnn.to_device(prefill_w_host, self.device)
+        self._prefill_weight_torch = None
+        if prefill_b is not None:
+            prefill_b_host = preprocess_linear_bias(
+                prefill_b,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                weights_mesh_mapper=_tp_mesh_mapper(self.device, self.input_dim),
+            )
+            self.tt_bias_prefill = ttnn.to_device(prefill_b_host, self.device)
+            self._prefill_bias_torch = None
+        else:
+            self.tt_bias_prefill = None
+
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        # Decode has logical seq_len == 1 (padded to 1 tile). Anything else is
+        # prefill -- including the 2-31 token range that still fits in one
+        # tile of padding. The dispatcher in ``TTNNDotsOCRAttention.forward``
+        # routes on the *logical* seq_length (``seq_length == 1`` => decode),
+        # so we must match that here using the logical shape, not the
+        # tile-padded one. The DRAM-sharded fast path inside the parent
+        # forward keys off the decode-shape program-config selector, so it
+        # never reads ``self.tt_weight`` in decode -- safe to swap in the
+        # standard-layout copy while the parent runs, then restore.
+        shape = list(input_tensor.shape)
+        seq_dim = int(shape[-2]) if len(shape) >= 2 else 1
+        is_prefill = seq_dim > 1
+        if is_prefill and getattr(self, "tt_weight_prefill", None) is not None:
+            orig_w, orig_b = self.tt_weight, self.tt_bias
+            self.tt_weight = self.tt_weight_prefill
+            self.tt_bias = self.tt_bias_prefill if self.tt_bias_prefill is not None else orig_b
+            try:
+                return super().forward(input_tensor)
+            finally:
+                self.tt_weight = orig_w
+                self.tt_bias = orig_b
+        return super().forward(input_tensor)
 
 
 def _env_on(name: str) -> bool:
@@ -132,6 +219,11 @@ class TTNNDotsOCRAttention(TTNNModule):
         v_w_grouped = hf_attn.v_proj.weight.data.view(num_kv_heads, 1, head_dim, hidden_dim)
         fused_weight = torch.cat([q_w_grouped, k_w_grouped, v_w_grouped], dim=1).reshape(-1, hidden_dim)
 
+        prefill_fused_weight = torch.cat(
+            [hf_attn.q_proj.weight.data, hf_attn.k_proj.weight.data, hf_attn.v_proj.weight.data],
+            dim=0,
+        )
+
         # Fuse Q/K/V bias into the qkv linear so it can ride the matmul kernel
         # (1D/2D mcast both fold a passed bias tensor into the post-accumulation
         # step of the matmul kernel). This eliminates one BinaryNg per layer in
@@ -144,6 +236,7 @@ class TTNNDotsOCRAttention(TTNNModule):
         new_attn._v_bias_torch = v_bias
 
         has_any_bias = q_bias is not None or k_bias is not None or v_bias is not None
+        prefill_fused_bias = None
         if has_any_bias:
             zeros_dtype = fused_weight.dtype
             qb = q_bias if q_bias is not None else torch.zeros(q_size, dtype=zeros_dtype)
@@ -154,12 +247,18 @@ class TTNNDotsOCRAttention(TTNNModule):
             kb_grouped = kb.view(num_kv_heads, 1, head_dim)
             vb_grouped = vb.view(num_kv_heads, 1, head_dim)
             new_attn._qkv_bias_torch = torch.cat([qb_grouped, kb_grouped, vb_grouped], dim=1).reshape(-1)
+            # Standard [Q|K|V] bias for the prefill weight (no permute).
+            prefill_fused_bias = torch.cat([qb, kb, vb])
 
         fused_linear = torch.nn.Linear(new_attn.hidden_size, q_size + 2 * kv_size, bias=has_any_bias)
         fused_linear.weight.data = fused_weight
         if has_any_bias:
             fused_linear.bias.data = new_attn._qkv_bias_torch
-        new_attn.qkv_proj = TTNNLinearLLamaIColShardedWAllReduced.from_torch(fused_linear)
+        new_attn.qkv_proj = TTNNDotsOCRQKVLinear.from_fused(
+            fused_linear,
+            prefill_weight_torch=prefill_fused_weight,
+            prefill_bias_torch=prefill_fused_bias,
+        )
 
         # O projection
         new_attn.o_proj = TTNNLinearLLamaIReplicatedWColSharded.from_torch(hf_attn.o_proj)

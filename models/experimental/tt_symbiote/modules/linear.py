@@ -340,6 +340,45 @@ def _decode_rmsnorm_program_config(hidden_size: int, num_cores: int = _DECODE_WI
     )
 
 
+def _prefill_block_sharded_input_memory_config(k: int, seq_len: int, grid_x: int = 8, grid_y: int = 8):
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))])
+    return ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            grid,
+            [seq_len // grid_y, k // grid_x],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+
+def _prefill_rmsnorm_program_config(hidden_size: int, seq_len_tiles: int, grid_x: int = 8, grid_y: int = 8):
+    """Sharded RMSNorm program config for the prefill 2D (block-sharded)
+    kernel path. Matches ``_prefill_block_sharded_input_memory_config``.
+
+    Validation (``layernorm_device_operation.cpp:282-302`` for row-wise):
+      - ``block_w == Kt / num_cores_c``  (= hidden_tiles / grid_x)
+      - ``block_h == Mt / num_cores_r``  (= seq_tiles  / grid_y)
+      - ``block_h * TILE_HEIGHT == shard.shape[0]``
+      - ``block_w * TILE_WIDTH  == shard.shape[1]``
+    All four are by construction here."""
+    block_w = hidden_size // grid_x // ttnn.TILE_SIZE
+    block_h = seq_len_tiles // grid_y
+    subblock_w = min(4, block_w)
+    while subblock_w > 0:
+        if block_w % subblock_w == 0:
+            break
+        subblock_w -= 1
+    return ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[grid_x, grid_y],
+        subblock_w=subblock_w,
+        block_h=block_h,
+        block_w=block_w,
+        inplace=False,
+    )
+
+
 _ATTN_QKV_DECODE_GRID = (8, 8)
 _ATTN_QKV_DECODE_PER_CORE_M = 1
 _ATTN_QKV_DECODE_PER_CORE_N = 1
