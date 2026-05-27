@@ -726,6 +726,57 @@ def _looks_like_python(body: str) -> bool:
         return False
 
 
+def _detect_call_signature_collisions(body: str) -> List[str]:
+    """Detect `__call__` (or `forward`) method signatures that risk
+    `TypeError: got multiple values for argument X` at invocation.
+
+    Common pattern from v12: agent writes
+        def __call__(self, hidden_states, *args, **kwargs):
+    The test harness invokes `module(*pos, hidden_states=val)` where `pos`
+    already contains a positional value at `hidden_states`'s index. Python
+    raises TypeError because the same argument was passed twice.
+
+    Risk = signature has `*args` AND a named parameter (other than self)
+    whose name matches common tensor-input arg names that the test scaffold
+    or HF reference might also pass as kwarg. Returns one message per
+    offending method.
+    """
+    import ast
+
+    try:
+        tree = ast.parse(body)
+    except SyntaxError:
+        return []
+    common_input_names = {
+        "x",
+        "hidden_states",
+        "features",
+        "input",
+        "inputs",
+        "image_embeddings",
+        "image_positional_embeddings",
+        "pixel_values",
+    }
+    issues: List[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name not in ("__call__", "forward"):
+            continue
+        sig = node.args
+        if sig.vararg is None:
+            continue
+        named = [a.arg for a in sig.args[1:]]
+        risky = [n for n in named if n in common_input_names]
+        if risky:
+            issues.append(
+                f"`{node.name}({', '.join(named)}, *args, ...)` -- "
+                f"`{risky[0]}` will collide if the test passes it both "
+                f"positionally (in *args) and as keyword."
+            )
+    return issues
+
+
 def _detect_self_inheriting_classes(body: str) -> List[str]:
     """Return class names that inherit from `_stub_mod.<same_name>` (or any
     submodule attribute matching the class's own name). This pattern is a
@@ -2050,6 +2101,25 @@ def apply_response(
                 f"RecursionError on every call. Rewrite the class to inherit "
                 f"directly from `object` (or `torch.nn.Module` if needed) "
                 f"and copy any logic from the existing stub explicitly."
+            ),
+        )
+
+    signature_risks = _detect_call_signature_collisions(body)
+    if signature_risks:
+        return ApplyResponseResult(
+            component=component_name,
+            stub_path="",
+            backup_path=None,
+            response_chars=len(raw),
+            status="signature-collision",
+            note=(
+                f"Response has a collision-prone method signature: "
+                f"{signature_risks[0]} Tests may invoke this with the named "
+                f"argument both positionally and as a keyword, raising "
+                f"`TypeError: got multiple values for argument`. Either drop "
+                f"`*args` from the signature, or remove the named parameter "
+                f"and read it from `**kwargs` (e.g. "
+                f"`val = kwargs.pop('hidden_states')`)."
             ),
         )
 

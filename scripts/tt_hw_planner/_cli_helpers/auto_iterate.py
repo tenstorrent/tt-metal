@@ -1598,14 +1598,15 @@ def _run_auto_iterate_loop(
 
             localization_hint = ""
             full_hf_source = ""
-            if failure_class == "PCC_ONLY":
+            if failure_class in ("PCC_ONLY", "DTYPE_MISMATCH", "SHAPE", "TT_FATAL_OPAQUE"):
                 try:
-                    from . import activation_diff as _act_diff
+                    from .. import activation_diff as _act_diff
 
                     _loc_result = _act_diff.localize_pcc_divergence(demo_dir, comp, device=None)
                     localization_hint = _act_diff.format_localization_hint_block(comp, _loc_result)
                 except Exception as _exc:
                     localization_hint = ""
+            if failure_class == "PCC_ONLY":
                 try:
                     full_hf_source = _full_hf_reference_source(
                         stub_path,

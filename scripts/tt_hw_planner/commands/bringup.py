@@ -161,7 +161,9 @@ def cmd_bringup(args) -> int:
                 print(f"      backup:  {r.backup_path}")
             if r.note:
                 print(f"      note:    {r.note}")
-        any_failed = any(r.status in ("syntax-error", "empty", "error") for r in results)
+        any_failed = any(
+            r.status in ("syntax-error", "empty", "error", "recursion-trap", "signature-collision") for r in results
+        )
         return 0 if not any_failed else 3
 
     if args.apply_response:

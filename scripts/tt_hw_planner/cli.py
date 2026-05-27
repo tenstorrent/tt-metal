@@ -3823,6 +3823,7 @@ _CLASS_SEVERITY: Dict[str, int] = {
     "NOT_IMPLEMENTED": 6,
     "SHAPE": 7,
     "DTYPE": 7,
+    "DTYPE_MISMATCH": 7,
     "RANK_MISMATCH": 7,
     "TT_FATAL_OPAQUE": 9,
     "L1_OOM": 10,
@@ -3876,6 +3877,10 @@ def _classify_failure(summary: str, details: str) -> str:
     )
     if oom_explicit or oom_via_allocator:
         return "L1_OOM"
+    if "expected scalar type" in text and (
+        "BFloat16" in text or "bfloat16" in text or "Float" in text or "Half" in text
+    ):
+        return "DTYPE_MISMATCH"
     if "incompatible function arguments" in text or "TypeError:" in text:
         return "API_SIGNATURE"
     if "AssertionError: PCC" in text:
@@ -4289,6 +4294,28 @@ def _strategy_directive_for_failure(failure_class: str, *, strict_native: bool =
             "Rewrite the forward path with every intermediate produced by a "
             "single tile-aligned ttnn op, and explicit layout transitions around "
             "every permute/reshape."
+        )
+    if failure_class == "DTYPE_MISMATCH":
+        return (
+            "Failure class is DTYPE_MISMATCH. PyTorch reported that an op "
+            "expected one scalar dtype but received another (typically "
+            "`expected scalar type Float but found BFloat16`). This is "
+            "usually one of three patterns:\n"
+            "  1. Your TTNN forward returns a bfloat16 tensor, but the test "
+            "harness compares against a float32 torch reference. Cast your "
+            "final output via `ttnn.to_torch(out).to(torch.float32)`, or "
+            "`ttnn.typecast(out, ttnn.float32)` before `ttnn.to_torch`. Do "
+            "this for EVERY tensor in your return value (dict / tuple / list).\n"
+            "  2. Mid-forward, a ttnn op is given a bfloat16 input and a "
+            "float32 weight (or vice-versa). Either cast the weight at "
+            "`__init__` (`ttnn.from_torch(w, dtype=ttnn.bfloat16, ...)`) or "
+            "cast the input right before the op (`ttnn.typecast(x, ttnn.bfloat16)`).\n"
+            "  3. A torch operation (e.g. `torch.cat`, `points_t.float()`) is "
+            "being called on a ttnn.Tensor object. Use ttnn equivalents, OR "
+            "convert to torch first with `ttnn.to_torch(t)`.\n"
+            "Read the traceback to find the exact line where dtype assertion "
+            "fired, then add the cast immediately above it. Do NOT change the "
+            "test scaffold."
         )
     if failure_class == "L1_OOM":
         oom_attention_hint = (
