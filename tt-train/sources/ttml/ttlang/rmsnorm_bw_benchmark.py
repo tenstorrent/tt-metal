@@ -76,27 +76,25 @@ def _ttl_rmsnorm_bw_numpy_to_2d(
     """Change ``[B,1,S,C]`` / ``[B,1,S,1]`` / ``[1,1,1,C]`` arrays to 2D."""
     x2 = torch.from_numpy(x_np).reshape(rows, columns)
     dL2 = torch.from_numpy(d_np).reshape(rows, columns)
-    g1d = torch.from_numpy(g_np).reshape(columns)
-    g2 = g1d.unsqueeze(0).expand(rows, columns).contiguous()
+    g_row = torch.from_numpy(g_np).reshape(columns).unsqueeze(0)
     r_row = torch.from_numpy(rms_np).squeeze(-1).reshape(rows, 1)
-    r2 = r_row.expand(rows, columns).contiguous()
-    return x2, dL2, g2, r2
+    return x2, dL2, g_row, r_row
 
 
 def _ttl_rmsnorm_bw_tensors_to_padded_device(
     ttl_mod,
     mesh,
     x2: torch.Tensor,
-    g2: torch.Tensor,
-    r2: torch.Tensor,
+    g_row: torch.Tensor,
+    r_row: torch.Tensor,
     dL2: torch.Tensor,
     rows_p: int,
     cols_p: int,
 ):
-    """Pad 2D torch inputs to ``(rows_p, cols_p)`` and ``_to_dev``."""
+    """Pad 2D torch inputs and ``to_dev`` (gamma ``[1, cols_p]``, rms ``[rows_p, 1]``)."""
     x_p = ttl_mod.to_dev(ttl_mod.pad(x2, rows_p, cols_p), mesh)
-    g_p = ttl_mod.to_dev(ttl_mod.pad(g2, rows_p, cols_p), mesh)
-    rms_p = ttl_mod.to_dev(ttl_mod.pad(r2, rows_p, cols_p), mesh)
+    g_p = ttl_mod.to_dev(ttl_mod.pad(g_row, 1, cols_p), mesh)
+    rms_p = ttl_mod.to_dev(ttl_mod.pad(r_row, rows_p, 1), mesh)
     dL_p = ttl_mod.to_dev(ttl_mod.pad(dL2, rows_p, cols_p), mesh)
     out_da = ttl_mod.to_dev(torch.zeros(rows_p, cols_p, dtype=torch.bfloat16), mesh)
     out_dg = ttl_mod.to_dev(torch.zeros(rows_p, cols_p, dtype=torch.bfloat16), mesh)
@@ -163,10 +161,12 @@ def _run_kernel(kernel: str = "metal") -> None:
                 assert ttl_mod is not None
                 rows = b * s_len
                 columns = c
-                x2, dL2, g2, r2 = _ttl_rmsnorm_bw_numpy_to_2d(x_np, d_np, g_np, rms_np, rows, columns)
+                x2, dL2, g_row, r_row = _ttl_rmsnorm_bw_numpy_to_2d(
+                    x_np, d_np, g_np, rms_np, rows, columns
+                )
                 rows_p, cols_p = _tile_padded_shape(rows, columns)
                 x_p, g_p, rms_p, dL_p, out_da, out_dg = _ttl_rmsnorm_bw_tensors_to_padded_device(
-                    ttl_mod, mesh, x2, g2, r2, dL2, rows_p, cols_p
+                    ttl_mod, mesh, x2, g_row, r_row, dL2, rows_p, cols_p
                 )
                 ttl_kernel = ttl_mod.make_kernel()
 

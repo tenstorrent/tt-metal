@@ -39,8 +39,13 @@ def make_kernel():
         dL_dinput_out,
         dL_dgamma_comp_out,
     ):
+        cols = input_t.shape[1]
+        if cols % TILE_WIDTH != 0:
+            raise ValueError(
+                f"input_t width ({cols}) must be divisible by TILE_WIDTH ({TILE_WIDTH})"
+            )
         ht = input_t.shape[0] // TILE_WIDTH
-        wt = input_t.shape[1] // TILE_WIDTH
+        wt = cols // TILE_WIDTH
         block_size = get_block_size(wt, 2)
         blk = (1, block_size)
         tile = (1, 1)
@@ -160,7 +165,7 @@ def make_kernel():
                             dL_blk.reserve() as d_blk,
                         ):
                             i_tx = ttl.copy(input_t[r, col_start:col_end], i_blk)
-                            g_tx = ttl.copy(gamma_t[r, col_start:col_end], g_blk)
+                            g_tx = ttl.copy(gamma_t[0, col_start:col_end], g_blk)
                             d_tx = ttl.copy(dL_dout_t[r, col_start:col_end], d_blk)
                             i_tx.wait()
                             g_tx.wait()
@@ -177,7 +182,7 @@ def make_kernel():
                             dL_blk.reserve() as d_blk,
                         ):
                             i_tx = ttl.copy(input_t[r, col_start:col_end], i_blk)
-                            g_tx = ttl.copy(gamma_t[r, col_start:col_end], g_blk)
+                            g_tx = ttl.copy(gamma_t[0, col_start:col_end], g_blk)
                             d_tx = ttl.copy(dL_dout_t[r, col_start:col_end], d_blk)
                             i_tx.wait()
                             g_tx.wait()

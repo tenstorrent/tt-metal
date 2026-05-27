@@ -35,22 +35,21 @@ def _run_case(
     torch.manual_seed(0)
     x = torch.randn(rows, cols, dtype=torch.bfloat16)
     g1d = torch.randn(cols, dtype=torch.bfloat16)
-    g2d = g1d.unsqueeze(0).expand(rows, cols).contiguous()
     with torch.no_grad():
         var = x.float().pow(2).mean(-1, keepdim=True)
         rms = (var + eps).sqrt()
-        y = x.float() / rms * g2d.float()
+        y = x.float() / rms * g1d.float()
     dL = ((2.0 / y.numel()) * y).to(torch.bfloat16)
-    rms_2d = rms.float().expand(-1, cols).contiguous()
 
     dL_dx_ref, dL_dg_ref, _ = _torch_ref(x, g1d, eps, dL)
+    # Match run_rmsnorm_bw_2pass: ttnn.sum(..., dim=[0], keepdim=True) -> [1, C].
     dL_dg_ref = dL_dg_ref.unsqueeze(0)
 
     rows_p = -(-rows // TILE) * TILE
     cols_p = -(-cols // TILE) * TILE
     x_p = ttl_mod.pad(x, rows_p, cols_p)
-    g_p = ttl_mod.pad(g2d, rows_p, cols_p)
-    rms_p = ttl_mod.pad(rms_2d, rows_p, cols_p)
+    g_p = ttl_mod.pad(g1d.unsqueeze(0), 1, cols_p)
+    rms_p = ttl_mod_pad(rms.to(torch.bfloat16), rows_p, 1)
     dL_p = ttl_mod.pad(dL, rows_p, cols_p)
 
     k = ttl_mod.make_kernel()
