@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <CLI/CLI.hpp>
+#include <algorithm>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -224,6 +225,7 @@ struct DeviceConfig {
     bool enable_ddp = false;
     bool enable_tp = false;
     bool enable_cp = false;
+    bool enable_sp = false;
 };
 
 DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
@@ -236,9 +238,13 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
     config.enable_ddp = device_node["enable_ddp"].as<bool>(false);
     config.enable_tp = device_node["enable_tp"].as<bool>(false);
     config.enable_cp = device_node["enable_cp"].as<bool>(false);
+    config.enable_sp = device_node["enable_sp"].as<bool>(false);
+    if (config.enable_sp && !config.enable_tp) {
+        throw std::runtime_error("device_config.enable_sp requires device_config.enable_tp=true");
+    }
 
     auto mesh_shape_node = device_node["mesh_shape"];
-    bool multidevice = config.enable_ddp || config.enable_tp || config.enable_cp;
+    bool multidevice = config.enable_ddp || config.enable_tp || config.enable_cp || config.enable_sp;
     if (multidevice && !mesh_shape_node) {
         throw std::runtime_error("Mesh shape is required for multidevice training");
     }
@@ -341,7 +347,7 @@ int main(int argc, char **argv) {
     argv = app.ensure_utf8(argv);
 
     std::string training_config_name =
-        std::string(CONFIGS_FOLDER) + "/training_configs/training_shakespeare_nanogpt.yaml";
+        std::string(CONFIGS_FOLDER) + "/training_configs/llama8b/training_shakespeare_llama_8b_tp4_ddp8.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
@@ -419,6 +425,7 @@ int main(int argc, char **argv) {
     if (device_config.enable_ddp || device_config.enable_cp || device_config.enable_tp) {
         fmt::println("Device config:");
         fmt::println("  Tensor parallel enabled: {}", device_config.enable_tp);
+        fmt::println("  Sequence parallel enabled: {}", device_config.enable_sp);
         fmt::println("  Context parallel enabled: {}", device_config.enable_cp);
         fmt::println("  Distributed data-parallel enabled: {}", device_config.enable_ddp);
         fmt::println("  Mesh shape: {}", device_config.mesh_shape);
@@ -427,7 +434,14 @@ int main(int argc, char **argv) {
         ttml::autograd::ctx().initialize_parallelism_context(
             {.enable_ddp = device_config.enable_ddp,
              .enable_tp = device_config.enable_tp,
-             .enable_cp = device_config.enable_cp});
+             .enable_cp = device_config.enable_cp,
+             .enable_sp = device_config.enable_sp});
+        const auto &pctx = ttml::autograd::ctx().get_parallelism_context();
+        fmt::println(
+            "Parallelism context initialized: tp_axis={} tp_size={} sequence_parallel_active={}",
+            pctx.get_tp_axis().has_value() ? static_cast<int>(*pctx.get_tp_axis()) : -1,
+            pctx.get_tp_size(),
+            pctx.is_sp_enabled());
     }
 
     if (multihost_config.enable_mpi) {
@@ -515,8 +529,30 @@ int main(int argc, char **argv) {
                     "Omitting vocab_size is only valid for plain text (character-tokenized) data.");
             }
             auto &yaml_node = std::get<YAML::Node>(data_source);
-            auto dataset = ttml::datasets::create_token_dataset_from_yaml(yaml_node);
-            return dataset;
+            auto tokens = yaml_node["tokens"].template as<std::vector<uint32_t>>();
+            if (tokens.empty()) {
+                throw std::runtime_error("Pre-tokenized data must contain at least one token.");
+            }
+            const auto max_token = *std::max_element(tokens.begin(), tokens.end());
+            if (max_token >= current_vocab_size) {
+                throw std::runtime_error(fmt::format(
+                    "Pre-tokenized data contains token id {} but model vocab_size is {}. "
+                    "Increase/pad vocab_size so every token id is in [0, vocab_size).",
+                    max_token,
+                    current_vocab_size));
+            }
+            if (yaml_node["tokenizer_vocab_size"]) {
+                const auto tokenizer_vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>();
+                if (max_token >= tokenizer_vocab_size) {
+                    fmt::println(
+                        "Warning: tokenized data max token id {} is >= tokenizer_vocab_size metadata {}. "
+                        "Continuing because model vocab_size {} covers the token ids.",
+                        max_token,
+                        tokenizer_vocab_size,
+                        current_vocab_size);
+                }
+            }
+            return ttml::datasets::InMemoryTokenDataset(tokens, sequence_length);
         }
     };
 
@@ -566,6 +602,26 @@ int main(int argc, char **argv) {
                     }
                     if (pctx.is_cp_enabled()) {
                         data_placements[pctx.get_cp_axis().value()] =
+                            ttnn::distributed::MeshMapperConfig::Shard{SEQUENCE_DIM_DATA};
+                    }
+                    if (pctx.is_sp_enabled()) {
+                        if (sequence_length % pctx.get_tp_size() != 0U) {
+                            throw std::logic_error(fmt::format(
+                                "Sequence parallelism requires sequence_length to be divisible by TP size. "
+                                "sequence_length={}, tp_size={}",
+                                sequence_length,
+                                pctx.get_tp_size()));
+                        }
+                        static bool printed_sp_data_shard = false;
+                        if (!printed_sp_data_shard) {
+                            fmt::println(
+                                "[ttml][SP] dataloader sharding data sequence dim {} on TP axis {}; targets stay "
+                                "replicated for full-sequence vocab-parallel loss",
+                                SEQUENCE_DIM_DATA,
+                                pctx.get_tp_axis().has_value() ? static_cast<int>(*pctx.get_tp_axis()) : -1);
+                            printed_sp_data_shard = true;
+                        }
+                        data_placements[pctx.get_tp_axis().value()] =
                             ttnn::distributed::MeshMapperConfig::Shard{SEQUENCE_DIM_DATA};
                     }
                     const auto data_mapper =
@@ -781,8 +837,11 @@ int main(int argc, char **argv) {
     const bool needs_to_call_loss = pipeline_needs_to_call_loss(multihost_config);
     // pipeline_parallel_llama still hardcodes gather_output=true at the LM head, so its
     // last-stage logits are full-vocab
-    const bool use_vocab_parallel_loss = device_config.enable_tp && !is_pipeline_parallel_enabled(multihost_config);
-
+    // const bool use_vocab_parallel_loss = device_config.enable_tp && !is_pipeline_parallel_enabled(multihost_config);
+    const bool use_vocab_parallel_loss = false;
+    fmt::println(
+        "Loss path: {}",
+        use_vocab_parallel_loss ? "vocab_parallel_cross_entropy_loss" : "full-vocab cross_entropy_loss");
     // Training loop
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {

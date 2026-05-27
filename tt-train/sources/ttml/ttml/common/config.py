@@ -28,6 +28,9 @@ class DeviceConfig:
         self.device_ids = device_config.get("device_ids", None)
         self.enable_tp = device_config.get("enable_tp", False)
         self.enable_ddp = device_config.get("enable_ddp", False)
+        self.enable_sp = device_config.get("enable_sp", False)
+        if self.enable_sp and not self.enable_tp:
+            raise ValueError("device_config.enable_sp requires device_config.enable_tp=true")
 
     def total_devices(self) -> int:
         """Get total number of devices in mesh.

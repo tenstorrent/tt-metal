@@ -25,6 +25,7 @@ public:
     ~AutocastTensor() = default;
 
     void set_tensor(const tt::tt_metal::Tensor &tensor);
+    void deallocate(bool force = false);
     [[nodiscard]] const tt::tt_metal::Tensor &get_tensor(
         PreferredPrecision preferred_precision = PreferredPrecision::HALF) const;
 
