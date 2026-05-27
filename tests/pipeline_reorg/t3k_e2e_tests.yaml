@@ -143,6 +143,6 @@
   skus:
     wh_llmbox:
       timeout: 45
-  owner_id: U08E1JCMAJF # Marko Bezulj
+  owner_id: U094PKWHNJ0 # Petar Milojevic
   team: shield
   model-name: deepseek_prefill

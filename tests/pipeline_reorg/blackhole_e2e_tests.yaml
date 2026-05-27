@@ -278,7 +278,7 @@
   skus:
     bh_loudbox:
       timeout: 60
-  owner_id: U08E1JCMAJF # Marko Bezulj
+  owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
 - id: bh-lb-deepseek-prefill-perf
@@ -320,5 +320,5 @@
   skus:
     bh_llmbox:
       timeout: 45
-  owner_id: U08E1JCMAJF # Marko Bezulj
+  owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
