@@ -158,14 +158,24 @@ void run_borrowed_memory_dfb_program(
     BindDFBToKernel(consumer_spec, "borrowed_dfb", "in",
                     KernelSpec::DFBEndpointType::CONSUMER, cfg.cap);
 
+    // Disable implicit sync on the borrowed DFB for every DM endpoint (Gen2 only;
+    // Gen1 has no ISR-based implicit sync to opt out of).
+    if (arch == ARCH::QUASAR) {
+        std::get<DataMovementConfiguration>(producer_spec.config_spec)
+            .gen2_data_movement_config->disable_implicit_sync_for.push_back("borrowed_dfb");
+        if (!cfg.tensix_consumer) {
+            std::get<DataMovementConfiguration>(consumer_spec.config_spec)
+                .gen2_data_movement_config->disable_implicit_sync_for.push_back("borrowed_dfb");
+        }
+    }
+
     // --- Borrowed DFB spec ---
     DataflowBufferSpec dfb_spec{
-        .unique_id             = "borrowed_dfb",
-        .entry_size            = cfg.entry_size,
-        .num_entries           = cfg.num_entries,
-        .data_format_metadata  = tt::DataFormat::Float16_b,
-        .borrowed_from         = "dfb_ring_tensor",
-        .disable_implicit_sync = true,
+        .unique_id = "borrowed_dfb",
+        .entry_size = cfg.entry_size,
+        .num_entries = cfg.num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .borrowed_from = "dfb_ring_tensor",
     };
 
     // --- TensorParameters ---
@@ -297,13 +307,21 @@ void run_update_address_test(
     }};
     BindDFBToKernel(consumer_spec, "borrowed_dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
 
+    // Disable implicit sync on the borrowed DFB for both DM endpoints (Gen2 only;
+    // Gen1 has no ISR-based implicit sync to opt out of).
+    if (arch == ARCH::QUASAR) {
+        std::get<DataMovementConfiguration>(producer_spec.config_spec)
+            .gen2_data_movement_config->disable_implicit_sync_for.push_back("borrowed_dfb");
+        std::get<DataMovementConfiguration>(consumer_spec.config_spec)
+            .gen2_data_movement_config->disable_implicit_sync_for.push_back("borrowed_dfb");
+    }
+
     DataflowBufferSpec dfb_spec{
-        .unique_id             = "borrowed_dfb",
-        .entry_size            = entry_size,
-        .num_entries           = num_entries,
-        .data_format_metadata  = tt::DataFormat::Float16_b,
-        .borrowed_from         = "dfb_ring_tensor",
-        .disable_implicit_sync = true,
+        .unique_id = "borrowed_dfb",
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .borrowed_from = "dfb_ring_tensor",
     };
 
     const TensorSpec src_spec  = make_flat_dram_tensor_spec(entry_size, num_entries);

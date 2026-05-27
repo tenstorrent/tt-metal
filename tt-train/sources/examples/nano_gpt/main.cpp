@@ -779,9 +779,9 @@ int main(int argc, char **argv) {
     };
 
     const bool needs_to_call_loss = pipeline_needs_to_call_loss(multihost_config);
-    // pipeline_parallel_llama still hardcodes gather_output=true at the LM head, so its
-    // last-stage logits are full-vocab
-    const bool use_vocab_parallel_loss = device_config.enable_tp && !is_pipeline_parallel_enabled(multihost_config);
+    // All TP-enabled LM heads (TP-only and PP+TP) emit vocab-sharded logits, so the loss
+    // path is uniformly vocab_parallel_cross_entropy_loss whenever TP is on.
+    const bool use_vocab_parallel_loss = device_config.enable_tp;
 
     // Training loop
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
@@ -799,7 +799,8 @@ int main(int argc, char **argv) {
             float loss_float = 0.0F;
             if (needs_to_call_loss) {
                 auto loss = use_vocab_parallel_loss
-                                ? ttml::ops::distributed::vocab_parallel_cross_entropy_loss(output, target, 1U)
+                                ? ttml::ops::distributed::vocab_parallel_cross_entropy_loss(
+                                      output, target, ttml::autograd::ctx().get_parallelism_context().get_tp_axis())
                                 : ttml::ops::cross_entropy_loss(output, target);
                 loss = gradient_accumulator_helper.scale(loss);
                 loss_float = get_loss_value(loss);
