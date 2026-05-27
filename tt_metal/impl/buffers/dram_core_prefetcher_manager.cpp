@@ -15,6 +15,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
@@ -60,12 +61,47 @@ std::pair<uint32_t, uint32_t> pick_page_size(uint32_t max_page_size, uint32_t nu
     return {page, static_cast<uint32_t>(total / page)};
 }
 
-// Address-independent per-tensor geometry for the DRAM-core prefetcher kernel — see
+// Distinguishes the two supported buffer layouts the prefetcher knows how to
+// consume. KRowMajor is the legacy layout: one shard per DRAM bank,
+// K-row-major within the bank. ReceiverContiguous stacks num_receivers slabs
+// per bank, each slab being (K, n_per_recv) contiguous bytes. Detection is
+// implicit per the design doc — see detect_layout_mode().
+enum class LayoutMode : uint32_t {
+    KRowMajor = 0,
+    ReceiverContiguous = 1,
+};
+
+LayoutMode detect_layout_mode(const Buffer& buf, uint32_t num_senders, uint32_t num_receivers) {
+    const uint32_t ring_size = num_senders * num_receivers;
+    const auto& bds_opt = buf.buffer_distribution_spec();
+    if (!bds_opt.has_value()) {
+        // Legacy ShardSpec path: one shard per bank by construction.
+        return LayoutMode::KRowMajor;
+    }
+    const auto num_shards = static_cast<uint32_t>(bds_opt->num_shards());
+    if (num_shards == num_senders) {
+        return LayoutMode::KRowMajor;
+    }
+    if (num_shards == ring_size) {
+        return LayoutMode::ReceiverContiguous;
+    }
+    TT_FATAL(
+        false,
+        "DRAM-core prefetcher buffer has {} shards across {} DRAM senders; expected either "
+        "num_senders ({}, K-row-major) or ring_size = num_senders * num_receivers ({}, "
+        "receiver-contiguous).",
+        num_shards,
+        num_senders,
+        num_senders,
+        ring_size);
+}
+
+// Address-independent per-tensor geometry for the K-row-major DRAM layout — see
 // DramCorePrefetcherTensorLayout in impl/buffers/dram_core_prefetcher_request.hpp for
 // the field-by-field documentation, and tt_metal/impl/buffers/prefetcher_matmul_design.md
 // §6 for the fit ladder. The tensor's bank-local address is carried separately in the
 // per-tensor DramCorePrefetcherEntry, so identical-geometry tensors share one layout.
-DramCorePrefetcherTensorLayout compute_tensor_layout(
+DramCorePrefetcherTensorLayout compute_tensor_layout_krow_major(
     const MeshTensor& t, uint32_t block_count, uint32_t num_receivers, uint32_t ring_half, ContextId context_id) {
     const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
     const auto shard_shape = ref_buffer->shard_spec().shape();
@@ -157,6 +193,131 @@ DramCorePrefetcherTensorLayout compute_tensor_layout(
 // packed POD of uint32_t fields, so a byte compare is exact (no padding).
 bool layout_equal(const DramCorePrefetcherTensorLayout& a, const DramCorePrefetcherTensorLayout& b) {
     return std::memcmp(&a, &b, sizeof(DramCorePrefetcherTensorLayout)) == 0;
+}
+
+// Receiver-contiguous layout: BDS holds `ring_size` shards round-robin across
+// `num_senders` banks, so each bank stacks `num_receivers` shards each of shape
+// (K_tiles, n_per_recv_tiles). Per (receiver, block) the source bytes are a
+// single contiguous DRAM region. Currently pins blocks_per_dma = 1; the fit
+// ladder still supports K-sub split for shapes where one block exceeds the
+// DRISC L1 stage half. The tensor's bank-local address is carried separately in
+// the per-tensor DramCorePrefetcherEntry, so identical-geometry tensors share one layout.
+DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
+    const MeshTensor& t, uint32_t block_count, uint32_t ring_half, ContextId context_id) {
+    // Read the original (non-squeezed) NdShardSpec from the MemoryConfig — the
+    // BDS internally collapses adjacent matching dims, so its
+    // shard_shape_in_pages() can come back rank-1 even though the caller
+    // passed a 2D shape.
+    const auto& nd_opt = t.nd_shard_spec();
+    TT_FATAL(
+        nd_opt.has_value(),
+        "Receiver-contiguous DRAM-core prefetcher tensor must be allocated with an "
+        "NdShardSpec (e.g. ttnn.MemoryConfig(BufferType.DRAM, NdShardSpec(...))).");
+    const auto& shard_shape = nd_opt->shard_shape;
+    TT_FATAL(
+        shard_shape.rank() == 2,
+        "Receiver-contiguous NdShardSpec shard shape must be 2D (K_elems, n_per_recv_elems); got rank {}",
+        shard_shape.rank());
+    const uint32_t k_elems = shard_shape[0];
+    const uint32_t n_per_recv_elems = shard_shape[1];
+    TT_FATAL(
+        k_elems % tt::constants::TILE_HEIGHT == 0 && n_per_recv_elems % tt::constants::TILE_WIDTH == 0,
+        "Receiver-contiguous shard shape ({}, {}) must be tile-aligned (TILE={}, {})",
+        k_elems,
+        n_per_recv_elems,
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH);
+    const uint32_t k_tiles_raw = k_elems / tt::constants::TILE_HEIGHT;
+    const uint32_t n_per_recv = n_per_recv_elems / tt::constants::TILE_WIDTH;
+    TT_FATAL(
+        k_tiles_raw > 0 && n_per_recv > 0,
+        "Receiver-contiguous shard shape has zero dim: ({}, {})",
+        k_tiles_raw,
+        n_per_recv);
+
+    const uint32_t tile_bytes = tt::tile_size(datatype_to_dataformat_converter(t.dtype()));
+    TT_FATAL(block_count > 0, "DRAM-core prefetcher block_count must be > 0");
+    const uint32_t k_block_w_tiles = (k_tiles_raw + block_count - 1) / block_count;
+    TT_FATAL(
+        k_block_w_tiles >= 1,
+        "Receiver-contiguous: K_tiles ({}) too small for block_count ({})",
+        k_tiles_raw,
+        block_count);
+
+    const uint32_t noc_max_burst = MetalContext::instance(context_id).hal().get_noc_max_burst_size_bytes();
+    const auto [coalesced_page_size, coalesced_num_pages] = pick_page_size(noc_max_burst, n_per_recv, tile_bytes);
+    TT_FATAL(
+        coalesced_page_size <= noc_max_burst,
+        "DRAM-core prefetcher coalesced page size ({} B) exceeds the one-packet NoC write limit ({} B).",
+        coalesced_page_size,
+        noc_max_burst);
+
+    const uint32_t bytes_per_recv_per_block = k_block_w_tiles * n_per_recv * tile_bytes;
+    const uint32_t recv_stride_bytes = k_tiles_raw * n_per_recv * tile_bytes;
+
+    // Fit ladder. Rung 1: full block fits — pin blocks_per_dma = 1 (multi-block
+    // batching needs fifo-wrap-aware writes; TODO). Rung 2: K-sub split.
+    uint32_t rows_per_sub = 0;
+    uint32_t num_sub = 1;
+    constexpr uint32_t blocks_per_dma = 1;
+    if (bytes_per_recv_per_block <= ring_half) {
+        rows_per_sub = k_block_w_tiles;
+        num_sub = 1;
+    } else {
+        rows_per_sub = 0;
+        for (uint32_t d = k_block_w_tiles; d >= 1; --d) {
+            if (k_block_w_tiles % d == 0 && static_cast<uint64_t>(d) * n_per_recv * tile_bytes <= ring_half) {
+                rows_per_sub = d;
+                break;
+            }
+        }
+        TT_FATAL(
+            rows_per_sub >= 1,
+            "Receiver-contiguous mode cannot fit a single K-row slice "
+            "(n_per_recv={}, tile_bytes={}, ring_half={} B). Reduce n_per_recv or grow num_global_cb_receivers.",
+            n_per_recv,
+            tile_bytes,
+            ring_half);
+        num_sub = k_block_w_tiles / rows_per_sub;
+    }
+
+    const uint32_t sub_chunk_bytes = blocks_per_dma * rows_per_sub * n_per_recv * tile_bytes;
+    TT_FATAL(
+        sub_chunk_bytes <= ring_half,
+        "Internal: receiver-contiguous chunk size {} B exceeds ring_half {} B",
+        sub_chunk_bytes,
+        ring_half);
+
+    DramCorePrefetcherTensorLayout g;
+    g.num_sub = num_sub;
+    g.M = 1;  // unused in recv-contig (no N-chunking)
+    g.rows_per_sub = rows_per_sub;
+    g.coalesced_page_size = coalesced_page_size;
+    g.coalesced_num_pages = coalesced_num_pages;
+    g.sub_chunk_bytes = sub_chunk_bytes;
+    g.sub_stride_bytes = rows_per_sub * n_per_recv * tile_bytes;
+    g.block_stride_bytes = k_block_w_tiles * n_per_recv * tile_bytes;  // within-slab K-block stride
+    g.page_bytes_per_recv = k_block_w_tiles * coalesced_num_pages * coalesced_page_size;
+    g.layout_mode = static_cast<uint32_t>(LayoutMode::ReceiverContiguous);
+    g.blocks_per_dma = blocks_per_dma;
+    g.recv_stride_bytes = recv_stride_bytes;
+    g.block_count = block_count;
+    return g;
+}
+
+DramCorePrefetcherTensorLayout compute_tensor_layout(
+    const MeshTensor& t,
+    uint32_t block_count,
+    uint32_t num_senders,
+    uint32_t num_receivers,
+    uint32_t ring_half,
+    ContextId context_id) {
+    const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
+    const LayoutMode mode = detect_layout_mode(*ref_buffer, num_senders, num_receivers);
+    if (mode == LayoutMode::KRowMajor) {
+        return compute_tensor_layout_krow_major(t, block_count, num_receivers, ring_half, context_id);
+    }
+    return compute_tensor_layout_recv_contig(t, block_count, ring_half, context_id);
 }
 
 }  // namespace
@@ -397,8 +558,8 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
     for (const auto& input : data_tensors) {
         // block_count is per-tensor: it sets how many K-blocks the kernel pushes
         // (and how K is divided in compute_tensor_layout), replacing the GCB ring size.
-        const DramCorePrefetcherTensorLayout layout =
-            compute_tensor_layout(input.tensor.get(), input.block_count, gcb_num_receivers, ring_half_, context_id);
+        const DramCorePrefetcherTensorLayout layout = compute_tensor_layout(
+            input.tensor.get(), input.block_count, num_senders_, gcb_num_receivers, ring_half_, context_id);
         const uint32_t bank_local_base = static_cast<uint32_t>(input.tensor.get().mesh_buffer().address());
 
         // Find this layout in the current page (dedup), or decide it needs adding.

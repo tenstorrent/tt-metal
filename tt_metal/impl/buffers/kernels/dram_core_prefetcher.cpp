@@ -247,155 +247,275 @@ void kernel_main() {
                 socket.read_ptr + sizeof(DramCorePrefetcherRequestHeader));
         const uint32_t layout_table_end = socket.read_ptr + kRequestPageBytes;
 
-        for (uint32_t e = 0; e < req_num_entries; ++e) {
-            const uint32_t tensor_base = entries[e].bank_local_base;
-            volatile tt_l1_ptr DramCorePrefetcherTensorLayout* g =
-                reinterpret_cast<volatile tt_l1_ptr DramCorePrefetcherTensorLayout*>(
-                    layout_table_end - (entries[e].layout_index + 1) * sizeof(DramCorePrefetcherTensorLayout));
-            const uint32_t t_num_sub = g->num_sub;
-            const uint32_t t_M = g->M;
-            const uint32_t t_rows_per_sub = g->rows_per_sub;
-            const uint32_t t_coal_page_size = g->coalesced_page_size;
-            const uint32_t t_coal_num_pages = g->coalesced_num_pages;
-            const uint32_t t_chunk_bytes = g->sub_chunk_bytes;
-            const uint32_t t_sub_stride = g->sub_stride_bytes;
-            const uint32_t t_block_stride = g->block_stride_bytes;
-            const uint32_t t_page_bytes_per_recv = g->page_bytes_per_recv;
-            const uint32_t t_block_count = g->block_count;
-            const uint32_t t_recv_per_chunk = num_receivers / t_M;
-            const uint32_t t_sub_band_per_block = t_num_sub * t_M;
+        {
+            for (uint32_t e = 0; e < req_num_entries; ++e) {
+                const uint32_t tensor_base = entries[e].bank_local_base;
+                volatile tt_l1_ptr DramCorePrefetcherTensorLayout* g =
+                    reinterpret_cast<volatile tt_l1_ptr DramCorePrefetcherTensorLayout*>(
+                        layout_table_end - (entries[e].layout_index + 1) * sizeof(DramCorePrefetcherTensorLayout));
+                const uint32_t t_num_sub = g->num_sub;
+                const uint32_t t_M = g->M;
+                const uint32_t t_rows_per_sub = g->rows_per_sub;
+                const uint32_t t_coal_page_size = g->coalesced_page_size;
+                const uint32_t t_coal_num_pages = g->coalesced_num_pages;
+                const uint32_t t_chunk_bytes = g->sub_chunk_bytes;
+                const uint32_t t_sub_stride = g->sub_stride_bytes;
+                const uint32_t t_block_stride = g->block_stride_bytes;
+                const uint32_t t_page_bytes_per_recv = g->page_bytes_per_recv;
+                const uint32_t t_layout_mode = g->layout_mode;
+                // g->blocks_per_dma is currently pinned to 1 by the manager.
+                const uint32_t t_recv_stride = g->recv_stride_bytes;
+                const uint32_t t_block_count = g->block_count;
 
-            // Set the sender fifo page size to one full per-receiver page so
-            // remote_cb_reserve_back reserves exactly one page per receiver.
-            experimental::resize_remote_sender_cb_interface</*update_remote_over_noc=*/false>(
-                remote_cb_id, t_page_bytes_per_recv, noc_index);
+                // Set the sender fifo page size to one full per-receiver page so
+                // remote_cb_reserve_back reserves exactly one page per receiver.
+                experimental::resize_remote_sender_cb_interface</*update_remote_over_noc=*/false>(
+                    remote_cb_id, t_page_bytes_per_recv, noc_index);
 
-            const uint32_t total_chunks = t_block_count * t_sub_band_per_block;
+                constexpr uint32_t stage_slot_sum = stage_slot_a + stage_slot_b;
 
-            // Prologue: issue first DMA (chunk 0) into stage_slot_a. The body's
-            // "issue next" lookahead populates subsequent slots.
-            experimental::dma_async_read(/*stream=*/0, tensor_base, stage_slot_a, t_chunk_bytes);
+                // Branch on layout. The branch is per-tensor (100% predictable across the
+                // inner chunk loop), so adding the second branch costs nothing in the
+                // hot path.
+                if (t_layout_mode == 0) {
+                    // ---- K-row-major main loop ----
+                    const uint32_t t_recv_per_chunk = num_receivers / t_M;
+                    const uint32_t t_sub_band_per_block = t_num_sub * t_M;
+                    const uint32_t total_chunks = t_block_count * t_sub_band_per_block;
 
-            uint32_t fifo_snapshot = 0;
-            uint32_t cum_offset_in_page = 0;
+                    experimental::dma_async_read(/*stream=*/0, tensor_base, stage_slot_a, t_chunk_bytes);
 
-            // The flat chunk index `c` decomposes into three nested counters,
-            // advanced by compare-and-increment (ch fastest, then sb, then blk):
-            uint32_t blk = 0;  // K-block index within the tensor, in [0, t_block_count)
-            uint32_t sb = 0;   // sub-band index within the block, in [0, t_num_sub)
-            uint32_t ch = 0;   // chunk index within the sub-band, in [0, t_M)
-            // stage_slot ping-pongs between stage_slot_a and stage_slot_b; toggle via
-            // `(a + b) - slot`.
-            constexpr uint32_t stage_slot_sum = stage_slot_a + stage_slot_b;
-            uint32_t stage_slot = stage_slot_a;
-            // True for every chunk except the very last; flipped once the successor
-            // counters cross t_block_count, so the hot path reads a flag instead of
-            // recomputing the bound each iteration.
-            bool has_next = (total_chunks > 1);
+                    uint32_t fifo_snapshot = 0;
+                    uint32_t cum_offset_in_page = 0;
+                    uint32_t blk = 0;
+                    uint32_t sb = 0;
+                    uint32_t ch = 0;
+                    uint32_t stage_slot = stage_slot_a;
+                    bool has_next = (total_chunks > 1);
 
-            for (uint32_t c = 0; c < total_chunks; ++c) {
-                if (sb == 0 && ch == 0) {
-                    experimental::remote_cb_reserve_back(remote_cb_id, 1);
-                    fifo_snapshot = iface.fifo_wr_ptr;
-                    cum_offset_in_page = 0;
-                }
-
-                // Compute the successor (blk, sb, ch) by incrementing the nested counters.
-                uint32_t next_ch = ch + 1;
-                uint32_t next_sb = sb;
-                uint32_t next_blk = blk;
-                if (next_ch == t_M) {
-                    next_ch = 0;
-                    ++next_sb;
-                    if (next_sb == t_num_sub) {
-                        next_sb = 0;
-                        ++next_blk;
-                        if (next_blk == t_block_count) {
-                            has_next = false;
+                    for (uint32_t c = 0; c < total_chunks; ++c) {
+                        if (sb == 0 && ch == 0) {
+                            experimental::remote_cb_reserve_back(remote_cb_id, 1);
+                            fifo_snapshot = iface.fifo_wr_ptr;
+                            cum_offset_in_page = 0;
                         }
-                    }
-                }
-                const uint32_t next_slot = stage_slot_sum - stage_slot;
 
-                // Issue the next DMA before waiting on this one (ping-pong, depth 2).
-                if (has_next) {
-                    const uint32_t next_src =
-                        tensor_base + next_blk * t_block_stride + next_sb * t_sub_stride + next_ch * t_chunk_bytes;
-                    experimental::dma_async_read(/*stream=*/0, next_src, next_slot, t_chunk_bytes);
-                }
-                const uint32_t outstanding_after_wait = has_next ? 1u : 0u;
-                experimental::dma_async_read_wait_n(/*stream=*/0, outstanding_after_wait);
-                volatile tt_l1_ptr uint32_t* chunk_recv_xy =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) +
-                    ch * t_recv_per_chunk * 2;
-                // Per-tensor-stable predicate; branches are 100% predictable across the
-                // chunk loop. Compiler folds the fast-path bodies via `if constexpr` in
-                // `prefetcher_write_chunk`.
-                if (t_rows_per_sub == 1) {
-                    if (t_coal_num_pages == 1) {
-                        prefetcher_write_chunk</*single_row=*/true, /*single_page=*/true>(
-                            stage_slot,
-                            fifo_snapshot + cum_offset_in_page,
-                            chunk_recv_xy,
-                            t_recv_per_chunk,
-                            t_rows_per_sub,
-                            t_coal_num_pages,
-                            t_coal_page_size,
-                            noc_index);
-                    } else {
-                        prefetcher_write_chunk</*single_row=*/true, /*single_page=*/false>(
-                            stage_slot,
-                            fifo_snapshot + cum_offset_in_page,
-                            chunk_recv_xy,
-                            t_recv_per_chunk,
-                            t_rows_per_sub,
-                            t_coal_num_pages,
-                            t_coal_page_size,
-                            noc_index);
+                        // Compute the successor (blk, sb, ch) by incrementing the nested counters.
+                        uint32_t next_ch = ch + 1;
+                        uint32_t next_sb = sb;
+                        uint32_t next_blk = blk;
+                        if (next_ch == t_M) {
+                            next_ch = 0;
+                            ++next_sb;
+                            if (next_sb == t_num_sub) {
+                                next_sb = 0;
+                                ++next_blk;
+                                if (next_blk == t_block_count) {
+                                    has_next = false;
+                                }
+                            }
+                        }
+                        const uint32_t next_slot = stage_slot_sum - stage_slot;
+
+                        // Issue the next DMA before waiting on this one (ping-pong, depth 2).
+                        if (has_next) {
+                            const uint32_t next_src = tensor_base + next_blk * t_block_stride + next_sb * t_sub_stride +
+                                                      next_ch * t_chunk_bytes;
+                            experimental::dma_async_read(/*stream=*/0, next_src, next_slot, t_chunk_bytes);
+                        }
+                        const uint32_t outstanding_after_wait = has_next ? 1u : 0u;
+                        experimental::dma_async_read_wait_n(/*stream=*/0, outstanding_after_wait);
+                        volatile tt_l1_ptr uint32_t* chunk_recv_xy =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) +
+                            ch * t_recv_per_chunk * 2;
+                        if (t_rows_per_sub == 1) {
+                            if (t_coal_num_pages == 1) {
+                                prefetcher_write_chunk</*single_row=*/true, /*single_page=*/true>(
+                                    stage_slot,
+                                    fifo_snapshot + cum_offset_in_page,
+                                    chunk_recv_xy,
+                                    t_recv_per_chunk,
+                                    t_rows_per_sub,
+                                    t_coal_num_pages,
+                                    t_coal_page_size,
+                                    noc_index);
+                            } else {
+                                prefetcher_write_chunk</*single_row=*/true, /*single_page=*/false>(
+                                    stage_slot,
+                                    fifo_snapshot + cum_offset_in_page,
+                                    chunk_recv_xy,
+                                    t_recv_per_chunk,
+                                    t_rows_per_sub,
+                                    t_coal_num_pages,
+                                    t_coal_page_size,
+                                    noc_index);
+                            }
+                        } else {
+                            if (t_coal_num_pages == 1) {
+                                prefetcher_write_chunk</*single_row=*/false, /*single_page=*/true>(
+                                    stage_slot,
+                                    fifo_snapshot + cum_offset_in_page,
+                                    chunk_recv_xy,
+                                    t_recv_per_chunk,
+                                    t_rows_per_sub,
+                                    t_coal_num_pages,
+                                    t_coal_page_size,
+                                    noc_index);
+                            } else {
+                                prefetcher_write_chunk</*single_row=*/false, /*single_page=*/false>(
+                                    stage_slot,
+                                    fifo_snapshot + cum_offset_in_page,
+                                    chunk_recv_xy,
+                                    t_recv_per_chunk,
+                                    t_rows_per_sub,
+                                    t_coal_num_pages,
+                                    t_coal_page_size,
+                                    noc_index);
+                            }
+                        }
+
+                        if (ch + 1 == t_M) {
+                            cum_offset_in_page += t_rows_per_sub * t_coal_num_pages * t_coal_page_size;
+                        }
+
+                        if (sb + 1 == t_num_sub && ch + 1 == t_M) {
+                            noc_async_posted_writes_flushed();
+                            prefetcher_finalize_block</*skip_ptr_update=*/true>(
+                                iface, t_page_bytes_per_recv, num_receivers, noc_index);
+                        } else {
+                            // The ping-pong DMA can reuse this stage slot two chunks later.
+                            // Make sure all posted writes sourced from it have departed first.
+                            noc_async_posted_writes_flushed();
+                        }
+
+                        blk = next_blk;
+                        sb = next_sb;
+                        ch = next_ch;
+                        stage_slot = next_slot;
                     }
                 } else {
-                    if (t_coal_num_pages == 1) {
-                        prefetcher_write_chunk</*single_row=*/false, /*single_page=*/true>(
-                            stage_slot,
-                            fifo_snapshot + cum_offset_in_page,
-                            chunk_recv_xy,
-                            t_recv_per_chunk,
-                            t_rows_per_sub,
-                            t_coal_num_pages,
-                            t_coal_page_size,
-                            noc_index);
-                    } else {
-                        prefetcher_write_chunk</*single_row=*/false, /*single_page=*/false>(
-                            stage_slot,
-                            fifo_snapshot + cum_offset_in_page,
-                            chunk_recv_xy,
-                            t_recv_per_chunk,
-                            t_rows_per_sub,
-                            t_coal_num_pages,
-                            t_coal_page_size,
-                            noc_index);
+                    // ---- Receiver-contiguous main loop ----
+                    // Layout: each bank holds num_receivers slabs of t_recv_stride bytes,
+                    // stacked at offsets 0, V, 2V, ... Within a slab, blocks are at
+                    // blk * t_block_stride and sub-bands within a block at sb * t_sub_stride.
+                    //
+                    // Iteration order: blk outer, r middle, sb inner. Per (blk, r, sb) we
+                    // issue one DMA + one NoC write to receiver r. Reserve + finalize happen
+                    // on the (r == 0, sb == 0) and (sb == last, r == last) boundaries.
+                    const uint32_t total_chunks = t_block_count * num_receivers * t_num_sub;
+
+                    experimental::dma_async_read(/*stream=*/0, tensor_base, stage_slot_a, t_chunk_bytes);
+
+                    uint32_t fifo_snapshot = 0;
+                    uint32_t cum_offset_in_page = 0;
+                    uint32_t blk = 0;
+                    uint32_t r = 0;
+                    uint32_t sb = 0;
+                    uint32_t stage_slot = stage_slot_a;
+                    bool has_next = (total_chunks > 1);
+
+                    for (uint32_t c = 0; c < total_chunks; ++c) {
+                        if (r == 0 && sb == 0) {
+                            experimental::remote_cb_reserve_back(remote_cb_id, 1);
+                            fifo_snapshot = iface.fifo_wr_ptr;
+                        }
+                        if (sb == 0) {
+                            cum_offset_in_page = 0;
+                        }
+
+                        // Successor (blk, r, sb): sb innermost, r middle, blk outermost.
+                        uint32_t next_sb = sb + 1;
+                        uint32_t next_r = r;
+                        uint32_t next_blk = blk;
+                        if (next_sb == t_num_sub) {
+                            next_sb = 0;
+                            ++next_r;
+                            if (next_r == num_receivers) {
+                                next_r = 0;
+                                ++next_blk;
+                                if (next_blk == t_block_count) {
+                                    has_next = false;
+                                }
+                            }
+                        }
+                        const uint32_t next_slot = stage_slot_sum - stage_slot;
+
+                        if (has_next) {
+                            const uint32_t next_src = tensor_base + next_r * t_recv_stride + next_blk * t_block_stride +
+                                                      next_sb * t_sub_stride;
+                            experimental::dma_async_read(/*stream=*/0, next_src, next_slot, t_chunk_bytes);
+                        }
+                        const uint32_t outstanding_after_wait = has_next ? 1u : 0u;
+                        experimental::dma_async_read_wait_n(/*stream=*/0, outstanding_after_wait);
+
+                        // Single-receiver write: pass the current receiver's xy as the start of
+                        // a length-1 chunk. prefetcher_write_chunk with num_receivers_in_chunk=1
+                        // iterates `t_rows_per_sub` K-rows × `t_coal_num_pages` coalesced pages.
+                        volatile tt_l1_ptr uint32_t* single_recv_xy =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + r * 2;
+                        if (t_rows_per_sub == 1) {
+                            if (t_coal_num_pages == 1) {
+                                prefetcher_write_chunk</*single_row=*/true, /*single_page=*/true>(
+                                    stage_slot,
+                                    fifo_snapshot + cum_offset_in_page,
+                                    single_recv_xy,
+                                    /*num_receivers_in_chunk=*/1,
+                                    t_rows_per_sub,
+                                    t_coal_num_pages,
+                                    t_coal_page_size,
+                                    noc_index);
+                            } else {
+                                prefetcher_write_chunk</*single_row=*/true, /*single_page=*/false>(
+                                    stage_slot,
+                                    fifo_snapshot + cum_offset_in_page,
+                                    single_recv_xy,
+                                    /*num_receivers_in_chunk=*/1,
+                                    t_rows_per_sub,
+                                    t_coal_num_pages,
+                                    t_coal_page_size,
+                                    noc_index);
+                            }
+                        } else {
+                            if (t_coal_num_pages == 1) {
+                                prefetcher_write_chunk</*single_row=*/false, /*single_page=*/true>(
+                                    stage_slot,
+                                    fifo_snapshot + cum_offset_in_page,
+                                    single_recv_xy,
+                                    /*num_receivers_in_chunk=*/1,
+                                    t_rows_per_sub,
+                                    t_coal_num_pages,
+                                    t_coal_page_size,
+                                    noc_index);
+                            } else {
+                                prefetcher_write_chunk</*single_row=*/false, /*single_page=*/false>(
+                                    stage_slot,
+                                    fifo_snapshot + cum_offset_in_page,
+                                    single_recv_xy,
+                                    /*num_receivers_in_chunk=*/1,
+                                    t_rows_per_sub,
+                                    t_coal_num_pages,
+                                    t_coal_page_size,
+                                    noc_index);
+                            }
+                        }
+
+                        cum_offset_in_page += t_rows_per_sub * t_coal_num_pages * t_coal_page_size;
+
+                        // Block boundary: last receiver's last sub-band has just been written —
+                        // bump pages_sent on every receiver by 1.
+                        if (sb + 1 == t_num_sub && r + 1 == num_receivers) {
+                            noc_async_posted_writes_flushed();
+                            prefetcher_finalize_block</*skip_ptr_update=*/true>(
+                                iface, t_page_bytes_per_recv, num_receivers, noc_index);
+                        }
+
+                        // Advance counters to next chunk.
+                        blk = next_blk;
+                        r = next_r;
+                        sb = next_sb;
+                        stage_slot = next_slot;
                     }
                 }
-
-                if (ch + 1 == t_M) {
-                    cum_offset_in_page += t_rows_per_sub * t_coal_num_pages * t_coal_page_size;
-                }
-
-                if (sb + 1 == t_num_sub && ch + 1 == t_M) {
-                    noc_async_posted_writes_flushed();
-                    prefetcher_finalize_block</*skip_ptr_update=*/true>(
-                        iface, t_page_bytes_per_recv, num_receivers, noc_index);
-                } else {
-                    // The ping-pong DMA can reuse this stage slot two chunks later.
-                    // Make sure all posted writes sourced from it have departed first.
-                    noc_async_posted_writes_flushed();
-                }
-
-                // Advance counters to next chunk.
-                blk = next_blk;
-                sb = next_sb;
-                ch = next_ch;
-                stage_slot = next_slot;
             }
         }
 
