@@ -1,6 +1,6 @@
 # CI Disable Work — Status Log
 
-Last updated: **2026-05-27T18:00 UTC** (session: Tier-1 examining session. PR #45322 run 26520651029 P100 job still queued/initializing (startedAt 15:55 UTC, >2h since start, >2.5h since 15:21 dispatch). PR #45114 confirmed CLOSED. New main runs queued: L2 nightly 26518398862 (queued since 14:42 UTC, 3h+), BH post-commit 26526029229 (queued since 17:00 UTC), BH e2e 26526054589 (queued since 17:00 UTC). Main unchanged at `08c2fb10e65`. 0 new dispatches this session.)
+Last updated: **2026-05-27T19:08 UTC** (session: Tier-1 examining session. Examining PRs: #44938 (rebased onto main `05de578a`, sd35 disable still valid), #45108 (rebased onto main `05de578a`, CCL disables still valid), #45313 (rebased onto main `05de578a`, sampling-test disables still valid). PR #45322 P100 job still queued >3h (runner initialization stall — likely heading to verification-inconclusive). Main advanced to `05de578a1a5`. 0 dispatches this session.)
 
 ---
 
@@ -20,14 +20,14 @@ Last updated: **2026-05-27T18:00 UTC** (session: Tier-1 examining session. PR #4
 | PR | Workflow | Lifecycle stage | Verification result | Ready to merge? | Notes |
 |----|----------|-----------------|---------------------|-----------------|-------|
 | [#44860](https://github.com/tenstorrent/tt-metal/pull/44860) | `Nightly tt-metal L2 tests` | `verified-pass` | [26175502415](https://github.com/tenstorrent/tt-metal/actions/runs/26175502415) failure (classified verified-pass) | Yes | Rebased 2026-05-27 16:30 UTC onto main `08c2fb10e65`; test_mla_wo still failing on BH; all verification failures are pre-existing on main |
-| [#44938](https://github.com/tenstorrent/tt-metal/pull/44938) | `t3000-demo-tests` | `verified-pass` | [26295163268](https://github.com/tenstorrent/tt-metal/actions/runs/26295163268) success | Yes | Rebased 2026-05-27 14:28 UTC onto main `08c2fb10e65`; sd35 disable still valid; awaiting CI/review |
-| [#45108](https://github.com/tenstorrent/tt-metal/pull/45108) | `(T3K) T3000 e2e tests` | `verified-pass` | [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) — CCL failure + 90m timeout | Yes | Rebased 2026-05-27 14:27 UTC onto main `08c2fb10e65`; CCL disables still valid; awaiting human review |
+| [#44938](https://github.com/tenstorrent/tt-metal/pull/44938) | `t3000-demo-tests` | `verified-pass` | [26295163268](https://github.com/tenstorrent/tt-metal/actions/runs/26295163268) success | Yes | Rebased 2026-05-27 19:08 UTC onto main `05de578a1a5`; sd35 disable still valid; awaiting CI/review |
+| [#45108](https://github.com/tenstorrent/tt-metal/pull/45108) | `(T3K) T3000 e2e tests` | `verified-pass` | [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) — CCL failure + 90m timeout | Yes | Rebased 2026-05-27 19:08 UTC onto main `05de578a1a5`; CCL disables still valid; awaiting human review |
 | [#45110](https://github.com/tenstorrent/tt-metal/pull/45110) | `Blackhole post-commit tests` | `verified-pass` | [26508063374](https://github.com/tenstorrent/tt-metal/actions/runs/26508063374) **success** | Yes | Rebased 2026-05-27 17:00 UTC onto main `08c2fb10e65` (merge `a2094780e13`); disable still valid; awaiting human review |
 | [#45112](https://github.com/tenstorrent/tt-metal/pull/45112) | `(Blackhole) e2e tests` | `verified-pass` | [26508072188](https://github.com/tenstorrent/tt-metal/actions/runs/26508072188) **success** | Yes | Rebased 2026-05-27 17:00 UTC onto main `08c2fb10e65` (merge `e2edbbdf64e`); CCL nightly disables still valid; awaiting human review |
 | [#45114](https://github.com/tenstorrent/tt-metal/pull/45114) | `(Blackhole) Demo tests` | `out-of-scope` | — | N/A | **Disable REMOVED 2026-05-27**: test fixed on main since May 26. PR **CLOSED 2026-05-27**. |
 | [#45306](https://github.com/tenstorrent/tt-metal/pull/45306) | `(T3K) T3000 unit tests` | `verified-pass` | [26513061621](https://github.com/tenstorrent/tt-metal/actions/runs/26513061621) **failure** (pre-existing/out-of-scope) | Yes | Rebased 2026-05-27 16:30 UTC onto main `08c2fb10e65`; all 3 job failures pre-existing or out-of-scope |
-| [#45313](https://github.com/tenstorrent/tt-metal/pull/45313) | `vllm-nightly-tests` | `verified-pass` | [26515302390](https://github.com/tenstorrent/tt-metal/actions/runs/26515302390) **success** | Yes | Both WH-T3K and BH-DB sampling-test jobs passed; awaiting human review |
-| [#45322](https://github.com/tenstorrent/tt-metal/pull/45322) | `Nightly tt-metal L2 tests` | `verifying` | [26520651029](https://github.com/tenstorrent/tt-metal/actions/runs/26520651029) in progress | No | PR #45322; N150+N300 success, P150 failure (pre-existing FP8), P100 job startedAt 15:55 UTC still status:queued (>2h); runner initialization stall |
+| [#45313](https://github.com/tenstorrent/tt-metal/pull/45313) | `vllm-nightly-tests` | `verified-pass` | [26515302390](https://github.com/tenstorrent/tt-metal/actions/runs/26515302390) **success** | Yes | Rebased 2026-05-27 19:08 UTC onto main `05de578a1a5`; WH-T3K and BH-DB sampling-test disables still valid; awaiting human review |
+| [#45322](https://github.com/tenstorrent/tt-metal/pull/45322) | `Nightly tt-metal L2 tests` | `verifying` | [26520651029](https://github.com/tenstorrent/tt-metal/actions/runs/26520651029) in progress | No | PR #45322; N150+N300 success, P150 failure (pre-existing FP8), P100 job still queued >3h as of 19:08 UTC — runner initialization stall; will classify when run completes |
 
 > **Scope note (2026-05-27 16:35 UTC):** L2 pipeline (`Nightly tt-metal L2 tests`) is covered by TWO PRs: PR #44860 (disables test_mla_wo and other Python tests via pytest.mark.skip; verified-pass) and PR #45322 (disables MeshDeviceFixture.Top32RmDevPipelineCompletes via gtest-filter; verifying). Both target different test failures in the same pipeline. PR #44860 was not tracked in the Quick Index in prior sessions — added this session.
 
@@ -37,7 +37,7 @@ Last updated: **2026-05-27T18:00 UTC** (session: Tier-1 examining session. PR #4
 
 | Run | Pipeline | Branch | Started | Status | Notes |
 |-----|----------|--------|---------|--------|-------|
-| [26520651029](https://github.com/tenstorrent/tt-metal/actions/runs/26520651029) | `Nightly tt-metal L2 tests` | `ci/disable-failing-tests-l2-nightly-20260527` | 2026-05-27 15:21 UTC | **in progress (P100 job startedAt 15:55 UTC but status still queued >2h as of 18:00 UTC)** | PR #45322 first verify; N150 success, N300 success, P150 failure (3 pre-existing FP8 tests), P100 runner initialization stall (startedAt 15:55 but not executing — possible stuck runner) |
+| [26520651029](https://github.com/tenstorrent/tt-metal/actions/runs/26520651029) | `Nightly tt-metal L2 tests` | `ci/disable-failing-tests-l2-nightly-20260527` | 2026-05-27 15:21 UTC | **in progress (P100 job still queued >3h as of 19:08 UTC — runner initialization stall; no steps executed)** | PR #45322 first verify; N150 success, N300 success, P150 failure (3 pre-existing FP8 tests), P100 runner initialization stall (startedAt 15:55 but no steps — likely verification-inconclusive once run fails) |
 
 **Policy:** Concurrent runs across PRs are allowed; each automation session may dispatch at most three new runs.
 
@@ -113,8 +113,8 @@ Commit `dcf3628dcee`:
 | Branch | `ci/disable-failing-tests-t3000-demo-tests-20260521` |
 | Workflow file | `t3000-demo-tests` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-05-27 14:28 UTC — rebased via `update_pull_request_branch` onto main `08c2fb10e65` (SHA 3760e1b6) |
-| Last revalidation | 2026-05-27 14:28 UTC — sd35 disable still valid; latest main run 26483848176 (May 27 00:47) still shows t3k_sd35_large_tests failing |
+| Last rebase | 2026-05-27 19:08 UTC — rebased via `update_pull_request_branch` onto main `05de578a1a531c8b5b31bbc1311ed29a283efb04` (HEAD now `575ad71baf648068018d7de087eb30ed3dfb51ca`) |
+| Last revalidation | 2026-05-27 19:08 UTC — sd35 disable still valid; main run 26483848176 (May 27 00:47, SHA `2a464882`) still shows `t3k_sd35_large_tests [wh_llmbox_perf]` failing |
 | Verification run | [26295163268](https://github.com/tenstorrent/tt-metal/actions/runs/26295163268) — **success** (2026-05-22) |
 | Readiness | **Yes** (pending CI checks passing and human review) |
 
@@ -132,8 +132,8 @@ Commit `dcf3628dcee`:
 | Branch | `ci/disable-failing-tests-t3000-e2e-tests-20260524` |
 | Workflow file | `t3000-e2e-tests.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-05-27 14:27 UTC — rebased via `update_pull_request_branch` onto main `08c2fb10e65` (SHA 1a6d4f0b) |
-| Last revalidation | 2026-05-27 14:27 UTC — CCL disables still valid; latest main run 26497844654 (May 27 07:41) still shows t3k_ccl_tests failing |
+| Last rebase | 2026-05-27 19:08 UTC — rebased via `update_pull_request_branch` onto main `05de578a1a531c8b5b31bbc1311ed29a283efb04` (HEAD now `a8b408732c480dd00c98ec693b66f627e3374018`) |
+| Last revalidation | 2026-05-27 19:08 UTC — CCL disables still valid; main run 26497844654 (May 27 07:41, SHA `2c0072ef`) still shows `t3k_ccl_tests [wh_llmbox]` failing |
 | Verification run | [26460410854](https://github.com/tenstorrent/tt-metal/actions/runs/26460410854) — Llama **success**; CCL **failure** (trace-buffer + 90m timeout) |
 | Readiness | **Yes** (rebased and up-to-date; awaiting human review) |
 
@@ -262,8 +262,8 @@ Note: `multi_host_fabric_tests` and potentially other `tt-run` invocations in th
 | Branch | `ci/disable-failing-tests-vllm-nightly-20260527` |
 | Workflow file | `vllm-nightly-tests-impl.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-05-27 13:49 UTC — created from main `08c2fb10e65` |
-| Last revalidation | 2026-05-27 13:45 UTC — vllm-nightly has been failing for 8+ consecutive runs since May 19 |
+| Last rebase | 2026-05-27 19:08 UTC — rebased via `update_pull_request_branch` onto main `05de578a1a531c8b5b31bbc1311ed29a283efb04` (HEAD now `f728c9195efa2ee019f3f032d8cb0ee186976276`) |
+| Last revalidation | 2026-05-27 19:08 UTC — sampling-test disables still valid; main run 26483744255 (May 27 00:45, SHA `2a464882`) still shows `[WH-T3K] Llama-3.1-8B-Instruct with sampling-tests` (failure) and `[BH-DB] Llama-3.1-8B-Instruct with sampling-tests` (failure) |
 | Verification run | [26515302390](https://github.com/tenstorrent/tt-metal/actions/runs/26515302390) — **success** (2026-05-27 13:49–14:23 UTC; fresh build; WH-T3K and BH-DB sampling-test jobs both passed) |
 | Readiness | **Yes** (verification passed; awaiting human review) |
 
@@ -347,6 +347,8 @@ Preliminary conclusion: **likely verified-pass** once P100 completes — the Mes
 ---
 
 ## Recent Activity
+
+- `2026-05-27 ~19:08 UTC` — SESSION: **Tier-1 examining session. PRs #44938, #45108, #45313 rebased onto main `05de578a1a5`.** Main advanced from `08c2fb10e65` to `05de578a1a5` (commit: "[skip ci] Update cron job times (#45307)"). Examining PRs: #44938 (rebased onto `05de578a`; `t3k_sd35_large_tests` still failing on main in run 26483848176 — disable still valid), #45108 (rebased onto `05de578a`; `t3k_ccl_tests` still failing on main in run 26497844654 — CCL disables still valid), #45313 (rebased onto `05de578a`; WH-T3K and BH-DB sampling-test jobs still failing on main in run 26483744255 — disables still valid). Lightweight check on PR #45322: P100 job in run 26520651029 still queued >3h (startedAt 15:55 UTC, no steps; likely verification-inconclusive once run officially fails). Tier-1: all non-Galaxy single-card workflows covered. No focus PRs (no priority-2/3 eligible PRs). 0 dispatches this session.
 
 - `2026-05-27 ~18:00 UTC` — SESSION: **Tier-1 examining session. PR #45322 P100 job still in runner initialization stall. PR #45114 confirmed CLOSED.** Examining PRs: #45322 (lightweight check — P100 job in run 26520651029 shows `startedAt: 15:55 UTC` but `status: queued` as of 18:00 UTC — runner initialization stall >2h; leave as `verifying`; if P100 job fails without pytest output classify as `verification-inconclusive`; likely verified-pass expected once resolved), #44860 (lightweight check — L2 nightly main run 26518398862 queued on SHA `08c2fb10e65b` since 14:42 UTC (3h+ queued) and 26526050206 was `cancelled` at 17:00 UTC; no new completed scheduled run available for `test_distributed_fused_rmsnorm` revalidation; deferred to next session after 4h throttle window). PR #45114 confirmed CLOSED (state: CLOSED via GitHub API). New main runs queued: BH post-commit 26526029229 (17:00 UTC), BH e2e 26526054589 (17:00 UTC) — when completed, will provide revalidation data for PRs #45110/#45112. No focus PRs (tier 1: all workflows covered; no priority-2/3 PRs). 0 dispatches this session.
 
