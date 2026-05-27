@@ -350,6 +350,7 @@ void kernel_main() {
                     k_block_left_tile,
                     k_block_right_tile);
                 if (is_injector_core) {
+                    DeviceZoneScopedN("injector core read in0 block");
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
                         in0_shape,
@@ -399,7 +400,7 @@ void kernel_main() {
                 }
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
-                    DeviceZoneScopedN("send");
+                    DeviceZoneScopedN("Fabric send half block");
                     bool forward_slice = false;
                     if (k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
                         forward_slice = true;
