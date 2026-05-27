@@ -33,7 +33,7 @@ from models.experimental.voxtraltts.tt.audio_tokenizer.model import (
 from models.experimental.voxtraltts.tt.text_model import VoxtralTTTextModel, patch_text_model_fp32_rms_norms
 from models.experimental.voxtraltts.tt.voxtral_tt_args import (
     _load_safetensors_state_dict,
-    voxtral_text_high_accuracy_optimizations,
+    voxtral_text_default_optimizations,
 )
 from models.experimental.voxtraltts.utils.debug_trace import VoxtralTTSDebugTrace
 from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
@@ -81,11 +81,11 @@ class VoxtralTTSPipeline:
         *,
         text_max_seq_len: int = 256,
         text_dtype: ttnn.DataType = ttnn.bfloat16,
-        text_optimizations=voxtral_text_high_accuracy_optimizations,
+        text_optimizations=voxtral_text_default_optimizations,
         acoustic_dtype: ttnn.DataType = ttnn.bfloat16,
         tokenizer_dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> "VoxtralTTSPipeline":
-        """Build TT TTS pipeline. Default text stack uses HiFi4 + BF16 weights for E2E PCC."""
+        """Build TT TTS pipeline using the production default text optimization profile."""
         full = _load_safetensors_state_dict(model_name_or_path)
         cfg = load_voxtral_config(model_name_or_path)
         sd_at = extract_audio_tokenizer_state_dict(full)
