@@ -35,6 +35,7 @@ set(UNIT_TESTS_API_SOURCES
     test_banked.cpp
     test_bit_utils.cpp
     test_filesystem_utils.cpp
+    test_graph_tracking.cpp
     test_buffer_region.cpp
     test_compile_time_args.cpp
     test_compile_defines.cpp
