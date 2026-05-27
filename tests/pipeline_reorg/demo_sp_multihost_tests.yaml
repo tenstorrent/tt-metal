@@ -98,9 +98,6 @@
         --reference-file /mnt/models/ref_data/output1_reference.txt \
         --output-file output1_teacher_forcing_results.json \
         --chunk-accuracy 256
-
-    echo "============= SP4 superpod: jq output1_teacher_forcing_results.json ============="
-    jq . output1_teacher_forcing_results.json
   skus:
     bh_sp4:
       timeout: 50
