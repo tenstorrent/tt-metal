@@ -178,8 +178,9 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
     if (!is_mesh_mmio_capable && num_available_routing_planes > 1) {
         num_available_routing_planes -= 1;
     }
-    log_debug(tt::LogOp, "num_available_routing_planes without max logic: {}", num_available_routing_planes);
-    return std::max(num_available_routing_planes, 1ul);
+    log_debug(tt::LogOp, "num_available_routing_planes: {}", num_available_routing_planes);
+    TT_FATAL(num_available_routing_planes > 0, "Failed to discover available ethernet links");
+    return num_available_routing_planes;
 }
 
 }  // namespace ttnn::operations::ccl::common
