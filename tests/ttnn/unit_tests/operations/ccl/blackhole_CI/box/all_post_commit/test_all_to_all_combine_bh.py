@@ -78,6 +78,9 @@ def test_all_to_all_combine_no_trace(
 
     bh_1d_mesh_device.disable_and_clear_program_cache()
     submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    # DEBUG: parent disable_and_clear_program_cache may not propagate to submesh.
+    # Force-disable on the submesh too to isolate cache-hit-vs-miss as a variable.
+    submesh_device.disable_and_clear_program_cache()
 
     run_all_to_all_combine_test(
         submesh_device,
