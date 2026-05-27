@@ -618,24 +618,84 @@ def load_captured_routing(
     num_routed_experts: int,
     num_experts_per_tok: int,
 ):
-    """Load real captured Galaxy gate indices remapped for an LB 8x1 single-col replay.
+    """Load real captured Galaxy gate indices, remapped to run one Galaxy column on LB 8x1.
 
-    Used by the dispatch/combine perf tests to replay a single Galaxy column's routing
-    on an LB 8x1 mesh. The captured indices encode Galaxy-global expert IDs in [0, 256).
-    On LB the combine kernel uses `first_expert_id=0` (single-col mesh) so all expert IDs
-    must fit in [0, 64) — we remap in-col routes to [0, 64) and out-of-col routes to
-    sentinel 255, then use col 0's (1, 256) dispatch-table row whose entries are chip IDs
-    [0, 8) for [0, 64) and -1 for [64, 256). End result: kernel routes in-col routings
-    1:1 with Galaxy col k and skips out-of-col routings.
+    What the capture contains
+    -------------------------
+    `expert_routing.safetensors[expert_ids_layer_<L>]` holds one tensor per MoE layer
+    of shape `(total_tokens=25600, top_k=8)` int32, with values in `[0, num_routed_experts=256)`.
+    Those are **Galaxy-global expert IDs**. We `view` it into the worker's expected
+    `(dispatch_group_size=8, seq_len_per_chip=3200, top_k=8)` layout.
 
-    Env vars (all required; raises if any unset):
+    Galaxy 8x4 owns 256 experts split across 4 dispatch columns × 8 chips:
+
+        col 0:  expert IDs [  0,  64), 8 experts per chip (chips 0..7 = ids 0..7, 8..15, ...)
+        col 1:  expert IDs [ 64, 128)
+        col 2:  expert IDs [128, 192)
+        col 3:  expert IDs [192, 256)
+
+    LB 8x1 has only one column, 8 chips, 8 experts/chip = 64 physical experts.
+    The LB combine kernel hard-codes `first_expert_id=0`, so every expert ID it
+    sees in metadata must fit in `[0, num_routed_experts_per_col=64)` or be a
+    skip-sentinel — anything in `[64, 256)` would index past the per-chip
+    `expert_token_counts` array and silently corrupt outputs.
+
+    The remap
+    ---------
+    For a chosen Galaxy column `k`, we transform every captured value `v`:
+
+        in-col routes (v in [k*64, (k+1)*64))   →  v - k*64      (shifts into [0, 64))
+        out-of-col routes (everything else)     →  255           (sentinel)
+
+    We then build the dispatch table.  `ExpertMapping.create_dispatch_table(256, 8, 4)`
+    returns the full Galaxy 4-row table of shape `(4, 256)`; we slice `[0:1]` to get a
+    `(1, 256)` tensor — one row, to match LB's single-col mesh.  The slice's contents:
+
+        table[0,  0..63]   = [0,0,0,0,0,0,0,0, 1,1,...,1, ..., 7,7,7,7,7,7,7,7]   (chip ids, 8 per chip)
+        table[0, 64..255]  = -1                                                    (kernel reads -1 → skip)
+        table[0, 255]      = -1                                                    (== sentinel target)
+
+    The chip-assignment function `chip_id = local_id // 8` is identical across every
+    Galaxy column's row, so using row 0 against remapped (in-col-shifted) indices
+    routes each expert to the same chip Galaxy would have:
+
+        Galaxy expert 135 (col 2 local 7)  →  Galaxy table[2, 135] = chip 0
+        After remap:        value becomes 7  →  LB table[0,   7]   = chip 0   (match)
+
+    Out-of-col routes (sentinel 255) hit `table[0, 255] = -1` and the kernel skips
+    them — preserving Galaxy col k's true per-col routing share 1:1 with no spurious
+    work on the other 192 globals.
+
+    Worked example: longbook L27 token 0, captured-col=2
+    ----------------------------------------------------
+    The 8 picks for chip 0 token 0 in longbook_qa_eng_25600 L27 are::
+
+        raw   :  [138, 147,  79,  30, 150, 120,  72, 154]
+        in-col:  [ ✓,   ✓,   ✗,   ✗,   ✓,   ✗,   ✗,   ✓ ]    (col 2 range = [128, 192))
+        remap :  [ 10,  19, 255, 255,  22, 255, 255,  26]
+        route :  [ch1, ch2, skip, skip, ch2, skip, skip, ch3]   (chip_id = remap_value // 8)
+
+    Verification — Galaxy would have routed the same picks via its col-2 row::
+
+        table[2, 138] = (138 - 128)//8 = chip 1   (same as our remapped 10 // 8)
+        table[2, 147] = (147 - 128)//8 = chip 2   (same as our remapped 19 // 8)
+        table[2,  79] = -1                         (col 1, Galaxy col 2 also skips)
+        ...
+
+    Env vars (all required; raises if missing)
+    -------------------------------------------
         TT_DS_CAPTURED_LAYER          int, MoE layer index (e.g. 27)
         TT_DS_CAPTURED_COL            int, Galaxy column [0, 4) to simulate
         TT_DS_USE_CAPTURED_INDICES    optional path override for the safetensors;
                                       defaults to LONGBOOK_QA_ENG_25600/expert_routing.safetensors
 
-    Returns:
-        (indices, expert_dispatch_table).
+    Returns
+    -------
+    (indices, expert_dispatch_table) where:
+        indices                 (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
+                                int32, values in [0, 64) ∪ {255}.
+        expert_dispatch_table   (1, 256) int32 — col 0's row of the Galaxy 4-col table,
+                                with chip IDs [0, 8) for [0, 64) and -1 elsewhere.
     """
     import os
     from pathlib import Path

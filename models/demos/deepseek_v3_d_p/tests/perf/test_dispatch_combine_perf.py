@@ -23,6 +23,7 @@ import pytest
 from loguru import logger
 from tracy.process_model_log import get_latest_ops_log_filename
 
+from models.demos.deepseek_v3_d_p.utils.perf_utils import run_model_device_perf_test_per_op
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
 
@@ -215,94 +216,6 @@ def run_model_device_perf_test_with_merge(
     )
 
 
-def run_model_device_perf_test_per_op(
-    command: str,
-    expected_per_op: dict,
-    subdir: str,
-    model_name: str,
-    margin: float = 0.015,
-    comments: str = "",
-    extra_env: dict | None = None,
-):
-    """Run one worker subprocess and assert performance for multiple ops independently.
-
-    Use when a single worker invocation produces multiple device ops in the Tracy CSV
-    (e.g. dispatch + combine in one forward pass) and each needs its own baseline so
-    a regression points to the responsible kernel rather than the combined total.
-
-    Args:
-        expected_per_op: dict mapping OP CODE substring → expected duration in ns.
-            For each entry, the merged-device-rows DataFrame is filtered by substring,
-            durations summed, and asserted against expected ± margin. Every entry must
-            match at least one row in the CSV; missing matches `pytest.fail`.
-        margin: tolerance applied uniformly to all entries in `expected_per_op`.
-    """
-    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
-    inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
-
-    import os
-
-    saved_env = {k: os.environ.get(k) for k in (extra_env or {})}
-    try:
-        if extra_env:
-            os.environ.update(extra_env)
-        run_device_perf(command, subdir=subdir, num_iterations=1, cols=cols, batch_size=1)
-    finally:
-        for k, v in saved_env.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-
-    filename = get_latest_ops_log_filename(subdir)
-    df = pd.read_csv(filename)
-    df = df[df["OP TYPE"] == "tt_dnn_device"]
-    df_merged = merge_device_rows(df)
-    logger.info(f"[per-op] CSV={filename}  device rows={len(df)}  merged ops={len(df_merged)}")
-
-    measured_per_op = {}
-    failures = []
-    for op_substring, expected_ns in expected_per_op.items():
-        rows = df_merged[df_merged["OP CODE"].str.contains(op_substring, na=False)]
-        if rows.empty:
-            pytest.fail(
-                f"No merged rows match op_substring={op_substring!r} in {filename}; "
-                f"available op codes: {sorted(df_merged['OP CODE'].unique())}"
-            )
-        measured_ns = float(rows["DEVICE KERNEL DURATION [ns]"].sum())
-        measured_per_op[op_substring] = measured_ns
-        lo = (1 - margin) * expected_ns
-        hi = (1 + margin) * expected_ns
-        passing = lo <= measured_ns <= hi
-        logger.info(
-            f"[per-op] {op_substring}: measured={measured_ns:,.0f} ns  "
-            f"expected={expected_ns:,.0f} ns  bounds=[{lo:,.0f}, {hi:,.0f}]  "
-            f"{'PASS' if passing else 'FAIL'}"
-        )
-        if not passing:
-            failures.append((op_substring, measured_ns, expected_ns, lo, hi))
-
-    total_measured = sum(measured_per_op.values())
-    post_processed_results = {inference_time_key: total_measured}
-    for op_substring, measured_ns in measured_per_op.items():
-        post_processed_results[f"{op_substring} DEVICE KERNEL DURATION [ns]"] = measured_ns
-
-    prep_device_perf_report(
-        model_name=model_name,
-        batch_size=1,
-        post_processed_results=post_processed_results,
-        expected_results={},
-        comments=comments,
-    )
-
-    if failures:
-        msg = "Per-op perf checks failed:\n  " + "\n  ".join(
-            f"{op}: measured={m:,.0f} ns  expected={e:,.0f} ns (bounds [{lo:,.0f}, {hi:,.0f}], margin ±{margin*100:.0f}%)"
-            for op, m, e, lo, hi in failures
-        )
-        pytest.fail(msg)
-
-
 def _perf_param(
     op,
     worker_file,
@@ -470,6 +383,7 @@ def _perf_param_per_op(
     captured_layer: int | None = None,
     captured_col: int | None = None,
     worker_filter_extras: str | None = "",
+    worker_dir: str = "models/demos/deepseek_v3_d_p/tests/perf",
 ):
     """Build one pytest.param tuple for a per-op perf test.
 
@@ -479,6 +393,11 @@ def _perf_param_per_op(
     carries an `expected_per_op` dict (op_code_substring → expected_ns) instead
     of a single `(expected_ns, op_filter)` pair. Used by
     `run_model_device_perf_test_per_op`.
+
+    `worker_dir` is the path to the directory containing `worker_file`; defaults
+    to the pcc test dir (where `test_prefill_dispatch.py` / `test_prefill_combine.py`
+    live). Override to `tests/perf` for workers that only run the perf path and
+    shouldn't be collected by the PCC pipeline.
     """
     worker_id = f"{topo}-8-{nlinks}link"
     model_name = f"deepseek_v3_{op}_{topo}_8_{nlinks}link"
@@ -492,7 +411,7 @@ def _perf_param_per_op(
         extra_env = {"TT_DS_CAPTURED_LAYER": str(captured_layer), "TT_DS_CAPTURED_COL": str(captured_col)}
     else:
         extra_env = {}
-    command = f"pytest models/demos/deepseek_v3_d_p/tests/perf/{worker_file}::{worker_test} " f"-k '{k_filter}'"
+    command = f"pytest {worker_dir}/{worker_file}::{worker_test} " f"-k '{k_filter}'"
     return (
         command,
         expected_per_op,
@@ -517,6 +436,9 @@ _DISPATCH_COMBINE_PERF_REAL_INDICES_PARAMS = [
         },
         captured_layer=layer,
         captured_col=col,
+        # The combined worker only runs perf path (skips when env vars unset), so it lives
+        # in tests/perf/ — keeps it out of the PCC pipeline's `pytest tests/pcc/` collection.
+        worker_dir="models/demos/deepseek_v3_d_p/tests/perf",
     )
     for topo, nlinks in _REAL_INDICES_TOPOS
     for layer, col in _REAL_INDICES_PICKS
