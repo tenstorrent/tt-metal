@@ -90,4 +90,10 @@ ttnn::Tensor prepare_w2_tensor_with_bias(
     const std::vector<std::pair<uint32_t, uint32_t>>& w2_shard_map,
     const std::vector<uint32_t>& w0_w1_shard_map);
 
+// Round-trip a device tensor through host to change its dtype and re-upload
+// it under the supplied memory config. Used to quantize the packed weight
+// tensors to ``bfloat4_b`` on the DRAM-sharded mem config the kernel consumes.
+ttnn::Tensor quantize_weights_via_host(
+    const ttnn::Tensor& device_tensor, ttnn::DataType dtype, const ttnn::MemoryConfig& memory_config);
+
 }  // namespace ttnn::experimental
