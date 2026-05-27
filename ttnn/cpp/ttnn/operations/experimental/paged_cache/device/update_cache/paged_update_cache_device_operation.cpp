@@ -170,12 +170,28 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
                 page_table_val.padded_shape()[0] == input_tensor.padded_shape()[1],
                 "Batch size between page_table and input_tensor must match");
         }
-        TT_FATAL(
-            page_table_val.padded_shape()[1] <= cache_tensor.padded_shape()[0],
-            "max_num_blocks_per_seq must be less than max_num_blocks: max_num_blocks_per_seq={}, "
-            "max_num_blocks={}",
-            page_table_val.padded_shape()[1],
-            cache_tensor.padded_shape()[0]);
+        if (operation_attributes.cache_position_modulo.has_value()) {
+            // Bounded-pool path (vLLM SlidingWindowSpec): page_table is right-padded
+            // out to max_model_len/block_size, but the kernel wraps positions into
+            // [0, modulo) before the page_table lookup, so the tail is never read.
+            // Only the bounded prefix needs to fit in the physical pool.
+            const uint32_t effective_block_size =
+                operation_attributes.block_size_override.value_or(cache_tensor.padded_shape()[2]);
+            const uint32_t modulo = operation_attributes.cache_position_modulo.value();
+            const uint32_t bounded_blocks_per_seq = modulo / effective_block_size;
+            TT_FATAL(
+                bounded_blocks_per_seq <= cache_tensor.padded_shape()[0],
+                "cache_position_modulo/block_size ({}) must be <= max_num_blocks ({})",
+                bounded_blocks_per_seq,
+                cache_tensor.padded_shape()[0]);
+        } else {
+            TT_FATAL(
+                page_table_val.padded_shape()[1] <= cache_tensor.padded_shape()[0],
+                "max_num_blocks_per_seq must be less than max_num_blocks: max_num_blocks_per_seq={}, "
+                "max_num_blocks={}",
+                page_table_val.padded_shape()[1],
+                cache_tensor.padded_shape()[0]);
+        }
     }
 
     // Update indices validation
