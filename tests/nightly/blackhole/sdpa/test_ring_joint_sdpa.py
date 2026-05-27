@@ -1070,7 +1070,7 @@ def run_ring_joint_sdpa_chunked(
         reference_outputs = None
         per_chunk_results = []
         for it in range(num_iterations):
-            iter_outputs = []
+            iter_outputs = [] if num_iterations > 1 else None
             for i in range(n_chunks):
                 s, e = i * chunk_size, (i + 1) * chunk_size
 
@@ -1691,10 +1691,6 @@ def test_ring_joint_attention_sdpa_chunked_determinism(model_name, q_chunk_size,
 
 
 # === TEST 8: CHUNKED-PREFILL PERF TABLE (skipped on CI) ===
-# Iterates over the chunks of a single chunked-prefill run and prints per-chunk math util.
-# Per-chunk work is rectangle (Q_chunk vs prefix K/V, non-causal) + triangle (Q_chunk vs
-# current K/V, causal half), so later chunks have a larger prefix and should reach higher
-# math utilization than chunk 0 (which is only the triangle).
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
@@ -1704,7 +1700,12 @@ def test_ring_joint_attention_sdpa_chunked_determinism(model_name, q_chunk_size,
     ids=CHUNKED_CONFIG_IDS,
 )
 def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_size, chunk_size):
-    """Run chunked prefill once with tracy and print a per-chunk math-util table."""
+    """Run chunked prefill once with tracy and print a per-chunk math-util table.
+
+    Per-chunk work is rectangle (Q_chunk vs prefix K/V, non-causal) + triangle (Q_chunk vs
+    current K/V, causal half), so later chunks have a larger prefix and should reach higher
+    math utilization than chunk 0 (which is only the triangle).
+    """
     from tracy.process_model_log import run_device_profiler
 
     mesh_config = MESH_CONFIG
@@ -1779,7 +1780,7 @@ def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size
         chunk_flops = rect_flops + tri_flops
 
         # Strip CCL contribution: round measured core count down to multiple of grid_rows.
-        effective_cores = (int(ccount) // mesh_config.grid_rows) * mesh_config.grid_rows
+        effective_cores = (ccount // mesh_config.grid_rows) * mesh_config.grid_rows
         cycles = dur_ns * clock_ghz
         theoretical_flops = effective_cores * cycles * flops_per_cycle_per_core
         util = (chunk_flops / theoretical_flops) * 100 if theoretical_flops > 0 else 0.0
