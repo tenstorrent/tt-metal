@@ -8,7 +8,18 @@ A multi-stage process that takes a HuggingFace reference model and produces a vL
 |---|---|
 | `models/autoports/<model_name>/` | Per-model home. Each stage adds files here. |
 | `models/common/readiness_check/` | Shared **model-readiness check** — one harness reused by every ported model. Not regenerated per-model. |
-| `.agents/skills/decoder-to-productized/` | Skill that automates **one stage**: ported decoder → `tt/model.py` + `tt/generator.py` + `tt/generator_vllm.py` + vLLM registration. |
+| `.agents/skills/` | Stage guidance for functional decoder, optimization, multi-chip, and productization work. |
+
+## Agent-driven stages
+
+The broad pipeline is:
+
+1. `functional-decoder`: HF decoder layer -> correct TTNN decoder layer.
+2. `optimize-decoder`: correct decoder -> faster single-chip decoder.
+3. `multichip-decoder`: single-chip decoder -> target-mesh decoder.
+4. `decoder-to-productized`: decoder -> full model wrapper, generator, vLLM adapter, and readiness path.
+
+Not every model needs every stage before useful work can continue. Use the strongest passing stage as the baseline for the next stage.
 
 ## The Generator contract
 

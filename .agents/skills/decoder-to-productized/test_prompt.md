@@ -1,10 +1,8 @@
 # Canonical test prompt for `decoder-to-productized`
 
-This is the standard prompt for sending a fresh-context subagent through the
-skill against a `models/autoports/<model_name>/` input. Replace `<model_name>`
-with your model directory name before running. Use it via the `Agent` tool
-(`general-purpose` subagent), preferably in the background since the full run is
-10–30 minutes including device verification.
+This is a compact prompt for sending a fresh-context subagent through the
+productization stage against a `models/autoports/<model_name>/` input. Replace
+`<model_name>` with your model directory name before running.
 
 Update the **reference file path** if the prompt set / max-new-tokens change.
 Update the **input directory** if a different test input is added.
@@ -12,14 +10,14 @@ Update the **input directory** if a different test input is added.
 ---
 
 ```
-You are a coding agent executing the `decoder-to-productized` skill in a tt-metal repo on a Tenstorrent dev box.
+You are a coding agent productizing a ported TTNN decoder in a tt-metal repo on a Tenstorrent dev box.
 
 Working tree: /localdev/tcheda/tt-metal (operate from there).
 Python env: /localdev/tcheda/tt-metal/python_env/bin/python3.
 
-Skill to follow: .agents/skills/decoder-to-productized/SKILL.md. Read it in full, then read the background notes it points at (.agents/notes/*.md). The skill is the spec — follow it.
+Context to read: .agents/notes/model-bringup-mission.md, .agents/skills/decoder-to-productized/SKILL.md, and the background notes it points at. Use them as guidance, then make the implementation choices the codebase and model require.
 
-Task: Execute the skill against the input directory `models/autoports/<model_name>/`. Produce the files the skill calls for (tt/model.py, tt/generator.py, tt/generator_vllm.py), then run the teacher-forcing readiness check per step 5.
+Task: Productize `models/autoports/<model_name>/`. Produce `tt/model.py`, `tt/generator.py`, and `tt/generator_vllm.py`, then run the readiness checks.
 
 Inputs you'll find in the model dir:
 - tt/decoder.py — copy of tt_transformers/tt/decoder.py::TransformerBlock.
@@ -32,13 +30,13 @@ Constraints:
 
 Hardware: 4× N300 boards. Open as N150 (MeshShape(1,1)) per the config — matches the existing reference.
 
-Expected outcome (from step 5 of the skill): top-5 ≥ 99%, top-100 = 100%. Lower top-1 (~95%) is expected from bf8 quantization.
+Expected outcome for this fixture: top-5 ≥ 99%, top-100 = 100%. Lower top-1 (~95%) is expected from bf8 quantization.
 
-Report back with (under 250 words):
+Report back with:
 - Files produced and where.
-- Teacher-forcing accuracy numbers (top-1 / top-5 / top-100, per-entry and aggregate).
-- Any deviations from the skill's instructions and why.
-- Anything in the skill that was unclear, wrong, or insufficient (this run is also a test of the skill itself).
+- Readiness accuracy numbers (top-1 / top-5 / top-100, per-entry and aggregate).
+- Important implementation choices, blockers, or deferred vLLM work.
+- Anything in the skill that was unclear, wrong, or insufficient.
 ```
 
 ---
@@ -57,9 +55,3 @@ rm -rf model_cache/$MODEL/   # if the run got far enough to cache
 ```
 
 Keep `tt/decoder.py`, `config.py`, and the two `__init__.py` files.
-
-## Permission mode
-
-The harness routes the subagent's tool prompts to the parent session. Flip the
-parent's permission mode to `bypassPermissions` (Shift+Tab or `/permissions`)
-before firing if you don't want to approve each Bash/Edit/Write call.
