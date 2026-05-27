@@ -105,34 +105,45 @@ class TtPixtralPatchConv:
             activation=None,
             deallocate_activation=True,
         )
+        self._image_input_tt: ttnn.Tensor | None = None
+        self._image_input_shape: tuple[int, int] | None = None
 
-    def forward(self, image: torch.Tensor) -> Tuple[ttnn.Tensor, int, int]:
-        """
-        Args:
-            image: torch [1, 3, H, W] bf16 (H,W must be multiples of patch_size)
-        Returns:
-            patches: ttnn [1, 1, num_patches, 1024] in TILE_LAYOUT, DRAM
-            h_patches, w_patches: int
-        """
+    def upload_image(self, image: torch.Tensor) -> Tuple[ttnn.Tensor, int, int]:
+        """Upload ``image`` to a persistent device buffer for trace replay."""
         assert image.ndim == 4 and image.shape[1] == VISION_NUM_CHANNELS
         H, W = image.shape[2], image.shape[3]
         assert H % self.patch_size == 0 and W % self.patch_size == 0
         h_patches = H // self.patch_size
         w_patches = W // self.patch_size
 
-        # NCHW [1, 3, H, W] → flat NHWC [1, 1, H*W, 3] (the layout ttnn.conv2d expects).
         x_host = image.to(torch.bfloat16).permute(0, 2, 3, 1).contiguous().reshape(1, 1, H * W, VISION_NUM_CHANNELS)
-        x = ttnn.from_torch(
-            x_host,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
+        if self._image_input_tt is None or self._image_input_shape != (H, W):
+            self._image_input_tt = ttnn.from_torch(
+                x_host,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            self._image_input_shape = (H, W)
+        else:
+            host_tt = ttnn.from_torch(
+                x_host,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            ttnn.copy_host_to_device_tensor(host_tt, self._image_input_tt)
+        return self._image_input_tt, h_patches, w_patches
+
+    def forward_device(self, image_tt: ttnn.Tensor, h_patches: int, w_patches: int) -> Tuple[ttnn.Tensor, int, int]:
+        """Patch conv on a pre-uploaded NHWC image tensor (trace-compatible)."""
+        H = h_patches * self.patch_size
+        W = w_patches * self.patch_size
 
         [out, [_out_h, _out_w], [self.weight, _]] = ttnn.conv2d(
-            input_tensor=x,
+            input_tensor=image_tt,
             weight_tensor=self.weight,
             bias_tensor=None,
             in_channels=VISION_NUM_CHANNELS,
@@ -155,9 +166,6 @@ class TtPixtralPatchConv:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # ttnn.conv2d output is [1, 1, num_patches, out_channels] but may be in
-        # ROW_MAJOR / sharded layout — normalise to interleaved TILE in DRAM
-        # for the downstream rms_norm.
         if ttnn.is_sharded(out):
             out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
         if out.layout != ttnn.TILE_LAYOUT:
@@ -165,6 +173,20 @@ class TtPixtralPatchConv:
         num_patches = h_patches * w_patches
         out = ttnn.reshape(out, [1, 1, num_patches, VISION_HIDDEN_SIZE])
         return out, h_patches, w_patches
+
+    def forward(self, image: torch.Tensor) -> Tuple[ttnn.Tensor, int, int]:
+        """
+        Args:
+            image: torch [1, 3, H, W] bf16 (H,W must be multiples of patch_size)
+        Returns:
+            patches: ttnn [1, 1, num_patches, 1024] in TILE_LAYOUT, DRAM
+            h_patches, w_patches: int
+        """
+        assert image.ndim == 4 and image.shape[1] == VISION_NUM_CHANNELS
+        H, W = image.shape[2], image.shape[3]
+        assert H % self.patch_size == 0 and W % self.patch_size == 0
+        image_tt, h_patches, w_patches = self.upload_image(image)
+        return self.forward_device(image_tt, h_patches, w_patches)
 
 
 # ── Single Pixtral block ───────────────────────────────────────────────────
@@ -278,6 +300,49 @@ class TtPixtralVisionTower:
             for i in range(num_layers)
         ]
 
+        self._rope_grid: tuple[int, int] | None = None
+        self._rope_ids_tt: ttnn.Tensor | None = None
+        self._cached_cos: ttnn.Tensor | None = None
+        self._cached_sin: ttnn.Tensor | None = None
+        self._forward_trace_id: int | None = None
+        self._features_out: ttnn.Tensor | None = None
+
+    def cache_rope_for_grid(self, h_patches: int, w_patches: int) -> None:
+        """Pre-upload position ids and cache cos/sin for a fixed patch grid (trace-safe)."""
+        grid = (h_patches, w_patches)
+        if self._rope_grid == grid:
+            return
+        position_ids = position_ids_from_grid(h_patches, w_patches)
+        seq_len = position_ids.numel()
+        self._rope_ids_tt = ttnn.as_tensor(
+            position_ids.to(torch.int32).reshape(1, -1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        self._cached_cos, self._cached_sin = self.rope.lookup_device(self._rope_ids_tt, seq_len)
+        self._rope_grid = grid
+
+    def forward_device(self, image_tt: ttnn.Tensor, h_patches: int, w_patches: int) -> Tuple[ttnn.Tensor, int, int]:
+        """
+        Device-only forward for trace capture/replay.
+
+        Requires ``cache_rope_for_grid`` for the same ``(h_patches, w_patches)``.
+        Does not deallocate cached RoPE tensors (safe for trace replay).
+        """
+        self.cache_rope_for_grid(h_patches, w_patches)
+        assert self._cached_cos is not None and self._cached_sin is not None
+
+        x, h_patches, w_patches = self.patch_conv.forward_device(image_tt, h_patches, w_patches)
+        x = _vision_rms_norm(x, self.ln_pre_w, self.compute_kernel_config)
+
+        for blk in self.blocks:
+            x = blk.forward(x, self._cached_cos, self._cached_sin)
+
+        return x, h_patches, w_patches
+
     def forward(self, image: torch.Tensor) -> Tuple[ttnn.Tensor, int, int]:
         """
         Args:
@@ -286,20 +351,22 @@ class TtPixtralVisionTower:
             features: ttnn [1, 1, num_patches, 1024] replicated on the mesh
             h_patches, w_patches: int — patch grid dimensions
         """
-        # Patch embed.
-        x, h_patches, w_patches = self.patch_conv.forward(image)
+        image_tt, h_patches, w_patches = self.patch_conv.upload_image(image)
+        return self.forward_device(image_tt, h_patches, w_patches)
 
-        # Pre-norm.
-        x = _vision_rms_norm(x, self.ln_pre_w, self.compute_kernel_config)
+    def capture_forward_trace(self, image_tt: ttnn.Tensor, h_patches: int, w_patches: int) -> ttnn.Tensor:
+        """Capture a replayable trace of ``forward_device`` (run once after JIT warmup)."""
+        self.cache_rope_for_grid(h_patches, w_patches)
+        ttnn.synchronize_device(self.mesh_device)
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        features_tt, _, _ = self.forward_device(image_tt, h_patches, w_patches)
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        self._forward_trace_id = trace_id
+        self._features_out = features_tt
+        return features_tt
 
-        # Build per-patch 2D RoPE lookup; this stays on device after lookup.
-        position_ids = position_ids_from_grid(h_patches, w_patches)
-        cos, sin = self.rope.lookup(position_ids)
-
-        # 24 attention/MLP blocks.
-        for blk in self.blocks:
-            x = blk.forward(x, cos, sin)
-
-        ttnn.deallocate(cos)
-        ttnn.deallocate(sin)
-        return x, h_patches, w_patches
+    def execute_forward_trace(self, blocking: bool = False) -> ttnn.Tensor:
+        """Replay the captured forward trace; returns the same output buffer as capture."""
+        assert self._forward_trace_id is not None and self._features_out is not None
+        ttnn.execute_trace(self.mesh_device, self._forward_trace_id, cq_id=0, blocking=blocking)
+        return self._features_out
