@@ -120,8 +120,15 @@ ttnn::Tensor unified_routed_expert_moe(
         // offset to DRAM tile indices for both x reads and output writes.
         // expert_outputs allocated with dispatched_buffer's shape/dtype;
         // each per-expert FFN call writes its [start_row,
-        // start_row+ceil_tile(count)) slice. Slices non-overlapping per
-        // expert_region_offsets / expert_token_counts contract.
+        // start_row+ceil_tile(count)) slice.
+        //
+        // CALLER CONTRACT: per-expert slices [region_offsets[gid],
+        // region_offsets[gid] + ceil_tile(counts[gid])) MUST be pairwise
+        // disjoint across the global experts a single chip touches. The
+        // composite cannot enforce this host-side without a host-device
+        // sync (region_offsets is device-resident); offset_cumsum is the
+        // producer of these offsets and is the right place to maintain the
+        // invariant. Overlapping slices => silent cross-expert corruption.
         auto expert_outputs = ttnn::empty(
             dispatched_buffer.logical_shape(),
             dispatched_buffer.dtype(),
@@ -158,7 +165,17 @@ ttnn::Tensor unified_routed_expert_moe(
     //       CB_OUT staging (L1 budget — the combined-page CB pushes the
     //       static CB region past the L1 allocator's buffer placement on
     //       the 256-expert / 32-per-chip case at large M).
-    auto expert_outputs = dispatched_buffer;
+    // Allocate a fresh output buffer rather than aliasing dispatched_buffer.
+    // Aliasing worked iff insert/extract touched strictly disjoint per-expert
+    // regions, but a single bug upstream (e.g. an overlapping region_offset
+    // from offset_cumsum) would silently corrupt the next iteration's
+    // extract input. Mirror the fused path's allocation pattern.
+    auto expert_outputs = ttnn::empty(
+        dispatched_buffer.logical_shape(),
+        dispatched_buffer.dtype(),
+        ttnn::TILE_LAYOUT,
+        dispatched_buffer.device(),
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
     for (uint32_t local_expert = 0; local_expert < experts_per_chip; ++local_expert) {
         auto tokens = ttnn::extract(
             dispatched_buffer,
