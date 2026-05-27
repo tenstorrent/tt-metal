@@ -1793,7 +1793,8 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     // tensors the CTA payload never carried tensor_shape in the first place (and
     // the device-side accessor doesn't read it), so the flag is a pure host-side
     // validation loosening and has no effect on the CTA/CRTA layout.
-    const bool dyn_shape = tensor_parameter.dynamic_tensor_shape && is_sharded;
+    const bool dyn_shape = tensor_parameter.advanced_options.has_value() &&
+                           tensor_parameter.advanced_options->dynamic_tensor_shape && is_sharded;
 
     tensor_accessor::ArgsConfig args_config;
     if (is_sharded) {
@@ -2414,11 +2415,12 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
 
     // Register TensorParameters with the program for ValidateProgramRunParams to consult at enqueue.
     for (const auto& tensor_parameter : spec.tensor_parameters) {
+        const bool dyn_shape =
+            tensor_parameter.advanced_options.has_value() && tensor_parameter.advanced_options->dynamic_tensor_shape;
+        const bool match_padded_only =
+            tensor_parameter.advanced_options.has_value() && tensor_parameter.advanced_options->match_padded_shape_only;
         program_impl->register_tensor_parameter(
-            tensor_parameter.unique_id,
-            tensor_parameter.spec,
-            tensor_parameter.dynamic_tensor_shape,
-            tensor_parameter.match_padded_shape_only);
+            tensor_parameter.unique_id, tensor_parameter.spec, dyn_shape, match_padded_only);
     }
 
     // Create DataflowBuffers and build name -> ID map.

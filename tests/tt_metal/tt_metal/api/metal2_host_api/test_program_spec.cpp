@@ -2995,7 +2995,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedKernelHashStableAcross
         TensorParameter tp{
             .unique_id = "input_tensor",
             .spec = tt::tt_metal::TensorSpec(std::move(shape), std::move(tensor_layout)),
-            .dynamic_tensor_shape = true,
+            .advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true},
         };
         spec.tensor_parameters = {tp};
         BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
@@ -3021,7 +3021,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_ShardedKernelHashStableAcrossShap
     auto make_spec = [](const tt::tt_metal::Shape& shape, bool dynamic) {
         ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
         auto tp = MakeShardedTensorParameter("input_tensor", shape, {32, 32}, /*num_cores=*/2);
-        tp.dynamic_tensor_shape = dynamic;
+        tp.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = dynamic};
         spec.tensor_parameters = {tp};
         BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
         return spec;
@@ -3055,7 +3055,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_ShardedBindingTracksShapeCRTASlot
     // directly to be robust against BDS-internal flattening conventions.
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto tp = MakeShardedTensorParameter("input_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, 2);
-    tp.dynamic_tensor_shape = true;
+    tp.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {tp};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -3077,7 +3077,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedBindingHasNoRuntimeFie
     // demotion, so num_runtime_field_crta_words should remain zero.
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto tp = MakeMinimalTensorParameter("input_tensor");
-    tp.dynamic_tensor_shape = true;
+    tp.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {tp};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -3116,7 +3116,7 @@ TEST_F(ProgramSpecTestGen1, KernelCrtaLayout_AllThreeSectionsConsistent) {
     auto plain_tp = MakeMinimalTensorParameter("plain_tensor");
     auto dyn_tp =
         MakeShardedTensorParameter("dyn_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2);
-    dyn_tp.dynamic_tensor_shape = true;
+    dyn_tp.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {plain_tp, dyn_tp};
     BindTensorParameterToKernel(spec.kernels[0], "plain_tensor", "plain_ta");
     BindTensorParameterToKernel(spec.kernels[0], "dyn_tensor", "dyn_ta");
