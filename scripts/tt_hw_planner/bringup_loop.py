@@ -236,6 +236,9 @@ def _make_arg_for(arg_name, *, model, torch_module):
     if arg_name in ("hidden_states", "inputs_embeds", "embeddings"):
         shape, _ = _detect_hidden_shape(torch_module, model=model)
         return torch.randn(*shape).to(md)
+    if arg_name in ("x", "features", "input", "inputs", "hidden_states_in"):
+        shape, _ = _detect_hidden_shape(torch_module, model=model)
+        return torch.randn(*shape).to(md)
     if arg_name in ("input_ids",):
         # Use small non-zero token ids so embeddings, positional
         # embeddings, and norm layers see realistic activations

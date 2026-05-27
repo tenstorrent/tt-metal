@@ -149,6 +149,8 @@ def _arg_for(
         return pixel_values
     if name in ("hidden_states", "inputs_embeds", "embeddings"):
         return torch.randn(1, 64, hidden_size)
+    if name in ("x", "features", "input", "inputs", "hidden_states_in"):
+        return torch.randn(1, 64, hidden_size)
     if name == "input_ids":
         vocab = getattr(cfg, "vocab_size", None) or 32000
         return torch.randint(low=1, high=min(vocab, 1000), size=(1, 64), dtype=torch.long)
