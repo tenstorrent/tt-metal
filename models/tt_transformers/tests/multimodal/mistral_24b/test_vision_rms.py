@@ -76,7 +76,6 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device=device),
     )
 
-    mode = "prefill"
     tt_output = tt_model(tt_input, mode=mode)
 
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=-1))[
