@@ -148,6 +148,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     Tensor* stats_dram_tensor = tensor_return_value.size() > 1 ? &tensor_return_value[1] : nullptr;
     const auto& input_tensor = tensor_args.input;
     const auto& weight = tensor_args.weight;
+    const auto& bias = tensor_args.bias;
     const auto& trans_mat = tensor_args.transformation_mat;
     const auto& rope_cos = tensor_args.rope_cos;
     const auto& rope_sin = tensor_args.rope_sin;
@@ -165,6 +166,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const uint32_t head_dim_tiles = head_dim / TILE_WIDTH;
 
     const bool has_weight = weight.has_value();
+    const bool has_bias = bias.has_value();
     const bool fuse_rope = trans_mat.has_value() && rope_cos.has_value() && rope_sin.has_value();
 
     // Per-head RoPE: cos/sin shape[1] == num_heads_per_device gives each head
@@ -399,6 +401,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     constexpr uint32_t stats_packed_local_cb_id = tt::CBIndex::c_17;
     constexpr uint32_t stats_packed_gathered_cb_id = tt::CBIndex::c_18;
     constexpr uint32_t stats_transposed_gathered_cb_id = tt::CBIndex::c_19;
+    constexpr uint32_t bias_cb_id = tt::CBIndex::c_20;
 
     // Double-buffer input_cb (Phase 5): reader can fill chunk N+1 while compute
     // is in chunk N's post phase. Cumulative cb_wait_front in compute (Phase 4)
@@ -439,6 +442,11 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         create_cb(weight_cb_id, program, worker_core_set, bf16_tile_size, num_tile_cols, bf16_format);
     } else {
         create_cb(weight_cb_id, program, worker_core_set, bf16_tile_size, 1, bf16_format);
+    }
+    if (has_bias) {
+        create_cb(bias_cb_id, program, worker_core_set, bf16_tile_size, num_tile_cols, bf16_format);
+    } else {
+        create_cb(bias_cb_id, program, worker_core_set, bf16_tile_size, 1, bf16_format);
     }
 
     create_cb(reduce_scalar_sum_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
@@ -515,10 +523,17 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         chunk_size_rows,
         static_cast<uint32_t>(per_head_rope),
         rope_seqlen_tiles,
+        bias_cb_id,
+        static_cast<uint32_t>(has_bias),
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     if (has_weight) {
         TensorAccessorArgs(weight.value().buffer()).append_to(reader_compile_args);
+    } else {
+        TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);  // dummy
+    }
+    if (has_bias) {
+        TensorAccessorArgs(bias.value().buffer()).append_to(reader_compile_args);
     } else {
         TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);  // dummy
     }
@@ -673,6 +688,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         stats_transposed_gathered_cb_id,
         static_cast<uint32_t>(use_mux ? 1u : 0u),  // packed_ag_enabled
         static_cast<uint32_t>(per_head_rope),
+        bias_cb_id,
+        static_cast<uint32_t>(has_bias),
     };
 
     KernelHandle compute_kernel_id = CreateKernel(
@@ -726,6 +743,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const uint32_t input_addr = input_tensor.buffer()->address();
     const uint32_t output_addr = output_tensor.buffer()->address();
     const uint32_t weight_addr = has_weight ? weight.value().buffer()->address() : 0;
+    const uint32_t bias_addr = has_bias ? bias.value().buffer()->address() : 0;
     const uint32_t trans_mat_addr = fuse_rope ? trans_mat.value().buffer()->address() : 0;
     const uint32_t rope_cos_addr = fuse_rope ? rope_cos.value().buffer()->address() : 0;
     const uint32_t rope_sin_addr = fuse_rope ? rope_sin.value().buffer()->address() : 0;
@@ -818,6 +836,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         std::vector<uint32_t> reader_rt_args = {
             input_addr,
             weight_addr,
+            bias_addr,
             trans_mat_addr,
             rope_cos_addr,
             rope_sin_addr,
@@ -931,6 +950,7 @@ void WanFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
     const uint32_t input_addr = tensor_args.input.buffer()->address();
     const uint32_t output_addr = tensor_return_value.at(0).buffer()->address();
     const uint32_t weight_addr = tensor_args.weight.has_value() ? tensor_args.weight.value().buffer()->address() : 0;
+    const uint32_t bias_addr = tensor_args.bias.has_value() ? tensor_args.bias.value().buffer()->address() : 0;
     const uint32_t trans_mat_addr =
         tensor_args.transformation_mat.has_value() ? tensor_args.transformation_mat.value().buffer()->address() : 0;
     const uint32_t rope_cos_addr =
@@ -956,9 +976,10 @@ void WanFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
             auto& reader_args = reader_runtime_args_by_core.at(core.x).at(core.y);
             reader_args[0] = input_addr;
             reader_args[1] = weight_addr;
-            reader_args[2] = trans_mat_addr;
-            reader_args[3] = rope_cos_addr;
-            reader_args[4] = rope_sin_addr;
+            reader_args[2] = bias_addr;
+            reader_args[3] = trans_mat_addr;
+            reader_args[4] = rope_cos_addr;
+            reader_args[5] = rope_sin_addr;
 
             auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
             writer_args[0] = output_addr;
