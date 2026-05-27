@@ -12,7 +12,7 @@ the actual ported models that the porting pipeline produces.
 The shim is a thin wrapper around the existing tt-transformers
 `Generator`. The tt-transformers stack is parameterised by env vars
 (`HF_MODEL`, `MESH_DEVICE`); this shim sets them and exposes the
-`models.common.readiness_check.contract.GeneratorBase` surface so the
+`models.common.readiness_check.contract.Generator` surface so the
 readiness runner can drive the model the same way it drives any newly
 ported model.
 
@@ -30,14 +30,12 @@ from typing import Any, List, Optional
 
 import torch
 
-from models.common.readiness_check.contract import GeneratorBase, NextInputFn
+from models.common.readiness_check.contract import Generator, NextInputFn
 
 #: tt_transformers' `HF_MODEL` env var accepts either a HuggingFace repo id
-#: or a local checkpoint directory. We default to the local path so the
-#: shim works on boxes without HF authentication (e.g. CI). Override via
-#: build_generator(..., hf_model_id=...) when a different checkpoint
-#: location is desired.
-DEFAULT_HF_MODEL_ID = "/proj_sw/user_dev/llama31-8b-data/Llama-3.1-8B-Instruct"
+#: or a local checkpoint directory. Override via build_generator(...,
+#: hf_model_id=...) when a different checkpoint location is desired.
+DEFAULT_HF_MODEL_ID = "meta-llama/Llama-3.1-8B-Instruct"
 DEFAULT_MESH_DEVICE = "N150"
 
 # tt_transformers requires prefill length to be a power of two; the floor is
@@ -70,7 +68,7 @@ def _set_env_for_tt_transformers(hf_model_id: str, mesh_device_label: str) -> No
         os.environ["TT_CACHE_PATH"] = str(cache_dir)
 
 
-class Llama31_8BReadinessGenerator(GeneratorBase):
+class Llama31_8BReadinessGenerator(Generator):
     """
     Readiness-check generator for Llama 3.1 8B Instruct on a single-device
     mesh (default N150). Internally constructs the tt-transformers
@@ -140,7 +138,7 @@ class Llama31_8BReadinessGenerator(GeneratorBase):
             tokenizer=self._model_args.tokenizer,
         )
 
-        # GeneratorBase contract surface.
+        # Generator contract surface.
         self.tokenizer = self._model_args.tokenizer
 
         # Internal state to track whether the next decode step is the first
@@ -163,7 +161,7 @@ class Llama31_8BReadinessGenerator(GeneratorBase):
         does its own power-of-two padding internally, so we must not pre-pad."""
         return torch.tensor([list(prompt_token_ids)], dtype=torch.int32)
 
-    # --- GeneratorBase low-level API ------------------------------------
+    # --- Generator low-level API ------------------------------------
 
     def prefill_forward(
         self,
@@ -182,25 +180,87 @@ class Llama31_8BReadinessGenerator(GeneratorBase):
             return_all_logits: If True, return logits at all positions [batch, seq_len, vocab].
                              If False (default), return logits at last position [batch, 1, vocab].
         """
-        if return_all_logits:
-            # For batch prefill check: need logits at all positions
-            # tt_transformers doesn't expose this directly, so we need to handle it
-            raise NotImplementedError(
-                "return_all_logits=True is not yet implemented for the Llama shim. "
-                "The underlying tt_transformers Generator.prefill_forward_text only returns "
-                "last-position logits. To support batch prefill checks, this would need to "
-                "either call the model directly or extend tt_transformers' Generator API."
+        if not return_all_logits:
+            # Standard prefill: return last-position logits
+            return self._inner.prefill_forward_text(
+                tokens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=prompt_lens,
+                sampling_params=None,
+                enable_trace=kwargs.get("enable_trace", True),
+                warmup_prefill=kwargs.get("warmup_prefill", False),
             )
 
-        return self._inner.prefill_forward_text(
-            tokens,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            prompt_lens=prompt_lens,
-            sampling_params=None,
-            enable_trace=kwargs.get("enable_trace", True),
-            warmup_prefill=kwargs.get("warmup_prefill", False),
-        )
+        # return_all_logits=True: tt_transformers doesn't support this directly,
+        # so we simulate it by doing prefill + decode at each position.
+        # This is inefficient but acceptable for the shim since it's only used
+        # for testing the check infrastructure. We use the shim's internal
+        # page_table and kv_cache since we're managing state internally.
+        batch_size = tokens.shape[0]
+        if batch_size != 1:
+            raise NotImplementedError("return_all_logits=True only supports batch_size=1")
+
+        seq_len = prompt_lens[0]
+        vocab_size = self._model_args.vocab_size
+
+        # Reset KV cache for clean state
+        self.reset()
+
+        # Use shim's internal page_table and kv_cache
+        internal_page_table = self._page_table
+        internal_kv_cache = self._tt_kv_cache
+
+        # Do prefill up to last position to populate KV cache
+        if seq_len > 1:
+            prefill_tokens = tokens[:, : seq_len - 1]
+            self._inner.prefill_forward_text(
+                prefill_tokens,
+                page_table=internal_page_table,
+                kv_cache=internal_kv_cache,
+                prompt_lens=[seq_len - 1],
+                sampling_params=None,
+                enable_trace=False,
+                warmup_prefill=False,
+            )
+
+        # Now decode one token at a time to get logits at each position
+        all_logits = []
+        for pos in range(seq_len):
+            if pos == 0:
+                # First position: single-token prefill
+                logits = self._inner.prefill_forward_text(
+                    tokens[:, :1],
+                    page_table=internal_page_table,
+                    kv_cache=internal_kv_cache,
+                    prompt_lens=[1],
+                    sampling_params=None,
+                    enable_trace=False,
+                    warmup_prefill=False,
+                )
+            else:
+                # Subsequent positions: decode
+                current_token = tokens[:, pos : pos + 1]
+                start_pos = torch.tensor([pos], dtype=torch.int32)
+                result = self._inner.decode_forward(
+                    current_token,
+                    start_pos,
+                    page_table=internal_page_table,
+                    kv_cache=internal_kv_cache,
+                    enable_trace=False,
+                )
+                # decode_forward may return (logits, log_probs) tuple - unwrap if needed
+                logits = result[0] if isinstance(result, tuple) else result
+
+            # Convert to torch and append
+            if isinstance(logits, torch.Tensor):
+                logits_host = logits.squeeze(0)  # Already torch, just squeeze
+            else:
+                logits_host = self._ttnn.to_torch(logits).squeeze(0)  # Convert from ttnn
+            all_logits.append(logits_host)
+
+        # Stack all logits: [seq_len, vocab] -> [1, seq_len, vocab]
+        return torch.stack(all_logits, dim=0).unsqueeze(0)
 
     def decode_forward(
         self,
@@ -222,7 +282,7 @@ class Llama31_8BReadinessGenerator(GeneratorBase):
             reset_batch=kwargs.get("reset_batch", False),
         )
 
-    # --- GeneratorBase high-level API -----------------------------------
+    # --- Generator high-level API -----------------------------------
 
     def generate(
         self,
@@ -282,7 +342,7 @@ class Llama31_8BReadinessGenerator(GeneratorBase):
 
         return predictions
 
-    # --- GeneratorBase lifecycle ---------------------------------------
+    # --- Generator lifecycle ---------------------------------------
 
     def reset(self) -> None:
         ttnn = self._ttnn
