@@ -1159,3 +1159,59 @@ registry:
     tt_kmd: "TT-KMD 2.6.0-rc1"
     tt_smi: "4.0.0"
     tt_firmware: "19.7.1.0"
+
+  - trace_id: 96
+    status: draft
+    models: [llama-3.1-8b-instruct]
+    hardware: {board_type: Blackhole, device_series: p100a, card_count: 1}
+    trace_uid: 84416194-2c06-4228-bb8f-d3a3bd06defb
+    tt_metal_sha: f19f708f6442c3f3a35cc2c88dcb0f7616ea9e42
+    config_count: 307
+    loaded_at: '2026-05-27'
+    notes: ''
+    pytest_args: '-k batch-1 or batch-32 or long-context-16k or reasoning-1'
+    tt_kmd: "TT-KMD 2.4.1"
+    tt_smi: "5.2.0"
+    tt_firmware: "18.12.1.0"
+
+  - trace_id: 97
+    status: draft
+    models: [whisper_4]
+    hardware: {board_type: Blackhole, device_series: p100a, card_count: 1}
+    trace_uid: b6fbc288-8407-478f-814f-65c120cdd28f
+    tt_metal_sha: f19f708f6442c3f3a35cc2c88dcb0f7616ea9e42
+    config_count: 109
+    loaded_at: '2026-05-27'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.4.1"
+    tt_smi: "5.2.0"
+    tt_firmware: "18.12.1.0"
+
+  - trace_id: 98
+    status: draft
+    models: [informer]
+    hardware: {board_type: Blackhole, device_series: p100a, card_count: 1}
+    trace_uid: 90811f64-7d9e-4f2e-9345-b9110fb0d567
+    tt_metal_sha: f19f708f6442c3f3a35cc2c88dcb0f7616ea9e42
+    config_count: 484
+    loaded_at: '2026-05-27'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.4.1"
+    tt_smi: "5.2.0"
+    tt_firmware: "18.12.1.0"
+
+  - trace_id: 99
+    status: draft
+    models: [resnet50_3]
+    hardware: {board_type: Blackhole, device_series: p100a, card_count: 1}
+    trace_uid: 1ace1c92-b292-456d-b8ca-752b675352d4
+    tt_metal_sha: f19f708f6442c3f3a35cc2c88dcb0f7616ea9e42
+    config_count: 136
+    loaded_at: '2026-05-27'
+    notes: ''
+    pytest_args: null
+    tt_kmd: "TT-KMD 2.4.1"
+    tt_smi: "5.2.0"
+    tt_firmware: "18.12.1.0"
