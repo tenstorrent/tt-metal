@@ -270,7 +270,7 @@ def compute_pinned_validation_matrix(
     hardware_modules = defaultdict(list)
     unmatched_modules = []
     for module in vector_modules:
-        parsed = parse_hardware_suffix(module)
+        parsed = parse_hardware_suffix(strip_mesh_suffix(module))
         if parsed is None:
             unmatched_modules.append(module)
         else:
