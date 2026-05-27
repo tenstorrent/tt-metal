@@ -36,7 +36,7 @@ Use previous single-chip implementation as the baseline: optimized if it exists 
 
 Read the baseline code and report first. Identify layer kinds, tested shapes, sequence limits, layouts, precision, cache behavior, trace behavior, and latency.
 
-Choose a strategy for the hardware. For 1D meshes up to 8 chips, 1D tensor parallelism the starting point. For Galaxy-class meshes, make a model-specific 2D plan. For dense models this might be using 2D matmuls, for MoE models calculate whether we can afford to replicate the expert weights to allow multiple active experts to run in parallel ala the gpt_oss implementation - but when making this decision take into account that we will need to be able to do so for all the layers in the model, not just for one decoder layer!
+Choose a strategy for the hardware. For 1D meshes up to 8 chips, 1D tensor parallelism the starting point. For Galaxy-class meshes, make a model-specific 2D plan. For dense models this might be using 2D matmuls. For MoE models, make the routed decode pipeline part of the mesh plan: choose the dispatch axis, replicated or TP axis, expert mapping, packed-weight placement, combine/reduce path, and whether the model can afford expert replication across all layers. Prefer the `all_to_all_dispatch_metadata` + `moe_compute` path or the common MoE decode wrapper when it fits.
 
 Keep the residual input/output layout chainable across decoder layers. Your decoder's output and input formats should be the same.
 
