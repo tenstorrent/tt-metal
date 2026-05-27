@@ -200,7 +200,7 @@ class Gemma4ModelArgs:
 
     def get_warmup_prefill_supported_seq_lens(self):
         """Sequence lengths to compile during prefill warmup."""
-        return [32, 128, 512]
+        return [32, 128, 512, 1024, 2048]
 
     @staticmethod
     def resolve_model_cache_path(model_path):

@@ -23,7 +23,7 @@ def _patch_model_args(model_args, mesh_device, max_batch_size, max_seq_len, mode
     model_args.max_seq_len = max_seq_len
     model_args.max_context_len = max_seq_len
     model_args.max_prefill_chunk_size = max_seq_len
-    model_args.trace_prefill_supported_seq_lens = [128, 512]
+    model_args.trace_prefill_supported_seq_lens = [128, 512, 1024, 2048]
     model_args.mesh_device = mesh_device
     model_args.device_name = determine_device_name(mesh_device)
     model_args.model_name = model_path
