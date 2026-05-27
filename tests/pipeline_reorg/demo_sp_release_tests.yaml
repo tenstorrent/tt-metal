@@ -123,7 +123,7 @@
   model: deepseek_decode
   skus:
     bh_galaxy:
-      timeout: 20
+      timeout: 40
   owner_id: U0ALAR9B78T # Brayden Zhang
   team: models
 
