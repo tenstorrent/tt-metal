@@ -11,6 +11,7 @@ from skills.orchestrator.lib.state import (
     SchemaError,
     bootstrap,
     load_state,
+    render_log,
     resume_normalize,
     save_state,
 )
@@ -275,3 +276,254 @@ def test_resume_normalize_returns_same_object():
     state = bootstrap("Qwen/Qwen3-TTS-12Hz-1.7B-Base", "n150", "wormhole_b0")
     out = resume_normalize(state)
     assert out is state
+
+
+# ---------------------------------------------------------------------------
+# render_log
+# ---------------------------------------------------------------------------
+
+
+def test_render_log_matches_golden():
+    """A representative state renders to a known markdown document, byte-for-byte.
+
+    This is the load-bearing renderer test: it pins down the exact column layout,
+    cell-formatting rules (em dash for missing, 6-decimal PCC, last_error vs
+    notes selection), and section ordering. The other render_log tests cover
+    individual edge cases; this one fixes the overall shape.
+    """
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    # Pin timestamps so the golden is deterministic across machines.
+    state["started_at"] = "2026-05-27T14:00:00Z"
+    state["updated_at"] = "2026-05-27T14:00:00Z"
+    state["components"] = [
+        {
+            "name": "RMSNorm",
+            "kind": "norm",
+            "reference_impl": "models/common/rmsnorm.py",
+            "depends_on": [],
+            "reference": {"status": "done", "pcc": 0.999998, "attempts": 1, "notes": "matches HF"},
+            "ttnn": {"status": "done", "pcc": 0.999985, "attempts": 1},
+            "debug": {"status": "n/a"},
+            "optimization": {"status": "pending"},
+        },
+        {
+            "name": "Attention",
+            "kind": "attention",
+            "reference_impl": "models/demos/llama3_70b_galaxy/tt/llama_attention.py",
+            "depends_on": ["RMSNorm"],
+            "host_resident": {"allowed": False, "justification": None, "reference_link": None},
+            "reference": {"status": "done", "pcc": 0.9999, "attempts": 1},
+            "ttnn": {"status": "failing", "pcc": 0.81, "attempts": 3, "last_error": "QK-norm mismatch"},
+            "debug": {"status": "in_progress", "attempts": 1, "notes": "K matrix amplified by k_norm"},
+            "optimization": {"status": "blocked", "blocked_on": "ttnn"},
+        },
+    ]
+    state["tick_log"] = [
+        {"tick": 1, "ts": "2026-05-27T14:00:10Z", "action": "architecture", "result": "ok"},
+        {"tick": 2, "ts": "2026-05-27T14:01:00Z", "action": "reference[RMSNorm,Attention]", "result": "ok"},
+    ]
+
+    golden = (
+        "# BRINGUP LOG: Acme/Foo-1B\n"
+        "\n"
+        "**Model:** `Acme/Foo-1B`\n"
+        "**Slug:** `acme_foo_1b`\n"
+        "**Target Device:** n150 (wormhole_b0)\n"
+        "**Started:** 2026-05-27T14:00:00Z\n"
+        "**Updated:** 2026-05-27T14:00:00Z\n"
+        "\n"
+        "## Block Status\n"
+        "\n"
+        "| Block | Phase | Status | PCC | Attempts | Notes |\n"
+        "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+        "| RMSNorm | reference | done | 0.999998 | 1 | matches HF |\n"
+        "| RMSNorm | ttnn | done | 0.999985 | 1 |  |\n"
+        "| RMSNorm | debug | n/a | — | 0 |  |\n"
+        "| RMSNorm | optimization | pending | — | 0 |  |\n"
+        "| Attention | reference | done | 0.999900 | 1 |  |\n"
+        "| Attention | ttnn | failing | 0.810000 | 3 | QK-norm mismatch |\n"
+        "| Attention | debug | in_progress | — | 1 | K matrix amplified by k_norm |\n"
+        "| Attention | optimization | blocked | — | 0 |  |\n"
+        "\n"
+        "## Recent Ticks\n"
+        "\n"
+        "- tick 1 (2026-05-27T14:00:10Z): architecture — ok\n"
+        "- tick 2 (2026-05-27T14:01:00Z): reference[RMSNorm,Attention] — ok\n"
+        "\n"
+        "## Host-Resident Exceptions\n"
+        "\n"
+        "_None._\n"
+    )
+
+    actual = render_log(state)
+    if actual != golden:
+        # Helpful diff output when iterating on the renderer.
+        import difflib
+
+        diff = "\n".join(
+            difflib.unified_diff(
+                golden.splitlines(),
+                actual.splitlines(),
+                fromfile="golden",
+                tofile="actual",
+                lineterm="",
+            )
+        )
+        raise AssertionError(f"render_log output diverged from golden:\n{diff}")
+
+
+def test_render_log_handles_missing_phases():
+    """A component with only `reference` set still produces one row per phase.
+
+    Missing phase keys render as em dash for status/pcc and 0 for attempts.
+    Every PHASE_NAMES entry must appear exactly once in the table for the
+    component.
+    """
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    state["components"] = [
+        {
+            "name": "PartialBlock",
+            "reference": {"status": "done", "pcc": 0.999, "attempts": 1},
+            # ttnn / debug / optimization intentionally absent
+        }
+    ]
+
+    output = render_log(state)
+
+    # Each phase name appears exactly once (in its own row).
+    for phase in ("reference", "ttnn", "debug", "optimization"):
+        rows_with_phase = [
+            ln for ln in output.splitlines() if ln.startswith("| PartialBlock |") and f"| {phase} |" in ln
+        ]
+        assert len(rows_with_phase) == 1, f"phase {phase!r} should appear in exactly one row; got {rows_with_phase!r}"
+
+    # Missing phases render em dash / 0.
+    assert "| PartialBlock | ttnn | — | — | 0 |  |" in output
+    assert "| PartialBlock | debug | — | — | 0 |  |" in output
+    assert "| PartialBlock | optimization | — | — | 0 |  |" in output
+
+
+def test_render_log_empty_components():
+    """A bootstrapped state with no components produces an empty table body.
+
+    The section headings and the table header row are still present; the
+    Recent Ticks placeholder reads ``_No ticks yet._`` and the Host-Resident
+    placeholder reads ``_None._``.
+    """
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    output = render_log(state)
+
+    assert "## Block Status" in output
+    assert "| Block | Phase | Status | PCC | Attempts | Notes |" in output
+    # No data rows: no line starts with "| " followed by anything other than
+    # the header / alignment row.
+    data_rows = [
+        ln
+        for ln in output.splitlines()
+        if ln.startswith("| ") and not ln.startswith("| Block ") and not ln.startswith("| :--- ")
+    ]
+    assert data_rows == [], f"expected no data rows, got {data_rows!r}"
+
+    assert "## Recent Ticks" in output
+    assert "_No ticks yet._" in output
+
+    assert "## Host-Resident Exceptions" in output
+    assert "_None._" in output
+
+
+def test_render_log_pipe_in_notes_escaped():
+    """A pipe in notes must be backslash-escaped so it doesn't break the table."""
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    state["components"] = [
+        {
+            "name": "WeirdBlock",
+            "reference": {"status": "done", "pcc": 0.9999, "attempts": 1, "notes": "a|b"},
+            "ttnn": {"status": "pending"},
+            "debug": {"status": "pending"},
+            "optimization": {"status": "pending"},
+        }
+    ]
+
+    output = render_log(state)
+
+    assert "a\\|b" in output, "pipe in notes should be escaped as a\\|b"
+    # And the raw `a|b` must NOT appear unescaped in the row — check by looking
+    # for it without the preceding backslash.
+    for ln in output.splitlines():
+        if "WeirdBlock" in ln and "reference" in ln:
+            # The escaped form contains "a\|b"; we want to confirm there is no
+            # unescaped "a|b" substring (which would mean we forgot the backslash).
+            assert "a\\|b" in ln
+            assert "a|b" not in ln.replace("a\\|b", "")
+
+
+def test_render_log_tick_log_truncated_to_10():
+    """With 15 tick entries, only the most recent 10 (ticks 6..15) are shown."""
+    state = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    state["tick_log"] = [
+        {"tick": i, "ts": f"2026-05-27T14:{i:02d}:00Z", "action": "x", "result": "ok"} for i in range(1, 16)
+    ]
+
+    output = render_log(state)
+
+    # Window boundaries are present.
+    assert "tick 6" in output
+    assert "tick 15" in output
+    # Entries outside the window are not.
+    assert "tick 1 " not in output  # trailing space avoids matching "tick 10"/"tick 11"
+    assert "tick 1:" not in output
+    assert "tick 5 " not in output
+    assert "tick 5:" not in output
+
+
+def test_render_log_host_resident_listed():
+    """Components with host_resident.allowed=True are listed; otherwise _None._.
+
+    Two states: one with an exception component, one without. We check both
+    branches of the renderer in a single test so the contract is fully pinned.
+    """
+    # Case 1: a qualifying component.
+    state_a = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    state_a["components"] = [
+        {
+            "name": "ConvDecoder",
+            "host_resident": {
+                "allowed": True,
+                "justification": "Conv too large for L1",
+                "reference_link": "models/foo/decoder.py",
+            },
+            "reference": {"status": "done"},
+            "ttnn": {"status": "n/a"},
+            "debug": {"status": "n/a"},
+            "optimization": {"status": "n/a"},
+        }
+    ]
+    output_a = render_log(state_a)
+    # Section appears with a bullet for the exception.
+    assert "## Host-Resident Exceptions" in output_a
+    assert "ConvDecoder" in output_a
+    assert "Conv too large for L1" in output_a
+    assert "models/foo/decoder.py" in output_a
+    # Sanity: the _None._ placeholder must NOT appear when there IS an exception.
+    # (The Host-Resident section is the only one that can produce it.)
+    assert "_None._" not in output_a
+
+    # Case 2: a component with host_resident.allowed = False does NOT qualify.
+    state_b = bootstrap("Acme/Foo-1B", "n150", "wormhole_b0")
+    state_b["components"] = [
+        {
+            "name": "RegularBlock",
+            "host_resident": {"allowed": False, "justification": None, "reference_link": None},
+            "reference": {"status": "done"},
+            "ttnn": {"status": "done"},
+            "debug": {"status": "n/a"},
+            "optimization": {"status": "pending"},
+        }
+    ]
+    output_b = render_log(state_b)
+    assert "## Host-Resident Exceptions" in output_b
+    assert "_None._" in output_b
+    # The block name itself can still appear in the table; that's fine. We're
+    # only checking the Host-Resident section reads _None._.
+    hr_section = output_b.split("## Host-Resident Exceptions", 1)[1]
+    assert "RegularBlock" not in hr_section

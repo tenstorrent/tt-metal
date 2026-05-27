@@ -10,6 +10,7 @@ The state file is the source of truth for orchestrator progress; see
 - `save_state(path, state)`: validate + atomic write.
 - `bootstrap(model_id, device, arch_name)`: build a fresh skeleton state.
 - `resume_normalize(state)`: make a state safe to resume after a crash.
+- `render_log(state)`: format the state as a BRINGUP_LOG.md markdown document.
 """
 
 from __future__ import annotations
@@ -196,3 +197,131 @@ def resume_normalize(state: dict) -> dict:
         device_lock["held_since"] = None
 
     return state
+
+
+# ---------------------------------------------------------------------------
+# render_log: state -> BRINGUP_LOG.md markdown
+# ---------------------------------------------------------------------------
+
+# Em dash used to render missing/None scalar cells (status, pcc) in the table.
+# A plain "-" would conflict with markdown's table-alignment row syntax and
+# arguably look like a typo; the em dash reads as "intentionally empty".
+_EM_DASH = "—"
+
+
+def _escape_cell(text: str) -> str:
+    """Escape characters that break a markdown table cell.
+
+    - ``|`` becomes ``\\|`` so it doesn't terminate the cell.
+    - Newlines collapse to a single space so the row stays on one line.
+    """
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
+def _fmt_pcc(pcc) -> str:
+    """Render a PCC value with 6 decimal places, or em dash if absent."""
+    if pcc is None:
+        return _EM_DASH
+    return f"{pcc:.6f}"
+
+
+def _fmt_notes(phase_dict: dict) -> str:
+    """Pick the notes cell for a phase row.
+
+    For failing/blocked phases, prefer ``last_error`` (the operator wants to
+    see *why* it's stuck). For everything else fall back to ``notes``. Returns
+    empty string when neither is present; callers feed the result through
+    ``_escape_cell``.
+    """
+    status = phase_dict.get("status")
+    if status in ("failing", "blocked"):
+        text = phase_dict.get("last_error") or phase_dict.get("notes") or ""
+    else:
+        text = phase_dict.get("notes") or ""
+    return text
+
+
+def render_log(state: dict) -> str:
+    """Render ``state`` as a BRINGUP_LOG.md markdown document.
+
+    Pure function: no I/O, no mutation of ``state``. The output ends with a
+    single trailing newline so writing it directly to a file produces a
+    POSIX-clean file with no trailing blank lines.
+
+    Layout (top to bottom): header block, ``## Block Status`` table with one
+    row per ``(component, phase)`` pair iterated in component order then
+    ``PHASE_NAMES`` order, ``## Recent Ticks`` (last 10 tick_log entries,
+    chronological), and ``## Host-Resident Exceptions`` (components flagged
+    with ``host_resident.allowed = True``, or ``_None._`` if none).
+    """
+    lines = []
+
+    # --- Header ---
+    lines.append(f"# BRINGUP LOG: {state['model_id']}")
+    lines.append("")
+    lines.append(f"**Model:** `{state['model_id']}`")
+    lines.append(f"**Slug:** `{state['model_slug']}`")
+    lines.append(f"**Target Device:** {state['device']} ({state['arch_name']})")
+    lines.append(f"**Started:** {state['started_at']}")
+    lines.append(f"**Updated:** {state['updated_at']}")
+    lines.append("")
+
+    # --- Block Status table ---
+    lines.append("## Block Status")
+    lines.append("")
+    lines.append("| Block | Phase | Status | PCC | Attempts | Notes |")
+    lines.append("| :--- | :--- | :--- | :--- | :--- | :--- |")
+    for component in state["components"]:
+        name = component.get("name", "")
+        for phase in PHASE_NAMES:
+            phase_dict = component.get(phase)
+            if not isinstance(phase_dict, dict):
+                status_cell = _EM_DASH
+                pcc_cell = _EM_DASH
+                attempts_cell = "0"
+                notes_cell = ""
+            else:
+                status_cell = phase_dict.get("status") or _EM_DASH
+                pcc_cell = _fmt_pcc(phase_dict.get("pcc"))
+                attempts_cell = str(phase_dict.get("attempts", 0))
+                notes_cell = _escape_cell(_fmt_notes(phase_dict))
+            lines.append(f"| {name} | {phase} | {status_cell} | {pcc_cell} | {attempts_cell} | {notes_cell} |")
+    lines.append("")
+
+    # --- Recent Ticks ---
+    lines.append("## Recent Ticks")
+    lines.append("")
+    tick_log = state.get("tick_log") or []
+    if not tick_log:
+        lines.append("_No ticks yet._")
+    else:
+        for entry in tick_log[-10:]:
+            tick = entry.get("tick", "?")
+            ts = entry.get("ts", "")
+            action = _escape_cell(str(entry.get("action", "")))
+            result = _escape_cell(str(entry.get("result", "")))
+            if ts:
+                lines.append(f"- tick {tick} ({ts}): {action} — {result}")
+            else:
+                lines.append(f"- tick {tick}: {action} — {result}")
+    lines.append("")
+
+    # --- Host-Resident Exceptions ---
+    lines.append("## Host-Resident Exceptions")
+    lines.append("")
+    exceptions = []
+    for component in state["components"]:
+        hr = component.get("host_resident") or {}
+        if hr.get("allowed") is True:
+            exceptions.append(component)
+    if not exceptions:
+        lines.append("_None._")
+    else:
+        for component in exceptions:
+            hr = component["host_resident"]
+            name = component.get("name", "")
+            justification = hr.get("justification", "") or ""
+            ref = hr.get("reference_link", "") or ""
+            lines.append(f"- **{name}**: {justification} (ref: {ref})")
+
+    return "\n".join(lines) + "\n"
