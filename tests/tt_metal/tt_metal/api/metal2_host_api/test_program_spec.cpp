@@ -61,6 +61,7 @@ using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalTensorParameter;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::MakeShardedTensorParameter;
 using test_helpers::ScopedSlowDispatchOverride;
 
 // ============================================================================
@@ -581,10 +582,8 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingSelfLoopWithMatchingSidesSucceeds) 
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    // INTRA-tensix self-loop DFBs require implicit_sync disabled (a lower-layer constraint
-    // enforced in dataflow_buffer.cpp). This matches the pattern real self-loop DFBs use
-    // (e.g. ACC_DFB / INEG_DFB in the reduction op factory's negate path).
-    dfb.disable_implicit_sync = true;
+    // INTRA-tensix self-loop DFBs have no DM endpoint; the spec-to-impl translation produces
+    // enable_{producer,consumer}_implicit_sync=false automatically (no DM kernel to vote for it).
 
     BindDFBToKernel(self_loop_1, "dfb", "p", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(self_loop_1, "dfb", "c", KernelSpec::DFBEndpointType::CONSUMER);
@@ -708,7 +707,11 @@ TEST_F(ProgramSpecTestQuasar, ComputeKernelExceedingMaxThreadsFails) {
             "KernelSpec 'kernel' has too many threads. The architecture supports up to 4 for compute kernels")));
 }
 
-TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigFails) {
+TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigSucceeds) {
+    // Gen2 config is fully optional even on Quasar: absence is treated as "use defaults"
+    // (empty disable_implicit_sync_for). A Gen1-only DM kernel building on Quasar is
+    // permitted at the spec layer (whether such a kernel actually does anything useful on
+    // Gen2 hardware is a separate question, outside the validator's scope).
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -729,10 +732,7 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigFails) {
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("KernelSpec 'kernel' must specify a Gen2 DM config when targeting Quasar")));
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestQuasar, DMKernelWithNoConfigAtAllFails) {
@@ -1536,7 +1536,6 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelInterScopeFails) {
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    dfb.disable_implicit_sync = true;
 
     BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -1589,7 +1588,6 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeReferencingUnknownDFBFails) {
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    dfb.disable_implicit_sync = true;
 
     BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -1645,7 +1643,6 @@ TEST_F(ProgramSpecTestQuasar, DuplicateSelfLoopScopeEntriesFails) {
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    dfb.disable_implicit_sync = true;
 
     BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -1689,8 +1686,8 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelImplicitIntraSucceeds) {
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    // INTRA requires implicit-sync OFF at the lower DFB layer.
-    dfb.disable_implicit_sync = true;
+    // INTRA-tensix self-loop: no DM endpoint, so the spec-to-impl translation produces
+    // enable_{producer,consumer}_implicit_sync=false at the lower DFB layer automatically.
 
     BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -1717,7 +1714,6 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelExplicitIntraSucceeds) {
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    dfb.disable_implicit_sync = true;
 
     BindDFBToKernel(compute, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -2335,11 +2331,9 @@ TEST(AggregateSpecTypes, DataflowBufferSpecDesignatedInitializers) {
         .entry_size = 1024,
         .num_entries = 8,
         .borrowed_from = "input_tensor",
-        .disable_implicit_sync = true,
     };
 
     EXPECT_EQ(borrowed_dfb.borrowed_from, std::optional<TensorParameterName>{"input_tensor"});
-    EXPECT_TRUE(borrowed_dfb.disable_implicit_sync);
 }
 
 TEST(AggregateSpecTypes, WorkUnitSpecDesignatedInitializers) {
@@ -2971,6 +2965,187 @@ TEST_F(ProgramSpecTestGen1, IdenticalTensorSpecProducesIdenticalKernelHash) {
     auto hash_a = prog_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
     auto hash_b = prog_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
     EXPECT_EQ(hash_a, hash_b);
+}
+
+// ============================================================================
+// Dynamic tensor shape — spec resolution
+// ============================================================================
+//
+// dynamic_tensor_shape on a TensorParameter loosens the runtime spec match (covered in
+// test_program_run_params.cpp) and, for sharded TensorParameters, also moves the
+// tensor_shape_in_pages words out of the kernel's CTAs and into per-binding CRTA slots.
+// The tests below pin both halves:
+//   - CTA stability: same kernel hash across different shapes when the flag is set.
+//   - Handle layout: num_runtime_field_crta_words tracks the rank when needed.
+
+TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedKernelHashStableAcrossShapes_TileLayout) {
+    // Interleaved + TILE layout: page_size is constant per dtype regardless of logical_shape, so
+    // the CTAs ([args_config.raw(), aligned_page_size]) are stable across shape variations.
+    // The dynamic flag thus enables JIT cache reuse for tile-layout eltwise.
+    //
+    // (Row-major interleaved has a shape-dependent page_size — the last-dim element count — so
+    // its CTAs do change with shape. That's a property of the page-size convention, not of the
+    // dynamic mechanism, and is a separate orthogonal concern. This test focuses on tile.)
+    auto make_spec = [](tt::tt_metal::Shape shape) {
+        ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+        auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE);
+        auto memory_config =
+            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+        auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
+        TensorParameter tp{
+            .unique_id = "input_tensor",
+            .spec = tt::tt_metal::TensorSpec(std::move(shape), std::move(tensor_layout)),
+            .dynamic_tensor_shape = true,
+        };
+        spec.tensor_parameters = {tp};
+        BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+        return spec;
+    };
+    Program prog_a = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 32, 32}));
+    Program prog_b = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 64, 64}));
+    EXPECT_EQ(
+        prog_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
+        prog_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
+        << "Interleaved tile + dynamic_tensor_shape: shape variations must hash equal so the "
+           "same compiled kernel binary is reused.";
+}
+
+TEST_F(ProgramSpecTestGen1, DynamicTensorShape_ShardedKernelHashStableAcrossShapes) {
+    // Sharded TensorParameters DO encode tensor_shape_in_pages in CTAs by default — so without
+    // the dynamic flag, two different-shape sharded TPs hash differently. With the flag, the
+    // tensor_shape words move to CRTAs and the CTAs become stable across shape variations.
+    //
+    // Layout: HEIGHT_SHARDED with shard_shape {32, 32} on 2 cores → 2 shards along height,
+    // full width per shard. The declared (64, 32) tensor has 2 shards; the alternate (32, 32)
+    // tensor needs only 1 shard (subset of the 2-core grid).
+    auto make_spec = [](const tt::tt_metal::Shape& shape, bool dynamic) {
+        ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+        auto tp = MakeShardedTensorParameter("input_tensor", shape, {32, 32}, /*num_cores=*/2);
+        tp.dynamic_tensor_shape = dynamic;
+        spec.tensor_parameters = {tp};
+        BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+        return spec;
+    };
+
+    // Without the flag: differently-shaped sharded TPs hash differently (regression canary).
+    Program prog_static_a = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 64, 32}, false));
+    Program prog_static_b = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 32, 32}, false));
+    EXPECT_NE(
+        prog_static_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
+        prog_static_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
+        << "Baseline: without dynamic_tensor_shape, different shapes should hash differently.";
+
+    // With the flag: same two shapes hash identically — CTAs are now stable.
+    Program prog_dyn_a = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 64, 32}, true));
+    Program prog_dyn_b = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 32, 32}, true));
+    EXPECT_EQ(
+        prog_dyn_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
+        prog_dyn_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
+        << "Sharded + dynamic_tensor_shape: tensor_shape moves to CRTAs, so CTA-driven hash "
+           "must be stable across shape variations.";
+}
+
+TEST_F(ProgramSpecTestGen1, DynamicTensorShape_ShardedBindingTracksShapeCRTASlots) {
+    // Sharded + dynamic_tensor_shape: the TensorBindingHandle's num_runtime_field_crta_words
+    // should equal the BufferDistributionSpec's tensor_shape_in_pages rank (one CRTA word per
+    // shape dim, written at enqueue).
+    //
+    // Note: BDS flattens the logical_shape via its sharding scheme, so the BDS rank is not
+    // generally the same as logical_shape.rank(). We derive the expected value from the BDS
+    // directly to be robust against BDS-internal flattening conventions.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto tp = MakeShardedTensorParameter("input_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, 2);
+    tp.dynamic_tensor_shape = true;
+    spec.tensor_parameters = {tp};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    const auto& handles = kernel->tensor_binding_handles();
+    ASSERT_EQ(handles.size(), 1u);
+
+    const auto bds = tp.spec.compute_buffer_sharding_args().buffer_distribution_spec();
+    ASSERT_TRUE(bds.has_value());
+    const auto expected_rank = bds->tensor_shape_in_pages().rank();
+    EXPECT_GT(expected_rank, 0u);
+    EXPECT_EQ(handles[0].num_runtime_field_crta_words, static_cast<uint32_t>(expected_rank))
+        << "Sharded + dynamic_tensor_shape: runtime-field CRTA words should equal BDS shape rank.";
+}
+
+TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedBindingHasNoRuntimeFieldCRTAs) {
+    // Interleaved + dynamic_tensor_shape: pure host-side validation loosening, no CTA→CRTA
+    // demotion, so num_runtime_field_crta_words should remain zero.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto tp = MakeMinimalTensorParameter("input_tensor");
+    tp.dynamic_tensor_shape = true;
+    spec.tensor_parameters = {tp};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    const auto& handles = kernel->tensor_binding_handles();
+    ASSERT_EQ(handles.size(), 1u);
+    EXPECT_EQ(handles[0].num_runtime_field_crta_words, 0u)
+        << "Interleaved dynamic_tensor_shape is host-side-only; no runtime CRTA words.";
+}
+
+TEST_F(ProgramSpecTestGen1, KernelCrtaLayout_AllThreeSectionsConsistent) {
+    // The Kernel's stored KernelCrtaLayout must equal what a fresh walk of (named CRTAs +
+    // binding handles) would compute. This test exercises a Program in which ALL THREE
+    // sections of the CRTA buffer are non-empty:
+    //   - section 1: named CRTAs           (declared in runtime_arguments_schema)
+    //   - section 2: TensorBinding section (variable-size: a plain interleaved binding +
+    //                                       a sharded-with-dynamic_tensor_shape binding)
+    //   - section 3: varargs               (declared via num_common_runtime_varargs)
+    //
+    // The headergen bakes vararg_section_offset into the kernel's `get_common_vararg(idx)`
+    // macro, so a wrong offset here would silently route vararg reads into the binding
+    // section. The walk-based reference value is exactly what genfiles used to compute on
+    // its own; the refactor moves that computation into ResolveTensorBindingsForKernel and
+    // threads it through. This test guards against the threading silently producing a
+    // different value than the walk would.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    // Section 1: named CRTAs on the DM kernel.
+    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"foo", "bar"};
+    // Section 3: vararg CRTAs on the DM kernel.
+    spec.kernels[0].runtime_arguments_schema.num_common_runtime_varargs = 3;
+
+    // Section 2: two bindings — one plain (1 word), one sharded+dynamic_tensor_shape
+    // (1 word + tensor_shape_in_pages rank words).
+    auto plain_tp = MakeMinimalTensorParameter("plain_tensor");
+    auto dyn_tp =
+        MakeShardedTensorParameter("dyn_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2);
+    dyn_tp.dynamic_tensor_shape = true;
+    spec.tensor_parameters = {plain_tp, dyn_tp};
+    BindTensorParameterToKernel(spec.kernels[0], "plain_tensor", "plain_ta");
+    BindTensorParameterToKernel(spec.kernels[0], "dyn_tensor", "dyn_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    const KernelCrtaLayout layout = kernel->get_crta_layout();
+
+    // Reference values, re-derived independently of the layout struct.
+    const uint32_t expected_named_words = 2u;  // "foo", "bar"
+    uint32_t expected_binding_words = 0;
+    for (const auto& handle : kernel->tensor_binding_handles()) {
+        expected_binding_words += 1u + handle.num_runtime_field_crta_words;
+    }
+    const uint32_t expected_vararg_offset = expected_named_words + expected_binding_words;
+
+    EXPECT_EQ(layout.num_named_words, expected_named_words);
+    EXPECT_EQ(layout.binding_section_words, expected_binding_words);
+    EXPECT_EQ(layout.vararg_section_offset, expected_vararg_offset)
+        << "vararg_section_offset must equal num_named_words + binding_section_words; this is the "
+           "value baked into get_common_vararg(idx) by the kernel headergen.";
+
+    // Sanity: the dynamic-shape binding's runtime-field word count should be > 0, so this test
+    // genuinely exercises a variable-size binding (not just two 1-word bindings that would also
+    // pass with the old binding-count-based math).
+    ASSERT_EQ(kernel->tensor_binding_handles().size(), 2u);
+    EXPECT_GT(kernel->tensor_binding_handles()[1].num_runtime_field_crta_words, 0u)
+        << "Test precondition: the second binding should be variable-size; otherwise the layout "
+           "calculation degenerates to the pre-refactor case.";
 }
 
 TEST_F(ProgramSpecTestGen1, CompilerIncludePathsForwardedToKernelConfig) {
