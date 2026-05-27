@@ -299,6 +299,21 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
         }
     }
 
+    // Float forward output (P @ V_expanded): the bf16-free reference for the
+    // kernel's forward attn_output. Composite (bf16) already drifts from this by
+    // bf16 ULP, so this is what we should compare the kernel against for training.
+    xt::xarray<float> attn_output_float = xt::zeros<float>({B, H, S, D_v});
+    {
+        const xt::xarray<float> V_expanded_fw = expand_kv_heads(V, H);
+        for (size_t b = 0; b < B; ++b) {
+            for (size_t h = 0; h < H; ++h) {
+                auto p_slice = xt::view(attention_weights, b, h, xt::all(), xt::all());  // (S, S)
+                auto v_slice = xt::view(V_expanded_fw, b, h, xt::all(), xt::all());      // (S, D_v)
+                xt::view(attn_output_float, b, h, xt::all(), xt::all()) = xt::linalg::dot(p_slice, v_slice);
+            }
+        }
+    }
+
     // ========== Backward Pass ==========
     const auto& dO = grad_output;
 
@@ -366,7 +381,7 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
     }
     const xt::xarray<float> dK = reduce_grad_to_groups(dK_expanded, G);
 
-    return {dQ, dK, dV, intermediates};
+    return {dQ, dK, dV, intermediates, attn_output_float};
 }
 
 // Wrapper around matmul to handle sharing of KV heads across groups of query
@@ -628,6 +643,7 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const auto& float_dK = float_gradients[1];
     const auto& float_dV = float_gradients[2];
     const auto& float_intermediates = float_gradients[3];
+    const auto& float_attn_output = float_gradients[4];
 
     // ========== Composite Implementation (uses ttnn ops) ==========
     auto composite_output = composite_sdpa(query, key, value, grad_output, attn_mask, /*return_intermediate=*/true);
@@ -741,6 +757,9 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     // ========== Comparisons ==========
     // Forward pass checks
     const bool fw_attn_output_matches = xt::allclose(kernel_attn_output_cpu, composite_attn_output_cpu, rtol, atol);
+    // Kernel forward attn output vs FLOAT reference — the bf16-free check that tells us
+    // whether the kernel is the outlier (vs composite which is also bf16).
+    const bool fw_attn_output_matches_float = xt::allclose(kernel_attn_output_cpu, float_attn_output, rtol, atol);
     // Compare kernel intermediates (FP32 logsumexp) vs float reference (value at pos 0 only)
     const bool fw_intermediates_matches = xt::allclose(kernel_intermediates_cpu, float_intermediates, rtol, atol);
 
@@ -758,6 +777,9 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     if (!fw_attn_output_matches || always_print_diffs) {
         print_top_diffs_4d(kernel_attn_output_cpu, composite_attn_output_cpu, "fw_attn_output_kernel_vs_composite");
     }
+    if (!fw_attn_output_matches_float || always_print_diffs) {
+        print_top_diffs_4d(kernel_attn_output_cpu, float_attn_output, "fw_attn_output_kernel_vs_float");
+    }
     if (!fw_intermediates_matches || always_print_diffs) {
         print_top_diffs_4d(kernel_intermediates_cpu, float_intermediates, "fw_intermediates_kernel_vs_float");
     }
@@ -772,7 +794,8 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     }
 
     // Assertions
-    EXPECT_TRUE(fw_attn_output_matches) << "Forward attn output mismatch in " << config.test_name;
+    EXPECT_TRUE(fw_attn_output_matches) << "Forward attn output (vs composite) mismatch in " << config.test_name;
+    EXPECT_TRUE(fw_attn_output_matches_float) << "Forward attn output (vs float) mismatch in " << config.test_name;
     EXPECT_TRUE(fw_intermediates_matches) << "Forward intermediates mismatch in " << config.test_name;
     EXPECT_TRUE(kernel_dQ_matches_float) << "Kernel dQ vs Float mismatch in " << config.test_name;
     EXPECT_TRUE(kernel_dK_matches_float) << "Kernel dK vs Float mismatch in " << config.test_name;
