@@ -71,25 +71,27 @@ constexpr uint32_t kMaxMuxWorkersPerChip = 16u;
 // of compute per chip — at that point parallelism + packed bytes win.
 constexpr uint32_t kMuxRowsThreshold = 4u;
 
-// Pick num_workers for the MUX/packed path. Aim for ~2 rows per worker so
-// chunk_size_rows = rows_per_worker can pack 2 rows into one fabric packet
-// (256 B of real data per packet). Cap at kMaxMuxWorkersPerChip — past that,
-// the doubled fabric traffic per chip outpaces the additional compute
-// parallelism we'd get. For small num_tile_rows (~8 to kMinWorkersForOverlap)
-// the per-worker compute load is small, so fall back to max parallelism
-// (1 row per worker) — empirically this gives the best balance for
-// prodlike-mid-sized shapes (N=256 H=640pd).
-constexpr uint32_t kMinWorkersForOverlap = 16u;
+// Pick num_workers for the MUX/packed path. Two regimes:
+//
+//  - SMALL (num_tile_rows ≤ kSmallShapeRowsLimit): per-worker compute is
+//    tiny, so prioritize compute parallelism. Use max(num_tile_rows,
+//    kMaxMuxWorkersPerChip). This wins for prodlike shapes (N=256 H=640pd).
+//
+//  - LARGE (num_tile_rows > kSmallShapeRowsLimit): per-worker compute is
+//    substantial. Use rows/2 workers so chunks pack 2 rows per fabric
+//    packet — halving the packet count per chip and reducing fabric
+//    overhead. Cap at kMaxMuxWorkersPerChip. This wins for multichunk
+//    shapes (N=512+ at H=64pd).
+constexpr uint32_t kSmallShapeRowsLimit = 8u;
 uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows) {
     if (num_tile_rows < kMuxRowsThreshold) {
         return 1u;
     }
-    const uint32_t desired = std::max(1u, (num_tile_rows + 1u) / 2u);
-    const uint32_t capped = std::min<uint32_t>(kMaxMuxWorkersPerChip, desired);
-    if (capped < kMinWorkersForOverlap) {
+    if (num_tile_rows <= kSmallShapeRowsLimit) {
         return std::min<uint32_t>(kMaxMuxWorkersPerChip, num_tile_rows);
     }
-    return capped;
+    const uint32_t target = std::max(1u, num_tile_rows / 2u);
+    return std::min<uint32_t>(target, kMaxMuxWorkersPerChip);
 }
 
 // Sizing derivation used in both spec computation (to size the stats scratch
