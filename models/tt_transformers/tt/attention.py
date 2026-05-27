@@ -374,8 +374,13 @@ class Attention(LightweightModule):
         if self.prefetcher is not None:
 
             def register_weights():
-                self.prefetcher.insert_tensor(self.wqkv)
-                self.prefetcher.insert_tensor(self.wo_sharded_ring)
+                # Decode-mode program configs so the DRAM-core prefetcher
+                # (DramCorePrefetcher) can size its global circular buffer.
+                # Worker-core Prefetcher ignores the kwarg.
+                pc_qkv = self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher)
+                pc_wo = self.args.get_attn_all_gather_matmul_program_config(Mode.DECODE, self.prefetcher)
+                self.prefetcher.insert_tensor(self.wqkv, program_config=pc_qkv)
+                self.prefetcher.insert_tensor(self.wo_sharded_ring, program_config=pc_wo)
 
             self.prefetcher.register_callback(register_weights)
 
