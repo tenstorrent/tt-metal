@@ -62,11 +62,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-      mlperf-read-only:
+      mlperf-write-access:
         required: false
         type: boolean
-        default: true
-        description: "Mount /mnt/MLPerf as read-only (uncheck for read-write access)"
+        default: false
+        description: "Enable read-write access to /mnt/MLPerf (e.g. to regenerate tensor cache). Default is read-only."
 
 permissions:
   packages: write
@@ -120,5 +120,5 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       model: ${{ needs.resolve-skus.outputs.model }}
-      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      mlperf-read-only: ${{ inputs.mlperf-write-access != true }}
       tier: "1"
