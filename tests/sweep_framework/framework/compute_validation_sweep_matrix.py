@@ -28,6 +28,7 @@ from constants import (
     strip_grouping_suffix,
     strip_mesh_suffix,
 )
+from matrix_runner_config import (
     GENERATION_MANIFEST_FILENAME,
     get_lead_models_test_group_name_for_hardware_group,
     get_runner_config,
