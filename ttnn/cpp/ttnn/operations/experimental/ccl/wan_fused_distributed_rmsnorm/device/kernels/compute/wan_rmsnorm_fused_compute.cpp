@@ -522,7 +522,11 @@ void kernel_main() {
 
         // -------- RELEASE THIS CHUNK --------
         cb_pop_front(input_cb, chunk_input_tiles);
-        cb_pop_front(stats_gathered_cb, chunk_stats_tiles);
+        // NOTE: stats_gathered_cb is NOT popped here — the reduce<AVG> with
+        // default WaitAndPopPerTile policy already drains chunk_stats_tiles
+        // (4 tiles × 3 rows for the AG path, or num_heads × rows for per_head).
+        // A manual pop here would be a DOUBLE-POP, advancing rd_ptr past
+        // wr_ptr and causing subsequent chunks to read stale L1 contents.
 
         row_processed += rows_in_chunk;
     }
