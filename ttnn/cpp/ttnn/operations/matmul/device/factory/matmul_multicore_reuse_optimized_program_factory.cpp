@@ -72,7 +72,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     tt::DataFormat output_data_format =
         tt_metal::datatype_to_dataformat_converter(operation_attributes.output_dtype.value());
 
-    tt_metal::IDevice* device = &in0_buffer.device_mut();
+    tt_metal::IDevice* device = &in0_buffer.mutable_device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());

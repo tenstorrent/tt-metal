@@ -634,7 +634,7 @@ ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt::tt_metal::IDevice* device = &a.mesh_tensor().device_mut();
+    tt::tt_metal::IDevice* device = &a.mesh_tensor().mutable_device();
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");

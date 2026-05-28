@@ -50,7 +50,7 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    tt::tt_metal::IDevice* device = &a.device_mut();
+    tt::tt_metal::IDevice* device = &a.mutable_device();
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
