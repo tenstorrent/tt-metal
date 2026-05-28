@@ -67,7 +67,7 @@
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
   skus:
     bh_sp1:
-      timeout: 50
+      timeout: 30
   owner_id: U08E1JCMAJF
   team: scaleout
   sp_config: sp1
@@ -100,7 +100,7 @@
         --chunk-accuracy 256
   skus:
     bh_sp4:
-      timeout: 50
+      timeout: 30
   owner_id: U08E1JCMAJF
   team: scaleout
   sp_config: sp4
