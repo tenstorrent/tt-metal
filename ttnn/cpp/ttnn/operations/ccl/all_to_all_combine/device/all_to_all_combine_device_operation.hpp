@@ -86,6 +86,12 @@ struct AllToAllCombineDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    // Workaround for PR #44408 cache-hit-on-stale-RTA bug: salt per-call so
+    // every dispatch is a cache miss.  Restores legacy override_runtime_arguments
+    // behavior at the cost of cache-key proliferation.  Real fix is a
+    // ScalarBinding-style framework feature for non-Buffer RTAs (Metal 2.0 plan).
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::operations::ccl
 
