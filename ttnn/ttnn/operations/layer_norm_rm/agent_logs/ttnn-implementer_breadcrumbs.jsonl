@@ -1,1 +1,0 @@
-{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/layer_norm_rm/test_layer_norm_rm.py::test_layer_norm_rm","params":"single_tile_32x32 and no_affine","mode":"--dev","ts":"2026-05-28T07:40:13+00:00"}
