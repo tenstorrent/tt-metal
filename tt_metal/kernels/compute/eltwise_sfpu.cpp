@@ -49,9 +49,7 @@ void kernel_main() {
             buff_in1.pop_front(1);
         }
     }
-#endif
-
-#ifdef SFPU_UNARY_OP
+#else
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
 
