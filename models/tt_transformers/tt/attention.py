@@ -883,6 +883,17 @@ class Attention(LightweightModule):
 
             return dense_out_reduced
 
+    def _prepare_q_for_sdpa(self, q_heads_1QSD: ttnn.Tensor) -> ttnn.Tensor:
+        """Hook: produce the Q tensor that gets passed into SDPA.
+
+        Default implementation casts Q to BFP8 to match the K/V dtype feeding
+        SDPA. Subclasses (e.g. for embedding-only workloads where K/V are kept
+        native bf16) can override this to return Q unchanged.
+        """
+        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b)
+        ttnn.deallocate(q_heads_1QSD)
+        return q_heads_1QSD_8b
+
     def forward_prefill(
         self,
         x_11SH,
@@ -920,19 +931,31 @@ class Attention(LightweightModule):
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
-        if seq_len > 128:
+        if self.args.use_minimal_matmul_prefill(seq_len):
+            # Pass memory_config so that the short-seq L1 path (use_short_seq_l1_prefill)
+            # actually keeps the QKV output in L1. Without this, minimal_matmul defaults
+            # to DRAM regardless of the model_config setting, which forces NlpCreateHeads
+            # to round-trip through DRAM (was ~10% of per-iteration kernel time).
+            # Force BF16 output: q_norm/k_norm/rotary downstream all require BF16
+            # tensors. minimal_matmul defaults the output dtype to the input dtype,
+            # which becomes BFP8 when QWEN_RESIDUAL_BFP8=1 propagates a BFP8 residual
+            # stream into QKV — that would crash rotary at runtime. Pinning bf16 here
+            # keeps the FF1/FF3/FF2 BFP8 chain intact while preserving rotary's
+            # bf16 invariant.
             xqkv_fused = ttnn.experimental.minimal_matmul(
                 x_11SH,
                 self.wqkv,
                 compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
                 config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
+                memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None, prefill_seq_len=seq_len),
+                dtype=ttnn.bfloat16,
             )
         else:
             xqkv_fused = ttnn.linear(
                 x_11SH,
                 self.wqkv,
                 dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-                memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None),
+                memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None, prefill_seq_len=seq_len),
                 compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
                 program_config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
             )
@@ -941,14 +964,16 @@ class Attention(LightweightModule):
         if self.wqkv_bias_prefill is not None:
             xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
 
-        xqkv_fused = tt_all_reduce(
-            xqkv_fused,
-            self.mesh_device,
-            self.tt_ccl,
-            cluster_axis=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=self.ccl_dtype,
-        )
+        if self.num_devices > 1:
+            qkv_ar_memcfg = self.args.get_attn_qkv_all_reduce_output_mem_config(Mode.PREFILL, prefill_seq_len=seq_len)
+            xqkv_fused = tt_all_reduce(
+                xqkv_fused,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=1,
+                memory_config=qkv_ar_memcfg,
+                dtype=self.ccl_dtype,
+            )
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
@@ -964,6 +989,9 @@ class Attention(LightweightModule):
         ttnn.deallocate(x_11SH)
 
         # split qkv into heads
+        create_head_memcfg = self.args.get_attn_create_head_output_mem_config(
+            Mode.PREFILL, None, prefill_seq_len=seq_len
+        )
         (
             q_heads_1QSD_pre_rot,
             k_heads_1KSD_pre_rot,
@@ -973,7 +1001,7 @@ class Attention(LightweightModule):
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=create_head_memcfg,
         )
 
         norm_config = self.args.get_norm_config("attn", Mode.PREFILL, None)
@@ -997,89 +1025,101 @@ class Attention(LightweightModule):
         else:
             keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
-        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=keys_BKSD.dtype)
-        ttnn.deallocate(k_heads_1KSD)
+        # For embedding / feature-extraction workloads (set via TT_SKIP_KV_CACHE_FILL=1)
+        # the KV cache is never read again after prefill. In that case, skip the whole
+        # paged_fill_cache pipeline and keep K/V in their native bf16 for SDPA — saves
+        # two typecasts + two paged_fill_cache device ops per layer.
+        skip_kv_fill = getattr(self.args, "skip_kv_cache_fill", False)
 
-        # sharding k_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-            k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.args.get_attn_kv_prefill_mem_config(seq_len))
+        if skip_kv_fill:
+            k_heads_1KSD_8b = k_heads_1KSD
+            v_heads_1VSD_8b = v_heads_1VSD
         else:
-            k_fill = k_heads_1KSD_8b
+            k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=keys_BKSD.dtype)
+            ttnn.deallocate(k_heads_1KSD)
 
-        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=values_BKSD.dtype)
+            if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+                k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.args.get_attn_kv_prefill_mem_config(seq_len))
+            else:
+                k_fill = k_heads_1KSD_8b
 
-        ttnn.deallocate(v_heads_1VSD)
+            v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=values_BKSD.dtype)
+            ttnn.deallocate(v_heads_1VSD)
 
-        # sharding v_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-            v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.args.get_attn_kv_prefill_mem_config(seq_len))
-        else:
-            v_fill = v_heads_1VSD_8b
+            if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+                v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.args.get_attn_kv_prefill_mem_config(seq_len))
+            else:
+                v_fill = v_heads_1VSD_8b
 
-        if self.TG:
-            k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
-            v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
-        if page_table:
-            # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
-            # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
-            block_size = keys_BKSD.shape[2]
-            # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
-            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+            if self.TG:
+                k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
+                v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
 
-        if batch_size > 1:
-            # For batched prefill, loop over VALID users only and fill each user's cache separately
-            # k_fill/v_fill have shape [padded_batch, n_kv_heads, seq_len_per_user, head_dim]
-            # The paged_fill_cache kernel reads batch_idx_ptr[0] for all positions,
-            # so we must call it once per user with their specific K/V slice
-            #
-            # IMPORTANT: user_id is a list of valid slot indices for batched prefill.
-            # Empty slots have page_table entries of -1, so we must skip them to avoid
-            # writing to invalid memory blocks.
-            seq_len_per_user = k_fill.shape[2]
-            page_len = fill_page_table.shape[1] * block_size
+        if not skip_kv_fill:
+            if page_table:
+                # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
+                # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
+                block_size = keys_BKSD.shape[2]
+                # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
+                fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
 
-            # user_id is a list of valid slot indices (e.g., [0, 1, 2, ..., N-1] for N users)
-            # Each slot index tells us which row in k_fill and page_table to use
-            valid_slots = user_id if isinstance(user_id, (list, tuple)) else list(range(batch_size))
+            if batch_size > 1:
+                # For batched prefill, loop over VALID users only and fill each user's cache separately
+                # k_fill/v_fill have shape [padded_batch, n_kv_heads, seq_len_per_user, head_dim]
+                # The paged_fill_cache kernel reads batch_idx_ptr[0] for all positions,
+                # so we must call it once per user with their specific K/V slice
+                #
+                # IMPORTANT: user_id is a list of valid slot indices for batched prefill.
+                # Empty slots have page_table entries of -1, so we must skip them to avoid
+                # writing to invalid memory blocks.
+                seq_len_per_user = k_fill.shape[2]
+                page_len = fill_page_table.shape[1] * block_size
 
-            for slot_idx in valid_slots:
-                # Extract this slot's K/V slice: [1, n_kv_heads, seq_len_per_user, head_dim]
-                k_user = k_fill[slot_idx : slot_idx + 1, :, :, :]
-                v_user = v_fill[slot_idx : slot_idx + 1, :, :, :]
+                # user_id is a list of valid slot indices (e.g., [0, 1, 2, ..., N-1] for N users)
+                # Each slot index tells us which row in k_fill and page_table to use
+                valid_slots = user_id if isinstance(user_id, (list, tuple)) else list(range(batch_size))
 
-                # Slice to page length if needed (same as single-user path)
-                k_user_sliced = k_user[:, :, :page_len, :] if page_len < seq_len_per_user else k_user
-                v_user_sliced = v_user[:, :, :page_len, :] if page_len < seq_len_per_user else v_user
+                for slot_idx in valid_slots:
+                    # Extract this slot's K/V slice: [1, n_kv_heads, seq_len_per_user, head_dim]
+                    k_user = k_fill[slot_idx : slot_idx + 1, :, :, :]
+                    v_user = v_fill[slot_idx : slot_idx + 1, :, :, :]
 
-                # Fill cache for this specific slot with scalar batch_idx
-                ttnn.experimental.paged_fill_cache(keys_BKSD, k_user_sliced, fill_page_table, batch_idx=slot_idx)
-                ttnn.experimental.paged_fill_cache(values_BKSD, v_user_sliced, fill_page_table, batch_idx=slot_idx)
-        elif page_table:
-            # Single user path with page_table
-            page_len = fill_page_table.shape[1] * block_size
-            k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
-            v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
-            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx=user_id)
-            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx=user_id)
-        else:
-            # Single user path without page_table
-            ttnn.fill_cache(
-                keys_BKSD,
-                k_fill,
-                user_id % self.batch_size_per_device_group,
-            )
-            ttnn.fill_cache(
-                values_BKSD,
-                v_fill,
-                user_id % self.batch_size_per_device_group,
-            )
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-            ttnn.deallocate(k_fill)
-            ttnn.deallocate(v_fill)
+                    # Slice to page length if needed (same as single-user path)
+                    k_user_sliced = k_user[:, :, :page_len, :] if page_len < seq_len_per_user else k_user
+                    v_user_sliced = v_user[:, :, :page_len, :] if page_len < seq_len_per_user else v_user
 
-        # SDPA
-        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b)
-        ttnn.deallocate(q_heads_1QSD)
+                    # Fill cache for this specific slot with scalar batch_idx
+                    ttnn.experimental.paged_fill_cache(keys_BKSD, k_user_sliced, fill_page_table, batch_idx=slot_idx)
+                    ttnn.experimental.paged_fill_cache(values_BKSD, v_user_sliced, fill_page_table, batch_idx=slot_idx)
+            elif page_table:
+                # Single user path with page_table
+                page_len = fill_page_table.shape[1] * block_size
+                k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
+                v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
+                ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx=user_id)
+                ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx=user_id)
+            else:
+                # Single user path without page_table
+                ttnn.fill_cache(
+                    keys_BKSD,
+                    k_fill,
+                    user_id % self.batch_size_per_device_group,
+                )
+                ttnn.fill_cache(
+                    values_BKSD,
+                    v_fill,
+                    user_id % self.batch_size_per_device_group,
+                )
+            if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+                ttnn.deallocate(k_fill)
+                ttnn.deallocate(v_fill)
+
+        # SDPA — cast Q to bfp8 to match the K/V dtype feeding SDPA. Skipping
+        # the typecast on embedding-only workloads looked free (just ~235 us
+        # per layer saved) but regressed bs32/isl512 by 6 ms: bf16 Q is 2x the
+        # memory footprint and SDPA reads Q multiple times per K chunk, so the
+        # bandwidth cost far exceeds the typecast saved for large batched work.
+        q_heads_1QSD_8b = self._prepare_q_for_sdpa(q_heads_1QSD)
 
         if chunk_start_idx is not None:
             if self.sliding_window is not None:
@@ -1092,11 +1132,14 @@ class Attention(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None),
+                memory_config=self.args.get_attn_sdpa_output_mem_config(Mode.PREFILL, prefill_seq_len=seq_len),
             )
+            l1_prefill_seq_len = seq_len
         else:
             # For batched prefill, the actual per-user seq_len is seq_len // batch_size
             # since the tensors have shape [batch_size, n_heads, seq_len_per_user, head_dim]
             sdpa_seq_len = seq_len // batch_size if batch_size > 1 else seq_len
+            l1_prefill_seq_len = sdpa_seq_len
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
@@ -1105,7 +1148,10 @@ class Attention(LightweightModule):
                 sliding_window_size=self.sliding_window,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, sdpa_seq_len, None, None),
+                program_config=self.args.get_attn_sdpa_program_config(
+                    Mode.PREFILL, sdpa_seq_len, None, None, batch_size=batch_size
+                ),
+                memory_config=self.args.get_attn_sdpa_output_mem_config(Mode.PREFILL, prefill_seq_len=sdpa_seq_len),
             )
 
         # deallocate keys and values
@@ -1125,9 +1171,12 @@ class Attention(LightweightModule):
         ###
         # Output matmul
         ###
+        concat_heads_memcfg = self.args.get_attn_concat_heads_output_mem_config(
+            Mode.PREFILL, None, prefill_seq_len=l1_prefill_seq_len
+        )
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=concat_heads_memcfg,
         )
         ttnn.deallocate(attn_output_1QSD)
 
@@ -1137,12 +1186,24 @@ class Attention(LightweightModule):
         if batch_size > 1:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
 
-        # reshaping long sequence to matmul fit on device
+        # reshaping long sequence to matmul fit on device (chunks of 1024 along seq)
+        # Total seq must be divisible by 1024 (e.g. batched prefill: batch*seq_per_user can be 12800)
+        pad_to_1024 = seq_len
         if seq_len > 1024:
-            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
+            pad_to_1024 = ((seq_len + 1023) // 1024) * 1024
+            if pad_to_1024 != seq_len:
+                attn_output_11SH = ttnn.pad(
+                    attn_output_11SH,
+                    padding=((0, 0), (0, 0), (0, pad_to_1024 - seq_len), (0, 0)),
+                    value=0.0,
+                )
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, pad_to_1024 // 1024, 1024, -1])
 
-        # Non fused All Gather Matmul
-        if self.use_fused_all_gather_matmul:  # is true for Ring topology
+        # Non fused All Gather Matmul (multi-device only; single-chip skips fabric CCL)
+        if self.use_fused_all_gather_matmul and self.num_devices > 1:
+            ag_memcfg = self.args.get_attn_all_gather_output_mem_config(
+                Mode.PREFILL, None, prefill_seq_len=l1_prefill_seq_len
+            )
             attn_output_11SH = ttnn.experimental.all_gather_async(
                 attn_output_11SH,
                 persistent_output_buffer=None,
@@ -1150,28 +1211,48 @@ class Attention(LightweightModule):
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
                 topology=self.ccl_topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ag_memcfg,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
 
-        output_11SH = ttnn.linear(
-            attn_output_11SH,
-            self.wo,
-            compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
-            dtype=self.activation_dtype or ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.args.get_attn_wo_program_config(Mode.PREFILL, seq_len, None),
-        )
+        wo_memcfg = self.args.get_attn_wo_output_mem_config(Mode.PREFILL, None, prefill_seq_len=l1_prefill_seq_len)
+        wo_pc = self.args.get_attn_wo_program_config(Mode.PREFILL, pad_to_1024, None)
+        # Use experimental.minimal_matmul for WO when the config getter opts in
+        # (long-seq prefill path); plain ttnn.linear runs this matmul at ~52 %
+        # BF8 peak, minimal_matmul gets it closer to the ~57 % we see on the
+        # similar-shape FF2 matmul on Qwen3-Embedding-0.6B bs32/isl512.
+        if isinstance(wo_pc, ttnn.MinimalMatmulConfig):
+            output_11SH = ttnn.experimental.minimal_matmul(
+                attn_output_11SH,
+                self.wo,
+                compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
+                config=wo_pc,
+                memory_config=wo_memcfg,
+            )
+        else:
+            output_11SH = ttnn.linear(
+                attn_output_11SH,
+                self.wo,
+                compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
+                dtype=self.activation_dtype or ttnn.bfloat8_b,
+                memory_config=wo_memcfg,
+                program_config=wo_pc,
+            )
 
         if seq_len > 1024:
-            output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
+            output_11SH = ttnn.reshape(output_11SH, [1, 1, pad_to_1024, -1])
+            if pad_to_1024 != seq_len:
+                output_11SH = output_11SH[:, :, :seq_len, :]
         ttnn.deallocate(attn_output_11SH)
 
-        # Reduce-scatter
-        if not self.use_fused_all_gather_matmul:
+        # Attention output all-reduce (tt_all_reduce no-ops on 1×1 mesh; skip call on single device)
+        if not self.use_fused_all_gather_matmul and self.num_devices > 1:
+            out_ar_memcfg = self.args.get_attn_all_reduce_output_mem_config(
+                Mode.PREFILL, prefill_seq_len=l1_prefill_seq_len
+            )
             output_11SH = tt_all_reduce(
                 output_11SH,
                 self.mesh_device,
@@ -1179,7 +1260,7 @@ class Attention(LightweightModule):
                 cluster_axis=0,
                 dim=0 if self.TG else 3,
                 topology=self.ccl_topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=out_ar_memcfg,
                 dtype=self.ccl_dtype,
             )
 

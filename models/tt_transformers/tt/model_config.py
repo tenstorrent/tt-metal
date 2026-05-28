@@ -9,7 +9,7 @@ import os
 from enum import Enum, auto
 from functools import lru_cache
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 from loguru import logger
@@ -528,6 +528,12 @@ class ModelArgs:
         self.embed_scale = None
         self.use_hf_rope = use_hf_rope
 
+        # For embedding / feature-extraction workloads the KV cache is never read
+        # again after prefill; skipping paged_fill_cache + the K/V bf16->bfp8
+        # typecasts that feed it removes ~0.3ms of device work per iteration.
+        # Opt-in via env var so non-embedding models are unaffected.
+        self.skip_kv_cache_fill = os.getenv("TT_SKIP_KV_CACHE_FILL", "0") == "1"
+
         assert not os.getenv(
             "FAKE_DEVICE"
         ), "FAKE_DEVICE has been renamed to MESH_DEVICE for consistency with vLLM, please update your environment variables and run again."
@@ -572,7 +578,7 @@ class ModelArgs:
             self.instruct = True
 
         # Check for supported batches since previous logic that contained the check was removed because it was unused
-        supported_batches = {1, 2, 4, 8, 16, 32}
+        supported_batches = {1, 2, 4, 8, 9, 10, 11, 12, 13, 14, 15, 16, 32}
         if self.max_batch_size not in supported_batches:
             raise ValueError(f"Batch size {self.max_batch_size} not supported")
 
@@ -1106,11 +1112,21 @@ class ModelArgs:
 
         to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
 
+        if not to_warmup_seq_lens:
+            # e.g. max_seq_len is below every standard warmup length after filtering
+            m = self.max_seq_len
+            assert m >= 1, "max_seq_len must be positive for prefill warmup"
+            to_warmup_seq_lens = [m]
+
         return to_warmup_seq_lens
 
     def filter_warmup_seq_lens(self, to_warmup_seq_lens):
         # TODO: Add more model-specific filtering here
         # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
+
+        # RoPE / prefill buffers are allocated for this instance's max_seq_len; do not
+        # warm up at longer lengths (e.g. demos with max_seq_len=256 vs table [128, 1024]).
+        to_warmup_seq_lens = [s for s in to_warmup_seq_lens if s <= self.max_seq_len]
 
         # TODO: https://github.com/tenstorrent/tt-metal/issues/33991 - for P100 only, P150 has assert for ISL > 1K
         if self.base_model_name == "Llama-3.1-8B" and self.device_name == "P100":
@@ -1118,16 +1134,13 @@ class ModelArgs:
                 if seq_len > 1024:
                     to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
                     break
-        if self.base_model_name == "Mistral-Small-3.1-24B":
-            to_warmup_seq_lens = [s for s in to_warmup_seq_lens if s <= self.max_seq_len]
         return to_warmup_seq_lens
 
     # =========================================================================
     # RESIDUAL MEMORY CONFIGS
     # =========================================================================
-    @lru_cache(maxsize=None)
-    def get_residual_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
-        """Get the memory config for decode residual tensors."""
+    def get_residual_mem_config(self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None):
+        """Get the memory config for residual tensors (decode: sharded L1; prefill: L1 for short-seq on single-chip)."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 num_residual_worker_cores = 32 if self.num_devices == 4 else 16
@@ -1158,15 +1171,128 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
+
+    def use_short_seq_l1_prefill(self, seq_len: int = None):
+        """L1-backed prefill activations on single-chip meshes when sequence is short.
+
+        Reduces DRAM traffic for short prompts (e.g. Qwen3-Embedding). Threshold is
+        ``TT_SHORT_SEQ_L1_PREFILL_MAX`` (default 512). Opt out with ``TT_PREFILL_FORCE_DRAM=1``.
+
+        Batched prefill (batch>1): the seq_len that flows through the network is
+        ``batch*per_user_seq`` (see attention.py reshape). We gate on the per-user
+        seq fitting the short-seq threshold AND a total-bytes cap so the FF
+        intermediates (~3x activation size) don't exceed L1 capacity.
+        ``TT_BATCHED_L1_PREFILL_MAX_BYTES`` controls the cap (default 24 MB —
+        empirically safe through ~bs=16 at ISL=512 on Qwen3-Embedding-0.6B; bs=32
+        goes OOM).
+        """
+        force_dram = os.getenv("TT_PREFILL_FORCE_DRAM", "0") == "1"
+        if force_dram:
+            return False
+        if self.is_galaxy:
+            return False
+        if self.num_devices != 1:
+            return False
+        max_short = int(os.getenv("TT_SHORT_SEQ_L1_PREFILL_MAX", "512"))
+        # The gate is called in two contexts:
+        #   - config time (e.g. residual mem-config setup): seq_len is None or the
+        #     model's max_seq_len, which is the PER-USER seq.
+        #   - runtime (e.g. residual placement during prefill): seq_len is the
+        #     ALREADY-FLATTENED batch*per_user seq (16384 for bs=32 isl=512).
+        # We need the same answer in both contexts. Disambiguate by checking
+        # whether seq_len is already > max_seq_len (then it's flattened) or not.
+        per_user_seq = self.max_seq_len if seq_len is None else seq_len
+        if per_user_seq > self.max_seq_len:  # already flattened across batch
+            per_user_seq = per_user_seq // max(1, self.max_batch_size)
+        flat_seq = per_user_seq * self.max_batch_size
+        # Single-user fast path
+        if self.max_batch_size == 1:
+            return per_user_seq <= max_short
+        # Batched prefill: opt-in via TT_BATCHED_L1_PREFILL=1 (default off because
+        # this can OOM on bigger batches; user must validate per-shape).
+        if os.getenv("TT_BATCHED_L1_PREFILL", "0") != "1":
+            return False
+        if per_user_seq > max_short:
+            return False
+        # Cap on total flattened activation bytes (bf16 = 2 B/element). Always
+        # use the FLAT batch*per_user shape for the budget, regardless of
+        # which form `seq_len` came in as.
+        # Empirically on Qwen3-Embedding-0.6B / P150 with all promotions enabled:
+        #   bs=8  isl=512 ( 8 MB act): passes consistently, ~21% faster than DRAM
+        #   bs=10 isl=512 (10 MB act): unstable — sometimes passes, sometimes
+        #     fails trace capture with the L1/static-CB clash
+        #     ("L1 buffer allocated at 580160 and static circular buffer region
+        #      ends at 659968"); the 80 KB gap is too tight when the per-core CB
+        #      region grows after program-cache fills with nested ops.
+        #   bs=11 isl=512 (11 MB act): fails consistently
+        #   bs=16 isl=512 (16 MB act): OOMs outright
+        # 8 MB is the safe default. Override with TT_BATCHED_L1_PREFILL_MAX_BYTES
+        # for experiments (e.g. 10485760 to attempt bs=10).
+        max_bytes = int(os.getenv("TT_BATCHED_L1_PREFILL_MAX_BYTES", str(8 * 1024 * 1024)))
+        if flat_seq * self.dim * 2 > max_bytes:
+            return False
+        return True
+
+    def get_prefill_activation_mem_config(self, seq_len: int = None):
+        """Preferred prefill activation memory placement (L1 for guarded short-seq path)."""
+        return ttnn.L1_MEMORY_CONFIG if self.use_short_seq_l1_prefill(seq_len) else ttnn.DRAM_MEMORY_CONFIG
+
+    def use_minimal_matmul_prefill(self, seq_len: int) -> bool:
+        """Return True iff the QKV / FF2 prefill matmul should route to
+        ``ttnn.experimental.minimal_matmul`` (vs. plain ``ttnn.linear``).
+
+        ``minimal_matmul`` is the right choice for medium-to-long sequences because
+        it exposes larger per-core block reuse. For very short sequences on
+        single-chip (e.g. Qwen3-Embedding-0.6B prefill at ISL<=512) its fixed
+        kernel/launch cost actually makes it slower than the well-tuned
+        ``MatmulMultiCoreReuseMultiCastProgramConfig`` path — per-op it was 53us
+        vs 21us in the profile. Force the traditional path in that regime.
+
+        Only the genuinely-small case (single-user prefill with short seq) wants
+        the legacy path; any batched prefill should keep using minimal_matmul
+        even if the activation happens to be L1-resident.
+
+        Override the bs=1 default with QWEN_MINIMAL_MM_BS1=1 for experiments
+        (the matmul-analyzer flagged the legacy path as SLOW on QKV; routing
+        bs=1 to minimal_matmul lifts FLOPS utilization on that op for problems
+        where K isn't (32 * grid_y)-divisible).
+        """
+        if seq_len <= 128:
+            return False
+        if self.max_batch_size == 1 and self.use_short_seq_l1_prefill(seq_len):
+            if os.getenv("QWEN_MINIMAL_MM_BS1", "0") == "1":
+                return True
+            return False
+        return True
+
+    def _resolve_mm_grid(self, grid, seq_len):
+        """Apply QWEN_MM_GRID env override for MinimalMatmulConfig grid experiments.
+
+        QWEN_MM_GRID=13,10 sets the grid to (13,10)=130 cores on Blackhole.
+        """
+        override = os.getenv("QWEN_MM_GRID")
+        if override:
+            parts = override.split(",")
+            if len(parts) == 2:
+                return (int(parts[0]), int(parts[1]))
+        if (
+            is_blackhole()
+            and os.getenv("QWEN_MM_BIG_GRID_BH", "0") == "1"
+            and grid == (8, 8)
+            and not self.use_short_seq_l1_prefill(seq_len)
+        ):
+            return (8, 10)
+        return grid
 
     # =========================================================================
     # MLP PROGRAM AND MEMORY CONFIGS
     # =========================================================================
-    @lru_cache(maxsize=None)
-    def get_mlp_input_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_mlp_input_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the sharded memory config for MLP input."""
         if mode == Mode.DECODE:
             if self.is_galaxy:
@@ -1190,7 +1316,7 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1233,6 +1359,14 @@ class ModelArgs:
                         num_cores=self.mlp_core_grid.num_cores,
                     )
         elif mode == Mode.PREFILL:
+            if self.use_minimal_matmul_prefill(seq_len):
+                grid = self._resolve_mm_grid(self.mlp1_3_grid(seq_len), seq_len)
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+                )
             return self.matmul_config(
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.dim // self.cluster_shape[0],
@@ -1284,8 +1418,8 @@ class ModelArgs:
                         num_cores=self.mlp2_core_grid.num_cores,
                     )
         elif mode == Mode.PREFILL:
-            if seq_len > 128:
-                grid = self.mlp2_grid(seq_len)
+            if self.use_minimal_matmul_prefill(seq_len):
+                grid = self._resolve_mm_grid(self.mlp2_grid(seq_len), seq_len)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
                     K_block_size=8,
@@ -1305,8 +1439,9 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_mlp_ff1_3_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_mlp_ff1_3_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 return ttnn.create_sharded_memory_config(
@@ -1321,12 +1456,11 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_mlp_ff2_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_mlp_ff2_mem_config(self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None):
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 return ttnn.create_sharded_memory_config(
@@ -1341,13 +1475,13 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
     # NOTE: Cannot use @lru_cache here because tensor parameter would cause memory leak
     # by keeping references to all tensors passed to this function
-    def get_mlp_ff2_all_reduce_mem_config(self, mode: Mode, tensor: ttnn.Tensor):
+    def get_mlp_ff2_all_reduce_mem_config(self, mode: Mode, tensor: ttnn.Tensor, prefill_seq_len: Optional[int] = None):
         if mode == Mode.DECODE:
             if self.is_galaxy:
                 return (
@@ -1370,7 +1504,7 @@ class ModelArgs:
             else:
                 return tensor.memory_config()
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1420,8 +1554,7 @@ class ModelArgs:
             raise ValueError(f"Invalid mode: {mode}")
 
     # NOTE: get_mlp_act_mem_config is a TG-specific MLP to memory config
-    @lru_cache(maxsize=None)
-    def get_mlp_act_mem_config(self, mode: Mode):
+    def get_mlp_act_mem_config(self, mode: Mode, prefill_seq_len: Optional[int] = None):
         """Get the memory config for MLP activation (TG specific)."""
         if mode == Mode.DECODE:
             if self.dim >= 4096:
@@ -1440,7 +1573,7 @@ class ModelArgs:
                     ttnn.ShardSpec(full_grid, [32, nearest_32(56)], ttnn.ShardOrientation.ROW_MAJOR),
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1449,7 +1582,7 @@ class ModelArgs:
     # =========================================================================
 
     @lru_cache(maxsize=None)
-    def get_attn_sdpa_prefill_program_config(self, seq_len: int = 1, chunk_start_idx: int = None):
+    def get_attn_sdpa_prefill_program_config(self, seq_len: int = 1, chunk_start_idx: int = None, batch_size: int = 1):
         """Get the SDPA program config for prefill mode."""
         # Sequence length and chunk start index are both required for prefill
         # Chunk values based on what works best empirically
@@ -1457,28 +1590,85 @@ class ModelArgs:
         # SPDA limitation: chunk_start_idx must be a multiple of q_chunk_size
         # Here (x & -x) is the highest power of 2 that divides x.
         # When chunk_start_idx=0, we use default values since 0 is a multiple of any number.
+        # For batched prefill (batch>1) we have many independent batch-head
+        # work units, so we can afford larger q/k chunks which improve the
+        # per-core compute-to-memory ratio. Empirically:
+        #   bs=1  seq=512: q_chunk=64  (16 batch-heads only — need many Q chunks to keep 64 cores busy)
+        #   bs=8  seq=512: q_chunk=256 (128 batch-heads × 2 q-chunks = 256 work units → 4 rounds on 64
+        #                               cores with 2x more work per kernel launch — net win)
+        #   bs=32 seq=512: q_chunk=256 (1024 work units / 80-core grid = ~13 rounds, less per-round
+        #                               setup cost than q_chunk=128's ~26 rounds)
+        # Earlier comment said q_chunk=256 regressed bs8-short — that test uses synthetic real-text
+        # inputs padded to ~1024 with batch_size=8 (different shape from bs8 ISL=512 batched). The
+        # gate on `batch_size >= 4 and seq_len == 512` keeps the win for our embedding workload
+        # without touching that other test path.
+        # CRITICAL: q/k_chunk=256 grows the SDPA static CB region by ~24 KB per core (q + k + scratch
+        # buffers all double). When activations are L1-resident (use_short_seq_l1_prefill=True, e.g.
+        # bs=8 ISL=512 with TT_BATCHED_L1_PREFILL=1) those CBs clash with the L1 activation buffer
+        # — observed as "Statically allocated CBs ... clash with L1 buffers" on bs=8. So only
+        # promote to chunk=256 when the activations live in DRAM (which gives SDPA the full L1
+        # budget, which is exactly bs=32 today).
+        try:
+            activations_in_l1 = self.use_short_seq_l1_prefill(batch_size * seq_len)
+        except Exception:
+            activations_in_l1 = False
+        if batch_size >= 4 and seq_len % 256 == 0 and seq_len >= 256 and seq_len <= 512 and not activations_in_l1:
+            short_seq_chunk = 256
+        elif batch_size > 1 and seq_len % 128 == 0 and seq_len >= 128:
+            short_seq_chunk = 128
+        else:
+            short_seq_chunk = 64
+        # Override: bigger chunk for bs=1 short-seq experiment. Per the matmul
+        # analyzer's hint that SDPA can benefit from larger chunks when combined
+        # with a bigger compute grid. Opt-in via QWEN_SDPA_BIG_CHUNK_BS1=1.
+        if (
+            batch_size == 1
+            and seq_len % 128 == 0
+            and seq_len >= 128
+            and os.getenv("QWEN_SDPA_BIG_CHUNK_BS1", "0") == "1"
+        ):
+            short_seq_chunk = 128
         q_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else 64
+            else short_seq_chunk
             if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
             else min(256, chunk_start_idx & -chunk_start_idx)
             if seq_len >= 2048
-            else min(64, chunk_start_idx & -chunk_start_idx)
+            else min(short_seq_chunk, chunk_start_idx & -chunk_start_idx)
         )
         # Workaround for https://github.com/tenstorrent/tt-metal/issues/35225:
         k_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else 64
+            else short_seq_chunk
             if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
             else min(256, chunk_start_idx & -chunk_start_idx)
             if seq_len >= 2048
-            else min(64, chunk_start_idx & -chunk_start_idx)
+            else min(short_seq_chunk, chunk_start_idx & -chunk_start_idx)
         )
+        # Blackhole exposes 8x10 compute cores (80 workers) vs Wormhole's 8x8 (64).
+        # SDPA parallelises work units across this grid. Larger grid only helps
+        # when the number of work units significantly exceeds the current grid
+        # — for short sequences at bs=1 (16 work units for Qwen3-Embedding-0.6B
+        # with 16 Q heads) the extra cores sit idle and the kernel setup overhead
+        # of a larger grid becomes net negative (regressed bs1 by ~1 ms).
+        # SDPA work is distributed over (batch * n_q_heads) independent
+        # batch-heads, so use the bigger grid only when that total is well above
+        # 64 — which kicks in reliably for batched prefill (bs32*16=512 units)
+        # but NOT for bs1 (16 units) or bs8 (128 units, same rounds as 8x8).
+        # Threshold >128 picks up bs32+ without regressing bs8.
+        n_q_heads = getattr(self, "n_heads", 32)
+        use_big_grid = is_blackhole() and (batch_size * n_q_heads) > 128
+        sdpa_grid = (8, 10) if use_big_grid else (8, 8)
+        # exp_approx_mode uses a fast piecewise-polynomial approximation of exp()
+        # inside the online softmax; verified to have negligible impact on
+        # Qwen3-Embedding cosine-similarity accuracy and cuts SDPA kernel time
+        # materially. Opt out with TT_SDPA_EXACT_EXP=1 if needed for QA runs.
+        use_exp_approx = os.getenv("TT_SDPA_EXACT_EXP", "0") != "1"
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            exp_approx_mode=False,
+            compute_with_storage_grid_size=sdpa_grid,
+            exp_approx_mode=use_exp_approx,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
         )
@@ -1509,18 +1699,24 @@ class ModelArgs:
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_program_config(
-        self, mode: Mode, seq_len: int = 1, chunk_start_idx: int = None, prefetcher: Prefetcher = None
+        self,
+        mode: Mode,
+        seq_len: int = 1,
+        chunk_start_idx: int = None,
+        prefetcher: Prefetcher = None,
+        batch_size: int = 1,
     ):
         """Get the SDPA program config for attention."""
         if mode == Mode.DECODE:
             return self.get_attn_sdpa_decode_program_config(prefetcher)
         elif mode == Mode.PREFILL:
-            return self.get_attn_sdpa_prefill_program_config(seq_len, chunk_start_idx)
+            return self.get_attn_sdpa_prefill_program_config(seq_len, chunk_start_idx, batch_size)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_input_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_input_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 return ttnn.create_sharded_memory_config(
@@ -1552,7 +1748,7 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1583,32 +1779,51 @@ class ModelArgs:
                 )
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
-            if seq_len > 128:
+            if self.use_minimal_matmul_prefill(seq_len):
+                qkv_grid = self._resolve_mm_grid((8, 10) if is_blackhole() else (8, 8), seq_len)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
                     K_block_size=8,
                     N_block_size=8,
-                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8),
+                    compute_with_storage_grid_size=ttnn.CoreCoord(qkv_grid[0], qkv_grid[1]),
                 )
             else:
-                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
-                    in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
-                    out_subblock_h=1,  # Must be divisible by per_core_M
-                    out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                    per_core_M=7
+                # Tuned per ttnn-visualizer matmul analyzer for the bs=1 / short-seq
+                # path (use_minimal_matmul_prefill = False). The previous config used
+                # in0_block_w=1 and out_subblock 1x1 which the analyzer flagged as
+                # SLOW; bumping in0_block_w to the largest divisor of K-per-row and
+                # out_subblock_w via get_out_subblock_w lifts the per-call FLOPS
+                # utilization toward the analyzer's "look good" band.
+                #
+                # Grid choice: matmul_config requires K to be divisible by
+                # TILE*grid_y. For Qwen3-Embedding K=dim=1024, grid_y=8 gives
+                # K_per_row=4 (clean) while grid_y=10 gives 3.2 (forces fallback to
+                # in0_block_w=1). Drop to grid (8,8) here — the matmul on a single
+                # short prefill batch was already only utilizing 64 cores in
+                # practice (M=16 doesn't divide 10), so the (8,8) explicit cap is
+                # not a regression and unlocks proper block-w / subblock-w.
+                qkv_grid_y = 8
+                qkv_grid_x = 8
+                qkv_per_core_M = (
+                    7
                     if self.device_name == "P100"
-                    else (
-                        max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
-                            1,
-                            8
-                            if seq_len >= self.MAX_QKV_MM_SEQ_LEN
-                            else math.ceil(seq_len / ttnn.TILE_SIZE / 8),  # 8 rows
-                        )
-                    ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                    per_core_N=math.ceil(
-                        self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width
-                    ),  # N / TILE_WIDTH / grid width
+                    else max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
+                        1,
+                        8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / ttnn.TILE_SIZE / 8),
+                    )
+                )
+                qkv_per_core_N = math.ceil(self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width)
+                # in0_block_w: largest divisor of K-tiles-per-row (capped at 8).
+                k_tiles_per_row = max(1, (self.dim // ttnn.TILE_SIZE) // qkv_grid_y)
+                qkv_in0_block_w = self.find_largest_divisor(k_tiles_per_row)
+                qkv_out_subblock_w = get_out_subblock_w(qkv_per_core_N, out_subblock_h=1) if not self.is_galaxy else 1
+                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(qkv_grid_x, qkv_grid_y),
+                    in0_block_w=qkv_in0_block_w,
+                    out_subblock_h=1,
+                    out_subblock_w=qkv_out_subblock_w,
+                    per_core_M=qkv_per_core_M,
+                    per_core_N=qkv_per_core_N,
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
@@ -1616,8 +1831,9 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_qkv_mm_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_qkv_mm_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for QKV matmul output in attention."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1637,12 +1853,13 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_qkv_all_reduce_output_mem_config(self, mode: Mode, mesh_cols: int = 1, prefetcher: Prefetcher = None):
+    def get_attn_qkv_all_reduce_output_mem_config(
+        self, mode: Mode, mesh_cols: int = 1, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for QKV all-reduce output in attention."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1666,22 +1883,22 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_create_head_input_mem_config(self, mode: Mode):
+    def get_attn_create_head_input_mem_config(self, mode: Mode, prefill_seq_len: Optional[int] = None):
         """Get the memory config for create_head input (TG specific)."""
         if mode == Mode.DECODE:
             return self.model_config["CREATE_HEAD_INPUT_MEMCFG"]
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_create_head_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_create_head_output_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for create_qkv_heads output in attention."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1707,13 +1924,16 @@ class ModelArgs:
                 else:
                     return ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
     def get_attn_sdpa_output_mem_config(
-        self, mode: Mode, batch_size_per_device_group: int = 1, prefetcher: Prefetcher = None
+        self,
+        mode: Mode,
+        batch_size_per_device_group: int = 1,
+        prefetcher: Prefetcher = None,
+        prefill_seq_len: Optional[int] = None,
     ):
         """Get the memory config for SDPA output in attention."""
         if mode == Mode.DECODE:
@@ -1740,12 +1960,14 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            # Match concat_heads / WO: keeps SDPA output off DRAM when use_short_seq_l1_prefill (embedding <512)
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_concat_heads_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_concat_heads_output_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for attention concat_heads output before WO matmul."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1776,12 +1998,13 @@ class ModelArgs:
                     ),
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_all_gather_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_all_gather_output_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for attention all-gather output."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1810,7 +2033,7 @@ class ModelArgs:
                     ),
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1915,6 +2138,16 @@ class ModelArgs:
                 if self.is_galaxy
                 else (self.n_heads * self.head_dim) // self.num_devices
             )
+            if self.use_minimal_matmul_prefill(seq_len) and not self.is_galaxy:
+                grid = self._resolve_mm_grid(
+                    self.find_prefill_grid(self.prefill_rows, k_dim // ttnn.TILE_SIZE), seq_len
+                )
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+                )
             return self.matmul_config(
                 m=min(seq_len, 1024),
                 k=k_dim,
@@ -1929,8 +2162,9 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_wo_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_wo_output_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for WO matmul output in attention."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1947,12 +2181,13 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_dense_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_dense_output_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for dense output (after all-reduce) in attention."""
         if mode == Mode.DECODE:
             if self.ccl_topology() == ttnn.Topology.Ring and prefetcher is None:
@@ -1975,13 +2210,17 @@ class ModelArgs:
                 else:
                     return self.get_residual_mem_config(Mode.DECODE, None)
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
     def get_attn_all_reduce_output_mem_config(
-        self, mode: Mode, hidden_size: int = 0, mesh_rows: int = 1, prefetcher: Prefetcher = None
+        self,
+        mode: Mode,
+        hidden_size: int = 0,
+        mesh_rows: int = 1,
+        prefetcher: Prefetcher = None,
+        prefill_seq_len: Optional[int] = None,
     ):
         """Get the memory config for attention all-reduce output (TG specific configs)."""
         if mode == Mode.DECODE:
@@ -2003,12 +2242,13 @@ class ModelArgs:
                 else:
                     return self.get_residual_mem_config(Mode.DECODE, None)
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_gather_users_mem_config(self, mode: Mode, mesh_cols: int = 1, prefetcher: Prefetcher = None):
+    def get_attn_gather_users_mem_config(
+        self, mode: Mode, mesh_cols: int = 1, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for gather users in attention (TG path)."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -2028,7 +2268,7 @@ class ModelArgs:
             else:
                 return self.model_config["GATHER_USERS_MEMCFG"](mesh_cols)
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -2330,7 +2570,36 @@ class ModelArgs:
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
-                "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen3-Embedding-0.6B": {
+                    "N150": 4,
+                    "N300": 64,
+                    "T3K": 128,
+                    "TG": 128,
+                    "P150": 128,
+                    "P300": 128,
+                    "P150x4": 128,
+                    "P150x8": 128,
+                },
+                "Qwen3-Embedding-4B": {
+                    "N150": 4,
+                    "N300": 64,
+                    "T3K": 128,
+                    "TG": 128,
+                    "P150": 128,
+                    "P300": 128,
+                    "P150x4": 128,
+                    "P150x8": 128,
+                },
+                "Qwen3-Embedding-8B": {
+                    "N150": 4,
+                    "N300": 64,
+                    "T3K": 128,
+                    "TG": 128,
+                    "P150": 128,
+                    "P300": 128,
+                    "P150x4": 128,
+                    "P150x8": 128,
+                },
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
@@ -2391,6 +2660,31 @@ class ModelArgs:
                 "T3K": [128, 1024, 2048, 4096, 8192],
                 "TG": [128, 1024, 2048, 4096, 8192],
                 "P150x4": [128, 1024, 2048, 4096, 8192],
+            },
+            # Embedding models: add the full ISL sweep range used by demo.py (32..8192).
+            # Without these entries, P150 falls back to the default [128, 1024], which
+            # means any ISL != {128,1024} silently runs without hardware trace and pays
+            # full host-dispatch overhead per op. For ISL=512 on Qwen3-Embedding-0.6B
+            # that was the difference between ~17ms (no-trace) and ~6ms (traced).
+            "Qwen3-Embedding-0.6B": {
+                "N150": [128, 256, 512, 1024],
+                "N300": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P150": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P300": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P150x4": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P150x8": [128, 256, 512, 1024, 2048, 4096, 8192],
+            },
+            "Qwen3-Embedding-4B": {
+                "N150": [128, 256, 512, 1024],
+                "N300": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P150": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P300": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P150x4": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P150x8": [128, 256, 512, 1024, 2048, 4096, 8192],
             },
             "Llama-3.2-3B": {
                 "N150": [],
@@ -2523,15 +2817,28 @@ class ModelArgs:
 
         mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
 
-        # input goes to DRAM
-        xs_1BSH = ttnn.from_torch(
-            x_1BSH,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
+        prefill_memcfg = self.get_prefill_activation_mem_config(seq_len=x_bsh.shape[1])
+        try:
+            xs_1BSH = ttnn.from_torch(
+                x_1BSH,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=prefill_memcfg,
+                mesh_mapper=mesh_mapper,
+            )
+        except RuntimeError as e:
+            if prefill_memcfg == ttnn.DRAM_MEMORY_CONFIG:
+                raise
+            logger.warning(f"Prefill residual tensor allocation in L1 failed; falling back to DRAM. Reason: {e}")
+            xs_1BSH = ttnn.from_torch(
+                x_1BSH,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
         return xs_1BSH
 
     def _get_text_prefix(self):
@@ -3415,6 +3722,104 @@ class ModelArgs:
             inplace=False,
         )
 
+    def get_prefill_block_sharded_norm_config(self, seq_len):
+        """Build (block-sharded input mem cfg, sharded LN program cfg) for prefill RMSNorm.
+
+        Returns None when the env knob is off, the model is multi-chip/galaxy/distributed-
+        norm, or the shape can't be cleanly tiled across a 8x8 grid.
+
+        Per-op profile vs. the interleaved 16-core path on Qwen3-Embedding-0.6B
+        (bs=1 ISL=512, full-dim attn_norm / ff_norm):
+                                  cores  kernel_us   conv_in   conv_out
+            interleaved (curr.)    16      ~16.6        -          -
+            block-sharded BGE-style 64      ~13.1      ~1.0       ~1.0
+            net per LN: ~1.5 us saved (matches BGE-M3 ttnn-visualizer report).
+
+        Per Qwen3-Embedding-0.6B prefill iter: 56 full-dim LNs (28 attn_norm + 28
+        ff_norm). Expected savings ~85 us / iter -> ~1% on bs=1 ISL=512 trace.
+
+        Opt-in via QWEN_LN_BLOCK_SHARDED=1 to keep blast radius small while we
+        validate; q_norm/k_norm already run on 130 cores via head-dim sharding so
+        they are NOT touched by this path.
+        """
+        if os.getenv("QWEN_LN_BLOCK_SHARDED", "0") != "1":
+            return None
+        if self.is_multichip or self.is_galaxy:
+            return None
+        if seq_len is None or seq_len <= 0 or seq_len % ttnn.TILE_SIZE != 0:
+            return None
+
+        # Only enable when activations are already L1-resident. With DRAM-resident
+        # activations, the I2S / S2I round-trip on every LN actually goes through
+        # DRAM (~500 GB/s) for an 8 MB tensor (bs=8 ISL=512 DRAM); paying that
+        # ~16 us per direction x 56 LNs/iter = ~1.8 ms wipes out the LN kernel's
+        # ~3 us savings several times over (measured: bs=8 ISL=512 went 45 -> 62
+        # ms with sharded LN over DRAM activations). When activations are L1-
+        # resident the conversions are L1-to-L1 (~3 TB/s) and the savings hold.
+        if not self.use_short_seq_l1_prefill(seq_len):
+            return None
+
+        m_tiles = seq_len // ttnn.TILE_SIZE
+        k_tiles = self.dim // ttnn.TILE_SIZE
+        if m_tiles == 0 or k_tiles == 0:
+            return None
+
+        # Aim for an 8x8 worker grid (matches BGE-M3's 64-core LN); shrink along
+        # an axis if the tile counts can't be split cleanly. Bigger grids don't
+        # pay off for LN since the per-tile work is tiny and reduction overhead
+        # grows with core count.
+        gx_max = 8
+        gy_max = 8
+        gx = min(gx_max, k_tiles)
+        while gx > 0 and k_tiles % gx != 0:
+            gx -= 1
+        gy = min(gy_max, m_tiles)
+        while gy > 0 and m_tiles % gy != 0:
+            gy -= 1
+        if gx <= 0 or gy <= 0:
+            return None
+        # Skip if we'd end up with fewer cores than the current interleaved path
+        # already gets (16 for full-dim LN at dim=1024); no point paying the
+        # I2S/S2I overhead for a wash.
+        if gx * gy < 32:
+            return None
+
+        block_h = m_tiles // gy
+        block_w = k_tiles // gx
+        # Per-core L1 budget: the LN kernel allocates ~6 static CBs each of size
+        # block_h*block_w tiles (input, gamma, interim, output, plus stats), so
+        # roughly block_h*block_w*~12 KB of static-CB region per core. With
+        # L1-resident activations eating most of L1, an empirical cap of 16
+        # tiles per core (~192 KB) avoids clashes with dynamic L1 buffers.
+        # bs=8 ISL=512 batched (block_h=16, block_w=4 -> 64) hit a CB clash
+        # precisely at this regime; bs=1 ISL=512 (2*4 = 8) runs cleanly.
+        if block_h * block_w > 16:
+            return None
+        # subblock_w must divide block_w and be in [1, 4] (kernel constraint).
+        subblock_w = min(4, block_w)
+        while subblock_w > 1 and block_w % subblock_w != 0:
+            subblock_w -= 1
+
+        shard_shape = (block_h * ttnn.TILE_SIZE, block_w * ttnn.TILE_SIZE)
+        sharded_mem_cfg = ttnn.create_sharded_memory_config(
+            shape=shard_shape,
+            core_grid=ttnn.CoreGrid(y=gy, x=gx),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[gx, gy],
+            subblock_w=subblock_w,
+            block_h=block_h,
+            block_w=block_w,
+            inplace=False,
+        )
+        return {
+            "sharded_input_mem_cfg": sharded_mem_cfg,
+            "sharded_program_config": program_config,
+        }
+
     def create_tokenizer(self):
         from transformers import AutoTokenizer
 
@@ -3520,7 +3925,11 @@ class ModelArgs:
 
         processor = None
         try:
-            processor = AutoProcessor.from_pretrained(self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true")
+            processor = AutoProcessor.from_pretrained(
+                self.TOKENIZER_PATH,
+                local_files_only=os.getenv("CI") == "true",
+                trust_remote_code=self.trust_remote_code_hf,
+            )
             logger.info(f"Successfully loaded processor from {self.TOKENIZER_PATH}")
         except Exception as e:
             logger.warning(f"Failed to load processor from {self.TOKENIZER_PATH}: {e}")

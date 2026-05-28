@@ -50,5 +50,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="pplx-embed-v1-0.6B bs=1 ISL=512 perf demo")
     parser.add_argument("--device-id", type=int, default=0)
     parser.add_argument("--iterations", type=int, default=NUM_ITERATIONS)
+    parser.add_argument(
+        "--full-pipeline",
+        action="store_true",
+        help="Measure full generator pipeline latency instead of direct trace replay",
+    )
     args = parser.parse_args()
-    standalone_main(BATCH_SIZE, SEQ_LEN, args.iterations, args.device_id)
+    standalone_main(BATCH_SIZE, SEQ_LEN, args.iterations, args.device_id, full_pipeline=args.full_pipeline)

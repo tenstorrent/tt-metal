@@ -297,6 +297,7 @@ def run_perf(
     *,
     emit_signposts: bool,
     is_ci_env: bool = False,
+    full_pipeline: bool = False,
 ):
     """Build, compile, and benchmark pplx-embed-v1-0.6B."""
     profiler = BenchmarkProfiler()
@@ -335,7 +336,7 @@ def run_perf(
     # us pure device-execution + sync latency.
     trace_key = f"{seq_len}_0_{batch_size}"
     trace_id = generator.trace_id_prefill.get(trace_key)
-    use_direct_trace = trace_id is not None
+    use_direct_trace = (trace_id is not None) and not full_pipeline
 
     if use_direct_trace:
         logger.info(f"Running {num_iterations} iterations via direct trace replay (key={trace_key})...")
@@ -435,7 +436,9 @@ def run_perf(
 # ---------------------------------------------------------------------------
 
 
-def standalone_main(batch_size: int, seq_len: int, iterations: int, device_id: int = 0) -> None:
+def standalone_main(
+    batch_size: int, seq_len: int, iterations: int, device_id: int = 0, full_pipeline: bool = False
+) -> None:
     """`python <entry_file>` path — opens its own device, no pytest fixture."""
     apply_recommended_env(batched_l1=batch_size > 1)
 
@@ -454,6 +457,7 @@ def standalone_main(batch_size: int, seq_len: int, iterations: int, device_id: i
             seq_len=seq_len,
             num_iterations=iterations,
             emit_signposts=False,
+            full_pipeline=full_pipeline,
         )
         logger.info(f"Total wall time: {time.perf_counter() - t0:.1f}s")
     finally:

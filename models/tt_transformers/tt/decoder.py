@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
@@ -218,7 +220,8 @@ class TransformerBlock(LightweightModule):
         residual = x
 
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
-        skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher)
+        prefill_seq_len = int(x.shape[-2]) if mode == Mode.PREFILL else None
+        skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher, prefill_seq_len=prefill_seq_len)
 
         assert (
             x.memory_config() == skip_mem_cfg
@@ -258,9 +261,16 @@ class TransformerBlock(LightweightModule):
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
         if self.pre_ff_norm is None:
-            hidden_states = ttnn.add(
-                residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
-            )
+            # Optional: emit the post-attn residual sum as BFP8 (instead of BF16/None).
+            # ff_norm preserves input dtype, so this propagates to FF1/FF3 as well —
+            # halving the activation DRAM read on the [seq, dim] tensor that flows
+            # ff_norm -> FF1/FF3. Strictly local to the FF subgraph: the per-layer
+            # final residual `out` add still emits bf16 (see further down), so the
+            # next layer's attention path (and its rotary op which asserts bf16) is
+            # unaffected. Opt-in via QWEN_FFNORM_IN_BFP8=1.
+            ffnorm_in_bfp8 = mode == Mode.PREFILL and not TG and os.getenv("QWEN_FFNORM_IN_BFP8", "0") == "1"
+            post_attn_add_dtype = ttnn.bfloat8_b if ffnorm_in_bfp8 else (ttnn.bfloat16 if TG else None)
+            hidden_states = ttnn.add(residual, attn_out, memory_config=skip_mem_cfg, dtype=post_attn_add_dtype)
             residual = hidden_states
             if mode == "prefill":
                 x.deallocate(True)
@@ -310,13 +320,28 @@ class TransformerBlock(LightweightModule):
                     cluster_axis=1,
                 )
 
+        # Optional: emit the post-FFN final residual sum as BFP8 in prefill.
+        # This is the activation that flows into the NEXT layer's attention_norm
+        # and from there into QKV. With QWEN_FFNORM_IN_BFP8=1 we already make
+        # the post-attn add BFP8 (so FF1/FF3 read BFP8); this knob completes
+        # the chain by also making the post-FFN add BFP8 (so QKV reads BFP8).
+        # Together: residual stream is BFP8 end-to-end through all 28 layers,
+        # halving the activation read on every QKV / FF1 / FF3 matmul.
+        # Safe wrt rotary (which asserts BF16): QKV's explicit `dtype` arg
+        # keeps its OUTPUT bf16, so Q/K split into rotary still get bf16.
+        # Opt-in via QWEN_RESIDUAL_BFP8=1.
+        residual_bfp8 = mode == Mode.PREFILL and not TG and os.getenv("QWEN_RESIDUAL_BFP8", "0") == "1"
+        if residual_bfp8:
+            out_dtype = ttnn.bfloat8_b
+        elif TG and not self.args.is_distributed_norm(mode):
+            out_dtype = self.args.ccl_dtype
+        else:
+            out_dtype = activation_dtype or ttnn.bfloat16
         out = ttnn.add(
             residual,
             hidden_states,
             memory_config=skip_mem_cfg,
-            dtype=self.args.ccl_dtype
-            if TG and not self.args.is_distributed_norm(mode)
-            else activation_dtype or ttnn.bfloat16,
+            dtype=out_dtype,
         )
 
         return out  # fractured across devices
