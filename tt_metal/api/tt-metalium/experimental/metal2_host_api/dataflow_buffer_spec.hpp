@@ -39,8 +39,11 @@ enum class DFBAccessPattern { STRIDED, ALL, BLOCKED };
 // A DFB's endpoint configuration is specified at the DFB binding site in KernelSpec, not here.
 // (producer/consumer kernel identity, threads, and access patterns)
 //
-// Invariant: A local DFB has exactly one producer kernel and one consumer kernel.
-// Both must share identical WorkUnitSpec membership.
+// Invariant: At each node, a local DFB has exactly one producer kernel instance
+// and exactly one consumer kernel instance. Multiple PRODUCER KernelSpecs (and
+// multiple CONSUMER KernelSpecs) may bind the same DFB, provided they have
+// non-overlapping node coverage and matching binding-site parameters
+// (access_pattern, num_threads).
 // (For cross-node communication, use RemoteDataflowBufferSpec.)
 //
 // Instancing: Like KernelSpec, a DataflowBufferSpec is a *per-node template*. One
