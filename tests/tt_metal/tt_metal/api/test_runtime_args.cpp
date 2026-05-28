@@ -129,7 +129,7 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
         .gen2_data_movement_config = experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
     };
     const bool is_quasar = MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
-    const uint8_t num_threads = is_quasar ? static_cast<uint8_t>(kQuasarNumUserDms) : uint8_t{1};
+    const uint32_t num_threads = is_quasar ? kQuasarNumUserDms : 1u;
 
     experimental::metal2_host_api::KernelSpec kernel_spec{
         .unique_id = KERNEL,
@@ -214,7 +214,7 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
             .source =
 
                 "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp",
-            .num_threads = static_cast<uint8_t>(dm_processors_per_kernel),
+            .num_threads = dm_processors_per_kernel,
             .compiler_options = {.defines = defines_vec},
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{

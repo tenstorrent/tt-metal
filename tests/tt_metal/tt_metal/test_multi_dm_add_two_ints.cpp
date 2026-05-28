@@ -47,7 +47,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     constexpr const char* KERNEL_2 = "kernel_2";
     constexpr const char* KERNEL_3 = "kernel_3";
 
-    auto make_dm_kernel_spec = [](const char* id, uint8_t num_threads, uint32_t l1_addr) {
+    auto make_dm_kernel_spec = [](const char* id, uint32_t num_threads, uint32_t l1_addr) {
         return experimental::metal2_host_api::KernelSpec{
             .unique_id = id,
             .source =

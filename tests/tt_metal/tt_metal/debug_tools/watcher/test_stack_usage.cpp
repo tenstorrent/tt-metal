@@ -87,7 +87,7 @@ void RunOneTest(
             kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
                 .unique_id = name,
                 .source = path_metal2,
-                .num_threads = static_cast<uint8_t>(dms_per_kernel),
+                .num_threads = dms_per_kernel,
                 .compile_time_arg_bindings = {{"usage", free}},
                 .config_spec =
                     experimental::metal2_host_api::DataMovementConfiguration{

@@ -94,7 +94,7 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     std::vector<std::string> work_unit_kernel_names;
 
     if (is_quasar) {
-        auto spec = MakeMinimalDMKernel("dm_barrier_kernel", static_cast<uint8_t>(expected_num_threads));
+        auto spec = MakeMinimalDMKernel("dm_barrier_kernel", expected_num_threads);
         spec.source = kKernelPath;
         spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
         kernel_configs.push_back({"dm_barrier_kernel", spec, make_layout(l1_base, kRounds)});

@@ -273,7 +273,7 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
     experimental::metal2_host_api::KernelSpec dm_spec{
         .unique_id = DM_KERNEL_NAME,
         .source = rta_crta_kernel_path,
-        .num_threads = is_quasar ? static_cast<uint8_t>(num_dms_) : uint8_t{1},
+        .num_threads = is_quasar ? num_dms_ : 1u,
         .config_spec = dm_cfg,
         .advanced_options =
             experimental::metal2_host_api::KernelAdvancedOptions{
@@ -408,7 +408,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     };
     if (params.processor_class == HalProcessorClassType::DM) {
         if (is_quasar) {
-            kspec.num_threads = static_cast<uint8_t>(num_dms_);
+            kspec.num_threads = num_dms_;
             kspec.compile_time_arg_bindings = {{"dm_id", 0}};
         } else {
             kspec.num_threads = 1;
@@ -476,7 +476,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
     experimental::metal2_host_api::KernelSpec dm_spec{
         .unique_id = MULTI_DM_KERNEL_NAME,
         .source = rta_crta_kernel_path,
-        .num_threads = static_cast<uint8_t>(num_dms_),
+        .num_threads = num_dms_,
         .compiler_options =
             {.defines = {{"MAX_RTA_IDX", std::to_string(default_rtas.size())}, {"TEST_MULTI_DM_RTA", "1"}}},
         .compile_time_arg_bindings = {{"num_dms", num_dms_}, {"l1_sync_addr", l1_unreserved_base}},

@@ -76,7 +76,7 @@ inline constexpr const char* MINIMAL_KERNEL_SOURCE = "void kernel_main() {}";
 // Placement is stated on WorkUnitSpec; pass node sets to MakeMinimalWorkUnit instead.
 
 // Helper to create a minimal valid KernelSpec for data movement (Gen2/Quasar)
-inline KernelSpec MakeMinimalDMKernel(const std::string& name, int num_threads = 1) {
+inline KernelSpec MakeMinimalDMKernel(const std::string& name, uint32_t num_threads = 1) {
     return KernelSpec{
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
@@ -107,7 +107,7 @@ inline KernelSpec MakeMinimalGen1DMKernel(
 }
 
 // Helper to create a minimal valid KernelSpec for compute
-inline KernelSpec MakeMinimalComputeKernel(const std::string& name, int num_threads = 1) {
+inline KernelSpec MakeMinimalComputeKernel(const std::string& name, uint32_t num_threads = 1) {
     return KernelSpec{
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},

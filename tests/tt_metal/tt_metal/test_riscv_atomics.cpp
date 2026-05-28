@@ -91,7 +91,7 @@ protected:
             kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
                 .unique_id = DM_KERNEL,
                 .source = kernel_path,
-                .num_threads = static_cast<uint8_t>(num_dms_),
+                .num_threads = num_dms_,
                 .compiler_options = {.defines = defines_vec},
                 .runtime_arguments_schema = {.named_runtime_args = {"l1_counter_addr", "increment_times"}},
                 .config_spec =

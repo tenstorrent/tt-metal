@@ -245,7 +245,7 @@ void run_single_dfb_program(
             .source =
 
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
-            .num_threads = static_cast<uint8_t>(dfb_config.num_producers),
+            .num_threads = dfb_config.num_producers,
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .local_accessor_name = "out",
@@ -271,7 +271,7 @@ void run_single_dfb_program(
             .source =
 
                 "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer.cpp",
-            .num_threads = static_cast<uint8_t>(dfb_config.num_producers),
+            .num_threads = dfb_config.num_producers,
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .local_accessor_name = "out",
@@ -290,7 +290,7 @@ void run_single_dfb_program(
             .source =
 
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
-            .num_threads = static_cast<uint8_t>(dfb_config.num_consumers),
+            .num_threads = dfb_config.num_consumers,
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .local_accessor_name = "in",
@@ -317,7 +317,7 @@ void run_single_dfb_program(
             .source =
 
                 "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp",
-            .num_threads = static_cast<uint8_t>(dfb_config.num_consumers),
+            .num_threads = dfb_config.num_consumers,
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .local_accessor_name = "in",
@@ -1249,7 +1249,7 @@ void run_in_dfb_out_dfb_program(
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
-        .num_threads = static_cast<uint8_t>(dm2tensix_config.num_producers),
+        .num_threads = dm2tensix_config.num_producers,
         .dfb_bindings = {{
             .dfb_spec_name = IN_DFB,
             .local_accessor_name = "out",
@@ -1308,7 +1308,7 @@ void run_in_dfb_out_dfb_program(
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
-        .num_threads = static_cast<uint8_t>(tensix2dm_config.num_consumers),
+        .num_threads = tensix2dm_config.num_consumers,
         .dfb_bindings = {{
             .dfb_spec_name = OUT_DFB,
             .local_accessor_name = "in",
@@ -1964,7 +1964,7 @@ static void run_intra_tensix_dfb_program(
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_intra.cpp",
-        .num_threads = static_cast<uint8_t>(num_threads),
+        .num_threads = num_threads,
         .dfb_bindings =
             {
                 {
@@ -2145,7 +2145,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/compute/dfb_intra_and_consume_all.cpp",
-        .num_threads = static_cast<uint8_t>(num_neos),
+        .num_threads = num_neos,
         .dfb_bindings =
             {
                 {

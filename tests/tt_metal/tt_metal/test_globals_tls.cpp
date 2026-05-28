@@ -66,7 +66,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
 
     // Three kernels split 6 user DMs as 3 + 2 + 1 to mirror the original 4 + 3 + 1 split
     // (preserving the "shared kernel binary across multiple DMs" + "single-DM kernel" mix).
-    auto make_dm_kernel_spec = [](const char* unique_id, uint32_t kernel_id, uint8_t num_threads) {
+    auto make_dm_kernel_spec = [](const char* unique_id, uint32_t kernel_id, uint32_t num_threads) {
         return experimental::metal2_host_api::KernelSpec{
             .unique_id = unique_id,
             .source =

@@ -47,7 +47,7 @@ struct KernelAdvancedOptions {
     //       (It's an open question if we EVER want to support it.)
     //       It is included here just as a placeholder for use case feedback.
     //       Attempting to use it will trigger a runtime error.
-    using NodeSpecificThreadCount = std::pair<Nodes, int>;  // {node_set, num_threads}
+    using NodeSpecificThreadCount = std::pair<Nodes, uint32_t>;  // {node_set, num_threads}
     using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
     NodeSpecificThreadCounts node_specific_thread_counts;
 
@@ -78,12 +78,12 @@ struct KernelAdvancedOptions {
     //--------------------------------
     // Number of runtime varargs for the kernel.
     // Set the vararg values (per node) via ProgramRunParams.
-    size_t num_runtime_varargs = 0;
+    uint32_t num_runtime_varargs = 0;
 
     // Number of common runtime varargs for the kernel.
     // Set the vararg values via ProgramRunParams.
     // (The same argument values are broadcast to every node the kernel runs on.)
-    size_t num_common_runtime_varargs = 0;
+    uint32_t num_common_runtime_varargs = 0;
 
     // Per-node runtime vararg-count override.
     // In very rare cases a kernel needs a DIFFERENT number of runtime varargs on
@@ -91,7 +91,7 @@ struct KernelAdvancedOptions {
     // not listed default to num_runtime_varargs.
     // TODO: This feature is truly bizarre. It will be removed from the API once
     //       existing uses are refactored to avoid it.
-    using NumVarargsPerNode = std::vector<std::pair<Nodes, size_t>>;
+    using NumVarargsPerNode = std::vector<std::pair<Nodes, uint32_t>>;
     [[deprecated("Per-node-vararg-count feature is deprecated and will be removed.")]]
     NumVarargsPerNode num_runtime_varargs_per_node;
 

@@ -1620,7 +1620,7 @@ private:
 // Constraint score for sorting: higher = more constrained (RISC cores should be assigned earlier)
 int ConstraintScore(const KernelSpec* k, const NodeRangeSet& kernel_nodes) {
     int node_count = static_cast<int>(kernel_nodes.num_cores());
-    int thread_count = k->num_threads;
+    int thread_count = static_cast<int>(k->num_threads);
     return (node_count * 100) + thread_count;  // nodes dominate, threads break ties
 }
 
@@ -2231,7 +2231,7 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(cons
     TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
 
     return experimental::quasar::QuasarDataMovementConfig{
-        .num_threads_per_cluster = static_cast<uint32_t>(kernel_spec.num_threads),
+        .num_threads_per_cluster = kernel_spec.num_threads,
         .compile_args = {},  // only named_compile_args is used
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
@@ -2254,7 +2254,7 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);
 
     return experimental::quasar::QuasarComputeConfig{
-        .num_threads_per_cluster = static_cast<uint32_t>(kernel_spec.num_threads),
+        .num_threads_per_cluster = kernel_spec.num_threads,
         .math_fidelity = compute_config.math_fidelity,
         .fp32_dest_acc_en = compute_config.fp32_dest_acc_en,
         .dst_full_sync_en = compute_config.dst_full_sync_en,
@@ -2625,8 +2625,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         runtime_schema.named_common_runtime_args = user_named_crtas;
 
         // Varargs schema now lives on KernelAdvancedOptions.
-        const size_t num_runtime_varargs = kernel_spec.advanced_options.num_runtime_varargs;
-        const size_t num_common_runtime_varargs = kernel_spec.advanced_options.num_common_runtime_varargs;
+        const uint32_t num_runtime_varargs = kernel_spec.advanced_options.num_runtime_varargs;
+        const uint32_t num_common_runtime_varargs = kernel_spec.advanced_options.num_common_runtime_varargs;
         const bool has_per_node_override = !kernel_spec.advanced_options.num_runtime_varargs_per_node.empty();
 
         if (num_runtime_varargs > 0) {

@@ -67,7 +67,7 @@ struct KernelSpec {
 
     // Kernel threading:
     // Number of kernel threads
-    int num_threads = 1;
+    uint32_t num_threads = 1;
 
     // Kernel type (methods)
     bool is_dm_kernel() const { return std::holds_alternative<DataMovementConfiguration>(config_spec); }

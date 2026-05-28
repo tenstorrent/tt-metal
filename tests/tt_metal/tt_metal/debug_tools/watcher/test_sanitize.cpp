@@ -236,7 +236,7 @@ void RunTestOnCore(
             .gen2_data_movement_config =
                 experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
         };
-        uint8_t num_threads = is_quasar ? 6 : 1;
+        uint32_t num_threads = is_quasar ? 6u : 1u;
         if (!is_quasar) {
             noc = static_cast<int>(gen1_noc);
         }
