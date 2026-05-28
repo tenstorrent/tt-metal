@@ -135,7 +135,7 @@
   model: llama_8b_tp8_ddp4_shakespeare
   skus:
     bh_galaxy_perf:
-      timeout: 40
+      timeout: 50
   owner_id: U07K00A281X # Kevin Wu
   team: train
   arch: blackhole
@@ -146,7 +146,7 @@
   model: llama_8b_tp4_ddp8_shakespeare
   skus:
     bh_galaxy_perf:
-      timeout: 45
+      timeout: 55
   owner_id: U07K00A281X # Kevin Wu
   team: train
   arch: blackhole
