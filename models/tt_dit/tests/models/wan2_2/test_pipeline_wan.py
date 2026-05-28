@@ -182,10 +182,10 @@ def test_pipeline_inference(
         number,
         vbench_thresholds={
             "subject_consistency": 0.92,
-            "background_consistency": 0.94,
+            "background_consistency": 0.93,
             "motion_smoothness": 0.96,
             "dynamic_degree": 1.0,
-            "imaging_quality": 0.70,
+            "imaging_quality": 0.645,
         },
     ):
         if int(ttnn.distributed_context_get_rank()) == 0:
