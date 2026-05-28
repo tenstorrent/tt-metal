@@ -170,8 +170,7 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn)
         new_layer.mlp = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
         if _use_bfp8_decoder_weights(getattr(new_layer.self_attn, "layer_idx", None)):
-            new_layer.self_attn.o_proj.set_weight_dtype(ttnn.bfloat8_b)
-            new_layer.mlp.set_weight_dtype(ttnn.bfloat8_b)
+            new_layer.mlp.fused_gate_up_proj.set_weight_dtype(ttnn.bfloat8_b)
         return new_layer
 
     def call(self, *args, **kwds):
