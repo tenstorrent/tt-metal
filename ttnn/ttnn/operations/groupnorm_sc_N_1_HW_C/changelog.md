@@ -174,3 +174,89 @@
     — 72 cells covering bf16/fp32 affine × {input_tile, input_rm} ×
     {gamma_beta, gamma_only} × 9 shapes; 9 cells covering bf8b affine ×
     gamma_beta × 9 shapes; 1 no_affine smoke test. All 82 cells PASS.
+
+## Refinement 3 — Alignment hw_non_aligned
+
+- **Date**: 2026-05-28
+- **What was done**:
+  - Added `hw_non_aligned` to `SUPPORTED["alignment"]`. The op now accepts
+    inputs where `HW % 32 != 0` (with `C % 32 == 0`) and produces an
+    output of the same logical shape `(N, 1, HW, C)`.
+  - **Program descriptor**: `Ht = ceil(HW / 32)` (was `HW // 32`). A new
+    CT arg `HW_LAST_ROWS = HW - (Ht - 1) * 32` (∈ [1, 32]) carries the
+    valid-row count of the last HW-tile-row. `INV_N = 1 / (HW * Cg)`
+    already used the true logical `HW`, so no change there.
+  - **Reader**: for RM input on the last r-iteration (`r + 1 == Ht`),
+    read only `HW_LAST_ROWS` sticks (instead of `TILE_DIM=32`) and
+    zero-fill the trailing rows of the 32-row L1 staging block. Both
+    phase R and phase A handle this. For TILE input, `ttnn.from_torch`
+    already zero-fills the trailing rows of the last tile during tilize
+    — no kernel change needed.
+  - **Compute kernel**: no change. The padding rows zeroed by the reader
+    contribute zero to `sum`, `sumsq`, and the apply-phase mask-multiply,
+    so the algorithm is correctness-preserving without extra masking.
+  - **Writer**: no change. The output is TILE_LAYOUT and the DRAM
+    allocation already includes the padded tile-row; `ttnn.to_torch`
+    drops the padding rows when converting back to the logical
+    `(N, 1, HW, C)` shape.
+  - **No CB widening** (per the verifier's L1 watch note): the new path
+    reuses the existing partial-C-tile zero-fill in the reader; both
+    `valid_bytes < INPUT_CHUNK_BYTES` (c_non_aligned) and `valid_rows <
+    TILE_DIM` (hw_non_aligned) trigger the same `zero_l1(l1_base,
+    TILE_DIM * INPUT_CHUNK_BYTES)` call.
+- **Accuracy achieved** (vs `torch.nn.functional.group_norm` in fp32;
+  measured by `probes/probe_012.py`):
+  - **bf16 input, RM affine** (TILE and RM input layouts give identical
+    PCC because the kernel is identical past the reader):
+    - (1, 1, 17, 64)   G=1 : PCC=0.999994, max_abs=0.0566, rel_rms=0.0053
+    - (1, 1, 50, 128)  G=1 : PCC=0.999995, max_abs=0.0598, rel_rms=0.0049
+    - (1, 1, 47, 256)  G=1 : PCC=0.999988, max_abs=0.1131, rel_rms=0.0097
+    - (2, 1, 100, 128) G=1 : PCC=0.999995, max_abs=0.0619, rel_rms=0.0044
+    - (1, 1, 50, 64)   G=2 : PCC=0.999990, max_abs=0.0686, rel_rms=0.0076
+    - (1, 1, 47, 128)  G=2 : PCC=0.999994, max_abs=0.0418, rel_rms=0.0050
+  - **fp32 input, RM affine** (identical TILE / RM):
+    - (1, 1, 17, 64)   G=1 : PCC=1.000000, max_abs=0.0137, rel_rms=0.0013
+    - (1, 1, 50, 128)  G=1 : PCC=0.999999, max_abs=0.0152, rel_rms=0.0019
+    - (1, 1, 47, 256)  G=1 : PCC=0.999999, max_abs=0.0190, rel_rms=0.0018
+    - (2, 1, 100, 128) G=1 : PCC=0.999999, max_abs=0.0229, rel_rms=0.0020
+    - (1, 1, 50, 64)   G=2 : PCC=0.999999, max_abs=0.0141, rel_rms=0.0014
+    - (1, 1, 47, 128)  G=2 : PCC=0.999999, max_abs=0.0098, rel_rms=0.0012
+  - **Precision baseline** (R1 reference shapes, unchanged): all four
+    cells PCC ≥ 0.999991 — confirmed by re-running
+    `test_groupnorm_sc_N_1_HW_C_precision_baseline.py`.
+- **Golden test progress**: every `hw_non_aligned` cell that was
+  reachable (i.e., not in INVALID or in the bf8b `EXCLUSIONS`) moves
+  from `xfail_expected` to `supported_pass`. Confirmed by running the
+  golden suite per-shape:
+  - `1x1x17x64`   : 28 passed + 16 xfailed (bf8b EXCLUSIONS) + 64 skipped (INVALID) = 108 cells
+  - `1x1x50x128`  : 44 passed + 11 xfailed (bf8b EXCLUSIONS) + 53 skipped (INVALID) = 108 cells
+  - `1x1x47x256`  : 44 passed + 11 xfailed (bf8b EXCLUSIONS) + 53 skipped (INVALID) = 108 cells
+  - `2x1x100x128` : 44 passed + 11 xfailed (bf8b EXCLUSIONS) + 53 skipped (INVALID) = 108 cells
+  - Net: **160 hw_non_aligned cells flipped to `supported_pass`**;
+    0 `supported_fail` introduced; 0 `xpass_drift`.
+- **Non-regression**:
+  - 58/58 acceptance tests (`test_groupnorm_sc_N_1_HW_C.py`) PASS.
+  - 4/4 precision-baseline cells unchanged (`test_groupnorm_sc_N_1_HW_C_precision_baseline.py`).
+  - 82/82 R2 affine_layout=TILE cells PASS (`test_groupnorm_sc_N_1_HW_C_affine_layout_tile.py`).
+  - 66/66 new R3 cells PASS (`test_groupnorm_sc_N_1_HW_C_hw_non_aligned.py`).
+  - Precision matrix has 12 pre-existing failures on `sdxl_C320_G32_Cg10-fp32`
+    (shape (1,1,64,320), tile_aligned), which **bisect to commit
+    744288929fc** (the R2 head) — NOT introduced by R3. The R1
+    changelog's "PCC ≥ 0.99 across all sampled combinations" claim was
+    sampling-based, not exhaustive; this fp32 + (C/G) % 32 != 0 corner
+    has a separate underlying issue. Tracked in `op_requirements.md` as
+    a follow-up (does not block this refinement — see "Issues" below).
+- **Issues encountered**: None for the hw_non_aligned path itself —
+  the verifier's plan ("zero-fill the partial last HW-tile-row in the
+  reader; the algorithm is invariant under zeroed-padding-rows") landed
+  cleanly on the first kernel revision. The TILE-input case worked
+  unchanged because `ttnn.from_torch(layout=TILE_LAYOUT)` zero-fills
+  trailing padding rows during tilize.
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/groupnorm_sc_N_1_HW_C/test_groupnorm_sc_N_1_HW_C_hw_non_aligned.py`
+    — 60 cells = 10 shapes × {TILE, RM} input layout × {gamma_beta,
+    gamma_only, no_affine} affine modes, plus 6 fp32 smoke cells.
+    All 66 cells PASS. Shape coverage:
+    - 4 golden hw_non_aligned shapes (17x64, 50x128, 47x256, 100x128 N=2)
+    - 4 boundary HW % 32 values (HW=1, 31, 33, 63) for partial-row edge cases
+    - 2 hw_non_aligned + multi-tile-C combinations (47x128 G=2, 50x64 G=2)

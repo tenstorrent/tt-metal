@@ -208,7 +208,7 @@ units are independent enough to land separately.
   passes the golden suite (in conjunction with whichever
   `affine_dtype` × `dtype` × `alignment` cell it sits in, modulo INVALID).
 
-### [ ] Refinement 3 — Alignment hw_non_aligned
+### [x] Refinement 3 — Alignment hw_non_aligned
 
 **Goal**: add `hw_non_aligned` to `SUPPORTED["alignment"]`. Today the
 design enforces `HW % 32 == 0` and `Ht = HW / 32` (integer); the reader and
