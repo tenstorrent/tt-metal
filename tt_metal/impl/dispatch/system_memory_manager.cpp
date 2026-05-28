@@ -6,7 +6,6 @@
 #include "impl/context/metal_context.hpp"
 #include "system_memory_manager.hpp"
 #include <tt-metalium/tt_align.hpp>
-#include <dlfcn.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -43,64 +42,6 @@ namespace tt::tt_metal {
 void on_dispatch_timeout_detected();
 
 namespace {
-
-using TTSimClockAllDevicesFn = void (*)(uint32_t);
-
-void* open_ttsim_handle() {
-    void* handle = nullptr;
-    if (const char* sim_path = std::getenv("TT_METAL_SIMULATOR")) {
-#ifdef RTLD_NOLOAD
-        handle = dlopen(sim_path, RTLD_NOW | RTLD_NOLOAD);
-#endif
-    }
-    if (handle == nullptr) {
-        handle = RTLD_DEFAULT;
-    }
-    return handle;
-}
-
-bool dram_backed_cq_dirty_flush_enabled() {
-    static const bool enabled = [] {
-        const char* env = std::getenv("TT_METAL_DRAM_BACKED_CQ_DIRTY_FLUSH");
-        if (env == nullptr) {
-            return false;
-        }
-        const std::string value(env);
-        if (value == "auto") {
-            return std::getenv("TT_METAL_SIMULATOR") != nullptr || std::getenv("TT_UMD_SIMULATOR") != nullptr;
-        }
-        return value == "1" || value == "true" || value == "TRUE" || value == "on" || value == "ON";
-    }();
-    return enabled;
-}
-
-TTSimClockAllDevicesFn get_ttsim_clock_all_devices() {
-    static TTSimClockAllDevicesFn fn = [] {
-        void* handle = open_ttsim_handle();
-        return reinterpret_cast<TTSimClockAllDevicesFn>(dlsym(handle, "libttsim_clock_all_devices"));
-    }();
-    return fn;
-}
-
-uint32_t get_ttsim_cq_wait_clock_cycles() {
-    static uint32_t cycles = [] {
-        if (const char* env = std::getenv("TT_METAL_SIMULATOR_CQ_WAIT_CLOCKS")) {
-            return static_cast<uint32_t>(std::stoul(env));
-        }
-        return 1000u;
-    }();
-    return cycles;
-}
-
-void pump_ttsim_clock_if_enabled(ContextId context_id) {
-    auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
-    if (!ctx.rtoptions().get_simulator_enabled()) {
-        return;
-    }
-    if (auto* clock_all_devices = get_ttsim_clock_all_devices()) {
-        clock_all_devices(get_ttsim_cq_wait_clock_cycles());
-    }
-}
 
 bool wrap_ge(uint32_t a, uint32_t b) {
     // Signed Diff uses 2's Complement to handle wrap
@@ -622,7 +563,6 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     const uint32_t push_size_16B = align(push_size_B, alignment) >> 4;
 
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-    const uint32_t issue_q_write_ptr_before_push = cq_interface.issue_fifo_wr_ptr << 4;
     uint32_t issue_q_wr_ptr = ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
 
     // Capture before advancing: issue_fifo_wr_ptr points to the slot just written; after the advance below it points to
