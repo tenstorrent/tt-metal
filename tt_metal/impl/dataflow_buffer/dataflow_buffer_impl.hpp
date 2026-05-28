@@ -14,7 +14,7 @@
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 

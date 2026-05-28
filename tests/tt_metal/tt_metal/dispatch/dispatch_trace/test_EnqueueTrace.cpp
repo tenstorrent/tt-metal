@@ -25,7 +25,7 @@
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "dispatch_test_utils.hpp"
 #include "env_lib.hpp"
