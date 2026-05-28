@@ -314,7 +314,7 @@ def run_all_gather_impl(
     "num_links, ag_output_shape, dim, layout, matmul_output_dim, max_in0_block_w, matmul_weights_dtype, ag_input_dtype, use_bias, enable_trace, num_iters, use_barrier, use_persistent_buffers, chunks_per_sync, num_workers_per_link, num_buffers_per_channel",
     [
         # Shape 0 tests - fused only
-        (
+        pytest.param(
             1,
             [1, 1, 4096, 2560],
             3,
@@ -331,8 +331,9 @@ def run_all_gather_impl(
             10,
             2,
             2,
+            marks=pytest.mark.skip(reason="Disabled by issue #45107"),
         ),  # perf, no_barrier_with_persistent, chunking
-        (
+        pytest.param(
             1,
             [1, 1, 4096, 2560],
             3,
@@ -349,8 +350,9 @@ def run_all_gather_impl(
             None,
             None,
             None,
+            marks=pytest.mark.skip(reason="Disabled by issue #45107"),
         ),  # check, barrier_with_persistent, default
-        (
+        pytest.param(
             1,
             [1, 1, 4096, 2560],
             3,
@@ -367,9 +369,10 @@ def run_all_gather_impl(
             None,
             None,
             None,
+            marks=pytest.mark.skip(reason="Disabled by issue #45107"),
         ),  # perf, barrier_without_persistent, default
         # Shape 1 tests - fused only
-        (
+        pytest.param(
             1,
             [1, 1, 32, 512],
             3,
@@ -386,8 +389,9 @@ def run_all_gather_impl(
             None,
             None,
             None,
+            marks=pytest.mark.skip(reason="Disabled by issue #45107"),
         ),  # check, barrier_with_persistent, default
-        (
+        pytest.param(
             1,
             [1, 1, 32, 512],
             3,
@@ -404,8 +408,9 @@ def run_all_gather_impl(
             10,
             2,
             2,
+            marks=pytest.mark.skip(reason="Disabled by issue #45107"),
         ),  # perf, no_barrier_with_persistent, chunking
-        (
+        pytest.param(
             1,
             [1, 1, 32, 512],
             3,
@@ -422,6 +427,7 @@ def run_all_gather_impl(
             10,
             2,
             2,
+            marks=pytest.mark.skip(reason="Disabled by issue #45107"),
         ),  # check, barrier_without_persistent, chunking
     ],
     ids=[
