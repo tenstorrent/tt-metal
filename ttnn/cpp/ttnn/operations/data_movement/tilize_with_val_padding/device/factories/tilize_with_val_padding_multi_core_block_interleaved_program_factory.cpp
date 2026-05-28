@@ -33,6 +33,15 @@ void push_padded_cb_pair(
     tt::DataFormat input_cb_data_format,
     tt::DataFormat output_cb_data_format) {
     desc.cbs.push_back(CBDescriptor{
+        .total_size = input_single_tile_size + 64,
+        .core_ranges = core_ranges,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
+            .data_format = input_cb_data_format,
+            .page_size = input_single_tile_size + 64,
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
         .total_size = num_tiles * input_single_tile_size,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
