@@ -6,23 +6,24 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 
-RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::create(
+using namespace tt;
+using namespace tt::constants;
+using namespace tt::tt_metal;
+
+ProgramDescriptor RotaryEmbeddingLlamaMultiCore::create_descriptor(
     const RotaryEmbeddingLlamaParams& operation_attributes,
     const RotaryEmbeddingLlamaInputs& tensor_args,
     tt::tt_metal::Tensor& output) {
-    using namespace tt::constants;
-    using namespace tt::tt_metal;
-    using namespace tt;
+    ProgramDescriptor desc;
 
     const auto& input = tensor_args.input_tensor;
     const auto& cos = tensor_args.cos_cache;
     const auto& sin = tensor_args.sin_cache;
     const auto& trans_mat = tensor_args.trans_mat;
-
-    Program program{};
 
     const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -72,9 +73,6 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
 
     CoreRange all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
-    bool in_sharded = input.shard_spec().has_value();
-    std::optional<ShardSpec> shard_spec = in_sharded ? input.shard_spec() : output.shard_spec();
-
     const uint32_t num_input_tiles = 2 * head_dim_t;
     const uint32_t num_output_tiles = num_input_tiles;
 
@@ -103,71 +101,110 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
         num_cos_sin_tiles = num_input_tiles;
     }
 
-    uint32_t input_cb_index = CBIndex::c_0;
-    tt_metal::CircularBufferConfig cb_input_config =
-        tt_metal::CircularBufferConfig(
-            input_cb_num_tiles * input_single_tile_size, {{input_cb_index, input_cb_data_format}})
-            .set_page_size(input_cb_index, input_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_input_config);
+    constexpr uint8_t input_cb_index = CBIndex::c_0;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = input_cb_num_tiles * input_single_tile_size,
+        .core_ranges = CoreRangeSet(all_cores),
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = input_cb_index,
+            .data_format = input_cb_data_format,
+            .page_size = input_single_tile_size,
+        }}},
+    });
 
-    uint32_t cos_cb_index = CBIndex::c_1;
-    tt_metal::CircularBufferConfig cb_cos_config =
-        tt_metal::CircularBufferConfig(num_cos_sin_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
-            .set_page_size(cos_cb_index, cos_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_config);
+    constexpr uint8_t cos_cb_index = CBIndex::c_1;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_cos_sin_tiles * cos_single_tile_size,
+        .core_ranges = CoreRangeSet(all_cores),
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = cos_cb_index,
+            .data_format = cos_cb_data_format,
+            .page_size = cos_single_tile_size,
+        }}},
+    });
 
-    uint32_t sin_cb_index = CBIndex::c_2;
-    tt_metal::CircularBufferConfig cb_sin_config =
-        tt_metal::CircularBufferConfig(num_cos_sin_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
-            .set_page_size(sin_cb_index, sin_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_config);
+    constexpr uint8_t sin_cb_index = CBIndex::c_2;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_cos_sin_tiles * sin_single_tile_size,
+        .core_ranges = CoreRangeSet(all_cores),
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = sin_cb_index,
+            .data_format = sin_cb_data_format,
+            .page_size = sin_single_tile_size,
+        }}},
+    });
 
-    uint32_t trans_mat_cb_index = CBIndex::c_3;
+    constexpr uint8_t trans_mat_cb_index = CBIndex::c_3;
     // We only take one tile of trans_mat
     uint32_t num_trans_mat_tiles = 1;
-    tt_metal::CircularBufferConfig cb_trans_mat_config =
-        tt_metal::CircularBufferConfig(
-            num_trans_mat_tiles * trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
-            .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_trans_mat_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_trans_mat_tiles * trans_mat_single_tile_size,
+        .core_ranges = CoreRangeSet(all_cores),
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = trans_mat_cb_index,
+            .data_format = trans_mat_cb_data_format,
+            .page_size = trans_mat_single_tile_size,
+        }}},
+    });
 
     uint32_t num_interm_tiles = head_dim_t;
-    uint32_t rotated_input_interm_cb_index = CBIndex::c_24;
-    tt_metal::CircularBufferConfig cb_rotated_input_interm_config =
-        tt_metal::CircularBufferConfig(
-            num_interm_tiles * input_single_tile_size, {{rotated_input_interm_cb_index, input_cb_data_format}})
-            .set_page_size(rotated_input_interm_cb_index, input_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_rotated_input_interm_config);
+    constexpr uint8_t rotated_input_interm_cb_index = CBIndex::c_24;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_interm_tiles * input_single_tile_size,
+        .core_ranges = CoreRangeSet(all_cores),
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = rotated_input_interm_cb_index,
+            .data_format = input_cb_data_format,
+            .page_size = input_single_tile_size,
+        }}},
+    });
 
-    uint32_t cos_interm_cb_index = CBIndex::c_25;
-    tt_metal::CircularBufferConfig cb_cos_interm_config =
-        tt_metal::CircularBufferConfig(
-            num_interm_tiles * cos_single_tile_size, {{cos_interm_cb_index, cos_cb_data_format}})
-            .set_page_size(cos_interm_cb_index, cos_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_interm_config);
+    constexpr uint8_t cos_interm_cb_index = CBIndex::c_25;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_interm_tiles * cos_single_tile_size,
+        .core_ranges = CoreRangeSet(all_cores),
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = cos_interm_cb_index,
+            .data_format = cos_cb_data_format,
+            .page_size = cos_single_tile_size,
+        }}},
+    });
 
-    uint32_t sin_interm_cb_index = CBIndex::c_26;
-    tt_metal::CircularBufferConfig cb_sin_interm_config =
-        tt_metal::CircularBufferConfig(
-            num_interm_tiles * sin_single_tile_size, {{sin_interm_cb_index, sin_cb_data_format}})
-            .set_page_size(sin_interm_cb_index, sin_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_interm_config);
+    constexpr uint8_t sin_interm_cb_index = CBIndex::c_26;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_interm_tiles * sin_single_tile_size,
+        .core_ranges = CoreRangeSet(all_cores),
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = sin_interm_cb_index,
+            .data_format = sin_cb_data_format,
+            .page_size = sin_single_tile_size,
+        }}},
+    });
 
-    uint32_t output_cb_index = CBIndex::c_16;  // output operands start at index 16
-    tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(
-            num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
-            .set_page_size(output_cb_index, output_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    constexpr uint8_t output_cb_index = CBIndex::c_16;  // output operands start at index 16
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_output_tiles * output_single_tile_size,
+        .core_ranges = CoreRangeSet(all_cores),
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = output_cb_index,
+            .data_format = output_cb_data_format,
+            .page_size = output_single_tile_size,
+        }}},
+    });
 
-    uint32_t zero_cb_index = CBIndex::c_27;
-    tt_metal::CircularBufferConfig cb_zero_config =
-        tt_metal::CircularBufferConfig(head_dim_t * output_single_tile_size, {{zero_cb_index, output_cb_data_format}})
-            .set_page_size(zero_cb_index, output_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_zero_config);
+    constexpr uint8_t zero_cb_index = CBIndex::c_27;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = head_dim_t * output_single_tile_size,
+        .core_ranges = CoreRangeSet(all_cores),
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = zero_cb_index,
+            .data_format = output_cb_data_format,
+            .page_size = output_single_tile_size,
+        }}},
+    });
 
-    std::map<std::string, std::string> kernel_defines;
-    kernel_defines["RELOAD_IMPL"] = use_reload_impl ? "1" : "0";
+    KernelDescriptor::Defines kernel_defines;
+    kernel_defines.emplace_back("RELOAD_IMPL", use_reload_impl ? "1" : "0");
 
     auto* src_buffer = input.buffer();
     auto* cos_buffer = cos.buffer();
@@ -188,10 +225,10 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
         (std::uint32_t)sin_seq_len_t,
         (std::uint32_t)rotary_seq_len_t,
     };
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(trans_mat_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*trans_mat_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
         (std::uint32_t)zero_cb_index,
@@ -200,21 +237,27 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
         (std::uint32_t)seq_len_t,
         (std::uint32_t)rotary_seq_len_t,
     };
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
-    tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
-        program,
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/dataflow/"
-        "reader_rotary_embedding_llama_interleaved_start_id.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
+        "reader_rotary_embedding_llama_interleaved_start_id.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = CoreRangeSet(all_cores);
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.defines = kernel_defines;
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
-        program,
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/dataflow/"
-        "writer_rotary_embedding_llama_interleaved_start_id.cpp",
-        all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
+        "writer_rotary_embedding_llama_interleaved_start_id.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = CoreRangeSet(all_cores);
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.defines = kernel_defines;
+    writer_desc.config = WriterConfigDescriptor{};
 
     std::vector<uint32_t> compute_kernel_args = {
         (std::uint32_t)input_cb_index,
@@ -230,16 +273,18 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
         (std::uint32_t)rotary_seq_len_t,
     };
 
-    auto rotary_embedding_kernel_id = tt_metal::CreateKernel(
-        program,
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/"
-        "rotary_embedding_llama.cpp",
-        all_cores,
-        tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .compile_args = compute_kernel_args,
-            .defines = kernel_defines});
+        "rotary_embedding_llama.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = CoreRangeSet(all_cores);
+    compute_desc.compile_time_args = std::move(compute_kernel_args);
+    compute_desc.defines = std::move(kernel_defines);
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+    };
 
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
@@ -247,18 +292,14 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
         Overall loop iterations: # total cores
     */
 
-    std::vector<uint32_t> default_reader_args = {
-        src_buffer->address(), cos_buffer->address(), sin_buffer->address(), trans_mat_buffer->address(), 0, 0, 0, 0};
-
-    std::vector<uint32_t> default_writer_args = {dst_buffer->address(), 0, 0, 0, 0};
-
-    std::vector<uint32_t> default_compute_args = {0, 0, 0, 0};
-
-    std::vector<std::vector<uint32_t>> unary_reader_args = {cores.size(), default_reader_args};
-    std::vector<std::vector<uint32_t>> unary_writer_args = {cores.size(), default_writer_args};
-    std::vector<std::vector<uint32_t>> unary_compute_args = {cores.size(), default_compute_args};
-
-    uint32_t num_active_cores = 0;
+    // Per-core args tracked as {start_batch, end_batch, start_seq, end_seq, active}.
+    struct CoreArgs {
+        uint32_t start_batch = 0;
+        uint32_t end_batch = 0;
+        uint32_t start_seq = 0;
+        uint32_t end_seq = 0;
+    };
+    std::vector<CoreArgs> per_core_args(cores.size());
 
     for (uint32_t batch_parallel = 0; batch_parallel < batch_parallel_factor; batch_parallel++) {
         for (uint32_t seq_parallel = 0; seq_parallel < seq_parallel_factor; seq_parallel++) {
@@ -282,83 +323,28 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
                 start_seq,
                 end_seq);
 
-            // Reader runtime args
-            auto& reader_rt_args = unary_reader_args[core_idx];
-            reader_rt_args[4] = start_batch;
-            reader_rt_args[5] = end_batch;
-            reader_rt_args[6] = start_seq;
-            reader_rt_args[7] = end_seq;
-
-            // Writer runtime args
-            auto& writer_rt_args = unary_writer_args[core_idx];
-            writer_rt_args[1] = start_batch;
-            writer_rt_args[2] = end_batch;
-            writer_rt_args[3] = start_seq;
-            writer_rt_args[4] = end_seq;
-
-            // Compute runtime args
-            auto& compute_rt_args = unary_compute_args[core_idx];
-            compute_rt_args[0] = start_batch;
-            compute_rt_args[1] = end_batch;
-            compute_rt_args[2] = start_seq;
-            compute_rt_args[3] = end_seq;
-
-            num_active_cores = core_idx + 1;
+            per_core_args[core_idx] = CoreArgs{start_batch, end_batch, start_seq, end_seq};
         }
     }
 
-    tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, cores, unary_reader_args);
-    tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, cores, unary_writer_args);
-    tt_metal::SetRuntimeArgs(program, rotary_embedding_kernel_id, cores, unary_compute_args);
-
-    RotaryEmbeddingLlamaMultiCore::shared_variables_t shared_variables;
-    shared_variables.unary_reader_kernel_id = unary_reader_kernel_id;
-    shared_variables.unary_writer_kernel_id = unary_writer_kernel_id;
-    shared_variables.rotary_embedding_kernel_id = rotary_embedding_kernel_id;
-    shared_variables.cores = cores;
-    shared_variables.num_active_cores = num_active_cores;
-
-    return {std::move(program), std::move(shared_variables)};
-}
-
-void RotaryEmbeddingLlamaMultiCore::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const RotaryEmbeddingLlamaParams& /*operation_attributes*/,
-    const RotaryEmbeddingLlamaInputs& tensor_args,
-    tt::tt_metal::Tensor& output) {
-    using namespace tt::constants;
-    using namespace tt::tt_metal;
-
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
-
-    auto* src_buffer = tensor_args.input_tensor.buffer();
-    auto* cos_buffer = tensor_args.cos_cache.buffer();
-    auto* sin_buffer = tensor_args.sin_cache.buffer();
-    auto* trans_mat_buffer = tensor_args.trans_mat.buffer();
-    auto* dst_buffer = output.buffer();
-
-    auto& cached_reader_args = GetRuntimeArgs(program, shared_variables.unary_reader_kernel_id);
-    auto& cached_writer_args = GetRuntimeArgs(program, shared_variables.unary_writer_kernel_id);
-
-    const auto& cores = shared_variables.cores;
-    uint32_t num_active_cores = shared_variables.num_active_cores;
-
-    for (uint32_t i = 0; i < num_active_cores; ++i) {
-        const CoreCoord& core = cores.at(i);
-        {
-            auto& runtime_args = cached_reader_args.at(core.x).at(core.y);
-            runtime_args[0] = src_buffer->address();
-            runtime_args[1] = cos_buffer->address();
-            runtime_args[2] = sin_buffer->address();
-            runtime_args[3] = trans_mat_buffer->address();
-        }
-
-        {
-            auto& runtime_args = cached_writer_args.at(core.x).at(core.y);
-            runtime_args[0] = dst_buffer->address();
-        }
+    reader_desc.runtime_args.reserve(cores.size());
+    writer_desc.runtime_args.reserve(cores.size());
+    compute_desc.runtime_args.reserve(cores.size());
+    for (uint32_t i = 0; i < cores.size(); ++i) {
+        const auto& a = per_core_args[i];
+        reader_desc.emplace_runtime_args(
+            cores[i],
+            {src_buffer, cos_buffer, sin_buffer, trans_mat_buffer, a.start_batch, a.end_batch, a.start_seq, a.end_seq});
+        writer_desc.emplace_runtime_args(cores[i], {dst_buffer, a.start_batch, a.end_batch, a.start_seq, a.end_seq});
+        compute_desc.runtime_args.emplace_back(
+            cores[i], std::vector<uint32_t>{a.start_batch, a.end_batch, a.start_seq, a.end_seq});
     }
+
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+
+    return desc;
 }
 
 }  // namespace ttnn::experimental::prim
