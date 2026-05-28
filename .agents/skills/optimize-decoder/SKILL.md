@@ -30,7 +30,7 @@ class OptimizedDecoder(LightweightModule):
     def decode_forward(self, ...): ...
 ```
 
-Reuse or wrap the functional implementation from models/autoports/<model>/tt/functional_decoder.py when that is the clearest path, but make sure tests and perf evidence exercise the optimized path.
+Reuse or wrap the functional implementation from models/autoports/<model>/tt/functional_decoder.py when that is the clearest path, but make sure tests and perf evidence exercise the optimized path. Also: your goal is to produce an optimized implementation. That often means doing more than just tweaking things in the functional path and require reimplementing some or all of its forward pass - in those cases feel free to copy the code into your optimized class as a starting point and change it as much as you need to!
 
 ## How To Approach It
 
