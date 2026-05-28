@@ -519,20 +519,29 @@ struct NoIn1BaseOffset {
  *                     out_subblock_h * out_subblock_w (= out_subblock_num_tiles) so
  *                     the per-subblock pack_untilize call covers the full DST sub-block.
  *   pin_interm_to_captured_base
- *                     Default false. When true, the helper captures interm_buf's
- *                     fifo_rd_ptr / fifo_wr_ptr at entry and resets them per K-block
- *                     (and once after the K-loop on the pack_last_to_interm path) to
- *                     keep interm_buf operating at a fixed L1 base across all blocks.
- *                     Required when interm_buf is allocated to alias the output buffer
- *                     in L1 (e.g. conv2d's `partials_cb_uses_output=true` path) — the
- *                     K-loop's natural fifo advance would otherwise wrap and overwrite
- *                     previously packed output. Pin pattern matches conv2d's original
- *                     manual K-loop:
- *                       pack_last_to_interm:        rd+wr reset for block < num-1
- *                       !pack_last_to_interm: rd reset for block < num-1; wr reset for
- *                                             block < num-2 (so the last reload still
- *                                             finds the second-to-last block's data at
- *                                             advanced wr_ptr).
+ *                     Default false. When true, the helper reserves interm_buf
+ *                     once at entry (out_block_num_tiles), packs each K-block's
+ *                     subblocks to fixed tile offsets within that reservation via
+ *                     pack_tile<true>, and reloads via copy_block_matmul_partials
+ *                     with start_in_tile_index set to the subblock's tile offset.
+ *                     No per-K-block reserve/push/pop on interm and no direct
+ *                     fifo_rd_ptr / fifo_wr_ptr access — the CB pointers never
+ *                     advance off the captured base because the helper never
+ *                     push_backs during the K-loop. On the pack_last_to_interm
+ *                     path the helper push_backs out_block_num_tiles once at
+ *                     exit so the downstream consumer (bias-add, untilize) sees
+ *                     the accumulated block; on the !pack_last_to_interm path
+ *                     interm holds only K-loop scratch and no end push is needed.
+ *                     Required when interm_buf is allocated to alias the output
+ *                     buffer in L1 (e.g. conv2d's `partials_cb_uses_output=true`
+ *                     path) — without pin, the K-loop's natural push/pop would
+ *                     advance the fifo ptrs past the captured base and wrap into
+ *                     already-packed output. Constraints: tile_order must be
+ *                     SubblockMajor (offset arithmetic is subblock-aligned),
+ *                     last_block_target must not be OutWithUntilize
+ *                     (pack_untilize_dest doesn't compose with absolute-offset
+ *                     packs), and shape.batch must be 1 (the one-shot reservation
+ *                     is outside the batch loop).
  *   Activation        Default NoneActivation. When the bound activation kind is non-NONE
  *                     the helper fuses SFPU activation onto the PACKER thread (TRISC2)
  *                     at the per-subblock pack stage of the last K-block, instead of
