@@ -1,8 +1,0 @@
-﻿ttnn.lgamma
-===========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.lgamma:
-
-.. autooperation:: ttnn.lgamma

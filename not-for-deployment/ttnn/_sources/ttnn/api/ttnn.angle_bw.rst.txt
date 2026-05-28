@@ -1,8 +1,0 @@
-﻿ttnn.angle\_bw
-==============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.angle_bw:
-
-.. autooperation:: ttnn.angle_bw

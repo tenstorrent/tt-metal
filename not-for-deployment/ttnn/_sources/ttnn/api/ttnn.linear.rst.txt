@@ -1,8 +1,0 @@
-﻿ttnn.linear
-===========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.linear:
-
-.. autooperation:: ttnn.linear

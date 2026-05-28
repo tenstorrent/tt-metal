@@ -1,8 +1,0 @@
-﻿ttnn.real
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.real:
-
-.. autooperation:: ttnn.real

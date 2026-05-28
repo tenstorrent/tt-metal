@@ -1,8 +1,0 @@
-﻿ttnn.logit
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.logit:
-
-.. autooperation:: ttnn.logit

@@ -1,8 +1,0 @@
-﻿ttnn.heaviside
-==============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.heaviside:
-
-.. autooperation:: ttnn.heaviside

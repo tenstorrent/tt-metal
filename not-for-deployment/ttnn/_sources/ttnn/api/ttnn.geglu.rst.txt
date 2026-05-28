@@ -1,8 +1,0 @@
-﻿ttnn.geglu
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.geglu:
-
-.. autooperation:: ttnn.geglu

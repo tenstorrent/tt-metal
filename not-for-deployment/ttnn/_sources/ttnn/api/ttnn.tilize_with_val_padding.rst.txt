@@ -1,8 +1,0 @@
-﻿ttnn.tilize\_with\_val\_padding
-===============================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.tilize_with_val_padding:
-
-.. autooperation:: ttnn.tilize_with_val_padding

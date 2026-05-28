@@ -1,8 +1,0 @@
-﻿ttnn.sin
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.sin:
-
-.. autooperation:: ttnn.sin

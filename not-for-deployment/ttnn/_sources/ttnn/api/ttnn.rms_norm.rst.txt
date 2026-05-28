@@ -1,8 +1,0 @@
-﻿ttnn.rms\_norm
-==============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.rms_norm:
-
-.. autooperation:: ttnn.rms_norm

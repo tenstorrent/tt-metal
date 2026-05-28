@@ -1,8 +1,0 @@
-﻿ttnn.hardswish
-==============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.hardswish:
-
-.. autooperation:: ttnn.hardswish

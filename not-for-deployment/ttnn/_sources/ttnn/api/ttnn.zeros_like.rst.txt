@@ -1,8 +1,0 @@
-﻿ttnn.zeros\_like
-================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.zeros_like:
-
-.. autooperation:: ttnn.zeros_like

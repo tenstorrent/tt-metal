@@ -1,8 +1,0 @@
-﻿ttnn.sign\_bw
-=============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.sign_bw:
-
-.. autooperation:: ttnn.sign_bw

@@ -1,8 +1,0 @@
-﻿ttnn.pow
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.pow:
-
-.. autooperation:: ttnn.pow

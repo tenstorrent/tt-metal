@@ -1,8 +1,0 @@
-﻿ttnn.logaddexp2
-===============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.logaddexp2:
-
-.. autooperation:: ttnn.logaddexp2

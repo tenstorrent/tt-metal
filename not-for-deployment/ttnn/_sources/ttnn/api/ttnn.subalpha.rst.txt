@@ -1,8 +1,0 @@
-﻿ttnn.subalpha
-=============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.subalpha:
-
-.. autooperation:: ttnn.subalpha

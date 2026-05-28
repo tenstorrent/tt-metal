@@ -1,8 +1,0 @@
-﻿ttnn.prepare\_conv\_transpose2d\_weights
-========================================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.prepare_conv_transpose2d_weights:
-
-.. autofunction:: ttnn.prepare_conv_transpose2d_weights

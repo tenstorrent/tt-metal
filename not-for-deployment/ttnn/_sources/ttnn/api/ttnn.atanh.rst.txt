@@ -1,8 +1,0 @@
-﻿ttnn.atanh
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.atanh:
-
-.. autooperation:: ttnn.atanh

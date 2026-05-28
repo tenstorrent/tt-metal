@@ -1,8 +1,0 @@
-﻿ttnn.cbrt
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.cbrt:
-
-.. autooperation:: ttnn.cbrt

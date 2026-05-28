@@ -1,8 +1,0 @@
-﻿ttnn.remainder\_bw
-==================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.remainder_bw:
-
-.. autooperation:: ttnn.remainder_bw

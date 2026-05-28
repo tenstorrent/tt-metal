@@ -1,8 +1,0 @@
-﻿ttnn.lt\_
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.lt_:
-
-.. autooperation:: ttnn.lt_

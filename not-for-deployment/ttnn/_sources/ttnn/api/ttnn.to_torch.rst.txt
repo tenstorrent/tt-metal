@@ -1,8 +1,0 @@
-﻿ttnn.to\_torch
-==============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.to_torch:
-
-.. autooperation:: ttnn.to_torch

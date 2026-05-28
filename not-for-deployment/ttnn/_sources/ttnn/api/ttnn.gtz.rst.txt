@@ -1,8 +1,0 @@
-﻿ttnn.gtz
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.gtz:
-
-.. autooperation:: ttnn.gtz

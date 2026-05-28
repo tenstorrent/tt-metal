@@ -1,8 +1,0 @@
-﻿ttnn.real\_bw
-=============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.real_bw:
-
-.. autooperation:: ttnn.real_bw

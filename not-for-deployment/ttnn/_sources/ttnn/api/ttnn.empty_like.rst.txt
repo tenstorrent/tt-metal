@@ -1,8 +1,0 @@
-﻿ttnn.empty\_like
-================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.empty_like:
-
-.. autooperation:: ttnn.empty_like

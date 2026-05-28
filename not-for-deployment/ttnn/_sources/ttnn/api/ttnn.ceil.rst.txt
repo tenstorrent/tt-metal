@@ -1,8 +1,0 @@
-﻿ttnn.ceil
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.ceil:
-
-.. autooperation:: ttnn.ceil

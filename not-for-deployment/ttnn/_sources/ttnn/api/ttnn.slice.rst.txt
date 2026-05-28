@@ -1,8 +1,0 @@
-﻿ttnn.slice
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.slice:
-
-.. autooperation:: ttnn.slice

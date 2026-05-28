@@ -1,8 +1,0 @@
-﻿ttnn.mean
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.mean:
-
-.. autooperation:: ttnn.mean

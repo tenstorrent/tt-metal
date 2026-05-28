@@ -1,8 +1,0 @@
-﻿ttnn.fill\_rm
-=============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.fill_rm:
-
-.. autooperation:: ttnn.fill_rm

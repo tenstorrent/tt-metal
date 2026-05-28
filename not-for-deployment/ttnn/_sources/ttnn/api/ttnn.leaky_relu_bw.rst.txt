@@ -1,8 +1,0 @@
-﻿ttnn.leaky\_relu\_bw
-====================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.leaky_relu_bw:
-
-.. autooperation:: ttnn.leaky_relu_bw

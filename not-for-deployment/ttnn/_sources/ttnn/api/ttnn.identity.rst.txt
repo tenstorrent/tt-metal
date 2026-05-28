@@ -1,8 +1,0 @@
-﻿ttnn.identity
-=============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.identity:
-
-.. autooperation:: ttnn.identity

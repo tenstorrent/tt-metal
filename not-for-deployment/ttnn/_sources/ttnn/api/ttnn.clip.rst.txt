@@ -1,8 +1,0 @@
-﻿ttnn.clip
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.clip:
-
-.. autooperation:: ttnn.clip

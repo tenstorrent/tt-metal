@@ -1,8 +1,0 @@
-﻿ttnn.hypot\_bw
-==============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.hypot_bw:
-
-.. autooperation:: ttnn.hypot_bw

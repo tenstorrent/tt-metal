@@ -1,8 +1,0 @@
-﻿ttnn.group\_norm
-================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.group_norm:
-
-.. autooperation:: ttnn.group_norm

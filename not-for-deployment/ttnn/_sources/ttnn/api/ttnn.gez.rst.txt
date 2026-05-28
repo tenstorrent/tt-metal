@@ -1,8 +1,0 @@
-﻿ttnn.gez
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.gez:
-
-.. autooperation:: ttnn.gez

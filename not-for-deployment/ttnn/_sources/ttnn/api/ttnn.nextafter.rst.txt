@@ -1,8 +1,0 @@
-﻿ttnn.nextafter
-==============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.nextafter:
-
-.. autooperation:: ttnn.nextafter

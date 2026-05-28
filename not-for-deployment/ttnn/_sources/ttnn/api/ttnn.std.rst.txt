@@ -1,8 +1,0 @@
-﻿ttnn.std
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.std:
-
-.. autooperation:: ttnn.std

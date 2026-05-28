@@ -1,8 +1,0 @@
-﻿ttnn.scatter
-============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.scatter:
-
-.. autooperation:: ttnn.scatter

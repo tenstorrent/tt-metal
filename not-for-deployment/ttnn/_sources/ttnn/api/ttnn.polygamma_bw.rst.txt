@@ -1,8 +1,0 @@
-﻿ttnn.polygamma\_bw
-==================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.polygamma_bw:
-
-.. autooperation:: ttnn.polygamma_bw

@@ -1,8 +1,0 @@
-﻿ttnn.arange
-===========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.arange:
-
-.. autooperation:: ttnn.arange

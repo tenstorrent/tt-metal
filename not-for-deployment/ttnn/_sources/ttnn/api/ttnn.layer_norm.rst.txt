@@ -1,8 +1,0 @@
-﻿ttnn.layer\_norm
-================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.layer_norm:
-
-.. autooperation:: ttnn.layer_norm

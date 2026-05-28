@@ -1,8 +1,0 @@
-﻿ttnn.register\_post\_operation\_hook
-====================================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.register_post_operation_hook:
-
-.. autofunction:: ttnn.register_post_operation_hook

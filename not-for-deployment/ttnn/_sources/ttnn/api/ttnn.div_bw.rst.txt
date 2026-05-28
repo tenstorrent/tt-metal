@@ -1,8 +1,0 @@
-﻿ttnn.div\_bw
-============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.div_bw:
-
-.. autooperation:: ttnn.div_bw

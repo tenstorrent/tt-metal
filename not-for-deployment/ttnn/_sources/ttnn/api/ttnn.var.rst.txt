@@ -1,8 +1,0 @@
-﻿ttnn.var
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.var:
-
-.. autooperation:: ttnn.var

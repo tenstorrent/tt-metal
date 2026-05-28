@@ -1,8 +1,0 @@
-﻿ttnn.acosh
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.acosh:
-
-.. autooperation:: ttnn.acosh

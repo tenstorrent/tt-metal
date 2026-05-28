@@ -1,8 +1,0 @@
-﻿ttnn.nez
-========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.nez:
-
-.. autooperation:: ttnn.nez

@@ -1,8 +1,0 @@
-﻿ttnn.reshape
-============
-
-.. currentmodule:: ttnn
-
-.. _ttnn.reshape:
-
-.. autooperation:: ttnn.reshape

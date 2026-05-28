@@ -1,8 +1,0 @@
-﻿ttnn.tril
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.tril:
-
-.. autooperation:: ttnn.tril

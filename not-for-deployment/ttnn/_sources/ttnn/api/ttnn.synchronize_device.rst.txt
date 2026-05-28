@@ -1,8 +1,0 @@
-﻿ttnn.synchronize\_device
-========================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.synchronize_device:
-
-.. autofunction:: ttnn.synchronize_device

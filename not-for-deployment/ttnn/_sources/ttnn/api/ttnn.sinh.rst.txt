@@ -1,8 +1,0 @@
-﻿ttnn.sinh
-=========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.sinh:
-
-.. autooperation:: ttnn.sinh

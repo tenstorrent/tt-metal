@@ -1,8 +1,0 @@
-﻿ttnn.outer
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.outer:
-
-.. autooperation:: ttnn.outer

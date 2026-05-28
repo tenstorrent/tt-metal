@@ -1,8 +1,0 @@
-﻿ttnn.swiglu
-===========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.swiglu:
-
-.. autooperation:: ttnn.swiglu

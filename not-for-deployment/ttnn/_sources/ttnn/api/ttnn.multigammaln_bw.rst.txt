@@ -1,8 +1,0 @@
-﻿ttnn.multigammaln\_bw
-=====================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.multigammaln_bw:
-
-.. autooperation:: ttnn.multigammaln_bw

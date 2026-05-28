@@ -1,8 +1,0 @@
-﻿ttnn.to\_memory\_config
-=======================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.to_memory_config:
-
-.. autooperation:: ttnn.to_memory_config

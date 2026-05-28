@@ -1,8 +1,0 @@
-﻿ttnn.normalize\_hw
-==================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.normalize_hw:
-
-.. autooperation:: ttnn.normalize_hw
