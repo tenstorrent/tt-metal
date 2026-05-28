@@ -145,7 +145,7 @@ same `to_layout` wrap path); no separate affine-layout refinement.
 - Output tensor's layout mirrors the input tensor's layout
   (test: round-trip TILE→layer_norm→TILE on a small shape).
 
-### [ ] Refinement 3 — Non-tile-aligned shapes (W / H % 32 ≠ 0)
+### [x] Refinement 3 — Non-tile-aligned shapes (W / H % 32 ≠ 0)
 
 **Goal**: add `"w_non_aligned"` and `"h_non_aligned"` to
 `SUPPORTED["alignment"]`. The kernel must handle the case where the

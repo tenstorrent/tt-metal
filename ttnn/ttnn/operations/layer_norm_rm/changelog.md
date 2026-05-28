@@ -331,3 +331,155 @@
   **157/157** across `tests/ttnn/unit_tests/operations/layer_norm_rm/`.
   Full **1335/1335** passing (no supported_fail) across
   `eval/golden_tests/layer_norm_rm/`.
+
+## Refinement 3 — Non-tile-aligned shapes (W / H % 32 ≠ 0)
+- **Date**: 2026-05-28
+- **What was done**: Added `"w_non_aligned"` and `"h_non_aligned"` to
+  `SUPPORTED["alignment"]`. The kernel now handles RM input whose H and/or
+  W is not a multiple of 32, following the softmax-R4 partial-scaler
+  pattern applied to layer_norm's two-pass mean/variance reduce.
+
+  Three coordinated edits across the program descriptor and all three
+  kernels:
+
+  1. **`layer_norm_rm_program_descriptor.py`** — switched `Wt` and
+     `num_strips` from floor to ceil division so the tile / strip count
+     reflects the physical L1 layout that includes the padded tail.
+     Computed `partial_w = W % 32` from the reduce-W dim and
+     `has_partial_w = 1 if partial_w > 0 else 0`. Computed
+     `last_strip_idx = num_strips - 1` and
+     `last_strip_rows = total_rows - last_strip_idx * 32` for the
+     H-non-aligned case (= 32 when aligned). Computed
+     `input_chunk_bytes_last`, `output_chunk_bytes_last`, and
+     `affine_chunk_bytes_last` as the actual valid byte count for the
+     LAST chunk along W (the chunk's tile-padded coverage extends past
+     the logical W when partial_w > 0). When `has_partial_w == 1`,
+     sized `cb_scaler` to 2 tiles instead of 1, then passed the new
+     CT args to reader / writer / compute.
+
+  2. **`layer_norm_rm_reader.cpp`** — boot-time scaler emit now picks
+     between two pool-type/reduce-dim-aware overloads:
+       - `partial_w > 0`: `prepare_partial_reduce_scalers<cb_scaler,
+         PoolType::SUM, REDUCE_ROW, partial_w>(1.0f / W)` emits the
+         (full, partial) tile pair. The partial tile has col-0 filled
+         only on rows [0, partial_w); rows >= partial_w hold 0, masking
+         the padded W positions out of the SUM reduce.
+       - `partial_w == 0`: legacy
+         `prepare_reduce_scaler<…, SUM, REDUCE_ROW>(1/W)` single-tile
+         path (Phase-0 / R1 behaviour preserved exactly).
+     In the per-strip loop, `rows_this_strip = (strip == last_strip_idx)
+     ? last_strip_rows : 32` is passed to every
+     `read_sticks_for_tilize<TILE>` call so the global last strip reads
+     only the valid rows. In the per-chunk loop,
+     `chunk_bytes_this = (c == NUM_BLOCKS - 1) ? *_chunk_bytes_last :
+     *_chunk_bytes` selects the actual valid byte count for the last
+     chunk. Both input and affine (gamma/beta) reads gate on the same
+     pattern (independent bpe scaling).
+
+  3. **`layer_norm_rm_compute.cpp`** — added `HAS_PARTIAL_W` CT arg and
+     a single `constexpr auto partial_scaler = (HAS_PARTIAL_W != 0)
+     ? ckl::ReducePartialScaler::last_tile_at(1)
+     : ckl::ReducePartialScaler::none();` selector. Forwarded it to
+     Pass A (`accumulate_reduce_block<SUM, REDUCE_ROW>` into `cb_mean`)
+     and Pass B (`accumulate_reduce_block<SUM, REDUCE_ROW>` into
+     `cb_inv_std`). `accumulate_reduce_block` routes the partial scaler
+     only to `b == NUM_BLOCKS-1`, where the inner `reduce<>` picks
+     `last_tile_scaler_idx = 1` for the strip's LAST reduce-dim tile —
+     exactly the boundary between valid and padded W positions. Pass C
+     (`sub<COL>(x, mean)` → `mul<COL>(centered, inv_std)` → optional
+     `mul<ROW>(centered, gamma)` / `add<ROW>(centered, beta)` →
+     untilize) computes junk in the padded W positions; the writer
+     drops them on the way out. End-of-kernel `cb_pop_front(cb_scaler,
+     …)` was sized to 2 when `HAS_PARTIAL_W != 0`.
+
+  4. **`layer_norm_rm_writer.cpp`** — symmetric to the reader: pass
+     `rows_this_strip` and `chunk_bytes_this` to
+     `write_sticks_after_untilize<cb_output_rm>`. The helper still pops
+     `width_in_tiles = BLOCK_SIZE` tile-pages from the CB per chunk so
+     the producer/consumer balance is preserved; the noc_async_write
+     only writes the valid bytes per stick.
+
+  Crucially, **zero kernel logic changed for the aligned path**: when
+  `partial_w == 0` and `last_strip_rows == 32`, every new branch
+  collapses to its R2 behaviour (single-tile scaler, full 32-row strip
+  reads/writes, full chunk bytes). The R2 acceptance suite passes
+  byte-identically.
+
+  Verifier-note caveat about bf16 + non-aligned interaction: the bf16
+  cross product (bf16_hifi4_fp32acc + W non-aligned + H non-aligned +
+  both axes) passed cleanly without any tolerance widening — see
+  `test_layer_norm_rm_bf16_non_aligned` (3 cells, PCC ≥ 0.995). No
+  EXCLUSIONS surfaced from R3.
+
+- **SUPPORTED at Refinement 3**:
+  - `alignment` = `["tile_aligned", "w_non_aligned", "h_non_aligned"]`
+  - Every other axis unchanged from R2.
+- **EXCLUSIONS at Refinement 3**: unchanged from R2 — still just the
+  single `{"precision": "bf8b_hifi4_bf16acc"}` entry inherited from
+  R2 (no new structural gaps). The xfailed-cell count grew from 220 at
+  R2 to 385 at R3 because the bf8b EXCLUSIONS entry is now reachable
+  across all three alignment values × layout × rank × affine —
+  unchanged code, more cells reach the exclusion gate.
+
+- **Accuracy achieved** (measured by
+  `tests/ttnn/unit_tests/operations/layer_norm_rm/test_layer_norm_rm_non_aligned.py`,
+  60 cells across 6 categories):
+  - **W non-aligned, fp32, all 3 affine modes** (21 cells): PCC ≥ 0.999
+    on every cell. Sample IDs: W=17 (sub-tile partial), W=33 (one tile
+    + 1 col), W=47 (two-strip wide partial), W=257 (multi-chunk with
+    partial last chunk → Wt=9, BLOCK_SIZE=3, NUM_BLOCKS=3, partial_w=1).
+  - **H non-aligned, fp32, all 3 affine modes** (18 cells): PCC ≥ 0.999.
+    Sample IDs: H=17 (single-strip partial), H=33 (two strips, last=1
+    row), H=100 (multi-batch NC composition).
+  - **Both H and W non-aligned, fp32, all 3 affine modes** (9 cells):
+    PCC ≥ 0.999. Tagger emits `w_non_aligned`; both paths run.
+  - **Rank composition** (4 cells): PCC ≥ 0.999. rank-2 (32x17, 17x64)
+    and rank-3 (1x32x50, 4x17x128) with R3's entry-point unsqueeze wrap.
+  - **bf16 + non-aligned** (3 cells): PCC ≥ 0.995 — composes R1
+    (bf16_hifi4_fp32acc precision band) and R3 (alignment) cleanly.
+  - **Padded-position masking smoke** (4 cells, W ∈ {33, 47, 200, 257}):
+    PCC ≥ 0.999. A leaked partial scaler would tank PCC to ~0.2-0.7
+    depending on the garbage magnitude in the padded L1 region; clean
+    pass confirms the partial-scaler API is correctly routed.
+  - **Drift signal** (1): asserts `SUPPORTED["alignment"]` carries
+    `tile_aligned`, `w_non_aligned`, `h_non_aligned`.
+
+- **Golden test progress**: **2325 / 2325 supported-pass cells passing**
+  (was 1335 / 1335 at end of R2, +990 cells unlocked by R3). 385
+  xfailed (bf8b EXCLUSIONS, expanded reach via the new alignment cells).
+  2345 invalid_skipped (INVALID universe — unchanged). **0
+  supported_fail, 0 xpass_drift, 0 xfail_wrong_mode**.
+
+  The +990-cell unlock corresponds to the ~1155 alignment-gated cells
+  flagged in the verifier note minus the ~165 bf8b cells that became
+  reachable via the new alignment values but stay xfailed via the
+  inherited EXCLUSIONS entry.
+
+  "Done when" criterion met:
+  - `SUPPORTED["alignment"] == ["tile_aligned", "w_non_aligned", "h_non_aligned"]` ✓
+  - All alignment-gated cells pass the golden suite under existing
+    TOLERANCES (no widening) ✓ (+990 unlock)
+  - `tag_alignment` unchanged (already emits the three values) ✓
+
+- **Issues encountered**: None — first-attempt green. The partial-scaler
+  API (`prepare_partial_reduce_scalers` on the reader,
+  `ReducePartialScaler::last_tile_at(1)` on the compute) is a clean
+  drop-in over the aligned path; the only structural concern (ceil-Wt /
+  ceil-num_strips + last-chunk byte counts) was caught at descriptor-edit
+  time. The verifier note observed that bf16 + non_tile_aligned_dim
+  *could* trigger ULP rounding that interacts with R1 tolerance bands;
+  the spot check showed no such interaction — every bf16 mode passes
+  the same TOLERANCES band as the aligned case.
+
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/layer_norm_rm/test_layer_norm_rm_non_aligned.py`
+    — 60 cells across the 6 categories above (W non-aligned × 21,
+    H non-aligned × 18, both × 9, rank composition × 4, bf16 × 3,
+    padded-masking × 4, drift signal × 1).
+
+- **Tests preserved**: Phase-0 acceptance (32/32), precision baseline
+  (8/8), precision matrix (65/65), layout matrix (52/52), all
+  continue to pass. Full **217/217** across
+  `tests/ttnn/unit_tests/operations/layer_norm_rm/`. Full **2325/2325**
+  supported-pass (385 xfailed via inherited EXCLUSIONS, 2345
+  invalid_skipped) across `eval/golden_tests/layer_norm_rm/`.
