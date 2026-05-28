@@ -30,6 +30,7 @@ from ..math_perf_env import (
     ace_step_ensure_dram_activation,
     ace_step_init_vae_conv_compute_kernel_config,
     ace_step_reshape_kwargs,
+    ace_step_safe_deallocate,
     ace_step_vae_activation_compute_dtype,
     ace_step_vae_activation_storage_dtype,
     ace_step_vae_conv1d_im2col_matmul_enabled,
@@ -40,6 +41,7 @@ from ..math_perf_env import (
     ace_step_vae_k1_prefer_conv1d_l1,
     ace_step_vae_k7_sharded_output_config,
     ace_step_vae_normalize_activation_output,
+    ace_step_vae_synchronize,
 )
 
 
@@ -432,7 +434,14 @@ class TtConv1d:
         self._packed_for = (batch_size, input_length)
 
     def _run_conv1d(
-        self, x, *, batch_size: int, input_length: int, return_tile: bool = False, return_sharded: bool = False
+        self,
+        x,
+        *,
+        batch_size: int,
+        input_length: int,
+        return_tile: bool = False,
+        return_sharded: bool = False,
+        _cb_retry: bool = False,
     ):
         """Eager ``ttnn.conv1d`` on ``[B,T,C]`` row-major (prepares weights per shape).
 
@@ -455,7 +464,11 @@ class TtConv1d:
 
         if self.kernel_size > 1:
             dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+            ace_step_vae_synchronize(ttnn, self.device)
+            x_dram = x
             x = ace_step_ensure_dram_activation(ttnn, x, dram_mc)
+            if x is not x_dram:
+                ace_step_safe_deallocate(ttnn, x_dram)
             if x.layout != ttnn.ROW_MAJOR_LAYOUT:
                 kw = {"memory_config": dram_mc} if dram_mc is not None else {}
                 x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, **kw)
@@ -463,12 +476,18 @@ class TtConv1d:
         # Determine output memory config.
         out_mc = self._output_memory_config()  # DRAM for k>1 by default
         use_sharded = False
-        if return_sharded and self._sharded_output_cache.get((b, t)) is not False:
+        if return_sharded and not return_tile and self._sharded_output_cache.get((b, t)) is not False:
             out_T = self._output_length(t)
             sharded_mc = ace_step_vae_k7_sharded_output_config(ttnn, self.device, out_T, self.out_channels)
             if sharded_mc is not None:
                 out_mc = sharded_mc
                 use_sharded = True
+
+        conv_kw: dict = {}
+        # k>1 conv2d always emits DRAM interleaved; passing memory_config only warns and can
+        # confuse buffer planning on Blackhole (static CB vs activation L1 clash).
+        if self.kernel_size == 1 or use_sharded:
+            conv_kw["memory_config"] = out_mc
 
         try:
             ret = ttnn.conv1d(
@@ -490,18 +509,21 @@ class TtConv1d:
                 return_output_dim=True,
                 return_weights_and_bias=False,
                 dtype=self._compute_dtype,
-                memory_config=out_mc,
+                **conv_kw,
             )
         except RuntimeError as exc:
             msg = str(exc).lower()
-            if use_sharded and ("circular buffer" in msg or "statically allocated" in msg):
-                self._sharded_output_cache[(b, t)] = False
+            if self.kernel_size > 1 and not _cb_retry and ("circular buffer" in msg or "statically allocated" in msg):
+                if use_sharded:
+                    self._sharded_output_cache[(b, t)] = False
+                ace_step_vae_synchronize(ttnn, self.device)
                 return self._run_conv1d(
                     x,
                     batch_size=b,
                     input_length=t,
-                    return_tile=return_tile,
+                    return_tile=True,
                     return_sharded=False,
+                    _cb_retry=True,
                 )
             raise
         out, out_length = ret
@@ -613,6 +635,8 @@ class TtConv1d:
                 return chunked
         if self.kernel_size == 1:
             x = self._k1_row_major_for_conv1d(x)
+        if self.kernel_size > 1:
+            ace_step_vae_synchronize(ttnn, self.device)
         return self._run_conv1d(x, batch_size=b, input_length=t, return_tile=return_tile, return_sharded=return_sharded)
 
 
@@ -749,7 +773,6 @@ class TtConvTranspose1d:
             return_weights_and_bias=True,
             mirror_kernel=True,
             dtype=self._compute_dtype,
-            memory_config=self._output_memory_config(),
         )
         # conv_transpose2d returns NHWC [B, 1, T_out, out_channels] (rank-4)
         out = ttnn.squeeze(out, 1)

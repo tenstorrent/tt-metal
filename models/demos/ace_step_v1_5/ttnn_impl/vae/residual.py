@@ -14,7 +14,7 @@ Reference forward (diffusers / torch_ref):
 from __future__ import annotations
 
 from .._ttnn import get_ttnn
-from ..math_perf_env import ace_step_linear_l1_memory_config
+from ..math_perf_env import ace_step_linear_l1_memory_config, ace_step_safe_deallocate, ace_step_vae_synchronize
 from .conv1d import TtConv1d
 from .snake import TtSnake1d
 
@@ -59,10 +59,14 @@ def _height_sharded_add(ttnn, device, x, y, *, l1_mc, dram_mc):
         # Two-step avoids an UntilizeDeviceOperation reading from DRAM.
         result = ttnn.sharded_to_interleaved(result_sh, l1_mc)
         ttnn.deallocate(result_sh)
-        return ttnn.to_layout(result, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram_mc)
+        out = ttnn.to_layout(result, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram_mc)
+        ace_step_safe_deallocate(ttnn, result, x, y)
+        return out
     except Exception:
         # Fallback: L1 interleaved add (still better than the original DRAM path).
-        return ttnn.add(x, y, memory_config=dram_mc)
+        out = ttnn.add(x, y, memory_config=dram_mc)
+        ace_step_safe_deallocate(ttnn, x, y)
+        return out
 
 
 def _require_ttnn():
@@ -153,20 +157,23 @@ class TtOobleckResidualUnit:
             x_l1 = x
             x = ttnn.to_memory_config(x, dram_mc)
             if x is not x_l1:
-                try:
-                    ttnn.deallocate(x_l1)
-                except Exception:
-                    pass
+                ace_step_safe_deallocate(ttnn, x_l1)
+
+        if self.conv1.kernel_size > 1:
+            ace_step_vae_synchronize(ttnn, self.device)
 
         y = self.snake1(x)
-        # conv1→snake2 TILE contract: return_sharded tries HEIGHT_SHARDED L1 when
-        # ACE_STEP_VAE_K7_SHARDED_OUTPUT=1; otherwise falls back to return_tile (DRAM TILE).
-        # snake2 accepts TILE (DRAM→L1 DMA or L1 passthrough) and skips Tilize on ROW_MAJOR.
-        y = self.conv1(y, return_sharded=True)
+        if self.conv1.kernel_size > 1:
+            ace_step_vae_synchronize(ttnn, self.device)
+        # conv1→snake2 TILE contract: DRAM TILE out (no HEIGHT_SHARDED L1 conv output — clashes
+        # with static CBs on Blackhole when prior residual L1 buffers are still live).
+        y = self.conv1(y, return_tile=True)
+        ace_step_vae_synchronize(ttnn, self.device)
         # snake2→conv2 TILE contract: return_tile keeps L1 TILE out (no Untilize) so conv2
         # k=1 uses TILE in0 on the linear path or a single Untilize before conv1d.
         y = self.snake2(y, return_tile=True)
         y = self.conv2(y)
+        ace_step_vae_synchronize(ttnn, self.device)
 
         x_T = int(x.shape[1])
         y_T = int(y.shape[1])
@@ -178,10 +185,18 @@ class TtOobleckResidualUnit:
         # conv1 static CB is now freed; move x from DRAM to L1 so both add operands are L1.
         # add output goes to DRAM so the next residual unit's DRAM check (line ~102) is a no-op.
         l1_mc = ace_step_linear_l1_memory_config(ttnn)
+        x_dram = x
         x = ttnn.to_memory_config(x, l1_mc)
+        if x is not x_dram:
+            ace_step_safe_deallocate(ttnn, x_dram)
         # For large tensors use HEIGHT_SHARDED add (each core works on its local L1 shard).
         # Small tensors fall back to L1 interleaved add (conversion overhead would dominate).
         t = int(x.shape[1])
+        y_add = y
         if t >= _SHARDED_ADD_MIN_T:
-            return _height_sharded_add(ttnn, self.device, x, y, l1_mc=l1_mc, dram_mc=dram_mc)
-        return ttnn.add(x, y, memory_config=dram_mc)
+            out = _height_sharded_add(ttnn, self.device, x, y_add, l1_mc=l1_mc, dram_mc=dram_mc)
+        else:
+            out = ttnn.add(x, y_add, memory_config=dram_mc)
+            ace_step_safe_deallocate(ttnn, x, y_add)
+        ace_step_vae_synchronize(ttnn, self.device)
+        return out

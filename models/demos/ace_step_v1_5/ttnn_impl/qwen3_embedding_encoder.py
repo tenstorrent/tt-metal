@@ -566,6 +566,10 @@ class _TtQwen3EncoderLayer:
             kw["memory_config"] = self._linear_out_l1
         if out_mc is not None:
             kw["memory_config"] = out_mc
+        elif self._linear_out_l1 is None and self.mem is not None:
+            # Detokenizer fused batch (n audio codes) has no L1 output config — keep DRAM so
+            # post-attn rms_norm does not compile against stray L1 matmul/SDPA buffers.
+            kw["memory_config"] = self.mem
         return kw
 
     def _maybe_shard_attn_in0(self, x: ttnn.Tensor, *, batch_size: int, seq_len: int, in_dim: int, out_dim: int):
@@ -587,7 +591,8 @@ class _TtQwen3EncoderLayer:
 
     def __call__(self, hidden_b1sh: ttnn.Tensor, cos_11sd: ttnn.Tensor, sin_11sd: ttnn.Tensor, attn_bias_b11ss):
         _l1_mc = self._linear_out_l1 or self.mem
-        _rms_kw = ace_step_cond_rms_norm_kwargs(ttnn, _l1_mc, device=self.device)
+        _act_mc = self._act_l1 if self._act_l1 is not None else _l1_mc
+        _rms_kw = ace_step_cond_rms_norm_kwargs(ttnn, _act_mc, device=self.device)
         x = ace_step_ensure_tile_layout(ttnn, hidden_b1sh)
         res = x
         # input_layernorm: WIDTH_SHARDED across hidden dim K=1024 ([1,1,256,1024], block_h=8).
@@ -688,7 +693,7 @@ class _TtQwen3EncoderLayer:
             sdpa_kw["compute_kernel_config"] = self._sdpa_compute_kernel_config
         if self._sdpa_program_config is not None:
             sdpa_kw["program_config"] = self._sdpa_program_config
-        sdpa_kw.update(ace_step_sdpa_activation_kwargs(ttnn, self._act_l1))
+        sdpa_kw.update(ace_step_sdpa_activation_kwargs(ttnn, _act_mc))
         ctx = self._sdpa(q, k, v, **sdpa_kw)
 
         if sdpa_d > self.dh:
@@ -696,19 +701,26 @@ class _TtQwen3EncoderLayer:
 
         # [b,H,s,Dh] -> [b,1,s,H*Dh] (permute + reshape view)
         ctx = ace_step_nlp_concat_heads(ttnn, ctx)
-        ctx = self._l1_activation(ctx)
+        ctx = (
+            self._l1_activation(ctx)
+            if self._act_l1 is not None
+            else ace_step_ensure_dram_activation(ttnn, ctx, self.mem)
+        )
         lin_o = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=q_dim_o, out_dim=hsz)
         ctx_o = self._maybe_shard_attn_in0(ctx, batch_size=b, seq_len=s, in_dim=q_dim_o, out_dim=hsz)
         attn_out = ttnn.linear(ctx_o, self.wo, bias=None, transpose_b=True, **lin_o)
         ace_step_safe_deallocate(ttnn, ctx_o if ctx_o is not ctx else None)
         ttnn.deallocate(ctx)
 
-        h = ttnn.add(res, attn_out, memory_config=_l1_mc)
+        h = ttnn.add(res, attn_out, memory_config=_act_mc)
         res2 = h
+        ace_step_safe_deallocate(ttnn, attn_out)
         h2 = ace_step_ensure_tile_layout(ttnn, h)
+        if self._act_l1 is None and self.mem is not None:
+            h2 = ace_step_ensure_dram_activation(ttnn, h2, self.mem)
         h2 = ttnn.rms_norm(h2, weight=self.post_ln_w, epsilon=self.eps, **_rms_kw)
         ff = self.mlp(h2)
-        return ttnn.add(res2, ff, memory_config=_l1_mc)
+        return ttnn.add(res2, ff, memory_config=_act_mc)
 
 
 class TtQwen3EmbeddingEncoder:

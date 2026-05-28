@@ -208,10 +208,208 @@ class AceStepPerfRecorder:
                 flush=True,
             )
         print(f"[ace_step_v1_5][perf]   {'TOTAL (wall)':40s} {total_ms:10.2f} ms", flush=True)
+        _emit_rtf_per_step(wall_ms=total_ms, params=self.params)
+        emit_benchmark_wall_breakdown(
+            [pair for pair in self.timings_ms if pair[0] != label],
+            wall_ms=total_ms,
+            params=self.params,
+        )
         _perf_banner("end perf summary")
 
 
-def emit_session_summary(state: SessionPerfState) -> None:
+def _ms_lookup(timings_ms: List[Tuple[str, float]]) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for name, ms in timings_ms:
+        out[name] = out.get(name, 0.0) + float(ms)
+    return out
+
+
+# Module labels → ACE-Step ``profile_inference.py`` TIME COSTS buckets (see BENCHMARK.md).
+_BENCHMARK_LLM_LABELS = frozenset({"five_hz_lm_generate", "handler_preprocess", "preprocess_readback"})
+_BENCHMARK_CONDITION_LABELS = frozenset({"condition_encoder"})
+_BENCHMARK_DIT_LABELS = frozenset({"dit_mask_prep", "dit_denoise_loop"})
+_BENCHMARK_VAE_LABELS = frozenset({"vae_decode", "vae_decode_torch"})
+_BENCHMARK_AUDIO_SAVE_LABELS = frozenset({"audio_save"})
+_BENCHMARK_INIT_LABELS = frozenset(
+    {"handler_init", "qwen_encoder_init", "dit_pipeline_init", "vae_init", "five_hz_lm_init"}
+)
+_BENCHMARK_WALL_LABELS = frozenset({"demo_total", "e2e_total"})
+
+
+def ace_step_rtf_per_step(
+    *,
+    wall_s: float,
+    duration_sec: float,
+    infer_steps: int,
+) -> Optional[float]:
+    """Real-time factor per diffusion step: wall / (audio_duration × infer_steps)."""
+    denom = float(duration_sec) * float(infer_steps)
+    if denom <= 0.0 or wall_s < 0.0:
+        return None
+    return float(wall_s) / denom
+
+
+def ace_step_rtf_per_step_from_params(
+    *,
+    wall_ms: float,
+    params: Optional[Dict[str, Any]] = None,
+) -> Optional[float]:
+    if not params:
+        return None
+    duration_sec = params.get("duration_sec")
+    infer_steps = params.get("infer_steps")
+    if duration_sec is None or infer_steps is None:
+        return None
+    try:
+        return ace_step_rtf_per_step(
+            wall_s=float(wall_ms) / 1000.0,
+            duration_sec=float(duration_sec),
+            infer_steps=int(infer_steps),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _emit_rtf_per_step(*, wall_ms: float, params: Optional[Dict[str, Any]] = None) -> None:
+    rtf = ace_step_rtf_per_step_from_params(wall_ms=wall_ms, params=params)
+    if rtf is None:
+        return
+    duration_sec = float(params["duration_sec"])  # type: ignore[index]
+    infer_steps = int(params["infer_steps"])  # type: ignore[index]
+    print(
+        f"[ace_step_v1_5][perf]   {'RTF_per_step':40s} {rtf:10.6f}  "
+        f"(wall / ({duration_sec:g}s × {infer_steps} steps))",
+        flush=True,
+    )
+    logger.info(
+        "ACE-Step RTF_per_step: {:.6f} (wall {:.2f}s / ({}s × {} steps))",
+        rtf,
+        float(wall_ms) / 1000.0,
+        duration_sec,
+        infer_steps,
+    )
+
+
+def emit_benchmark_wall_breakdown(
+    timings_ms: List[Tuple[str, float]],
+    *,
+    wall_ms: float,
+    params: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Print ACE-Step BENCHMARK.md-style wall-time table (seconds + % of total).
+
+    Compatible with the ``profile_inference.py`` *profile* mode breakdown documented at
+    https://github.com/ace-step/ACE-Step-1.5/blob/main/docs/en/BENCHMARK.md
+    """
+    lookup = _ms_lookup(timings_ms)
+    for wall_label in _BENCHMARK_WALL_LABELS:
+        lookup.pop(wall_label, None)
+
+    def _sum(labels: frozenset[str]) -> float:
+        return sum(lookup.get(lbl, 0.0) for lbl in labels)
+
+    llm_ms = _sum(_BENCHMARK_LLM_LABELS)
+    cond_ms = _sum(_BENCHMARK_CONDITION_LABELS)
+    dit_ms = _sum(_BENCHMARK_DIT_LABELS)
+    vae_ms = _sum(_BENCHMARK_VAE_LABELS)
+    save_ms = _sum(_BENCHMARK_AUDIO_SAVE_LABELS)
+    init_ms = _sum(_BENCHMARK_INIT_LABELS)
+
+    bucketed = {
+        "LLM Planning (total)": llm_ms,
+        "Condition encode": cond_ms,
+        "DiT Diffusion (total)": dit_ms,
+        "VAE Decode": vae_ms,
+        "Audio Save": save_ms,
+    }
+    used_labels = (
+        _BENCHMARK_LLM_LABELS
+        | _BENCHMARK_CONDITION_LABELS
+        | _BENCHMARK_DIT_LABELS
+        | _BENCHMARK_VAE_LABELS
+        | _BENCHMARK_AUDIO_SAVE_LABELS
+        | _BENCHMARK_INIT_LABELS
+    )
+    other_ms = sum(ms for lbl, ms in lookup.items() if lbl not in used_labels)
+    accounted_ms = sum(bucketed.values()) + other_ms + init_ms
+    overhead_ms = max(0.0, float(wall_ms) - accounted_ms)
+    other_ms += overhead_ms
+
+    wall_s = float(wall_ms) / 1000.0
+    bar = "=" * 100
+
+    print(f"[ace_step_v1_5][perf] {bar}", flush=True)
+    print("[ace_step_v1_5][perf] TIME COSTS BREAKDOWN (ACE-Step BENCHMARK.md compatible)", flush=True)
+    print(f"[ace_step_v1_5][perf] {bar}", flush=True)
+    if params:
+        brief = ", ".join(
+            f"{k}={v}"
+            for k, v in sorted(params.items())
+            if k in ("duration_sec", "infer_steps", "guidance_scale", "variant", "use_trace", "torch_vae")
+        )
+        if brief:
+            print(f"[ace_step_v1_5][perf] {brief}", flush=True)
+    print(f"[ace_step_v1_5][perf]   {'Component':<34s} {'Time (s)':>10s}  {'% of Total':>12s}", flush=True)
+    print(f"[ace_step_v1_5][perf]   {'─' * 34} {'─' * 10}  {'─' * 12}", flush=True)
+
+    def _row(name: str, ms: float, *, indent: str = "") -> None:
+        if ms <= 0.0:
+            return
+        sec = ms / 1000.0
+        pct = (ms / float(wall_ms) * 100.0) if wall_ms > 0 else 0.0
+        print(
+            f"[ace_step_v1_5][perf]   {indent}{name:<34s} {sec:10.2f}  {pct:11.1f}%",
+            flush=True,
+        )
+
+    for name, ms in bucketed.items():
+        _row(name, ms)
+        if name == "LLM Planning (total)" and ms > 0:
+            for sub, sub_labels in (
+                ("├─ LM token generation", frozenset({"five_hz_lm_generate"})),
+                ("├─ Handler preprocess", frozenset({"handler_preprocess", "preprocess_readback"})),
+            ):
+                sub_ms = _sum(sub_labels)
+                if sub_ms > 0:
+                    _row(sub, sub_ms, indent="  ")
+        if name == "DiT Diffusion (total)" and ms > 0:
+            for sub, sub_labels in (
+                ("├─ Mask prep", frozenset({"dit_mask_prep"})),
+                ("├─ Denoise loop", frozenset({"dit_denoise_loop"})),
+            ):
+                sub_ms = _sum(sub_labels)
+                if sub_ms > 0:
+                    _row(sub, sub_ms, indent="  ")
+
+    _row("Other / Overhead", other_ms)
+    if init_ms > 0:
+        _row("One-time init (excluded above)", init_ms)
+    print(f"[ace_step_v1_5][perf]   {'─' * 34} {'─' * 10}  {'─' * 12}", flush=True)
+    print(
+        f"[ace_step_v1_5][perf]   {'Wall Time (total)':<34s} {wall_s:10.2f}  {'100.0':>11s}%",
+        flush=True,
+    )
+    rtf = ace_step_rtf_per_step_from_params(wall_ms=wall_ms, params=params)
+    if rtf is not None:
+        duration_sec = float(params["duration_sec"])  # type: ignore[index]
+        infer_steps = int(params["infer_steps"])  # type: ignore[index]
+        print(
+            f"[ace_step_v1_5][perf]   {'RTF_per_step':<34s} {rtf:10.6f}  "
+            f"(wall / ({duration_sec:g}s × {infer_steps} steps))",
+            flush=True,
+        )
+    print(f"[ace_step_v1_5][perf] {bar}", flush=True)
+    logger.info(
+        "ACE-Step benchmark wall: {:.2f}s (LLM {:.2f}s DiT {:.2f}s VAE {:.2f}s){}",
+        wall_s,
+        llm_ms / 1000.0,
+        dit_ms / 1000.0,
+        vae_ms / 1000.0,
+        f" RTF_per_step={rtf:.6f}" if rtf is not None else "",
+    )
+
+
+def emit_session_summary(state: SessionPerfState, *, params: Optional[Dict[str, Any]] = None) -> None:
     """Print a rollup across init + every pass in a ``--warmup`` / ``--repeat`` session."""
     if not ace_step_perf_logging_enabled():
         return
@@ -259,6 +457,7 @@ def emit_session_summary(state: SessionPerfState) -> None:
                 f"[ace_step_v1_5][perf] steady-state (last timed pass '{last.label}'): " f"{last.total_ms:.2f} ms",
                 flush=True,
             )
+            _emit_rtf_per_step(wall_ms=last.total_ms, params=params)
         warmup = [s for s in state.pass_snapshots if s.is_warmup]
         if warmup and timed:
             print(

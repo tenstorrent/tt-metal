@@ -92,7 +92,9 @@ def ace_step_resolve_vae_tiling(
     on_mesh = mesh_sku is not None and ace_step_needs_split_device(mesh_sku)
     if on_mesh:
         # 15 s @ 25 Hz ≈ 375 frames → ~16 tiles at overlap=4; wider overlap reduces boundary artifacts.
-        if frames_i >= 400 and overlap < 12:
+        if frames_i >= 1000 and overlap < 14:
+            overlap = 14
+        elif frames_i >= 400 and overlap < 12:
             overlap = 12
         elif frames_i >= 200 and overlap < 8:
             overlap = 8

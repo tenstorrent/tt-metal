@@ -291,15 +291,60 @@ def ace_step_init_vae_conv_compute_kernel_config(device: Any):
     return ace_step_init_lofi_linear_compute_kernel_config(device)
 
 
-def ace_step_vae_bfloat8_activations_enabled() -> bool:
-    """``bfloat8_b`` for VAE conv im2col + Snake eltwise compute — **on by default**.
+def ace_step_vae_quality_decode_enabled(
+    *,
+    latent_frames: int | None = None,
+    mesh_sku: str | None = None,
+    duration_sec: float | None = None,
+) -> bool:
+    """Prefer BF16 VAE compute/weights for long tiled decode (reduces hiss on 60s+ mesh runs)."""
+    from models.demos.ace_step_v1_5.tt_device import ace_step_needs_split_device
+
+    env = os.environ.get("ACE_STEP_VAE_QUALITY", "")
+    if env.lower() in ("1", "true", "yes", "on"):
+        return True
+    if env.lower() in ("0", "false", "no", "off"):
+        return False
+    if latent_frames is None:
+        lf = os.environ.get("ACE_STEP_VAE_LATENT_FRAMES", "")
+        if lf.strip().isdigit():
+            latent_frames = int(lf)
+    if duration_sec is None:
+        ds = os.environ.get("ACE_STEP_VAE_DURATION_SEC", "")
+        try:
+            if ds.strip():
+                duration_sec = float(ds)
+        except ValueError:
+            pass
+    if mesh_sku is None:
+        mesh_sku = os.environ.get("ACE_STEP_VAE_MESH_SKU") or None
+    on_mesh = mesh_sku is not None and ace_step_needs_split_device(mesh_sku)
+    if not on_mesh:
+        return False
+    if latent_frames is not None and int(latent_frames) >= 400:
+        return True
+    if duration_sec is not None and float(duration_sec) >= 30.0:
+        return True
+    return False
+
+
+def ace_step_vae_bfloat8_activations_enabled(
+    *,
+    latent_frames: int | None = None,
+    mesh_sku: str | None = None,
+    duration_sec: float | None = None,
+) -> bool:
+    """``bfloat8_b`` for VAE conv im2col + Snake eltwise compute — **on by default** for short clips.
 
     TTNN does not support ``bfloat8_b`` with ``ROW_MAJOR`` activations (conv1d / slice / residual
     trim). Inter-op buffers stay **BF16 ROW_MAJOR**; :func:`ace_step_vae_activation_compute_dtype`
     applies inside conv/Snake kernels only.
 
-    Set ``ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=0`` to fall back to full BF16 compute.
+    Long overlap-add decode on mesh defaults to BF16 compute (see :func:`ace_step_vae_quality_decode_enabled`).
+    Set ``ACE_STEP_VAE_BFLOAT8_ACTIVATIONS=0`` to force BF16, or ``=1`` to force BFP8.
     """
+    if ace_step_vae_quality_decode_enabled(latent_frames=latent_frames, mesh_sku=mesh_sku, duration_sec=duration_sec):
+        return False
     return os.environ.get("ACE_STEP_VAE_BFLOAT8_ACTIVATIONS", "1").lower() not in ("0", "false", "no", "off")
 
 
@@ -330,15 +375,35 @@ def ace_step_vae_host_weight_staging_dtype(ttnn: Any) -> Any:
     return ace_step_vae_activation_storage_dtype(ttnn)
 
 
+def ace_step_vae_ensure_interleaved(
+    ttnn: Any,
+    tensor: Any,
+    *,
+    memory_config: Any | None = None,
+) -> Any:
+    """Convert sharded VAE activations to interleaved before unsqueeze/reshape/slice."""
+    if tensor is None:
+        return tensor
+    is_sharded_fn = getattr(ttnn, "is_sharded", None)
+    s2i = getattr(ttnn, "sharded_to_interleaved", None)
+    if not callable(is_sharded_fn) or not callable(s2i) or not is_sharded_fn(tensor):
+        return tensor
+    mc = memory_config if memory_config is not None else getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+    kw = {"memory_config": mc} if mc is not None else {}
+    return s2i(tensor, **kw)
+
+
 def ace_step_vae_normalize_activation_output(ttnn: Any, tensor: Any, *, storage_dtype: Any, compute_dtype: Any) -> Any:
     """Return a ``ROW_MAJOR`` tensor in *storage_dtype* (post-conv / post-Snake boundary contract)."""
     if tensor is None:
         return tensor
+    dram = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+    tensor = ace_step_vae_ensure_interleaved(ttnn, tensor, memory_config=dram)
     if compute_dtype != storage_dtype and getattr(tensor, "dtype", None) != storage_dtype:
-        dram = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
         kw = {"memory_config": dram} if dram is not None else {}
         tensor = ttnn.typecast(tensor, storage_dtype, **kw)
-    return ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+    kw = {"memory_config": dram} if dram is not None else {}
+    return ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT, **kw)
 
 
 def ace_step_vae_activation_memory_config(ttnn: Any):
@@ -355,6 +420,16 @@ def ace_step_vae_conv1d_memory_config(ttnn: Any, *, kernel_size: int):
     if int(kernel_size) == 1:
         return ace_step_vae_activation_memory_config(ttnn)
     return getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+
+
+def ace_step_vae_synchronize(ttnn: Any, device: Any) -> None:
+    """Drain the device queue so ``deallocate`` / ``deallocate_activation`` frees L1 before k>7 conv compile."""
+    if device is None:
+        return
+    try:
+        ttnn.synchronize_device(device)
+    except Exception:
+        pass
 
 
 def ace_step_vae_k7_sharded_output_config(ttnn: Any, device: Any, out_length: int, out_channels: int) -> Any:
@@ -401,6 +476,8 @@ def ace_step_vae_k7_sharded_output_config(ttnn: Any, device: Any, out_length: in
 def ace_step_vae_conv_weight_dtype(ttnn: Any, default_dtype: Any, *, kernel_size: int) -> Any:
     """VAE conv weights: ``bfloat8_b`` for ``k>1`` DRAM im2col (halves weight BW); BF16 for ``k==1``."""
     if int(kernel_size) > 1:
+        if os.environ.get("ACE_STEP_VAE_BF16_CONV_WEIGHTS", "").lower() in ("1", "true", "yes", "on"):
+            return default_dtype
         return ace_step_linear_weight_dtype(ttnn, default_dtype)
     return default_dtype
 
@@ -1935,6 +2012,22 @@ def ace_step_dense_linear_program_config(
 _ACE_STEP_WIDTH_SHARDED_RMSNORM_MAX_BLOCK_H = 16
 
 
+def ace_step_tile_physical_m_dim(
+    *,
+    batch: int,
+    one: int,
+    seq: int,
+    tile: int = 32,
+) -> int:
+    """Physical M (elements) for TILE ``[B,1,S,K]`` tensors used in width-sharded RMSNorm.
+
+    TILE layout pads ``S`` to a tile multiple, so logical ``B*1*S`` can understate the
+    physical height seen by sharded memory configs (e.g. ``[128,1,5,H]`` → 4096, not 640).
+    """
+    s_tiles = (max(1, int(seq)) + tile - 1) // tile
+    return max(1, int(batch)) * max(1, int(one)) * s_tiles * tile
+
+
 def _ace_step_pick_width_shard_cores(*, k_tiles: int, device: Any) -> "tuple[int, int] | None":
     """Return ``(cx, cy)`` for a WIDTH_SHARDED rms_norm across ``num_cores = cx * cy`` cores."""
     if not hasattr(device, "compute_with_storage_grid_size"):
@@ -2018,12 +2111,7 @@ def ace_step_rms_norm_width_sharded(
         kw_pad = {"memory_config": l1_mc} if l1_mc is not None else {}
         x_work = ttnn.pad(x_work, padding=pad4, value=0.0, **kw_pad)
 
-    m_total = b_dim * one_dim * s_dim
-    if m_total % tile != 0:
-        if did_k_pad:
-            ace_step_safe_deallocate(ttnn, x_work)
-        return _fallback(x)
-
+    m_physical = ace_step_tile_physical_m_dim(batch=b_dim, one=one_dim, seq=s_dim, tile=tile)
     k_tiles = k_pad // tile
     grid_pair = _ace_step_pick_width_shard_cores(k_tiles=k_tiles, device=device)
     if grid_pair is None:
@@ -2040,7 +2128,7 @@ def ace_step_rms_norm_width_sharded(
 
     try:
         sharded_mc = create_shard(
-            shape=(m_total, shard_width),
+            shape=(m_physical, shard_width),
             core_grid=ttnn.CoreGrid(y=cy, x=cx),
             strategy=shard_strat.WIDTH,
             orientation=shard_ori.ROW_MAJOR,
@@ -2058,7 +2146,7 @@ def ace_step_rms_norm_width_sharded(
     except Exception:
         return _fallback(x)
 
-    block_h = m_total // tile
+    block_h = m_physical // tile
     block_w = shard_width // tile
 
     if block_h > _ACE_STEP_WIDTH_SHARDED_RMSNORM_MAX_BLOCK_H:
