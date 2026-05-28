@@ -4,17 +4,55 @@
 """
 Run the vLLM server readiness check.
 
-Launches a vLLM server using the TT plugin, runs the canonical sampling tests
-from `vllm-tt-plugin/tests/tt/`, then generates qualitative completions for a
-small set of prompts and saves them for manual review.
+A single entry point that can launch the server, run any subset of checks
+against it, or attach to an already-running server. Pick what to do via
+``--stages``.
+
+Stages:
+  serve         Launch the vLLM server. If it's the only stage, hold it open
+                until SIGINT/SIGTERM; otherwise shut it down once the trailing
+                checks finish. Requires ``--mesh-device``.
+  sampling      Run the canonical pytest plugin sampling tests against the
+                live server.
+  qualitative   Run qualitative prompts and save completions for manual
+                review.
+
+Default: ``--stages serve,sampling,qualitative`` (launch, run all checks, shut
+down). Full launch with the typical tuning flags:
+
+    python -m models.common.readiness_check.run_vllm_server \\
+        --model-dir models/autoports/<model_name> \\
+        --hf-model <hf-model-id> \\
+        --mesh-device N150 \\
+        --max-model-len 32768 \\
+        --tt-config '{"trace_region_size": 85000000, "fabric_config": "FABRIC_1D"}'
+
+To hold the server open without running checks (skip trace compile on
+subsequent check invocations):
+
+    python -m models.common.readiness_check.run_vllm_server \\
+        --stages serve \\
+        --model-dir models/autoports/<model_name> \\
+        --hf-model <hf-model-id> \\
+        --mesh-device N150 \\
+        --max-model-len 32768 \\
+        --tt-config '{"trace_region_size": 85000000, "fabric_config": "FABRIC_1D"}'
+
+To run a single check against the running server, pass ``--server-url`` and
+omit ``serve`` from the stages:
+
+    python -m models.common.readiness_check.run_vllm_server \\
+        --stages sampling \\
+        --server-url http://localhost:8000 \\
+        --model-dir models/autoports/<model_name> \\
+        --hf-model <hf-model-id>
 
 To install vllm, if not already present:
 1. Clone `https://github.com/tenstorrent/vllm.git`
 2. Switch to the `dev` branch
 3. Follow installation instructions in `plugins/vllm-tt-plugin/README.md`
 
-This runner only exercises the *serving* path. Before invoking it, two things
-must already be true:
+Before invoking it, two things must already be true:
 
   1. `<model_dir>/tt/generator_vllm.py` exists and implements the model.
   2. The model architecture is registered in
@@ -29,14 +67,6 @@ On-device sampling is enforced (`sample_on_device_mode: all` in the plugin
 config). A model that cannot serve sampling from the device is not
 production-ready, so the readiness check fails fast there rather than papering
 over it with host-side sampling.
-
-CLI:
-    python -m models.common.readiness_check.run_vllm_server \\
-        --model-dir models/autoports/<model_name> \\
-        --hf-model <hf-model-id> \\
-        --mesh-device N150 \\
-        --max-model-len 32768 \\
-        --tt-config '{"trace_region_size": 85000000, "fabric_config": "FABRIC_1D"}'
 """
 
 from __future__ import annotations
@@ -46,6 +76,7 @@ import importlib.util
 import json
 import os
 import shlex
+import signal
 import socket
 import subprocess
 import sys
@@ -63,6 +94,12 @@ DEFAULT_MAX_NUM_SEQS = 32
 DEFAULT_SERVER_TIMEOUT_S = 1200
 # Matches the nightly CI workflow.
 DEFAULT_VLLM_RPC_TIMEOUT_MS = 300000
+
+STAGE_SERVE = "serve"
+STAGE_SAMPLING = "sampling"
+STAGE_QUALITATIVE = "qualitative"
+ALL_STAGES: tuple[str, ...] = (STAGE_SERVE, STAGE_SAMPLING, STAGE_QUALITATIVE)
+DEFAULT_STAGES: tuple[str, ...] = ALL_STAGES
 
 # Always enforce on-device sampling. A ported model that cannot serve sampling
 # from the device is not production-ready; the readiness check fails fast here
@@ -102,7 +139,7 @@ def _find_plugin_tests_dir() -> Path:
     tests_dir = plugin_root / "tests" / "tt"
     if not tests_dir.is_dir():
         raise RuntimeError(
-            f"Expected plugin tests at {tests_dir} but did not find them. " "Plugin layout may have changed."
+            f"Expected plugin tests at {tests_dir} but did not find them. Plugin layout may have changed."
         )
     return tests_dir
 
@@ -209,7 +246,7 @@ def _wait_for_server(
 
         if proc.poll() is not None:
             raise RuntimeError(
-                f"Server launcher exited with code {proc.returncode} before becoming ready. " f"Inspect {log_file}."
+                f"Server launcher exited with code {proc.returncode} before becoming ready. Inspect {log_file}."
             )
 
         fatal = _scan_log_for_fatal(log_file)
@@ -222,7 +259,26 @@ def _wait_for_server(
     raise RuntimeError(f"Server did not become ready in {timeout_seconds}s. Inspect {log_file}.")
 
 
-def _run_plugin_sampling_tests(*, port: int, hf_model: str, log_file: Path, server_log: Path) -> bool:
+def _probe_external_server(server_url: str) -> None:
+    """Verify an externally-managed server is reachable before running checks."""
+    health = f"{server_url.rstrip('/')}/health"
+    try:
+        resp = requests.get(health, timeout=5)
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(
+            f"Server not reachable at {health} ({e}). Start it first with `--stages serve` " "or check --server-url."
+        ) from e
+    if resp.status_code != 200:
+        raise RuntimeError(f"Server at {health} returned {resp.status_code}; expected 200.")
+
+
+def _run_plugin_sampling_tests(
+    *,
+    server_url: str,
+    hf_model: str,
+    log_file: Path,
+    server_log: Path,
+) -> bool:
     """
     Invoke `vllm-tt-plugin/tests/tt/` against the live server. This is the same
     test suite the nightly CI runs (greedy determinism, seeded reproducibility,
@@ -240,7 +296,7 @@ def _run_plugin_sampling_tests(*, port: int, hf_model: str, log_file: Path, serv
         "pytest",
         str(tests_dir),
         "-v",
-        f"--tt-server-url=http://localhost:{port}",
+        f"--tt-server-url={server_url}",
         f"--tt-model-name={hf_model}",
     ]
     print("\n=== Running plugin sampling tests ===")
@@ -267,7 +323,7 @@ def _run_plugin_sampling_tests(*, port: int, hf_model: str, log_file: Path, serv
 
 def _run_qualitative_prompts(
     *,
-    port: int,
+    server_url: str,
     hf_model: str,
     prompts_file: Path,
     output_dir: Path,
@@ -283,7 +339,7 @@ def _run_qualitative_prompts(
         raise RuntimeError(f"No prompts found in {prompts_file}")
 
     print(f"  Loaded {len(prompts)} prompts")
-    client = openai.OpenAI(base_url=f"http://localhost:{port}/v1", api_key="dummy")
+    client = openai.OpenAI(base_url=f"{server_url.rstrip('/')}/v1", api_key="dummy")
 
     results: List[dict[str, Any]] = []
     for i, prompt in enumerate(prompts, 1):
@@ -351,76 +407,71 @@ def _shutdown(proc: subprocess.Popen, log_file: Path) -> None:
             print(line)
 
 
-def run_vllm_server_check(
-    *,
-    model_dir: Path,
-    hf_model: str,
-    mesh_device: str,
-    prompts_file: Path,
-    port: int = DEFAULT_PORT,
-    max_num_seqs: int = DEFAULT_MAX_NUM_SEQS,
-    block_size: int = DEFAULT_BLOCK_SIZE,
-    server_timeout: int = DEFAULT_SERVER_TIMEOUT_S,
-    max_model_len: Optional[int] = None,
-    tt_config: Optional[dict[str, Any]] = None,
-    additional_server_args: Optional[List[str]] = None,
-) -> None:
-    # Always enforce on-device sampling; allow caller overrides via tt_config.
-    merged_tt_config: dict[str, Any] = {**DEFAULT_TT_CONFIG, **(tt_config or {})}
+def _hold_until_signal(proc: subprocess.Popen, log_file: Path) -> None:
+    """Block until SIGINT/SIGTERM, or until the server exits on its own."""
+    stop = False
 
-    output_dir = model_dir / "readiness_vllm"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    def _handler(_signum, _frame):
+        nonlocal stop
+        stop = True
 
-    server_log = output_dir / "server.log"
-    sampling_log = output_dir / "sampling_tests.log"
+    signal.signal(signal.SIGTERM, _handler)
 
-    _check_port_available(port)
-
-    proc = _launch_server(
-        hf_model=hf_model,
-        mesh_device=mesh_device,
-        max_num_seqs=max_num_seqs,
-        block_size=block_size,
-        port=port,
-        log_file=server_log,
-        max_model_len=max_model_len,
-        tt_config=merged_tt_config,
-        additional_args=list(additional_server_args or []),
-    )
-
+    print("Server is running. Press Ctrl-C (or send SIGTERM) to stop.")
     try:
-        _wait_for_server(proc=proc, port=port, log_file=server_log, timeout_seconds=server_timeout)
+        while not stop:
+            if proc.poll() is not None:
+                raise RuntimeError(f"Server exited unexpectedly with code {proc.returncode}. Inspect {log_file}.")
+            # vLLM's engine can die while the launcher keeps running; the fatal
+            # markers catch that case (same scan as _wait_for_server).
+            fatal = _scan_log_for_fatal(log_file)
+            if fatal:
+                raise RuntimeError(f"Fatal marker {fatal!r} found in {log_file}. Server engine is dead.")
+            time.sleep(2)
+    except KeyboardInterrupt:
+        pass
 
-        sampling_ok = _run_plugin_sampling_tests(
-            port=port,
-            hf_model=hf_model,
-            log_file=sampling_log,
-            server_log=server_log,
-        )
-        if not sampling_ok:
-            print("\nSampling tests failed — skipping qualitative prompts.")
-            print(f"Results in {output_dir}")
-            sys.exit(1)
 
-        _run_qualitative_prompts(
-            port=port,
-            hf_model=hf_model,
-            prompts_file=prompts_file,
-            output_dir=output_dir,
-        )
-
-        print("\n" + "=" * 60)
-        print(f"vLLM server check complete. Results in {output_dir}")
-        print("=" * 60)
-    finally:
-        _shutdown(proc, server_log)
+def _parse_stages(raw: str) -> List[str]:
+    stages = [s.strip() for s in raw.split(",") if s.strip()]
+    if not stages:
+        raise argparse.ArgumentTypeError("--stages must list at least one stage")
+    unknown = [s for s in stages if s not in ALL_STAGES]
+    if unknown:
+        raise argparse.ArgumentTypeError(f"Unknown stages {unknown}. Valid stages: {list(ALL_STAGES)}")
+    deduped: List[str] = []
+    for s in stages:
+        if s not in deduped:
+            deduped.append(s)
+    return deduped
 
 
 def _main() -> None:
     parser = argparse.ArgumentParser(description="Run the vLLM server readiness check.")
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--hf-model", type=str, required=True)
-    parser.add_argument("--mesh-device", type=str, required=True, choices=sorted(_MESH_SHAPES))
+    parser.add_argument(
+        "--stages",
+        type=_parse_stages,
+        default=list(DEFAULT_STAGES),
+        help=("Comma-separated stages to run. Valid: " f"{','.join(ALL_STAGES)}. Default: {','.join(DEFAULT_STAGES)}."),
+    )
+    parser.add_argument(
+        "--server-url",
+        type=str,
+        default=None,
+        help=(
+            "URL of an already-running vLLM server (e.g. http://localhost:8000). "
+            "Required when `serve` is not in --stages; rejected when it is."
+        ),
+    )
+    parser.add_argument(
+        "--mesh-device",
+        type=str,
+        default=None,
+        choices=sorted(_MESH_SHAPES),
+        help="Required when `serve` is in --stages; ignored otherwise.",
+    )
     parser.add_argument(
         "--prompts",
         type=Path,
@@ -433,7 +484,7 @@ def _main() -> None:
         "--server-timeout",
         type=int,
         default=DEFAULT_SERVER_TIMEOUT_S,
-        help=f"Seconds to wait for /health (default {DEFAULT_SERVER_TIMEOUT_S}).",
+        help=f"Seconds to wait for /health when launching (default {DEFAULT_SERVER_TIMEOUT_S}).",
     )
     parser.add_argument(
         "--max-model-len",
@@ -463,28 +514,90 @@ def _main() -> None:
     )
     args = parser.parse_args()
 
+    stages: List[str] = args.stages
+    serve_locally = STAGE_SERVE in stages
+
+    if serve_locally and args.server_url is not None:
+        parser.error("--server-url is not allowed when `serve` is in --stages")
+    if not serve_locally and args.server_url is None:
+        parser.error("--server-url is required when `serve` is not in --stages")
+    if serve_locally and args.mesh_device is None:
+        parser.error("--mesh-device is required when `serve` is in --stages")
+
     try:
         tt_config = json.loads(args.tt_config)
     except json.JSONDecodeError as e:
         parser.error(f"--tt-config is not valid JSON: {e}")
     if not isinstance(tt_config, dict):
         parser.error(f"--tt-config must be a JSON object, got {type(tt_config).__name__}")
+    merged_tt_config: dict[str, Any] = {**DEFAULT_TT_CONFIG, **tt_config}
 
     additional = shlex.split(args.additional_server_args) if args.additional_server_args else []
 
-    run_vllm_server_check(
-        model_dir=args.model_dir.resolve(),
-        hf_model=args.hf_model,
-        mesh_device=args.mesh_device,
-        prompts_file=args.prompts.resolve(),
-        port=args.port,
-        max_num_seqs=args.max_num_seqs,
-        block_size=args.block_size,
-        server_timeout=args.server_timeout,
-        max_model_len=args.max_model_len,
-        tt_config=tt_config,
-        additional_server_args=additional,
-    )
+    model_dir = args.model_dir.resolve()
+    output_dir = model_dir / "readiness_vllm"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    server_log = output_dir / "server.log"
+    sampling_log = output_dir / "sampling_tests.log"
+
+    server_proc: Optional[subprocess.Popen] = None
+    try:
+        if serve_locally:
+            _check_port_available(args.port)
+            server_proc = _launch_server(
+                hf_model=args.hf_model,
+                mesh_device=args.mesh_device,
+                max_num_seqs=args.max_num_seqs,
+                block_size=args.block_size,
+                port=args.port,
+                log_file=server_log,
+                max_model_len=args.max_model_len,
+                tt_config=merged_tt_config,
+                additional_args=additional,
+            )
+            _wait_for_server(
+                proc=server_proc,
+                port=args.port,
+                log_file=server_log,
+                timeout_seconds=args.server_timeout,
+            )
+            server_url = f"http://localhost:{args.port}"
+        else:
+            server_url = args.server_url.rstrip("/")
+            _probe_external_server(server_url)
+
+        check_stages = [s for s in stages if s != STAGE_SERVE]
+
+        if serve_locally and not check_stages:
+            print(f"\nServer ready at {server_url}")
+            _hold_until_signal(server_proc, server_log)
+            return
+
+        for stage in check_stages:
+            if stage == STAGE_SAMPLING:
+                ok = _run_plugin_sampling_tests(
+                    server_url=server_url,
+                    hf_model=args.hf_model,
+                    log_file=sampling_log,
+                    server_log=server_log,
+                )
+                if not ok:
+                    print("\nSampling tests failed — skipping remaining stages.")
+                    sys.exit(1)
+            elif stage == STAGE_QUALITATIVE:
+                _run_qualitative_prompts(
+                    server_url=server_url,
+                    hf_model=args.hf_model,
+                    prompts_file=args.prompts.resolve(),
+                    output_dir=output_dir,
+                )
+
+        print("\n" + "=" * 60)
+        print(f"vLLM checks complete. Results in {output_dir}")
+        print("=" * 60)
+    finally:
+        if server_proc is not None:
+            _shutdown(server_proc, server_log)
 
 
 if __name__ == "__main__":
