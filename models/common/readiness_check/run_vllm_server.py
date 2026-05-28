@@ -16,9 +16,12 @@ Stages:
                 live server.
   qualitative   Run qualitative prompts and save completions for manual
                 review.
+  benchmark     Fire synthetic random-token prompts at the server under
+                concurrency and report TTFT, ITL, and per-user / aggregate
+                throughput. Saves ``vllm_benchmark.json`` for the work log.
 
-Default: ``--stages serve,sampling,qualitative`` (launch, run all checks, shut
-down). Full launch with the typical tuning flags:
+Default: ``--stages serve,sampling,qualitative,benchmark`` (launch, run all
+checks, shut down). Full launch with the typical tuning flags:
 
     python -m models.common.readiness_check.run_vllm_server \\
         --model-dir models/autoports/<model_name> \\
@@ -98,8 +101,18 @@ DEFAULT_VLLM_RPC_TIMEOUT_MS = 300000
 STAGE_SERVE = "serve"
 STAGE_SAMPLING = "sampling"
 STAGE_QUALITATIVE = "qualitative"
-ALL_STAGES: tuple[str, ...] = (STAGE_SERVE, STAGE_SAMPLING, STAGE_QUALITATIVE)
+STAGE_BENCHMARK = "benchmark"
+ALL_STAGES: tuple[str, ...] = (STAGE_SERVE, STAGE_SAMPLING, STAGE_QUALITATIVE, STAGE_BENCHMARK)
 DEFAULT_STAGES: tuple[str, ...] = ALL_STAGES
+
+# Benchmark defaults: 128-tok prompts × 128-tok outputs × 32 requests × 8
+# concurrent. The output-length mirrors the per-token-decode metric in the
+# productize SKILL; concurrency lets the scheduler exercise real batching
+# without saturating it (default max_num_seqs = 32).
+DEFAULT_BENCH_PROMPT_LEN = 128
+DEFAULT_BENCH_OUTPUT_LEN = 128
+DEFAULT_BENCH_NUM_REQUESTS = 32
+DEFAULT_BENCH_CONCURRENCY = 8
 
 # Always enforce on-device sampling. A ported model that cannot serve sampling
 # from the device is not production-ready; the readiness check fails fast here
@@ -386,6 +399,150 @@ def _run_qualitative_prompts(
     print("  - greedy and sampled outputs both reasonable")
 
 
+def _run_serving_benchmark(
+    *,
+    server_url: str,
+    hf_model: str,
+    output_dir: Path,
+    prompt_len: int,
+    output_len: int,
+    num_requests: int,
+    concurrency: int,
+) -> None:
+    """
+    Measure serving-path TTFT, ITL, and throughput under concurrent load.
+
+    Generates `num_requests` synthetic random-token prompts of length
+    `prompt_len`, fires them at the server with up to `concurrency` in flight,
+    streams completions, and aggregates per-request timings. Uses
+    `ignore_eos=True` so every request emits exactly `output_len` tokens
+    regardless of natural EOS, which keeps the workload deterministic.
+
+    Reports TTFT P50/P99, ITL P50/P99, aggregate output throughput, and the
+    mean per-user decode throughput (t/s/u). Saves the full summary to
+    `vllm_benchmark.json`.
+    """
+    import asyncio
+    import random
+
+    from transformers import AutoTokenizer
+
+    print("\n=== Running vLLM serving benchmark ===")
+    print(
+        f"  prompt_len={prompt_len}, output_len={output_len}, "
+        f"num_requests={num_requests}, concurrency={concurrency}"
+    )
+    print(f"  Loading tokenizer for {hf_model}...")
+    tokenizer = AutoTokenizer.from_pretrained(hf_model)
+    rng = random.Random(0)
+    vocab_size = tokenizer.vocab_size
+    prompts: List[List[int]] = [[rng.randrange(0, vocab_size) for _ in range(prompt_len)] for _ in range(num_requests)]
+
+    client = openai.AsyncOpenAI(base_url=f"{server_url.rstrip('/')}/v1", api_key="dummy")
+
+    async def _one(token_ids: List[int]) -> dict[str, Any]:
+        start = time.perf_counter()
+        first: Optional[float] = None
+        token_times: List[float] = []
+        stream = await client.completions.create(
+            model=hf_model,
+            prompt=token_ids,
+            max_tokens=output_len,
+            temperature=0.0,
+            stream=True,
+            extra_body={"ignore_eos": True},
+        )
+        async for chunk in stream:
+            if not chunk.choices or not chunk.choices[0].text:
+                continue
+            now = time.perf_counter()
+            if first is None:
+                first = now
+            token_times.append(now)
+        end = time.perf_counter()
+        return {
+            "start": start,
+            "end": end,
+            "ttft_s": (first - start) if first is not None else None,
+            "total_s": end - start,
+            "token_count": len(token_times),
+            "itl_s": [token_times[i] - token_times[i - 1] for i in range(1, len(token_times))],
+        }
+
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _gated(token_ids: List[int]) -> dict[str, Any]:
+        async with sem:
+            return await _one(token_ids)
+
+    async def _run_all() -> List[dict[str, Any]]:
+        return await asyncio.gather(*[_gated(p) for p in prompts])
+
+    bench_start = time.perf_counter()
+    results = asyncio.run(_run_all())
+    elapsed = time.perf_counter() - bench_start
+
+    def _pct(xs: List[float], p: float) -> Optional[float]:
+        if not xs:
+            return None
+        s = sorted(xs)
+        return s[max(0, min(len(s) - 1, int(round(p * (len(s) - 1)))))]
+
+    def _ms(v: Optional[float]) -> Optional[float]:
+        return v * 1000 if v is not None else None
+
+    ttfts: List[float] = [r["ttft_s"] for r in results if r["ttft_s"] is not None]
+    itls: List[float] = [t for r in results for t in r["itl_s"]]
+    total_output_tokens = sum(r["token_count"] for r in results)
+
+    per_request_tsu: List[float] = []
+    for r in results:
+        if r["ttft_s"] is None or r["token_count"] <= 1:
+            continue
+        decode_time = r["total_s"] - r["ttft_s"]
+        if decode_time > 0:
+            per_request_tsu.append((r["token_count"] - 1) / decode_time)
+
+    summary = {
+        "config": {
+            "prompt_len": prompt_len,
+            "output_len": output_len,
+            "num_requests": num_requests,
+            "concurrency": concurrency,
+        },
+        "elapsed_s": elapsed,
+        "completed_requests": len(results),
+        "total_output_tokens": total_output_tokens,
+        "ttft_ms": {
+            "p50": _ms(_pct(ttfts, 0.5)),
+            "p99": _ms(_pct(ttfts, 0.99)),
+            "mean": _ms(sum(ttfts) / len(ttfts)) if ttfts else None,
+        },
+        "itl_ms": {
+            "p50": _ms(_pct(itls, 0.5)),
+            "p99": _ms(_pct(itls, 0.99)),
+            "mean": _ms(sum(itls) / len(itls)) if itls else None,
+        },
+        "output_throughput_tok_per_s": (total_output_tokens / elapsed) if elapsed > 0 else None,
+        "request_throughput_per_s": (len(results) / elapsed) if elapsed > 0 else None,
+        "mean_per_request_decode_tps": (sum(per_request_tsu) / len(per_request_tsu)) if per_request_tsu else None,
+    }
+
+    output_file = output_dir / "vllm_benchmark.json"
+    output_file.write_text(json.dumps(summary, indent=2))
+
+    def _fmt(v: Optional[float], unit: str) -> str:
+        return f"{v:.1f}{unit}" if v is not None else "n/a"
+
+    print("\n=== Serving benchmark summary ===")
+    print(f"  Requests : {len(results)} completed in {elapsed:.1f}s")
+    print(f"  TTFT     : P50={_fmt(summary['ttft_ms']['p50'], 'ms')}  P99={_fmt(summary['ttft_ms']['p99'], 'ms')}")
+    print(f"  ITL      : P50={_fmt(summary['itl_ms']['p50'], 'ms')}  P99={_fmt(summary['itl_ms']['p99'], 'ms')}")
+    print(f"  Output   : {_fmt(summary['output_throughput_tok_per_s'], ' tok/s')} aggregate")
+    print(f"  Per-user : {_fmt(summary['mean_per_request_decode_tps'], ' t/s/u')} (mean over requests)")
+    print(f"  Saved to {output_file}")
+
+
 def _shutdown(proc: subprocess.Popen, log_file: Path) -> None:
     """Terminate the server; fall back to SIGKILL; show log tail."""
     if proc.poll() is not None:
@@ -512,6 +669,30 @@ def _main() -> None:
             "--max_model_len here; use --tt-config / --max-model-len."
         ),
     )
+    parser.add_argument(
+        "--benchmark-prompt-len",
+        type=int,
+        default=DEFAULT_BENCH_PROMPT_LEN,
+        help=f"Tokens per synthetic prompt for the benchmark stage (default {DEFAULT_BENCH_PROMPT_LEN}).",
+    )
+    parser.add_argument(
+        "--benchmark-output-len",
+        type=int,
+        default=DEFAULT_BENCH_OUTPUT_LEN,
+        help=f"Tokens to generate per request in the benchmark stage (default {DEFAULT_BENCH_OUTPUT_LEN}).",
+    )
+    parser.add_argument(
+        "--benchmark-num-requests",
+        type=int,
+        default=DEFAULT_BENCH_NUM_REQUESTS,
+        help=f"Total requests sent in the benchmark stage (default {DEFAULT_BENCH_NUM_REQUESTS}).",
+    )
+    parser.add_argument(
+        "--benchmark-concurrency",
+        type=int,
+        default=DEFAULT_BENCH_CONCURRENCY,
+        help=f"Max in-flight requests during the benchmark (default {DEFAULT_BENCH_CONCURRENCY}).",
+    )
     args = parser.parse_args()
 
     stages: List[str] = args.stages
@@ -590,6 +771,16 @@ def _main() -> None:
                     hf_model=args.hf_model,
                     prompts_file=args.prompts.resolve(),
                     output_dir=output_dir,
+                )
+            elif stage == STAGE_BENCHMARK:
+                _run_serving_benchmark(
+                    server_url=server_url,
+                    hf_model=args.hf_model,
+                    output_dir=output_dir,
+                    prompt_len=args.benchmark_prompt_len,
+                    output_len=args.benchmark_output_len,
+                    num_requests=args.benchmark_num_requests,
+                    concurrency=args.benchmark_concurrency,
                 )
 
         print("\n" + "=" * 60)
