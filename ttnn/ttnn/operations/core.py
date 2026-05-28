@@ -416,7 +416,6 @@ def to_torch(
                 f"ttnn.to_torch: converting an FP8_E4M3 tensor requires torch >= 2.8 (dlpack code 10 support); "
                 f"got torch {torch.__version__}. Update torch in your environment."
             )
-    print("Good! I'm tested!")
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, queue_id=cq_id)
 
