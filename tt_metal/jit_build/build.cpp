@@ -66,12 +66,9 @@ void report_result(const string& target_name, string_view op, const string& cmd,
         if (!result) {
             TT_THROW("{} build failed. Log: {}", target_name, log_contents);
         }
-        if (!log_contents.empty()) {
-            // Don't mix warnings from parallel compilations.
-            static std::mutex mutex;
-            std::lock_guard lock(mutex);
-            std::cerr << "Building " << target_name << ", " << op << " step:\n" << cmd << "\n" << log_contents;
-        }
+        // Successful builds keep output in *.o.log files. Do not echo those logs here:
+        // profiler-enabled kernels emit thousands of compiler "note:" lines from
+        // KERNEL_PROFILER pragma messages, which overwhelms CI/terminal output.
     } else if (!result) {
         TT_THROW("Failed to open {} failure log file {}", op, log_file);
     }
