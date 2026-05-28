@@ -251,7 +251,7 @@ struct GatheredInnerDimFn {
     const uint32_t* unpadded_widths;
     uint32_t ring_idx;
 
-    ALWI uint32_t operator()(uint32_t block, uint32_t /*block_w*/) const {
+    ALWI uint32_t operator()(uint32_t block, uint32_t /*block_k*/) const {
         const uint32_t curr_ring_idx = (ring_idx + block) % RingSize;
         return unpadded_widths[curr_ring_idx];
     }

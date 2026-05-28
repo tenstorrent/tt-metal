@@ -178,15 +178,22 @@ enum class DataFormatReconfig : uint8_t { NONE, INPUT, OUTPUT, INPUT_AND_OUTPUT 
  * Usage:
  *   matmul_block<...>(
  *       in0_buf, in1_buf, out_buf, interm_buf,
- *       MatmulBlockShape::of(in0_sb, in1_sb, h, w, in0_block_w, num_k_blocks),
+ *       MatmulBlockShape::of(in0_sb, in1_sb, h, w, in0_block_k, num_k_blocks),
  *       ...);
+ *
+ * Naming note: the K-block tile count is `in0_block_k`, not `in0_block_w`. The
+ * legacy convention (still present in kernel locals, host-side program config
+ * fields, and LLK calls outside the helper) uses operand-local axes — A is M×K
+ * so A's "width" is K. The helper's public API uses matmul-dim names instead so
+ * a parameter named `_k` always refers to the K dimension, regardless of which
+ * operand. Same applies to the KBlockInnerDimFn callback's second arg (`block_k`).
  */
 struct MatmulBlockShape {
     uint32_t in0_num_subblocks;  // Output subblock count along M.
     uint32_t in1_num_subblocks;  // Output subblock count along N.
     uint32_t out_subblock_h;     // Output subblock height in tiles.
     uint32_t out_subblock_w;     // Output subblock width in tiles.
-    uint32_t in0_block_w;        // K per K-block in tiles (= A's "per_core_K_block").
+    uint32_t in0_block_k;        // K per K-block in tiles (= legacy "in0_block_w" / A's per-core K-block size).
     uint32_t num_k_blocks;       // Number of K-blocks along the K dimension.
     uint32_t batch = 1;          // Independent batch slices. Pass the actual batch count
                                  // when the caller has no per-batch work between matmuls
@@ -215,10 +222,10 @@ struct MatmulBlockShape {
         uint32_t in1_num_subblocks,
         uint32_t out_subblock_h,
         uint32_t out_subblock_w,
-        uint32_t in0_block_w,
+        uint32_t in0_block_k,
         uint32_t num_k_blocks,
         uint32_t batch = 1) {
-        return {in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, in0_block_w, num_k_blocks, batch};
+        return {in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, in0_block_k, num_k_blocks, batch};
     }
 };
 
@@ -269,16 +276,16 @@ struct NoPostKBlock {
 // Default per-K-block inner-dim step-count functor.
 // Called at the start of each K-block's per-subblock matmul loop to determine
 // how many FMA steps to issue along the inner dim. The default returns the
-// static block_w so the loop runs the full K-tile span — preserving prior
+// static block_k so the loop runs the full K-tile span — preserving prior
 // helper behavior. Callers that pad in0/in1 K-tiles for some K-blocks override
 // this to return the unpadded step count for those blocks.
 //
-// The inner LLK call's kt_dim argument stays block_w in both cases — that
+// The inner LLK call's kt_dim argument stays block_k in both cases — that
 // parameter is the in1 row stride in L1, NOT the FMA step count. Returning
 // a smaller value here only shrinks the loop bound; the LLK still strides
 // through in1's tile geometry as if it were full-width.
 struct NoKBlockInnerDimFn {
-    ALWI uint32_t operator()(uint32_t /*block*/, uint32_t block_w) const { return block_w; }
+    ALWI uint32_t operator()(uint32_t /*block*/, uint32_t block_k) const { return block_k; }
 };
 
 // Default per-K-block in0 source functor.
@@ -461,12 +468,12 @@ struct NoIn1BaseOffset {
  *                     PreKBlockFn — use for per-K-block postprocessing such as
  *                     advancing a ring CB rd_ptr after the consumer has run.
  *   KBlockInnerDimFn  Functor called per K-block to determine the inner-dim FMA step
- *                     count. Receives (block, block_w); returns the number of inner
- *                     iterations to issue. Default returns block_w (full K-tile span).
+ *                     count. Receives (block, block_k); returns the number of inner
+ *                     iterations to issue. Default returns block_k (full K-tile span).
  *                     Use when some K-blocks have unpadded widths smaller than the
- *                     static block_w (e.g. ring-aware all-gather where each block
+ *                     static block_k (e.g. ring-aware all-gather where each block
  *                     consumes a different chip's shard width). The inner LLK call's
- *                     kt_dim arg stays block_w — only the loop bound shrinks.
+ *                     kt_dim arg stays block_k — only the loop bound shrinks.
  *   In0SourceFn       Functor called per K-block to pick which CB to read in0 from.
  *                     Receives (block, in0_cb_id); returns the active in0 CB id for
  *                     this iteration. Default returns in0_cb_id (single-source,
@@ -608,7 +615,7 @@ struct NoIn1BaseOffset {
  *   //                 0,         // transpose
  *   //                 1,         // ct_dim   (= out_subblock_w)
  *   //                 1,         // rt_dim   (= out_subblock_h)
- *   //                 Kt);       // kt_dim   (= in0_block_w)
+ *   //                 Kt);       // kt_dim   (= in0_block_k)
  *   CircularBuffer in0_buf(cb_in0);
  *   CircularBuffer in1_buf(cb_in1);
  *   CircularBuffer out_buf(cb_out);
@@ -620,7 +627,7 @@ struct NoIn1BaseOffset {
  *           Nt,    // in1_num_subblocks
  *           1,     // out_subblock_h
  *           1,     // out_subblock_w
- *           Kt,    // in0_block_w
+ *           Kt,    // in0_block_k
  *           1));   // num_k_blocks
  *
  * @example
@@ -631,7 +638,7 @@ struct NoIn1BaseOffset {
  *       in0_buf, in1_buf, out_buf, interm_buf,
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             out_subblock_h, out_subblock_w,
- *                             in0_block_w, num_k_blocks));
+ *                             in0_block_k, num_k_blocks));
  *
  * @example
  *   // SDPA-style: row-major pack, retain in0 to reuse Q across K chunks, masked post-compute.
@@ -646,7 +653,7 @@ struct NoIn1BaseOffset {
  *                OptionalMaskPostCompute>(
  *       in0_buf, in1_buf, out_buf, in0_buf,  // interm unused when num_k_blocks==1
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
- *                             subblock_h, subblock_w, in0_block_w, num_blocks),
+ *                             subblock_h, subblock_w, in0_block_k, num_blocks),
  *       OptionalMaskPostCompute{...},
  *       NoPreKBlock{});
  *
@@ -662,7 +669,7 @@ struct NoIn1BaseOffset {
  *       in0_buf, in1_buf, out_buf, mm_partials_buf,
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             out_subblock_h, out_subblock_w,
- *                             in0_block_w, num_blocks_inner_dim),
+ *                             in0_block_k, num_blocks_inner_dim),
  *       PostFn{}, PreFn{},
  *       in1_block_w,      // in1_per_core_w  (DRAM-sharded shard width)
  *       out_block_w);     // out_row_width   (DRAM-sharded padded pack width)
@@ -670,7 +677,7 @@ struct NoIn1BaseOffset {
  * @example
  *   // Per-K-block unpadded inner-dim: each K-block consumes a different chip's
  *   // shard width (ring-aware all-gather pattern). The kernel pads in0/in1 K-tiles
- *   // up to a uniform block_w so CB sizing stays static, then the helper's
+ *   // up to a uniform block_k so CB sizing stays static, then the helper's
  *   // KBlockInnerDimFn callback shrinks the FMA loop to the unpadded count.
  *   struct RingInnerDimFn {
  *       const uint32_t* unpadded_widths;  // ring_size entries, runtime-arg backed
@@ -689,7 +696,7 @@ struct NoIn1BaseOffset {
  *       in0_buf, in1_buf, out_buf, interm_buf,
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             out_subblock_h, out_subblock_w,
- *                             in0_block_w, num_blocks),
+ *                             in0_block_k, num_blocks),
  *       NoPostCompute{}, NoPreKBlock{},
  *       in1_per_core_w, out_row_width,
  *       NoPostKBlock{}, RingInnerDimFn{unpadded, ring_idx, ring_size});
@@ -709,7 +716,7 @@ struct NoIn1BaseOffset {
  *       in0_buf, in1_buf, out_buf, mm_partials_buf,
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             out_subblock_h, out_subblock_w,
- *                             in0_block_w, num_blocks),
+ *                             in0_block_k, num_blocks),
  *       NoPostCompute{}, ring_pre_k_block,
  *       in1_per_core_w, out_block_w,
  *       ring_post_k_block);
@@ -730,7 +737,7 @@ struct NoIn1BaseOffset {
  *       cb_mm_in0, cb_in1, cb_matmul_partials, cb_matmul_partials,  // out==interm
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             out_subblock_h, out_subblock_w,
- *                             in0_block_w, in0_num_blocks_w),
+ *                             in0_block_k, in0_num_blocks_w),
  *       ConvSFPUPostCompute{}, conv_pre_k_block);
  *
  * ── Future perf followups ─────────────────────────────────────────────────
