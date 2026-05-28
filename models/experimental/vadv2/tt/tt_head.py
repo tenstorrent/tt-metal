@@ -660,16 +660,21 @@ class TtVADHead:
         result = ttnn.add(x_sq, y_sq)
         map_dis = ttnn.sqrt(result)
         map_dis = ttnn.to_layout(map_dis, ttnn.ROW_MAJOR_LAYOUT)
-        min_map_pos_idx = ttnn.argmax((map_dis * -1), dim=-1)  # [B, P]
-        min_map_pos_idx = ttnn.reshape(min_map_pos_idx, [-1])
-        min_map_pos = ttnn.reshape(map_pos, [map_pos.shape[0] * map_pos.shape[1], map_pos.shape[2], map_pos.shape[3]])
-        min_map_pos = ttnn.to_torch(min_map_pos)
-        min_map_pos_idx = ttnn.to_torch(min_map_pos_idx).long()
-        min_map_pos = min_map_pos[range(min_map_pos.shape[0]), min_map_pos_idx]  # [B*P, 2]
-
-        min_map_pos = ttnn.from_torch(min_map_pos, dtype=ttnn.bfloat16, device=self.device)
-
-        min_map_pos = ttnn.reshape(min_map_pos, (batch, num_map, 2))  # [B, P, 2]
+        min_map_pos_idx = ttnn.argmax((map_dis * -1), dim=-1)  # [B, num_map]
+        min_map_pos_idx = ttnn.reshape(min_map_pos_idx, [-1])  # [B*num_map]
+        # Device-side gather via ttnn.embedding (same pattern as Step 1 in
+        # select_and_pad_pred_map, commit cd355a3e19e). Replaces the prior
+        # to_torch + torch advanced indexing + from_torch chain. Flatten
+        # map_pos into an (B*num_map*num_pts, 2) embedding table and look
+        # up by linearized indices = arange(B*num_map) * num_pts + per-row
+        # point index.
+        num_pts = map_pos.shape[2]
+        coord_dim = map_pos.shape[3]
+        table = ttnn.reshape(map_pos, [batch * num_map * num_pts, coord_dim])
+        base = ttnn.arange(0, batch * num_map, dtype=ttnn.uint32, device=self.device) * num_pts
+        linearized_idx = base + min_map_pos_idx
+        min_map_pos = ttnn.embedding(linearized_idx, table, layout=ttnn.TILE_LAYOUT)  # [B*num_map, 2]
+        min_map_pos = ttnn.reshape(min_map_pos, (batch, num_map, coord_dim))  # [B, num_map, 2]
         map_query, map_pos, map_mask = self.select_and_pad_query(
             map_query, min_map_pos, map_conf, score_thresh=self.query_thresh, use_fix_pad=self.query_use_fix_pad
         )
@@ -823,17 +828,19 @@ class TtVADHead:
         result = ttnn.add(x_sq, y_sq)
         map_dis = ttnn.sqrt(result)
         map_dis = ttnn.to_layout(map_dis, ttnn.ROW_MAJOR_LAYOUT)
-        min_map_pos_idx = ttnn.argmax((map_dis * -1), dim=-1)  # [B, P]
-        min_map_pos_idx = ttnn.reshape(min_map_pos_idx, [-1])
-        min_map_pos = ttnn.reshape(map_pos, [map_pos.shape[0] * map_pos.shape[1], map_pos.shape[2], map_pos.shape[3]])
-        min_map_pos = ttnn.to_torch(min_map_pos)
-        min_map_pos_idx = ttnn.to_torch(min_map_pos_idx).long()
-
-        min_map_pos = min_map_pos[range(min_map_pos.shape[0]), min_map_pos_idx]  # [B*P, 2]
-
-        min_map_pos = ttnn.from_torch(min_map_pos, dtype=ttnn.bfloat16, device=self.device)  # [B*P, 2]
-        min_map_pos = ttnn.reshape(min_map_pos, (batch, num_map, 2))  # [B, P, 2]
-        min_map_pos = ttnn.to_layout(min_map_pos, layout=ttnn.TILE_LAYOUT)
+        min_map_pos_idx = ttnn.argmax((map_dis * -1), dim=-1)  # [B, num_map]
+        min_map_pos_idx = ttnn.reshape(min_map_pos_idx, [-1])  # [B*num_map]
+        # Device-side gather via ttnn.embedding (avoids the prior to_torch +
+        # torch advanced indexing + from_torch host roundtrip). Flatten map_pos
+        # into an (B*num_map*num_pts, 2) "embedding table" and look up by
+        # linearized indices = (row_offset * num_pts) + per-row point index.
+        num_pts = map_pos.shape[2]
+        coord_dim = map_pos.shape[3]
+        table = ttnn.reshape(map_pos, [batch * num_map * num_pts, coord_dim])
+        base = ttnn.arange(0, batch * num_map, dtype=ttnn.uint32, device=self.device) * num_pts
+        linearized_idx = base + min_map_pos_idx
+        min_map_pos = ttnn.embedding(linearized_idx, table, layout=ttnn.TILE_LAYOUT)  # [B*num_map, 2]
+        min_map_pos = ttnn.reshape(min_map_pos, (batch, num_map, coord_dim))  # [B, num_map, 2]
 
         map_score = ttnn.sigmoid(map_score)
         map_max_score = ttnn.max(map_score, dim=-1)[0]
