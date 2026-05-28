@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from multiprocessing import Process
 from pathlib import Path
 from queue import Empty
+import signal
+import time
 
 # third party
 import enlighten
@@ -331,6 +333,21 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
 
 
 MAX_RETRIES = 1
+_CHILD_POLL_INTERVAL = 0.5
+
+
+class ChildCrash(Exception):
+    """Raised when a child process dies unexpectedly (e.g. segfault)."""
+
+    def __init__(self, exitcode):
+        self.exitcode = exitcode
+        sig = -exitcode if exitcode < 0 else exitcode
+        sig_name = ""
+        try:
+            sig_name = f" ({signal.Signals(sig).name})"
+        except (ValueError, AttributeError):
+            pass
+        super().__init__(f"child process died with exit code {exitcode}{sig_name}")
 
 
 def _create_main_proc_runner(module_name, input_queue, output_queue, config):
@@ -409,7 +426,7 @@ def _attempt_vector(
     """Send a single vector to the child process and collect the result.
 
     Returns (response_tuple, p) on success.
-    Raises Empty on timeout.
+    Raises Empty on timeout, ChildCrash if the child process dies.
     """
     if child_mode and (p is None or not p.is_alive()):
         p = Process(target=run, args=(module_name, input_queue, output_queue, config))
@@ -419,6 +436,19 @@ def _attempt_vector(
         main_proc_runner(test_vector)
     else:
         input_queue.put(test_vector)
+
+    if child_mode and p is not None:
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise Empty()
+            try:
+                response = output_queue.get(block=True, timeout=min(remaining, _CHILD_POLL_INTERVAL))
+                return response, p
+            except Empty:
+                if not p.is_alive():
+                    raise ChildCrash(p.exitcode)
 
     response = output_queue.get(block=True, timeout=timeout)
     return response, p
@@ -535,10 +565,10 @@ def _execute_vector_with_retry(
     result,
     main_proc_runner=None,
 ):
-    """Execute a single test vector with up to MAX_RETRIES retries on timeout.
+    """Execute a single test vector with up to MAX_RETRIES retries on timeout or crash.
 
-    On timeout: kill child -> tt-smi reset -> spawn new child -> retry.
-    If the retry also times out: mark as FAIL_CRASH_HANG -> tt-smi reset.
+    On timeout or child crash: kill child -> tt-smi reset -> spawn new child -> retry.
+    If retries exhausted: mark as FAIL_CRASH_HANG -> tt-smi reset.
 
     Returns the result dict with two internal keys:
       _child_process  – the (possibly new) child Process
@@ -562,14 +592,17 @@ def _execute_vector_with_retry(
             result["_abort_suite"] = False
             return result
 
-        except Empty:
+        except (Empty, ChildCrash) as exc:
+            is_crash = isinstance(exc, ChildCrash)
             is_last_attempt = attempt == MAX_RETRIES
             _kill_child(p, timeout_before_rejoin)
             p = None
 
+            failure_kind = f"CRASHED ({exc})" if is_crash else "TIMED OUT"
+
             if not is_last_attempt:
                 logger.warning(
-                    f"TEST TIMED OUT (attempt {attempt + 1}/{1 + MAX_RETRIES}) for "
+                    f"TEST {failure_kind} (attempt {attempt + 1}/{1 + MAX_RETRIES}) for "
                     f"input_hash='{input_hash}'. Resetting devices and retrying..."
                 )
                 reset_util.reset()
@@ -579,7 +612,7 @@ def _execute_vector_with_retry(
                 continue
 
             logger.warning(
-                f"TEST TIMED OUT after {1 + MAX_RETRIES} attempt(s) for "
+                f"TEST {failure_kind} after {1 + MAX_RETRIES} attempt(s) for "
                 f"input_hash='{input_hash}'. Marking as FAIL_CRASH_HANG."
             )
             _set_crash_hang_defaults(result)
