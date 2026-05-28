@@ -711,12 +711,53 @@ class Model:
         sampling_params=None,
         model_args=None,
         trace_cache=None,
+        empty_slots=None,
     ):
-        """Row-parallel batched prefill: 1 user per row per iteration."""
+        """Row-parallel batched prefill: 1 user per row per iteration.
+
+        ``empty_slots``: optional list of decoder slot ids, one per input user.
+        If supplied, users are first reordered so that array-index ``i`` lands
+        on the same row that ``empty_slots[i]`` will decode on
+        (``target_row = slot // max_local_batch_size``). Required for
+        users_row_sharded models whose prefill array-index routing must match
+        decode's row mapping. See tenstorrent/tt-metal#44746. The output is
+        inverse-permuted back to the caller-supplied user order before
+        returning.
+        """
         from models.tt_transformers.tt.common import copy_host_to_device, get_block_size, num_blocks_in_seq
 
         mesh_device = self.mesh_device
         num_rows = mesh_device.shape[0]
+        original_n = len(prompt_lens)
+
+        # Row-aware reorder. Group users by their target decode row, pad each
+        # row to the same length with duplicates so the call shape stays
+        # rectangular, then rebuild a flat batch in row-major order.
+        new_order = None
+        if empty_slots is not None:
+            max_local_batch_size = getattr(model_args, "max_local_batch_size", None) or max(original_n // num_rows, 1)
+            users_by_row = [[] for _ in range(num_rows)]
+            for local_idx, slot in enumerate(list(empty_slots)[:original_n]):
+                target_row = min(int(slot) // max_local_batch_size, num_rows - 1)
+                users_by_row[target_row].append(local_idx)
+            max_per_row = max((len(group) for group in users_by_row), default=1) or 1
+            fallback = users_by_row[0][0] if users_by_row[0] else 0
+            for r in range(num_rows):
+                if not users_by_row[r]:
+                    users_by_row[r] = [fallback]
+                while len(users_by_row[r]) < max_per_row:
+                    users_by_row[r].append(users_by_row[r][0])
+            new_order = []
+            for r in range(num_rows):
+                new_order.extend(users_by_row[r])
+            tokens = tokens[new_order]
+            prompt_lens_list = list(prompt_lens)
+            prompt_lens = [prompt_lens_list[i] for i in new_order]
+            prefill_seq_lens_list = list(prefill_seq_lens)
+            prefill_seq_lens = [prefill_seq_lens_list[i] for i in new_order]
+            if page_table is not None:
+                page_table = page_table[new_order]
+
         batch_size = len(prompt_lens)
         actual_batch_size = batch_size
         # upr (users-per-row-per-iter): pack 8 short-prompt users per row per
@@ -850,16 +891,35 @@ class Model:
                     )
 
         ttnn.synchronize_device(mesh_device)
+
+        # If we reordered, the output is in row-major order over new_order. Build
+        # an inverse permutation back to the caller-supplied user order and trim
+        # padded duplicates so the caller sees exactly ``original_n`` users.
+        if new_order is not None:
+            inverse_order = [-1] * original_n
+            for new_pos, orig_idx in enumerate(new_order):
+                if 0 <= orig_idx < original_n and inverse_order[orig_idx] == -1:
+                    inverse_order[orig_idx] = new_pos
+            assert all(p >= 0 for p in inverse_order), "internal: not all original users covered by new_order"
+            select_idx = torch.as_tensor(inverse_order, dtype=torch.long)
+        else:
+            select_idx = None
+
         if sampling_params is not None:
             # GPT-OSS always emits <|channel|> (token 200005) as the first generated token
             # regardless of prompt content. Skipping lm_head and returning this hardcoded
             # token saves ~100ms/user by avoiding the 201K-vocab matmul. vLLM device
             # sampling accepts this as a pre-sampled token ID.
             CHANNEL_TOKEN_ID = 200005
-            return torch.full((actual_batch_size, 1), CHANNEL_TOKEN_ID, dtype=torch.int64), torch.zeros(
-                actual_batch_size, 1, dtype=torch.float32
+            out_n = original_n if new_order is not None else actual_batch_size
+            return torch.full((out_n, 1), CHANNEL_TOKEN_ID, dtype=torch.int64), torch.zeros(
+                out_n, 1, dtype=torch.float32
             )
-        return output_tensor[:actual_batch_size]
+
+        out = output_tensor[:actual_batch_size]
+        if select_idx is not None:
+            out = out[select_idx]
+        return out
 
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """
