@@ -47,12 +47,15 @@ def run_device_perf(
         profiler_kwargs["op_support_count"] = op_support_count
 
     for _ in range(num_iterations):
-        run_device_profiler(command, subdir, device_analysis_types, **profiler_kwargs)
+        run_device_profiler(command, subdir, device_analysis_types=device_analysis_types, **profiler_kwargs)
         r = post_process_ops_log(subdir, duration_cols, op_name=op_name, has_signposts=has_signposts)
         for d_col in duration_cols:
             results[f"AVG {d_col}"] += r[d_col]
             results[f"MIN {d_col}"] = min(results[f"MIN {d_col}"], r[d_col])
             results[f"MAX {d_col}"] = max(results[f"MAX {d_col}"], r[d_col])
+
+    ops_csv_path = get_latest_ops_log_filename(subdir)
+    logger.info(f"Device perf ops CSV generated at: {ops_csv_path}")
 
     post_processed_results = {}
     for s_col, d_col in zip(samples_cols, duration_cols):

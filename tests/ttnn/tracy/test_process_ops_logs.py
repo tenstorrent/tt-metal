@@ -272,3 +272,36 @@ def test_enrich_device_logs_still_asserts_on_unrecognized_dispatch_without_trace
 
     with pytest.raises(AssertionError, match="Unrecognized dispatch OPs"):
         process_ops_logs._enrich_ops_from_device_logs(host_ops_by_device, tmp_path, [], None)
+
+
+def test_enrich_perf_csv_skips_host_ops_missing_from_device_report():
+    """Host Tracy logs every op, but cpp_device_perf_report.csv can be partial when
+    the profiler DRAM buffer overflows.  Those host ops are skipped instead of failing."""
+
+    device_id = 0
+    matched_id = 1024
+    missing_id = 51221504
+
+    host_ops_by_device = {
+        device_id: [
+            {"global_call_count": matched_id, "metal_trace_id": None},
+            {"global_call_count": missing_id, "metal_trace_id": None},
+        ]
+    }
+
+    device_perf_by_device = {
+        device_id: {
+            (matched_id, None, None): {
+                "GLOBAL CALL COUNT": matched_id,
+                "METAL TRACE ID": None,
+                "METAL TRACE REPLAY SESSION ID": None,
+                "CORE COUNT": 16,
+            },
+        }
+    }
+
+    result = process_ops_logs._enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, None)
+
+    assert len(result[device_id]) == 1
+    assert result[device_id][0]["global_call_count"] == matched_id
+    assert result[device_id][0]["_device_perf_row"]["GLOBAL CALL COUNT"] == matched_id
