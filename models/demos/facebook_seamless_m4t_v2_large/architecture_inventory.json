@@ -1,0 +1,172 @@
+{
+  "components": [
+    {
+      "name": "layernorm",
+      "kind": "norm",
+      "depends_on": [],
+      "reference_impl": "models/demos/qwen3_vl/tt/vision_layernorm.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "scaled_word_embedding",
+      "kind": "embedding",
+      "depends_on": [],
+      "reference_impl": "models/demos/audio/whisper/tt/ttnn_optimized_functional_whisper.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "sinusoidal_positional_embedding",
+      "kind": "embedding",
+      "depends_on": [],
+      "reference_impl": "models/demos/audio/whisper/tt/ttnn_optimized_functional_whisper.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "seamless_mha",
+      "kind": "attention",
+      "depends_on": [],
+      "reference_impl": "models/demos/audio/whisper/tt/ttnn_optimized_functional_whisper.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "seamless_ffn",
+      "kind": "mlp",
+      "depends_on": [],
+      "reference_impl": "models/demos/bert/tt/ttnn_optimized_bert.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "conformer_ffn",
+      "kind": "mlp",
+      "depends_on": [],
+      "reference_impl": "models/demos/llama3_70b_galaxy/tt/llama_mlp.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "conformer_self_attention",
+      "kind": "attention",
+      "depends_on": [],
+      "reference_impl": "models/demos/bert/tt/ttnn_optimized_bert.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "conformer_convolution_module",
+      "kind": "conv",
+      "depends_on": ["layernorm"],
+      "reference_impl": "models/demos/qwen3_tts/tt/ttnn_conv_decoder.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "variance_predictor",
+      "kind": "conv",
+      "depends_on": ["layernorm"],
+      "reference_impl": "models/demos/qwen3_tts/tt/ttnn_conv_decoder.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "hifigan_residual_block",
+      "kind": "conv",
+      "depends_on": [],
+      "reference_impl": "models/demos/qwen3_tts/tt/ttnn_speech_decoder.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "conformer_feature_projection",
+      "kind": "linear",
+      "depends_on": ["layernorm"],
+      "reference_impl": "models/demos/bert/tt/ttnn_optimized_bert.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "conformer_encoder_layer",
+      "kind": "decoder_layer",
+      "depends_on": ["layernorm", "conformer_ffn", "conformer_self_attention", "conformer_convolution_module"],
+      "reference_impl": "models/demos/audio/whisper/tt/ttnn_optimized_functional_whisper.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "text_encoder_layer",
+      "kind": "decoder_layer",
+      "depends_on": ["layernorm", "seamless_mha", "seamless_ffn"],
+      "reference_impl": "models/demos/audio/whisper/tt/ttnn_optimized_functional_whisper.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "text_decoder_layer",
+      "kind": "decoder_layer",
+      "depends_on": ["layernorm", "seamless_mha", "seamless_ffn"],
+      "reference_impl": "models/demos/audio/whisper/tt/ttnn_optimized_functional_whisper.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "t2u_decoder_layer",
+      "kind": "decoder_layer",
+      "depends_on": ["layernorm", "seamless_mha"],
+      "reference_impl": "models/demos/qwen3_tts/tt/ttnn_conv_decoder.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "conformer_adapter_layer",
+      "kind": "decoder_layer",
+      "depends_on": ["layernorm", "conformer_self_attention", "conformer_ffn"],
+      "reference_impl": "models/demos/qwen3_tts/tt/ttnn_conv_decoder.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "speech_encoder",
+      "kind": "other",
+      "depends_on": ["layernorm", "conformer_feature_projection", "conformer_encoder_layer", "conformer_ffn", "conformer_adapter_layer"],
+      "reference_impl": "models/demos/audio/whisper/tt/ttnn_optimized_functional_whisper.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "text_encoder",
+      "kind": "other",
+      "depends_on": ["layernorm", "scaled_word_embedding", "sinusoidal_positional_embedding", "text_encoder_layer"],
+      "reference_impl": "models/demos/audio/whisper/tt/ttnn_optimized_functional_whisper.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "text_decoder",
+      "kind": "other",
+      "depends_on": ["layernorm", "scaled_word_embedding", "sinusoidal_positional_embedding", "text_decoder_layer"],
+      "reference_impl": "models/demos/audio/whisper/tt/ttnn_optimized_functional_whisper.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "t2u_encoder",
+      "kind": "other",
+      "depends_on": ["layernorm", "text_encoder_layer"],
+      "reference_impl": "models/demos/audio/whisper/tt/ttnn_optimized_functional_whisper.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "t2u_decoder",
+      "kind": "other",
+      "depends_on": ["layernorm", "scaled_word_embedding", "sinusoidal_positional_embedding", "variance_predictor", "t2u_decoder_layer"],
+      "reference_impl": "models/demos/qwen3_tts/tt/ttnn_conv_decoder.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "hifigan_vocoder",
+      "kind": "conv",
+      "depends_on": ["hifigan_residual_block"],
+      "reference_impl": "models/demos/qwen3_tts/tt/ttnn_speech_decoder.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "code_hifigan_vocoder",
+      "kind": "other",
+      "depends_on": ["variance_predictor", "hifigan_vocoder"],
+      "reference_impl": "models/demos/qwen3_tts/tt/ttnn_speech_decoder.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    },
+    {
+      "name": "seamless_m4t_v2",
+      "kind": "other",
+      "depends_on": ["speech_encoder", "text_encoder", "text_decoder", "t2u_encoder", "t2u_decoder", "code_hifigan_vocoder"],
+      "reference_impl": "models/demos/audio/whisper/tt/ttnn_optimized_functional_whisper.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null}
+    }
+  ]
+}
