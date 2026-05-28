@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -136,6 +137,39 @@ public:
         // host transparently pads the metadata to socket_page_size before
         // pushing — the caller never sees the padding.
         uint32_t metadata_size_bytes = 0;
+
+        // Optional host-side preprocessing hook. When set, every
+        // `forward_to_tensor(bytes, metadata)` call:
+        //   1. Copies `bytes` into a service-owned scratch buffer of size
+        //      `payload_size_bytes()`.
+        //   2. Invokes the preprocessor with that scratch buffer
+        //      (mutable, in-place) and the `metadata` span (read-only —
+        //      the same bytes the service multicasts to worker L1
+        //      afterward, so host preprocessor and device worker kernel
+        //      can share one metadata schema).
+        //   3. Hands the now-mutated scratch buffer to the mapper as if
+        //      it were the original input.
+        //
+        // Contract:
+        //   * Length-preserving. The hook must not resize `bytes`.
+        //   * In-place. The hook mutates the scratch buffer; the service
+        //     does not consume a return value.
+        //   * Exceptions propagate — preprocessor throws, the
+        //     `forward_to_tensor` call throws.
+        //   * Only runs on the raw-bytes overload. The
+        //     `forward_to_tensor(const Tensor&, ...)` overload skips the
+        //     hook (the caller has already shaped the data).
+        //
+        // Use case: per-call transforms that derive their parameters from
+        // the same `metadata` the device-side worker kernel reads.
+        // Example: the ring-SDPA prefill reshuffle reads
+        // `chunk_P_aligned` out of the metadata and rotates the
+        // token-ID array so the existing TensorToMesh mapper distributes
+        // each rotated slice to the column that owns those slot
+        // positions in the KV cache (see
+        // `models/demos/deepseek_v3_b1/docs/ring_sdpa_prefill_reshuffling.md`).
+        std::function<void(ttsl::Span<std::byte> bytes,
+                           ttsl::Span<const std::byte> metadata)> preprocessor;
     };
 
     H2DStreamService(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Config cfg);
@@ -272,8 +306,19 @@ public:
     //
     // @param service_id Identifier the owner passed to `export_descriptor`.
     // @param timeout_ms Max wait time for the descriptor file (default 10s).
+    // @param preprocessor Optional host-side hook installed into the
+    //     connector-side service's `Config::preprocessor`. The preprocessor
+    //     is process-local executable code; it is NOT shipped through the
+    //     descriptor. The connector must install whatever transform it wants
+    //     applied to its outgoing bytes BEFORE the mapper distributes shards.
+    //     Same contract as `Config::preprocessor` on the in-process path:
+    //     in-place, length-preserving, gets the same `metadata` span the
+    //     service will multicast to workers. Pass nullptr (default) to skip.
     static std::unique_ptr<H2DStreamService> connect(
-        const std::string& service_id, std::optional<uint32_t> timeout_ms = std::nullopt);
+        const std::string& service_id,
+        std::optional<uint32_t> timeout_ms = std::nullopt,
+        std::function<void(ttsl::Span<std::byte> bytes,
+                           ttsl::Span<const std::byte> metadata)> preprocessor = nullptr);
 
 private:
     // Connector-mode ctor. Called by the static `connect()` factory after it
@@ -389,6 +434,13 @@ private:
     // metadata into the head and pushes the whole page through every socket.
     // Empty when metadata is disabled.
     std::vector<std::byte> metadata_scratch_;
+
+    // Per-service host scratch buffer for the optional preprocessor hook.
+    // Lazy-allocated to `payload_size_bytes()` on the first
+    // `forward_to_tensor(bytes,...)` call after `Config::preprocessor` was
+    // set; reused across every subsequent call. Empty when no preprocessor
+    // is registered, so callers that don't opt in pay zero memory cost.
+    std::vector<std::byte> preprocess_scratch_;
 
     // Persistent receiver workload — built and enqueued once in the ctor,
     // drained in the dtor after termination is signalled.
