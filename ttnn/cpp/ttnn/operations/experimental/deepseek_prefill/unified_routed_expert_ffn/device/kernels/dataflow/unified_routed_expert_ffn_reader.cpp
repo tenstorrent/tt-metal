@@ -225,12 +225,12 @@ void kernel_main() {
             const uint32_t this_core_last_row = this_core_first_row + per_core_M;
             if (this_core_last_row > M_bound) {
                 const uint32_t slot_size_bytes = g_in0_block_num_tiles * get_tile_size(cb_in0_x);
-                const uint32_t total_bytes = 2 * slot_size_bytes;
-                volatile tt_l1_ptr uint64_t* p =
+                const uint32_t both_slots_bytes = 2 * slot_size_bytes;
+                volatile tt_l1_ptr uint64_t* zero_dst =
                     reinterpret_cast<volatile tt_l1_ptr uint64_t*>(get_write_ptr(cb_in0_x));
-                const size_t n = total_bytes / sizeof(uint64_t);
-                for (size_t i = 0; i < n; ++i) {
-                    p[i] = 0;
+                const size_t num_u64_words = both_slots_bytes / sizeof(uint64_t);
+                for (size_t word = 0; word < num_u64_words; ++word) {
+                    zero_dst[word] = 0;
                 }
             }
         }
