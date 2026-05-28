@@ -58,9 +58,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import (
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from tests.ttnn.utils_for_testing import comp_pcc
 
-# Variant configs (DSv3 / Kimi K2.6) live in models/.../tests/model_variants.py.
-# Test selection: `pytest -k dsv3` or `pytest -k kimi`.
-
 
 # dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
 # integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.

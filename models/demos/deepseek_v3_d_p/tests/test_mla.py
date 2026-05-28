@@ -29,9 +29,6 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-# Variant configs (DSv3 / Kimi K2.6) live in models/.../tests/model_variants.py.
-# Test selection: `pytest -k dsv3` or `pytest -k kimi`.
-
 
 def run_mla_inference(
     config,

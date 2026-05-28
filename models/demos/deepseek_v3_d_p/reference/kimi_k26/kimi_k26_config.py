@@ -7,10 +7,6 @@ Kimi K2.6 model configuration.
 
 Overrides DeepSeekV3Config with the values from Kimi K2.6's
 text_config (https://huggingface.co/moonshotai/Kimi-K2.6/blob/main/config.json).
-Kimi K2.6 reuses the DeepSeek V3 architecture (architectures =
-["DeepseekV3ForCausalLM"]); only hyperparameters differ.
-
-Fields not listed here inherit the DeepSeek V3 value.
 """
 
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config

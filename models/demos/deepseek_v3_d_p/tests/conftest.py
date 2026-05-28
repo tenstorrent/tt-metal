@@ -498,10 +498,7 @@ def weight_cache_path(model_path):
 @pytest.fixture
 def random_weights(variant, request):
     """
-    Random MLA weights for the active variant. Returns (config, weights_dict).
-
-    Lazy: access via ``request.getfixturevalue("random_weights")`` in branches
-    that need it, so the heavy tensor allocation is skipped on pretrained runs.
+    Random MLA weights for the model variant.
     """
     config = variant.get_config(request)
     torch.manual_seed(42)  # this is tied to already cached reference results, so keep it consistent for now
