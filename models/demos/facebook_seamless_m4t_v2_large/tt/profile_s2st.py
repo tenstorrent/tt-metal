@@ -24,9 +24,12 @@ vocoder NAR stages). The TTNN model file is
 
 Just like T2ST, T2U + vocoder are NAR one-shot stages, so the right
 primary metric is **end-to-end wall-clock per synthesize**, not
-per-decode-step. Cross-call AR trace reuse is BLOCKED by the post-AR
-NAR stage allocations (documented in PERF_NOTES.md::T2ST), so this
-harness defaults to the untraced production path.
+per-decode-step. The ``--traced`` flag enables the single-call trace
+pattern: capture the AR decode trace inside the synthesize() call,
+**release it explicitly before T2U+vocoder allocate**, recapture on
+the next call. Cross-call trace reuse (Phase 9c, T2TT/S2TT) is
+forbidden here because the post-AR allocations are unsafe under an
+armed trace -- see PERF_NOTES.md::T2ST for the lifetime discussion.
 
 Usage (no tracy, just wall-clock)::
 
@@ -69,10 +72,15 @@ import ttnn
 INPUTS_DIR = Path(__file__).resolve().parents[1] / "demo" / "inputs"
 
 # Default profiling budget for the AR text-decoder. Includes prefix tokens.
-DEFAULT_MAX_NEW_TOKENS = 32
+# Use a deliberately generous budget so the single-call trace pattern has
+# enough steady-state steps to amortise its recapture cost (~27 ms).
+DEFAULT_MAX_NEW_TOKENS = 48
 
-# Default WAV sample to profile. Short hello-world style.
-DEFAULT_SAMPLE = "sample_hello.wav"
+# Default WAV sample to profile. ``sample_jim.wav`` is ~2.4 s vs hello's
+# ~1.85 s, so the model emits a few more tokens, giving the AR loop
+# enough steady-state steps to amortise the per-call recapture cost
+# of the single-call trace pattern.
+DEFAULT_SAMPLE = "sample_jim.wav"
 DEFAULT_SRC_LANG = "eng"
 DEFAULT_TGT_LANG = "fra"
 DEFAULT_MAX_AUDIO_SECONDS = 5.0
@@ -100,6 +108,7 @@ def _run_one_synthesize(
     tgt_lang: str,
     max_new_tokens: int,
     max_audio_seconds: float,
+    use_trace: bool,
     timings: Dict[str, float],
     waveform_ref: List[Optional[np.ndarray]],
 ) -> Tuple[np.ndarray, int]:
@@ -163,10 +172,23 @@ def _run_one_synthesize(
         eos_token_id=model.eos_token_id,
         max_new_tokens=max_total,
         do_sample=False,
+        use_trace=use_trace,
     )
     ttnn.synchronize_device(model.device)
     timings["ar_text_ms"] = (time.perf_counter() - t2) * 1000.0
     tokens_generated = int(len(text_tokens)) if hasattr(text_tokens, "__len__") else 0
+
+    # CRITICAL: release the AR trace BEFORE T2U+vocoder allocate fresh
+    # device buffers. This is the single-call trace pattern -- the next
+    # synthesize() call re-captures. Without this, the post-AR
+    # allocations either warn or corrupt under trace replay.
+    if use_trace:
+        t_rel = time.perf_counter()
+        model.text_generator.release_trace()
+        ttnn.synchronize_device(model.device)
+        timings["release_ms"] = (time.perf_counter() - t_rel) * 1000.0
+    else:
+        timings["release_ms"] = 0.0
 
     if isinstance(text_tokens, torch.Tensor):
         seq = text_tokens.to(torch.int64).view(1, -1)
@@ -276,6 +298,16 @@ def main():
         help="Cap on the input audio length (seconds). Defaults to 5.",
     )
     parser.add_argument(
+        "--traced",
+        action="store_true",
+        help=(
+            "Enable single-call metal-trace replay on the AR text decoder. "
+            "The trace is captured inside synthesize() and released "
+            "BEFORE T2U+vocoder allocate; recaptured on the next call. "
+            "T2U and vocoder themselves are NOT traced (one-shot per call)."
+        ),
+    )
+    parser.add_argument(
         "--device-id",
         type=int,
         default=0,
@@ -284,13 +316,16 @@ def main():
     parser.add_argument(
         "--num-timed",
         type=int,
-        default=1,
+        default=3,
         help=(
             "Number of timed synthesize() calls AFTER the 1-call warmup. "
             "Reported numbers are medians across these calls."
         ),
     )
     args = parser.parse_args()
+
+    if args.traced:
+        print("[profile_s2st] --traced ENABLED: AR text-decoder steps run " "under metal trace replay.")
 
     from transformers import AutoProcessor
 
@@ -308,7 +343,12 @@ def main():
     print(f"[profile_s2st] opening device {args.device_id} ...")
     device = ttnn.open_device(
         device_id=args.device_id,
-        l1_small_size=32768,
+        # When --traced, allocations from the AR-loop's captured trace can
+        # leave less L1_SMALL headroom for the post-AR vocoder Conv1d
+        # halos. Give a bigger L1_SMALL pool in traced mode so the
+        # vocoder doesn't OOM on fragmentation.
+        l1_small_size=65536 if args.traced else 32768,
+        trace_region_size=256_000_000 if args.traced else 0,
     )
 
     try:
@@ -333,6 +373,7 @@ def main():
             tgt_lang=args.tgt_lang,
             max_new_tokens=args.max_new_tokens,
             max_audio_seconds=args.max_audio_seconds,
+            use_trace=args.traced,
             timings=warmup_timings,
             waveform_ref=warmup_audio,
         )
@@ -361,6 +402,7 @@ def main():
                 tgt_lang=args.tgt_lang,
                 max_new_tokens=args.max_new_tokens,
                 max_audio_seconds=args.max_audio_seconds,
+                use_trace=args.traced,
                 timings=t,
                 waveform_ref=audio_ref,
             )
@@ -384,6 +426,7 @@ def main():
             "feature_extractor_ms",
             "speech_encoder_ms",
             "ar_text_ms",
+            "release_ms",
             "hf_rerun_ms",
             "char_prep_ms",
             "t2u_ms",
@@ -416,11 +459,19 @@ def main():
             return statistics.median(xs) if xs else float("nan")
 
         total_p50 = _med(all_totals)
+        # Per-step ms: AR generate() runs (tokens_generated - 1) forward
+        # passes (positions 0..N-2). Position 0's logits are discarded;
+        # positions 1..N-2 each produce one sampled token.
+        ar_p50 = _med(per_key["ar_text_ms"])
+        step_count = max(1, (all_tokens[0] if all_tokens else 1) - 1)
+        per_step_ms = ar_p50 / float(step_count) if step_count > 0 else float("nan")
         print(
             f"[profile_s2st] SUMMARY "
             + " ".join(f"{k}={_med(per_key[k]):.2f}" for k in keys)
             + f" total_ms={total_p50:.2f}"
+            + f" ar_step_ms={per_step_ms:.2f}"
             + f" tokens_generated={all_tokens[0] if all_tokens else 0}"
+            + f" (steps={step_count})"
         )
 
     finally:

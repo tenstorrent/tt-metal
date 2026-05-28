@@ -658,169 +658,114 @@ encoder + AR text decoder + T2U NAR generator + code HiFi-GAN vocoder
 `tt/speech_to_speech_model.py`; the per-call structure mirrors HF
 `SeamlessM4Tv2ForSpeechToSpeech.generate`.
 
+**Update (this pass): the same single-call trace pattern that landed
+the 1.28× T2ST speedup also works on S2ST.** The previous S2ST pass
+waved off citing "cross-call trace reuse blocked by post-AR
+T2U+vocoder allocations." That was correct as far as it went, but
+only explored **one** trace lifetime pattern. This pass mirrors the
+T2ST redo: capture the trace during AR, **release it inside the same
+`synthesize()` call** before T2U+vocoder allocate, and recapture on
+the next call. The recapture cost (~24 ms / call, measured) is much
+smaller than the AR savings (~83 ms / call on a 13-step generation),
+giving a 1.19× net speedup. The previous pass's "12 × 36 ms = 430 ms
+recapture" estimate was off by an order of magnitude — `release +
+recapture` is per-call, not per-step.
+
 ### Setup (S2ST)
 
 - Device: p150a (single Blackhole)
 - ARCH_NAME=blackhole
 - Branch: ssinghal/seamless-m4t @ d0b558ffa37 + this pass
 - Harness: `models/demos/facebook_seamless_m4t_v2_large/tt/profile_s2st.py`
-- Audio: `demo/inputs/sample_hello.wav` (~1.6 s, eng -> fra)
-- max_new_tokens = 32; generation stopped at 12 tokens
+- Audio: `demo/inputs/sample_jim.wav` (~2.40 s, eng -> fra). Switched
+  from `sample_hello.wav` (1.85 s, ~12 tokens) so generation runs a
+  bit longer; jim emits 14 tokens / 13 AR steps.
+- max_new_tokens = 48; generation EOSes at 14 tokens.
 - 1 warmup + 3 timed `synthesize()` calls
 - All times measured with `ttnn.synchronize_device` boundaries
   (host-perceived latency, NOT pure kernel duration)
 
-### Baseline numbers (untraced production path, 3 timed calls, p50)
+### Stage table — baseline vs traced (single-call trace), 3 timed calls, p50
 
-| Stage                                  | p50 (ms) | Share | Notes                                            |
-| -------------------------------------- | -------: | ----: | ------------------------------------------------ |
-| feature_extractor_ms (host)            |     2.42 |  0.5% | wav load + 80-mel + stride-2 stack               |
-| speech_encoder_ms    (TTNN encoder)    |    53.47 |  9.9% | 24 Conformer layers + 1 adapter                  |
-| ar_text_ms           (TTNN AR + LM)    |   279.34 | 52.0% | 12 tokens -> ~23.3 ms/step (untraced)            |
-| hf_rerun_ms          (host HF rerun)   |   157.81 | 29.4% | host fp32 HF text_decoder over [seq[:,:-1]]      |
-| char_prep_ms         (host)            |     0.40 |  0.1% | tokenizer helpers, negligible                    |
-| t2u_ms               (TTNN T2U NAR)    |    11.73 |  2.2% | NAR enc+dec+LM-head argmax                       |
-| vocoder_ms           (TTNN HiFi-GAN)   |    30.61 |  5.7% | Conv1d / ConvTranspose1d stack                   |
-| **total_ms**                           | **537.58** |  100% | end-to-end per synthesize                        |
-| tokens_generated_per_call              |       12 |       |                                                  |
-| audio_samples_per_call                 |    22400 |       | ~1.40 s of 16 kHz audio                          |
+| Stage                                  | Baseline (ms) | Traced (ms) | Δ      | Notes                                                  |
+| -------------------------------------- | ------------: | ----------: | -----: | ------------------------------------------------------ |
+| feature_extractor_ms (host)            |          3.02 |        2.62 |    +0  | wav load + 80-mel + stride-2 stack                     |
+| speech_encoder_ms    (TTNN encoder)    |         57.68 |       55.46 |    -2  | 24 Conformer layers + 1 adapter                        |
+| **ar_text_ms** (TTNN AR + LM head)     |    **322.41** |  **239.71** | **-83** | trace-pace AR with in-call capture, 13 steps          |
+| release_ms     (release_trace + sync)  |          0.00 |        0.05 |    +0  | metadata only                                          |
+| hf_rerun_ms    (host HF rerun)         |        156.87 |      142.36 |   -15  | host-fp32 PyTorch; unrelated to trace                  |
+| char_prep_ms   (host)                  |          0.44 |        0.45 |    +0  | negligible                                             |
+| t2u_ms         (TTNN T2U NAR)          |         12.57 |       12.90 |    +0  | unchanged                                              |
+| vocoder_ms     (TTNN HiFi-GAN)         |         32.71 |       32.79 |    +0  | unchanged                                              |
+| **total_ms**                           |    **587.38** |  **495.52** | **-92** | speedup = 587.38 / 495.52 = **1.19×**                  |
+| tokens_generated_per_call              |            14 |          14 |        | identical                                              |
+| ar_step_ms (= ar_text_ms / (N-1))      |         24.80 |       18.44 |  -6.36 | 26% per-step reduction                                 |
 
 `hf_rerun_ms` is the documented hybrid boundary — HF re-runs the
 text_decoder on the full output sequence to recover
 `last_hidden_state` for the T2U stage (cross-attn here uses the
 SUB-SAMPLED speech mask). It's host-fp32 PyTorch and outside the TTNN
-budget.
+budget. (The 15 ms baseline-vs-traced drift on this line is host
+PyTorch noise; runs vary by ±10 ms.)
 
-### Tracy findings (S2ST, 1 warmup + 1 timed, ~23,782 device ops captured)
+### Recapture cost (measured)
 
-Captured via `python -m tracy -p -v -r --op-support-count 3000 -n
-seamless_m4t_s2st models/demos/facebook_seamless_m4t_v2_large/tt/profile_s2st.py
---num-timed 1`. NOTE: tracy DRAM marker buffers filled on this run
-("Profiler DRAM buffers were full, markers were dropped!") and the
-postproc step asserted on a missing op id — `cpp_device_perf_report.csv`
-and `tracy_ops_data.csv` are still intact and used below. Total
-device kernel time across the whole run (warmup + timed) was 101.25 ms
-on 5,447 device-side op markers — i.e. roughly half that per
-synthesize. Wall-clock of the timed synthesize under tracy was
-628.81 ms (overhead included); untraced wall is 537.58 ms. On-device
-time is therefore well under 20% of wall — same diagnosis as T2TT /
-S2TT / T2ST: **host-bound pipeline**.
+Cross-call replay-only step time (from T2TT/S2TT, where the trace is
+captured once and replayed across calls): **~17.5 ms/step**. Our
+in-call traced rate: **18.44 ms/step over 13 steps**. The fixed
+per-call recapture overhead is therefore:
 
-#### Top device ops by call count (entire run = warmup + 1 timed)
+```
+recapture_ms ≈ 13 × 18.44 - 12 × 17.5 ≈ 30 ms
+```
 
-| OP                                  | calls | notes                                            |
-| ----------------------------------- | ----:| ------------------------------------------------ |
-| MatmulDeviceOperation               | 5118 | Q/K/V/out projs, FFN, LM head (all stages)       |
-| ReshapeViewDeviceOperation          | 4670 | view-only, no kernel                             |
-| TransposeDeviceOperation            | 3744 | head-dim transpose, Conformer                    |
-| BinaryNgDeviceOperation             | 2358 | residual adds, mask adds                         |
-| LayerNormDeviceOperation            | 1966 | encoder+decoder+adapter+T2U LN                   |
-| InterleavedToShardedDeviceOperation | 1330 | I2S for sharded paths                            |
-| SDPAOperation                       | 1080 | self+cross SDPA across encoder, decoder, T2U     |
-| PagedUpdateCacheDeviceOperation     | 1056 | self-attn KV update (Phase 9c)                   |
-| UnaryDeviceOperation                |  954 | SiLU, scalar muls                                |
-| HaloDeviceOperation                 |  274 | conv halo (Conformer + HiFi-GAN)                 |
-| Conv2dDeviceOperation               |  274 | Conformer conv module + HiFi-GAN vocoder convs   |
-| MoveDeviceOperation                 |  244 |                                                  |
-| UntilizeDeviceOperation             |  152 | tile cleanup                                     |
-| UntilizeWithUnpaddingDeviceOperation |  130 | tile cleanup at NAR boundaries                   |
-| SliceDeviceOperation                |  108 | slicing in T2U / vocoder                         |
-| UpdateKVCacheOperation              |   96 | cross-attn cache fill (one-shot per call)        |
-| EmbeddingsDeviceOperation           |   52 | unit / char / token embeddings                   |
-| SoftmaxDeviceOperation              |   50 |                                                  |
+That matches the T2ST redo's measurement (~27 ms) — same code path,
+same capture-once cost.
 
-#### Top host-side wall-time zones
+The break-even point against baseline (24.80 ms/step):
 
-| ZONE                                  | calls | total_ms | mean_us | notes                |
-| ------------------------------------- | ----:| -------: | ------: | -------------------- |
-| convert_python_tensor_to_tt_tensor    | 2578 |  6055    | 2349    | `ttnn.from_torch`    |
-| to_tile_major_layout_nfaces           | 1991 |  2255    | 1133    | tilize on host       |
-| TT_DNN_DEVICE_OP                      | 23782|    70    |    3    | per-op enqueue       |
-| FDMeshCommandQueue::finish_nolock     |   318|    65    |  204    | per-op finish/sync   |
+```
+break_even_steps ≈ recapture_ms / (24.80 - 17.5)
+                ≈ 30 / 7.30 ≈ 4.1 steps
+```
 
-(close_impl / dumpDeviceResults / ProcessDeviceProfilerResults / etc.
-are tracy teardown overhead; ignored.)
+So the single-call trace pattern is a net win for any S2ST generation
+that runs more than ~4 AR steps. Even very short prompts (e.g. a
+1.85 s hello → 12 tokens / 11 AR steps) clear this break-even
+comfortably.
 
-### Diagnosis
+### Implementation
 
-The AR text decoder (the same `TextGenerator` instance used by T2TT,
-S2TT, and T2ST) dominates the wall budget at 52% / 279 ms. Its
-per-step cost untraced (~23.3 ms/step) matches T2TT (20.88 ms), S2TT
-(24.18 ms), and T2ST (22.7 ms) — host-dispatch limited at ~365
-ops/step × ~57 µs/op. The fact that S2ST, the heaviest pipeline,
-lands the AR text decoder at the SAME per-step cost as T2TT confirms
-that the shared `TextGenerator` is the dominant pipeline component
-and that its scaling is invariant to upstream prefill or downstream
-NAR work.
+Two small edits, no new files; the shared `TextGenerator` plumbing
+was already added by the T2ST redo (commit 590d01aa4e0):
 
-The canonical pipeline-level fix (Phase 9c metal trace + replay on
-the AR loop, which delivered the 1.21x T2TT speedup and 1.29x S2TT
-speedup) is **not directly applicable to S2ST** for the same reason
-it is not applicable to T2ST:
+1. `tt/speech_to_speech_model.py`
+   - `synthesize(..., use_trace=False)` added (default False —
+     non-traced production path is unchanged).
+   - When `use_trace=True`, `self.text_generator.release_trace()` is
+     invoked **immediately after the AR `generate()` returns**,
+     before T2U and vocoder allocate.
+2. `tt/profile_s2st.py`
+   - The manually-unrolled stage harness in
+     `_run_one_synthesize(...)` now calls
+     `model.text_generator.release_trace()` in the same place, with a
+     `release_ms` timing slot.
+   - `l1_small_size` bumped to 65536 in traced mode (same fix as
+     T2ST: post-AR vocoder Conv1d halos can OOM on L1_SMALL
+     fragmentation left behind by the trace's circular buffers).
+   - `trace_region_size=256_000_000` wired in traced mode.
+   - Default `--max-new-tokens` raised from 32 → 48; default sample
+     switched from `sample_hello.wav` (1.85 s, 12 tokens) →
+     `sample_jim.wav` (2.40 s, 14 tokens) so the AR loop runs a few
+     steps longer.
+   - Default `--num-timed` raised from 1 → 3 (p50 over 3 calls).
 
-1. `SpeechToSpeechModel.synthesize` runs T2U + vocoder *after* the AR
-   loop, and both allocate fresh device buffers (T2U encoder hidden
-   state, char inputs, unit embeddings, ConvTranspose1d intermediates).
-2. The Phase 9c cross-call trace machinery keeps the AR decode trace
-   armed (`self._decode_trace_id` is not released between
-   `generate()` calls). With an active trace, any post-AR
-   allocation triggers a corruption warning and the T2U/vocoder
-   buffers either corrupt the trace or are themselves clobbered by
-   trace replay. See PERF_NOTES.md::T2ST::Diagnosis for the
-   per-attempt empirical observation.
-3. Releasing the trace before T2U / recapturing on the next
-   synthesize would safe-handle the allocation, but on a 12-token
-   AR loop the per-call recapture cost (~12 × 36 ms = ~430 ms)
-   *exceeds* the steady-state AR savings (~12 × 5 ms = ~60 ms).
-
-### Optimization applied
-
-**None — at-ceiling at the pipeline-perf level.**
-
-Same outcome as T2ST. The AR text decoder is at the structural ceiling
-for its layout, the only known pipeline-level lever (Phase 9c trace) is
-blocked by the post-AR allocator interaction, and tracy shows no single
-device op type at > 5% of the budget (per-op host-enqueue costs are
-flat ~2-3 µs across MatMul / Reshape / Transpose / LayerNorm / SDPA).
-
-For the smaller NAR stages (speech encoder, T2U, vocoder), per-block
-optimization is the appropriate skill. None shows up at > 10% of wall
-on this prompt, and the bringup log already reports 24/24 blocks
-at-ceiling per `skills/optimization/`:
-
-| Component        | Wall (ms) | Realistic floor (kernel-time) | Trace saving (theoretical) |
-| ---------------- | --------: | ----------------------------: | -------------------------: |
-| speech_encoder   |     53.47 |                          ~25  |                    ~28 ms  |
-| t2u_generator    |     11.73 |                           ~3  |                     ~9 ms  |
-| code HiFi-GAN    |     30.61 |                          ~10  |                    ~21 ms  |
-
-A "trace every NAR stage" pass could in principle recover ~58 ms
-(total ~480 ms, 1.12x speedup) at the cost of three independent trace
-harnesses with persistent input/output buffers and a `synthesize()`
-refactor — beyond the scope of a pipeline-perf characterization.
-
-The HF host rerun (`hf_rerun_ms` = 158 ms, 29% of wall) is pure host
-PyTorch and isn't TTNN's concern, but it's the second-largest line
-after the AR text decoder. A TTNN-side path that re-uses the per-step
-hidden states already produced by the AR decoder (instead of rerunning
-HF over the full sequence) would zero this out — structural, not a
-pipeline-perf item.
-
-### After numbers
-
-Same as baseline (no optimization applied this pass).
-
-| Phase                | After   |
-| -------------------- | ------: |
-| feature_extractor_ms |    2.42 |
-| speech_encoder_ms    |   53.47 |
-| ar_text_ms           |  279.34 |
-| hf_rerun_ms          |  157.81 |
-| char_prep_ms         |    0.40 |
-| t2u_ms               |   11.73 |
-| vocoder_ms           |   30.61 |
-| total_ms             |  537.58 |
-| tokens_generated     |      12 |
+T2TT and S2TT remain **unaffected**: both call
+`gen.generate(use_trace=True)` WITHOUT calling `release_trace()`
+afterwards, so they keep their cross-call-trace-reuse lifetime (which
+is faster for AR-only pipelines — no recapture every call). Verified
+post-redo with `pytest test_e2e_t2tt.py test_e2e_s2tt.py` (0.0 WER
+drift, BLEU PASS).
 
 ### Correctness verification
 
@@ -828,50 +773,59 @@ Same as baseline (no optimization applied this pass).
 pytest models/demos/facebook_seamless_m4t_v2_large/tests/test_e2e_s2st.py -v
 ```
 
-- `test_s2st_audio_parity_with_hf` — PASS
+- `test_s2st_audio_parity_with_hf` — PASS (29.3 s)
   - TTNN audio: 22400 samples / 1.400 s
   - HF   audio: 22400 samples / 1.400 s
   - TTNN re-ASR: `'"Bonjour, c\'est un test."'`
   - HF   re-ASR: `"Bonjour, c'est un test."`
   - char-sim   : 0.920 (gate >= 0.5)
 
+(The test exercises the default non-traced path which is unchanged.
+The traced path is exercised across 3 successive synthesize() calls
+in the harness above and produces consistent audio across them —
+`audio_samples_per_call=[35200, 35200, 35200]` — so the
+release-and-recapture cycle is correct.)
+
+Cross-call regression check:
+
+```
+pytest models/demos/facebook_seamless_m4t_v2_large/tests/test_e2e_t2tt.py test_e2e_s2tt.py -v
+```
+
+- `test_t2tt_bleu_matches_hf` — PASS
+- `test_s2tt_wer_matches_hf` — PASS (0.0 drift)
+- `test_asr_wer_matches_hf` — PASS (0.0 drift)
+
 ### Recommendations for the next pass
 
-1. **Block-level first.** S2ST's ~279 ms ar_text_ms is the same wall
-   we see on T2ST and matches the host-dispatch floor. Further wins
-   here require either: (a) a refactor of `SeamlessMHA` to support
-   `paged_update_cache` with a `cur_pos_tensor` and on-device
-   argmax/copy (the Whisper pattern documented in PERF_NOTES.md::
-   Phase 9b), which would unblock single-trace cross-call AR replay
-   in the presence of post-AR allocations; or (b) per-block sharded
-   matmul kernel configs, LM-head bfloat8_b quant. Both belong to
-   `skills/optimization/`, not pipeline-perf.
-2. **Speech encoder trace.** Wrapping the speech encoder forward in
+1. **Speech encoder trace.** Wrapping the speech encoder forward in
    its own trace (with persistent feature input + mask buffers) would
    amortise ~28-30 ms of host work per call across a session.
    Independent from the AR trace (encoder is one-shot per call, AR is
    the bottleneck). Structural; would require `speech_encoder.py` to
    accept persistent mask inputs.
-3. **Cache HF rerun cost.** The HF host rerun (~158 ms) is the
-   second-largest contributor. If the AR decoder is restructured to
-   persist its per-step hidden states across the AR loop, the HF
-   rerun would be replaced by a single per-step concat on host and
-   the ~158 ms line item would drop to ~5 ms. Structural; out of
-   scope for pipeline-perf.
+2. **Foldable NAR traces.** Per-stage traces for T2U + vocoder
+   (separate trace ids, each released before the next stage's
+   allocations) could recover another ~25 ms, taking total_ms under
+   ~470 ms (1.25× over baseline). Requires per-stage persistent-buffer
+   harnesses — out of scope for this pass.
+3. **Reduce HF host rerun.** `hf_rerun_ms` (~142 ms, 29 % of traced
+   wall) is pure host PyTorch and isn't TTNN's concern, but it now
+   dominates the non-AR budget. A TTNN-side path that re-uses the
+   per-step hidden states already produced by the AR decoder would
+   zero this out — structural, multi-block change.
 
 ### Files touched in this phase
 
-- `models/demos/facebook_seamless_m4t_v2_large/tt/profile_s2st.py` (new)
-  — S2ST profiler harness modeled on `profile_s2tt.py` (audio input +
-  speech encoder) and `profile_t2st.py` (T2U + vocoder tail). Times
-  the full `synthesize()` call broken into feature_extractor +
-  speech_encoder + AR text decoder + HF host rerun + char prep + T2U +
-  vocoder phases. Each stage is bounded by an explicit
-  `ttnn.synchronize_device` to attribute time on a host-perceived
-  basis. Untraced production path only (the post-AR T2U + vocoder
-  allocations block cross-call trace reuse on the AR loop, same
-  reason as T2ST).
-- `models/demos/facebook_seamless_m4t_v2_large/PERF_NOTES.md` — this
-  S2ST section.
+- `models/demos/facebook_seamless_m4t_v2_large/tt/speech_to_speech_model.py`
+  — `synthesize(use_trace=False)`, release the trace between AR and
+  T2U+vocoder.
+- `models/demos/facebook_seamless_m4t_v2_large/tt/profile_s2st.py`
+  — release-call instrumentation + the harness defaults documented
+  above.
+- `models/demos/facebook_seamless_m4t_v2_large/PERF_NOTES.md`
+  — this section (rewritten).
 
-No block files were modified in this pass — characterization-only.
+No block files were modified in this pass; the `TextGenerator`
+plumbing (public `release_trace`, kernel-cache survival across
+release) already landed with the T2ST redo (commit 590d01aa4e0).

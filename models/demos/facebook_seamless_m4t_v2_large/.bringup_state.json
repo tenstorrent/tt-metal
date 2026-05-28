@@ -1689,11 +1689,14 @@
       "perf": {
         "status": "done",
         "metric": {
-          "total_ms": 537.58,
-          "speedup": 1.0
+          "total_ms": 495.52,
+          "speedup": 1.185,
+          "ar_step_ms_baseline": 24.8,
+          "ar_step_ms_traced": 18.44
         },
-        "notes": "At-ceiling at pipeline level. Total 538 ms wall: speech_encoder 53ms, AR text 279ms (52%), HF rerun 158ms, T2U 12ms, vocoder 31ms. Cross-call trace blocked by post-AR T2U+vocoder allocations (same as T2ST). AR floor matches T2TT/S2TT/T2ST at ~23ms/step untraced. test_e2e_s2st PASSES char_sim=0.920 vs gate 0.5.",
+        "notes": "Single-call trace pattern (mirrored from T2ST redo). 1.19x e2e speedup (587ms->496ms p50, 3 timed calls, 13-step gen). ar_step 24.80->18.44 ms. test_e2e_s2st PASSES char_sim=0.920. T2TT/S2TT/ASR cross-call tests still PASS.",
         "artifacts": [
+          "models/demos/facebook_seamless_m4t_v2_large/tt/speech_to_speech_model.py",
           "models/demos/facebook_seamless_m4t_v2_large/tt/profile_s2st.py",
           "models/demos/facebook_seamless_m4t_v2_large/PERF_NOTES.md"
         ]
