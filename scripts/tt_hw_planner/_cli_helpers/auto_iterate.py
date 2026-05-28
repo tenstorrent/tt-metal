@@ -2225,6 +2225,24 @@ def _run_auto_iterate_loop(
                         f"consecutive-same-class counter reset to "
                         f"1/{max_attempts_per_component}."
                     )
+                _consec_noop = consecutive_same_class_attempts.get(comp, 0)
+                if (
+                    _consec_noop >= 2
+                    and last_failure_class_per_component.get(comp) == "NO_OP"
+                    and comp not in permanently_skipped
+                    and comp not in graduated_this_run
+                ):
+                    print(
+                        f"  [no-op escalation] `{comp}` produced byte-identical "
+                        f"responses {_consec_noop} iter(s) in a row — agent is "
+                        f"persistently failing to engage with this component. "
+                        f"Escalating to CPU fallback (rather than burning more "
+                        f"iters on the same NO_OP pattern); hand-fix or "
+                        f"decompose this component before the next run."
+                    )
+                    _skip_component_to_fallback(
+                        comp, f"NO_OP escalation: {_consec_noop} consecutive byte-identical responses"
+                    )
             continue
 
         if not skip_agent_patch and not agent_produced_any and not stub_changed_any:
