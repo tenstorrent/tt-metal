@@ -75,6 +75,16 @@ endif()
 
 set(NO_FILESELECTOR ON)
 
+# Tracy CLI tools must run from CI artifacts without build/_deps. Capstone defaults to a
+# static library when BUILD_SHARED_LIBS is OFF; tt-metal sets BUILD_SHARED_LIBS ON globally,
+# which makes Tracy's vendored capstone a shared library unless overridden here.
+set(_tt_tracy_saved_build_shared_libs "${BUILD_SHARED_LIBS}")
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Create shared libraries" FORCE)
+
+# Tracy adds -march=native by default in its config. Build CLI + TracyServer with a portable
+# x86-64 baseline to avoid illegal-instruction failures on CI hosts without newer ISA subsets.
+set(NO_ISA_EXTENSIONS ON CACHE BOOL "Disable Tracy -march=native for portable CLI tools" FORCE)
+
 # Repair CMAKE_(C|CXX)_COMPILER_(AR|RANLIB) before building the Tracy CLI tools.
 #
 # Tracy's csvexport/capture pull zstd via CPM, which uses add_library(... STATIC ...).
@@ -210,6 +220,10 @@ endif()
 add_subdirectory(tracy/csvexport)
 add_subdirectory(tracy/capture)
 
+# Restore the global shared-lib preference after configuring Tracy CLI subdirectories.
+set(BUILD_SHARED_LIBS "${_tt_tracy_saved_build_shared_libs}" CACHE BOOL "Create shared libraries" FORCE)
+unset(_tt_tracy_saved_build_shared_libs)
+
 # Land the host-side Tracy CLI tools at ${CMAKE_BINARY_DIR}/tools/profiler/bin so they line
 # up with PROFILER_BIN_DIR in tools/tracy/common.py and the path baked into the artifact
 # packaging step (.github/workflows/build-artifact.yaml: TRACY_CLI_DIR=build/tools/profiler/bin).
@@ -224,6 +238,38 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             "${TRACY_CLI_BIN_DIR}"
 )
+
+# Last -march on a target wins; override any higher baseline from parent settings for
+# Tracy server/CLI and their key dependencies so generated binaries stay portable in CI.
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+    set(_tt_tracy_portable_march -march=x86-64-v2)
+    foreach(
+        _tt_tracy_portable_target
+        IN
+        ITEMS
+            TracyServer
+            tracy-capture
+            tracy-csvexport
+            tracy-capture-daemon
+            capstone
+            libzstd
+            libzstd_static
+            PPQSort
+            TracyGetOpt
+    )
+        if(NOT TARGET ${_tt_tracy_portable_target})
+            continue()
+        endif()
+        get_target_property(_tt_tracy_portable_target_type ${_tt_tracy_portable_target} TYPE)
+        if(_tt_tracy_portable_target_type STREQUAL "INTERFACE_LIBRARY")
+            continue()
+        endif()
+        target_compile_options(${_tt_tracy_portable_target} PRIVATE ${_tt_tracy_portable_march})
+    endforeach()
+    unset(_tt_tracy_portable_march)
+    unset(_tt_tracy_portable_target)
+    unset(_tt_tracy_portable_target_type)
+endif()
 
 # Aggregate target referenced by the artifact workflow's failure message
 # ("Build tracy_profiler_cli_tools before packaging the profiler artifact.") so a single
