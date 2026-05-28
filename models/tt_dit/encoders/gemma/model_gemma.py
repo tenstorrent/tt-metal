@@ -17,10 +17,8 @@ Architecture: Gemma-3 12B text model
 from __future__ import annotations
 
 import math
-import os
 
 import torch
-from loguru import logger
 
 import ttnn
 
@@ -31,17 +29,6 @@ from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.substate import pop_substate, rename_substate
-
-# Temporary per-op hang localizer. Set GEMMA_TRACE=1 to synchronize the device and
-# log after each op so the last line before a freeze names the hanging op.
-_TRACE = os.environ.get("GEMMA_TRACE") == "1"
-
-
-def _trace(mesh_device, msg: str) -> None:
-    if not _TRACE:
-        return
-    ttnn.synchronize_device(mesh_device)
-    logger.info(f"[gemma-trace] {msg}")
 
 
 class GemmaConfig:
@@ -222,13 +209,11 @@ class GemmaAttention(Module):
     def forward(self, hidden_states, cos, sin, attn_mask=None):
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
-        _trace(self.mesh_device, "attn.input_layernorm")
 
         # QKV projections
         q = self.q_proj(hidden_states, compute_kernel_config=self.compute_config)
         k = self.k_proj(hidden_states, compute_kernel_config=self.compute_config)
         v = self.v_proj(hidden_states, compute_kernel_config=self.compute_config)
-        _trace(self.mesh_device, "attn.qkv_proj")
 
         # Split into heads: (B, seq, H*D) → (B, H, seq, D)
         B, seq_len = q.shape[0], q.shape[1]
@@ -238,31 +223,25 @@ class GemmaAttention(Module):
         k = ttnn.permute(k, (0, 2, 1, 3))
         v = ttnn.reshape(v, (B, seq_len, self.num_local_kv_heads, self.head_dim))
         v = ttnn.permute(v, (0, 2, 1, 3))
-        _trace(self.mesh_device, "attn.reshape_permute_heads")
 
         # QK normalization (Gemma-3): RMSNorm per head before RoPE
         q = self.q_norm(q)
-        _trace(self.mesh_device, "attn.q_norm")
         k = self.k_norm(k)
-        _trace(self.mesh_device, "attn.k_norm")
 
         # Apply RoPE
         q = self._apply_rope(q, cos, sin)
         k = self._apply_rope(k, cos, sin)
-        _trace(self.mesh_device, "attn.rope")
 
         # GQA: repeat KV heads to match Q heads
         if self.num_local_kv_heads < self.num_local_heads:
             repeats = self.num_local_heads // self.num_local_kv_heads
             k = ttnn.repeat(k, ttnn.Shape([1, repeats, 1, 1]))
             v = ttnn.repeat(v, ttnn.Shape([1, repeats, 1, 1]))
-        _trace(self.mesh_device, "attn.gqa_repeat")
 
         # Ensure DRAM interleaved layout for SDPA compatibility
         q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
         k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
         v = ttnn.to_memory_config(v, ttnn.DRAM_MEMORY_CONFIG)
-        _trace(self.mesh_device, "attn.to_dram")
 
         # SDPA — use is_causal when no mask, or explicit mask when padding present.
         # TTNN SDPA doesn't support both is_causal and attn_mask simultaneously.
@@ -275,11 +254,9 @@ class GemmaAttention(Module):
             program_config=self.sdpa_config,
             compute_kernel_config=self.compute_config,
         )
-        _trace(self.mesh_device, "attn.sdpa")
 
         # Concat heads: (B, H, seq, D) → (B, seq, H*D)
         attn_output = ttnn.transformer.concatenate_heads(attn_output)
-        _trace(self.mesh_device, "attn.concat_heads")
 
         # Output projection
         attn_output = ttnn.unsqueeze(attn_output, 0)
@@ -361,15 +338,12 @@ class GemmaFF(Module):
     def forward(self, x):
         residual = x
         x = self.pre_feedforward_layernorm(x)
-        _trace(self.mesh_device, "ff.pre_ln")
 
         gate = self.gate_proj(x, compute_kernel_config=self.compute_config)
         up = self.up_proj(x, compute_kernel_config=self.compute_config)
         x = gate * up
-        _trace(self.mesh_device, "ff.gate_up")
 
         x = self.down_proj(x, compute_kernel_config=self.compute_config)
-        _trace(self.mesh_device, "ff.down_proj")
         x = ttnn.unsqueeze(x, 0)
         if self.parallel_config.tensor_parallel.factor > 1:
             x = self.ccl_manager.all_gather(
@@ -490,11 +464,9 @@ class GemmaEncoder(Module):
         """
         # Embed tokens
         hidden_states = self.embed_tokens(token_ids)
-        _trace(self.mesh_device, "encoder.embed_tokens")
 
         # Scale embeddings (Gemma-specific)
         hidden_states = ttnn.multiply(hidden_states, math.sqrt(self.config.hidden_size))
-        _trace(self.mesh_device, "encoder.embed_scale")
 
         # Get RoPE cos/sin for this sequence length (global + local variants)
         seq_len = token_ids.shape[-1]
