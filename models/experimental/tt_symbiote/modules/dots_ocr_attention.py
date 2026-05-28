@@ -23,6 +23,21 @@ except ImportError:
     Cache = object
 
 
+class _TTNNDotsOCRQKVPrefillLinear(TTNNLinearLLamaIColShardedWAllReduced):
+    """QKV-shaped linear for the prefill path only.
+
+    The parent class pre-allocates a DRAM_WIDTH_SHARDED copy of the weight
+    for the decode fast path whenever in/out features match the canonical
+    dots.ocr QKV (K=1536, N=2048). The prefill weight is conventional-order
+    ([Q_all|K_all|V_all]) and only ever used at seq_len > 1, where the
+    DRAM-sharded matmul kernel doesn't fire anyway — so the second device
+    copy (~1.7 MB / layer) would just sit unused. Disable it.
+    """
+
+    def _qkv_use_dram_sharded(self) -> bool:
+        return False
+
+
 @trace_enabled
 class TTNNDotsOCRAttention(TTNNModule):
     _shared_rotary_setups = {}
@@ -38,6 +53,7 @@ class TTNNDotsOCRAttention(TTNNModule):
         self.is_causal = True
         self.layer_idx = None
         self.qkv_proj = None
+        self.qkv_proj_prefill = None
         self.o_proj = None
         self.sdpa = None
         self.core_grid = None
@@ -81,9 +97,9 @@ class TTNNDotsOCRAttention(TTNNModule):
         # width-shard reshard of ``qkv_states`` engages the Sharded factory
         # in decode (kernel runs across ``num_q_heads`` cores instead of
         # falling back to the 1-core interleaved variant).
-        # Prefill keeps using the interleaved create-heads factory, so it
-        # undoes this permute back to ``[Q_all, K_all, V_all]`` after the
-        # matmul (see ``_undo_qkv_kv_group_permute``).
+        # Prefill keeps using the interleaved create-heads factory, which
+        # assumes ``[Q_all, K_all, V_all]``, so prefill uses a separate
+        # weight in that conventional order (``qkv_proj_prefill`` below).
         num_q_heads = new_attn.num_attention_heads
         num_kv_heads = new_attn.num_key_value_heads
         num_q_per_kv = num_q_heads // num_kv_heads
@@ -123,6 +139,26 @@ class TTNNDotsOCRAttention(TTNNModule):
         if has_any_bias:
             fused_linear.bias.data = new_attn._qkv_bias_torch
         new_attn.qkv_proj = TTNNLinearLLamaIColShardedWAllReduced.from_torch(fused_linear)
+
+        # Conventional-order QKV weight ([Q_all | K_all | V_all]) for prefill.
+        # Prefill's nlp_create_qkv_heads runs the Interleaved factory which
+        # assumes this block layout; storing the weight that way produces a
+        # post-matmul tensor that can flow straight into create_heads,
+        # eliminating the 6 BF16 slices + concat that _undo_qkv_kv_group_permute
+        # used to do every prefill (Tracy: ~25 ms / layer at S=2816).
+        # Memory cost: +1 QKV weight per layer (~3 MB BFP8 on dots.ocr,
+        # in_features=1536 / out_features=2048).
+        fused_weight_conv = torch.cat(
+            [hf_attn.q_proj.weight.data, hf_attn.k_proj.weight.data, hf_attn.v_proj.weight.data], dim=0
+        )
+        fused_linear_conv = torch.nn.Linear(new_attn.hidden_size, q_size + 2 * kv_size, bias=has_any_bias)
+        fused_linear_conv.weight.data = fused_weight_conv
+        if has_any_bias:
+            qb_conv = q_bias if q_bias is not None else torch.zeros(q_size, dtype=fused_weight_conv.dtype)
+            kb_conv = k_bias if k_bias is not None else torch.zeros(kv_size, dtype=fused_weight_conv.dtype)
+            vb_conv = v_bias if v_bias is not None else torch.zeros(kv_size, dtype=fused_weight_conv.dtype)
+            fused_linear_conv.bias.data = torch.cat([qb_conv, kb_conv, vb_conv], dim=0)
+        new_attn.qkv_proj_prefill = _TTNNDotsOCRQKVPrefillLinear.from_torch(fused_linear_conv)
 
         # O projection
         new_attn.o_proj = TTNNLinearLLamaIReplicatedWColSharded.from_torch(hf_attn.o_proj)
@@ -235,57 +271,25 @@ class TTNNDotsOCRAttention(TTNNModule):
             return self._decode_cur_pos
         return cp
 
-    def _undo_qkv_kv_group_permute(self, qkv_states):
-        """Undo the KV-group-interleaved permute of the fused QKV matmul output.
-
-        The fused QKV weight is stored in
-        ``[Q_g0, K_0, V_0, Q_g1, K_1, V_1, ...]`` order (see ``from_torch``)
-        so the decode path can feed a single width-shard straight into the
-        Sharded program factory of ``nlp_create_qkv_heads`` (which expects
-        each shard to be ``[Q_group_i | K_i | V_i]``). Prefill still goes
-        through the Interleaved factory, which assumes the conventional
-        ``[Q_all | K_all | V_all]`` block layout, so we splice the columns
-        back into that order here. All slice offsets are tile-aligned
-        (multiples of 32) because ``num_q_per_kv * head_dim`` and
-        ``head_dim`` are both multiples of ``TILE_SIZE`` for this model.
-        """
-        num_kv = self.num_key_value_heads
-        num_q_per_kv = self.num_attention_heads // num_kv
-        hd = self.head_dim
-        q_size = num_q_per_kv * hd
-        s0 = int(qkv_states.shape[0])
-        s1 = int(qkv_states.shape[1])
-        s2 = int(qkv_states.shape[2])
-
-        def _slice(start, size):
-            return ttnn.slice(qkv_states, [0, 0, 0, start], [s0, s1, s2, start + size])
-
-        q_parts, k_parts, v_parts = [], [], []
-        offset = 0
-        for _ in range(num_kv):
-            q_parts.append(_slice(offset, q_size))
-            offset += q_size
-            k_parts.append(_slice(offset, hd))
-            offset += hd
-            v_parts.append(_slice(offset, hd))
-            offset += hd
-        result = ttnn.concat(q_parts + k_parts + v_parts, dim=-1)
-        for p in q_parts + k_parts + v_parts:
-            ttnn.deallocate(p)
-        return result
-
-    def _project_qkv_fused(self, hidden_states, batch_size, seq_length):
+    def _project_qkv_fused(self, hidden_states, batch_size, seq_length, proj=None):
         """Project hidden states to fused QKV tensor, ready for nlp_create_qkv_heads.
 
         Bias (if any) is fused into the qkv_proj matmul kernel, so the output
         of qkv_proj is already (W·x + b). On single-device decode, we only need
         to make sure the result lives in L1 to keep nlp_create_qkv_heads on
         L1 inputs.
+
+        ``proj`` selects which QKV linear to use: defaults to ``self.qkv_proj``
+        (KV-group-interleaved layout, decode fast path). Prefill passes
+        ``self.qkv_proj_prefill`` for conventional ``[Q_all|K_all|V_all]``
+        output that flows straight into the Interleaved create_heads factory.
         """
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        qkv_states = self.qkv_proj(hidden_states)
+        if proj is None:
+            proj = self.qkv_proj
+        qkv_states = proj(hidden_states)
 
         is_decode = int(seq_length) == 1
         if is_decode and qkv_states.memory_config().buffer_type != ttnn.BufferType.L1:
@@ -298,15 +302,13 @@ class TTNNDotsOCRAttention(TTNNModule):
     def _forward_prefill(self, hidden_states, attention_mask, past_key_values, cache_position):
         batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
 
-        qkv_states = self._project_qkv_fused(hidden_states, batch_size, seq_length)
-        # Fused QKV weight is stored in KV-group-interleaved order to let
-        # decode engage the multi-core Sharded factory of
-        # ``nlp_create_qkv_heads``. The interleaved factory used here in
-        # prefill expects conventional ``[Q_all | K_all | V_all]`` cols, so
-        # splice the matmul output back to that order before create_heads.
-        qkv_unpermuted = self._undo_qkv_kv_group_permute(qkv_states)
-        ttnn.deallocate(qkv_states)
-        qkv_states = qkv_unpermuted
+        # Prefill uses qkv_proj_prefill (conventional [Q_all|K_all|V_all] weight),
+        # so the matmul output is already in the layout the Interleaved
+        # create_heads factory expects. This drops the 6 BF16 slices + concat
+        # _undo_qkv_kv_group_permute used to do every prefill (Tracy: ~25 ms
+        # / layer at S=2816). Decode keeps using self.qkv_proj (KV-group-
+        # interleaved) to engage the Sharded create_heads factory.
+        qkv_states = self._project_qkv_fused(hidden_states, batch_size, seq_length, proj=self.qkv_proj_prefill)
         query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
             qkv_states,
             num_heads=self.num_attention_heads,
