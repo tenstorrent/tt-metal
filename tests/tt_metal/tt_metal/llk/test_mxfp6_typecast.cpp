@@ -83,7 +83,7 @@ static vector<uint32_t> run_mxfp6_typecast(
 
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
-        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = INPUT_DFB,
@@ -91,7 +91,6 @@ static vector<uint32_t> run_mxfp6_typecast(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .compile_time_arg_bindings = {{"use_dfbs", 1}},
         .runtime_arguments_schema =
             {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec =
@@ -102,7 +101,7 @@ static vector<uint32_t> run_mxfp6_typecast(
 
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUTPUT_DFB,
@@ -110,7 +109,6 @@ static vector<uint32_t> run_mxfp6_typecast(
             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
         }},
-        .compile_time_arg_bindings = {{"use_dfbs", 1}},
         .runtime_arguments_schema =
             {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .config_spec =
@@ -121,7 +119,7 @@ static vector<uint32_t> run_mxfp6_typecast(
 
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings =
             {{
@@ -136,7 +134,7 @@ static vector<uint32_t> run_mxfp6_typecast(
                  .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = {{"per_core_tile_cnt", num_tiles}, {"use_dfbs", 1}},
+        .compile_time_arg_bindings = {{"per_core_tile_cnt", num_tiles}},
         .config_spec =
             experimental::metal2_host_api::ComputeConfiguration{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
