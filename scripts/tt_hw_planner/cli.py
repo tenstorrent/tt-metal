@@ -6317,19 +6317,34 @@ def _capture_worktree_deltas_as_overlay(worktree_path, model_id):
 
     captured = 0
     try:
-        proc = _subprocess.run(
-            ["git", "diff", "--name-only"],
+        status_proc = _subprocess.run(
+            ["git", "status", "--porcelain"],
             cwd=str(worktree_path),
             capture_output=True,
             text=True,
             check=False,
         )
-        if proc.returncode != 0:
-            raise RuntimeError(f"git diff --name-only failed: {proc.stderr.strip()}")
-        changed = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+        if status_proc.returncode != 0:
+            raise RuntimeError(f"git status --porcelain failed: {status_proc.stderr.strip()}")
+        changed: List[str] = []
+        for line in status_proc.stdout.splitlines():
+            if len(line) < 4:
+                continue
+            path = line[3:].strip()
+            if " -> " in path:
+                path = path.split(" -> ", 1)[1].strip()
+            if path:
+                changed.append(path)
         for f in changed:
+            _subprocess.run(
+                ["git", "add", "--", f],
+                cwd=str(worktree_path),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
             diff_proc = _subprocess.run(
-                ["git", "diff", "--", f],
+                ["git", "diff", "HEAD", "--", f],
                 cwd=str(worktree_path),
                 capture_output=True,
                 text=True,
