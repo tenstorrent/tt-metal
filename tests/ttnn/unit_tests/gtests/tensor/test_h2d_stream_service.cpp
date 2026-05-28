@@ -970,5 +970,196 @@ TEST_F(H2DStreamServiceTest, Sharded_WorkerSync_Sweep) {
     }
 }
 
+// F — Preprocessor hook. Validates that `Config::preprocessor` runs on a
+// service-owned scratch BEFORE the mapper distributes shards and that the
+// scratch is correctly reused across calls.
+//
+// We model the ring-SDPA prefill reshuffle (see
+// models/demos/deepseek_v3_b1/docs/ring_sdpa_prefill_reshuffling.md). For
+// each test case `chunk_P_aligned` is set on a test-local variable that the
+// preprocessor closure captures by reference; the preprocessor derives
+// (c_start, intra) and rotates the input array so each column receives the
+// slot positions it owns. Because the mapper shards dim 3 into `num_cols`
+// contiguous slices of `W` elements each, the reshuffle works by reordering
+// the input so the mapper's natural distribution lines up with the
+// analytical expected.
+//
+// We DON'T exercise the device-side metadata multicast path here — a
+// production caller would route `chunk_P_aligned` through the existing
+// per-call metadata buffer (which also reaches the worker kernel), but
+// that path is covered by the worker-sync sweep tests. Here `metadata` is
+// empty and `metadata_size_bytes == 0`, isolating the preprocessor wiring.
+//
+// Per-coord expected (from doc section 6): after the reshuffle, column
+// `k` receives `W` consecutive logical positions starting at
+//
+//   start_pos[k] = chunk_P_aligned                                       if k == c_start
+//                  chunk_P_aligned + ((k - c_start) mod N_C) * W - intra otherwise
+//
+// modulo the full-iota wraparound at N_C*W (since the input is just
+// `[0, 1, ..., N_C*W - 1]`).
+
+namespace {
+// Reshuffle helper — direct port of the Python `reshuffle` in section 5
+// step 4 of the ring-SDPA doc. Volume-preserving column rotation of an
+// N_C*W-element uint32 array.
+void ring_sdpa_reshuffle(
+    ttsl::Span<std::byte> bytes, uint32_t c_start, uint32_t intra, uint32_t N_C, uint32_t W) {
+    const size_t volume = N_C * W;
+    TT_FATAL(bytes.size() == volume * sizeof(uint32_t), "reshuffle: size mismatch");
+    auto* in = reinterpret_cast<const uint32_t*>(bytes.data());
+    std::vector<uint32_t> out(volume);
+
+    // Column c_start gets two pieces: `[0, W - intra)` from the head + `[N_C*W - intra, N_C*W)`
+    // from the tail (the wraparound across two stripe wraps).
+    for (uint32_t i = 0; i < W - intra; ++i) {
+        out[c_start * W + i] = in[i];
+    }
+    for (uint32_t i = 0; i < intra; ++i) {
+        out[c_start * W + (W - intra) + i] = in[volume - intra + i];
+    }
+
+    // Every other column gets one contiguous slice.
+    for (uint32_t k = 1; k < N_C; ++k) {
+        const uint32_t col = (c_start + k) % N_C;
+        const uint32_t s = (W - intra) + (k - 1) * W;
+        for (uint32_t i = 0; i < W; ++i) {
+            out[col * W + i] = in[s + i];
+        }
+    }
+
+    std::memcpy(bytes.data(), out.data(), bytes.size());
+}
+}  // namespace
+
+TEST_F(H2DStreamServiceTest, Preprocessor_RingSDPAReshuffle) {
+    const auto mesh_shape = this->mesh_device_->shape();
+    if (mesh_shape.dims() != 2) {
+        GTEST_SKIP() << "Preprocessor reshuffle test requires a 2D mesh; got " << mesh_shape;
+    }
+    const uint32_t num_cols = mesh_shape[1];
+    if (num_cols < 2) {
+        GTEST_SKIP() << "Need num_cols >= 2 for sharded-along-cols reshuffle; got " << num_cols;
+    }
+
+    const uint32_t N_C = num_cols;
+    // W chosen so the per-shard tensor page = W * sizeof(uint32_t) is a
+    // multiple of the PCIe alignment (64 B on Blackhole). 64 uint32 = 256 B.
+    constexpr uint32_t W = 64;
+
+    // Shard dim 3 across cols, replicate across rows — same axis structure as
+    // ring-SDPA prefill (`{Replicate{}, Shard{3}}`).
+    ttsl::SmallVector<MeshMapperConfig::Placement> placements{
+        MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{3}};
+
+    const auto global_shape = ttnn::Shape({1, 1, 1, N_C * W});
+    const auto tensor_layout = TensorLayout(
+        DataType::UINT32,
+        PageConfig(Layout::ROW_MAJOR),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
+    const auto global_spec = TensorSpec(global_shape, tensor_layout);
+
+    // Preprocessor — pulls the current chunk's `chunk_P_aligned` out of a
+    // test-local variable captured by reference, derives (c_start, intra), and
+    // mutates `bytes` in place via the column rotation. The metadata span is
+    // intentionally unused here: `metadata_size_bytes == 0` below means the
+    // service's per-call metadata contract is "empty span only" and this
+    // test must honour it. A production caller would tie the preprocessor's
+    // params to the metadata buffer that ALSO flows to the worker kernels
+    // (see ring_sdpa_prefill_reshuffling.md) — that path is exercised by the
+    // worker-sync sweep tests, not this one.
+    uint32_t current_chunk_P_aligned = 0;
+    auto preprocessor = [N_C, &current_chunk_P_aligned](
+                            ttsl::Span<std::byte> bytes, ttsl::Span<const std::byte> metadata) {
+        (void)metadata;
+        const uint32_t c_start = (current_chunk_P_aligned / W) % N_C;
+        const uint32_t intra = current_chunk_P_aligned % W;
+        ring_sdpa_reshuffle(bytes, c_start, intra, N_C, W);
+    };
+
+    // Tensor page size = bytes per write into a per-shard DRAM bank. With the
+    // mapper sharding dim 3 across N_C columns, the per-shard tensor is
+    // [1, 1, 1, W], so its row (and only page, since num_pages == 1) is
+    // `W * sizeof(uint32_t)` bytes — NOT N_C * W * sizeof(uint32_t).
+    const uint32_t tensor_page_size_bytes = W * sizeof(uint32_t);
+    tt::tt_metal::H2DStreamService::Config cfg{
+        .global_spec = global_spec,
+        .mapper = create_mesh_mapper(*this->mesh_device_, MeshMapperConfig{.placements = placements}),
+        .socket_buffer_type = BufferType::L1,
+        .fifo_size_bytes = tensor_page_size_bytes,
+        .scratch_cb_size_bytes = tensor_page_size_bytes,
+        .socket_mode = H2DMode::DEVICE_PULL,
+        .worker_cores = std::nullopt,
+        .metadata_size_bytes = 0,  // device-side metadata path is independent of this test
+        .preprocessor = preprocessor,
+    };
+    tt::tt_metal::H2DStreamService service(this->mesh_device_, std::move(cfg));
+    ASSERT_NE(service.get_backing_tensor().buffer(), nullptr);
+
+    // Source: simple iota so per-coord expected values are predictable.
+    std::vector<uint32_t> src(N_C * W);
+    std::iota(src.begin(), src.end(), 0);
+
+    // Sweep a handful of (chunk_P_aligned) values covering: identity, pure
+    // column rotation (intra=0, c_start>0), pure intra rotation (c_start=0,
+    // intra>0), and combined.
+    struct Case {
+        uint32_t chunk_P_aligned;
+        const char* label;
+    };
+    const Case cases[] = {
+        {0,                                   "identity"},
+        {W,                                   "c_start=1, intra=0"},
+        {W / 2,                               "c_start=0, intra=W/2"},
+        {W * (N_C / 2) + W / 2,               "c_start=N_C/2, intra=W/2"},
+    };
+
+    for (const auto& tc : cases) {
+        SCOPED_TRACE(
+            ::testing::Message() << "chunk_P_aligned=" << tc.chunk_P_aligned << " label=" << tc.label);
+        current_chunk_P_aligned = tc.chunk_P_aligned;  // picked up by preprocessor closure
+        auto bytes_span = ttsl::Span<const std::byte>(
+            reinterpret_cast<const std::byte*>(src.data()), src.size() * sizeof(uint32_t));
+
+        // Empty metadata to honour `metadata_size_bytes == 0` contract.
+        service.forward_to_tensor(bytes_span, /*metadata=*/{});
+        service.barrier();
+
+        // Compute the analytical expected per-coord array — re-run the same
+        // reshuffle on a host-local copy, then split into N_C contiguous
+        // slices of W (the mapper's natural distribution along dim 3).
+        std::vector<uint32_t> expected_global = src;
+        const uint32_t c_start = (tc.chunk_P_aligned / W) % N_C;
+        const uint32_t intra = tc.chunk_P_aligned % W;
+        ring_sdpa_reshuffle(
+            ttsl::Span<std::byte>(
+                reinterpret_cast<std::byte*>(expected_global.data()),
+                expected_global.size() * sizeof(uint32_t)),
+            c_start, intra, N_C, W);
+
+        // Verify every per-device sub-tensor.
+        auto subs = ttnn::distributed::get_device_tensors(service.get_backing_tensor());
+        ASSERT_EQ(subs.size(), this->mesh_device_->num_devices());
+        for (auto& sub : subs) {
+            const auto coords = sub.device_storage().get_coords();
+            ASSERT_EQ(coords.size(), 1u);
+            const auto& coord = coords[0];
+            // Replicate-on-rows: every row sees the same shard for a given column.
+            const uint32_t col = coord[1];
+            const uint32_t row = coord[0];
+            (void)row;
+            std::vector<uint32_t> expected_shard(
+                expected_global.begin() + col * W,
+                expected_global.begin() + (col + 1) * W);
+            auto readback = sub.to_vector<uint32_t>();
+            ASSERT_EQ(readback.size(), expected_shard.size())
+                << "size mismatch at coord=" << coord;
+            EXPECT_EQ(readback, expected_shard)
+                << "contents mismatch at coord=" << coord
+                << " chunk_P_aligned=" << tc.chunk_P_aligned;
+        }
+    }
+}
+
 }  // namespace
 }  // namespace ttnn::distributed::test

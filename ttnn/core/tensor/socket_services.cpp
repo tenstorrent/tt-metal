@@ -466,6 +466,16 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         metadata_scratch_.assign(socket_page_size_, std::byte{0});
     }
 
+    // --- B7.7: optional preprocessor scratch ----------------------------------
+    // When the caller registered a preprocessor in Config, allocate a single
+    // host scratch buffer sized to the full global tensor's packed bytes.
+    // Mutated in place by the hook per call; lives for the service's lifetime.
+    // Skipped entirely when no preprocessor is set — zero memory cost on the
+    // default path.
+    if (cfg_.preprocessor) {
+        preprocess_scratch_.assign(cfg_.global_spec.compute_packed_buffer_size_bytes(), std::byte{0});
+    }
+
     // --- B8: build one persistent program per socket, bundle into a workload --
     // Construct the workload only on the owner; `MeshWorkloadImpl`'s ctor
     // touches `MetalContext::instance()` (see member-decl comment in the
@@ -567,6 +577,15 @@ H2DStreamService::H2DStreamService(
     //         metadata_size_bytes. Mirrors B7.6 on the owner. -----------------
     if (cfg_.metadata_size_bytes > 0) {
         metadata_scratch_.assign(socket_page_size_, std::byte{0});
+    }
+
+    // --- C5.5: optional preprocessor scratch. Mirrors B7.7 on the owner —
+    //           when the connect() caller installed a preprocessor into
+    //           cfg.preprocessor, allocate a per-service host scratch sized
+    //           to the full global tensor. Skipped (zero allocation) when no
+    //           preprocessor is set.
+    if (cfg_.preprocessor) {
+        preprocess_scratch_.assign(cfg_.global_spec.compute_packed_buffer_size_bytes(), std::byte{0});
     }
 
     // No B7 / B7.5 / B7.6 / B8 / B9 — service core L1 allocations, worker-sync
@@ -827,7 +846,9 @@ std::string H2DStreamService::export_descriptor(const std::string& service_id) {
 }
 
 std::unique_ptr<H2DStreamService> H2DStreamService::connect(
-    const std::string& service_id, std::optional<uint32_t> timeout_ms) {
+    const std::string& service_id,
+    std::optional<uint32_t> timeout_ms,
+    std::function<void(ttsl::Span<std::byte> bytes, ttsl::Span<const std::byte> metadata)> preprocessor) {
     auto desc = distributed::H2DStreamServiceDescriptor::wait_and_read(
         distributed::descriptor_path_for_service(service_id), timeout_ms.value_or(10000));
 
@@ -858,6 +879,11 @@ std::unique_ptr<H2DStreamService> H2DStreamService::connect(
         .socket_mode = desc.socket_mode,
         .worker_cores = std::nullopt,
         .metadata_size_bytes = desc.metadata_size_bytes,
+        // Preprocessor is process-local executable code; the descriptor does
+        // not (and cannot) carry it. The connector installs whatever transform
+        // it wants on its own outgoing bytes. nullptr by default — same
+        // zero-cost fast path as the in-process case with no preprocessor.
+        .preprocessor = std::move(preprocessor),
     };
 
     return std::unique_ptr<H2DStreamService>(
@@ -899,8 +925,30 @@ void H2DStreamService::forward_to_tensor(
         "Use the Tensor overload with a pre-distributed host tensor for other layouts.",
         cfg_.global_spec.layout());
 
-    // --- S2: wrap bytes as a borrowed host tensor (zero-copy) -------------------
-    Tensor borrowed = make_borrowed_host_tensor(bytes, cfg_.global_spec);
+    // --- S1.5: optional host-side preprocessing ---------------------------------
+    // When the caller registered a preprocessor in Config, copy `bytes` into the
+    // service-owned scratch (allocated once in B7.7 to exactly this size — the
+    // S1 size check above guarantees the memcpy fits), run the hook in place,
+    // and rewire the mapper input to the scratch. The scratch lives until the
+    // service dtor, so the borrowed Tensor below remains valid for the whole
+    // synchronous forward call.
+    //
+    // Skipped entirely on the no-preprocessor path — `mapper_input` aliases the
+    // caller's buffer directly, preserving the zero-copy fast path.
+    ttsl::Span<const std::byte> mapper_input = bytes;
+    if (cfg_.preprocessor) {
+        std::memcpy(preprocess_scratch_.data(), bytes.data(), bytes.size());
+        cfg_.preprocessor(
+            ttsl::Span<std::byte>(preprocess_scratch_.data(), preprocess_scratch_.size()),
+            metadata);
+        mapper_input = ttsl::Span<const std::byte>(
+            preprocess_scratch_.data(), preprocess_scratch_.size());
+    }
+
+    // --- S2: wrap bytes as a borrowed host tensor (zero-copy on the no-preprocessor
+    // path; borrow points into `preprocess_scratch_` otherwise — same lifetime
+    // guarantees because the scratch is a service member) ----------------------
+    Tensor borrowed = make_borrowed_host_tensor(mapper_input, cfg_.global_spec);
 
     // --- S3: distribute via the cached mapper -----------------------------------
     // For Replicate placements this stays zero-copy (mapper emplaces one shared
