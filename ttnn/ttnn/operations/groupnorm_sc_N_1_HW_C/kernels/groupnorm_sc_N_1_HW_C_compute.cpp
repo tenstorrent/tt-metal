@@ -64,7 +64,6 @@ constexpr uint32_t CB_BETA_TILE = 7;
 constexpr uint32_t CB_SCALER_ONE = 8;
 constexpr uint32_t CB_MASK_STREAM = 9;
 constexpr uint32_t CB_INV_N_SCALAR = 10;
-constexpr uint32_t CB_EPS_SCALAR = 11;
 constexpr uint32_t CB_RUNNING_ACC_SUM = 12;
 constexpr uint32_t CB_RUNNING_ACC_SUMSQ = 13;
 constexpr uint32_t CB_OUTPUT_TILES = 16;
@@ -117,11 +116,10 @@ void kernel_main() {
     // their own reconfig between operations.
     compute_kernel_hw_startup(CB_INPUT_TILES_R, CB_MASK_STREAM, CB_SCRATCH_A);
 
-    // The one-shot CBs (scaler / inv_N / eps) have been pushed once by the reader.
+    // The one-shot CBs (scaler / inv_N) have been pushed once by the reader.
     // Wait for them upfront; they are never popped during the kernel's lifetime.
     cb_wait_front(CB_SCALER_ONE, 1);
     cb_wait_front(CB_INV_N_SCALAR, 1);
-    cb_wait_front(CB_EPS_SCALAR, 1);  // used only as a placeholder; eps is also CT-arg-baked
 
     // ============================================================
     // PER-BATCH MAIN LOOP
@@ -138,7 +136,6 @@ void kernel_main() {
             const uint32_t T_first = g_start_ch / TILE_DIM;
             const uint32_t T_last = (g_end_ch - 1) / TILE_DIM;
             const uint32_t tile_span_g = T_last - T_first + 1;
-            const uint32_t total_iters_g = tile_span_g * Ht;
 
             uint32_t iter = 0;
             for (uint32_t T_idx = 0; T_idx < tile_span_g; ++T_idx) {
@@ -185,7 +182,6 @@ void kernel_main() {
                     iter++;
                 }
             }
-            (void)total_iters_g;
 
             // -------- R/post for group g --------
             // After phase R for g: cb_running_acc_sum has sum_g (1 tile);
@@ -225,7 +221,6 @@ void kernel_main() {
             //    Load var → AddScalar(eps_bits) → Rsqrt → cb_group_rcp_std (push 1).
             {
                 constexpr uint32_t EPS_BITS_CT = get_compile_time_arg_val(10);
-                (void)EPS_BITS_CT;  // not used directly; eps is also held in cb_eps_scalar
                 ckl::AddScalar<ckl::Dst::D0> add_eps_op{};
                 add_eps_op.scalar = EPS_BITS_CT;
                 auto chain = ckl::sfpu_chain(

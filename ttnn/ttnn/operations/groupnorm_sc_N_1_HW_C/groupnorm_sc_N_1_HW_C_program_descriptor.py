@@ -31,7 +31,8 @@ CB_BETA_TILE = 7  # tilized beta (one tile per output T)
 CB_SCALER_ONE = 8  # reduce-scaler tile (1.0 for SUM REDUCE_SCALAR)
 CB_MASK_STREAM = 9  # streaming row-replicated mask tile
 CB_INV_N_SCALAR = 10  # scalar 1/N_per_g tile (scalar at (0,0))
-CB_EPS_SCALAR = 11  # scalar eps tile (scalar at (0,0))
+# (slot 11 reserved — eps used to occupy this CB, now flows via CT-arg into the
+# SFPU AddScalar op, so no scalar CB is needed for eps anymore.)
 CB_RUNNING_ACC_SUM = 12  # 1-slot running accumulator for sum (phase R)
 CB_RUNNING_ACC_SUMSQ = 13  # 1-slot running accumulator for sumsq (phase R)
 CB_OUTPUT_TILES = 16  # output to writer
@@ -223,8 +224,8 @@ def create_program_descriptor(
             )
         )
 
-    # Scaler / one-shot tiles
-    for cb_index in (CB_SCALER_ONE, CB_INV_N_SCALAR, CB_EPS_SCALAR):
+    # Scaler / one-shot tiles (eps no longer needs a CB — flows via CT arg)
+    for cb_index in (CB_SCALER_ONE, CB_INV_N_SCALAR):
         cbs.append(
             ttnn.CBDescriptor(
                 total_size=tile_bytes,

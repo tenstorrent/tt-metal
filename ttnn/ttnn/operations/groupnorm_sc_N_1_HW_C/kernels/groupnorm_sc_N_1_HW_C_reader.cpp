@@ -32,7 +32,6 @@ constexpr uint32_t CB_BETA_RM = 5;
 constexpr uint32_t CB_SCALER_ONE = 8;
 constexpr uint32_t CB_MASK_STREAM = 9;
 constexpr uint32_t CB_INV_N_SCALAR = 10;
-constexpr uint32_t CB_EPS_SCALAR = 11;
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
@@ -180,20 +179,15 @@ void kernel_main() {
         calculate_and_prepare_reduce_scaler<CB_SCALER_ONE, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_SCALAR>();
 
     // cb_inv_N_scalar — manual: 1/N_per_g at position (0,0).
+    // (eps is bit-packed into the compute kernel's CT args via SfpuAddScalar —
+    // no scalar CB needed on the compute side.)
     {
         cb_reserve_back(CB_INV_N_SCALAR, 1);
         uint32_t l1 = get_write_ptr(CB_INV_N_SCALAR);
         write_scalar_tile_bf16(l1, INV_N);
         cb_push_back(CB_INV_N_SCALAR, 1);
     }
-
-    // cb_eps_scalar — manual: eps at (0,0).
-    {
-        cb_reserve_back(CB_EPS_SCALAR, 1);
-        uint32_t l1 = get_write_ptr(CB_EPS_SCALAR);
-        write_scalar_tile_bf16(l1, eps_f);
-        cb_push_back(CB_EPS_SCALAR, 1);
-    }
+    (void)eps_f;  // retained for potential future use; eps currently flows via CT arg
 
     // ============================================================
     // PER-BATCH MAIN LOOP
