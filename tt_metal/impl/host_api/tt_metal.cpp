@@ -1015,7 +1015,30 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     log_info(tt::LogMetal, "DFB size: {}", program.impl().get_program_config(index).dfb_size);
                     std::vector<uint8_t> dfb_config_vec(
                         program.impl().get_program_config(index).dfb_size / sizeof(uint8_t));
+
+                    // Layout: [dfb_global_header_t | DM0 blobs (all DFBs) | shared layouts (all DFBs)]
+                    // Compute total DM0 blob size to fill the global header.
+                    uint32_t total_dm0_blob_size = 0;
+                    for (const auto& dfb : dfbs_on_core) {
+                        total_dm0_blob_size += dfb->dm0_blob_serialized_size();
+                    }
+
+                    // Write global header (only on Quasar which has tile counter registers).
                     uint32_t offset = 0;
+                    if (MetalContext::instance().hal().has_tile_counter_registers()) {
+                        dfb_global_header_t ghdr = {};
+                        ghdr.per_dfb_layout_offset =
+                            static_cast<uint32_t>(sizeof(dfb_global_header_t)) + total_dm0_blob_size;
+                        std::memcpy(dfb_config_vec.data() + offset, &ghdr, sizeof(ghdr));
+                        offset += sizeof(ghdr);
+                        // DM0 global blob: one blob per DFB, contiguous.
+                        for (const auto& dfb : dfbs_on_core) {
+                            auto blob = dfb->serialize_dm0_blob_for_core(logical_core);
+                            std::memcpy(dfb_config_vec.data() + offset, blob.data(), blob.size());
+                            offset += blob.size();
+                        }
+                    }
+                    // Shared per-DFB layouts (dfb_initializer_t + per_risc entries).
                     for (const auto& dfb : dfbs_on_core) {
                         auto serialized = dfb->serialize_for_core(logical_core);
                         std::memcpy(dfb_config_vec.data() + offset, serialized.data(), serialized.size());

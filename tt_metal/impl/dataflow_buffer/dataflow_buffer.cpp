@@ -342,11 +342,25 @@ uint32_t DataflowBufferImpl::serialized_size() const {
     if (!MetalContext::instance().hal().has_tile_counter_registers()) {
         return 4 * sizeof(uint32_t);
     }
-    // On Quasar: one dfb_initializer_t + one dfb_initializer_per_risc_t per risc.
-    // All groups have the same number of RISC configs
+    // On Quasar: shared per-DFB layout only (dfb_initializer_t + per_risc entries).
+    // The DM0 blob is serialized separately via serialize_dm0_blob_for_core / dm0_blob_serialized_size.
     TT_FATAL(!groups.empty(), "DFB {} has no groups (configs not finalized?)", id);
     return sizeof(dfb_initializer_t) +
            (groups[0].hw_risc_configs.size() * sizeof(dfb_initializer_per_risc_t));
+}
+
+uint32_t DataflowBufferImpl::dm0_blob_serialized_size() const {
+    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+        return 0;
+    }
+    uint8_t num_rmp  = use_remapper ? static_cast<uint8_t>(config.num_producers) : 0;
+    uint8_t num_prod = producer_txn_descriptor.num_txn_ids;
+    uint8_t num_cons = consumer_txn_descriptor.num_txn_ids;
+    return static_cast<uint32_t>(
+        sizeof(dfb_dm0_blob_header_t) +
+        num_rmp  * sizeof(dfb_dm0_remapper_slot_t) +
+        num_prod * sizeof(dfb_dm0_txn_entry_t) +
+        num_cons * sizeof(dfb_dm0_txn_entry_t));
 }
 
 std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& core) const {
@@ -523,19 +537,14 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
             log_trace(tt::LogMetal, "Limit {}: {}", i, static_cast<uint32_t>(per_risc.tc_addrs[i].limit));
             log_trace(tt::LogMetal, "Packed tile counter {}: {}", i, (uint32_t)per_risc.packed_tile_counter[i]);
         }
-        per_risc.flags.remapper_pair_index = static_cast<uint8_t>(rc->config.remapper_pair_index) & 0x3F;
         per_risc.flags.remapper_en = this->use_remapper;
         per_risc.flags.is_producer = rc->is_producer;
-        per_risc.consumer_tcs = rc->config.consumer_tcs;
-        // Per-producer remapper fields
-        per_risc.remapper_consumer_ids_mask = rc->config.remapper_consumer_ids_mask;
-        per_risc.producer_client_type = rc->config.producer_client_type;
         log_debug(tt::LogMetal, "Is producer: {}", rc->is_producer);
         log_debug(tt::LogMetal, "Remapper en: {}", this->use_remapper);
         if (this->use_remapper && rc->is_producer) {
             log_debug(
                 tt::LogMetal,
-                "Producer remapper: pair_idx={}, clientL={}, consumer_ids_mask=0x{:02x}",
+                "Producer remapper: pair_idx={}, clientL={}, consumer_ids_mask=0x{:02x} (in DM0 blob)",
                 rc->config.remapper_pair_index,
                 rc->config.producer_client_type,
                 rc->config.remapper_consumer_ids_mask);
@@ -545,7 +554,219 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         data.insert(data.end(), cfg_bytes, cfg_bytes + sizeof(per_risc));
     }
 
+    // RTL-sim correlation map (log_info): links this DFB to the identifiers visible in
+    // the simulation trace at the two benchmark markers:
+    //   - ISR side  (handle_interrupt fence):  filter by prod_txns to find this DFB's interrupt.
+    //   - wait_front side (wait_front_impl fence): filter by cons_tcs (tensix_id, tc_id) to find
+    //     the TC that unblocked the Tensix.
+    {
+        auto fmt_tcs = [](const DFBRiscConfig& rc) {
+            std::string s;
+            for (uint8_t t = 0; t < rc.config.num_tcs_to_rr; t++) {
+                if (t) s += ",";
+                s += fmt::format(
+                    "(t{},c{})",
+                    ::dfb::get_tensix_id(rc.config.packed_tile_counter[t]),
+                    ::dfb::get_counter_id(rc.config.packed_tile_counter[t]));
+            }
+            return s;
+        };
+
+        auto fmt_txn_ids = [](const dfb_txn_id_descriptor_t& desc) -> std::string {
+            if (desc.num_txn_ids == 0) return "-";
+            std::string s;
+            for (uint8_t i = 0; i < desc.num_txn_ids; i++) {
+                if (i) s += ",";
+                s += std::to_string(desc.txn_ids[i]);
+            }
+            return s;
+        };
+
+        std::string prod_part, cons_part;
+        for (const auto& rc : per_core_rc) {
+            if (rc.is_producer) {
+                if (!prod_part.empty()) prod_part += "  ";
+                prod_part += fmt::format("r{}:[{}]", rc.risc_id, fmt_tcs(rc));
+                if (this->use_remapper)
+                    prod_part += fmt::format("(rmp={})", rc.config.remapper_pair_index);
+            } else {
+                if (!cons_part.empty()) cons_part += "  ";
+                cons_part += fmt::format("r{}:[{}]", rc.risc_id, fmt_tcs(rc));
+            }
+        }
+
+        log_info(
+            tt::LogMetal,
+            "DFB {} corr: prod_txns=[{}] prod_tcs={{ {} }} | cons_txns=[{}] cons_tcs={{ {} }}",
+            this->id,
+            fmt_txn_ids(this->producer_txn_descriptor),
+            prod_part.empty() ? "-" : prod_part,
+            fmt_txn_ids(this->consumer_txn_descriptor),
+            cons_part.empty() ? "-" : cons_part);
+    }
+
     log_debug(tt::LogMetal, "Serialized DFB {} for core ({},{}) size: {}", this->id, core.x, core.y, data.size());
+
+    return data;
+}
+
+std::vector<uint8_t> DataflowBufferImpl::serialize_dm0_blob_for_core(const CoreCoord& core) const {
+    TT_FATAL(this->configs_finalized, "DFB {} configs not finalized before serialization", this->id);
+
+    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+        return {};
+    }
+
+    auto it = this->core_lookup_.find(core);
+    TT_FATAL(it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
+    const auto& [group_idx, alloc_addr] = it->second;
+    const DfbGroup* core_group = &this->groups[group_idx];
+    const auto& hw_risc_configs = core_group->hw_risc_configs;
+
+    // Recompute per_core_rc with addresses assigned (same logic as serialize_for_core).
+    uint8_t num_producer_tcs = 0;
+    uint8_t num_consumer_tcs = 0;
+    for (const auto& rc : hw_risc_configs) {
+        if (rc.is_producer) {
+            num_producer_tcs = std::max(num_producer_tcs, rc.config.num_tcs_to_rr);
+        } else {
+            num_consumer_tcs = std::max(num_consumer_tcs, rc.config.num_tcs_to_rr);
+        }
+    }
+    const uint32_t entry_size = this->config.entry_size;
+    const uint32_t effective_stride = this->stride_in_entries;
+    const uint32_t base_step = (effective_stride > 1) ? entry_size : (this->capacity * entry_size);
+
+    std::vector<DFBRiscConfig> per_core_rc = hw_risc_configs;
+    uint32_t base = alloc_addr;
+    for (uint8_t tc = 0; tc < num_producer_tcs; tc++) {
+        for (auto& rc : per_core_rc) {
+            if (rc.is_producer && tc < rc.config.num_tcs_to_rr) {
+                rc.config.base_addr[tc] = base;
+                rc.config.limit[tc] =
+                    rc.config.base_addr[tc] + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
+                base += base_step;
+            }
+        }
+    }
+    base = alloc_addr;
+    for (uint8_t tc = 0; tc < num_consumer_tcs; tc++) {
+        for (auto& rc : per_core_rc) {
+            if (rc.is_producer) { continue; }
+            rc.config.base_addr[tc] = base;
+            rc.config.limit[tc] =
+                rc.config.base_addr[tc] + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
+            if (this->config.cap == dfb::AccessPattern::STRIDED && tc < rc.config.num_tcs_to_rr) {
+                base += base_step;
+            }
+        }
+        if (this->config.cap == dfb::AccessPattern::ALL && this->config.num_producers > 1 &&
+            tc < num_consumer_tcs) {
+            base += base_step;
+        }
+    }
+
+    // Collect producer and consumer TCs in risc_mask bit order.
+    std::vector<::dfb::PackedTileCounter> blob_producer_tcs;
+    std::vector<::dfb::PackedTileCounter> blob_consumer_tcs;
+    for (int bit = 0; bit < 16; bit++) {
+        if (!(this->risc_mask & (1 << bit))) { continue; }
+        const DFBRiscConfig* rc = nullptr;
+        for (const auto& c : per_core_rc) {
+            if (c.risc_id == static_cast<uint8_t>(bit)) { rc = &c; break; }
+        }
+        for (uint8_t j = 0; j < rc->config.num_tcs_to_rr; j++) {
+            if (rc->is_producer) {
+                blob_producer_tcs.push_back(rc->config.packed_tile_counter[j]);
+            } else {
+                blob_consumer_tcs.push_back(rc->config.packed_tile_counter[j]);
+            }
+        }
+    }
+
+    uint8_t num_rmp  = this->use_remapper ? static_cast<uint8_t>(this->config.num_producers) : 0;
+    uint8_t num_prod = this->producer_txn_descriptor.num_txn_ids;
+    uint8_t num_cons = this->consumer_txn_descriptor.num_txn_ids;
+
+    std::vector<uint8_t> data;
+    data.reserve(dm0_blob_serialized_size());
+
+    // Blob header
+    dfb_dm0_blob_header_t blob_hdr = {};
+    blob_hdr.num_remapper_slots = num_rmp;
+    blob_hdr.num_producer_txns  = num_prod;
+    blob_hdr.num_consumer_txns  = num_cons;
+    const auto* bhdr_bytes = reinterpret_cast<const uint8_t*>(&blob_hdr);
+    data.insert(data.end(), bhdr_bytes, bhdr_bytes + sizeof(blob_hdr));
+
+    // Remapper slots: one per producer RISC that uses the remapper, in risc_mask bit order.
+    if (this->use_remapper) {
+        for (int bit = 0; bit < 16; bit++) {
+            if (!(this->risc_mask & (1 << bit))) { continue; }
+            const DFBRiscConfig* rc = nullptr;
+            for (const auto& c : per_core_rc) {
+                if (c.risc_id == static_cast<uint8_t>(bit)) { rc = &c; break; }
+            }
+            if (!rc->is_producer) { continue; }
+
+            uint8_t num_clientRs =
+                static_cast<uint8_t>(__builtin_popcount(rc->config.remapper_consumer_ids_mask));
+            uint8_t producer_client_type = rc->config.producer_client_type;
+            uint8_t tc_id = ::dfb::get_counter_id(rc->config.packed_tile_counter[0]);
+            uint8_t valid_mask = static_cast<uint8_t>((1u << num_clientRs) - 1);
+
+            uint32_t clientR_val = 0;
+            uint8_t mask_remaining = rc->config.remapper_consumer_ids_mask;
+            for (uint8_t r = 0; r < num_clientRs && r < ::dfb::MAX_CLIENT_RS; r++) {
+                uint8_t id_R  = static_cast<uint8_t>(__builtin_ctz(mask_remaining));
+                mask_remaining &= mask_remaining - 1;
+                uint8_t tc_R  = static_cast<uint8_t>((rc->config.consumer_tcs >> (r * 5)) & 0x1F);
+                clientR_val  |= (static_cast<uint32_t>(id_R  & 0x7u) << (r * 8)) |
+                                (static_cast<uint32_t>(tc_R  & 0x1Fu) << (r * 8 + 3));
+            }
+            uint32_t clientL_val =
+                (static_cast<uint32_t>(producer_client_type & 0x7u)) |
+                (static_cast<uint32_t>(tc_id    & 0x1Fu) << 3) |
+                (static_cast<uint32_t>(valid_mask & 0xFu) << 8) |
+                (1u << 12) |  // clientl_is_producer = 1
+                (1u << 13);   // clientr_group = 1, distribute = 0
+
+            dfb_dm0_remapper_slot_t slot = {};
+            slot.pair_index  = rc->config.remapper_pair_index;
+            slot.clientR_val = clientR_val;
+            slot.clientL_val = clientL_val;
+            const auto* slot_bytes = reinterpret_cast<const uint8_t*>(&slot);
+            data.insert(data.end(), slot_bytes, slot_bytes + sizeof(slot));
+        }
+    }
+
+    // Producer txn entries
+    for (uint8_t i = 0; i < num_prod; i++) {
+        dfb_dm0_txn_entry_t entry = {};
+        entry.txn_id               = this->producer_txn_descriptor.txn_ids[i];
+        entry.tiles_to_post_or_ack = this->producer_txn_descriptor.num_entries_per_txn_id_per_tc;
+        entry.threshold            = this->producer_txn_descriptor.num_entries_to_process_threshold;
+        entry.num_tcs              = static_cast<uint8_t>(blob_producer_tcs.size());
+        for (uint8_t j = 0; j < entry.num_tcs && j < ::dfb::MAX_TCS_PER_TXN; j++) {
+            entry.tile_counters[j] = blob_producer_tcs[j];
+        }
+        const auto* e_bytes = reinterpret_cast<const uint8_t*>(&entry);
+        data.insert(data.end(), e_bytes, e_bytes + sizeof(entry));
+    }
+
+    // Consumer txn entries
+    for (uint8_t i = 0; i < num_cons; i++) {
+        dfb_dm0_txn_entry_t entry = {};
+        entry.txn_id               = this->consumer_txn_descriptor.txn_ids[i];
+        entry.tiles_to_post_or_ack = this->consumer_txn_descriptor.num_entries_per_txn_id_per_tc;
+        entry.threshold            = this->consumer_txn_descriptor.num_entries_to_process_threshold;
+        entry.num_tcs              = static_cast<uint8_t>(blob_consumer_tcs.size());
+        for (uint8_t j = 0; j < entry.num_tcs && j < ::dfb::MAX_TCS_PER_TXN; j++) {
+            entry.tile_counters[j] = blob_consumer_tcs[j];
+        }
+        const auto* e_bytes = reinterpret_cast<const uint8_t*>(&entry);
+        data.insert(data.end(), e_bytes, e_bytes + sizeof(entry));
+    }
 
     return data;
 }
@@ -570,12 +791,14 @@ uint32_t finalize_dfbs(
         auto kernel_config = kg->launch_msg.view().kernel_config();
         kernel_config.local_cb_offset() = base_offset;
 
-        uint32_t kg_dfb_size = 0;
+        // Global header (4B) + DM0 blobs + shared per-DFB layouts.
+        // serialized_size() returns shared layout only; dm0_blob_serialized_size() returns DM0 blob only.
+        uint32_t kg_dfb_size = hal.has_tile_counter_registers() ? static_cast<uint32_t>(sizeof(dfb_global_header_t)) : 0;
         for (const auto& dfb : dataflow_buffers) {
             TT_ASSERT(dfb->configs_finalized, "DFB {} configs not finalized before serialization", dfb->id);
             for (const CoreRange& kg_range : kg->core_ranges.ranges()) {
                 if (dfb->core_ranges.intersects(kg_range)) {
-                    kg_dfb_size += dfb->serialized_size();
+                    kg_dfb_size += dfb->serialized_size() + dfb->dm0_blob_serialized_size();
                     break;
                 }
             }

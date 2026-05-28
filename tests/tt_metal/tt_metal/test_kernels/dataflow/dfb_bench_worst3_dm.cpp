@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// DM producer kernel for BenchmarkWorstCaseThree ISR latency benchmark.
+// DM producer kernel for BenchmarkCaseSeven ISR latency benchmark.
 //
-// Six DM threads (DM0–DM5) run this kernel. Each DM checks its mhartid and
+// Six DM threads (DM1–DM5) run this kernel. Each DM checks its mhartid and
 // issues one implicit NOC read per DFB it produces, then calls finish().
 // DFB IDs are addressed via the low-level uint16_t constructor since
 // kernel_bindings_generated.h has no constants (DFBs are created with
@@ -20,14 +20,14 @@
 //   1Sx2A (DFBs 16–31): one DM producer, two Neo ALL consumers via remapper
 //     DFB 16–19 : DM2 → {Neo0, Neo2}
 //     DFB 20–23 : DM3 → {Neo0, Neo2}
-//     DFB 24–27 : DM0 → {Neo1, Neo3}
+//     DFB 24–27 : DM4 → {Neo1, Neo3}   [DM4 risc_id=4, 4%4=0 → t0, same as DM0]
 //     DFB 28–31 : DM1 → {Neo1, Neo3}
 //
 // TC budget (16 per tensix, 64 total):
-//   t0: 4(1Sx1S Neo0) + 4(DM0 prod) + 8(Neo0 type-X cons) = 16
-//   t1: 4(1Sx1S Neo1) + 4(DM1 prod) + 8(Neo1 type-Y cons) = 16
-//   t2: 4(1Sx1S Neo2) + 8(DM2 prod+Neo2 type-X) + 4(Neo2 type-X) = 16
-//   t3: 4(1Sx1S Neo3) + 4(DM3 prod) + 8(Neo3 type-Y cons) = 16
+//   t0: 4(1Sx1S Neo0) + 4(DM4 prod 24-27) + 4(Neo0 cons DM2) + 4(Neo0 cons DM3) = 16
+//   t1: 4(1Sx1S Neo1) + 4(DM1 prod 28-31) + 4(Neo1 cons DM4) + 4(Neo1 cons DM1) = 16
+//   t2: 4(1Sx1S Neo2) + 4(DM2 prod 16-19) + 4(Neo2 cons DM2) + 4(Neo2 cons DM3) = 16
+//   t3: 4(1Sx1S Neo3) + 4(DM3 prod 20-23) + 4(Neo3 cons DM4) + 4(Neo3 cons DM1) = 16
 // Remapper: 16 × 1-to-2 entries (all 16 one-to-many slots), 32 set_clientR_slot writes.
 //
 // Threshold table (all DFBs, num_entries=1, num_producers=1):
@@ -60,6 +60,9 @@ void kernel_main() {
         issue_and_finish(2);  issue_and_finish(3);
         issue_and_finish(8);  issue_and_finish(9);
         issue_and_finish(10); issue_and_finish(11);
+        // 1Sx2A DFBs 24–27 (→ {Neo1, Neo3})
+        issue_and_finish(24); issue_and_finish(25);
+        issue_and_finish(26); issue_and_finish(27);
     } else if (dm_id == 5) {
         // 1Sx1S DFBs 4–7 (→ Neo1) and 12–15 (→ Neo3)
         issue_and_finish(4);  issue_and_finish(5);
@@ -74,14 +77,10 @@ void kernel_main() {
         // 1Sx2A DFBs 20–23 (→ {Neo0, Neo2})
         issue_and_finish(20); issue_and_finish(21);
         issue_and_finish(22); issue_and_finish(23);
-    } else if (dm_id == 0) {
-        // 1Sx2A DFBs 24–27 (→ {Neo1, Neo3})
-        issue_and_finish(24); issue_and_finish(25);
-        issue_and_finish(26); issue_and_finish(27);
     } else if (dm_id == 1) {
         // 1Sx2A DFBs 28–31 (→ {Neo1, Neo3})
         issue_and_finish(28); issue_and_finish(29);
         issue_and_finish(30); issue_and_finish(31);
     }
-    // DM6 and DM7 are not used; they participate in no DFBs and do nothing.
+    // DM0 and DM6-DM7 are not used; they participate in no DFBs and do nothing.
 }

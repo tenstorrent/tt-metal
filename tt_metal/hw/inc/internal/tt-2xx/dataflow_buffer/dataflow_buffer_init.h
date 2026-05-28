@@ -21,15 +21,15 @@
 
 
 // Poll until every DFB has all producer TCs initialized and DM0's ISR path marked done.
-// Item 2 (early-break): break as soon as any condition fails to avoid scanning remaining DFBs.
-// Item 3 (move-implicit-sync): implicit_sync_configured is now written once by DM0 in
-//   setup_local_dfb_interfaces; we only read it here.
-FORCE_INLINE void wait_all_tcs_initialized(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs, uint64_t hartid) {
+// shared_layout_ptr points to the first dfb_initializer_t (= dfb_config_base + per_dfb_layout_offset).
+// The DM0 global blob is no longer interleaved, so the per-DFB stride is simply
+//   sizeof(dfb_initializer_t) + num_riscs * sizeof(dfb_initializer_per_risc_t).
+FORCE_INLINE void wait_all_tcs_initialized(volatile uint8_t* shared_layout_ptr, uint32_t num_dfbs, uint64_t hartid) {
     WAYPOINT("TCIW");
     bool all_tcs_initialized = false;
     while (!all_tcs_initialized) {
         all_tcs_initialized = true;
-        volatile uint8_t* base_ptr = reinterpret_cast<volatile uint8_t*>(dfb_config_base);
+        volatile uint8_t* base_ptr = shared_layout_ptr;
 
         for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
             volatile dfb_initializer_t* init_ptr = reinterpret_cast<volatile dfb_initializer_t*>(base_ptr);
@@ -69,10 +69,11 @@ inline uint32_t rdcycle() {
   }
 
 // Item 1 (merge-passes):
-//   DM path:   one merged loop (old Pass 1 + DM0's Pass 2 data-collection, in lock-step per DFB),
-//              followed by DM0's post-loop (remapper enable + ISR setup + implicit_sync_configured write),
-//              followed by a TC-init loop (old Pass 3) for all DMs.
-//   TRISC path: one merged loop (old Pass 1 + old Pass 3) — no second loop needed.
+//   DM0 path:  dedicated contiguous blob loop (reads DM0 global blob directly — no dfb_initializer_t
+//              fetches, no per-RISC cache pollution), followed by DM0's post-loop (remapper enable +
+//              ISR setup + implicit_sync_configured write), followed by a TC-init loop for all DMs.
+//   Other DMs: shared per-DFB layout loop (dfb_initializer_t + per-risc entries only).
+//   TRISC path: shared per-DFB layout loop (same as other DMs).
 FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base, uint32_t local_dfb_mask) {
     uint32_t start_time = rdcycle();
 
@@ -90,227 +91,294 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
     uint32_t num_dfbs =
         local_dfb_mask;  // kernel config holds local_cb_mask but it gets hijacked to hold number of dfbs
-    volatile uint8_t* base_ptr = reinterpret_cast<volatile uint8_t*>(dfb_config_base);
+
+    // Read the global header to find where the shared per-DFB layout begins.
+    // Layout: [dfb_global_header_t(4B)] [DM0 global blob] [shared per-DFB layout...]
+    volatile dfb_global_header_t* ghdr = reinterpret_cast<volatile dfb_global_header_t*>(dfb_config_base);
+    uint32_t per_dfb_layout_offset = ghdr->per_dfb_layout_offset;
+    volatile uint8_t* shared_base_ptr =
+        reinterpret_cast<volatile uint8_t*>(dfb_config_base) + per_dfb_layout_offset;
+
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
     uint8_t compact_dfb_count = 0;
 #endif
 
+    // Timing probes shared by ALL RISCs (DMs + TRISCs). Zero = not reached.
+    //   SW cost  = t_after_merged_loop - start_time   (for every RISC)
+    //   wait cost= end_time - t_after_tc_init_loop    (DMs)
+    //            = end_time - t_after_merged_loop      (TRISCs, which skip the TC init loop)
+    uint32_t t_after_merged_loop  = 0;
+    uint32_t t_after_tc_init_loop = 0;
+
 #ifndef COMPILE_FOR_TRISC
     // DM0-only accumulator state for the post-loop remapper enable and ISR setup.
     bool enable_remapper = false;
+    uint8_t remapper_hwm = 0;  // high-watermark: one past the highest pair_index configured; drives write_pairs_up_to()
     uint32_t producer_txn_id_mask = 0;
     uint32_t consumer_txn_id_mask = 0;
     uint32_t end_remapper_config_time = 0;
     uint32_t end_isr_enable_time = 0;
+    // Granular timing probes. Per-DFB arrays populated by DM0 only.
+    // t_before_tc_writes set by all DMs to split spin-wait from TC HW writes:
+    //   spinwait  = t_before_tc_writes - t_after_merged_loop
+    //   tc_writes = t_after_tc_init_loop - t_before_tc_writes
+    constexpr uint8_t MAX_PROBE_DFBS = 32;
+    uint32_t t_subpassA[MAX_PROBE_DFBS]   = {};  // loop overhead only for DM0 (no dfb_initializer_t fetch)
+    uint32_t t_subpassB_0[MAX_PROBE_DFBS] = {};  // after remapper SW setup (no HW writes), per DFB (DM0)
+    uint32_t t_subpassB[MAX_PROBE_DFBS]   = {};  // after txn-id threshold writes, per DFB (DM0)
+    uint32_t t_after_write_pairs_up_to = 0;      // after write_pairs_up_to() HW burst in post-loop (DM0; 0 if no remapper)
+    uint32_t t_after_isr_ie_writes = 0;          // after ISR IE mask register writes (DM0)
+    uint32_t t_before_tc_writes    = 0;          // before first llk_intf_reset; all producer DMs
 #endif
 
     // -----------------------------------------------------------------------
-    // Merged loop: populate g_dfb_interface for this RISC (all RISCs),
-    //              + collect TCs / configure remapper / set up TxnDFBDescriptors for DM0,
-    //              + TC hardware init for TRISC producers (UCK_CHLKC_PACK only).
+    // DM0: dedicated contiguous blob loop.
+    // Reads linearly from dfb_config_base + sizeof(dfb_global_header_t) — no dfb_initializer_t
+    // fetches, no per-RISC cache pollution, hardware prefetcher-friendly.
     // -----------------------------------------------------------------------
-    for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
-        // Read dfb_initializer_t (shared config)
-        volatile dfb_initializer_t* init_ptr = reinterpret_cast<volatile dfb_initializer_t*>(base_ptr);
-        uint16_t risc_mask = (init_ptr->risc_mask_bits.tensix_mask << 8) | init_ptr->risc_mask_bits.dm_mask;
-        uint8_t num_riscs = static_cast<uint8_t>(__builtin_popcount(risc_mask));
+#ifndef COMPILE_FOR_TRISC
+    if (hartid == 0) {
+        volatile uint8_t* dm0_blob_ptr =
+            reinterpret_cast<volatile uint8_t*>(dfb_config_base) + sizeof(dfb_global_header_t);
 
-        // Per-risc configs start after dfb_initializer_t
-        volatile dfb_initializer_per_risc_t* per_risc_base =
-            reinterpret_cast<volatile dfb_initializer_per_risc_t*>(base_ptr + sizeof(dfb_initializer_t));
+        // Local non-volatile staging buffer: one blob entry at a time.
+        // All blob structs are 4-byte aligned and sized in multiples of 4, so word-copy is safe.
+        // Size = header(4) + max_rmp_slots(8×16) + max_txn_entries(2×4×16) = 260 bytes = 65 words.
+        constexpr uint32_t MAX_DFB_BLOB_ENTRY_WORDS =
+            (sizeof(dfb_dm0_blob_header_t) +
+             dfb::MAX_DM0_REMAPPER_SLOTS * sizeof(dfb_dm0_remapper_slot_t) +
+             2u * dfb::NUM_TXN_IDS     * sizeof(dfb_dm0_txn_entry_t) + 3u) / 4u;
+        uint32_t local_blob[MAX_DFB_BLOB_ENTRY_WORDS];
 
-        // --- Sub-pass A: populate g_dfb_interface (all RISCs) ---
-        if (risc_mask & hart_bit) {
-            uint8_t risc_index = static_cast<uint8_t>(__builtin_popcount(risc_mask & ((1 << hartid) - 1)));
-            volatile dfb_initializer_per_risc_t* per_risc_ptr = per_risc_base + risc_index;
+        for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
+            // subpassA for DM0: near-zero interval (loop overhead only — no dfb_initializer_t read).
+            t_subpassA[logical_dfb_id] = rdcycle();
+
+            // --- Non-volatile bulk-copy of this DFB's blob entry ---
+            // Step 1: read the 4-byte header with a single volatile word load to get entry counts.
+            const volatile uint32_t* vsrc = reinterpret_cast<const volatile uint32_t*>(dm0_blob_ptr);
+            local_blob[0] = vsrc[0];
+
+            const dfb_dm0_blob_header_t* local_hdr =
+                reinterpret_cast<const dfb_dm0_blob_header_t*>(local_blob);
+            uint8_t num_rmp  = local_hdr->num_remapper_slots;
+            uint8_t num_prod = local_hdr->num_producer_txns;
+            uint8_t num_cons = local_hdr->num_consumer_txns;
+
+            // Step 2: copy the rest of the entry (slots + txn entries) one word at a time.
+            // After this loop every field access below uses registers, not volatile L1 loads.
+            uint32_t entry_bytes = sizeof(dfb_dm0_blob_header_t)
+                                 + num_rmp  * sizeof(dfb_dm0_remapper_slot_t)
+                                 + (num_prod + num_cons) * sizeof(dfb_dm0_txn_entry_t);
+            uint32_t entry_words = (entry_bytes + 3u) >> 2u;
+            for (uint32_t w = 1u; w < entry_words; w++) {
+                local_blob[w] = vsrc[w];
+            }
+
+            // Non-volatile pointers into the local buffer.
+            const dfb_dm0_remapper_slot_t* slots =
+                reinterpret_cast<const dfb_dm0_remapper_slot_t*>(
+                    reinterpret_cast<const uint8_t*>(local_blob) + sizeof(dfb_dm0_blob_header_t));
+            const dfb_dm0_txn_entry_t* prod_txns =
+                reinterpret_cast<const dfb_dm0_txn_entry_t*>(slots + num_rmp);
+            const dfb_dm0_txn_entry_t* cons_txns = prod_txns + num_prod;
+
+            // Remapper config (SW only): all reads from local non-volatile buffer.
+            // write_pairs_up_to(remapper_hwm) bursts all HW writes in the post-loop.
+            for (uint8_t s = 0; s < num_rmp; s++) {
+                const dfb_dm0_remapper_slot_t& slot = slots[s];
+                enable_remapper = true;
+                g_remapper_configurator.load_pair_raw(
+                    static_cast<uint32_t>(slot.pair_index), slot.clientR_val, slot.clientL_val);
+                uint8_t hwm = static_cast<uint8_t>(slot.pair_index + 1);
+                if (hwm > remapper_hwm) { remapper_hwm = hwm; }
+            }
+
+            // t_subpassB_0: after remapper SW setup; before HW threshold writes.
+            t_subpassB_0[logical_dfb_id] = rdcycle();
+
+            // Producer txn entries from local non-volatile buffer.
+            for (uint8_t i = 0; i < num_prod; i++) {
+                const dfb_dm0_txn_entry_t& e = prod_txns[i];
+                producer_txn_id_mask |= (1u << e.txn_id);
+                volatile TxnDFBDescriptor& dst = g_txn_dfb_descriptor[e.txn_id];
+                dst.num_counters = e.num_tcs;
+                for (uint8_t j = 0; j < e.num_tcs; j++) {
+                    dst.tile_counters[j] = e.tile_counters[j];
+                }
+                dst.tiles_to_post = e.tiles_to_post_or_ack;
+                CMDBUF_CLEAR_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, e.txn_id);
+                asm volatile("nop");
+                SET_TILES_TO_PROCESS_THRES_TR_ACK(e.txn_id, e.threshold);
+            }
+            // Consumer txn entries from local non-volatile buffer.
+            for (uint8_t i = 0; i < num_cons; i++) {
+                const dfb_dm0_txn_entry_t& e = cons_txns[i];
+                consumer_txn_id_mask |= (1u << e.txn_id);
+                volatile TxnDFBDescriptor& dst = g_txn_dfb_descriptor[e.txn_id];
+                dst.num_counters = e.num_tcs;
+                for (uint8_t j = 0; j < e.num_tcs; j++) {
+                    dst.tile_counters[j] = e.tile_counters[j];
+                }
+                CMDBUF_CLEAR_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, e.txn_id);
+                asm volatile("nop");
+                dst.tiles_to_ack = e.tiles_to_post_or_ack;
+                SET_TILES_TO_PROCESS_THRES_WR_SENT(e.txn_id, e.threshold);
+            }
+            t_subpassB[logical_dfb_id] = rdcycle();
+
+            // Advance dm0_blob_ptr to the next DFB's blob entry.
+            dm0_blob_ptr += entry_bytes;
+        }
+    } else
+#endif  // !COMPILE_FOR_TRISC
+    // -----------------------------------------------------------------------
+    // All DMs except DM0 + TRISC: shared per-DFB layout loop.
+    // Populates g_dfb_interface (TC base/limit addrs, txn IDs, entry sizes) for
+    // each RISC that participates as a producer or consumer.
+    // DM0 is always a pure coordinator (remapper config + ISR setup via blob loop
+    // above) and never a DFB producer/consumer, so it skips this loop entirely.
+    // Stride = sizeof(dfb_initializer_t) + num_riscs * sizeof(dfb_initializer_per_risc_t).
+    // -----------------------------------------------------------------------
+    {
+        volatile uint8_t* base_ptr = shared_base_ptr;
+        for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
+            volatile dfb_initializer_t* init_ptr = reinterpret_cast<volatile dfb_initializer_t*>(base_ptr);
+            uint16_t risc_mask = (init_ptr->risc_mask_bits.tensix_mask << 8) | init_ptr->risc_mask_bits.dm_mask;
+            uint8_t num_riscs = static_cast<uint8_t>(__builtin_popcount(risc_mask));
+
+            volatile dfb_initializer_per_risc_t* per_risc_base =
+                reinterpret_cast<volatile dfb_initializer_per_risc_t*>(base_ptr + sizeof(dfb_initializer_t));
+
+            // --- Sub-pass A: populate g_dfb_interface ---
+            if (risc_mask & hart_bit) {
+                uint8_t risc_index = static_cast<uint8_t>(__builtin_popcount(risc_mask & ((1 << hartid) - 1)));
+                volatile dfb_initializer_per_risc_t* per_risc_ptr = per_risc_base + risc_index;
 
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
-            ASSERT(compact_dfb_count < dfb::MAX_ACTIVE_DFBS_PACK);
-            const uint8_t compact_dfb_id = compact_dfb_count++;
-            g_dfb_logical_to_compact[logical_dfb_id] = compact_dfb_id;
-            LocalDFBInterface& dfb_interface = g_dfb_interface[compact_dfb_id];
+                ASSERT(compact_dfb_count < dfb::MAX_ACTIVE_DFBS_PACK);
+                const uint8_t compact_dfb_id = compact_dfb_count++;
+                g_dfb_logical_to_compact[logical_dfb_id] = compact_dfb_id;
+                LocalDFBInterface& dfb_interface = g_dfb_interface[compact_dfb_id];
 #else
-            LocalDFBInterface& dfb_interface = g_dfb_interface[logical_dfb_id];
+                LocalDFBInterface& dfb_interface = g_dfb_interface[logical_dfb_id];
 #endif
 
-            dfb_interface.num_tcs_to_rr = per_risc_ptr->num_tcs_and_init.num_tcs_to_rr;
+                dfb_interface.num_tcs_to_rr = per_risc_ptr->num_tcs_and_init.num_tcs_to_rr;
 
 #ifdef COMPILE_FOR_TRISC
-            dfb_interface.entry_size = static_cast<uint16_t>(init_ptr->entry_size >> cb_addr_shift);
-            dfb_interface.stride_size = static_cast<uint16_t>(
-                static_cast<uint32_t>(dfb_interface.entry_size) * static_cast<uint32_t>(init_ptr->stride_in_entries));
-            dfb_interface.stride_size_tiles = static_cast<uint8_t>(init_ptr->stride_in_entries);
+                dfb_interface.entry_size = static_cast<uint16_t>(init_ptr->entry_size >> cb_addr_shift);
+                dfb_interface.stride_size = static_cast<uint16_t>(
+                    static_cast<uint32_t>(dfb_interface.entry_size) * static_cast<uint32_t>(init_ptr->stride_in_entries));
+                dfb_interface.stride_size_tiles = static_cast<uint8_t>(init_ptr->stride_in_entries);
 #if defined(UCK_CHLKC_PACK)
-            dfb_interface.wr_entry_ptr = 0;
+                dfb_interface.wr_entry_ptr = 0;
 #else
-            dfb_interface.tensix_trisc_mask = static_cast<uint8_t>(init_ptr->risc_mask_bits.tensix_trisc_mask);
+                dfb_interface.tensix_trisc_mask = static_cast<uint8_t>(init_ptr->risc_mask_bits.tensix_trisc_mask);
 #endif
 #else
-            dfb_interface.entry_size = init_ptr->entry_size >> cb_addr_shift;
-            dfb_interface.stride_size = dfb_interface.entry_size * init_ptr->stride_in_entries;
+                dfb_interface.entry_size = init_ptr->entry_size >> cb_addr_shift;
+                dfb_interface.stride_size = dfb_interface.entry_size * init_ptr->stride_in_entries;
 #endif
 
-            for (uint8_t i = 0; i < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; i++) {
-                uint32_t base = per_risc_ptr->tc_addrs[i].base_addr >> cb_addr_shift;
-                uint32_t limit_s = per_risc_ptr->tc_addrs[i].limit >> cb_addr_shift;
+                for (uint8_t i = 0; i < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; i++) {
+                    uint32_t base = per_risc_ptr->tc_addrs[i].base_addr >> cb_addr_shift;
+                    uint32_t limit_s = per_risc_ptr->tc_addrs[i].limit >> cb_addr_shift;
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
-                dfb_interface.tc_slots[i].base_addr = base;
-                dfb_interface.tc_slots[i].wr_offset = 0;
-                dfb_interface.tc_slots[i].ring_size = static_cast<uint16_t>(limit_s - base);
-                dfb_interface.tc_slots[i].packed_tile_counter = per_risc_ptr->packed_tile_counter[i];
-                dfb_interface.tc_slots[i].base_entry_idx = static_cast<uint16_t>(
-                    (base - dfb_interface.tc_slots[0].base_addr) / dfb_interface.entry_size);
-                dfb_interface.tc_slots[i].wr_entry_idx = dfb_interface.tc_slots[i].base_entry_idx;
+                    dfb_interface.tc_slots[i].base_addr = base;
+                    dfb_interface.tc_slots[i].wr_offset = 0;
+                    dfb_interface.tc_slots[i].ring_size = static_cast<uint16_t>(limit_s - base);
+                    dfb_interface.tc_slots[i].packed_tile_counter = per_risc_ptr->packed_tile_counter[i];
+                    dfb_interface.tc_slots[i].base_entry_idx = static_cast<uint16_t>(
+                        (base - dfb_interface.tc_slots[0].base_addr) / dfb_interface.entry_size);
+                    dfb_interface.tc_slots[i].wr_entry_idx = dfb_interface.tc_slots[i].base_entry_idx;
 #elif defined(COMPILE_FOR_TRISC)
-                dfb_interface.tc_slots[i].base_addr = base;
-                dfb_interface.tc_slots[i].rd_offset = 0;
-                dfb_interface.tc_slots[i].ring_size = static_cast<uint16_t>(limit_s - base);
-                dfb_interface.tc_slots[i].packed_tile_counter = per_risc_ptr->packed_tile_counter[i];
-                dfb_interface.tc_slots[i].base_entry_idx = static_cast<uint16_t>(
-                    (base - dfb_interface.tc_slots[0].base_addr) / dfb_interface.entry_size);
-                dfb_interface.tc_slots[i].rd_entry_idx = dfb_interface.tc_slots[i].base_entry_idx;
+                    dfb_interface.tc_slots[i].base_addr = base;
+                    dfb_interface.tc_slots[i].rd_offset = 0;
+                    dfb_interface.tc_slots[i].ring_size = static_cast<uint16_t>(limit_s - base);
+                    dfb_interface.tc_slots[i].packed_tile_counter = per_risc_ptr->packed_tile_counter[i];
+                    dfb_interface.tc_slots[i].base_entry_idx = static_cast<uint16_t>(
+                        (base - dfb_interface.tc_slots[0].base_addr) / dfb_interface.entry_size);
+                    dfb_interface.tc_slots[i].rd_entry_idx = dfb_interface.tc_slots[i].base_entry_idx;
 #else
-                dfb_interface.tc_slots[i].base_addr = base;
-                dfb_interface.tc_slots[i].limit = limit_s;
-                dfb_interface.tc_slots[i].rd_ptr = base;
-                dfb_interface.tc_slots[i].wr_ptr = base;
-                dfb_interface.tc_slots[i].packed_tile_counter = per_risc_ptr->packed_tile_counter[i];
+                    dfb_interface.tc_slots[i].base_addr = base;
+                    dfb_interface.tc_slots[i].limit = limit_s;
+                    dfb_interface.tc_slots[i].rd_ptr = base;
+                    dfb_interface.tc_slots[i].wr_ptr = base;
+                    dfb_interface.tc_slots[i].packed_tile_counter = per_risc_ptr->packed_tile_counter[i];
 #endif
-            }
+                }
 
-            dfb_interface.tc_idx = 0;
+                dfb_interface.tc_idx = 0;
 #ifndef COMPILE_FOR_TRISC
-            dfb_interface.broadcast_tc = per_risc_ptr->num_tcs_and_init.broadcast_tc;
-
-            if (per_risc_ptr->flags.is_producer) {
-                dfb_interface.num_txn_ids = init_ptr->producer_txn_descriptor.num_txn_ids;
-                dfb_interface.threshold = init_ptr->producer_txn_descriptor.num_entries_to_process_threshold;
-                dfb_interface.num_entries_per_txn_id = init_ptr->producer_txn_descriptor.num_entries_per_txn_id;
-                dfb_interface.num_entries_per_txn_id_per_tc =
-                    init_ptr->producer_txn_descriptor.num_entries_per_txn_id_per_tc;
-                for (uint8_t i = 0; i < dfb_interface.num_txn_ids; i++) {
-                    dfb_interface.txn_ids[i] = init_ptr->producer_txn_descriptor.txn_ids[i];
-                }
-            } else {
-                dfb_interface.num_txn_ids = init_ptr->consumer_txn_descriptor.num_txn_ids;
-                dfb_interface.threshold = init_ptr->consumer_txn_descriptor.num_entries_to_process_threshold;
-                dfb_interface.num_entries_per_txn_id = init_ptr->consumer_txn_descriptor.num_entries_per_txn_id;
-                dfb_interface.num_entries_per_txn_id_per_tc =
-                    init_ptr->consumer_txn_descriptor.num_entries_per_txn_id_per_tc;
-                for (uint8_t i = 0; i < dfb_interface.num_txn_ids; i++) {
-                    dfb_interface.txn_ids[i] = init_ptr->consumer_txn_descriptor.txn_ids[i];
-                }
-            }
-#endif
-
-            // --- Sub-pass B (TRISC UCK_CHLKC_PACK only): TC hardware init merged into this loop ---
-            // All producers (DM and TRISC) must wait for DM0's remapper enable before initializing TCs.
-            // TRISC producers can spin-wait here safely because DM0's remapper enable happens in
-            // the post-loop block below, which DM0 reaches concurrently via the same merged loop.
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
-            if (per_risc_ptr->flags.is_producer) {
-                while (per_risc_ptr->flags.remapper_en && !overlay::RemapperAPI::is_remapper_enabled());
-                for (uint8_t tc = 0; tc < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; tc++) {
-                    dfb::PackedTileCounter ptc = per_risc_ptr->packed_tile_counter[tc];
-                    uint8_t tc_id = dfb::get_counter_id(ptc);
-                    ckernel::trisc::tile_counters[tc_id].f.reset = 1;
-                    ckernel::trisc::tile_counters[tc_id].f.buf_capacity = init_ptr->capacity;
-                }
-                per_risc_ptr->num_tcs_and_init.tc_init_done = 1;
-            }
-#endif
-        }  // end if (risc_mask & hart_bit)
-
-#ifndef COMPILE_FOR_TRISC
-        // --- Sub-pass B (DM0 only): collect TC sets, configure remapper, set up TxnDFBDescriptors ---
-        // Merged from old Pass 2: avoids re-reading init_ptr / risc_mask / per_risc_base for DM0.
-        if (hartid == 0) {
-            uint8_t num_producer_tcs = 0;
-            uint8_t producer_tcs[16] = {};
-            uint8_t num_consumer_tcs = 0;
-            uint8_t consumer_tcs[16] = {};
-
-            for (uint8_t i = 0; i < num_riscs; i++) {
-                volatile dfb_initializer_per_risc_t* per_risc_ptr = per_risc_base + i;
+                dfb_interface.broadcast_tc = per_risc_ptr->num_tcs_and_init.broadcast_tc;
 
                 if (per_risc_ptr->flags.is_producer) {
-                    if (per_risc_ptr->flags.remapper_en) {
-                        enable_remapper = true;
-                        uint8_t remapper_consumer_ids_mask = per_risc_ptr->remapper_consumer_ids_mask;
-                        uint8_t producer_client_type = per_risc_ptr->producer_client_type;
-                        uint8_t num_clientRs = static_cast<uint8_t>(__builtin_popcount(remapper_consumer_ids_mask));
-                        uint8_t clientR_valid_mask = (1u << num_clientRs) - 1;
-                        g_remapper_configurator.set_pair_index(
-                            static_cast<uint32_t>(per_risc_ptr->flags.remapper_pair_index));
-                        g_remapper_configurator.configure_clientL_all_fields(
-                            producer_client_type,
-                            dfb::get_counter_id(per_risc_ptr->packed_tile_counter[0]),
-                            clientR_valid_mask,
-                            1,  // is_producer
-                            1,  // group mode
-                            0   // distribute mode
-                        );
-                        uint8_t mask_remaining = remapper_consumer_ids_mask;
-                        for (uint8_t clientR_idx = 0; clientR_idx < num_clientRs; clientR_idx++) {
-                            uint8_t id_R = static_cast<uint8_t>(__builtin_ctz(mask_remaining));
-                            mask_remaining &= mask_remaining - 1;
-                            uint8_t tc_R = (per_risc_ptr->consumer_tcs >> (clientR_idx * 5)) & 0x1F;
-                            g_remapper_configurator.set_clientR_slot(clientR_idx, id_R, tc_R);
-                        }
-                        g_remapper_configurator.write_all_configs();
-                    }
-                    for (uint8_t j = 0; j < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; j++) {
-                        producer_tcs[num_producer_tcs++] = per_risc_ptr->packed_tile_counter[j];
+                    dfb_interface.num_txn_ids = init_ptr->producer_txn_descriptor.num_txn_ids;
+                    dfb_interface.threshold = init_ptr->producer_txn_descriptor.num_entries_to_process_threshold;
+                    dfb_interface.num_entries_per_txn_id = init_ptr->producer_txn_descriptor.num_entries_per_txn_id;
+                    dfb_interface.num_entries_per_txn_id_per_tc =
+                        init_ptr->producer_txn_descriptor.num_entries_per_txn_id_per_tc;
+                    for (uint8_t i = 0; i < dfb_interface.num_txn_ids; i++) {
+                        dfb_interface.txn_ids[i] = init_ptr->producer_txn_descriptor.txn_ids[i];
                     }
                 } else {
-                    for (uint8_t j = 0; j < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; j++) {
-                        consumer_tcs[num_consumer_tcs++] = per_risc_ptr->packed_tile_counter[j];
+                    dfb_interface.num_txn_ids = init_ptr->consumer_txn_descriptor.num_txn_ids;
+                    dfb_interface.threshold = init_ptr->consumer_txn_descriptor.num_entries_to_process_threshold;
+                    dfb_interface.num_entries_per_txn_id = init_ptr->consumer_txn_descriptor.num_entries_per_txn_id;
+                    dfb_interface.num_entries_per_txn_id_per_tc =
+                        init_ptr->consumer_txn_descriptor.num_entries_per_txn_id_per_tc;
+                    for (uint8_t i = 0; i < dfb_interface.num_txn_ids; i++) {
+                        dfb_interface.txn_ids[i] = init_ptr->consumer_txn_descriptor.txn_ids[i];
                     }
                 }
-            }
-
-            for (uint8_t i = 0; i < init_ptr->producer_txn_descriptor.num_txn_ids; i++) {
-                uint8_t txn_id = init_ptr->producer_txn_descriptor.txn_ids[i];
-                producer_txn_id_mask |= (1u << txn_id);
-                volatile TxnDFBDescriptor& dst = g_txn_dfb_descriptor[txn_id];
-                dst.num_counters = static_cast<uint8_t>(num_producer_tcs);
-                for (uint8_t j = 0; j < dst.num_counters; j++) {
-                    dst.tile_counters[j] = producer_tcs[j];
-                }
-                dst.tiles_to_post = init_ptr->producer_txn_descriptor.num_entries_per_txn_id_per_tc;
-                CMDBUF_CLEAR_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, txn_id);
-                asm volatile("nop");
-                SET_TILES_TO_PROCESS_THRES_TR_ACK(
-                    txn_id, init_ptr->producer_txn_descriptor.num_entries_to_process_threshold);
-            }
-            for (uint8_t i = 0; i < init_ptr->consumer_txn_descriptor.num_txn_ids; i++) {
-                uint8_t txn_id = init_ptr->consumer_txn_descriptor.txn_ids[i];
-                consumer_txn_id_mask |= (1u << txn_id);
-                volatile TxnDFBDescriptor& dst = g_txn_dfb_descriptor[txn_id];
-                dst.num_counters = static_cast<uint8_t>(num_consumer_tcs);
-                for (uint8_t j = 0; j < dst.num_counters; j++) {
-                    dst.tile_counters[j] = consumer_tcs[j];
-                }
-                CMDBUF_CLEAR_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, txn_id);
-                asm volatile("nop");
-                dst.tiles_to_ack = init_ptr->consumer_txn_descriptor.num_entries_per_txn_id_per_tc;
-                SET_TILES_TO_PROCESS_THRES_WR_SENT(
-                    txn_id, init_ptr->consumer_txn_descriptor.num_entries_to_process_threshold);
-            }
-        }  // end DM0 sub-pass B
 #endif
 
-        base_ptr += sizeof(dfb_initializer_t) + (num_riscs * sizeof(dfb_initializer_per_risc_t));
+                // --- Sub-pass B (TRISC UCK_CHLKC_PACK only): TC hardware init merged into this loop ---
+                // All producers (DM and TRISC) must wait for DM0's remapper enable before initializing TCs.
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+                if (per_risc_ptr->flags.is_producer) {
+                    while (per_risc_ptr->flags.remapper_en && !overlay::RemapperAPI::is_remapper_enabled());
+                    for (uint8_t tc = 0; tc < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; tc++) {
+                        dfb::PackedTileCounter ptc = per_risc_ptr->packed_tile_counter[tc];
+                        uint8_t tc_id = dfb::get_counter_id(ptc);
+                        ckernel::trisc::tile_counters[tc_id].f.reset = 1;
+                        ckernel::trisc::tile_counters[tc_id].f.buf_capacity = init_ptr->capacity;
+                    }
+                    per_risc_ptr->num_tcs_and_init.tc_init_done = 1;
+                }
+#endif
+            }  // end if (risc_mask & hart_bit)
+
+            base_ptr += sizeof(dfb_initializer_t) + (num_riscs * sizeof(dfb_initializer_per_risc_t));
+        }
     }
+
     // -----------------------------------------------------------------------
-    // End merged loop
+    // End merged loops (DM0 blob loop + shared per-DFB layout loop)
     // -----------------------------------------------------------------------
+
+    // Point 4: all RISCs (DMs + TRISCs) capture merged loop end.
+    // SW cost = t_after_merged_loop - start_time.
+    t_after_merged_loop = rdcycle();
 
 #ifndef COMPILE_FOR_TRISC
     // DM0 post-loop: enable remapper, set up ISR interrupt enables, then write
     // implicit_sync_configured = 1 for all DFBs so other DMs/TRISCs can proceed.
     if (hartid == 0) {
-        // Program which transaction ids should trigger the implicit sync ISR
+        // Flush accumulated pair configs and enable the remapper.
+        // Pair indices are monotonically increasing so only [0, remapper_hwm) need writes.
+        // Interval [t_after_merged_loop  → t_after_write_pairs_up_to] = write_pairs_up_to() HW burst cost.
+        // Interval [t_after_write_pairs_up_to → end_remapper_config_time] = enable_remapper() cost.
+        if (enable_remapper) {
+            g_remapper_configurator.write_pairs_up_to(remapper_hwm);
+            t_after_write_pairs_up_to = rdcycle();
+            g_remapper_configurator.enable_remapper();
+            end_remapper_config_time = rdcycle();
+        }
+
+        // Program which transaction ids should trigger the implicit sync ISR.
+        // Interval [end_remapper_config_time → t_after_isr_ie_writes] = IE register read/write cost.
         uint64_t reg_val = CMDBUF_RD_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);
         reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((uint64_t)(producer_txn_id_mask & 0xFFFFFFFFULL) << 32);
         CMDBUF_WR_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, reg_val);
@@ -318,11 +386,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         reg_val = CMDBUF_RD_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);
         reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (consumer_txn_id_mask & 0xFFFFFFFFULL);
         CMDBUF_WR_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, reg_val);
-
-        if (enable_remapper) {
-            g_remapper_configurator.enable_remapper();
-            end_remapper_config_time = rdcycle();
-        }
+        t_after_isr_ie_writes = rdcycle();
 
         if ((producer_txn_id_mask | consumer_txn_id_mask) != 0) {
             enable_dfb_tile_isr();
@@ -334,55 +398,110 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
     // -----------------------------------------------------------------------
     // TC init loop (old Pass 3): all DMs; DM producers spin-wait for remapper.
-    // Item 3 (move-implicit-sync): DM0 writes implicit_sync_configured = 1 here,
-    //   once per DFB, after ISR setup is complete — replacing the repeated volatile
-    //   store that was inside every iteration of the wait_all_tcs_initialized poll loop.
+    // DM0 writes implicit_sync_configured = 1 here once per DFB, after ISR setup is
+    // complete, so other DMs/TRISCs can proceed with TC init.
+    // Uses shared_base_ptr (shared per-DFB layout); no DM0 blob to skip.
     // -----------------------------------------------------------------------
-    base_ptr = reinterpret_cast<volatile uint8_t*>(dfb_config_base);
-    for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
-        volatile dfb_initializer_t* init_ptr = reinterpret_cast<volatile dfb_initializer_t*>(base_ptr);
-        uint16_t risc_mask = (init_ptr->risc_mask_bits.tensix_mask << 8) | init_ptr->risc_mask_bits.dm_mask;
-        uint8_t num_riscs = static_cast<uint8_t>(__builtin_popcount(risc_mask));
+    {
+        volatile uint8_t* base_ptr = shared_base_ptr;
+        for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
+            volatile dfb_initializer_t* init_ptr = reinterpret_cast<volatile dfb_initializer_t*>(base_ptr);
+            uint16_t risc_mask = (init_ptr->risc_mask_bits.tensix_mask << 8) | init_ptr->risc_mask_bits.dm_mask;
+            uint8_t num_riscs = static_cast<uint8_t>(__builtin_popcount(risc_mask));
 
-        volatile dfb_initializer_per_risc_t* per_risc_base =
-            reinterpret_cast<volatile dfb_initializer_per_risc_t*>(base_ptr + sizeof(dfb_initializer_t));
+            volatile dfb_initializer_per_risc_t* per_risc_base =
+                reinterpret_cast<volatile dfb_initializer_per_risc_t*>(base_ptr + sizeof(dfb_initializer_t));
 
-        // DM0 signals ISR-ready to all other DMs and TRISCs once per DFB, not on every poll iteration.
-        if (hartid == 0) {
-            init_ptr->implicit_sync_configured = 1;
-        }
-
-        if (risc_mask & hart_bit) {
-            uint8_t risc_index = static_cast<uint8_t>(__builtin_popcount(risc_mask & ((1 << hartid) - 1)));
-            volatile dfb_initializer_per_risc_t* per_risc_ptr = per_risc_base + risc_index;
-
-            if (per_risc_ptr->flags.is_producer) {
-                while (per_risc_ptr->flags.remapper_en && !overlay::RemapperAPI::is_remapper_enabled());
-                for (uint8_t tc = 0; tc < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; tc++) {
-                    dfb::PackedTileCounter ptc = per_risc_ptr->packed_tile_counter[tc];
-                    uint8_t tensix_id = dfb::get_tensix_id(ptc);
-                    uint8_t tc_id = dfb::get_counter_id(ptc);
-                    overlay::llk_intf_reset(tensix_id, tc_id);
-                    overlay::llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
-                }
-                per_risc_ptr->num_tcs_and_init.tc_init_done = 1;
+            // DM0 signals ISR-ready to all other DMs and TRISCs once per DFB, not on every poll iteration.
+            if (hartid == 0) {
+                init_ptr->implicit_sync_configured = 1;
             }
-        }
 
-        base_ptr += sizeof(dfb_initializer_t) + (num_riscs * sizeof(dfb_initializer_per_risc_t));
+            if (risc_mask & hart_bit) {
+                uint8_t risc_index = static_cast<uint8_t>(__builtin_popcount(risc_mask & ((1 << hartid) - 1)));
+                volatile dfb_initializer_per_risc_t* per_risc_ptr = per_risc_base + risc_index;
+
+                if (per_risc_ptr->flags.is_producer) {
+                    while (per_risc_ptr->flags.remapper_en && !overlay::RemapperAPI::is_remapper_enabled());
+                    // Capture once (first producer DFB): marks end of spin-wait, start of TC HW writes.
+                    // spinwait  = t_before_tc_writes - t_after_merged_loop
+                    // tc_writes = t_after_tc_init_loop - t_before_tc_writes
+                    if (!t_before_tc_writes) { t_before_tc_writes = rdcycle(); }
+                    for (uint8_t tc = 0; tc < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; tc++) {
+                        dfb::PackedTileCounter ptc = per_risc_ptr->packed_tile_counter[tc];
+                        uint8_t tensix_id = dfb::get_tensix_id(ptc);
+                        uint8_t tc_id = dfb::get_counter_id(ptc);
+                        overlay::llk_intf_reset(tensix_id, tc_id);
+                        overlay::llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
+                    }
+                    per_risc_ptr->num_tcs_and_init.tc_init_done = 1;
+                }
+            }
+
+            // Stride: no DM0 blob suffix.
+            base_ptr += sizeof(dfb_initializer_t) + (num_riscs * sizeof(dfb_initializer_per_risc_t));
+        }
     }
+    // Point 6: isolates llk_intf_reset + llk_intf_set_capacity cost across all TCs/DFBs.
+    // All DMs do TC init for their own producer TCs, so no hartid guard here.
+    // Interval [end_isr_enable_time → t_after_tc_init_loop] = TC HW init cost per DM.
+    // Interval [t_after_tc_init_loop → end_time] = wait_all_tcs_initialized spin time.
+    t_after_tc_init_loop = rdcycle();
 #endif
 
-    wait_all_tcs_initialized(dfb_config_base, num_dfbs, hartid);
+    wait_all_tcs_initialized(shared_base_ptr, num_dfbs, hartid);
     uint32_t end_time = rdcycle();
 
     // All DPRINTs deferred to here so zero DPRINT overhead falls inside the timed region.
     DPRINT << "start_time: " << start_time << ENDL();
 #ifndef COMPILE_FOR_TRISC
     if (hartid == 0) {
-        if (end_remapper_config_time) DPRINT << "end_remapper_config_time: " << end_remapper_config_time << ENDL();
-        if (end_isr_enable_time) DPRINT << "end_isr_enable_time: " << end_isr_enable_time << ENDL();
+        // Per-DFB breakdown (DM0 only — t_subpassA/B arrays only populated by DM0):
+        //   subpassA   = SW cost: L1 config reads + g_dfb_interface populate
+        //   subpassB_0 = SW cost: blob read + remapper API setup (no HW writes; deferred to post-loop)
+        //   subpassB_1 = HW cost: g_txn_dfb_descriptor populate + CMDBUF threshold register writes
+        uint32_t total_subpassA  = 0;
+        uint32_t total_subpassB0 = 0;
+        uint32_t total_subpassB1 = 0;
+        for (uint32_t i = 0; i < num_dfbs; i++) {
+            uint32_t prev_end   = (i == 0) ? start_time : t_subpassB[i - 1];
+            uint32_t elapsed_a  = t_subpassA[i] - prev_end;
+            uint32_t elapsed_b0 = t_subpassB_0[i] - t_subpassA[i];
+            uint32_t elapsed_b1 = t_subpassB[i] - t_subpassB_0[i];
+            total_subpassA  += elapsed_a;
+            total_subpassB0 += elapsed_b0;
+            total_subpassB1 += elapsed_b1;
+            DPRINT << "DFB" << i
+                   << " subpassA=" << elapsed_a
+                   << " subpassB_0=" << elapsed_b0
+                   << " subpassB_1=" << elapsed_b1
+                   << ENDL();
+        }
+        DPRINT << "total_subpassA=" << total_subpassA
+               << " total_subpassB0=" << total_subpassB0
+               << " total_subpassB1=" << total_subpassB1 << ENDL();
+
+        // DM0-only post-loop milestones (absolute timestamps, in execution order).
+        // [t_after_merged_loop      → t_after_write_pairs_up_to] = write_pairs_up_to() HW burst (0 if no remapper)
+        // [t_after_write_pairs_up_to → end_remapper_config_time]  = enable_remapper() cost
+        // [end_remapper_config_time  → t_after_isr_ie_writes]     = ISR IE register read/write cost
+        // [t_after_isr_ie_writes     → end_isr_enable_time]       = enable_dfb_tile_isr() cost
+        if (t_after_write_pairs_up_to) DPRINT << "t_after_write_pairs_up_to: " << t_after_write_pairs_up_to << ENDL();
+        if (end_remapper_config_time)  DPRINT << "end_remapper_config_time: "  << end_remapper_config_time  << ENDL();
+        if (t_after_isr_ie_writes)     DPRINT << "t_after_isr_ie_writes: "     << t_after_isr_ie_writes     << ENDL();
+        if (end_isr_enable_time)       DPRINT << "end_isr_enable_time: "       << end_isr_enable_time       << ENDL();
     }
+    // All DMs: spinwait vs TC HW write split, then TC init loop end.
+    if (t_before_tc_writes) {
+        DPRINT << "spinwait="   << (t_before_tc_writes - t_after_merged_loop)
+               << " tc_writes=" << (t_after_tc_init_loop - t_before_tc_writes) << ENDL();
+    }
+    if (t_after_tc_init_loop) DPRINT << "t_after_tc_init_loop: " << t_after_tc_init_loop << ENDL();
 #endif
+    // All RISCs (DMs + TRISCs): merged loop end and final end time.
+    // SW cost  = t_after_merged_loop - start_time
+    // wait cost= end_time - t_after_tc_init_loop  (DMs)
+    //          = end_time - t_after_merged_loop    (TRISCs, which have t_after_tc_init_loop=0)
+    if (t_after_merged_loop) DPRINT << "t_after_merged_loop: " << t_after_merged_loop << ENDL();
     DPRINT << "end_time: " << end_time << ENDL();
 }

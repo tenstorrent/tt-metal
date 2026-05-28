@@ -1163,24 +1163,51 @@ public:
             const CoreCoord logical_representative = core_range.start_coord;
 
             size_t max_byte_end = 0;
-            size_t sequential_byte_offset = 0;
-            for (const auto& dfb : dfbs_on_corerange) {
-                size_t dfb_byte_offset = 0;
-                if (!hal.has_tile_counter_registers()) {
-                    // WH/BH: DFBs reuse the CB slot format; slot N starts at N * 4 words.
-                    dfb_byte_offset =
+            if (!hal.has_tile_counter_registers()) {
+                // WH/BH: DFBs reuse the CB slot format; slot N starts at N * 4 words.
+                for (const auto& dfb : dfbs_on_corerange) {
+                    size_t dfb_byte_offset =
                         static_cast<size_t>(dfb->id) * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-                } else {
-                    // Quasar: DFBs are laid out sequentially in the dfb config region.
-                    dfb_byte_offset = sequential_byte_offset;
-                    sequential_byte_offset += dfb->serialized_size();
+                    auto serialized = dfb->serialize_for_core(logical_representative);
+                    TT_ASSERT(serialized.size() == dfb->serialized_size());
+                    TT_ASSERT(dfb_byte_offset + serialized.size() <= payload.size());
+                    std::copy(serialized.begin(), serialized.end(), payload.begin() + dfb_byte_offset);
+                    max_byte_end = std::max(max_byte_end, dfb_byte_offset + serialized.size());
+                }
+            } else {
+                // Quasar: layout is [dfb_global_header_t | DM0 blobs (all DFBs) | shared layouts (all DFBs)].
+                uint32_t total_dm0_blob_size = 0;
+                for (const auto& dfb : dfbs_on_corerange) {
+                    total_dm0_blob_size += dfb->dm0_blob_serialized_size();
                 }
 
-                auto serialized = dfb->serialize_for_core(logical_representative);
-                TT_ASSERT(serialized.size() == dfb->serialized_size());
-                TT_ASSERT(dfb_byte_offset + serialized.size() <= payload.size());
-                std::copy(serialized.begin(), serialized.end(), payload.begin() + dfb_byte_offset);
-                max_byte_end = std::max(max_byte_end, dfb_byte_offset + serialized.size());
+                // Global header.
+                dfb_global_header_t ghdr = {};
+                ghdr.per_dfb_layout_offset =
+                    static_cast<uint32_t>(sizeof(dfb_global_header_t)) + total_dm0_blob_size;
+                size_t write_offset = 0;
+                TT_ASSERT(write_offset + sizeof(ghdr) <= payload.size());
+                std::memcpy(payload.data() + write_offset, &ghdr, sizeof(ghdr));
+                write_offset += sizeof(ghdr);
+
+                // DM0 global blob: one blob per DFB, contiguous.
+                for (const auto& dfb : dfbs_on_corerange) {
+                    auto blob = dfb->serialize_dm0_blob_for_core(logical_representative);
+                    TT_ASSERT(blob.size() == dfb->dm0_blob_serialized_size());
+                    TT_ASSERT(write_offset + blob.size() <= payload.size());
+                    std::copy(blob.begin(), blob.end(), payload.begin() + write_offset);
+                    write_offset += blob.size();
+                }
+
+                // Shared per-DFB layouts (dfb_initializer_t + per_risc entries).
+                for (const auto& dfb : dfbs_on_corerange) {
+                    auto serialized = dfb->serialize_for_core(logical_representative);
+                    TT_ASSERT(serialized.size() == dfb->serialized_size());
+                    TT_ASSERT(write_offset + serialized.size() <= payload.size());
+                    std::copy(serialized.begin(), serialized.end(), payload.begin() + write_offset);
+                    write_offset += serialized.size();
+                }
+                max_byte_end = write_offset;
             }
 
             CoreRange virtual_range(virtual_start, virtual_end);

@@ -4,7 +4,7 @@
 
 // DM producer kernel for BenchmarkWorstCaseFour ISR latency benchmark.
 //
-// Four DM threads (DM0–DM3) run this kernel. Each DM checks its mhartid and
+// Five DM threads (DM1–DM4) run this kernel. Each DM checks its mhartid and
 // issues one implicit NOC read per DFB it produces, then calls finish().
 // DFB IDs are addressed via the low-level uint16_t constructor since
 // kernel_bindings_generated.h has no constants (DFBs are created with
@@ -18,20 +18,20 @@
 //   1Sx2A (DFBs 0–15): STRIDED producer, ALL consumer — 1-to-2 remapper entry each.
 //     DFB  0– 3 : DM2 → {Neo0, Neo2}
 //     DFB  4– 7 : DM3 → {Neo0, Neo2}
-//     DFB  8–11 : DM0 → {Neo1, Neo3}
+//     DFB  8–11 : DM4 → {Neo1, Neo3}
 //     DFB 12–15 : DM1 → {Neo1, Neo3}
 //
 //   1Sx1A (DFBs 16–23): STRIDED producer, ALL consumer — 1-to-1 remapper entry each.
 //     DFB 16–17 : DM2 → Neo1
 //     DFB 18–19 : DM3 → Neo1
 //     DFB 20–21 : DM2 → Neo3
-//     DFB 22–23 : DM0 → Neo0
+//     DFB 22–23 : DM4 → Neo0
 //
 // TC budget (16 per tensix, 64 total):
-//   t0: 4(DM0 prod 1Sx2A) + 4(Neo0 cons from DM2) + 4(Neo0 cons from DM3) + 2(DM0 prod 22-23) + 2(Neo0 cons 22-23) = 16
-//   t1: 4(DM1 prod 1Sx2A) + 4(Neo1 cons from DM0) + 4(Neo1 cons from DM1) + 2(Neo1 cons 16-17) + 2(Neo1 cons 18-19) = 16
+//   t0: 4(DM4 prod 1Sx2A) + 4(Neo0 cons from DM2) + 4(Neo0 cons from DM3) + 2(DM4 prod 22-23) + 2(Neo0 cons 22-23) = 16
+//   t1: 4(DM1 prod 1Sx2A) + 4(Neo1 cons from DM4) + 4(Neo1 cons from DM1) + 2(Neo1 cons 16-17) + 2(Neo1 cons 18-19) = 16
 //   t2: 4(DM2 prod 1Sx2A) + 4(Neo2 cons from DM2) + 4(Neo2 cons from DM3) + 2(DM2 prod 16-17) + 2(DM2 prod 20-21) = 16
-//   t3: 4(DM3 prod 1Sx2A) + 4(Neo3 cons from DM0) + 4(Neo3 cons from DM1) + 2(DM3 prod 18-19) + 2(Neo3 cons 20-21) = 16
+//   t3: 4(DM3 prod 1Sx2A) + 4(Neo3 cons from DM4) + 4(Neo3 cons from DM1) + 2(DM3 prod 18-19) + 2(Neo3 cons 20-21) = 16
 //
 // Remapper: 16 × 1-to-2 (all 16 one-to-many slots) + 8 × 1-to-1 = 24 entries, 40 set_clientR_slot writes.
 
@@ -49,7 +49,7 @@ void kernel_main() {
         // dfb.finish();
     };
 
-    if (dm_id == 0) {
+    if (dm_id == 4) {
         // 1Sx2A DFBs 8–11 (→ {Neo1, Neo3})
         issue_and_finish(8);  issue_and_finish(9);
         issue_and_finish(10); issue_and_finish(11);
@@ -73,5 +73,5 @@ void kernel_main() {
         // 1Sx1A DFBs 18–19 (→ Neo1)
         issue_and_finish(18); issue_and_finish(19);
     }
-    // DM4–DM7 are not used; they participate in no DFBs and do nothing.
+    // DM0 and DM5–DM7 are not used; they participate in no DFBs and do nothing.
 }
