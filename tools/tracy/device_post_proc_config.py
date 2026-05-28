@@ -439,20 +439,17 @@ class test_dispatch_cores_extended_worker(test_dispatch_cores):
     pass
 
 
-class test_dispatch_cores_extended_worker_dispatch_ops:
-    riscs = default_setup.riscs
-    riscTypes = default_setup.riscTypes
-    timerAnalysis = {
-        "dispatch_total_cq_cmd_op_time": default_setup.timerAnalysis["dispatch_total_cq_cmd_op_time"],
-        "dispatch_go_send_wait_time": default_setup.timerAnalysis["dispatch_go_send_wait_time"],
-    }
-    displayStats = default_setup.displayStats
+class test_dispatch_cores_extended_worker_dispatch_ops(default_setup):
     detectOps = True
-    outputFolder = default_setup.outputFolder
-    deviceInputLog = default_setup.deviceInputLog
-    deviceAnalysisData = default_setup.deviceAnalysisData
-    deviceStatsTXT = default_setup.deviceStatsTXT
-    deviceTarball = default_setup.deviceTarball
+
+
+# Set timerAnalysis outside the class body so MergeMetaclass doesn't fold in
+# default_setup's full timerAnalysis. This class intentionally runs only the
+# two dispatch_ops analyses verify_stats checks at the call site.
+test_dispatch_cores_extended_worker_dispatch_ops.timerAnalysis = {
+    "dispatch_total_cq_cmd_op_time": default_setup.timerAnalysis["dispatch_total_cq_cmd_op_time"],
+    "dispatch_go_send_wait_time": default_setup.timerAnalysis["dispatch_go_send_wait_time"],
+}
 
 
 class test_ethernet_dispatch_cores(default_setup):
