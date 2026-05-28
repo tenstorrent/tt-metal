@@ -113,6 +113,16 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
 void AllToAllCombineDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
+// DEBUG-ONLY: force a unique hash per call → guarantees cache miss on every
+// dispatch.  If this makes the failing test pass, the bug is cache-hit-on-stale.
+ttsl::hash::hash_t AllToAllCombineDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    static std::atomic<uint64_t> counter{0};
+    const uint64_t unique = counter.fetch_add(1, std::memory_order_relaxed);
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<AllToAllCombineDeviceOperation>, attrs, tensor_args, unique);
+}
+
 AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;

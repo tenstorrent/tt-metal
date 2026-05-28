@@ -86,6 +86,11 @@ struct AllToAllCombineDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    // DEBUG-ONLY (branch dgomez/debug-a2a-force-cache-miss): force a fresh cache entry
+    // on every dispatch by salting the hash with an ever-incrementing counter.  If this
+    // makes the failing test pass, the bug is cache-hit-on-stale-state (Audrey pattern).
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::operations::ccl
 
