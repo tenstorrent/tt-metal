@@ -17,8 +17,7 @@ namespace sfpu
 
 // Int32 multiply ported from the BH DISABLE_SFPLOADMACRO path.
 // Uses SFPMUL24 (24-bit partial products) + shifts to produce a full 32-bit
-// result. Quasar uses 2's complement natively so no sign-magnitude conversion
-// is needed. (needed for now for ELWADD to dest)
+// result.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
 inline void _mul_int32_(const int iterations, const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
