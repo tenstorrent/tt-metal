@@ -743,11 +743,12 @@ def test_ring_joint_sdpa(
 
 
 @pytest.mark.parametrize(
-    "mesh_device_id",
-    mesh_device_map.keys(),
+    "mesh_device_id, mesh_device",
+    [(k, v[0]) for k, v in mesh_device_map.items()],
     ids=mesh_device_map.keys(),
+    indirect=["mesh_device"],
 )
-def test_ring_joint_sdpa_perf_table(mesh_device_id):
+def test_ring_joint_sdpa_perf_table(mesh_device_id, mesh_device):
     results = []
     for model_input_id, model_input_shape in benchmark_model_input_shapes.items():
         parallel_config = parallel_config_map[mesh_device_id][model_input_id]
