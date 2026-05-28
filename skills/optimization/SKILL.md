@@ -1,5 +1,22 @@
 # SKILL: Performance Optimization
 
+## Scope: per-block
+
+This skill is **per-block**. It tunes one TTNN module at a time:
+compute kernel config (HiFi4 + fp32_dest_acc), memory layout (DRAM
+TILE), weight dtype, sharding individual matmuls, fusing
+block-internal sequences.
+
+For **pipeline-level perf** — cross-block refactors like
+`paged_update_cache` migration, reusable metal trace across
+`generate()` calls, integrated tracy on the full AR pipeline — see
+`skills/perf/SKILL.md`. Those patterns require touching multiple
+block files at once and don't fit per-block dispatch.
+
+A leaf block already using HiFi4 + fp32_dest_acc + bf16 DRAM TILE is
+at-ceiling for this skill. "No improvement found → status=ok" is a
+valid outcome.
+
 ## Purpose
 Optimize TTNN models for throughput using a profiler-driven loop: **measure → bucket → attack → verify**. Cover tracing, sharded ops, memory placement, and op fusion.
 
