@@ -422,6 +422,7 @@ class LTXTransformerBlock(Module):
                 rope_sin=video_cross_pe_sin,
                 k_rope_cos=audio_cross_pe_cos_full,
                 k_rope_sin=audio_cross_pe_sin_full,
+                trans_mat=trans_mat,
             )
             video_1BND = ttnn.addcmul(video_1BND, a2v_output, v_ca_gate)
 
@@ -446,6 +447,7 @@ class LTXTransformerBlock(Module):
                 rope_sin=audio_cross_pe_sin,
                 k_rope_cos=video_cross_pe_cos_full,
                 k_rope_sin=video_cross_pe_sin_full,
+                trans_mat=trans_mat,
             )
             audio_1BND = ttnn.addcmul(audio_1BND, v2a_output, a_ca_gate)
 

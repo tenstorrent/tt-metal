@@ -152,6 +152,7 @@ class LTXFastPipeline(LTXAVPipeline):
             a_xpe_cos_full,
             a_xpe_sin_full,
         ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
+        trans_mat = self._prepare_trans_mat()
         tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
         tt_v_pad_mask_sp, tt_v_pad_mask_full = self._prepare_video_masks(video_N, video_N_real)
 
@@ -214,7 +215,7 @@ class LTXFastPipeline(LTXAVPipeline):
                 audio_rope_cos=a_cos,
                 audio_rope_sin=a_sin,
                 audio_N=audio_N,
-                trans_mat=None,
+                trans_mat=trans_mat,
                 timestep_torch=torch.tensor([sigma]),
                 video_cross_pe_cos=v_xpe_cos,
                 video_cross_pe_sin=v_xpe_sin,

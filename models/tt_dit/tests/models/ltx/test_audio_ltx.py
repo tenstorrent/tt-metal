@@ -691,20 +691,75 @@ def test_av_model_pcc_vs_reference(mesh_device: ttnn.MeshDevice, sp_axis: int, t
         freq_grid_generator=generate_freq_grid_np,
     )
 
-    tt_vc = bf16_tensor_2dshard(v_cos, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_vs = bf16_tensor_2dshard(v_sin, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_ac = bf16_tensor_2dshard(a_cos, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_as = bf16_tensor_2dshard(a_sin, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    # TT runtime uses INTERLEAVED + trans_mat — reuse ref's INTERLEAVED precompute,
+    # reshape (1, N, dim) → (1, H, N, head_dim) for the kernel.
+    def _to_bhnd(t, num_heads):
+        B, N, dim = t.shape
+        return t.reshape(B, N, num_heads, dim // num_heads).permute(0, 2, 1, 3).contiguous()
 
-    # Cross PE: SP+TP for Q, TP-only for K
-    tt_v_xcos = bf16_tensor_2dshard(v_cross_cos, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_v_xsin = bf16_tensor_2dshard(v_cross_sin, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_a_xcos = bf16_tensor_2dshard(a_cross_cos, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_a_xsin = bf16_tensor_2dshard(a_cross_sin, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_v_xcos_full = bf16_tensor(v_cross_cos, device=mesh_device, mesh_axis=tp_axis, shard_dim=1)
-    tt_v_xsin_full = bf16_tensor(v_cross_sin, device=mesh_device, mesh_axis=tp_axis, shard_dim=1)
-    tt_a_xcos_full = bf16_tensor(a_cross_cos, device=mesh_device, mesh_axis=tp_axis, shard_dim=1)
-    tt_a_xsin_full = bf16_tensor(a_cross_sin, device=mesh_device, mesh_axis=tp_axis, shard_dim=1)
+    v_cos_i, v_sin_i = ref_precompute(
+        v_pos.bfloat16(),
+        dim=4096,
+        out_dtype=torch.float32,
+        theta=10000.0,
+        max_pos=[20, 2048, 2048],
+        use_middle_indices_grid=True,
+        num_attention_heads=32,
+        rope_type=RefLTXRopeType.INTERLEAVED,
+        freq_grid_generator=generate_freq_grid_np,
+    )
+    a_cos_i, a_sin_i = ref_precompute(
+        a_pos.bfloat16(),
+        dim=2048,
+        out_dtype=torch.float32,
+        theta=10000.0,
+        max_pos=[20],
+        use_middle_indices_grid=True,
+        num_attention_heads=32,
+        rope_type=RefLTXRopeType.INTERLEAVED,
+        freq_grid_generator=generate_freq_grid_np,
+    )
+    v_xcos_i, v_xsin_i = ref_precompute(
+        v_pos[:, 0:1, :].bfloat16(),
+        dim=2048,
+        out_dtype=torch.float32,
+        theta=10000.0,
+        max_pos=[cross_pe_max_pos],
+        use_middle_indices_grid=True,
+        num_attention_heads=32,
+        rope_type=RefLTXRopeType.INTERLEAVED,
+        freq_grid_generator=generate_freq_grid_np,
+    )
+    a_xcos_i, a_xsin_i = ref_precompute(
+        a_pos.bfloat16(),
+        dim=2048,
+        out_dtype=torch.float32,
+        theta=10000.0,
+        max_pos=[cross_pe_max_pos],
+        use_middle_indices_grid=True,
+        num_attention_heads=32,
+        rope_type=RefLTXRopeType.INTERLEAVED,
+        freq_grid_generator=generate_freq_grid_np,
+    )
+    v_cos_i, v_sin_i = _to_bhnd(v_cos_i, 32), _to_bhnd(v_sin_i, 32)
+    a_cos_i, a_sin_i = _to_bhnd(a_cos_i, 32), _to_bhnd(a_sin_i, 32)
+    v_xcos_i, v_xsin_i = _to_bhnd(v_xcos_i, 32), _to_bhnd(v_xsin_i, 32)
+    a_xcos_i, a_xsin_i = _to_bhnd(a_xcos_i, 32), _to_bhnd(a_xsin_i, 32)
+
+    tt_vc = bf16_tensor_2dshard(v_cos_i, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_vs = bf16_tensor_2dshard(v_sin_i, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_ac = bf16_tensor_2dshard(a_cos_i, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_as = bf16_tensor_2dshard(a_sin_i, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+
+    tt_v_xcos = bf16_tensor_2dshard(v_xcos_i, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_v_xsin = bf16_tensor_2dshard(v_xsin_i, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_a_xcos = bf16_tensor_2dshard(a_xcos_i, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_a_xsin = bf16_tensor_2dshard(a_xsin_i, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+    tt_v_xcos_full = bf16_tensor(v_xcos_i, device=mesh_device, mesh_axis=tp_axis, shard_dim=1)
+    tt_v_xsin_full = bf16_tensor(v_xsin_i, device=mesh_device, mesh_axis=tp_axis, shard_dim=1)
+    tt_a_xcos_full = bf16_tensor(a_xcos_i, device=mesh_device, mesh_axis=tp_axis, shard_dim=1)
+    tt_a_xsin_full = bf16_tensor(a_xsin_i, device=mesh_device, mesh_axis=tp_axis, shard_dim=1)
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
 
     tt_vp = bf16_tensor(video_prompt.unsqueeze(0), device=mesh_device)
     tt_ap = bf16_tensor(audio_prompt.unsqueeze(0), device=mesh_device)
@@ -720,7 +775,7 @@ def test_av_model_pcc_vs_reference(mesh_device: ttnn.MeshDevice, sp_axis: int, t
         audio_rope_cos=tt_ac,
         audio_rope_sin=tt_as,
         audio_N=audio_N,
-        trans_mat=None,  # Split RoPE
+        trans_mat=tt_trans_mat,
         timestep_torch=torch.tensor([sigma]),
         video_cross_pe_cos=tt_v_xcos,
         video_cross_pe_sin=tt_v_xsin,
