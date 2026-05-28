@@ -12,7 +12,7 @@ the mid-run sync path), then closes the device. The C++ mesh device logs
 sync cycle — the outer pytest scrapes those lines and validates them.
 
 Meant to be run under Tracy capture by the outer test
-(test_realtime_profiler.py::test_sync_accuracy).
+(test_realtime_profiler_sync_accuracy.py).
 """
 
 import torch
