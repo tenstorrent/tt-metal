@@ -276,14 +276,14 @@ class TtPixtralBlock:
         normed = _vision_rms_norm(x, self.attn_norm_w, self.compute_kernel_config)
         attn_out = self.attn.forward(normed, cos, sin)
         ttnn.deallocate(normed)
-        x = ttnn.add(residual, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(residual, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
 
         residual = x
         normed = _vision_rms_norm(x, self.ffn_norm_w, self.compute_kernel_config)
         mlp_out = self.mlp.forward(normed)
         ttnn.deallocate(normed)
-        x = ttnn.add(residual, mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(residual, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(mlp_out)
         return x
 
@@ -382,14 +382,16 @@ class TtPixtralVisionTower:
         assert self._cached_cos is not None and self._cached_sin is not None
 
         x, h_patches, w_patches = self.patch_conv.forward_device(image_tt, h_patches, w_patches)
-        # patch_conv → ln_pre stays L1 WIDTH_SHARDED. Convert to DRAM interleaved
-        # before entering the blocks (their residual-add path is DRAM today).
+        # patch_conv → ln_pre stays L1 WIDTH_SHARDED. Convert to L1 interleaved
+        # before entering the blocks (their residual-add path is L1).
         x = _vision_rms_norm(x, self.ln_pre_w, self.compute_kernel_config)
-        x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
 
         for blk in self.blocks:
             x = blk.forward(x, self._cached_cos, self._cached_sin)
 
+        # Final features → DRAM for downstream consumers (projector, host copy, etc.).
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         return x, h_patches, w_patches
 
     def forward(self, image: torch.Tensor) -> Tuple[ttnn.Tensor, int, int]:
