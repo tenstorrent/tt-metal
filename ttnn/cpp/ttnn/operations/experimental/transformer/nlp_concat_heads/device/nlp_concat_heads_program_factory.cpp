@@ -170,7 +170,7 @@ ProgramDescriptor NLPConcatHeadsProgramFactory::create_descriptor(
         uint32_t nheads_second_risc = num_blocks_per_core_group_1 - nheads_first_risc;
         // Mirror SetRuntimeArgs(program, kernel, all_cores, args) by emplacing the same
         // per-core args on every logical core in the sharded range set.
-        for (const auto& core : corerange_to_cores(all_cores, num_cores, /*row_major=*/true)) {
+        for (const auto& core : corerange_to_cores(all_cores, num_cores, /*row_wise=*/true)) {
             reader_desc.emplace_runtime_args(
                 core,
                 {
