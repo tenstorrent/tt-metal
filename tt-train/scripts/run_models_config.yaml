@@ -90,6 +90,10 @@ models:
       - "--batch_size=160"
       - "--max_steps=2048"
     mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_32_1_ring_ring.textproto"
+    tokenize:
+      text_file: "data/shakespeare.txt"
+      hf_tokenizer: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+      output_file: "data/tokenized_shakespeare_tinyllama"
 
   - name: "Llama 8B TP=8 DDP=4 Shakespeare"
     filename: "llama_8b_tp8_ddp4_shakespeare"
