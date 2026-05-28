@@ -5,6 +5,7 @@
 #include <string>
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
@@ -80,11 +81,11 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     // Extract from operation_attributes and tensor_args
-    const auto& a = tensor_args.input;
-    const auto& b = tensor_args.residual_input_tensor;
-    const auto& gamma = tensor_args.weight;
-    const auto& beta = tensor_args.bias;
-    auto& output = tensor_return_value;
+    const auto& a = tensor_args.input.mesh_tensor();
+    const auto b = as_optional_mesh_tensor(tensor_args.residual_input_tensor);
+    const auto gamma = as_optional_mesh_tensor(tensor_args.weight);
+    const auto beta = as_optional_mesh_tensor(tensor_args.bias);
+    const auto& output = tensor_return_value.mesh_tensor();
     bool rms_norm = operation_attributes.norm_type == LayerNormType::RMSNORM;
     float eps = operation_attributes.eps;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
@@ -127,7 +128,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     //                       Device Setup
     //////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    IDevice* device = a.device();
+    IDevice* device = &a.mutable_device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                Circular Buffer Data Format Setup
@@ -278,7 +279,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         im2_t * single_tile_size,
         reciprocal_CB_size_bytes,
         in_rm_size + out_rm_size,
-        a.device()->l1_size_per_core());
+        a.device().l1_size_per_core());
     // For input_is_row_major we also allow large_tensor_needed (same L1 logic applies).
     // use_row_major_kernel (row-major gamma/beta) still skips large_tensor check as before.
     if (!use_row_major_kernel || input_is_row_major) {
@@ -350,35 +351,27 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         reader_compile_time_args.push_back((std::uint32_t)use_welford);
     }
     reader_compile_time_args.push_back(W);
-    tt::tt_metal::TensorAccessorArgs(a.mesh_tensor()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(
-        b ? ttsl::optional_reference<const MeshTensor>(b->mesh_tensor()) : ttsl::optional_reference<const MeshTensor>{})
-        .append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(
-        gamma ? ttsl::optional_reference<const MeshTensor>(gamma->mesh_tensor())
-              : ttsl::optional_reference<const MeshTensor>{})
-        .append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(
-        beta ? ttsl::optional_reference<const MeshTensor>(beta->mesh_tensor())
-             : ttsl::optional_reference<const MeshTensor>{})
-        .append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(a).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(b).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(gamma).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(beta).append_to(reader_compile_time_args);
 
     if (input_is_row_major) {
         // For rm_input readers: element size of input tensor for address stride calculations
         reader_compile_time_args.push_back(static_cast<uint32_t>(a.element_size()));
     } else if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
-        reader_compile_time_args.push_back(gamma_stick_size);
+        reader_compile_time_args.push_back(static_cast<uint32_t>(gamma_stick_size));
     } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
         auto beta_stick_size = beta.value().padded_shape()[-1] * beta.value().element_size();
-        reader_compile_time_args.push_back(beta_stick_size);
+        reader_compile_time_args.push_back(static_cast<uint32_t>(beta_stick_size));
     } else {
         reader_compile_time_args.push_back(tile_size(datatype_to_dataformat_converter(a.dtype())));
     }
 
     // Build compile time args for writer kernel
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
-    tt::tt_metal::TensorAccessorArgs(output.mesh_tensor()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output).append_to(writer_compile_time_args);
     if (input_is_row_major) {
         // RM writer needs elem_size to compute per-row NOC write sizes
         writer_compile_time_args.push_back(static_cast<uint32_t>(output.element_size()));
@@ -623,24 +616,24 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         // (the kernel reads slot==0 as "no tensor"). The variant in RTArgList accepts uint32_t and
         // MeshTensor refs interchangeably.
         KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(a.mesh_tensor());               // slot 0: src DRAM addr
+        reader_args.push_back(a);                             // slot 0: src DRAM addr
         reader_args.push_back(num_tile_rows_per_core);        // slot 1
         reader_args.push_back(Wt);                            // slot 2
         reader_args.push_back(reader_start);                  // slot 3
         reader_args.push_back(packed_one_value);              // slot 4
         reader_args.push_back(std::bit_cast<uint32_t>(eps));  // slot 5
         if (gamma.has_value()) {
-            reader_args.push_back(gamma->mesh_tensor());  // slot 6: gamma addr
+            reader_args.push_back(*gamma);  // slot 6: gamma addr
         } else {
             reader_args.push_back(0u);
         }
         if (beta.has_value()) {
-            reader_args.push_back(beta->mesh_tensor());  // slot 7: beta addr
+            reader_args.push_back(*beta);  // slot 7: beta addr
         } else {
             reader_args.push_back(0u);
         }
         if (b.has_value()) {
-            reader_args.push_back(b->mesh_tensor());  // slot 8: b addr
+            reader_args.push_back(*b);  // slot 8: b addr
         } else {
             reader_args.push_back(0u);
         }
@@ -654,10 +647,9 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         const uint32_t writer_start = input_is_row_major ? curr_row : tile_offset;
         if (input_is_row_major) {
             writer_kernel_desc.emplace_runtime_args(
-                core, {output.mesh_tensor(), Wt, num_tile_rows_per_core, writer_start, H_logical});
+                core, {output, Wt, num_tile_rows_per_core, writer_start, H_logical});
         } else {
-            writer_kernel_desc.emplace_runtime_args(
-                core, {output.mesh_tensor(), Wt, num_tile_rows_per_core, writer_start});
+            writer_kernel_desc.emplace_runtime_args(core, {output, Wt, num_tile_rows_per_core, writer_start});
         }
 
         compute_kernel_desc.emplace_runtime_args(core, {num_tile_rows_per_core});
