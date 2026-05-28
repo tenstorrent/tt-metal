@@ -707,20 +707,20 @@ def _gemma3_text_demo_device_params():
                 "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",
                 "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
             ],  # input_prompts: list of 8 files, one per sweep step
-            True,   # instruct mode
-            8,      # repeat_batches (one per seqlen step)
-            128 * 1024,  # max_seq_len
-            1,      # batch_size
-            32,     # max_generated_tokens (minimal decode to verify prefill works)
-            True,   # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            True,  # instruct mode
+            8,  # repeat_batches (one per seqlen step)
+            64 * 1024,  # max_seq_len # NOTE: might have to halve this to 64 * 1024
+            1,  # batch_size
+            32,  # max_generated_tokens (minimal decode to verify prefill works)
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params
-            True,   # stop_at_eos
-            True,   # ci_only
-            1,      # data_parallel
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,   # enable_trace
+            True,  # enable_trace
         ),
     ],
     ids=[
@@ -922,12 +922,12 @@ def test_demo_text(
     is_seqlen_sweep = isinstance(input_prompts, list) and len(input_prompts) > 1 and isinstance(input_prompts[0], str)
     if is_seqlen_sweep:  # seqlen-sweep: list of file paths, loaded per step in repeat_batch_prompts
         seqlen_sweep_files = input_prompts
+        logger.info(f"Seqlen sweep: running {len(seqlen_sweep_files)} steps: {[f.split('_')[-1] for f in seqlen_sweep_files]}")
     elif len(input_prompts) == 1:  # Manual input
         input_prompts = input_prompts * global_batch_size
     else:  # Inputs from file
         input_prompts = load_inputs(input_prompts, global_batch_size, input_prompts)
     profiler.end("loading_inputs")
-
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
@@ -1000,8 +1000,9 @@ def test_demo_text(
             repeat_batch_prompts.append(step_prompts)
     else:
         for i in range(repeat_batches):
-            repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
-
+            repeat_batch_prompts.append(
+                [input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))]
+            )
     num_tokens_generated_decode = []
 
     logger.info("Starting inference...")
@@ -1218,7 +1219,7 @@ def test_demo_text(
                 expected_accuracy_metrics={"top1": min_top1_acc, "top5": min_top5_acc},
             )
 
-    profiler.end(f"inference_decode", iteration=batch_idx)
+        profiler.end(f"inference_decode", iteration=batch_idx)
 
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
@@ -1368,18 +1369,20 @@ def test_demo_text(
             )
 
         # Also save the avg decode performance for the 128 iterations (excluding the compile time)
-        inference_decode_time_first_128 = sum(
-            profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, 128)
-        )
-        benchmark_data.add_measurement(
-            profiler,
-            0,
-            "inference_decode",
-            "avg_decode_time_first_128",
-            inference_decode_time_first_128 * 1000 / 127,
-            step_warm_up_num_iterations=None,
-            target=None,
-        )
+        # Guard: only meaningful when enough decode steps were generated (e.g. not for seqlen-sweep with 32 tokens)
+        if iteration > 128:
+            inference_decode_time_first_128 = sum(
+                profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, 128)
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_decode",
+                "avg_decode_time_first_128",
+                inference_decode_time_first_128 * 1000 / 127,
+                step_warm_up_num_iterations=None,
+                target=None,
+            )
         if token_accuracy:
             benchmark_data.add_measurement(
                 profiler,
