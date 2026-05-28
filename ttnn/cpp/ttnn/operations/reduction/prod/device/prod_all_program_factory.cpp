@@ -14,7 +14,7 @@ using namespace tt::tt_metal;
 ProgramDescriptor ProdAllDeviceOperation::ProdAllProgramFactory::create_descriptor(
     const ProdAllParams& /*operation_attributes*/, const ProdAllInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input.mesh_tensor();
-    auto& output = tensor_return_value.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
 
     ProgramDescriptor desc;
 

@@ -23,7 +23,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     using namespace tt;
     using namespace tt::tt_metal;
     const auto& a = tensor_args.mesh_tensor();
-    auto& output = tensor_return_value.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
