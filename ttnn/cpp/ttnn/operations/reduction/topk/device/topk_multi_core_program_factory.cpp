@@ -9,6 +9,7 @@
 #include "tt_stl/assert.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include <cmath>
 #include <map>
