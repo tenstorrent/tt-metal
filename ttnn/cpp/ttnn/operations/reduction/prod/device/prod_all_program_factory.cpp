@@ -13,8 +13,8 @@ using namespace tt::tt_metal;
 
 ProgramDescriptor ProdAllDeviceOperation::ProdAllProgramFactory::create_descriptor(
     const ProdAllParams& /*operation_attributes*/, const ProdAllInputs& tensor_args, Tensor& tensor_return_value) {
-    const auto& input = tensor_args.input;
-    auto& output = tensor_return_value;
+    const auto& input = tensor_args.input.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
 
     ProgramDescriptor desc;
 
@@ -61,13 +61,10 @@ ProgramDescriptor ProdAllDeviceOperation::ProdAllProgramFactory::create_descript
         }}},
     });
 
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
-
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output).append_to(writer_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -105,8 +102,8 @@ ProgramDescriptor ProdAllDeviceOperation::ProdAllProgramFactory::create_descript
     };
 
     CoreCoord core_coord = {0, 0};
-    reader_desc.emplace_runtime_args(core_coord, {src_buffer, num_tiles, 0u});
-    writer_desc.emplace_runtime_args(core_coord, {dst_buffer, /*num_tiles=*/1u, 0u});
+    reader_desc.emplace_runtime_args(core_coord, {input, num_tiles, 0u});
+    writer_desc.emplace_runtime_args(core_coord, {output, /*num_tiles=*/1u, 0u});
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
