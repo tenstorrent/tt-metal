@@ -52,6 +52,12 @@ if(ENABLE_TRACY AND TARGET TracyClient)
     set_target_properties(
         TracyClient
         PROPERTIES
+            EXCLUDE_FROM_ALL
+                TRUE
+            LIBRARY_OUTPUT_DIRECTORY
+                "${PROJECT_BINARY_DIR}/lib"
+            ARCHIVE_OUTPUT_DIRECTORY
+                "${PROJECT_BINARY_DIR}/lib"
             OUTPUT_NAME
                 "tracy"
     )
