@@ -21,6 +21,29 @@ L1-budget-bounded chunked design:
 
 Three reader passes per strip is the L1-budget trade-off: every CB is bounded
 by BLOCK_SIZE (or by a constant), so per-core L1 stays constant regardless of W.
+
+Refinement 3 — Non-tile-aligned shapes (W / H % 32 != 0):
+  * W non-aligned: Wt uses ceil division (the last reduce-row tile holds only
+    `partial_w` valid cols of input data). The reader uses
+    `prepare_partial_reduce_scalers<cb_scaler, SUM, REDUCE_ROW, partial_w>(1/W)`
+    to emit a (full, partial) scaler pair. The compute side passes
+    `ReducePartialScaler::last_tile_at(1)` into Pass A and Pass B's
+    `accumulate_reduce_block<SUM, REDUCE_ROW>` calls — the partial scaler tile
+    zeroes out col-0 rows >= partial_w, masking the padded W positions so they
+    contribute 0 to the SUM (and hence 0 to mean / variance). Pass C's
+    sub<COL> + mul_in_place<COL> + optional mul<ROW>/add<ROW> compute junk in
+    the padded positions; the writer doesn't write those positions back.
+  * H non-aligned: num_strips uses ceil division. The LAST strip globally has
+    `last_strip_rows < 32` valid rows; the reader/writer pass that count to the
+    `read_sticks_for_tilize` / `write_sticks_after_untilize` helpers which
+    natively handle partial-row blocks (helper docs: "Handles non-tile-aligned
+    heights by … only writing the valid rows"). Compute is unchanged — each of
+    the 32 tile rows is normalized independently, padded rows compute junk but
+    are never written.
+  * Last-chunk byte counts: when W is non-aligned, the last chunk's reader/writer
+    `row_bytes` differs from the full-chunk count (the chunk's W coverage
+    extends past the logical W). Pass `*_chunk_bytes_last` so the helpers issue
+    the correctly-sized noc_async_read / noc_async_write per stick.
 """
 
 from pathlib import Path
@@ -88,8 +111,24 @@ def create_program_descriptor(
         NC *= d
 
     total_rows = NC * H  # one RM stick per row
-    num_strips = total_rows // TILE_DIM
-    Wt = W // TILE_DIM
+
+    # ------- Refinement 3: ceil-division for non-tile-aligned shapes -------
+    # H non-aligned: num_strips uses ceil; the last strip globally has
+    #   `last_strip_rows < 32` valid rows. The reader/writer helpers natively
+    #   handle partial-row blocks (the kernel passes that count for the last
+    #   strip on the last core).
+    # W non-aligned: Wt uses ceil; the last reduce-row tile is partially valid
+    #   (partial_w valid cols). The reader emits a (full, partial) scaler tile
+    #   pair via `prepare_partial_reduce_scalers`; the compute side uses
+    #   `ReducePartialScaler::last_tile_at(1)` for the last reduce-dim iteration
+    #   in both Pass A (mean) and Pass B (variance). When tile-aligned, both
+    #   variables collapse to the legacy values (32, 0).
+    num_strips = (total_rows + TILE_DIM - 1) // TILE_DIM
+    Wt = (W + TILE_DIM - 1) // TILE_DIM
+    partial_w = W % TILE_DIM  # 0 ⇒ tile-aligned, else number of valid W cols in the LAST tile
+    has_partial_w = 1 if partial_w > 0 else 0
+    last_strip_idx = num_strips - 1
+    last_strip_rows = total_rows - last_strip_idx * TILE_DIM  # ∈ [1, 32]; 32 when aligned
 
     BLOCK_SIZE = _pick_block_size(Wt)
     NUM_BLOCKS = Wt // BLOCK_SIZE
@@ -106,18 +145,33 @@ def create_program_descriptor(
     output_bpe = output_tensor.element_size()
     affine_bpe = gamma.element_size() if has_gamma else (beta.element_size() if has_beta else input_bpe)
 
-    # Input / output stick sizes (one RM stick per row, W * bpe bytes).
+    # Input / output stick sizes (one RM stick per row, W * bpe bytes —
+    # logical W, not tile-padded). For non-aligned W this is < tile_row_bytes
+    # and the read/write helpers pad the L1 stride internally.
     input_page_size = input_tensor.buffer_page_size()
     output_page_size = output_tensor.buffer_page_size()
     assert input_page_size == W * input_bpe, f"input page size mismatch: {input_page_size} != {W * input_bpe}"
     assert output_page_size == W * output_bpe, f"output page size mismatch: {output_page_size} != {W * output_bpe}"
 
     # Bytes for one strip-chunk per row:
-    #   input/output:  BLOCK_SIZE tiles wide * 32 elements/tile * input_bpe
+    #   input/output:  BLOCK_SIZE tiles wide * 32 elements/tile * bpe
     #   gamma/beta:    BLOCK_SIZE tiles wide * 32 elements/tile * affine_bpe
     # These can differ when input dtype != affine dtype (mixed-precision).
     input_chunk_bytes = BLOCK_SIZE * TILE_DIM * input_bpe
     affine_chunk_bytes = BLOCK_SIZE * TILE_DIM * affine_bpe
+    output_chunk_bytes = BLOCK_SIZE * TILE_DIM * output_bpe
+
+    # ------- Refinement 3: last-chunk byte counts -------
+    # When W is non-aligned, the LAST chunk's actual valid byte coverage is less
+    # than a full chunk because the chunk's tile-padded W extends past the
+    # logical W. Pass these as separate CT args so the helpers issue the right
+    # noc_async_read / noc_async_write byte counts on the last chunk.
+    # When tile-aligned (partial_w == 0), these equal the full-chunk values.
+    full_chunk_bytes_w = BLOCK_SIZE * TILE_DIM  # # of W positions per full chunk
+    last_chunk_w_positions = W - (NUM_BLOCKS - 1) * full_chunk_bytes_w  # ∈ [1, full_chunk_bytes_w]
+    input_chunk_bytes_last = last_chunk_w_positions * input_bpe
+    output_chunk_bytes_last = last_chunk_w_positions * output_bpe
+    affine_chunk_bytes_last = last_chunk_w_positions * affine_bpe
 
     # ------- CB tile sizes (Refinement 1) -------
     # Reader/writer CBs follow their backing tensor's dtype. Scaler CB stays
@@ -195,9 +249,14 @@ def create_program_descriptor(
                 )
             ],
         ),
-        # cb_scaler: 1 tile, fp32 (preserves precision — see scaler_dtype rationale above).
+        # cb_scaler: 1 tile when W is tile-aligned, 2 tiles when partial_w > 0
+        # (Refinement 3: full+partial scaler pair, both fp32). The compute side
+        # uses `ReducePartialScaler::last_tile_at(1)` to pick tile 1 for the
+        # last reduce-dim iteration. Both tiles share the same scaler value
+        # (1/W); the partial tile zeroes out col-0 rows >= partial_w to mask
+        # the padded W positions.
         ttnn.CBDescriptor(
-            total_size=scaler_page_size,
+            total_size=(2 if has_partial_w else 1) * scaler_page_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
@@ -316,17 +375,24 @@ def create_program_descriptor(
         )
 
     # ------- Compile-time args -------
-    # Reader CT args (Refinement 1: split chunk_bytes into input vs affine):
-    #   [0] BLOCK_SIZE
-    #   [1] NUM_BLOCKS
-    #   [2] input_chunk_bytes  (BLOCK_SIZE * 32 * input_bpe)
-    #   [3] affine_chunk_bytes (BLOCK_SIZE * 32 * affine_bpe) — for gamma/beta
-    #   [4] scaler_bits        (1.0f / W, fp32 bit pattern)
-    #   [5] HAS_GAMMA          (0 or 1)
-    #   [6] HAS_BETA           (0 or 1)
-    #   [7..] TensorAccessorArgs(input_tensor)
-    #   [..]  TensorAccessorArgs(gamma) — placeholder when absent
-    #   [..]  TensorAccessorArgs(beta)  — placeholder when absent
+    # Reader CT args (Refinement 1: split chunk_bytes; Refinement 3: partial-W
+    # and partial-H args appended at the end so the TensorAccessorArgs offsets
+    # used in the reader's `TensorAccessorArgs<N>()` are preserved):
+    #   [0]  BLOCK_SIZE
+    #   [1]  NUM_BLOCKS
+    #   [2]  input_chunk_bytes       (BLOCK_SIZE * 32 * input_bpe)
+    #   [3]  affine_chunk_bytes      (BLOCK_SIZE * 32 * affine_bpe) — for gamma/beta
+    #   [4]  scaler_bits             (1.0f / W, fp32 bit pattern)
+    #   [5]  HAS_GAMMA               (0 or 1)
+    #   [6]  HAS_BETA                (0 or 1)
+    #   [7]  partial_w               Refinement 3: # of valid W cols in the LAST tile (0 ⇒ aligned)
+    #   [8]  input_chunk_bytes_last  Refinement 3: actual valid bytes for the last chunk
+    #   [9]  affine_chunk_bytes_last Refinement 3: same for gamma/beta
+    #   [10] last_strip_idx          Refinement 3: index of the global last strip
+    #   [11] last_strip_rows         Refinement 3: # of valid rows in the global last strip (∈ [1,32])
+    #   [12..] TensorAccessorArgs(input_tensor)
+    #   [..]   TensorAccessorArgs(gamma) — placeholder when absent
+    #   [..]   TensorAccessorArgs(beta)  — placeholder when absent
     scaler_bits = _fp32_bits(1.0 / float(W))
     reader_ct_args = [
         BLOCK_SIZE,
@@ -336,6 +402,11 @@ def create_program_descriptor(
         scaler_bits,
         1 if has_gamma else 0,
         1 if has_beta else 0,
+        partial_w,
+        input_chunk_bytes_last,
+        affine_chunk_bytes_last,
+        last_strip_idx,
+        last_strip_rows,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     if has_gamma:
@@ -348,15 +419,20 @@ def create_program_descriptor(
         reader_ct_args.extend(ttnn.TensorAccessorArgs().get_compile_time_args())
 
     # Writer CT args:
-    #   [0] BLOCK_SIZE
-    #   [1] NUM_BLOCKS
-    #   [2] output_chunk_bytes  (BLOCK_SIZE * 32 * output_bpe)
-    #   [3..] TensorAccessorArgs(output_tensor)
-    output_chunk_bytes = BLOCK_SIZE * TILE_DIM * output_bpe
+    #   [0]  BLOCK_SIZE
+    #   [1]  NUM_BLOCKS
+    #   [2]  output_chunk_bytes       (BLOCK_SIZE * 32 * output_bpe)
+    #   [3]  output_chunk_bytes_last  Refinement 3: actual valid bytes for the last chunk
+    #   [4]  last_strip_idx           Refinement 3: index of the global last strip
+    #   [5]  last_strip_rows          Refinement 3: # of valid rows in the global last strip
+    #   [6..] TensorAccessorArgs(output_tensor)
     writer_ct_args = [
         BLOCK_SIZE,
         NUM_BLOCKS,
         output_chunk_bytes,
+        output_chunk_bytes_last,
+        last_strip_idx,
+        last_strip_rows,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
@@ -366,12 +442,15 @@ def create_program_descriptor(
     #   [2] HAS_GAMMA
     #   [3] HAS_BETA
     #   [4] epsilon_bits (fp32 bit pattern)
+    #   [5] has_partial_w  Refinement 3: routes ReducePartialScaler::last_tile_at(1)
+    #                       into Pass A and Pass B's accumulate_reduce_block calls
     compute_ct_args = [
         BLOCK_SIZE,
         NUM_BLOCKS,
         1 if has_gamma else 0,
         1 if has_beta else 0,
         epsilon_bits,
+        has_partial_w,
     ]
 
     # ------- Runtime args (per-core) -------

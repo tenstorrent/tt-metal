@@ -78,6 +78,14 @@ void kernel_main() {
     constexpr uint32_t HAS_GAMMA = get_compile_time_arg_val(2);
     constexpr uint32_t HAS_BETA = get_compile_time_arg_val(3);
     constexpr uint32_t EPSILON_BITS = get_compile_time_arg_val(4);
+    // Refinement 3: when W is non-aligned (partial_w > 0 in the descriptor),
+    // the scaler CB carries a (full, partial) tile pair. Use
+    // ReducePartialScaler::last_tile_at(1) so the inner reduce<> picks the
+    // partial tile for the LAST reduce-dim iteration of accumulate_reduce_block
+    // (and accumulate_reduce_block routes it only to the b == NUM_BLOCKS-1
+    // block). Aligned shapes (has_partial_w == 0) keep the single-tile scaler
+    // path via ReducePartialScaler::none().
+    constexpr uint32_t HAS_PARTIAL_W = get_compile_time_arg_val(5);
 
     const uint32_t num_strips = get_arg_val<uint32_t>(0);
 
@@ -89,6 +97,13 @@ void kernel_main() {
 
     constexpr auto reduce_shape = ckl::ReduceInputBlockShape::of(1, BLOCK_SIZE, 1);
     constexpr auto bin_shape = ckl::BinaryInputBlockShape::of(1, BLOCK_SIZE);
+
+    // Refinement 3 — partial-scaler selector. accumulate_reduce_block forwards
+    // this to the inner reduce<> only on the last block (b == NUM_BLOCKS-1),
+    // so the partial tile (idx 1) is consumed exactly once per pass — at the
+    // boundary between valid and padded W positions of the strip.
+    constexpr auto partial_scaler =
+        (HAS_PARTIAL_W != 0) ? ckl::ReducePartialScaler::last_tile_at(1) : ckl::ReducePartialScaler::none();
 
     for (uint32_t s = 0; s < num_strips; ++s) {
         // ============================================================
@@ -104,7 +119,7 @@ void kernel_main() {
                 reduce_shape,
                 /*b=*/c,
                 /*num_blocks=*/NUM_BLOCKS,
-                ckl::ReducePartialScaler::none());
+                partial_scaler);
         }
 
         // ============================================================
@@ -122,7 +137,7 @@ void kernel_main() {
             ckl::square_in_place(cb_centered, bin_shape);
 
             ckl::accumulate_reduce_block<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-                cb_centered, cb_scaler, cb_inv_std, reduce_shape, c, NUM_BLOCKS, ckl::ReducePartialScaler::none());
+                cb_centered, cb_scaler, cb_inv_std, reduce_shape, c, NUM_BLOCKS, partial_scaler);
         }
 
         // ============================================================
@@ -181,6 +196,6 @@ void kernel_main() {
     }
 
     // End-of-kernel: drain the scaler CB (pushed once at boot, never popped
-    // by reduce<>).
-    cb_pop_front(cb_scaler, 1);
+    // by reduce<>). Refinement 3: pop the (full, partial) pair when partial_w > 0.
+    cb_pop_front(cb_scaler, (HAS_PARTIAL_W != 0) ? 2 : 1);
 }

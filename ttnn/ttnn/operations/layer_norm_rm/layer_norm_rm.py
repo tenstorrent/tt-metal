@@ -141,7 +141,20 @@ SUPPORTED = {
     # the layout decision lives at the data-access boundary, not in the
     # math (see /memory-layouts §1 and softmax-R3's mirror-image wrap).
     "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
-    "alignment": ["tile_aligned"],
+    # Refinement 3: non-tile-aligned shapes are now supported.
+    # - "w_non_aligned" (W % 32 != 0): the LAST reduce-row tile is partially
+    #   valid; the reader emits a (full, partial) scaler pair via
+    #   `prepare_partial_reduce_scalers<…, partial_w>(1/W)` and compute
+    #   routes `ReducePartialScaler::last_tile_at(1)` through Pass A and
+    #   Pass B's `accumulate_reduce_block<SUM, REDUCE_ROW>` calls to mask
+    #   the padded W positions.
+    # - "h_non_aligned" (W aligned, H % 32 != 0): num_strips uses ceil
+    #   division; the global last strip has < 32 valid rows. The reader and
+    #   writer pass that count to the tilize-dataflow helpers which natively
+    #   handle partial-row blocks (the helper still pops BLOCK_SIZE tile-pages
+    #   from the CB to balance the producer count; the padded rows compute
+    #   junk but never reach DRAM).
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
     "affine": ["gamma_beta", "gamma_only", "no_affine"],
     # Refinement 1: extended to all three affine dtypes. bf8b in
