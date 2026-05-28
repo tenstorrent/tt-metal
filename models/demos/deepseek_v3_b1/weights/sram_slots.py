@@ -29,6 +29,7 @@ This module ties the two together with the on-device allocator.
 
 from __future__ import annotations
 
+import hashlib
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -40,7 +41,11 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
-from models.demos.deepseek_v3_b1.weights.cache import CacheConfig
+from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, SourceTensorSelection, SramCompressedTensorTarget
+from models.demos.deepseek_v3_b1.weights.cache.sram_compressed_cache import (
+    get_or_create_sram_compressed_expert,
+    to_canonical_mesh_mapper,
+)
 from models.demos.deepseek_v3_b1.weights.overlap.spec import _core_list
 from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import (
     SramExpertCoreGrids,
@@ -318,6 +323,9 @@ def build_sram_routed_proj_cts(
     *,
     tile_w: int = 32,
     assignment_per_expert: dict | None = None,
+    cache_config: CacheConfig | None = None,
+    cache_target_name_fn: "Callable[[int], str] | None" = None,
+    cache_source_keys_fn: "Callable[[int], tuple[str, ...]] | None" = None,
 ) -> list[CompressedTensor]:
     """Batch wrapper around :func:`build_sram_routed_proj_ct` for a list of experts.
 
@@ -326,6 +334,10 @@ def build_sram_routed_proj_cts(
     ``None``, every (expert, device) gets a uniform-BFP4 constant assignment
     (BFP4 = index 1 in COMPRESSED_FORMATS); otherwise the per-(expert, device)
     arrays come from the caller (e.g. BSPM file).
+
+    Optional per-slot disk cache identity: provide ``cache_config`` plus
+    ``cache_target_name_fn(eid) -> str`` and ``cache_source_keys_fn(eid) -> tuple``
+    to persist the post-pack byte buffers under a content-addressed key.
     """
     moe_tp = mesh_device.shape[0] * mesh_device.shape[1]
     cts: list[CompressedTensor] = []
@@ -349,6 +361,9 @@ def build_sram_routed_proj_cts(
                 is_cb_backing_expert=(slot_idx == 0),
                 bspm_assignment_per_device=per_dev_asgn,
                 tile_w=tile_w,
+                cache_config=cache_config,
+                cache_target_name=cache_target_name_fn(eid) if cache_target_name_fn else None,
+                cache_source_keys=cache_source_keys_fn(eid) if cache_source_keys_fn else None,
             )
         )
     return cts
@@ -370,6 +385,9 @@ def build_sram_routed_proj_ct(
     is_cb_backing_expert: bool,
     bspm_assignment_per_device: list[np.ndarray],
     tile_w: int = 32,
+    cache_config: CacheConfig | None = None,
+    cache_target_name: str | None = None,
+    cache_source_keys: tuple[str, ...] | None = None,
 ) -> CompressedTensor:
     """Build one per-expert, per-projection SRAM L1 CompressedTensor.
 
@@ -383,6 +401,11 @@ def build_sram_routed_proj_ct(
         (down projection at TP8).
       * else → HEIGHT_SHARDED with per-core shards stacked along H in row-major
         ``(k_idx, n_idx)`` order (gate/up at TP8).
+
+    Disk cache: when ``cache_config`` is disk-backed AND ``cache_target_name`` +
+    ``cache_source_keys`` are provided, the post-pack byte buffers are persisted
+    so warm runs hydrate without re-packing.  Ephemeral cache configs and
+    missing cache identity → cold pack (no persistence).
     """
     assert bspm_assignment_per_device is not None, "assignment required"
     num_sram_cores = len(ttnn.corerange_to_cores(core_grid))
@@ -463,6 +486,36 @@ def build_sram_routed_proj_ct(
                 parts.append(asg_per_dev[k_start:k_end, n_start:n_end])
             shuffled.append(np.concatenate(parts, axis=0))
     full_assignment = np.concatenate(shuffled, axis=0)
+
+    use_cache = cache_config is not None and cache_target_name is not None and cache_source_keys is not None
+    if use_cache:
+        target = SramCompressedTensorTarget(
+            name=cache_target_name,
+            tensor_shape=tuple(int(d) for d in b_4d.shape),
+            tile_hw=tile_w,
+            memory_config=sram_b_mem,
+            per_core_allocation=True,
+            mesh_mapper_config=to_canonical_mesh_mapper(mesh_mapper_config),
+            assigner_fingerprint="",
+            assignment_hash=hashlib.sha256(np.ascontiguousarray(full_assignment).tobytes()).hexdigest()[:16],
+        )
+        fp = cache_config.context.fingerprint(
+            source=SourceTensorSelection(names=tuple(cache_source_keys)),
+            target=target,
+        )
+        return get_or_create_sram_compressed_expert(
+            cache_config.cache,
+            fp,
+            mesh_device,
+            weight_provider=lambda: b_4d,
+            assignment=full_assignment,
+            memory_config=sram_b_mem,
+            per_core_allocation=True,
+            mesh_mapper_config=mesh_mapper_config,
+            tile_hw=tile_w,
+            min_shard_bytes=min_shard_bytes,
+        )
+
     return CompressedTensor(
         b_4d,
         full_assignment,
@@ -614,10 +667,9 @@ def prepare_compressed_sram_slots(
     # cores which would need per_core_N=16 (not tile-aligned) for gate/up.
     # See sram_experts_plan.md (phase 2) for the full rationale.
     #
-    # TP=1 path was removed (test_compressed_sram_slots single-device tests
-    # deleted).  Only TP>1 (shared-expert HEIGHT_SHARDED gate/up + WIDTH_SHARDED
-    # down) is supported now.
-    assert moe_tp > 1, "prepare_compressed_sram_slots requires TP>1 (mesh allocation)"
+    # TP=1 degenerates to mesh_rows=mesh_cols=1 and falls through the same
+    # ``_build_sram_routed_proj_ct`` path; only used by the host-only
+    # ``test_compressed_sram_slots`` per-layer routing test.
 
     # Address-boundary trim state: only tracks per-core lowest occupied L1
     # address (bootstrapped from real allocator state via the attention prep).
@@ -749,6 +801,12 @@ def prepare_compressed_sram_slots(
         up_assignment_full = assignment_provider(expert_idx, 1)
         down_assignment_full = assignment_provider(expert_idx, 2)
 
+        def _cache_target_name(_proj: str, _eid: int = expert_idx) -> str:
+            return f"sram_layer{layer_idx}_expert{_eid}_{_proj}_proj"
+
+        def _cache_source_keys(_proj: str, _eid: int = expert_idx) -> tuple[str, ...]:
+            return (_key(layer_idx, f"mlp.experts.{_eid}.{_proj}_proj.weight"),)
+
         gate_ct = build_sram_routed_proj_ct(
             mesh_device=device_for_torch,
             full_torch_weight_per_device=gate_per_dev,
@@ -758,6 +816,9 @@ def prepare_compressed_sram_slots(
             per_core_N=gate_per_core_N,
             is_cb_backing_expert=_is_cb_backing,
             bspm_assignment_per_device=_bspm_per_dev(0, gate_assignment_full),
+            cache_config=cache_config,
+            cache_target_name=_cache_target_name("gate"),
+            cache_source_keys=_cache_source_keys("gate"),
         )
         up_ct = build_sram_routed_proj_ct(
             mesh_device=device_for_torch,
@@ -768,6 +829,9 @@ def prepare_compressed_sram_slots(
             per_core_N=up_per_core_N,
             is_cb_backing_expert=_is_cb_backing,
             bspm_assignment_per_device=_bspm_per_dev(1, up_assignment_full),
+            cache_config=cache_config,
+            cache_target_name=_cache_target_name("up"),
+            cache_source_keys=_cache_source_keys("up"),
         )
         down_ct = build_sram_routed_proj_ct(
             mesh_device=device_for_torch,
@@ -778,6 +842,9 @@ def prepare_compressed_sram_slots(
             per_core_N=down_per_core_N,
             is_cb_backing_expert=_is_cb_backing,
             bspm_assignment_per_device=_bspm_per_dev(2, down_assignment_full),
+            cache_config=cache_config,
+            cache_target_name=_cache_target_name("down"),
+            cache_source_keys=_cache_source_keys("down"),
         )
         gate_cts.append(gate_ct)
         up_cts.append(up_ct)
