@@ -193,7 +193,7 @@ ProgramDescriptor MSDAOperation::create_descriptor(
 
     // Per-core runtime args. Buffer* entries auto-register as buffer bindings
     // so the framework patches addresses on cache hits (no override_runtime_arguments).
-    const auto logical_cores = corerange_to_cores(all_cores, num_cores, /*row_major=*/true);
+    const auto logical_cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
     uint32_t tile_cursor = 0;
     for (const auto& core : logical_cores) {
         uint32_t tiles_here = 0;
