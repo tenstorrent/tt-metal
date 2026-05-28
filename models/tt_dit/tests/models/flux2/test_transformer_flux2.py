@@ -370,6 +370,19 @@ def test_transformer_profile(
     tt_prompt_rope_cos = tensor.from_torch(prompt_rope_cos, device=mesh_device)
     tt_prompt_rope_sin = tensor.from_torch(prompt_rope_sin, device=mesh_device)
 
+    # warmup
+    tt_model.forward(
+        spatial=tt_spatial,
+        prompt=tt_prompt,
+        timestep=tt_timestep,
+        guidance=tt_guidance,
+        spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
+        prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+        spatial_sequence_length=spatial_seq_len,
+        prompt_sequence_length=prompt_seq_len,
+        traced=True,
+    )
+    ttnn.synchronize_device(mesh_device)
     signpost("transformer_start")
     tt_output = tt_model.forward(
         spatial=tt_spatial,
@@ -380,6 +393,7 @@ def test_transformer_profile(
         prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
         spatial_sequence_length=spatial_seq_len,
         prompt_sequence_length=prompt_seq_len,
+        traced=True,
     )
     ttnn.synchronize_device(mesh_device)
     signpost("transformer_end")
