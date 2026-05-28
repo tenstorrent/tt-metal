@@ -28,6 +28,11 @@ from models.experimental.mistral_small_4_119b.constants import (
     VISION_NUM_HEADS,
 )
 from models.experimental.mistral_small_4_119b.tt.mistral4_self_attention import _load_weight
+from models.experimental.mistral_small_4_119b.tt.vision_matmul_config import (
+    build_o_proj_preset,
+    build_qkv_preset,
+    vision_linear,
+)
 
 
 class TtPixtralAttention:
@@ -74,6 +79,9 @@ class TtPixtralAttention:
 
         self.o_proj = _load_weight(state_dict, p + "o_proj.weight", True, dtype, mesh_device)
 
+        self.qkv_preset = build_qkv_preset(mesh_device)
+        self.o_proj_preset = build_o_proj_preset(mesh_device)
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -90,12 +98,12 @@ class TtPixtralAttention:
         seq_len = x.shape[-2]
 
         # ── Fused QKV projection → [1, 1, seq, 3*hidden] ────────────────
-        qkv = ttnn.linear(
+        # Sweep-tuned 1D l1/dram/ws on 8×6 grid (49 TFLOPs vs 25 with the default).
+        qkv = vision_linear(
             x,
             self.wqkv,
+            self.qkv_preset,
             compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, 1, seq, 3 * VISION_HIDDEN_SIZE]
 
         # ── Split into heads: each [1, n_heads, seq, head_dim] ──────────
@@ -137,12 +145,12 @@ class TtPixtralAttention:
         ttnn.deallocate(attn)
 
         # ── Output projection ────────────────────────────────────────────
-        out = ttnn.linear(
+        # Sweep-tuned 1D l1/dram/ws on 8×4 grid, in0_block_w=16 (24 TFLOPs).
+        out = vision_linear(
             attn_flat,
             self.o_proj,
+            self.o_proj_preset,
             compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_flat)
         return out

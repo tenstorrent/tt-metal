@@ -15,6 +15,11 @@ from __future__ import annotations
 
 import ttnn
 from models.experimental.mistral_small_4_119b.tt.mistral4_self_attention import _load_weight
+from models.experimental.mistral_small_4_119b.tt.vision_matmul_config import (
+    build_ffn_down_preset,
+    build_ffn_up_preset,
+    vision_linear,
+)
 
 
 class TtPixtralMLP:
@@ -55,31 +60,34 @@ class TtPixtralMLP:
             mesh_device=mesh_device,
         )  # [4096, 1024]
 
+        self.ffn_up_preset = build_ffn_up_preset(mesh_device)
+        self.ffn_down_preset = build_ffn_down_preset(mesh_device)
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        gate = ttnn.linear(
+        # Sweep-tuned 1D l1/dram/ws on 8×8 grid (gate and up share the shape).
+        gate = vision_linear(
             x,
             self.gate_proj,
-            activation="silu",
+            self.ffn_up_preset,
             compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            activation="silu",
         )
-        up = ttnn.linear(
+        up = vision_linear(
             x,
             self.up_proj,
+            self.ffn_up_preset,
             compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         hidden = ttnn.multiply(gate, up, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
-        out = ttnn.linear(
+        # Sweep-tuned 1D ws/dram/ws on 8×2 grid, in0_block_w=8 (33 TFLOPs).
+        # vision_linear converts hidden (L1 interleaved) → L1 width-sharded for in0.
+        out = vision_linear(
             hidden,
             self.down_proj,
+            self.ffn_down_preset,
             compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(hidden)
         return out
