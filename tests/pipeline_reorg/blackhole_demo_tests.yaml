@@ -519,6 +519,61 @@
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   model-name: wan2.2-t2v-a14b
+
+# ─── Z-Image-Turbo ──────────────────────────────────────────────────────────
+
+- name: Z-Image-Turbo Text Encoder
+  cmd: |
+    set -e
+    uv pip install -r models/demos/z_image_turbo/requirements.txt
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    pytest models/demos/z_image_turbo/tests/test_text_encoder.py --timeout=600
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U088VJ79WDB # Jonathan Su
+  team: models
+  model-name: z-image-turbo
+
+- name: Z-Image-Turbo DiT
+  cmd: |
+    set -e
+    uv pip install -r models/demos/z_image_turbo/requirements.txt
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    pytest models/demos/z_image_turbo/tests/test_dit.py --timeout=600
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U088VJ79WDB # Jonathan Su
+  team: models
+  model-name: z-image-turbo
+
+- name: Z-Image-Turbo VAE decoder
+  cmd: |
+    set -e
+    uv pip install -r models/demos/z_image_turbo/requirements.txt
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    pytest models/demos/z_image_turbo/tests/test_vae.py --timeout=600
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U088VJ79WDB # Jonathan Su
+  team: models
+  model-name: z-image-turbo
+
+- name: Z-Image-Turbo full pipeline
+  cmd: |
+    set -e
+    uv pip install -r models/demos/z_image_turbo/requirements.txt
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    pytest models/demos/z_image_turbo/tests/test_pipeline.py --timeout=600
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U088VJ79WDB # Jonathan Su
+  team: models
+  model-name: z-image-turbo
+
 # ─── Stress tests (DISABLED) ────────────────────────────────────────────────
 #
 # Stress tests are moving to a separate pipeline. The original entries are

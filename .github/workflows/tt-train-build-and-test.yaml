@@ -14,18 +14,9 @@ on:
         default: ""
         description: "Build artifact name to use (skips build if provided)"
   workflow_dispatch:
-  merge_group:
 
 permissions:
   packages: write
-
-concurrency:
-  group: >-
-    ${{ github.workflow }}-
-    ${{ (github.ref_protected && github.run_id)
-        || github.event.pull_request.number
-        || github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build-artifact:

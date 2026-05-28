@@ -319,14 +319,12 @@ void run_single_core_reduce_program(
     constexpr const char* IN_TENSOR = "in_tensor";
     constexpr const char* OUT_TENSOR = "out_tensor";
 
-    // Match pre-migration behavior: legacy DataflowBufferConfig set enable_implicit_sync=false on all 3 DFBs.
     experimental::metal2_host_api::DataflowBufferSpec src0_dfb_spec{
         .unique_id = SRC0_DFB,
         .entry_size = dims.single_tile_bytes,
         .num_entries = num_buffer_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .tile_format_metadata = test_config.tile_shape,
-        .disable_implicit_sync = true,
     };
     experimental::metal2_host_api::DataflowBufferSpec src1_dfb_spec{
         .unique_id = SRC1_DFB,
@@ -334,7 +332,6 @@ void run_single_core_reduce_program(
         .num_entries = 2,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .tile_format_metadata = tt_metal::Tile({32, 32}),
-        .disable_implicit_sync = true,
     };
     experimental::metal2_host_api::DataflowBufferSpec dst_dfb_spec{
         .unique_id = DST_DFB,
@@ -342,7 +339,6 @@ void run_single_core_reduce_program(
         .num_entries = num_output_buffer_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .tile_format_metadata = test_config.tile_shape,
-        .disable_implicit_sync = true,
     };
 
     // Build reader spec depending on reduce dim
@@ -366,7 +362,7 @@ void run_single_core_reduce_program(
 
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{reader_kernel_path},
+        .source = reader_kernel_path,
         .num_threads = 1,
         .compiler_options = {.defines = reader_defines},
         .dfb_bindings =
@@ -391,14 +387,15 @@ void run_single_core_reduce_program(
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = DST_DFB,
@@ -414,13 +411,13 @@ void run_single_core_reduce_program(
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {DST_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{get_compute_kernel_name(test_config.reduce_dim)},
+        .source = get_compute_kernel_name(test_config.reduce_dim),
         .num_threads = 1,
         .compiler_options = {.defines = build_reduce_defines(test_config)},
         .dfb_bindings =

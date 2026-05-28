@@ -90,14 +90,12 @@ void unroll_llk() {
     cur_llk.llk_init(cur_llk.CB_A, cur_llk.CB_B, __builtin_LINE());
     for (uint32_t i = 0; i < cb_iterations; i++) {
         if constexpr (cur_llk.debug_mode == 1) {
-            // UNPACK(DPRINT << "=============START NODE==============" << ENDL());
-            // DEVICE_PRINT_UNPACK("=============START NODE=============\n");
+            // DPRINT_UNPACK("=============START NODE=============\n");
         }
         unroll_inner_loop<num_dst_regs, cur_llk_type>(i);
 
         if constexpr (cur_llk.debug_mode == 1) {
-            // UNPACK(DPRINT << "=============END NODE==============" << ENDL());
-            // DEVICE_PRINT_UNPACK("=============END NODE=============\n");
+            // DPRINT_UNPACK("=============END NODE=============\n");
         }
     }
     unroll_inner_loop<cb_leftovers, cur_llk_type>(cb_iterations);
@@ -107,11 +105,9 @@ template <typename cur_llk_type>
 void print_input_CBs(uint32_t j, uint32_t wt) {
     constexpr auto cur_llk = cur_llk_type::node;
     // Commented out so code will compile on non debug print moded. Uncomment out for debug purposes
-    // UNPACK(DPRINT << "=============CB_A==============" << ENDL());
-    // DEVICE_PRINT_UNPACK("=============CB_A=============\n");
+    // DPRINT_UNPACK("=============CB_A=============\n");
     // UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_A, j, true));
-    // UNPACK(DPRINT << "=============CB_B==============" << ENDL());
-    // DEVICE_PRINT_UNPACK("=============CB_B=============\n");
+    // DPRINT_UNPACK("=============CB_B=============\n");
     // UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_B, cb_b_index_policy<cur_llk_type>(j, wt), true));
 }
 template <uint32_t num_dst_regs, typename cur_llk_type>
@@ -134,8 +130,7 @@ void unroll_inner_loop(uint32_t register_loops) {
         cur_llk.llk(cur_llk.CB_A, cur_llk.CB_B, j, cb_b_index_policy<cur_llk_type>(j, wt), j);
         if constexpr (cur_llk.debug_mode == 1) {
             // Commented out so code will compile on non debug print moded. Uncomment out for debug purposes
-            //  MATH(DPRINT << "=============DEST_OUT==============" << ENDL());
-            //  DEVICE_PRINT_MATH("=============DEST_OUT=============\n");
+            //  DPRINT_MATH("=============DEST_OUT=============\n");
             //  dprint_tensix_dest_reg(j);
         }
     }

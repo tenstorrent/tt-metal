@@ -160,6 +160,9 @@ LEAD_MODELS_MESH_TEST_GROUPS = {
     "8x4": "lead-models-galaxy",
     "2x16": "lead-models-galaxy",
     "16x2": "lead-models-galaxy",
+    "4x4": "lead-models-galaxy",
+    "1x32": "lead-models-galaxy",
+    "32x1": "lead-models-galaxy",
 }
 
 LEAD_MODELS_DEFAULT_TEST_GROUP = "lead-models-single-chip"
@@ -200,6 +203,9 @@ MODEL_TRACED_MESH_TEST_GROUPS = {
     "8x4": "wormhole-galaxy-sweeps",
     "2x16": "wormhole-galaxy-sweeps",
     "16x2": "wormhole-galaxy-sweeps",
+    "4x4": "wormhole-galaxy-sweeps",
+    "1x32": "wormhole-galaxy-sweeps",
+    "32x1": "wormhole-galaxy-sweeps",
 }
 
 

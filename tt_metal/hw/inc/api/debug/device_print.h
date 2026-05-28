@@ -11,6 +11,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "hostdevcommon/dprint_common.h"
 #include "hostdev/device_print_common.h"
 #include "hostdev/device_print_structures.h"
 #include "waypoint.h"
@@ -127,7 +128,7 @@ struct dp_typed_array_t {
 #define DEVICE_PRINT_IS_KERNEL 0
 #endif
 
-#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && defined(USE_DEVICE_PRINT)
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
 #define DEVICE_PRINT(_device_print_format, ...)                                                                    \
     {                                                                                                              \
         auto _device_print_info_address = device_print_detail::invoke_by_value(                                    \
@@ -1339,10 +1340,8 @@ volatile tt_l1_ptr std::atomic<uint32_t>& get_lock_atomic() {
 #if !defined(ARCH_QUASAR)
     return get_device_print_buffer()->aux.lock;
 #else
-    std::uintptr_t buffer_address = reinterpret_cast<std::uintptr_t>(get_device_print_buffer());
-    auto cached_address = buffer_address - MEM_L1_UNCACHED_BASE;
-    auto* print_buffer = reinterpret_cast<volatile tt_l1_ptr DevicePrintMemoryLayout*>(cached_address);
-    return print_buffer->aux.lock;
+    // Atomics require the cached L1 alias.
+    return GET_MAILBOX_ADDRESS_DEV_CACHED(dprint_buf.shared_data)->aux.lock;
 #endif
 }
 #endif

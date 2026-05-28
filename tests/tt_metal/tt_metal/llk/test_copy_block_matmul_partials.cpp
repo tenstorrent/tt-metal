@@ -104,23 +104,19 @@ void run_single_core_copy_block_matmul_partials(
         .entry_size = single_tile_size,
         .num_entries = num_input_tiles,
         .data_format_metadata = data_format,
-        // Match pre-migration behavior: legacy DataflowBufferConfig set enable_implicit_sync=false.
-        .disable_implicit_sync = true,
     };
     experimental::metal2_host_api::DataflowBufferSpec dst_dfb_spec{
         .unique_id = DST_DFB,
         .entry_size = single_tile_size,
         .num_entries = num_output_tiles,
         .data_format_metadata = data_format,
-        // Match pre-migration behavior: legacy DataflowBufferConfig set enable_implicit_sync=false.
-        .disable_implicit_sync = true,
     };
 
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = SRC0_DFB,
@@ -136,14 +132,15 @@ void run_single_core_copy_block_matmul_partials(
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {SRC0_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_pop_n.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_pop_n.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = DST_DFB,
@@ -159,7 +156,8 @@ void run_single_core_copy_block_matmul_partials(
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {DST_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines compute_defines;
@@ -170,8 +168,8 @@ void run_single_core_copy_block_matmul_partials(
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings =

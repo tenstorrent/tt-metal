@@ -4,13 +4,18 @@
 
 #pragma once
 #include "internal/debug/dprint_buffer.h"
+#include "internal/hw_thread.h"
 
 // Add option to skip noc logging for certain cores via a define.
 #if defined(NOC_LOGGING_ENABLED) && !defined(SKIP_NOC_LOGGING)
+// NOC transfer length histogram: 32 buckets (one per bit in the length field) per RISC, laid
+// out as a flat uint32_t array starting at the base of the device print buffer. NOC logging is
+// mutually exclusive with DPRINT (enforced host-side), so the buffer is fully available here.
+constexpr uint32_t NOC_LOG_BUCKETS_PER_RISC = 32;
+
 void log_noc_xfer(uint32_t len) {
-    // Hijack print buffer for noc logging data.
-    volatile tt_l1_ptr uint32_t* buf_ptr =
-        (volatile tt_l1_ptr uint32_t*)(reinterpret_cast<DebugPrintMemLayout*>(get_debug_print_buffer())->data);
+    volatile tt_l1_ptr uint32_t* buf_base = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_device_print_buffer());
+    volatile tt_l1_ptr uint32_t* buf_ptr = buf_base + internal_::get_hw_thread_idx() * NOC_LOG_BUCKETS_PER_RISC;
 
     int highest_bit_position = 0;
     while (len >>= 1) {
