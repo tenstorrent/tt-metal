@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import torch
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
@@ -21,6 +22,9 @@ from models.experimental.tt_symbiote.modules.linear import (
     _tp_mesh_mapper,
     _linear_mesh_num_devices,
     _ccl_num_links,
+    _gate_up_input_memory_config,
+    _gate_up_matmul_program_config,
+    _gate_up_output_memory_config,
 )
 
 
@@ -104,11 +108,14 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         # output of post_attention_layernorm — no reshard needed). Output lands
         # L1 width-sharded on the same 16c 8x2 grid, BFP8.
         dram_shard_cfg = getattr(self, "_gate_up_dram_input_shard_cfg", None)
-        dram_pc = (
-            _decode_gate_up_dram_sharded_program_config(input_shape, self.tt_weight.shape)
-            if (not needs_ccl and dram_shard_cfg is not None)
-            else None
-        )
+        is_decode = int(input_shape[-2]) <= ttnn.TILE_SIZE
+        use_gather_in0 = is_decode and os.environ.get("DOTS_OCR_GATE_UP_GATHER_IN0", "0") == "1"
+        if use_gather_in0:
+            input_tensor = ttnn.to_memory_config(input_tensor, _gate_up_input_memory_config(int(input_shape[-1])))
+        dram_pc = _gate_up_matmul_program_config(input_shape, self.tt_weight.shape) if use_gather_in0 else None
+        matmul_mc = _gate_up_output_memory_config() if use_gather_in0 else ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        if dram_pc is None and not needs_ccl and dram_shard_cfg is not None:
+            dram_pc = _decode_gate_up_dram_sharded_program_config(input_shape, self.tt_weight.shape)
         if dram_pc is not None and dram_shard_cfg is not None:
             dram_weight, dram_bias = self._get_gate_up_dram_sharded_weight()
             input_tensor = ttnn.to_memory_config(input_tensor, dram_shard_cfg)
@@ -117,7 +124,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
                 dram_weight,
                 bias=dram_bias,
                 dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                memory_config=matmul_mc,
                 compute_kernel_config=self._gate_up_decode_compute_kernel_config,
                 program_config=dram_pc,
             )

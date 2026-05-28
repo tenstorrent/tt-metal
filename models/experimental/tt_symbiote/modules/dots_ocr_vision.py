@@ -1370,7 +1370,16 @@ class TTNNDotsVisionAttention(TTNNModule):
             q = ttnn.experimental.rotary_embedding(q, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             k = ttnn.experimental.rotary_embedding(k, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # V stays BFP8 from the QKV matmul through SDPA (no BFP4 downcast).
+        # V → BFP4 (gated by ``DOTS_OCR_VISION_V_BFP4=1``). Halves the V DRAM
+        # stream in the chunked SDPA kernel. V is the dominant DRAM consumer
+        # in non-causal vision attention because each per-core Q chunk reads
+        # all V tiles ``q_per_core`` times during prefill (10 outer-Q iters
+        # at q_chunk=256, S=12288). One typecast/layer (~0.1 ms reading
+        # 21 MB BFP8 + writing 10.5 MB BFP4) saves ~2-3 ms of SDPA BW per
+        # layer. Q/K stay BFP8 -- BFP4 K loses precision in early QK^T
+        # scores. SDPA validates BFP4 V at sdpa_device_operation.cpp:40.
+        if os.environ.get("DOTS_OCR_VISION_V_BFP4", "0") == "1":
+            v = ttnn.typecast(v, dtype=ttnn.bfloat4_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # SDPA still requires interleaved Q/K/V (sdpa_device_operation.cpp:44 forbids
         # sharded inputs) and at S=12288 the BFP8 Q+K+V (~46 MB) plus SDPA's static

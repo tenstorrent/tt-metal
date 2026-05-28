@@ -482,14 +482,12 @@ class PipelineConfig:
 def _create_paged_kv_cache(model_config, device, batch_size: int = 1):
     """Create a paged attention KV cache for dots.ocr.
 
-    Cache dtype is left at default ``bfloat16``. ``bfloat8_b`` was tried
-    twice in isolation -- both runs produced visibly corrupted text
-    (``EX丝滿º衔task放...``). The K/V values for dots.ocr decode SDPA
-    are sensitive to per-element quantization in a way that is not
-    captured by simple per-tile statistics; the BFP8 shared exponent
-    appears to be too coarse for the long-horizon attention scores in
-    this model. Do not flip back to ``bfloat8_b`` without a per-layer
-    Q/K/V max-error sweep.
+    Cache dtype defaults to ``bfloat16``; override with the env knob
+    ``DOTS_OCR_KV_CACHE_DTYPE = bfloat8_b | bfloat4_b`` to halve / quarter
+    the K/V DRAM read bandwidth in ``paged_sdpa_decode`` at the cost of
+    decode-quality. ``bfloat8_b`` previously produced visibly corrupted
+    text (``EX丝滿º衔task放...``) in isolated A/Bs -- ship-quality runs
+    must leave the env unset. Use only for perf-ceiling measurement.
     """
     head_dim = getattr(
         model_config,
@@ -504,12 +502,25 @@ def _create_paged_kv_cache(model_config, device, batch_size: int = 1):
         max_num_blocks=max(256, batch_size * blocks_per_sequence),
         batch_size=batch_size,
     )
+    kv_dtype_name = os.environ.get("DOTS_OCR_KV_CACHE_DTYPE", "").strip().lower()
+    kv_dtype_map = {
+        "bfloat16": ttnn.bfloat16,
+        "bf16": ttnn.bfloat16,
+        "bfloat8_b": ttnn.bfloat8_b,
+        "bfp8": ttnn.bfloat8_b,
+        "bfp8_b": ttnn.bfloat8_b,
+        "bfloat4_b": ttnn.bfloat4_b,
+        "bfp4": ttnn.bfloat4_b,
+        "bfp4_b": ttnn.bfloat4_b,
+    }
+    tt_cache_dtype = kv_dtype_map.get(kv_dtype_name, None)
     return TTNNPagedAttentionKVCache(
         num_layers=model_config.num_hidden_layers,
         num_kv_heads=model_config.num_key_value_heads,
         head_dim=head_dim,
         config=config,
         device=None,
+        tt_cache_dtype=tt_cache_dtype,
     ).to_device(device)
 
 

@@ -5,6 +5,12 @@
 """Linear layer implementations for TTNN."""
 
 import math
+import os
+
+
+def _prefill_lofi() -> bool:
+    return os.environ.get("DOTS_OCR_PREFILL_LOFI", "0") == "1"
+
 
 from torch import nn
 import torch
@@ -431,6 +437,64 @@ _DOWN_PROJ_MCAST1D_PER_CORE_N = 2
 _DOWN_PROJ_MCAST1D_OUT_SUBBLOCK_W = 2
 
 
+_GATE_UP_GRID = (8, 7)
+_GATE_UP_INPUT_SHARD_CORES = 16
+_GATE_UP_IN0_BLOCK_W = 3
+_GATE_UP_PER_CORE_M = 1
+_GATE_UP_PER_CORE_N = 10
+_GATE_UP_OUT_SUBBLOCK_W = 5
+
+
+def _gate_up_input_memory_config(k: int):
+    input_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_GATE_UP_INPUT_SHARD_CORES // 2 - 1, 1))]
+    )
+    return ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            input_grid,
+            [ttnn.TILE_SIZE, k // _GATE_UP_INPUT_SHARD_CORES],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+
+def _gate_up_output_memory_config():
+    output_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))])
+    return ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            output_grid,
+            [ttnn.TILE_SIZE, ttnn.TILE_SIZE * _GATE_UP_PER_CORE_N],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+
+def _gate_up_matmul_program_config(input_shape, weight_shape):
+    if int(input_shape[-2]) > ttnn.TILE_SIZE:
+        return None
+    if int(input_shape[-1]) != 1536 or int(weight_shape[-2]) != 1536 or int(weight_shape[-1]) != 17920:
+        return None
+
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=_GATE_UP_GRID,
+        in0_block_w=_GATE_UP_IN0_BLOCK_W,
+        out_subblock_h=1,
+        out_subblock_w=_GATE_UP_OUT_SUBBLOCK_W,
+        out_block_h=_GATE_UP_PER_CORE_M,
+        out_block_w=_GATE_UP_PER_CORE_N,
+        per_core_M=_GATE_UP_PER_CORE_M,
+        per_core_N=_GATE_UP_PER_CORE_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=True,
+    )
+
+
 def _decode_down_proj_mcast1d_program_config(input_shape, weight_shape):
     """Down-proj mcast1d decode program config: 32x8960x1536 @ 8x3 grid (24 cores)."""
     if int(input_shape[-2]) > ttnn.TILE_SIZE:
@@ -567,10 +631,11 @@ class TTNNLinearInputShardedWeightSharded(TTNNLinear):
             )
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
+        _lofi = _prefill_lofi()
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            math_fidelity=ttnn.MathFidelity.LoFi if _lofi else ttnn.MathFidelity.HiFi4,
+            math_approx_mode=_lofi,
+            fp32_dest_acc_en=not _lofi,
             packer_l1_acc=True,
         )
 
@@ -798,10 +863,11 @@ class TTNNLinearInputReplicatedWeightSharded(TTNNLinear):
             )
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
+        _lofi = _prefill_lofi()
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            math_fidelity=ttnn.MathFidelity.LoFi if _lofi else ttnn.MathFidelity.HiFi4,
+            math_approx_mode=_lofi,
+            fp32_dest_acc_en=not _lofi,
             packer_l1_acc=True,
         )
 
@@ -903,7 +969,7 @@ class TTNNLinearLLamaIColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
         if isinstance(self.tt_weight_host, torch.Tensor):
             self.tt_weight_host = preprocess_linear_weight(
                 self.tt_weight_host,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 weights_mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
             )
@@ -928,9 +994,10 @@ class TTNNLinearLLamaIColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
             self._bias_fused_into_matmul = False
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
+        _lofi = _prefill_lofi()
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
+            math_fidelity=ttnn.MathFidelity.LoFi if _lofi else ttnn.MathFidelity.HiFi2,
+            math_approx_mode=_lofi,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
@@ -948,7 +1015,7 @@ class TTNNLinearLLamaIColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
             self._qkv_dram_weight = ttnn.as_tensor(
                 weight_t,
                 device=self.device,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
                 memory_config=_dram_sharded_mem_config_2d(
@@ -1039,9 +1106,10 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
         else:
             self.tt_bias = None
 
+        _lofi = _prefill_lofi()
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
+            math_fidelity=ttnn.MathFidelity.LoFi if _lofi else ttnn.MathFidelity.HiFi2,
+            math_approx_mode=_lofi,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )

@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNLayerStack, TTNNModule
@@ -37,15 +39,6 @@ def _take_local_dp_batch(hidden_states, device):
         [0, 0, 0],
         [1, int(hidden_states.shape[-2]), int(hidden_states.shape[-1])],
     )
-
-
-def _use_bfp8_decoder_weights(layer_idx) -> bool:
-    if layer_idx is None:
-        return False
-    layer_idx = int(layer_idx)
-    # Layers 0..6 stay BFP4 for decode speed; later layers are more sensitive
-    # for OCR spelling/table tokens.
-    return layer_idx >= 7
 
 
 class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
@@ -98,10 +91,11 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
         # variance combine accurate. Without ``packer_l1_acc=True`` we saw
         # downstream tokenization drift (``Hodgkin`` -> ``Hodgin`` and
         # ``(reference group`` -> ``( (reference group``).
+        _ln_lofi = os.environ.get("DOTS_OCR_LN_LOFI", "0") == "1"
         sharded_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            math_fidelity=ttnn.MathFidelity.LoFi if _ln_lofi else ttnn.MathFidelity.HiFi4,
+            math_approx_mode=_ln_lofi,
+            fp32_dest_acc_en=not _ln_lofi,
             packer_l1_acc=True,
         )
         tt_out = ttnn.rms_norm(
@@ -169,9 +163,6 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         )
         new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn)
         new_layer.mlp = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
-        if _use_bfp8_decoder_weights(getattr(new_layer.self_attn, "layer_idx", None)):
-            new_layer.self_attn.o_proj.set_weight_dtype(ttnn.bfloat8_b)
-            new_layer.mlp.set_weight_dtype(ttnn.bfloat8_b)
         return new_layer
 
     def call(self, *args, **kwds):
