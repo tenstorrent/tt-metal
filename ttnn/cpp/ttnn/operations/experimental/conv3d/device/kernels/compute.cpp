@@ -125,7 +125,8 @@ void untilize_block() {
         out_cb,
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-        untilize_reconfig_mode>(rows);
+        untilize_reconfig_mode,
+        compute_kernel_lib::untilize_config::RemapMode::AssumeConfigured>(rows);
 }
 
 template <
@@ -285,7 +286,10 @@ void kernel_main() {
                                             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                                             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                                             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::
-                                                NoReconfigure>(1, patches_this_row);
+                                                NoReconfigure,
+                                            compute_kernel_lib::tilize_config::Fp32Mode::Fast,
+                                            compute_kernel_lib::tilize_config::RemapMode::AssumeConfigured>(
+                                            1, patches_this_row);
                                         patches_left -= patches_this_row;
                                     }
 
@@ -353,7 +357,9 @@ void kernel_main() {
                                             cb_matmul_result_rm,
                                             compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                                             compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-                                            untilize_reconfig_mode_sb>(subblock_h);
+                                            untilize_reconfig_mode_sb,
+                                            compute_kernel_lib::untilize_config::RemapMode::AssumeConfigured>(
+                                            subblock_h);
                                     }
                                 }
                             }

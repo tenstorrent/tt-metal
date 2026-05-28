@@ -22,6 +22,7 @@ template <
     uint32_t out_subblock_w,
     uint32_t out_block_w,
     reblock_untilize_config::InitUninitMode init_uninit_mode,
+    OutputCBLayout layout,
     typename Buf>
 inline void reblock_and_untilize(
     uint32_t num_subblocks_w,
@@ -29,6 +30,12 @@ inline void reblock_and_untilize(
     uint32_t out_subblock_h,
     Buf& interm_buf,
     Buf& out_buf) {
+    static_assert(
+        layout == OutputCBLayout::SubblockMajor,
+        "reblock_and_untilize requires SubblockMajor interm input. The tile addressing "
+        "below assumes tiles are grouped per-subblock; TileRowMajor input is already in "
+        "tile-row order, so callers should use the standard untilize helper instead.");
+
     const uint32_t interm_cb_id = buf_id(interm_buf);
     const uint32_t out_cb_id = buf_id(out_buf);
 
