@@ -13,14 +13,30 @@ SPDX-License-Identifier: Apache-2.0
 ## Overview
 
 `/bringup` is the single entry point that drives an entire TTNN model
-bring-up from a HuggingFace model id to a PCC > 0.99 implementation on a
-Tenstorrent device. It bootstraps persistent state under
-`models/demos/<slug>/.bringup_state.json`, then hands off to `/loop`
-which repeatedly invokes the per-tick orchestrator (`tick.md`). Each
-tick dispatches one phase of one block (architecture, reference, ttnn,
-debug, or optimization), commits, and `ScheduleWakeup`s the next tick.
-The user's job is to invoke `/bringup` and (occasionally) nudge with
-`--redo` or `--skip` when a block is stuck.
+bring-up from a HuggingFace model id to working end-to-end demos with
+characterized perf on a Tenstorrent device. It bootstraps persistent
+state under `models/demos/<slug>/.bringup_state.json`, then hands off
+to `/loop` which repeatedly invokes the per-tick orchestrator
+(`tick.md`).
+
+Each tick dispatches one piece of work and commits. The orchestrator
+walks 8 phases per model in order:
+
+1. **architecture** (per-model) — discover components + use_cases
+2. **reference** (per-component) — PyTorch reference vs HF
+3. **ttnn** (per-component) — TTNN implementation, PCC > 0.99 vs reference
+4. **debug** (per-component, only on failures) — diagnose + fix
+5. **optimization** (per-component) — block-level perf tuning
+6. **real_weights** (per-component, NEW) — real HF weights + full-config PCC
+7. **generation** (per-use-case, NEW) — AR loop + demo + e2e validation gate
+8. **perf** (per-use-case, NEW) — pipeline-level perf (paged_update_cache
+   + reusable trace + targeted tracy)
+
+The user's job is to invoke `/bringup` once and (occasionally) nudge
+with `--redo` or `--skip` when a block or use_case is stuck.
+
+See `SPEC.md` for the original bringup design and `SPEC_post_bringup.md`
+for the integration / generation / perf extension.
 
 ## Argument forms
 
@@ -172,11 +188,21 @@ The user can inspect any in-progress bringup without invoking `/bringup`:
 
 - **slug** — `model_id.lower().replace("/", "_").replace("-", "_")`. The
   on-disk directory name under `models/demos/`.
-- **phase** — one of `reference`, `ttnn`, `debug`, `optimization`.
-  `architecture` is a one-shot pre-step that populates `state.components`
-  and is not a per-block phase.
+- **phase** — one of `reference`, `ttnn`, `debug`, `optimization`,
+  `real_weights` (per-component), or `generation`, `perf` (per-use-case).
+  `architecture` is a one-shot pre-step that populates both
+  `state.components` AND `state.use_cases`.
+- **component** — a single TTNN block (e.g. `Attention`, `LayerNorm`).
+  Lives under `state["components"]`.
+- **use_case** — a distinct inference path the model exposes (e.g.
+  `t2tt`, `asr`, `text_generation`). Discovered by the architecture
+  worker from the HF model's class hierarchy. Lives under
+  `state["use_cases"]`. Each has its own `generation` and `perf` phase.
 - **tick** — one atomic orchestrator step: load → decide → dispatch →
   parse → save → commit → wakeup. Driven by `tick.md`.
 - **host-resident** — a block that legitimately cannot run on-device
   (e.g. a Conv too large for L1). Allowed only via `--skip` with a
   justification and a reference-link.
+- **hybrid boundary** — parts of a use_case pipeline that legitimately
+  stay on HF host (e.g. tokenizer-bound char prep). Documented per
+  use_case in its `hybrid_notes` field.
