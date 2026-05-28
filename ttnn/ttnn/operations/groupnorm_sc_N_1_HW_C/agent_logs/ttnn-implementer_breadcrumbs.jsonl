@@ -33,3 +33,5 @@
 {"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-05-28T05:44:29+00:00"}
 {"event":"test_run","status":"pass","tests":"test_groupnorm_sc_N_1_HW_C.py -k single_tile and tile and gamma_beta","note":"baseline smoke before R3 changes","ts":"2026-05-28T05:47:21+00:00"}
 {"event":"test_run","status":"pass","tests":"test_groupnorm_sc_N_1_HW_C_hw_non_aligned.py -k golden_50x128_G1 and rm and no_affine","note":"first R3 smoke — partial-HW kernel changes work end-to-end (TILE+RM, no_affine, HW=50)","ts":"2026-05-28T05:49:49+00:00"}
+{"event":"test_run","status":"pass","tests":"test_groupnorm_sc_N_1_HW_C_hw_non_aligned.py [full sweep, 66 cases]","note":"all hw_non_aligned cells pass: 10 shapes (golden_17/50/47/100 + 6 boundary) × {tile,rm} × {gamma_beta,gamma_only,no_affine} + fp32 smoke (6 cases). PCC ≥ threshold for every cell.","ts":"2026-05-28T05:52:24+00:00"}
+{"event":"test_run","status":"pass","tests":"test_groupnorm_sc_N_1_HW_C.py [acceptance, 58 cases]","note":"R3 non-regression confirmed: all Phase 0 acceptance cells still pass (TILE/RM × bf16 × 9 shapes × 3 affine_modes + 4 validation tests)","ts":"2026-05-28T05:53:21+00:00"}
