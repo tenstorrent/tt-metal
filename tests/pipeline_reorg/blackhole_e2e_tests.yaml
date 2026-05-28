@@ -276,15 +276,14 @@
   # the 8-chip parametrize variants actually run; 2/4/single-chip and galaxy
   # variants skip cleanly at collection time.
   #
-  # Per-file -k overrides (match main's bh_lb_DeepSeek_PREFILL behavior for these 3):
+  # Per-file -k overrides (match main's bh_lb_DeepSeek_PREFILL behavior):
   #   test_ring_joint_mla    -> only `4x2 and pcc_check` variants
   #   test_rope_prefill      -> only `4x2` variant
-  #   test_moe_grouped_topk  -> only `realistic` variant (single-chip smoke)
   # The `(not test_X or <filter>)` form applies <filter> only when the test name
   # matches; all other tests in the sweep pass through unrestricted.
   cmd: |
     exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or (4x2 and pcc_check)) and (not test_rope_prefill or 4x2) and (not test_moe_grouped_topk or realistic)" || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or (4x2 and pcc_check)) and (not test_rope_prefill or 4x2)" || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:

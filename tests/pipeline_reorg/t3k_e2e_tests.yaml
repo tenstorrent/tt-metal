@@ -146,8 +146,6 @@
   #   test_reduce                 -> 2048 and (linear-4x1 or mesh-4x2 or mesh-2x4)
   #   test_ttnn_dispatch_combine  -> random and (linear-8-1link or mesh-4x2 or mesh-2x4)
   #   test_ring_joint_mla         -> 4x2 and single_run and pcc_check
-  # test_moe_grouped_topk is excluded: it's a single-chip smoke test and main's
-  # T3K row did not run it; it's covered by the BH op-tests row instead.
   # Fabric-safety: the test_ring_joint_mla filter (4x2 + single_run + pcc_check)
   # matches only test_mla_sdpa (line 517) variants — its FABRIC_1D_RING test
   # function test_mla_sdpa_perf (line 866-869) doesn't have single_run/pcc_check
@@ -156,7 +154,7 @@
   # matches; all other tests in the sweep pass through unrestricted.
   cmd: |
     exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_prefill_dispatch or (random and (linear-8-1link or mesh-4x2 or mesh-2x4))) and (not test_prefill_combine or (random and (linear-8-1link or mesh-4x2 or mesh-2x4))) and (not test_reduce or (2048 and (linear-4x1 or mesh-4x2 or mesh-2x4))) and (not test_ttnn_dispatch_combine or (random and (linear-8-1link or mesh-4x2 or mesh-2x4))) and (not test_ring_joint_mla or (4x2 and single_run and pcc_check)) and not test_moe_grouped_topk" || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_prefill_dispatch or (random and (linear-8-1link or mesh-4x2 or mesh-2x4))) and (not test_prefill_combine or (random and (linear-8-1link or mesh-4x2 or mesh-2x4))) and (not test_reduce or (2048 and (linear-4x1 or mesh-4x2 or mesh-2x4))) and (not test_ttnn_dispatch_combine or (random and (linear-8-1link or mesh-4x2 or mesh-2x4))) and (not test_ring_joint_mla or (4x2 and single_run and pcc_check))" || exit_code=$?
     exit $exit_code
   skus:
     wh_llmbox:
