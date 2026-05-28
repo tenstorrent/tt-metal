@@ -352,28 +352,29 @@ def _to_tile_input(torch_input_f32, device, in_dtype):
         # (2, 2, 2),  # 2x2 tile grid
         # (32, 32, 32),
     ],
-    # ids=[
-    #     "small_square",
-    #     "large_square",
-    #     "decode_narrow_M",
-    #     "ds_v3_wo",
-    #     "ds_v3_qkv_a",
-    # ],
+    ids=[
+        "small_square",
+        "large_square",
+        "decode_narrow_M",
+        "ds_v3_wo",
+        "ds_v3_qkv_a",
+        # "2x2",
+        # "32x32",
+    ],
 )
 @pytest.mark.parametrize(
+    # Note that fp8 output is not valid, though it will run without error
     "in_dtype, out_dtype",
     [
         # bf16 baseline: feeds the same bmm.cpp kernel with DataFormat::Float16_b
         # CBs (and FP32 dest because we set fp32_dest_acc_en=True for parity with
         # the FP8 run). This is the reference number FP8 is being compared against.
-        # (ttnn.bfloat16, ttnn.bfloat16),
+        (ttnn.bfloat16, ttnn.bfloat16),
         # FP8 -> bf16: FP8 unpacker, FP32 dest, bf16 packer. Isolates the input-
         # side bandwidth & math win; output writeback is the same size as bf16.
         (ttnn.fp8_e4m3, ttnn.bfloat16),
-        # FP8 -> FP8: full FP8 path including 1 B/element output writeback.
-        # (ttnn.fp8_e4m3, ttnn.fp8_e4m3),
     ],
-    # ids=["bf16_to_bf16", "fp8_to_bf16", "fp8_to_fp8"],
+    ids=["bf16_to_bf16", "fp8_to_bf16"],
 )
 def test_fp8_matmul_perf(device, M, K, N, in_dtype, out_dtype):
     """Time matmul on Blackhole, FP8 vs bf16 inputs at matched shapes.
@@ -397,13 +398,18 @@ def test_fp8_matmul_perf(device, M, K, N, in_dtype, out_dtype):
     # a_f32 = torch.eye(M, K, dtype=torch.float32)
     # b_f32 = torch.eye(K, N, dtype=torch.float32)
 
-    a_i8 = torch.ones(M, K, dtype=torch.uint8) * 56
-    b_i8 = torch.randint(0, 256, (K, N), dtype=torch.uint8)
+    # Hack FP8 by generating uint8 tensors.
+    if in_dtype == ttnn.uint8:
+        a_i8 = torch.ones(M, K, dtype=torch.uint8) * 56  # 56 maps to 1.0 in fp8 e4m3
+        b_i8 = torch.randint(0, 256, (K, N), dtype=torch.uint8)
+        tt_a = _to_tile_input(a_i8, device, ttnn.uint8)
+        tt_b = _to_tile_input(b_i8, device, ttnn.uint8)
+    else:
+        a_f32 = torch.ones(M, K, dtype=torch.float32)
+        b_f32 = torch.randn(K, N, dtype=torch.float32)
+        tt_a = _to_tile_input(a_f32, device, in_dtype)
+        tt_b = _to_tile_input(b_f32, device, in_dtype)
 
-    # print(b_i8)
-
-    tt_a = _to_tile_input(a_i8, device, ttnn.uint8)
-    tt_b = _to_tile_input(b_i8, device, ttnn.uint8)
     # assert tt_a.dtype == in_dtype and tt_a.layout == ttnn.TILE_LAYOUT
     # assert tt_b.dtype == in_dtype and tt_b.layout == ttnn.TILE_LAYOUT
 
