@@ -317,6 +317,7 @@ def build_filtered_dit_kwargs_for_handler(
     lm_generated_metadata = None
     lm_generated_audio_codes_list: list[Any] = []
     lm_total_time_costs = {"phase1_time": 0.0, "phase2_time": 0.0, "total_time": 0.0}
+    lm_total_tokens = 0
 
     bpm = params.bpm
     key_scale = params.keyscale
@@ -463,6 +464,7 @@ def build_filtered_dit_kwargs_for_handler(
                 for key in ["phase1_time", "phase2_time", "total_time"]:
                     if key in lm_chunk_time_costs:
                         lm_total_time_costs[key] += lm_chunk_time_costs[key]
+            lm_total_tokens += int(lm_extra.get("num_tokens", 0) or 0)
 
         lm_generated_metadata = all_metadata_list[0] if all_metadata_list else None
         lm_generated_audio_codes_list = all_audio_codes_list
@@ -506,6 +508,14 @@ def build_filtered_dit_kwargs_for_handler(
                 dit_input_caption = lm_generated_metadata.get("caption", dit_input_caption)
             if params.use_cot_language:
                 dit_input_vocal_language = lm_generated_metadata.get("vocal_language", dit_input_vocal_language)
+
+        if llm_handler is not None:
+            llm_handler.last_lm_perf = {
+                "lm_num_tokens": int(lm_total_tokens),
+                "lm_gen_time_s": float(lm_total_time_costs.get("total_time", 0.0)),
+                "lm_phase1_time_s": float(lm_total_time_costs.get("phase1_time", 0.0)),
+                "lm_phase2_time_s": float(lm_total_time_costs.get("phase2_time", 0.0)),
+            }
 
     if params.task_type in ("repaint", "cover", "cover-nofsq", "extract"):
         dit_input_caption = params.caption or dit_input_caption
