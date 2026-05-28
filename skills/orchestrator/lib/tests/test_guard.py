@@ -14,10 +14,12 @@ from skills.orchestrator.lib.guard import (
     HostResidentSubOp,
     KIND_REQUIRED_KERNELS,
     LintViolation,
+    UseCaseVerdict,
     assert_traced_ops,
     cross_check_reference,
     lint_block,
     verify_block,
+    verify_use_case,
 )
 
 
@@ -303,3 +305,112 @@ def test_verify_block_missing_kernel_marks_not_ok(tmp_path):
     verdict = verify_block(block, [], "attention", reference)
     assert verdict.ok is False
     assert len(verdict.missing_kernels) == 2  # both attention option-sets missing
+
+
+# ---------------------------------------------------------------------------
+# verify_use_case
+# ---------------------------------------------------------------------------
+
+
+def test_verify_use_case_clean_returns_ok(tmp_path):
+    model_file = tmp_path / "uc1_model.py"
+    model_file.write_text(
+        "from .layernorm import LayerNorm\n"
+        "from .seamless_mha import SeamlessMha\n"
+        "class UC1Model:\n"
+        "    def __init__(self, device):\n"
+        "        self.norm = LayerNorm(device)\n"
+        "        self.attn = SeamlessMha(device)\n"
+    )
+    use_case = {
+        "name": "uc1",
+        "components_used": ["LayerNorm", "SeamlessMha"],
+        "hf_class": "XxxForUC1",
+        "validation_metric": "bleu",
+    }
+    verdict = verify_use_case(model_file, use_case)
+    assert verdict.ok
+    assert verdict.issues == []
+
+
+def test_verify_use_case_rejects_missing_component_import(tmp_path):
+    model_file = tmp_path / "uc1_model.py"
+    model_file.write_text("class UC1Model: pass\n")  # imports nothing
+    use_case = {
+        "name": "uc1",
+        "components_used": ["LayerNorm", "SeamlessMha"],
+        "hf_class": "XxxForUC1",
+        "validation_metric": "bleu",
+    }
+    verdict = verify_use_case(model_file, use_case)
+    assert not verdict.ok
+    assert any("LayerNorm" in issue for issue in verdict.issues)
+    assert any("SeamlessMha" in issue for issue in verdict.issues)
+
+
+def test_verify_use_case_demo_must_invoke_hf_reference(tmp_path):
+    model_file = tmp_path / "uc1_model.py"
+    model_file.write_text("from .x import X\nclass UC1Model: pass\n")
+
+    demo_file = tmp_path / "demo_uc1.py"
+    demo_file.write_text("# does not run HF\n")
+
+    use_case = {
+        "name": "uc1",
+        "components_used": ["X"],
+        "hf_class": "XxxForUC1",
+        "validation_metric": "bleu",
+    }
+    verdict = verify_use_case(model_file, use_case, demo_path=demo_file)
+    assert not verdict.ok
+    assert any("XxxForUC1" in issue for issue in verdict.issues)
+
+
+def test_verify_use_case_test_must_enforce_metric(tmp_path):
+    model_file = tmp_path / "uc1_model.py"
+    model_file.write_text("from .x import X\nclass UC1Model: pass\n")
+
+    test_file = tmp_path / "test_e2e_uc1.py"
+    test_file.write_text("def test_uc1(): pass\n")  # doesn't use bleu
+
+    use_case = {
+        "name": "uc1",
+        "components_used": ["X"],
+        "hf_class": "XxxForUC1",
+        "validation_metric": "bleu",
+    }
+    verdict = verify_use_case(model_file, use_case, test_path=test_file)
+    assert not verdict.ok
+    assert any("bleu" in issue for issue in verdict.issues)
+
+
+def test_verify_use_case_all_three_checks_pass(tmp_path):
+    model_file = tmp_path / "uc1_model.py"
+    model_file.write_text("from .x import X\nclass UC1Model: pass\n")
+
+    demo_file = tmp_path / "demo_uc1.py"
+    demo_file.write_text("from transformers import XxxForUC1\n" "def main(): hf = XxxForUC1.from_pretrained('x')\n")
+
+    test_file = tmp_path / "test_e2e_uc1.py"
+    test_file.write_text("from demo.validate import bleu\ndef test_uc1(): pass\n")
+
+    use_case = {
+        "name": "uc1",
+        "components_used": ["X"],
+        "hf_class": "XxxForUC1",
+        "validation_metric": "bleu",
+    }
+    verdict = verify_use_case(model_file, use_case, demo_path=demo_file, test_path=test_file)
+    assert verdict.ok, verdict.issues
+
+
+def test_verify_use_case_missing_model_file_fails(tmp_path):
+    use_case = {
+        "name": "uc1",
+        "components_used": [],
+        "hf_class": "XxxForUC1",
+        "validation_metric": "bleu",
+    }
+    verdict = verify_use_case(tmp_path / "missing.py", use_case)
+    assert not verdict.ok
+    assert any("not found" in issue for issue in verdict.issues)

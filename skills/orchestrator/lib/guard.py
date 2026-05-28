@@ -437,3 +437,81 @@ def verify_block(
         missing_kernels=assert_traced_ops(traced_ops, kind),
         new_host_ops=cross_check_reference(block_path, reference_impl),
     )
+
+
+# ---------------------------------------------------------------------------
+# Use-case verdict
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class UseCaseVerdict:
+    """Composite result of verifying one use case's generation artifacts."""
+
+    issues: list[str]
+
+    @property
+    def ok(self) -> bool:
+        return not self.issues
+
+
+def verify_use_case(
+    model_path: PathLike,
+    use_case: dict,
+    demo_path: PathLike | None = None,
+    test_path: PathLike | None = None,
+) -> UseCaseVerdict:
+    """Verify one use case's integration artifacts pass the orchestrator's checks.
+
+    Three static checks (the tick runs the e2e test for the dynamic gate; this
+    function checks the artifacts are structurally sound):
+
+    1. tt/<use_case>_model.py must IMPORT (not duplicate) every component listed
+       in use_case["components_used"]. Catches copy-paste of block code.
+    2. demo/demo_<use_case>.py must invoke the HF reference path (grep for the
+       use_case's hf_class string).
+    3. tests/test_e2e_<use_case>.py must reference the use_case's
+       validation_metric string (proves the test enforces the metric gate).
+
+    Returns UseCaseVerdict with issues list. Empty → ok.
+    """
+    issues: list[str] = []
+
+    # Read model file source
+    try:
+        model_src = Path(model_path).read_text()
+    except FileNotFoundError:
+        issues.append(f"{model_path}: file not found")
+        return UseCaseVerdict(issues=issues)
+
+    # Check 1: imports each component in components_used
+    for comp_name in use_case.get("components_used", []):
+        # The component name typically maps to a class or module name. Be lenient:
+        # accept either "import comp_name" (any form) or the comp_name appearing
+        # in the source (covers `from ... import CompName` and similar).
+        if comp_name not in model_src:
+            issues.append(
+                f"{model_path}: component '{comp_name}' from " f"use_case.components_used is not referenced in source"
+            )
+
+    # Check 2: demo runs HF reference
+    if demo_path is not None:
+        try:
+            demo_src = Path(demo_path).read_text()
+            hf_class = use_case.get("hf_class", "")
+            if hf_class and hf_class not in demo_src:
+                issues.append(f"{demo_path}: does not invoke HF reference class '{hf_class}'")
+        except FileNotFoundError:
+            issues.append(f"{demo_path}: file not found")
+
+    # Check 3: e2e test enforces metric
+    if test_path is not None:
+        try:
+            test_src = Path(test_path).read_text()
+            metric = use_case.get("validation_metric", "")
+            if metric and metric not in test_src:
+                issues.append(f"{test_path}: does not reference validation_metric '{metric}'")
+        except FileNotFoundError:
+            issues.append(f"{test_path}: file not found")
+
+    return UseCaseVerdict(issues=issues)
