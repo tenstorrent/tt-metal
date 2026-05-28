@@ -4,7 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t dims = get_compile_time_arg_val(1);
@@ -37,6 +40,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_out0 = 24;
 
+    Noc noc;
     // Create CircularBuffers for Device 2.0 API
     CircularBuffer cb_in0(cb_id_in0);
     CircularBuffer cb_out0(cb_id_out0);
@@ -63,10 +67,16 @@ void kernel_main() {
         // Now iterate over the last dimension
         uint32_t out_stick_id = 0;
         // Perform the read operation
-        noc_async_read_page(base_linear_index, s0, src_buffer_l1_addr);
+        CoreLocalMem<uint32_t> scratch_dst(src_buffer_l1_addr);
+        noc.async_read(
+            s0,
+            scratch_dst,
+            s0.get_aligned_page_size(),
+            {.page_id = base_linear_index, .offset_bytes = 0},
+            {.offset_bytes = 0});
         // Reserve space in the output buffer
         cb_out0.reserve_back(1);
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         for (uint32_t l = starts[dims - 1]; l < ends[dims - 1]; l += strides[dims - 1]) {
             // Write the element into the output buffer
             volatile tt_l1_ptr uint8_t* out_stick =

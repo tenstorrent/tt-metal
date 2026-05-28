@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
@@ -22,33 +26,41 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<8>();
     const auto s = TensorAccessor(dst_args, dst_addr);
 
-    uint64_t base_dst_noc_addr[tile_height];
+    Noc noc;
+    CircularBuffer cb_out(cb_id_out0);
+
+    uint32_t row_stick_ids[tile_height];
+    uint32_t stick_offset = 0;
 
     auto write_tiles_in_current_block = [&]() {
-        cb_wait_front(cb_id_out0, num_tiles_per_output_block);
+        cb_out.wait_front(num_tiles_per_output_block);
 
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+        uint32_t l1_read_addr = cb_out.get_read_ptr();
         for (uint32_t l = 0; l < tile_height; ++l) {
-            uint64_t dst_noc_addr = base_dst_noc_addr[l];
-            noc_async_write(l1_read_addr, dst_noc_addr, output_single_block_width_size);
+            CoreLocalMem<uint32_t> src(l1_read_addr);
+            noc.async_write(
+                src,
+                s,
+                output_single_block_width_size,
+                {.offset_bytes = 0},
+                {.page_id = row_stick_ids[l], .offset_bytes = stick_offset});
             l1_read_addr += output_single_block_width_size;
-            base_dst_noc_addr[l] += output_single_block_width_size;
         }
+        stick_offset += output_single_block_width_size;
 
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, num_tiles_per_output_block);
+        noc.async_write_barrier();
+        cb_out.pop_front(num_tiles_per_output_block);
     };
 
     // Each row of tiles processed separately
     for (uint32_t i = 0; i < num_blocks_across_height; ++i) {
-        // If width or block sharded, we'll have multiple columns of rows/blocks
         for (uint32_t j = 0; j < num_output_columns_of_blocks; ++j) {
-            // Determine the base addresses for the row of blocks in the current column
+            // Determine the base stick_ids for the row of blocks in the current column
             for (uint32_t k = 0; k < tile_height; ++k) {
                 uint32_t num_complete_rows_already_processed = (i * tile_height + k) * num_output_columns_of_blocks;
-                uint32_t stick_id = num_complete_rows_already_processed + j;
-                base_dst_noc_addr[k] = s.get_noc_addr(stick_id);
+                row_stick_ids[k] = num_complete_rows_already_processed + j;
             }
+            stick_offset = 0;
 
             for (uint32_t k = 0; k < num_blocks_per_output_column_row; ++k) {
                 write_tiles_in_current_block();

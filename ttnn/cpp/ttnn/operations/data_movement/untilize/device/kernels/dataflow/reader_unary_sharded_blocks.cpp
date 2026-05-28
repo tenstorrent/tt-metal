@@ -4,7 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
 
 // Block-by-block reader for sharded inputs. The kernel does a simple local L1 to CB copy (not page-by-page via
 // TensorAccessor), so it is not fully using device API 1.1 features. Only cb operations are used.
@@ -37,15 +40,22 @@ void kernel_main() {
     constexpr uint32_t tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr uint32_t block_size_bytes = tiles_per_block * tile_size_bytes;
 
+    Noc noc;
     CircularBuffer cb_in(cb_id_in0);
-    uint64_t l1_read_addr = get_noc_addr(src_addr);
+    uint32_t l1_read_addr = src_addr;
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
         cb_in.reserve_back(tiles_per_block);
-        uint32_t cb_write_addr = cb_in.get_write_ptr();
-        noc_async_read(l1_read_addr, cb_write_addr, block_size_bytes);
+        noc.async_read(
+            UnicastEndpoint{},
+            cb_in,
+            block_size_bytes,
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = l1_read_addr},
+            {.offset_bytes = 0});
         l1_read_addr += block_size_bytes;
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         cb_in.push_back(tiles_per_block);
     }
 }

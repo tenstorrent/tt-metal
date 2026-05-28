@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
@@ -13,6 +15,7 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
+    Noc noc;
     CircularBuffer cb_out(cb_id_out);
 
 #ifdef OUT_SHARDED
@@ -50,10 +53,15 @@ void kernel_main() {
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
         cb_out.wait_front(onetile);
-        uint32_t l1_read_addr = cb_out.get_read_ptr();
+#ifdef SHARDED
+        // ShardedAddrGen has no noc_traits_t specialization; keep legacy NoC API.
         uint64_t dest_noc_addr = s.get_noc_addr(i);
-        noc_async_write(l1_read_addr, dest_noc_addr, tile_bytes);
+        noc_async_write(cb_out.get_read_ptr(), dest_noc_addr, tile_bytes);
         noc_async_write_barrier();
+#else
+        noc.async_write(cb_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = i, .offset_bytes = 0});
+        noc.async_write_barrier();
+#endif
         cb_out.pop_front(onetile);
     }
 #endif
