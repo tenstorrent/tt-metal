@@ -1629,6 +1629,15 @@ def _run_auto_iterate_loop(
                     f"\n--- FULL HF REFERENCE SOURCE (PCC_ONLY: the COMPLETE reference class) ---\n"
                     f"{full_hf_source}\n"
                 )
+            print(
+                f"  [prompt-block] {comp}: "
+                f"captured_shape={'NON-EMPTY' if captured_shape_block else 'EMPTY'}"
+                f"({len(captured_shape_block)})  "
+                f"localization={'NON-EMPTY' if localization_hint else 'EMPTY'}"
+                f"({len(localization_hint)})  "
+                f"hf_source={'NON-EMPTY' if full_hf_source else 'EMPTY'}"
+                f"({len(full_hf_source)})"
+            )
 
             component_blocks.append(
                 f"================================================================\n"
