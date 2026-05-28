@@ -157,6 +157,14 @@ inline void DataflowBuffer::finish_impl() {
             }
 #endif
             all_acked = all_acked && (ckernel::trisc::tile_counters[tc_id].f.posted == 0);
+#elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+            // PACK must wait for UNPACK to drain everything PACK pushed.
+            // posted == 0 means UNPACK has popped all pushed tiles, so UNPACK's
+            // in-place mutation of each tile is complete (the pop_front in the
+            // kernel loop runs AFTER UNPACK's L1 write). Without this wait,
+            // finish() returns immediately for PACK, which would let callers
+            // signal "output ready" while UNPACK is still mid-loop.
+            all_acked = all_acked && (ckernel::trisc::tile_counters[tc_id].f.posted == 0);
 #elif !defined(COMPILE_FOR_TRISC)
             uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
             all_acked &=
