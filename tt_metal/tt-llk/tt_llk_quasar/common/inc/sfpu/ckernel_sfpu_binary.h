@@ -64,7 +64,7 @@ sfpi_inline sfpi::vFloat _float32_to_bf16_rne_(sfpi::vFloat in)
  * @param dst_index_in1: tile index into DEST for in1
  * @param dst_index_out: tile index into DEST for output
  */
-template <bool APPROXIMATION_MODE /* unused */, BinaryOp BINOP /* unused */, bool is_fp32_dest_acc_en = false>
+template <bool APPROXIMATION_MODE [[maybe_unused]], BinaryOp BINOP [[maybe_unused]], bool EN_32BIT_DEST = false>
 inline void _calculate_sfpu_binary_div_(
     const int iterations, const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
@@ -98,7 +98,7 @@ inline void _calculate_sfpu_binary_div_(
         }
         v_endif;
 
-        if constexpr (!is_fp32_dest_acc_en)
+        if constexpr (!EN_32BIT_DEST)
         {
             // Software RNE conversion to match FPU bf16 rounding (Quasar SFPSTORE
             // truncates by default).
