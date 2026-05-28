@@ -70,8 +70,8 @@ class TtPixtralVisionModel(LightweightModule):
             vision_prefix=f"{vision_prefix}transformer.layers.",
         )
 
-    def forward(self, pixel_values, image_sizes: list[tuple[int, int]], position_ids_tt: ttnn.Tensor):
-        """pixel_values: torch ``[N,C,H,W]`` bf16; image_sizes aligned with batch; position_ids_tt ``[1,seq]`` uint32."""
+    def forward(self, pixel_values, image_sizes: list[tuple[int, int]], position_ids):
+        """pixel_values: torch ``[N,C,H,W]`` bf16; image_sizes aligned with batch; position_ids torch ``[1,seq]`` long."""
         if len(image_sizes) > 1 and len({tuple(sz) for sz in image_sizes}) > 1:
             raise ValueError(
                 "TtPixtralVisionModel supports one image size per batch; " f"got mixed image_sizes={image_sizes!r}"
@@ -125,7 +125,7 @@ class TtPixtralVisionModel(LightweightModule):
             patch_embeds = ttnn.to_memory_config(patch_embeds, ln_mem)
         patch_embeds = self.ln_pre(patch_embeds)
 
-        cos, sin = self.patch_positional_embedding(patch_embeds, position_ids_tt)
+        cos, sin = self.patch_positional_embedding(patch_embeds, position_ids)
         return self.transformer(patch_embeds, attention_mask=None, position_embeddings=(cos, sin))
 
 

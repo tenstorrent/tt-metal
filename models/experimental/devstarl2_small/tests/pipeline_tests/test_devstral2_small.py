@@ -124,14 +124,6 @@ def test_devstral2_small_projected_image_features_pcc(mesh_device, monkeypatch, 
     pe_conv = hf_vm.patch_conv(pixel_values.to(dtype=target_dtype))
     plist = [e[..., : s[0] // patch_sz, : s[1] // patch_sz] for e, s in zip(pe_conv, image_sizes_list)]
     position_ids = position_ids_in_meshgrid(plist, max_width=_max_patch_grid_side(vision_cfg))
-    pos_tt = ttnn.from_torch(
-        position_ids.unsqueeze(0).to(torch.int32),
-        device=mesh_device,
-        dtype=ttnn.uint32,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
 
     tt_model = TtDevstral2SmallModel(
         mesh_device=mesh_device,
@@ -145,7 +137,7 @@ def test_devstral2_small_projected_image_features_pcc(mesh_device, monkeypatch, 
         vision_config=vision_cfg,
     )
 
-    tt_out = tt_model.get_projected_image_features(pixel_values, image_sizes_list, pos_tt)
+    tt_out = tt_model.get_projected_image_features(pixel_values, image_sizes_list, position_ids)
 
     tt_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)).float()
     while tt_torch.dim() > 2:

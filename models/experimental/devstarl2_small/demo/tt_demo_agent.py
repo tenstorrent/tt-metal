@@ -480,9 +480,8 @@ def _ensure_multimodal_img_rows(
 ) -> torch.Tensor:
     if rt._img_rows_cache is not None:
         return rt._img_rows_cache
-    pos_vision = _mlp._vision_position_ids_tt(rt.hf_inner, pixel_values, image_sizes_list, rt.mesh_device)
+    pos_vision = _mlp._vision_position_ids(rt.hf_inner, pixel_values, image_sizes_list)
     img_tt = rt.tt_devstral.get_projected_image_features(pixel_values, image_sizes_list, pos_vision)
-    ttnn.deallocate(pos_vision)
     img_torch = ttnn.to_torch(img_tt, mesh_composer=ttnn.ConcatMeshToTensor(rt.mesh_device, dim=-1))
     ttnn.deallocate(img_tt)
     while img_torch.dim() > 2:

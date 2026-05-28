@@ -77,16 +77,7 @@ def test_pixtral_rotary_embedding_pcc(mesh_device, seq_len):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-    pos_tt = ttnn.from_torch(
-        position_ids.to(torch.int32),
-        device=mesh_device,
-        dtype=ttnn.uint32,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-
-    cos_tt, sin_tt = tt_rope(x_tt, pos_tt)
+    cos_tt, sin_tt = tt_rope(x_tt, position_ids)
     cos_tt = _tt_to_torch_3d(cos_tt, mesh_device).float()
     sin_tt = _tt_to_torch_3d(sin_tt, mesh_device).float()
 
