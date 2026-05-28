@@ -80,7 +80,11 @@ class VisionModelArgs(ModelArgs):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(None, -1),
+                mesh_shape=self.cluster_shape,
+            ),
         )
         return xs_1BSH
 

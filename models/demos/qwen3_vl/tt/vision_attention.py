@@ -1,12 +1,30 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
+"""
+Tensor-parallel ("Megatron-style") variant of the qwen35_27b vision attention.
+
+Mirrors the LLM TP convention from `tt_transformers.tt.attention`:
+
+  in:  replicated x_11SH (the wrapping DistributedLayerNorm produced this)
+  ──▶ column-sharded W_qkv (head-fractured) ──▶ per-device n_local_heads
+  ──▶ SDPA → nlp_concat_heads
+  ──▶ row-sharded W_o ──▶ partial sums
+  ──▶ tt_all_reduce(dim=3)  -> on T3K this is a reduce_scatter
+  out: fractured along dim=3 (each device owns dim/TP)
+
+The fractured output then re-enters the next block's DistributedLayerNorm,
+which gathers it back to replicated.
+"""
+
 import math
 
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
@@ -38,6 +56,7 @@ class VisionAttention(LightweightModule):
     def __init(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         weight_cache_path,
         layer_num,
@@ -45,14 +64,22 @@ class VisionAttention(LightweightModule):
         transformation_mats,
         configuration,
         paged_attention_config=None,
-        # use_paged_kv_cache=False,
         causal_mask=True,
-        # use_kv_cache=True,
     ):
         super().__init__()
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
+        self.configuration = configuration
+        self.cluster_shape = configuration.cluster_shape
+        # We TP across cluster axis 1 (e.g. all 8 devices on T3K).
+        self.tp = self.cluster_shape[1]
+        # `tt_all_reduce` for T3K (1, 8) ignores the supplied cluster_axis and
+        # reduce_scatters across the non-1 axis; keep this at 0 to avoid the
+        # cluster_axis==1 short-circuit.
+        self.ccl_cluster_axis = 0
+
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
         self.head_dim = configuration.head_dim
@@ -61,17 +88,17 @@ class VisionAttention(LightweightModule):
         self.n_kv_heads = configuration.n_kv_heads
         self.paged_attention_config = paged_attention_config
         self.causal_mask = causal_mask
-        # self.use_kv_cache = use_kv_cache
         self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
         self.ccl_dtype = configuration.ccl_dtype
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
         self.tile_size = configuration.tile_size
 
-        self.num_devices_per_group = 1  # [INFO] each device runs a copy of the vision model
-
-        self.n_local_heads = self.n_heads // self.num_devices_per_group
-        self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
+        # Each device holds n_heads / tp heads.
+        self.n_local_heads = self.n_heads // self.tp
+        self.n_local_kv_heads = self.n_kv_heads // self.tp
         self.padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
+        # Per-device qkv width = (n_local_heads + 2*n_local_kv_heads) * padded_head_dim
+        self.local_qkv_size = (self.n_local_heads + 2 * self.n_local_kv_heads) * self.padded_head_dim
 
         self.dtype = dtype
 
@@ -174,7 +201,7 @@ class VisionAttention(LightweightModule):
             self.wqkv_bias_prefill = ttnn.as_tensor(
                 qkv_bias,
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
                 dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
@@ -232,7 +259,7 @@ class VisionAttention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
             cache_file_name=cache_name("wqkv"),
         )
 
@@ -313,7 +340,7 @@ class VisionAttention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -2), mesh_shape=self.cluster_shape),
             cache_file_name=cache_name("wo"),
         )
         # self.wo.shape = [1, 1, 384, 2560] each device of N300 sharded on dim=2
@@ -323,7 +350,7 @@ class VisionAttention(LightweightModule):
             self.wo_bias_prefill = ttnn.as_tensor(
                 self.state_dict[f"{wo_str}.bias"],
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
                 dtype=self.dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
@@ -333,7 +360,6 @@ class VisionAttention(LightweightModule):
         self.scale = self.head_dim**-0.5
 
         dram_shard_grid_width = 8
-        target_device_shape = (1, 1)  # each 1x1 device runs a vision model
         self.xqkv_prefill_progcfg = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
@@ -342,9 +368,7 @@ class VisionAttention(LightweightModule):
             per_core_M=max(
                 1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8)  # 8 rows
             ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-            per_core_N=math.ceil(
-                configuration.qkv_size / target_device_shape[1] / 32 / dram_shard_grid_width
-            ),  # N / TILE_WIDTH / grid width
+            per_core_N=math.ceil(self.local_qkv_size / 32 / dram_shard_grid_width),  # N / TILE_WIDTH / grid width
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
@@ -362,11 +386,8 @@ class VisionAttention(LightweightModule):
     ):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
-        ###
-        # QKV matmuls
-        ###
 
-        # reshaping long sequence to matmul fit on device
+        # ---- QKV matmul (column / head sharded) -----------------------------------
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             if seq_len % self.MAX_QKV_MM_SEQ_LEN != 0:
                 raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
@@ -390,7 +411,7 @@ class VisionAttention(LightweightModule):
 
         ttnn.deallocate(x_11SH)
 
-        # split qkv into heads
+        # Each device owns local_qkv_size columns -> n_local_heads / n_local_kv_heads.
         (
             q_heads_1QSD_pre_rot,
             k_heads_1KSD_pre_rot,
@@ -405,8 +426,6 @@ class VisionAttention(LightweightModule):
 
         q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode=Mode.PREFILL)
         k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode=Mode.PREFILL)
-
-        # last_five_unpadded = lambda x, mesh_device: first_five(x, mesh_device, start=-(96 - 80) - 5, end=-(96 - 80))
 
         ttnn.deallocate(xqkv_fused)
 
@@ -456,31 +475,16 @@ class VisionAttention(LightweightModule):
         v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(v_heads_1VSD)
 
-        # SDPA
-        if chunk_start_idx is not None:
-            # todo)) the use of chunked SDPA seem to imply the use of kv_cache (as keys_BKSD and values_BKSD are associated with kv_cache); Is this correct?
-            attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
-                q_heads_1QSD_8b,
-                keys_BKSD,
-                values_BKSD,
-                page_table,
-                chunk_start_idx,
-                scale=self.scale,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=self.configuration.get_attn_sdpa_program_config(
-                    Mode.PREFILL, seq_len, chunk_start_idx, None
-                ),
-            )
-        else:
-            attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
-                q_heads_1QSD_8b,
-                k_heads_1KSD_8b,
-                v_heads_1VSD_8b,
-                is_causal=False,
-                scale=self.scale,
-                compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
-            )
+        # ---- SDPA (purely local; each device runs its own n_local_heads) ----------
+        attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
+            q_heads_1QSD_8b,
+            k_heads_1KSD_8b,
+            v_heads_1VSD_8b,
+            is_causal=False,
+            scale=self.scale,
+            compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+            program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
+        )
 
         # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD_8b)
@@ -489,9 +493,7 @@ class VisionAttention(LightweightModule):
 
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.padded_head_dim])
 
-        ###
-        # Output matmul
-        ###
+        # ---- WO matmul (row sharded along contraction) ----------------------------
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -502,7 +504,8 @@ class VisionAttention(LightweightModule):
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
-        output_11SH = ttnn.linear(
+        # Each device contributes a partial sum of the full output dim.
+        output_partial = ttnn.linear(
             attn_output_11SH,
             self.wo,
             compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
@@ -510,12 +513,29 @@ class VisionAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["VISION_WO_PREFILL_PROGCFG"](seq_len),
         )
-        # FIXME: surely ttnn.linear bias should work?
-        if self.wo_bias_prefill is not None:
-            output_11SH = output_11SH + self.wo_bias_prefill
-
-        if seq_len > 1024:
-            output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
-        return output_11SH
+        if seq_len > 1024:
+            output_partial = ttnn.reshape(output_partial, [1, 1, seq_len, -1])
+
+        # On T3K (1, 8) `tt_all_reduce(dim=3)` is implemented as a
+        # reduce_scatter, so the result is fractured along dim=3
+        output_frac = tt_all_reduce(
+            output_partial,
+            self.mesh_device,
+            self.tt_ccl,
+            cluster_axis=self.ccl_cluster_axis,
+            dim=3,
+            sharded=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=self.ccl_dtype,
+            topology=self.ccl_topology,
+        )
+        if output_frac is not output_partial:
+            ttnn.deallocate(output_partial)
+
+        # Bias is fractured along dim=3 to match.
+        if self.wo_bias_prefill is not None:
+            output_frac = output_frac + self.wo_bias_prefill
+
+        return output_frac

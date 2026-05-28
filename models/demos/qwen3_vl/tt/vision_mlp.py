@@ -6,17 +6,36 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode, pad_to_size
 
 
 class MLP(LightweightModule):
-    def __init__(self, mesh_device, args, state_dict, weight_cache_path, layer_num, state_dict_prefix=None):
+    def __init__(
+        self,
+        mesh_device,
+        tt_ccl,
+        args,
+        state_dict,
+        weight_cache_path,
+        layer_num,
+        state_dict_prefix=None,
+    ):
         super().__init__()
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.args = args
         self.dim = args.dim
+        self.cluster_shape = args.cluster_shape
+        # We TP across cluster axis 1 (the row axis on T3K, i.e. all 8 devices).
+        self.tp = self.cluster_shape[1]
+        # For T3K (1, 8), `tt_all_reduce` ignores `cluster_axis` and falls
+        # straight into `reduce_scatter_minimal_async` over the non-1 axis,
+        # so any cluster_axis other than 1 (which is short-circuited) works.
+        self.ccl_cluster_axis = 0
+
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
         pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
@@ -32,7 +51,7 @@ class MLP(LightweightModule):
             pad_hidden_dim(torch_weight(name[:]), dims[0]),
             dtype=type,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, dims[0]), mesh_shape=self.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name),
@@ -43,21 +62,24 @@ class MLP(LightweightModule):
             pad_hidden_dim(torch_bias(name[:]), dim=-1) if pad else torch_bias(name[:]),
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name),
         )
 
         self.four_bit_mlp = args.optimizations.bfp4_mlp
-
-        # Create weights with appropriate precision
+        # ---- fc1: column-sharded ----------------------------------------------------
+        # torch_weight("linear_fc1") has shape [dim, intermediate]. We pad the
+        # output dim up to args.hidden_dim, then shard along the output dim.
+        # Shape: [1, 1, dim, hidden_dim]; shard dim=-1 across cluster axis 1.
         self.linear_fc1_weight = as_weight_tensor(
             "linear_fc1", (-1, -2), ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b
         )
-        # self.linear_fc1_weight.shape = [4304, 1152] each device of N300 sharded on dim=0
+        # ---- fc2: row-sharded -------------------------------------------------------
+        # torch_weight("linear_fc2") has shape [intermediate, dim]. Pad input dim
+        # up to args.hidden_dim and shard along the input dim.
         self.linear_fc2_weight = as_weight_tensor("linear_fc2", (-2, -1), ttnn.bfloat8_b)
-        # self.linear_fc2_weight.shape = [1152, 4304] each device of N300 sharded on dim=1
 
         # Create bias
         self.linear_fc1_bias = as_bias_tensor("linear_fc1", pad=True)
@@ -71,7 +93,8 @@ class MLP(LightweightModule):
         if seq_len >= 1024:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
 
-        # Linear projections with bias
+        # fc1: column-sharded matmul + bias + GELU. Output is column-sharded
+        # along the intermediate dim; no comm yet.
         w1_out = ttnn.linear(
             x,
             self.linear_fc1_weight,
@@ -83,10 +106,11 @@ class MLP(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        w2_out = ttnn.linear(
+        # fc2: row-sharded matmul. Each device computes a partial sum of the
+        # full output dim. We fold the bias in *after* the all-reduce.
+        w2_partial = ttnn.linear(
             w1_out,
             self.linear_fc2_weight,
-            bias=self.linear_fc2_bias,
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp
             else self.args.compute_kernel_config_hifi2_fp16,
@@ -94,7 +118,29 @@ class MLP(LightweightModule):
         )
         ttnn.deallocate(w1_out)
 
-        original_shape = w2_out.shape
+        # On T3K (1, 8) `tt_all_reduce(dim=3)` is implemented as a
+        # reduce_scatter, so the result is fractured along dim=3 -- exactly
+        # the block I/O contract that the LLM uses.
+        w2_frac = tt_all_reduce(
+            w2_partial,
+            self.mesh_device,
+            self.tt_ccl,
+            cluster_axis=self.ccl_cluster_axis,
+            dim=3,
+            sharded=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=self.args.ccl_dtype,
+            topology=self.args.ccl_topology(),
+        )
+        if w2_frac is not w2_partial:
+            ttnn.deallocate(w2_partial)
+
+        # Bias is also fractured along dim=3 to match.
+        out = ttnn.add(w2_frac, self.linear_fc2_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if out is not w2_frac:
+            ttnn.deallocate(w2_frac)
+
+        original_shape = out.shape
         return ttnn.reshape(
-            w2_out, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
+            out, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )

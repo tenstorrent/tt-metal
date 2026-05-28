@@ -13,6 +13,7 @@ from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
 from models.demos.qwen3_vl.tt.patch_merger import PatchMerger
 from models.demos.qwen3_vl.tt.rope import RotarySetup
 from models.demos.qwen3_vl.tt.vision_block import VisionBlock
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
@@ -43,7 +44,6 @@ class VisionTransformer(LightweightModule):
         Args:
             args (VisionModelArgs): Model arguments
             dtype (ttnn.dtype): Data type for computations
-            mesh_device (ttnn.mesh_device): Mesh device for the model
             state_dict (dict): State dictionary containing model weights
             weight_cache_path (str): Path to weight cache
         """
@@ -51,6 +51,8 @@ class VisionTransformer(LightweightModule):
         self.args = args
         self.dtype = dtype
         self.weight_cache_path = weight_cache_path
+
+        self.tt_ccl = TT_CCL(args.mesh_device)
 
         # Create transformation matrix for RoPE QK prefill
         transformation_mat_torch = get_rot_transformation_mat(
@@ -78,6 +80,7 @@ class VisionTransformer(LightweightModule):
                 dtype=dtype,
                 transformation_mats=self.transformation_mats,
                 args=args,
+                tt_ccl=self.tt_ccl,
             )
             self.blocks.append(block)
 
@@ -88,6 +91,7 @@ class VisionTransformer(LightweightModule):
             weight_cache_path=weight_cache_path,
             state_dict_prefix=args.get_state_dict_prefix("PatchMerger"),
             dtype=dtype,
+            tt_ccl=self.tt_ccl,
         )
 
         self.deepstack_visual_indices = args.hf_config.vision_config.deepstack_visual_indexes
@@ -100,6 +104,7 @@ class VisionTransformer(LightweightModule):
                 state_dict_prefix=args.get_state_dict_prefix("DeepstackMerger", deepstack_merger_num=i),
                 dtype=dtype,
                 postshuffle_norm=True,
+                tt_ccl=self.tt_ccl,
             )
             for i in range(len(self.deepstack_visual_indices))
         ]
@@ -131,11 +136,15 @@ class VisionTransformer(LightweightModule):
 
         Args:
             x (ttnn.Tensor): Input tensor [batch_size, 1, seq_len, hidden_dim]
-            cu_seqlens (torch.Tensor): Cumulative sequence lengths
+                Arrives fractured along dim=3 (the hidden dim)
+            unpadded_seq_len (int): Real sequence length before padding.
             rot_mats (list): Rotation matrices for positional embeddings
 
         Returns:
             ttnn.Tensor: Output tensor
+                - fractured along dim=3 (each device owns
+                  out_hidden_size/TP).
+            deepstack_feature_list
         """
         # Forward through each block
         deepstack_feature_list = []
@@ -172,10 +181,8 @@ class DropInVisionTransformer(torch.nn.Module):
         Initialize the TorchVisionTransformer wrapper.
 
         Args:
-            tt_model (VisionTransformer): Initialized TT VisionTransformer instance.
             reference_model (Qwen2_5_VisionTransformerPretrainedModel): Initialized reference HF model instance.
             model_args (VisionModelArgs): Model configuration arguments.
-            mesh_device (ttnn.MeshDevice): The mesh device used by the TT model.
         """
         super().__init__()
         self.reference_model = reference_model
@@ -211,7 +218,7 @@ class DropInVisionTransformer(torch.nn.Module):
 
     def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass mimicking the Qwen2_5_VisionTransformerPretrainedModel interface.
+        Forward pass mimicking the Qwen3_VisionTransformerPretrainedModel interface.
 
         Args:
             pixel_values (torch.Tensor): Input pixel values tensor (equivalent to hidden_states for the ref model start).
@@ -302,7 +309,9 @@ class DropInVisionTransformer(torch.nn.Module):
 
             # --- Postprocessing ---
             # 1. Extract the relevant output part and adjust shape (matching test logic)
-            out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
+            out_hidden_size = (
+                self.model_args.hf_config.vision_config.out_hidden_size // self.model_args.cluster_shape[1]
+            )
             # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims
             final_output = ttnn.reshape(tt_out[:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
             ttnn.deallocate(tt_out)
@@ -318,23 +327,13 @@ class DropInVisionTransformer(torch.nn.Module):
                 _, pcc = comp_pcc(reference_output, final_output)
                 logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
 
-            # 2. Convert the output to the desired tensor sharding format
-            # TODO: Modify this once we implement TP+DP to use just convert to desired output sharding
-            final_output_sharded = ttnn.mesh_partition(final_output, 1)
-            ttnn.deallocate(final_output)
-            deepstack_visual_embeds_sharded = [
-                ttnn.mesh_partition(deepstack_visual_embeds_output[i], 1)
-                for i in range(len(deepstack_visual_embeds_output))
-            ]
-            [ttnn.deallocate(deepstack_visual_embeds_output[i]) for i in range(len(deepstack_visual_embeds_output))]
-
-            # 3. Aggregate in batched users list
-            final_outputs.append(final_output_sharded)
+            # 2. Aggregate in batched users list
+            final_outputs.append(final_output)
             for i in range(len(deepstack_visual_embeds_list)):
                 if deepstack_visual_embeds_list[i] is None:
-                    deepstack_visual_embeds_list[i] = [deepstack_visual_embeds_sharded[i]]
+                    deepstack_visual_embeds_list[i] = [deepstack_visual_embeds_output[i]]
                 else:
-                    deepstack_visual_embeds_list[i].append(deepstack_visual_embeds_sharded[i])
+                    deepstack_visual_embeds_list[i].append(deepstack_visual_embeds_output[i])
 
         # concatenate all the outputs
         tt_out = ttnn.concat(final_outputs, dim=0)
@@ -426,7 +425,7 @@ class DropInVisionTransformer(torch.nn.Module):
         ttnn.deallocate(rot_mats[1])
 
         # Postprocessing - extract relevant output and adjust shape
-        out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
+        out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size // self.model_args.cluster_shape[1]
         final_output = ttnn.reshape(tt_out[:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
         ttnn.deallocate(tt_out)
 

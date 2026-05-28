@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_vl.tt.distributed_layernorm import DistributedLayerNorm
 from models.demos.qwen3_vl.tt.vision_attention import VisionAttention
-from models.demos.qwen3_vl.tt.vision_layernorm import LayerNorm
 from models.demos.qwen3_vl.tt.vision_mlp import MLP
 from models.tt_transformers.tt.common import Mode
 
@@ -19,6 +19,7 @@ class VisionBlock(LightweightModule):
         layer_num,
         weight_cache_path,
         transformation_mats,
+        tt_ccl=None,
     ):
         super().__init__()
 
@@ -34,11 +35,13 @@ class VisionBlock(LightweightModule):
         self.n_kv_heads = args.n_kv_heads
         self.current = 0
         self.model_config = args.get_model_config()
+        self.tt_ccl = tt_ccl
 
         self.layer_num = layer_num
 
         self.attention = VisionAttention(
             mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
@@ -48,12 +51,13 @@ class VisionBlock(LightweightModule):
         )
         self.feed_forward = MLP(
             mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
             args=args,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
         )
-        self.attention_norm = LayerNorm(
+        self.attention_norm = DistributedLayerNorm(
             device=mesh_device,
             dim=args.dim,
             eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
@@ -61,9 +65,10 @@ class VisionBlock(LightweightModule):
             state_dict_prefix=args.get_state_dict_prefix("norm1", layer_num),
             weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=ttnn.bfloat16,
+            tt_ccl=tt_ccl,
+            ccl_topology=args.ccl_topology(),
         )
-        # args.dim = 1280
-        self.ff_norm = LayerNorm(
+        self.ff_norm = DistributedLayerNorm(
             device=mesh_device,
             dim=args.dim,
             eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
@@ -71,6 +76,8 @@ class VisionBlock(LightweightModule):
             state_dict_prefix=args.get_state_dict_prefix("norm2", layer_num),
             weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=ttnn.bfloat16,
+            tt_ccl=tt_ccl,
+            ccl_topology=args.ccl_topology(),
         )
 
     def forward(
