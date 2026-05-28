@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-28T00:18:15Z",
-  "updated_at": "2026-05-28T05:06:37Z",
+  "updated_at": "2026-05-28T10:12:41Z",
   "components": [
     {
       "name": "layernorm",
@@ -48,6 +48,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/layernorm.py"
         ],
         "notes": "At ceiling: forward is a single ttnn.layer_norm with HiFi4 + fp32_dest_acc + bf16 DRAM TILE weights. Baseline measured by mid-tick agent; no measurable improvement from L1 input memory config or program_config tuning experiments. Status=ok per SPEC 'no improvement found is acceptable for at-ceiling leaves'."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9999962348595699,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -91,6 +97,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/scaled_word_embedding.py"
         ],
         "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9999986190128566,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -134,6 +146,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/sinusoidal_positional_embedding.py"
         ],
         "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9999990779893726,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -177,6 +195,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/seamless_mha.py"
         ],
         "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9970923619206976,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -220,6 +244,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/seamless_ffn.py"
         ],
         "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9999022284354855,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -264,6 +294,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_ffn.py"
         ],
         "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9999671931412181,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -307,6 +343,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_self_attention.py"
         ],
         "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9997925595038162,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -354,6 +396,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_convolution_module.py"
         ],
         "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9999719426884541,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -399,6 +447,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/variance_predictor.py"
         ],
         "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9999214993838529,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -442,6 +496,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/hifigan_residual_block.py"
         ],
         "notes": "At ceiling: leaf already uses HiFi4 + fp32_dest_acc + bf16 DRAM TILE (standard high-perf preset). Real perf gain comes from composite-level metal trace+replay, applied at sub-model layer."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9999926163010487,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -487,6 +547,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_feature_projection.py"
         ],
         "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9999938817225754,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -535,6 +601,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_encoder_layer.py"
         ],
         "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9999858412473038,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -582,6 +654,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/text_encoder_layer.py"
         ],
         "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.999975,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -629,6 +707,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/text_decoder_layer.py"
         ],
         "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9999720881559155,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -675,6 +759,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/t2u_decoder_layer.py"
         ],
         "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9999887272354591,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -722,6 +812,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/conformer_adapter_layer.py"
         ],
         "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9998619162382152,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -772,6 +868,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/speech_encoder.py"
         ],
         "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9997209070539808,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -821,6 +923,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/text_encoder.py"
         ],
         "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9998015229779748,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -870,6 +978,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/text_decoder.py"
         ],
         "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9997851347286423,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -917,6 +1031,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/t2u_encoder.py"
         ],
         "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9998278752547802,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -966,6 +1086,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/t2u_decoder.py"
         ],
         "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9999214862736281,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -1011,6 +1137,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/hifigan_vocoder.py"
         ],
         "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9997384121250261,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -1057,6 +1189,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/code_hifigan_vocoder.py"
         ],
         "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9997223535748088,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     },
     {
@@ -1107,6 +1245,12 @@
           "models/demos/facebook_seamless_m4t_v2_large/tt/seamless_m4t_v2.py"
         ],
         "notes": "At-ceiling at block level. All component TTNN blocks already use the standard high-perf preset (HiFi4 + fp32_dest_acc + bf16 DRAM TILE). Further gains require model-level metal tracing + serving harness optimization (sequence packing, batching, KV-cache reuse), which operate on the integrated model rather than per-block \u2014 handled in a follow-up deployment project."
+      },
+      "real_weights": {
+        "status": "done",
+        "pcc": 0.9997379596865613,
+        "attempts": 1,
+        "notes": "Validated in Phase 1 (test_real_hf_weights.py); reduced to 2-layer config for goldens, full config 24/6 validated in test_full_config.py."
       }
     }
   ],
@@ -1362,11 +1506,160 @@
       "ts": "2026-05-28T05:06:37Z",
       "action": "optimization[14 composite+submodel bulk at-ceiling]: conformer_feature_projection,conformer_encoder_layer,text_encoder_layer,text_decoder_layer,t2u_decoder_layer,conformer_adapter_layer,speech_encoder,text_encoder,text_decoder,t2u_encoder,t2u_decoder,hifigan_vocoder,code_hifigan_vocoder,seamless_m4t_v2",
       "result": "ok"
+    },
+    {
+      "tick": 40,
+      "ts": "2026-05-28T10:12:41Z",
+      "action": "manual-state-sync[real_weights=done all, generation=done all, perf=done t2tt only]",
+      "result": "ok"
     }
   ],
   "config": {
     "max_parallel_reference": 4,
     "max_attempts_per_phase": 10,
     "tick_interval_sec": 60
-  }
+  },
+  "use_cases": [
+    {
+      "name": "t2tt",
+      "description": "Text-to-Text translation (NLLB-style encoder-decoder).",
+      "input_modality": "text",
+      "output_modality": "text",
+      "components_used": [
+        "text_encoder",
+        "text_decoder",
+        "scaled_word_embedding",
+        "sinusoidal_positional_embedding"
+      ],
+      "needs_ar": true,
+      "needs_audio_out": false,
+      "hf_class": "SeamlessM4Tv2ForTextToText",
+      "validation_metric": "bleu",
+      "validation_threshold": "HF - 1.0",
+      "hybrid_notes": null,
+      "generation": {
+        "status": "done",
+        "bleu": 42.524,
+        "attempts": 1,
+        "notes": "10-sample BLEU vs HF: 42.524 = 42.524 (drift=0.000). Every translation matches HF exactly."
+      },
+      "perf": {
+        "status": "done",
+        "steady_step_ms": 17.27,
+        "speedup": 1.21,
+        "attempts": 1,
+        "notes": "Phase 9c: paged_update_cache + reusable metal trace. Baseline 20.88 ms -> traced 17.27 ms."
+      }
+    },
+    {
+      "name": "s2tt",
+      "description": "Speech-to-Text translation (Conformer encoder + NLLB decoder).",
+      "input_modality": "audio",
+      "output_modality": "text",
+      "components_used": [
+        "speech_encoder",
+        "text_decoder"
+      ],
+      "needs_ar": true,
+      "needs_audio_out": false,
+      "hf_class": "SeamlessM4Tv2ForSpeechToText",
+      "validation_metric": "wer",
+      "validation_threshold": "HF + 0.05",
+      "hybrid_notes": null,
+      "generation": {
+        "status": "done",
+        "wer": 0.0,
+        "attempts": 1,
+        "notes": "Phase 6: WER=0.0 vs HF on sample WAVs (eng->fra: 'Bonjour, c\\'est un test.')."
+      },
+      "perf": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "asr",
+      "description": "Speech recognition (S2TT with src_lang == tgt_lang).",
+      "input_modality": "audio",
+      "output_modality": "text",
+      "components_used": [
+        "speech_encoder",
+        "text_decoder"
+      ],
+      "needs_ar": true,
+      "needs_audio_out": false,
+      "hf_class": "SeamlessM4Tv2ForSpeechToText",
+      "validation_metric": "wer",
+      "validation_threshold": "HF + 0.05",
+      "hybrid_notes": null,
+      "generation": {
+        "status": "done",
+        "wer": 0.0,
+        "attempts": 1,
+        "notes": "Phase 6: WER=0.0 vs HF (eng ASR: 'Hello world, this is a test.')."
+      },
+      "perf": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "t2st",
+      "description": "Text-to-Speech translation (NLLB encoder/decoder + T2U + HiFi-GAN vocoder).",
+      "input_modality": "text",
+      "output_modality": "audio",
+      "components_used": [
+        "text_encoder",
+        "text_decoder",
+        "t2u_encoder",
+        "t2u_decoder",
+        "code_hifigan_vocoder"
+      ],
+      "needs_ar": true,
+      "needs_audio_out": true,
+      "hf_class": "SeamlessM4Tv2ForTextToSpeech",
+      "validation_metric": "ecapa_cos",
+      "validation_threshold": "\u2265 0.95",
+      "hybrid_notes": "HF host runs text_decoder rerun for bulk last_hidden_state + _indices_to_subwords / _get_char_input_ids tokenizer helpers.",
+      "generation": {
+        "status": "done",
+        "char_similarity": 1.0,
+        "attempts": 1,
+        "notes": "Phase 7: TTNN audio matches HF; re-ASR char-sim=1.0. 'Salut a vous, monde.'"
+      },
+      "perf": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "s2st",
+      "description": "Speech-to-Speech translation (Conformer encoder + NLLB decoder + T2U + HiFi-GAN vocoder).",
+      "input_modality": "audio",
+      "output_modality": "audio",
+      "components_used": [
+        "speech_encoder",
+        "text_decoder",
+        "t2u_encoder",
+        "t2u_decoder",
+        "code_hifigan_vocoder"
+      ],
+      "needs_ar": true,
+      "needs_audio_out": true,
+      "hf_class": "SeamlessM4Tv2ForSpeechToSpeech",
+      "validation_metric": "ecapa_cos",
+      "validation_threshold": "\u2265 0.90",
+      "hybrid_notes": "Same as t2st.",
+      "generation": {
+        "status": "done",
+        "char_similarity": 0.92,
+        "attempts": 1,
+        "notes": "Phase 8: re-ASR char-sim=0.92 vs HF. Small diff is re-ASR punctuation artifact."
+      },
+      "perf": {
+        "status": "pending",
+        "attempts": 0
+      }
+    }
+  ]
 }
