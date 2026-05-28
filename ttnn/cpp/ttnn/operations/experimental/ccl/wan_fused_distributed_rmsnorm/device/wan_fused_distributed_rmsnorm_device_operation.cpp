@@ -282,8 +282,11 @@ Tensor wan_fused_distributed_rmsnorm(
     using OperationType = ttnn::experimental::prim::WanFusedDistributedRmsnormDeviceOperation;
 
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
+    // Match composite ops' fused_rmsnorm_{pre,post}_allgather defaults so
+    // both paths produce numerically equivalent output when the caller
+    // omits compute_kernel_config: math_approx=false, fp32_dest_acc_en=true.
     auto kernel_config_val = init_device_compute_kernel_config(
-        arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
+        arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, false, true, false);
 
     const auto& mesh_view = mesh_device.get_view();
     const std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
