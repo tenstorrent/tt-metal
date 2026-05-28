@@ -255,8 +255,6 @@ class SequentialScheduler(_SchedulerBase):
             self._current_step_in_scheduler = 0
 
     def get_last_lr(self) -> float:
-        if self._current_scheduler_index < len(self._schedulers):
-            return self._schedulers[self._current_scheduler_index].get_last_lr()
         return self._last_lr
 
     def get_state_dict(self) -> dict:
