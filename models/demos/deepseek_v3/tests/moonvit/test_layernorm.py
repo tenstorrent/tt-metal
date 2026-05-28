@@ -34,6 +34,56 @@ from models.demos.deepseek_v3.tt.moonvit.layernorm import MoonVisionLayerNorm
     indirect=True,
 )
 @pytest.mark.parametrize("seq_len", [256, 1024])
+def test_moonvit_final_layernorm(mesh_device, model_args, seq_len):
+    """encoder.final_layernorm (used post-block-stack, pre-patch_merger).
+
+    Mechanically identical to the per-block LayerNorm — same hidden dim,
+    same eps=1e-5 — but pinning a separate test so a future bug in the
+    extraction (wrong attribute path) is caught at this position.
+    """
+    pcc_threshold = 0.99
+
+    ref_ln = model_args.reference_final_layernorm()
+    ref_ln_fp32 = ref_ln.float()
+    assert isinstance(ref_ln, torch.nn.LayerNorm)
+    assert ref_ln.normalized_shape[0] == model_args.hidden_size
+
+    tt_ln = MoonVisionLayerNorm.from_torch(mesh_device=mesh_device, ref=ref_ln, dtype=ttnn.bfloat16)
+
+    torch.manual_seed(0)
+    x_pt_fp32 = torch.randn(1, 1, seq_len, model_args.hidden_size, dtype=torch.float32)
+    x_pt_bf16 = x_pt_fp32.to(torch.bfloat16)
+
+    ref_out = ref_ln_fp32(x_pt_fp32)
+
+    is_mesh = type(mesh_device).__name__ == "MeshDevice"
+    x_tt = ttnn.from_torch(
+        x_pt_bf16,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
+    )
+    tt_out = ttnn.to_torch(
+        tt_ln(x_tt),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0) if is_mesh else None,
+    )
+    if is_mesh and tt_out.shape[0] != ref_out.shape[0]:
+        tt_out = tt_out[: ref_out.shape[0]]
+
+    passing, pcc_msg = comp_pcc(ref_out, tt_out, pcc_threshold)
+    logger.info(f"[final_ln seq={seq_len}] {comp_allclose(ref_out, tt_out)} {pcc_msg}")
+    assert passing, f"final_layernorm PCC below threshold at seq_len={seq_len}: {pcc_msg}"
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "mesh_device",
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(os.environ.get("MESH_DEVICE"), (1, 1))],
+    indirect=True,
+)
+@pytest.mark.parametrize("seq_len", [256, 1024])
 @pytest.mark.parametrize("which", ["norm0", "norm1"])
 def test_moonvit_layernorm(mesh_device, model_args, seq_len, which):
     """LayerNorm forward matches HF reference at PCC >= 0.99."""
