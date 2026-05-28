@@ -286,6 +286,16 @@ void FabricFirmwareInitializer::init(
 
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         log_info(tt::LogMetal, "Initializing Fabric");
+        if (rtoptions_.get_simulator_enabled()) {
+            for (auto* dev : devices_) {
+                const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+                for (const auto& [eth_chan, direction] :
+                     control_plane_.get_active_fabric_eth_channels(fabric_node_id)) {
+                    cluster_.get_driver()->register_sim_fabric_endpoint_direction(
+                        dev->id(), uint32_t(eth_chan), uint32_t(direction));
+                }
+            }
+        }
         control_plane_.write_routing_tables_to_all_chips();
         compile_and_configure_fabric();
         log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
