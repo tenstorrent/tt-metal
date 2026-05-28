@@ -1903,10 +1903,11 @@ std::set<PhysicalPortConnection> CablingGenerator::prune_dead_channels(
 
     std::vector<LogicalChannelConnection> rebuilt;
 
-    // Single-pass walk that rebuilds chip_connections_ while detecting dead cables. For each
-    // cable: expand to channels, decide live-or-dead in one shot. Live -> append channels to
-    // rebuilt. Dead -> skip channels, record the cable into `pruned`.
-    auto process_cable = [&](PortType port_type,
+    // Inspect a single cable. Expands its channels via the connector mapping, records the
+    // cable into `pruned` if any channel is in the dead set; otherwise appends the channels
+    // to `rebuilt` (the new chip_connections_). Returns true if the cable was dead, so callers
+    // operating on mutable containers can erase it.
+    auto inspect_cable = [&](PortType port_type,
                              const Board& start_board,
                              const Board& end_board,
                              HostId start_host_id,
@@ -1914,7 +1915,7 @@ std::set<PhysicalPortConnection> CablingGenerator::prune_dead_channels(
                              PortId start_port,
                              HostId end_host_id,
                              TrayId end_tray,
-                             PortId end_port) {
+                             PortId end_port) -> bool {
         const auto& start_channels = start_board.get_port_channels(port_type, start_port);
         const auto& end_channels = end_board.get_port_channels(port_type, end_port);
         auto pairs = tt::scaleout_tools::get_asic_channel_connections(port_type, start_channels, end_channels);
@@ -1938,7 +1939,7 @@ std::set<PhysicalPortConnection> CablingGenerator::prune_dead_channels(
             } else {
                 pruned.insert({endpoint_b, endpoint_a});
             }
-            return;
+            return true;
         }
 
         for (const auto& [start_chan, end_chan] : pairs) {
@@ -1946,51 +1947,67 @@ std::set<PhysicalPortConnection> CablingGenerator::prune_dead_channels(
                 LogicalChannelEndpoint{.host_id = start_host_id, .tray_id = start_tray, .asic_channel = start_chan},
                 LogicalChannelEndpoint{.host_id = end_host_id, .tray_id = end_tray, .asic_channel = end_chan});
         }
+        return false;
     };
 
+    // Single-pass walk that:
+    //   1. Rebuilds chip_connections_ (drives FSD emission).
+    //   2. Mutates graph->internal_connections in place to drop dead graph-level cables
+    //      (drives emit_cabling_descriptor — only graph-level connections appear in the
+    //      cabling textproto, see resolved_graph_to_protobuf at line ~1336).
+    //   3. Mutates node.inter_board_connections in place for in-memory consistency, even
+    //      though they are not part of the emitted cabling textproto.
+    //   4. Board::internal_connections (intra-board traces) are board-type properties; we
+    //      filter their channels out of chip_connections_ but cannot mutate the Board.
     std::function<void(const std::unique_ptr<ResolvedGraphInstance>&)> walk =
         [&](const std::unique_ptr<ResolvedGraphInstance>& graph) {
             if (!graph) {
                 return;
             }
 
-            for (const auto& [node_name, node] : graph->nodes) {
+            for (auto& [node_name, node] : graph->nodes) {
                 HostId host_id = node.host_id;
 
+                // Intra-board: rebuild-only, no mutation of Board possible.
                 for (const auto& [tray_id, board] : node.boards) {
                     for (const auto& [port_type, conns] : board.get_internal_connections()) {
                         for (const auto& [port_a, port_b] : conns) {
-                            process_cable(port_type, board, board, host_id, tray_id, port_a, host_id, tray_id, port_b);
+                            inspect_cable(port_type, board, board, host_id, tray_id, port_a, host_id, tray_id, port_b);
                         }
                     }
                 }
 
-                for (const auto& [port_type, conns] : node.inter_board_connections) {
-                    for (const auto& [be_a, be_b] : conns) {
-                        TrayId tray_a = be_a.first;
-                        PortId port_a = be_a.second;
-                        TrayId tray_b = be_b.first;
-                        PortId port_b = be_b.second;
+                // Inter-board within node: erase dead cables from the node clone's container.
+                for (auto& [port_type, conns] : node.inter_board_connections) {
+                    auto new_end = std::remove_if(conns.begin(), conns.end(), [&](const auto& bc) {
+                        TrayId tray_a = bc.first.first;
+                        PortId port_a = bc.first.second;
+                        TrayId tray_b = bc.second.first;
+                        PortId port_b = bc.second.second;
                         const Board& board_a = node.boards.at(tray_a);
                         const Board& board_b = node.boards.at(tray_b);
-                        process_cable(port_type, board_a, board_b, host_id, tray_a, port_a, host_id, tray_b, port_b);
-                    }
+                        return inspect_cable(
+                            port_type, board_a, board_b, host_id, tray_a, port_a, host_id, tray_b, port_b);
+                    });
+                    conns.erase(new_end, conns.end());
                 }
             }
 
-            for (const auto& [port_type, conns] : graph->internal_connections) {
-                for (const auto& [pe_a, pe_b] : conns) {
-                    auto [host_a, tray_a, port_a] = pe_a;
-                    auto [host_b, tray_b, port_b] = pe_b;
+            // Graph-level (between nodes): erase dead cables so emit_cabling_descriptor reflects pruning.
+            for (auto& [port_type, conns] : graph->internal_connections) {
+                auto new_end = std::remove_if(conns.begin(), conns.end(), [&](const auto& pc) {
+                    auto [host_a, tray_a, port_a] = pc.first;
+                    auto [host_b, tray_b, port_b] = pc.second;
                     if (!host_id_to_node_.contains(host_a) || !host_id_to_node_.contains(host_b)) {
-                        continue;
+                        return false;
                     }
                     const Node* node_a = host_id_to_node_.at(host_a);
                     const Node* node_b = host_id_to_node_.at(host_b);
                     const Board& board_a = node_a->boards.at(tray_a);
                     const Board& board_b = node_b->boards.at(tray_b);
-                    process_cable(port_type, board_a, board_b, host_a, tray_a, port_a, host_b, tray_b, port_b);
-                }
+                    return inspect_cable(port_type, board_a, board_b, host_a, tray_a, port_a, host_b, tray_b, port_b);
+                });
+                conns.erase(new_end, conns.end());
             }
 
             for (const auto& [_, sub] : graph->subgraphs) {
