@@ -464,6 +464,10 @@
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_MM_THROTTLE_PERF=2
+    # Catch silent CB overflows / NOC asserts on the failing leg. Watcher
+    # writes to /work/generated/watcher/watcher.log and TT_THROWs the moment
+    # any kernel writes past a CB's allocated pages — see issue #45327.
+    export TT_METAL_WATCHER=60
     SKIP_MODEL_LOAD="--skip-model-load"
     [ "${MLPERF_READ_ONLY:-true}" = "false" ] && SKIP_MODEL_LOAD=""
     overall_status=0

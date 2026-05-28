@@ -181,6 +181,17 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+      # Stress branch: capture TT_METAL_WATCHER log when enabled. Watcher writes
+      # to generated/watcher/watcher.log relative to TT_METAL_HOME (=/work).
+      # Upload separately so the log survives even on success (and isn't
+      # overwritten by the test_reports artifact).
+      - name: Upload watcher log
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: "watcher_log_${{ job.check_run_id }}"
+          path: /work/generated/watcher/
+          if-no-files-found: ignore
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}

@@ -33,6 +33,12 @@ on:
           - "wh_llmbox_perf (T3000 perf)"
           - "wh_galaxy (WH Galaxy)"
           - "wh_galaxy_perf (WH Galaxy perf)"
+          # Stress branch — pin to one Galaxy host for the prefill_128 stress matrix.
+          - "wh_galaxy_perf_g04glx01 (Galaxy g04glx01)"
+          - "wh_galaxy_perf_g04glx03 (Galaxy g04glx03)"
+          - "wh_galaxy_perf_g05glx04 (Galaxy g05glx04)"
+          - "wh_galaxy_perf_g14glx03 (Galaxy g14glx03)"
+          - "wh_galaxy_perf_g14glx04 (Galaxy g14glx04)"
           - "bh_p150 (P150)"
           - "bh_loudbox (BH LoudBox)"
           - "bh_p300 (P300)"
