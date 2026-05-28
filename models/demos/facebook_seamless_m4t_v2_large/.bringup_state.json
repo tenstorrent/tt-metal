@@ -5,7 +5,7 @@
   "device": "p150",
   "arch_name": "blackhole",
   "started_at": "2026-05-28T00:18:15Z",
-  "updated_at": "2026-05-28T10:23:10Z",
+  "updated_at": "2026-05-28T10:23:51Z",
   "components": [
     {
       "name": "layernorm",
@@ -1518,6 +1518,12 @@
       "ts": "2026-05-28T10:23:10Z",
       "action": "perf[s2tt]",
       "result": "ok"
+    },
+    {
+      "tick": 42,
+      "ts": "2026-05-28T10:23:51Z",
+      "action": "perf[asr]: shares-infra-with-s2tt",
+      "result": "ok"
     }
   ],
   "config": {
@@ -1608,8 +1614,11 @@
         "notes": "Phase 6: WER=0.0 vs HF (eng ASR: 'Hello world, this is a test.')."
       },
       "perf": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "steady_step_ms": 17.47,
+        "speedup": 1.294,
+        "attempts": 1,
+        "notes": "Shares tt/speech_to_text_model.py with s2tt (ASR is s2tt with src_lang==tgt_lang). Same trace path, same numbers. Verified by test_asr_wer_matches_hf still passing at WER=0.0."
       }
     },
     {

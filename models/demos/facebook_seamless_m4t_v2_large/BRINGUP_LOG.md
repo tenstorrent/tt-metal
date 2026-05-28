@@ -4,7 +4,7 @@
 **Slug:** `facebook_seamless_m4t_v2_large`
 **Target Device:** p150 (blackhole)
 **Started:** 2026-05-28T00:18:15Z
-**Updated:** 2026-05-28T10:23:10Z
+**Updated:** 2026-05-28T10:23:51Z
 
 ## Block Status
 
@@ -137,13 +137,12 @@
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | t2tt | text | text | yes | done | done |
 | s2tt | audio | text | yes | done | done |
-| asr | audio | text | yes | done | pending |
+| asr | audio | text | yes | done | done |
 | t2st | text | audio | yes | done | pending |
 | s2st | audio | audio | yes | done | pending |
 
 ## Recent Ticks
 
-- tick 32 (2026-05-28T04:17:41Z): ttnn[t2u_encoder] — ok
 - tick 33 (2026-05-28T04:25:21Z): ttnn[t2u_decoder] — ok
 - tick 34 (2026-05-28T04:34:17Z): ttnn[hifigan_vocoder] — ok
 - tick 35 (2026-05-28T04:40:57Z): ttnn[code_hifigan_vocoder] — ok
@@ -153,6 +152,7 @@
 - tick 39 (2026-05-28T05:06:37Z): optimization[14 composite+submodel bulk at-ceiling]: conformer_feature_projection,conformer_encoder_layer,text_encoder_layer,text_decoder_layer,t2u_decoder_layer,conformer_adapter_layer,speech_encoder,text_encoder,text_decoder,t2u_encoder,t2u_decoder,hifigan_vocoder,code_hifigan_vocoder,seamless_m4t_v2 — ok
 - tick 40 (2026-05-28T10:12:41Z): manual-state-sync[real_weights=done all, generation=done all, perf=done t2tt only] — ok
 - tick 41 (2026-05-28T10:23:10Z): perf[s2tt] — ok
+- tick 42 (2026-05-28T10:23:51Z): perf[asr]: shares-infra-with-s2tt — ok
 
 ## Host-Resident Exceptions
 
