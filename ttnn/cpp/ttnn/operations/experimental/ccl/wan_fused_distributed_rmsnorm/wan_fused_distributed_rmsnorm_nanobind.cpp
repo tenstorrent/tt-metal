@@ -50,6 +50,26 @@ void bind_wan_fused_distributed_rmsnorm(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("use_device_op") = false);
+
+    ttnn::bind_function<"wan_fused_distributed_rmsnorm_create_stats_buffer", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Allocate the persistent stats DRAM buffer required by the device op's
+            MUX writer path (TP>1 with multiple workers per chip). Returns None
+            when the MUX path isn't used (TP=1, per_head_norm, or single-worker
+            shapes), in which case the device op also doesn't require a buffer.
+
+            The returned tensor must be held by the caller across launches and
+            passed in via the `persistent_output_buffer` kwarg to
+            `wan_fused_distributed_rmsnorm`.
+        )doc",
+        &ttnn::experimental::wan_fused_distributed_rmsnorm_create_stats_buffer,
+        nb::arg("input_tensor"),
+        nb::arg("cluster_axis"),
+        nb::arg("mesh_device"),
+        nb::kw_only(),
+        nb::arg("num_heads_per_device") = 1,
+        nb::arg("per_head_norm") = false);
 }
 
 }  // namespace ttnn::operations::experimental::ccl
