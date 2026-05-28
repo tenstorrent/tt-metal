@@ -395,9 +395,9 @@ models/common/warmup/ @nostojicTT @sraizada-tt @djordje-tt @rdraskicTT @tchedaTT
 models/datasets/llm_dataset_utils.py @mtairum @uaydonat @tenstorrent/codeowner-bypass
 models/demos @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/demos/deepseek_v3 @uaydonat @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @yalrawwashTT @tenstorrent/codeowner-bypass
-models/demos/deepseek_v3_b1 @tt-aho @TT-BrianLiu @sjameelTT @nardoTT @tt-asaigal @tenstorrent/codeowner-bypass
-models/demos/deepseek_v3_b1/demo @esmalTT @tt-aho @TT-BrianLiu @sjameelTT @nardoTT @tt-asaigal @tenstorrent/codeowner-bypass
-models/demos/deepseek_v3_b1/weights @esmalTT @tt-aho @TT-BrianLiu @sjameelTT @nardoTT @tt-asaigal @tenstorrent/codeowner-bypass
+models/demos/deepseek_v3_b1 @tt-aho @TT-BrianLiu @sjameelTT @tt-asaigal @tenstorrent/codeowner-bypass
+models/demos/deepseek_v3_b1/demo @esmalTT @tt-aho @TT-BrianLiu @sjameelTT @tt-asaigal @tenstorrent/codeowner-bypass
+models/demos/deepseek_v3_b1/weights @esmalTT @tt-aho @TT-BrianLiu @sjameelTT @tt-asaigal @tenstorrent/codeowner-bypass
 models/demos/deepseek_v3_d_p @tenstorrent/metalium-developers-ds-prefill @tenstorrent/codeowner-bypass
 models/demos/gpt_oss @uaydonat @mtairum @sraizada-tt @handrewsTT @tenstorrent/codeowner-bypass
 models/**/bert*/ @TT-BrianLiu @uaydonat @tenstorrent/codeowner-bypass
