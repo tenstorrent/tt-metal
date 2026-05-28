@@ -99,6 +99,33 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_graph_phy
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
 /**
+ * @brief Port-type validation metadata attached to MappingConstraints
+ *
+ * Used by ConsistencyChecker during DFS to validate mapped global pairs satisfy
+ * cross-host required port types (pairwise QSFP_DD check).
+ */
+template <typename TargetNode, typename GlobalNode>
+struct PortTypeMappingValidationContext {
+    std::map<TargetNode, MeshHostRankId> target_host_ranks;
+    std::map<GlobalNode, MeshHostRankId> global_host_ranks;
+    std::map<std::pair<GlobalNode, GlobalNode>, tt::tt_metal::PortType> undirected_link_port_types;
+
+    bool enabled() const {
+        return !undirected_link_port_types.empty() && !target_host_ranks.empty() && !global_host_ranks.empty();
+    }
+};
+
+/**
+ * @brief Indexed port-type validation data for ConsistencyChecker
+ */
+struct PortTypeValidationIndexData {
+    bool enabled = false;
+    std::vector<MeshHostRankId> target_host_ranks;
+    std::vector<MeshHostRankId> global_host_ranks;
+    std::map<std::pair<size_t, size_t>, tt::tt_metal::PortType> undirected_link_port_types;
+};
+
+/**
  * @brief Unified constraint system for topology mapping
  *
  * MappingConstraints represents all constraints internally as trait maps. Both trait-based
@@ -442,6 +469,20 @@ public:
      */
     void print_mapping_constraint_maps(const std::string& label = "Mapping constraints", bool quiet_mode = false) const;
 
+    /**
+     * @brief Attach port-type validation metadata for ConsistencyChecker (DFS path)
+     *
+     * When set, ConsistencyChecker validates that mapped cross-host target pairs use the
+     * required port type (QSFP_DD) on their mapped global ASIC pair.
+     */
+    void set_port_type_validation_context(PortTypeMappingValidationContext<TargetNode, GlobalNode> context);
+
+    /**
+     * @brief Get port-type validation metadata, if attached
+     */
+    const std::optional<PortTypeMappingValidationContext<TargetNode, GlobalNode>>& get_port_type_validation_context()
+        const;
+
 private:
     // Internal representation: intersection of all constraints
     std::map<TargetNode, std::set<GlobalNode>> valid_mappings_;      // Required constraints
@@ -458,6 +499,8 @@ private:
     // Same-group constraint: targets in a target group map to at most one global group
     std::vector<std::set<TargetNode>> same_rank_target_groups_;
     std::vector<std::set<GlobalNode>> same_rank_global_groups_;
+
+    std::optional<PortTypeMappingValidationContext<TargetNode, GlobalNode>> port_type_validation_context_;
 
     // Track which global nodes are exclusively reserved by many-to-many constraints
     // Maps global node -> set of target nodes that are allowed to map to it via many-to-many constraints
@@ -769,6 +812,8 @@ struct ConstraintIndexData {
     std::vector<int> global_to_same_rank_group;
     std::vector<std::set<size_t>> same_rank_groups;
     std::vector<size_t> target_to_group;
+
+    PortTypeValidationIndexData port_type_validation;
 
     /**
      * @brief Construct ConstraintIndexData from MappingConstraints and GraphIndexData
@@ -1091,12 +1136,15 @@ struct ConsistencyChecker {
      * Checks that if target node A is mapped to global X, and target node B (neighbor of A)
      * is mapped to global Y, then X and Y must be connected.
      * In STRICT mode: also checks channel counts are sufficient.
+     * When port_type_validation is provided and enabled, also validates that mapped
+     * cross-host target pairs use QSFP_DD on their mapped global ASIC pair.
      *
      * @param target_idx Index of target node being assigned
      * @param global_idx Index of global node being assigned to
      * @param graph_data Indexed graph data
      * @param mapping Current partial mapping (target_idx -> global_idx)
      * @param validation_mode Channel validation mode
+     * @param port_type_validation Optional indexed port-type validation data
      * @return true if assignment is locally consistent
      */
     template <typename TargetNode, typename GlobalNode>
@@ -1105,7 +1153,8 @@ struct ConsistencyChecker {
         size_t global_idx,
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         const std::vector<int>& mapping,
-        ConnectionValidationMode validation_mode);
+        ConnectionValidationMode validation_mode,
+        const PortTypeValidationIndexData* port_type_validation = nullptr);
 
     /**
      * @brief Check forward consistency: ensure assignment leaves viable options for future neighbors

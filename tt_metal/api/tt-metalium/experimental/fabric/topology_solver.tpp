@@ -697,6 +697,18 @@ MappingConstraints<TargetNode, GlobalNode>::get_cardinality_constraints() const 
 }
 
 template <typename TargetNode, typename GlobalNode>
+void MappingConstraints<TargetNode, GlobalNode>::set_port_type_validation_context(
+    PortTypeMappingValidationContext<TargetNode, GlobalNode> context) {
+    port_type_validation_context_ = std::move(context);
+}
+
+template <typename TargetNode, typename GlobalNode>
+const std::optional<PortTypeMappingValidationContext<TargetNode, GlobalNode>>&
+MappingConstraints<TargetNode, GlobalNode>::get_port_type_validation_context() const {
+    return port_type_validation_context_;
+}
+
+template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::set_same_rank_groups_constraint(
     const std::vector<std::set<TargetNode>>& target_groups,
     const std::vector<std::set<GlobalNode>>& global_groups) {
@@ -2075,6 +2087,37 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
         }
         same_rank_groups.push_back(std::move(group_indices));
     }
+
+    const auto& port_type_context = constraints.get_port_type_validation_context();
+    if (port_type_context.has_value() && port_type_context->enabled()) {
+        port_type_validation.enabled = true;
+        port_type_validation.target_host_ranks.assign(graph_data.n_target, MESH_HOST_RANK_UNSET);
+        port_type_validation.global_host_ranks.assign(graph_data.n_global, MESH_HOST_RANK_UNSET);
+
+        for (size_t i = 0; i < graph_data.n_target; ++i) {
+            const auto& target_node = graph_data.target_nodes[i];
+            auto rank_it = port_type_context->target_host_ranks.find(target_node);
+            if (rank_it != port_type_context->target_host_ranks.end()) {
+                port_type_validation.target_host_ranks[i] = rank_it->second;
+            }
+        }
+        for (size_t i = 0; i < graph_data.n_global; ++i) {
+            const auto& global_node = graph_data.global_nodes[i];
+            auto rank_it = port_type_context->global_host_ranks.find(global_node);
+            if (rank_it != port_type_context->global_host_ranks.end()) {
+                port_type_validation.global_host_ranks[i] = rank_it->second;
+            }
+        }
+        for (const auto& [link_key, port_type] : port_type_context->undirected_link_port_types) {
+            auto global_a_it = graph_data.global_to_idx.find(link_key.first);
+            auto global_b_it = graph_data.global_to_idx.find(link_key.second);
+            if (global_a_it != graph_data.global_to_idx.end() && global_b_it != graph_data.global_to_idx.end()) {
+                const size_t lo = std::min(global_a_it->second, global_b_it->second);
+                const size_t hi = std::max(global_a_it->second, global_b_it->second);
+                port_type_validation.undirected_link_port_types[{lo, hi}] = port_type;
+            }
+        }
+    }
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -2542,7 +2585,8 @@ bool ConsistencyChecker::check_local_consistency(
     size_t global_idx,
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const std::vector<int>& mapping,
-    ConnectionValidationMode validation_mode) {
+    ConnectionValidationMode validation_mode,
+    const PortTypeValidationIndexData* port_type_validation) {
     // Check all neighbors of target_idx that are already mapped
     for (size_t neighbor : graph_data.target_adj_idx[target_idx]) {
         int mapped_global = mapping[neighbor];
@@ -2570,6 +2614,24 @@ bool ConsistencyChecker::check_local_consistency(
                 return false;  // Insufficient channels in strict mode
             }
         }
+
+        if (port_type_validation != nullptr && port_type_validation->enabled) {
+            const auto& ptv = *port_type_validation;
+            if (target_idx < ptv.target_host_ranks.size() && neighbor < ptv.target_host_ranks.size() &&
+                global_idx < ptv.global_host_ranks.size() && mapped_global_idx < ptv.global_host_ranks.size()) {
+                const auto rank_a = ptv.target_host_ranks[target_idx];
+                const auto rank_b = ptv.target_host_ranks[neighbor];
+                if (rank_a != MESH_HOST_RANK_UNSET && rank_b != MESH_HOST_RANK_UNSET && rank_a != rank_b) {
+                    const size_t lo = std::min(global_idx, mapped_global_idx);
+                    const size_t hi = std::max(global_idx, mapped_global_idx);
+                    const auto link_it = ptv.undirected_link_port_types.find({lo, hi});
+                    if (link_it == ptv.undirected_link_port_types.end() ||
+                        link_it->second != tt::tt_metal::PortType::QSFP_DD) {
+                        return false;
+                    }
+                }
+            }
+        }
     }
 
     return true;  // All checks passed
@@ -2584,6 +2646,9 @@ bool ConsistencyChecker::check_forward_consistency(
     const std::vector<int>& mapping,
     const std::vector<bool>& used,
     ConnectionValidationMode validation_mode) {
+    const PortTypeValidationIndexData* port_type_validation =
+        constraint_data.port_type_validation.enabled ? &constraint_data.port_type_validation : nullptr;
+
     // For each unassigned neighbor of target_idx, check if there's at least one viable candidate
     for (size_t neighbor : graph_data.target_adj_idx[target_idx]) {
         if (mapping[neighbor] != -1) {
@@ -2610,7 +2675,8 @@ bool ConsistencyChecker::check_forward_consistency(
             // Modify the temporary mapping in place (restored on next iteration)
             temp_mapping[neighbor] = static_cast<int>(candidate_global);
 
-            if (ConsistencyChecker::check_local_consistency(neighbor, candidate_global, graph_data, temp_mapping, validation_mode)) {
+            if (ConsistencyChecker::check_local_consistency(
+                    neighbor, candidate_global, graph_data, temp_mapping, validation_mode, port_type_validation)) {
                 has_viable_candidate = true;
                 break;  // Found at least one viable candidate
             }
@@ -2780,9 +2846,12 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
 
     // Try each candidate in order (best first)
     for (size_t global_idx : selection.candidates) {
+        const PortTypeValidationIndexData* port_type_validation =
+            constraint_data.port_type_validation.enabled ? &constraint_data.port_type_validation : nullptr;
+
         // Check local consistency (edges to already-mapped neighbors)
         if (!ConsistencyChecker::check_local_consistency(
-                target_idx, global_idx, graph_data, state_.mapping, validation_mode)) {
+                target_idx, global_idx, graph_data, state_.mapping, validation_mode, port_type_validation)) {
             continue;  // Skip invalid candidate
         }
 
@@ -3220,8 +3289,11 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search_n(
                 return;
             }
 
+            const PortTypeValidationIndexData* port_type_validation =
+                constraint_data.port_type_validation.enabled ? &constraint_data.port_type_validation : nullptr;
+
             if (!ConsistencyChecker::check_local_consistency(
-                    target_idx, global_idx, graph_data, state_.mapping, validation_mode)) {
+                    target_idx, global_idx, graph_data, state_.mapping, validation_mode, port_type_validation)) {
                 continue;
             }
 
