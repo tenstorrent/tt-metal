@@ -161,9 +161,7 @@ def _run_kernel(kernel: str = "metal") -> None:
                 assert ttl_mod is not None
                 rows = b * s_len
                 columns = c
-                x2, dL2, g_row, r_row = _ttl_rmsnorm_bw_numpy_to_2d(
-                    x_np, d_np, g_np, rms_np, rows, columns
-                )
+                x2, dL2, g_row, r_row = _ttl_rmsnorm_bw_numpy_to_2d(x_np, d_np, g_np, rms_np, rows, columns)
                 rows_p, cols_p = _tile_padded_shape(rows, columns)
                 x_p, g_p, rms_p, dL_p, out_da, out_dg = _ttl_rmsnorm_bw_tensors_to_padded_device(
                     ttl_mod, mesh, x2, g_row, r_row, dL2, rows_p, cols_p
@@ -171,9 +169,7 @@ def _run_kernel(kernel: str = "metal") -> None:
                 ttl_kernel = ttl_mod.make_kernel()
 
                 def run_step() -> None:
-                    _, _ = ttl_mod.run_rmsnorm_bw_2pass(
-                        mesh, ttl_kernel, x_p, g_p, rms_p, dL_p, out_da, out_dg
-                    )
+                    _, _ = ttl_mod.run_rmsnorm_bw_2pass(mesh, ttl_kernel, x_p, g_p, rms_p, dL_p, out_da, out_dg)
 
             else:
                 raise ValueError(f"unknown kernel: {kernel}")
@@ -182,7 +178,6 @@ def _run_kernel(kernel: str = "metal") -> None:
                 run_step()
             ttnn.synchronize_device(mesh)
 
-            total = 0.0
             t0 = time.perf_counter()
             for _ in range(NUM_MEASURE):
                 run_step()

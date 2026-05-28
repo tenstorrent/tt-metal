@@ -18,6 +18,7 @@ import torch
 
 TILE_WIDTH = 32
 
+
 def get_block_size(whole_row_width: int = 32, max_block_size: int = 4) -> int:
     """
     Same logic as tt-train/.../metal/common/program_utils.hpp get_block_size:
@@ -26,6 +27,7 @@ def get_block_size(whole_row_width: int = 32, max_block_size: int = 4) -> int:
         if whole_row_width % block_size == 0:
             return block_size
     return 1
+
 
 def make_kernel():
     bc = 2
@@ -41,9 +43,7 @@ def make_kernel():
     ):
         cols = input_t.shape[1]
         if cols % TILE_WIDTH != 0:
-            raise ValueError(
-                f"input_t width ({cols}) must be divisible by TILE_WIDTH ({TILE_WIDTH})"
-            )
+            raise ValueError(f"input_t width ({cols}) must be divisible by TILE_WIDTH ({TILE_WIDTH})")
         ht = input_t.shape[0] // TILE_WIDTH
         wt = cols // TILE_WIDTH
         block_size = get_block_size(wt, 2)
@@ -139,10 +139,7 @@ def make_kernel():
                                     dL_blk.wait() as dlv,
                                 ):
                                     with out_da_blk.reserve() as oa:
-                                        oa.store(
-                                            recip_w * gv * dlv
-                                            - scale_w * iv * recip_w * recip_w * inv_c_w
-                                        )
+                                        oa.store(recip_w * gv * dlv - scale_w * iv * recip_w * recip_w * inv_c_w)
                                     with out_dg_blk.reserve() as og:
                                         og.store(iv * recip_w * dlv)
 
@@ -214,9 +211,10 @@ def run_rmsnorm_bw_2pass(device, kernel, x_p, g_p, rms_p, dL_p, out_da, out_dg):
 
 
 def to_dev(t, device):
-   return ttnn.from_torch(
+    return ttnn.from_torch(
         t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
+
 
 def pad(t, rows_padded, cols_padded):
     rows, cols = t.shape
