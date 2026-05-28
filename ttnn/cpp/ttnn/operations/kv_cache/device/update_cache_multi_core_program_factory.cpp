@@ -243,15 +243,21 @@ ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descriptor(
         Wt,
         granularity,
         u_count};
+    const auto make_compute_config = [&]() {
+        return ComputeConfigDescriptor{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .math_approx_mode = math_approx_mode,
+        };
+    };
 
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/compute/update_cache.cpp";
     compute_desc_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc_g1.core_ranges = core_group_1;
     compute_desc_g1.compile_time_args = compute_kernel_args;
-    compute_desc_g1.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-    };
+    compute_desc_g1.config = make_compute_config();
 
     std::optional<KernelDescriptor> compute_desc_g2;
     if (!core_group_2.ranges().empty()) {
@@ -262,9 +268,7 @@ ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descriptor(
         desc_g2.source_type = KernelDescriptor::SourceType::FILE_PATH;
         desc_g2.core_ranges = core_group_2;
         desc_g2.compile_time_args = std::move(compute_kernel_args_g2);
-        desc_g2.config = ComputeConfigDescriptor{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-        };
+        desc_g2.config = make_compute_config();
         compute_desc_g2 = std::move(desc_g2);
     }
 
