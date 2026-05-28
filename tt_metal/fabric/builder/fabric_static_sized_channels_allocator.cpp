@@ -716,6 +716,7 @@ void FabricStaticSizedChannelsAllocator::emit_channel_allocations_ct_args(
     std::vector<uint32_t>& ct_args,
     size_t num_used_vc0_sender_channels,
     size_t num_used_vc1_sender_channels,
+    size_t num_used_vc2_sender_channels,
     size_t num_used_receiver_channels) const {
     // Tag
     ct_args.push_back(0xabcd1234);
@@ -732,49 +733,69 @@ void FabricStaticSizedChannelsAllocator::emit_channel_allocations_ct_args(
     // Channel-to-entry index mappings
     //
     // The allocator emits entries in order: VC0 senders [0 .. total_vc0), VC1 senders
-    // [total_vc0 .. total_vc0+total_vc1), then receiver entries. The router may use fewer
-    // sender channels per VC than were allocated (e.g. interior chips have no Z upstream,
-    // so the last VC0/VC1 slot is allocated but unused). When emitting the kernel-side
-    // SENDER_TO_ENTRY_IDX mapping we must skip past the *per-VC* unused slots, not the
-    // total unused slots, so that VC1 sch_idx i maps to allocator entry
-    //   total_vc0_sender_channels + (i - num_used_vc0_sender_channels)
-    // = i + (total_vc0_sender_channels - num_used_vc0_sender_channels)
-    // = i + num_unused_vc0_sender_channels
+    // [total_vc0 .. total_vc0+total_vc1), VC2 senders [total_vc0+total_vc1 .. total_sender),
+    // then receiver entries. The router may use fewer sender channels per VC than were
+    // allocated (e.g. interior chips have no Z upstream, so the last VC0/VC1 slot is
+    // allocated but unused). When emitting the kernel-side SENDER_TO_ENTRY_IDX mapping we
+    // must skip past the *per-VC* unused slots, not the total unused slots — the kernel
+    // compacts its sender channels in (VC0, VC1, VC2) order using the ACTUAL_* counts
+    // (see VC1_SENDER_CHANNEL_START / VC2_SENDER_CHANNEL_START in
+    // fabric_erisc_router_ct_args.hpp), so each VC's used channels must point into its
+    // own allocator-entry region.
     //
-    // Adding `num_unused_channels` (the historical, buggy value) over-skips by
-    // `num_unused_vc1_sender_channels`, which silently routes VC1 sch_idx[k] to the
-    // *next* VC1 entry, e.g. sch=6 (the third used VC1 channel = "from-N upstream"
-    // on a SOUTH router) ends up reading the unused VC1[3] "from-Z" slot. The upstream
-    // router is still configured (correctly) to write into the VC1[2] base address, so
-    // forwarded data is dropped on the floor while credits keep flowing, producing the
-    // classic "downstream transmits zero-content packets" symptom observed on multi-hop
-    // cross-mesh VC1 paths through interior chips.
+    // VC1 sch_idx i (in [used_vc0 .. used_vc0+used_vc1)) maps to entry
+    //   total_vc0 + (i - used_vc0) = i + unused_vc0
+    // VC2 sch_idx i (in [used_vc0+used_vc1 .. used_vc0+used_vc1+used_vc2)) maps to
+    //   total_vc0 + total_vc1 + (i - used_vc0 - used_vc1) = i + unused_vc0 + unused_vc1
+    //
+    // The historical bug was using `num_unused_channels` (the total across VCs) as the
+    // skip count for VC1, which silently routed VC1 sch_idx[k] to the *next* VC1 entry —
+    // e.g. sch=6 (the third used VC1 channel = "from-N upstream" on a SOUTH router) ended
+    // up reading the unused VC1 "from-Z" slot. The upstream router was still configured
+    // (correctly) to write into the original base address, so forwarded data was dropped
+    // on the floor while credits kept flowing, producing the classic "downstream transmits
+    // zero-content packets" symptom on multi-hop cross-mesh VC1 paths through interior
+    // chips. VC2 had the same shape of bug: VC2 used channels fell into the padding
+    // region because num_used_sender_channels excluded VC2.
     const size_t total_vc0_sender_channels = get_num_sender_channels(0);
+    const size_t total_vc1_sender_channels = get_num_sender_channels(1);
+    const size_t total_vc2_sender_channels = get_num_sender_channels(2);
     const size_t num_unused_vc0_sender_channels = total_vc0_sender_channels - num_used_vc0_sender_channels;
-    const size_t num_used_sender_channels = num_used_vc0_sender_channels + num_used_vc1_sender_channels;
-    const size_t num_unused_channels = total_sender_channels - num_used_sender_channels;
+    const size_t num_unused_vc1_sender_channels = total_vc1_sender_channels - num_used_vc1_sender_channels;
+    const size_t num_unused_vc2_sender_channels = total_vc2_sender_channels - num_used_vc2_sender_channels;
+    const size_t num_used_sender_channels =
+        num_used_vc0_sender_channels + num_used_vc1_sender_channels + num_used_vc2_sender_channels;
+    const size_t num_unused_channels =
+        num_unused_vc0_sender_channels + num_unused_vc1_sender_channels + num_unused_vc2_sender_channels;
     const bool has_unused_channels = (num_unused_channels > 0) && num_used_sender_channels > 0;
 
     // Sender channel-to-entry index
     if (has_unused_channels) {
+        const size_t used_vc0_end = num_used_vc0_sender_channels;
+        const size_t used_vc1_end = used_vc0_end + num_used_vc1_sender_channels;
         for (size_t i = 0; i < num_used_sender_channels; ++i) {
-            if (i < num_used_vc0_sender_channels) {
+            if (i < used_vc0_end) {
                 ct_args.push_back(static_cast<uint32_t>(i));
-            } else {
-                // VC1 channels skip the unused VC0 channel entries only — *not* the
-                // unused VC1 slots, which sit after the used VC1 entries.
+            } else if (i < used_vc1_end) {
+                // VC1 channels skip the unused VC0 slots only.
                 ct_args.push_back(static_cast<uint32_t>(i + num_unused_vc0_sender_channels));
+            } else {
+                // VC2 channels skip the unused VC0 and VC1 slots.
+                ct_args.push_back(
+                    static_cast<uint32_t>(i + num_unused_vc0_sender_channels + num_unused_vc1_sender_channels));
             }
         }
         // Padding for unused channels — map to their actual (unserviced) entry indices.
-        // The unused entries are the VC0 tail [num_used_vc0 .. total_vc0) followed by
-        // the VC1 tail [total_vc0 + num_used_vc1 .. total_vc0 + total_vc1).
+        // The unused entries are the per-VC tails appended in VC order.
         for (size_t i = 0; i < num_unused_vc0_sender_channels; ++i) {
             ct_args.push_back(static_cast<uint32_t>(num_used_vc0_sender_channels + i));
         }
-        const size_t num_unused_vc1_sender_channels = num_unused_channels - num_unused_vc0_sender_channels;
         for (size_t i = 0; i < num_unused_vc1_sender_channels; ++i) {
             ct_args.push_back(static_cast<uint32_t>(total_vc0_sender_channels + num_used_vc1_sender_channels + i));
+        }
+        for (size_t i = 0; i < num_unused_vc2_sender_channels; ++i) {
+            ct_args.push_back(static_cast<uint32_t>(
+                total_vc0_sender_channels + total_vc1_sender_channels + num_used_vc2_sender_channels + i));
         }
     } else {
         for (size_t i = 0; i < num_used_sender_channels; ++i) {

@@ -2084,7 +2084,11 @@ std::pair<std::vector<TrafficPatternConfig>, uint32_t> TestConfigBuilder::create
     // Z-link neighbor sync. Only emitted for NeighborExchange because the other topologies
     // sync via full mcast across the mesh, which does not currently extend across Z-links.
     // For NeighborExchange this is a no-op on non-Z systems (control plane returns empty)
-    // and on Z systems we fan out one CHIP_UNICAST {Z:1} per Z partner.
+    // and on Z systems emits a single CHIP_UNICAST {Z:1} pattern when any Z neighbor
+    // exists. Multi-Z fan-out would require one pattern per partner (the hop map can't
+    // distinguish among multiple Z partners), which today's chips don't need on the
+    // supported rev-C galaxy multi-mesh; see the log_warning below for the case where
+    // someone exercises a topology with more than one Z neighbor per chip.
     if (topology == tt::tt_fabric::Topology::NeighborExchange) {
         const auto z_neighbors = this->route_manager_.get_all_neighbor_node_ids(src_device, RoutingDirection::Z);
         if (z_neighbors.size() > 1) {

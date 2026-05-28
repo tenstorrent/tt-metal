@@ -20,9 +20,11 @@ void FabricConnectionManager::register_client(
     if (inserted) {
         conn.next_hop_dst = next_hop_dst;
     } else {
-        // (eth_chan, vc_id) uniquely determines the next-hop neighbor; sanity-check that
-        // every registration for the same key resolves to the same first-hop dst.
-        TT_ASSERT(
+        // (eth_chan, vc_id) uniquely determines the next-hop neighbor; enforce that every
+        // registration for the same key resolves to the same first-hop dst. Use TT_FATAL
+        // (not TT_ASSERT) so this invariant holds in release builds as well — silently
+        // continuing with a mismatched next_hop_dst would emit wrong RT-args downstream.
+        TT_FATAL(
             conn.next_hop_dst == next_hop_dst,
             "ConnectionKey (dir={}, link={}, vc={}, eth_chan={}) registered with conflicting "
             "next-hop dsts: existing={}, new={}",
