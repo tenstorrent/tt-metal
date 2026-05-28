@@ -59,7 +59,7 @@ void kernel_main() {
         fill_zeros_async(l1_output_write_addr, get_tile_size(cb_output_idx));
         noc_async_read_barrier();
 
-        auto target_indexes_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(get_read_ptr(cb_target_idx));
+        auto target_indexes_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(l1_target_write_addr);
 
         for (uint32_t h = 0U; h < TILE_HEIGHT; ++h) {
             const uint32_t c = target_indexes_l1_ptr[h];

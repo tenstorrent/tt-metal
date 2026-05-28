@@ -53,7 +53,7 @@ void kernel_main() {
         noc_async_read(get_noc_addr(page, target_addr_gen, offset), l1_target_write_addr, target_read_page_size);
         noc_async_read_barrier();
 
-        auto target_indexes_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(get_read_ptr(cb_target_idx));
+        auto target_indexes_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(l1_target_write_addr);
 
         // Process each tile column: read the input tile straight into the output CB,
         // patch any in-range target column in place, then publish to the writer.

@@ -31,23 +31,6 @@ READ_PTR_RE = re.compile(r"\bget_read_ptr\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)")
 LINE_COMMENT_RE = re.compile(r"//.*$")
 BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 
-# Pre-existing violations not addressed in this PR. Each was audited to be safe
-# by construction (single-tile CB, sharded input CB, or single-shot reserve
-# where read_ptr == write_ptr at the call site). They're tracked separately so
-# the lint can still catch NEW violations. Remove an entry as each is fixed.
-KNOWN_VIOLATIONS: frozenset[str] = frozenset(
-    {
-        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/device/kernels/dataflow/writer_llama_reduce_scatter.cpp",
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_boltz/device/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_boltz_sharded.cpp",
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_sharded.cpp",
-        "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_height_width_sharded.cpp",
-        "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp",
-        "tt-train/sources/ttml/metal/ops/select_target_logit/device/kernels/dataflow/select_target_logit_reader.cpp",
-        "tt-train/sources/ttml/metal/ops/subtract_at_target/device/kernels/dataflow/subtract_at_target_reader.cpp",
-        "tt-train/sources/ttml/metal/ops/cross_entropy_fw/device/kernels/dataflow/reader_cross_entropy_fw_interleaved_start_id.cpp",
-    }
-)
-
 
 def strip_comments(text: str) -> str:
     # Preserve newlines inside block comments so line numbers stay accurate.
@@ -123,8 +106,6 @@ def main(argv: list[str]) -> int:
 
     all_errors: list[tuple[Path, int, str, int]] = []
     for p in paths:
-        if str(p) in KNOWN_VIOLATIONS:
-            continue
         all_errors.extend(check_file(p))
 
     if not all_errors:
