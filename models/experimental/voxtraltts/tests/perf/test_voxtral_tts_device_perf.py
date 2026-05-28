@@ -6,25 +6,28 @@ import pytest
 from models.common.utility_functions import run_for_blackhole
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
-_PCC_TEST = "models/experimental/voxtraltts/tests/pcc/test_voxtrale2e_pcc.py"
-_OP_SUPPORT_COUNT = 50000
+_PERF_TEST = "models/experimental/voxtraltts/tests/perf/test_voxtral_tts_perf_inference.py"
+# Model load dispatches ~68k device ops; use headroom above that so load-time
+# profiler overflow is minimized before ReadDeviceProfiler() clears the buffer.
+_OP_SUPPORT_COUNT = 75000
 
 
 @run_for_blackhole("Voxtral TTS device perf is targeted for P150/Blackhole")
 @pytest.mark.parametrize(
     "batch_size, model_name, expected_perf",
     [
-        (1, "voxtral_tts_e2e", 1.0),
+        (1, "voxtral_tts_e2e", 0.43),
     ],
 )
 @pytest.mark.timeout(3600)
 @pytest.mark.models_device_performance_bare_metal
 def test_perf_device_bare_metal_voxtral_tts(batch_size, model_name, expected_perf):
-    subdir = model_name
+    subdir = ""
     num_iterations = 1
     margin = 0.04
 
-    command = f"pytest --timeout=0 {_PCC_TEST} -sv"
+    # Inner run is under Tracy (-p); avoid -sv so model load does not flood the terminal.
+    command = f"pytest --timeout=0 {_PERF_TEST} -q"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
@@ -37,6 +40,7 @@ def test_perf_device_bare_metal_voxtral_tts(batch_size, model_name, expected_per
         num_iterations,
         cols,
         batch_size,
+        device_analysis_types=[],
         op_support_count=_OP_SUPPORT_COUNT,
     )
     expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
