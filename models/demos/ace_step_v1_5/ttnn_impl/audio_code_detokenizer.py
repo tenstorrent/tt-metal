@@ -14,7 +14,7 @@ import numpy as np
 import ttnn
 
 from .condition_encoder import _bidirectional_attn_bias_np, _rope_cos_sin_np
-from .math_perf_env import ace_step_reshape_kwargs
+from .math_perf_env import ace_step_concat_kwargs, ace_step_reshape_kwargs, ace_step_safe_deallocate
 from .qwen3_embedding_encoder import Qwen3EmbeddingEncoderConfig, _TtQwen3EncoderLayer
 
 
@@ -71,6 +71,13 @@ def _build_fsq_codebook_np() -> np.ndarray:
     """
     n = int(np.prod(_FSQ_LEVELS))
     return fsq_codes_from_indices_np(np.arange(n, dtype=np.int64))
+
+
+def _detok_chunk_n() -> int:
+    try:
+        return max(1, int(os.environ.get("ACE_STEP_DETOK_CHUNK_CODES", "128")))
+    except ValueError:
+        return 128
 
 
 def _as_weight(weights_np: Dict[str, np.ndarray], key: str, *, device, dtype, mem, mapper):
@@ -252,6 +259,7 @@ class TtAceStepAudioCodeDetokenizer:
         """Device decode from ``[1, N]`` uint32 indices already on device."""
         n = int(n_codes)
         _sr = ace_step_reshape_kwargs(ttnn)
+        _lin_kw = {"memory_config": self.mem} if self.mem is not None else {}
         x = ttnn.embedding(
             ids_dev,
             self.fsq_codebook_tt,
@@ -260,12 +268,12 @@ class TtAceStepAudioCodeDetokenizer:
             memory_config=self.mem,
         )
         x = ttnn.reshape(x, (1, 1, n, 6), **_sr)
-        q = ttnn.linear(x, self.quantizer_project_out_w, bias=self.quantizer_project_out_b, transpose_b=True)
-        q = ttnn.linear(q, self.embed_w, bias=self.embed_b, transpose_b=True)
+        q = ttnn.linear(x, self.quantizer_project_out_w, bias=self.quantizer_project_out_b, transpose_b=True, **_lin_kw)
+        q = ttnn.linear(q, self.embed_w, bias=self.embed_b, transpose_b=True, **_lin_kw)
         q = ttnn.reshape(q, (1, n, 1, 2048), **_sr)
         q = ttnn.repeat(q, (1, 1, 5, 1))
         special = ttnn.repeat(self.special_tokens, (1, n, 1, 1))
-        h = ttnn.add(q, special)
+        h = ttnn.add(q, special, memory_config=self.mem)
         h = ttnn.reshape(h, (n, 1, 5, 2048), **_sr)
         owns_bias = False
         if bias_tt is None:
@@ -281,10 +289,30 @@ class TtAceStepAudioCodeDetokenizer:
                 except Exception:
                     pass
         h = ttnn.rms_norm(ttnn.to_layout(h, ttnn.TILE_LAYOUT), weight=self.norm_w, epsilon=1e-6, memory_config=self.mem)
-        h = ttnn.linear(h, self.proj_out_w, bias=self.proj_out_b, transpose_b=True)
+        h = ttnn.linear(h, self.proj_out_w, bias=self.proj_out_b, transpose_b=True, **_lin_kw)
         return ttnn.reshape(h, (1, n * 5, 64), **_sr)
 
     def _forward_n_codes(self, code_ids: list[int]) -> ttnn.Tensor:
+        n = int(len(code_ids))
+        chunk_n = _detok_chunk_n()
+        if n <= chunk_n:
+            return self._forward_n_codes_once(code_ids)
+        parts: list[ttnn.Tensor] = []
+        for start in range(0, n, chunk_n):
+            end = min(start + chunk_n, n)
+            parts.append(self._forward_n_codes_once(code_ids[start:end]))
+        if len(parts) == 1:
+            return parts[0]
+        out = (
+            ttnn.concat(parts, dim=1, **ace_step_concat_kwargs(ttnn))
+            if hasattr(ttnn, "concat")
+            else ttnn.concatenate(parts, dim=1, **ace_step_concat_kwargs(ttnn))
+        )
+        for part in parts:
+            ace_step_safe_deallocate(ttnn, part)
+        return out
+
+    def _forward_n_codes_once(self, code_ids: list[int]) -> ttnn.Tensor:
         n = int(len(code_ids))
         mapper = (
             self._fsq_mapper
@@ -326,8 +354,10 @@ class TtAceStepAudioCodeDetokenizer:
         if not code_ids:
             return None
         n = int(len(code_ids))
+        chunk_n = _detok_chunk_n()
         max_n = int(os.environ.get("ACE_STEP_MAX_AUDIO_CODES", "200"))
-        if n > max_n:
+        # Trace capture is fixed-shape; long code streams use chunked eager forward().
+        if n > max_n or n > chunk_n:
             return self.forward(code_str)
         if self._detok_trace_id is not None and self._detok_n_codes != n:
             self.release_trace()

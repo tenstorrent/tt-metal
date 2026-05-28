@@ -25,6 +25,7 @@ from ..math_perf_env import (
     ace_step_vae_activation_memory_config,
     ace_step_vae_activation_storage_dtype,
     ace_step_vae_eltwise_kwargs,
+    ace_step_vae_ensure_interleaved,
     ace_step_vae_typecast_kwargs,
 )
 
@@ -152,6 +153,9 @@ class TtSnake1d:
         out_kw = self._out_kw
         l1_mc = self._l1_mc
         dram_mc = self._dram_mc
+
+        # Wide conv outputs can be HEIGHT_SHARDED ROW_MAJOR; unsqueeze/tilize require interleaved.
+        x = ace_step_vae_ensure_interleaved(ttnn, x, memory_config=dram_mc)
 
         orig_shape = tuple(x.shape)
 
