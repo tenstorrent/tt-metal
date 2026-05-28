@@ -2,10 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Consumer kernel for the DRAM-with-scratch test (Noc::write_zeros overload 3).
-// Waits for the producer to publish a pre-zeroed entry on dfb::scratch, then loops
-// noc.write_zeros over [page_start, page_end) passing the scratch as the working
-// buffer. Flushes with the matching DRAM barrier, then pops the scratch entry.
+// Consumer half of the unified Noc::write_zeros end-to-end test.
+// Pairs with zero_memory_api_l1_producer.cpp: the producer tests overload (1) on a
+// DFB-resident L1 region (CPU-stamp + write_zeros + verify), and as a side effect
+// leaves that DFB entry filled with zeros. This consumer wait_fronts on the same
+// DFB and consumes the now-zero entry as the pre-zeroed scratch for overload (2),
+// looping over the DRAM page range. The single shared DFB scratch eliminates the
+// need for a separate scratch_zeroer kernel — the L1 zero IS the scratch fill.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
