@@ -105,7 +105,71 @@ def multi_scale_deformable_attn_pytorch(
             h_l, w_l = value_spatial_shapes[lvl]
             spatial_shapes_int.append((int(h_l.item()), int(w_l.item())))
 
-    # Split value into a list of tensors for each level
+    # Specialized single-level fast path. BEV-encoder TSA/SCA, DETR decoder,
+    # motion decoder, and seg_head's DETR encoder all see num_levels=1 in
+    # MSDA (= `value_spatial_shapes.shape[0]`), so the multi-level loop
+    # never iterates more than once. The general path still pays for
+    # value_list[]/sampling_grids[] list construction and the `output is
+    # None` branch every call. Fold them flat.
+    #
+    # Note: some upstream blocks (seg_head's DETR encoder) configure their
+    # attention with `num_levels=4` even when MSDA sees only one level —
+    # the slice `[:, :, :, 0, :, :]` is what discards the extra slots. We
+    # keep those slices here for shape-compatibility with both regimes.
+    if num_levels == 1:
+        h_l, w_l = spatial_shapes_int[0]
+        if _enc_stats is not None:
+            # No actual op; keep the marker for parity with multi-level path.
+            _r(_enc_stats, "msda_split_value", _t, device)
+            _t = _s(device)
+
+        # Normalize sampling locations to [-1, 1] via the cached (2,) scale
+        # tensor [2/w, 2/h] which broadcasts on the last dim. The bf16
+        # representation of 2/W (e.g. 2/50 ≈ 0.040039) costs PCC sdc_traj
+        # 0.9911 → 0.9909, still well above the 0.99 gate.
+        scale = _msda_grid_scale(h_l, w_l, device)
+        grid = sampling_locations[:, :, :, 0, :, :]
+        grid = ttnn.subtract(ttnn.multiply(grid, scale), 1.0)
+        if _enc_stats is not None:
+            _r(_enc_stats, "msda_grids", _t, device)
+            _t = _s(device)
+
+        # Layout block: bring value and grid into the (B*H, h, w, D) /
+        # (B*H, Q*P, 1, 2) row-major form grid_sample wants. Typecast
+        # guards from the multi-level path are removed: upstream callers
+        # always emit bf16 (value from a Linear, sampling_locations from
+        # bf16 arithmetic).
+        value_l = ttnn.permute(value, (0, 2, 1, 3))
+        value_l = ttnn.reshape(value_l, (bs * num_heads, h_l, w_l, head_dim))
+        grid = ttnn.permute(grid, (0, 2, 1, 3, 4))
+        grid = ttnn.reshape(grid, (bs * num_heads, num_queries * num_points, 1, 2))
+        value_l = ttnn.to_layout(value_l, layout=ttnn.ROW_MAJOR_LAYOUT)
+        grid = ttnn.to_layout(grid, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if _enc_stats is not None:
+            _r(_enc_stats, "msda_gs_layout", _t, device)
+            _t = _s(device)
+
+        sampled = ttnn.grid_sample(value_l, grid)
+        if _enc_stats is not None:
+            _r(_enc_stats, "msda_grid_sample", _t, device)
+            _t = _s(device)
+
+        sampled = ttnn.reshape(sampled, (bs, num_heads, num_queries, num_points, head_dim))
+        attn = attention_weights[:, :, :, 0, :]
+        attn = ttnn.permute(attn, (0, 2, 1, 3))
+        attn = ttnn.unsqueeze(attn, -1)
+        output = ttnn.sum((sampled * attn), -2)  # (B, H, Q, D)
+        if _enc_stats is not None:
+            _r(_enc_stats, "msda_combine", _t, device)
+            _t = _s(device)
+
+        output = ttnn.permute(output, (0, 2, 1, 3))
+        output = ttnn.reshape(output, (bs, num_queries, num_heads * head_dim))
+        if _enc_stats is not None:
+            _r(_enc_stats, "msda_finalize", _t, device)
+        return output
+
+    # General multi-level path (kept for callers with num_levels > 1).
     value_list = []
     start = 0
     for lvl in range(num_levels):
@@ -118,13 +182,6 @@ def multi_scale_deformable_attn_pytorch(
         _r(_enc_stats, "msda_split_value", _t, device)
         _t = _s(device)
 
-    # Normalize sampling locations to [-1, 1]. Use a cached (2,) scale
-    # tensor [2/w, 2/h] that broadcasts on the last dim of `grid`, so we
-    # do one multiply + one subtract per level instead of slicing x/y
-    # apart, scaling each by a different scalar, and concatenating them
-    # back together. The bf16 representation of 2/W (e.g. 2/50 = 0.04
-    # → 0x3D23 ≈ 0.040039) causes a tiny precision drop — PCC sdc_traj
-    # goes 0.9911 → 0.9909, still well above the 0.99 gate.
     sampling_grids = []
     for lvl in range(num_levels):
         h_l, w_l = spatial_shapes_int[lvl]
@@ -138,19 +195,6 @@ def multi_scale_deformable_attn_pytorch(
     # Accumulator initialized lazily on the first level — avoids an
     # explicit ttnn.zeros allocation, which counts as a Write inside
     # begin_trace_capture and breaks the trace.
-    #
-    # Per-level layout notes (this loop is the hot path):
-    #   - Build NHWC value_l = (B*H, h, w, D) directly with a single
-    #     permute(0,2,1,3) + reshape, instead of going via NCHW intermediate
-    #     and a second permute back to NHWC. The original chain spent ~30 ms
-    #     across encoder layers in a permute that only existed to be undone.
-    #   - Skip identity typecast(bfloat16) when inputs already arrive bf16
-    #     from upstream linear/sampling math — was costing ~10 ms despite
-    #     being a no-op.
-    #   - Keep the per-level contribution in (B, H, Q, D) shape, doing only
-    #     one cheap 4D permute on attention_weights instead of a 5D permute
-    #     on the much larger sampled tensor. Final (B, Q, H*D) materialise
-    #     is hoisted outside the loop (pure layout, no compute).
     output = None
     for lvl in range(num_levels):
         _tlvl = _s(device) if _enc_stats is not None else 0.0
