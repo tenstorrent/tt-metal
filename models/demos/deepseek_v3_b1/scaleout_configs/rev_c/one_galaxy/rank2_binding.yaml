@@ -1,0 +1,9 @@
+rank_bindings:
+- rank: 0
+  mesh_id: 0
+  mesh_host_rank: 0
+  env_overrides:
+    TT_METAL_ALLOCATOR_MODE_HYBRID: "1"
+    # TT_METAL_CACHE: /tmp/tt-metal-cache-decoder-verify-r2
+    TT_VISIBLE_DEVICES: 18,19,22,23,26,27,30,31
+mesh_graph_desc_path: mesh_graph_descriptor.textproto

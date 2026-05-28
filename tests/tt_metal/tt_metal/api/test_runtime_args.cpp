@@ -129,21 +129,21 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
         .gen2_data_movement_config = experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
     };
     const bool is_quasar = MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
-    const uint8_t num_threads = is_quasar ? static_cast<uint8_t>(kQuasarNumUserDms) : uint8_t{1};
+    const uint32_t num_threads = is_quasar ? kQuasarNumUserDms : 1u;
 
     experimental::metal2_host_api::KernelSpec kernel_spec{
         .unique_id = KERNEL,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp",
         .num_threads = num_threads,
         .compiler_options = {.defines = dm_defines},
-        .runtime_arguments_schema =
-            {
+        .config_spec = dm_cfg,
+        .advanced_options =
+            experimental::metal2_host_api::KernelAdvancedOptions{
                 .num_runtime_varargs = num_unique_rt_args,
                 .num_common_runtime_varargs = common_rtas ? num_unique_rt_args : 0u,
             },
-        .config_spec = dm_cfg,
     };
 
     experimental::metal2_host_api::WorkUnitSpec wu{
@@ -212,19 +212,19 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
         kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
             .unique_id = kernel_names[k],
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp"},
-            .num_threads = static_cast<uint8_t>(dm_processors_per_kernel),
+
+                "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp",
+            .num_threads = dm_processors_per_kernel,
             .compiler_options = {.defines = defines_vec},
-            .runtime_arguments_schema =
-                {
-                    .num_runtime_varargs = num_runtime_args,
-                    .num_common_runtime_varargs = common_rtas ? num_runtime_args : 0,
-                },
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
                     .gen2_data_movement_config =
                         experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            .advanced_options =
+                experimental::metal2_host_api::KernelAdvancedOptions{
+                    .num_runtime_varargs = num_runtime_args,
+                    .num_common_runtime_varargs = common_rtas ? static_cast<size_t>(num_runtime_args) : size_t{0},
+                },
         });
         wu_kernel_names.push_back(kernel_names[k]);
     }
@@ -1002,8 +1002,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
     experimental::metal2_host_api::ProgramRunParams params;
     params.kernel_run_params = {{
         .kernel_spec_name = kernel_names[0],
-        .runtime_varargs = {{core, std::vector<uint32_t>(common_rtas.size(), 0)}},
-        .common_runtime_varargs = common_rtas,
+        .advanced_options =
+            experimental::metal2_host_api::AdvancedKernelRunParams{
+                .runtime_varargs = {{core, std::vector<uint32_t>(common_rtas.size(), 0)}},
+                .common_runtime_varargs = common_rtas,
+            },
     }};
     experimental::metal2_host_api::SetProgramRunParameters(program, params);
 
@@ -1041,8 +1044,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
         all_crtas[i] = kernel_crtas;
         params.kernel_run_params.push_back({
             .kernel_spec_name = kernel_names[i],
-            .runtime_varargs = {{core, std::vector<uint32_t>(base_crtas.size(), 0)}},
-            .common_runtime_varargs = kernel_crtas,
+            .advanced_options =
+                experimental::metal2_host_api::AdvancedKernelRunParams{
+                    .runtime_varargs = {{core, std::vector<uint32_t>(base_crtas.size(), 0)}},
+                    .common_runtime_varargs = kernel_crtas,
+                },
         });
     }
     experimental::metal2_host_api::SetProgramRunParameters(program, params);
