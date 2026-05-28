@@ -78,41 +78,47 @@ class TtPixtralVisionModel(LightweightModule):
             )
 
         patch_embeds = self.patch_conv(pixel_values)
-        patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
-        bsz = patch_embeds.shape[0]
+        bsz = int(patch_embeds.shape[0])
+        num_patches = int(patch_embeds.shape[1])
         h0, w0 = image_sizes[0]
         gh, gw = h0 // self.patch_size, w0 // self.patch_size
-        slice_mem_cfg = vision_slice_memcfg(gh * gw)
-        patch_embeds = ttnn.reshape(patch_embeds, [bsz, self.hidden_size, gh, gw], memory_config=slice_mem_cfg)
-        if (
-            slice_mem_cfg.buffer_type == ttnn.BufferType.L1
-            and patch_embeds.memory_config().buffer_type != ttnn.BufferType.L1
-        ):
-            patch_embeds = ttnn.to_memory_config(patch_embeds, slice_mem_cfg)
 
-        patch_embeds_list = [
-            ttnn.slice(
-                patch_embeds,
-                [0, 0, 0, 0],
-                [bsz, self.hidden_size, sz[0] // self.patch_size, sz[1] // self.patch_size],
-                memory_config=slice_mem_cfg,
-            )
-            for sz in image_sizes
-        ]
-
-        reshaped = []
-        for p in patch_embeds_list:
-            p = ttnn.reshape(p, (1, self.hidden_size, -1))
-            p = ttnn.transpose(p, 1, 2)
-            reshaped.append(p)
-        if len(reshaped) == 1:
-            patch_embeds = reshaped[0]
+        if bsz == 1 and len(image_sizes) == 1 and num_patches == gh * gw:
+            # No padding to crop and no batch concat: the transpose/grid-reshape/slice round-trip is identity.
+            patch_embeds = ttnn.reshape(patch_embeds, (1, 1, num_patches, self.hidden_size))
         else:
-            patch_embeds = ttnn.concat(reshaped, dim=0)
-        patch_embeds = ttnn.reshape(
-            patch_embeds,
-            (1, 1, patch_embeds.shape[-2], patch_embeds.shape[-1]),
-        )
+            patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
+            slice_mem_cfg = vision_slice_memcfg(gh * gw)
+            patch_embeds = ttnn.reshape(patch_embeds, [bsz, self.hidden_size, gh, gw], memory_config=slice_mem_cfg)
+            if (
+                slice_mem_cfg.buffer_type == ttnn.BufferType.L1
+                and patch_embeds.memory_config().buffer_type != ttnn.BufferType.L1
+            ):
+                patch_embeds = ttnn.to_memory_config(patch_embeds, slice_mem_cfg)
+
+            patch_embeds_list = [
+                ttnn.slice(
+                    patch_embeds,
+                    [0, 0, 0, 0],
+                    [bsz, self.hidden_size, sz[0] // self.patch_size, sz[1] // self.patch_size],
+                    memory_config=slice_mem_cfg,
+                )
+                for sz in image_sizes
+            ]
+
+            reshaped = []
+            for p in patch_embeds_list:
+                p = ttnn.reshape(p, (1, self.hidden_size, -1))
+                p = ttnn.transpose(p, 1, 2)
+                reshaped.append(p)
+            if len(reshaped) == 1:
+                patch_embeds = reshaped[0]
+            else:
+                patch_embeds = ttnn.concat(reshaped, dim=0)
+            patch_embeds = ttnn.reshape(
+                patch_embeds,
+                (1, 1, patch_embeds.shape[-2], patch_embeds.shape[-1]),
+            )
         seq_len = int(patch_embeds.shape[-2])
         ln_mem = vision_seq_memcfg(seq_len, self.hidden_size)
         if patch_embeds.memory_config().buffer_type != ln_mem.buffer_type:
