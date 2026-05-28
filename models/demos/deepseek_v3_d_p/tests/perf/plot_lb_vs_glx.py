@@ -53,21 +53,29 @@ _GLX_RENAME = {
 }
 
 
-def _load(path: Path, rename: dict) -> pd.DataFrame:
+def _load(path: Path) -> pd.DataFrame:
+    """Auto-detect column-name flavor (LB-style or GLX-style) and normalize."""
     df = pd.read_csv(path)
+    cols = set(df.columns)
+    if "dispatch_col0_max_chip_med_ns" in cols:
+        rename = _LB_RENAME
+    elif "dispatch_col0_ns" in cols:
+        rename = _GLX_RENAME
+    else:
+        raise SystemExit(f"{path}: doesn't look like an LB or GLX summary. Columns: {sorted(cols)[:5]}...")
     df = df.rename(columns=rename)
     return df.set_index("layer_idx").sort_index()
 
 
-def _draw_bars(ax, layers, lb_vals_ms, glx_vals_ms, title, xlabel=True):
+def _draw_bars(ax, layers, lb_vals_ms, glx_vals_ms, title, lb_label, glx_label, xlabel=True):
     n = len(layers)
     bar_w = 0.4
     x = np.arange(n)
     x_lb = x - bar_w / 2 - 0.02
     x_glx = x + bar_w / 2 + 0.02
 
-    ax.bar(x_lb, lb_vals_ms, width=bar_w, color="tab:blue", label="LB 8x1 (200G)")
-    ax.bar(x_glx, glx_vals_ms, width=bar_w, color="tab:orange", label="Galaxy 8x4")
+    ax.bar(x_lb, lb_vals_ms, width=bar_w, color="tab:blue", label=lb_label)
+    ax.bar(x_glx, glx_vals_ms, width=bar_w, color="tab:orange", label=glx_label)
     ax.set_xticks(x)
     ax.set_xticklabels([f"L{L:02d}" for L in layers], rotation=70, fontsize=7)
     if xlabel:
@@ -80,7 +88,9 @@ def _draw_bars(ax, layers, lb_vals_ms, glx_vals_ms, title, xlabel=True):
     ax.set_xlim(-0.7, n - 0.3)
 
 
-def plot_one(lb: pd.DataFrame, glx: pd.DataFrame, op: str, col_or_max: int | str, out_path: Path) -> None:
+def plot_one(
+    lb: pd.DataFrame, glx: pd.DataFrame, op: str, col_or_max, out_path: Path, lb_label: str, glx_label: str
+) -> None:
     if col_or_max == "max":
         key = f"{op}_max"
         title_suffix = "max across dispatch groups"
@@ -92,13 +102,20 @@ def plot_one(lb: pd.DataFrame, glx: pd.DataFrame, op: str, col_or_max: int | str
     glx_vals_ms = [glx.loc[L, key] / 1e6 for L in layers]
 
     fig, ax = plt.subplots(figsize=(max(14, len(layers) * 0.28), 5))
-    _draw_bars(ax, layers, lb_vals_ms, glx_vals_ms, f"{op.capitalize()} — {title_suffix}")
+    _draw_bars(ax, layers, lb_vals_ms, glx_vals_ms, f"{op.capitalize()} — {title_suffix}", lb_label, glx_label)
     if col_or_max == "max":
         avg_lb = sum(lb_vals_ms) / len(lb_vals_ms)
         avg_glx = sum(glx_vals_ms) / len(glx_vals_ms)
-        ax.axhline(avg_lb, color="tab:blue", linestyle="--", linewidth=1.4, label=f"LB avg = {avg_lb:.2f} ms", zorder=5)
         ax.axhline(
-            avg_glx, color="tab:orange", linestyle="--", linewidth=1.4, label=f"Galaxy avg = {avg_glx:.2f} ms", zorder=5
+            avg_lb, color="tab:blue", linestyle="--", linewidth=1.4, label=f"{lb_label} avg = {avg_lb:.2f} ms", zorder=5
+        )
+        ax.axhline(
+            avg_glx,
+            color="tab:orange",
+            linestyle="--",
+            linewidth=1.4,
+            label=f"{glx_label} avg = {avg_glx:.2f} ms",
+            zorder=5,
         )
         ax.legend(loc="upper left", fontsize=8)
     fig.tight_layout()
@@ -107,7 +124,7 @@ def plot_one(lb: pd.DataFrame, glx: pd.DataFrame, op: str, col_or_max: int | str
     print(f"  wrote {out_path}")
 
 
-def plot_grid(lb: pd.DataFrame, glx: pd.DataFrame, out_path: Path) -> None:
+def plot_grid(lb: pd.DataFrame, glx: pd.DataFrame, out_path: Path, lb_label: str, glx_label: str) -> None:
     """Combined 3-row grid:
       row 0: Dispatch group 0..3
       row 1: Combine  group 0..3
@@ -138,7 +155,16 @@ def plot_grid(lb: pd.DataFrame, glx: pd.DataFrame, out_path: Path) -> None:
             key = f"{op}_col{ci}"
             lb_vals_ms = [lb.loc[L, key] / 1e6 for L in layers]
             glx_vals_ms = [glx.loc[L, key] / 1e6 for L in layers]
-            _draw_bars(ax, layers, lb_vals_ms, glx_vals_ms, f"{op.capitalize()} — group {ci}", xlabel=False)
+            _draw_bars(
+                ax,
+                layers,
+                lb_vals_ms,
+                glx_vals_ms,
+                f"{op.capitalize()} — group {ci}",
+                lb_label,
+                glx_label,
+                xlabel=False,
+            )
             if ci > 0:
                 ax.set_ylabel("")
                 ax.tick_params(labelleft=False)
@@ -150,17 +176,26 @@ def plot_grid(lb: pd.DataFrame, glx: pd.DataFrame, out_path: Path) -> None:
         key = f"{op}_max"
         lb_vals_ms = [lb.loc[L, key] / 1e6 for L in layers]
         glx_vals_ms = [glx.loc[L, key] / 1e6 for L in layers]
-        _draw_bars(ax, layers, lb_vals_ms, glx_vals_ms, f"{op.capitalize()} — max", xlabel=True)
+        _draw_bars(ax, layers, lb_vals_ms, glx_vals_ms, f"{op.capitalize()} — max", lb_label, glx_label, xlabel=True)
         avg_lb = sum(lb_vals_ms) / len(lb_vals_ms)
         avg_glx = sum(glx_vals_ms) / len(glx_vals_ms)
-        ax.axhline(avg_lb, color="tab:blue", linestyle="--", linewidth=1.4, label=f"LB avg = {avg_lb:.2f} ms", zorder=5)
         ax.axhline(
-            avg_glx, color="tab:orange", linestyle="--", linewidth=1.4, label=f"Galaxy avg = {avg_glx:.2f} ms", zorder=5
+            avg_lb, color="tab:blue", linestyle="--", linewidth=1.4, label=f"{lb_label} avg = {avg_lb:.2f} ms", zorder=5
+        )
+        ax.axhline(
+            avg_glx,
+            color="tab:orange",
+            linestyle="--",
+            linewidth=1.4,
+            label=f"{glx_label} avg = {avg_glx:.2f} ms",
+            zorder=5,
         )
         # Refresh legend now that lines were added (the bars were already in legend).
         ax.legend(loc="upper left", fontsize=8)
 
-    fig.suptitle("LB 8x1 vs Galaxy 8x4 — Dispatch & Combine per dispatch group, per MoE layer", fontsize=14, y=0.995)
+    fig.suptitle(
+        f"{lb_label} vs {glx_label} — Dispatch & Combine per dispatch group, per MoE layer", fontsize=14, y=0.995
+    )
     # Finalize layout before reading axes positions
     fig.canvas.draw()
 
@@ -199,23 +234,31 @@ def plot_grid(lb: pd.DataFrame, glx: pd.DataFrame, out_path: Path) -> None:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--lb-summary", required=True, help="LB summary CSV (summary_linear-8-2link.csv)")
-    ap.add_argument("--glx-summary", required=True, help="Galaxy 8x4 summary CSV (summary_mesh-8x4-2link.csv)")
-    ap.add_argument("--out-dir", required=True, help="Where to write the 8 PNGs")
+    ap.add_argument("--lb-summary", required=True, help="Left-side summary CSV (blue bars).")
+    ap.add_argument("--glx-summary", required=True, help="Right-side summary CSV (orange bars).")
+    ap.add_argument("--lb-label", default="LB 8x1 (200G)", help="Legend label for the left/blue series.")
+    ap.add_argument("--glx-label", default="Galaxy 8x4", help="Legend label for the right/orange series.")
+    ap.add_argument("--out-dir", required=True, help="Where to write PNGs.")
+    ap.add_argument(
+        "--combined-only", action="store_true", help="Skip 10 standalone PNGs; only emit the combined grid."
+    )
+    ap.add_argument("--combined-name", default="all_lb_vs_glx.png", help="Filename for the combined PNG.")
     args = ap.parse_args()
 
-    lb = _load(Path(args.lb_summary), _LB_RENAME)
-    glx = _load(Path(args.glx_summary), _GLX_RENAME)
+    lb = _load(Path(args.lb_summary))
+    glx = _load(Path(args.glx_summary))
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for op in ["dispatch", "combine"]:
-        for col in range(4):
-            plot_one(lb, glx, op, col, out_dir / f"{op}_col{col}.png")
-        plot_one(lb, glx, op, "max", out_dir / f"{op}_max.png")
-    plot_grid(lb, glx, out_dir / "all_lb_vs_glx.png")
+    if not args.combined_only:
+        for op in ["dispatch", "combine"]:
+            for col in range(4):
+                plot_one(lb, glx, op, col, out_dir / f"{op}_col{col}.png", args.lb_label, args.glx_label)
+            plot_one(lb, glx, op, "max", out_dir / f"{op}_max.png", args.lb_label, args.glx_label)
+    plot_grid(lb, glx, out_dir / args.combined_name, args.lb_label, args.glx_label)
 
-    print(f"\nDone. 10 standalone + 1 combined PNG in {out_dir}")
+    n_standalone = 0 if args.combined_only else 10
+    print(f"\nDone. {n_standalone} standalone + 1 combined PNG in {out_dir}")
 
 
 if __name__ == "__main__":

@@ -109,6 +109,17 @@ _CAPTURE_FILES = _list_captures()
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="mesh-8x4-2link",
         ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            },
+            2,
+            ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4-2link-ring",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
