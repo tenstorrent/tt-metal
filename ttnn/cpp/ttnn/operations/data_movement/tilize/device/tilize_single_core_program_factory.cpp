@@ -38,7 +38,11 @@ ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
+    // EXPERIMENT (MM_FP8 branch): also force fp32_dest_acc_en when any CB on this
+    // core is an 8-bit float format. PR #43481 enforces this at kernel build time;
+    // without it the build fails with "Fp8_e4m3 / Lf8 require fp32_dest_acc_en=true".
+    bool fp32_llk_acc =
+        a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::FP8_E4M3;
 
     uint32_t num_tiles = a.physical_volume() / TILE_HW;
 

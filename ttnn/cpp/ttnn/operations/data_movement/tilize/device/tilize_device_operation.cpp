@@ -111,10 +111,15 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
             input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32 or
             input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::FP8_E4M3,
         "data type must be bfloat16, float32, uint32, int32, uint16, or fp8_e4m3");
+    // EXPERIMENT (MM_FP8 branch only): also allow FP8_E4M3 output so we can construct FP8 TILE
+    // tensors for native FP8 x FP8 matmul (PR #43481). PR #44307 originally restricted FP8 input
+    // to BFLOAT8_B output because (FP8_E4M3, TILE) was not a valid TensorSpec on main; on this
+    // branch we relax that constraint in tensor_spec.cpp.
     TT_FATAL(
-        input_tensor_a.dtype() != DataType::FP8_E4M3 || (operation_attributes.output_dtype == DataType::BFLOAT8_B),
-        "FP8_E4M3 input requires output_dtype=BFLOAT8_B for tilize; the default output dtype would produce an "
-        "invalid TILE output specification");
+        input_tensor_a.dtype() != DataType::FP8_E4M3 || operation_attributes.output_dtype == DataType::BFLOAT8_B ||
+            operation_attributes.output_dtype == DataType::FP8_E4M3,
+        "FP8_E4M3 input requires output_dtype=BFLOAT8_B or FP8_E4M3 for tilize; the default output dtype would "
+        "produce an invalid TILE output specification");
 
     uint32_t stick_size = stick_s * input_tensor_a.element_size();  // Assuming bfloat16 dataformat
 

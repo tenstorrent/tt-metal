@@ -115,23 +115,13 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
                 TT_FATAL(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
                 break;
             case DataType::FP8_E4M3:
-                // Arch validation is each producer op's responsibility (e.g., the combine op
-                // validator at ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/
-                // device/combine_device_operation.cpp); this dtype/layout validator has no
-                // MeshDevice handle and so stays arch-agnostic.
-                // Layout note: ROW_MAJOR-only here because FP8_E4M3 is currently produced
-                // exclusively as the row-major output of the DeepSeek V3 Prefill combine op
-                // (ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine).
-                TT_FATAL(layout == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for FP8_E4M3 dtype!");
-                break;
-            case DataType::FP8_E4M3:
-                // FP8_E4M3 is Blackhole-only; that arch catch-all lives in
-                // MeshTensor::allocate_on_device (the device-binding boundary), since this
-                // dtype/layout validator does not have access to a MeshDevice.
-                // Layout note: ROW_MAJOR-only here because FP8_E4M3 is currently produced
-                // exclusively as the row-major output of the DeepSeek V3 Prefill combine op
-                // (ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine).
-                TT_FATAL(layout == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for FP8_E4M3 dtype!");
+                // EXPERIMENT (MM_FP8 branch only): upstream main forbids TILE here because
+                // the only FP8 producer on main is the DeepSeek prefill combine op, which is
+                // RM-only. We allow both layouts on this branch so we can construct FP8 TILE
+                // tensors and feed them through ttnn.matmul (PR #43481 supplies the FP8 LLK
+                // matmul; PR #44307 supplies FP8 RM -> BFP8 TILE tilize; we additionally allow
+                // FP8 RM -> FP8 TILE tilize, see tilize_device_operation.cpp).
+                // Tracked upstream by #45040.
                 break;
             default:
                 TT_FATAL(
