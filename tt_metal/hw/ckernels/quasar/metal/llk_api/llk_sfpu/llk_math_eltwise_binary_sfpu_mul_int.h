@@ -11,12 +11,31 @@
 
 namespace ckernel {
 
+/**
+ * @brief Initialize SFPU for elementwise integer multiply
+ *
+ * @tparam APPROXIMATE: Approximation mode (unused for integer mul)
+ * @tparam DATA_FORMAT: Data format of the integer operands
+ */
 template <bool APPROXIMATE, DataFormat DATA_FORMAT>
 inline void llk_math_eltwise_binary_sfpu_mul_int_init() {
     static_assert(DATA_FORMAT == DataFormat::Int32, "Quasar SFPU mul_int currently supports Int32 only");
     _llk_math_eltwise_sfpu_init_();
 }
 
+/**
+ * @brief Performs elementwise integer multiply: y = mul(x0, x1)
+ *
+ * @tparam APPROXIMATE: Approximation mode (unused for integer mul)
+ * @tparam DATA_FORMAT: Data format of the integer operands
+ * @tparam ITERATIONS: Number of iterations for given face
+ * @tparam SIGN_MAGNITUDE_FORMAT: Sign-magnitude Int32 encoding for operands and result
+ *
+ * @param idst0: The index of the tile in DST register buffer to use as first operand
+ * @param idst1: The index of the tile in DST register buffer to use as second operand
+ * @param odst: The index of the tile in DST register buffer to use as output
+ * @param vector_mode: Vector mode (must be VectorMode::RC)
+ */
 template <bool APPROXIMATE, DataFormat DATA_FORMAT, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
 inline void llk_math_eltwise_binary_sfpu_mul_int(
     uint32_t idst0, uint32_t idst1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {

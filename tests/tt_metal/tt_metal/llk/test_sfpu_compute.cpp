@@ -144,8 +144,7 @@ bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
     TT_THROW("Unsupported op_name in test");
 }
 
-// Reference implementation for float-typed binary SFPU ops. Integer ops
-// (e.g. add_int) bypass this helper; golden is computed in run_sfpu_binary_two_input_buffer.
+// Reference implementation for float-typed binary SFPU ops.
 bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs, const bfloat16& rhs) {
     if (op_name == "div_binary") {
         return bfloat16(static_cast<float>(lhs) / static_cast<float>(rhs));
@@ -153,6 +152,34 @@ bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs, c
     TT_THROW("Unsupported binary op_name in test");
 }
 
+// Reference for int8 binary SFPU ops after sign-magnitude decode.
+int32_t get_binary_int_operation_result(const std::string& op_name, int lhs, int rhs) {
+    if (op_name == "add_int") {
+        return static_cast<int32_t>(lhs + rhs);
+    }
+    if (op_name == "mul_int") {
+        return static_cast<int32_t>(lhs * rhs);
+    }
+    TT_THROW("Unsupported int8 binary op_name in test");
+}
+
+// Builds packed sign-magnitude Int32 golden for int8 binary SFPU ops.
+std::vector<uint32_t> compute_packed_int8_binary_golden(
+    const std::vector<uint32_t>& packed_lhs, const std::vector<uint32_t>& packed_rhs, const std::string& op_name) {
+    TT_FATAL(packed_lhs.size() == packed_rhs.size(), "lhs/rhs packed size mismatch");
+    std::vector<uint32_t> packed_golden(packed_lhs.size() * 4);
+    for (size_t w = 0; w < packed_lhs.size(); ++w) {
+        for (int b = 0; b < 4; ++b) {
+            const auto lhs_byte = static_cast<uint8_t>((packed_lhs[w] >> (b * 8)) & 0xFF);
+            const auto rhs_byte = static_cast<uint8_t>((packed_rhs[w] >> (b * 8)) & 0xFF);
+            const int lhs = sign_mag_byte_to_int8(lhs_byte);
+            const int rhs = sign_mag_byte_to_int8(rhs_byte);
+            const int32_t result = get_binary_int_operation_result(op_name, lhs, rhs);
+            packed_golden[w * 4 + b] = int32_to_sign_mag_word(result);
+        }
+    }
+    return packed_golden;
+}
 vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std::string& op_name, const int seed) {
     if ((op_name == "sqrt") or (op_name == "log") or (op_name == "rsqrt")) {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(0.0001f, 4.0f, numel, seed);
@@ -490,7 +517,11 @@ bool run_sfpu_binary_two_input_buffer(
     if (is_int8_op) {
         // HW interprets each Int8 datum as sign-mag on the wire (bit7=sign, bits[6:0]=mag),
         // promotes to sign-mag Int32 in dest via copy_tile + fp32_dest_acc, then SFPU int op
+<<<<<<< HEAD
         // (sign-mag on Quasar via ARCH_QUASAR) writes sign-mag Int32 to DRAM.
+=======
+        // writes sign-mag Int32 to DRAM.
+>>>>>>> e7a4a69e1bc (added doc strings, helper functions for clarity)
         packed_golden = sfpu_util::compute_packed_int8_binary_golden(packed_lhs, packed_rhs, test_config.sfpu_op);
     } else {
         auto lhs = unpack_vector<bfloat16, uint32_t>(packed_lhs);
