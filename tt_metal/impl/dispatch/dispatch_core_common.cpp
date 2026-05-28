@@ -7,6 +7,7 @@
 #include "dispatch_core_common.hpp"
 #include <tt-metalium/cluster.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/hal.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
