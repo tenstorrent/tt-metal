@@ -278,6 +278,15 @@ class HybridAttentionForCausalLM(Generator):
                 for s in per_submesh:
                     s.append(pt)
                 continue
+            # torch.chunk returns fewer than dp chunks when pt has fewer
+            # rows than dp.  Pad to the nearest multiple of dp so the
+            # zip below always covers every submesh.
+            if pt.shape[0] % dp != 0:
+                pad_rows = dp - (pt.shape[0] % dp)
+                pt = torch.cat(
+                    [pt, torch.zeros(pad_rows, pt.shape[1], dtype=pt.dtype)],
+                    dim=0,
+                )
             chunks = torch.chunk(pt, dp, dim=0)
             for s, c in zip(per_submesh, chunks):
                 s.append(c)
