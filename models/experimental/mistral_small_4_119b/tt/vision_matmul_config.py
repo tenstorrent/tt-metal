@@ -189,24 +189,91 @@ def build_vision_matmul_preset(mesh_device: ttnn.MeshDevice, m: int, k: int, n: 
     )
 
 
-def build_ffn_down_preset(mesh_device: ttnn.MeshDevice) -> VisionMatmulPreset:
+def _ceil_div(a: int, b: int) -> int:
+    return (a + b - 1) // b
+
+
+def _pick_in0_block_w(
+    mt: int,
+    kt_total: int,
+    *,
+    kt_per_shard: int | None = None,
+    max_block_w: int = 16,
+    is_ws_in0: bool = False,
+) -> int:
+    """Largest in0_block_w that (a) divides Kt (and per-shard Kt for ws-in0)
+    and (b) keeps the in0 CB L1 footprint inside our budget.
+
+    The matmul kernel double-buffers each in0 CB, and the ws-in0 mcast path
+    additionally allocates a separate receiver CB — so total in0 CB L1 cost
+    per core is:
+        l1-in0 (single mcast CB, dbuf):    2 × per_core_M × in0_block_w tiles
+        ws-in0 (sender + receiver, dbuf):  4 × per_core_M × in0_block_w tiles
+
+    We aim to keep the in0 CB footprint ≤ ~250 KB per core (leaving headroom
+    for in1/out/intermediate CBs + sharded buffers). On P150x8 with hidden M
+    ≈ 1152 (mt=36) this lands at:
+        l1-in0 → in0_block_w = 2 (CB ≈ 144 KB)
+        ws-in0 → in0_block_w = 1 (CB ≈ 144 KB)
+    """
+    in0_cb_tile_budget = 250  # ≈ 250 KB at bf16
+    multiplier = 4 if is_ws_in0 else 2
+    candidates = (16, 8, 4, 2, 1)
+    for cand in candidates:
+        if cand > max_block_w:
+            continue
+        if kt_total % cand != 0:
+            continue
+        if kt_per_shard is not None and kt_per_shard % cand != 0:
+            continue
+        if multiplier * mt * cand > in0_cb_tile_budget:
+            continue
+        return cand
+    return 1
+
+
+def _pick_per_core_n(nt: int, max_cells: int) -> int:
+    """Smallest per_core_N that (a) keeps ceil(nt/per_core_N) ≤ max_cells, and
+    (b) divides nt evenly, so the width-sharded output has uniform shard widths
+    across all cores. Downstream ops (gate*up multiply, ffn_down's ws-in0
+    reshard) expect uniform ws shards.
+    """
+    min_per_core_n = max(1, _ceil_div(nt, max_cells))
+    for cand in range(min_per_core_n, nt + 1):
+        if nt % cand == 0:
+            return cand
+    return min_per_core_n
+
+
+def build_ffn_down_preset(mesh_device: ttnn.MeshDevice, m: int = VISION_MM_SEQ_LEN) -> VisionMatmulPreset:
     """Sweep-tuned FFN down preset: 1D ws/dram/ws on 8×2 grid, in0_block_w=8 → 33 TFLOPs.
 
-    Counterintuitive choice: halving cores (32 → 16) doubles per_core_N (1 → 2)
-    and lets in0_block_w grow from 4 to 8 (Kt_per_shard goes 128/32=4 → 128/16=8),
-    halving the inner-K loop. The default 32-core grid leaves cores
-    under-utilized at Mt=4."""
-    shape = MatmulShape(*FFN_DOWN_SHAPE)
+    Tuned at M=128. ``per_core_M`` and per_core_N are scaled with the actual
+    sequence length so the matmul kernel's core count never exceeds the grid.
+    """
+    K, N = FFN_DOWN_SHAPE[1], FFN_DOWN_SHAPE[2]
+    mt = max(1, _ceil_div(m, TILE))
+    nt = N // TILE
+    kt = K // TILE
     dev = mesh_device.compute_with_storage_grid_size()
     gx, gy = min(dev.x, 8), min(dev.y, 2)
     cfg = {
         "family": "1D",
         "layout": "ws/dram/ws",
         "grid": (gx, gy),
-        "in0_block_w": 8,
-        "per_core_M": shape.M // TILE,  # 4
-        "per_core_N": max(1, (shape.N // TILE) // (gx * gy)),  # 32 / 16 = 2
+        # in0 is ws-sharded → block_w must divide kt_per_shard. ws mcast keeps
+        # both a sender and receiver CB, so the in0 CB budget is tighter here.
+        "in0_block_w": _pick_in0_block_w(
+            mt,
+            kt,
+            kt_per_shard=max(1, kt // (gx * gy)),
+            max_block_w=8,
+            is_ws_in0=True,
+        ),
+        "per_core_M": mt,
+        "per_core_N": _pick_per_core_n(nt, gx * gy),
     }
+    shape = MatmulShape(mt * TILE, K, N)
     in0_mem, in1_mem, out_mem = create_memory_configs(shape, cfg)
     return VisionMatmulPreset(
         shape=shape,
@@ -217,24 +284,29 @@ def build_ffn_down_preset(mesh_device: ttnn.MeshDevice) -> VisionMatmulPreset:
     )
 
 
-def build_ffn_up_preset(mesh_device: ttnn.MeshDevice) -> VisionMatmulPreset:
+def build_ffn_up_preset(mesh_device: ttnn.MeshDevice, m: int = VISION_MM_SEQ_LEN) -> VisionMatmulPreset:
     """Sweep-tuned FFN gate/up preset: 1D l1/dram/ws on 8×8 grid, in0_block_w=4.
 
-    Sweep winner was ``dram/dram/ws 8×8 w4`` at 50 TFLOPs. We use ``l1`` in0
-    here to match the actual upstream layout (ffn_norm rms_norm outputs L1)
-    and avoid an L1→DRAM convert per call. Same grid, same w; should land
-    very close to the dram-in0 number."""
-    shape = MatmulShape(*FFN_UP_SHAPE)
+    Tuned at M=128. ``per_core_M`` and per_core_N are scaled with the actual
+    sequence length so the matmul kernel's core count never exceeds the grid.
+    Uses ceil-division on per_core_N to stay safe when the device grid is
+    smaller than the 8×8 design point (e.g. P150 with compute grid 8×6).
+    """
+    K, N = FFN_UP_SHAPE[1], FFN_UP_SHAPE[2]
+    mt = max(1, _ceil_div(m, TILE))
+    nt = N // TILE
+    kt = K // TILE
     dev = mesh_device.compute_with_storage_grid_size()
     gx, gy = min(dev.x, 8), min(dev.y, 8)
     cfg = {
         "family": "1D",
         "layout": "l1/dram/ws",
         "grid": (gx, gy),
-        "in0_block_w": 4,
-        "per_core_M": shape.M // TILE,  # 4
-        "per_core_N": max(1, (shape.N // TILE) // (gx * gy)),  # 128 / 64 = 2
+        "in0_block_w": _pick_in0_block_w(mt, kt, max_block_w=4),
+        "per_core_M": mt,
+        "per_core_N": _pick_per_core_n(nt, gx * gy),
     }
+    shape = MatmulShape(mt * TILE, K, N)
     in0_mem, in1_mem, out_mem = create_memory_configs(shape, cfg)
     return VisionMatmulPreset(
         shape=shape,
@@ -245,24 +317,28 @@ def build_ffn_up_preset(mesh_device: ttnn.MeshDevice) -> VisionMatmulPreset:
     )
 
 
-def build_o_proj_preset(mesh_device: ttnn.MeshDevice) -> VisionMatmulPreset:
-    """Sweep-tuned O-projection preset: 1D l1/dram/ws on 8×4 grid with
-    in0_block_w=16 → 11 µs, 24 TFLOPs.
+def build_o_proj_preset(mesh_device: ttnn.MeshDevice, m: int = VISION_MM_SEQ_LEN) -> VisionMatmulPreset:
+    """Sweep-tuned O-projection preset: 1D l1/dram/ws on 8×4 grid.
 
-    Same grid as the heuristic but ``in0_block_w=16`` (vs default 4) cuts the
-    inner-K loop from 8 iters to 2. ``_pick_in0_block_w`` doesn't see 16
-    because its divisor pool is ``(8, 4, 2, 1)``."""
-    shape = MatmulShape(*O_PROJ_SHAPE)
+    Tuned at M=128 with in0_block_w=16 → 11 µs, 24 TFLOPs. For larger M the
+    in0 working set (per_core_M × in0_block_w tiles) would blow L1, so drop
+    in0_block_w to 4 when M exceeds the design point.
+    """
+    K, N = O_PROJ_SHAPE[1], O_PROJ_SHAPE[2]
+    mt = max(1, _ceil_div(m, TILE))
+    nt = N // TILE
+    kt = K // TILE
     dev = mesh_device.compute_with_storage_grid_size()
     gx, gy = min(dev.x, 8), min(dev.y, 4)
     cfg = {
         "family": "1D",
         "layout": "l1/dram/ws",
         "grid": (gx, gy),
-        "in0_block_w": 16,
-        "per_core_M": shape.M // TILE,  # 4
-        "per_core_N": max(1, (shape.N // TILE) // (gx * gy)),  # 32 / 32 = 1
+        "in0_block_w": _pick_in0_block_w(mt, kt, max_block_w=16),
+        "per_core_M": mt,
+        "per_core_N": _pick_per_core_n(nt, gx * gy),
     }
+    shape = MatmulShape(mt * TILE, K, N)
     in0_mem, in1_mem, out_mem = create_memory_configs(shape, cfg)
     return VisionMatmulPreset(
         shape=shape,
@@ -273,23 +349,29 @@ def build_o_proj_preset(mesh_device: ttnn.MeshDevice) -> VisionMatmulPreset:
     )
 
 
-def build_qkv_preset(mesh_device: ttnn.MeshDevice) -> VisionMatmulPreset:
+def build_qkv_preset(mesh_device: ttnn.MeshDevice, m: int = VISION_MM_SEQ_LEN) -> VisionMatmulPreset:
     """Sweep-tuned QKV preset (test_vision_matmul_sweep.py on Blackhole P150):
-    1D l1/dram/ws on 8×6 grid with in0_block_w=4 → 16 µs, 49 TFLOPs.
+    1D l1/dram/ws on 8×6 grid with in0_block_w=4 → 16 µs, 49 TFLOPs at M=128.
 
-    Bypasses ``choose_strategy`` because its heuristic clamps grid_y to 4 and
-    misses the 8×6 win — Mt=4 with N split as per_core_N=2 across 48 cores."""
-    shape = MatmulShape(*QKV_SHAPE)
+    ``per_core_M`` and per_core_N are scaled with the actual sequence length
+    so the matmul kernel's core count never exceeds the grid (was hardcoded
+    to mt=4, which crashes when num_patches > 128).
+    """
+    K, N = QKV_SHAPE[1], QKV_SHAPE[2]
+    mt = max(1, _ceil_div(m, TILE))
+    nt = N // TILE
+    kt = K // TILE
     dev = mesh_device.compute_with_storage_grid_size()
     gx, gy = min(dev.x, 8), min(dev.y, 6)
     cfg = {
         "family": "1D",
         "layout": "l1/dram/ws",
         "grid": (gx, gy),
-        "in0_block_w": 4,
-        "per_core_M": shape.M // TILE,  # 4
-        "per_core_N": max(1, (shape.N // TILE) // (gx * gy)),  # 96 / 48 = 2
+        "in0_block_w": _pick_in0_block_w(mt, kt, max_block_w=4),
+        "per_core_M": mt,
+        "per_core_N": _pick_per_core_n(nt, gx * gy),
     }
+    shape = MatmulShape(mt * TILE, K, N)
     in0_mem, in1_mem, out_mem = create_memory_configs(shape, cfg)
     return VisionMatmulPreset(
         shape=shape,
@@ -324,6 +406,7 @@ def vision_linear(
     activation=None,
     keep_sharded: bool = False,
     output_memory_config: ttnn.MemoryConfig | None = None,
+    deallocate_input: bool = False,
 ) -> ttnn.Tensor:
     """Run ``ttnn.linear`` with a vision matmul preset (program + memory configs).
 
@@ -331,10 +414,18 @@ def vision_linear(
     ops expect that). Pass ``output_memory_config=ttnn.L1_MEMORY_CONFIG`` to keep
     it in L1 instead — useful when the next op also lives in L1 (avoids DRAM
     round-trips). ``keep_sharded=True`` returns the raw sharded output untouched.
+
+    ``deallocate_input=True``: when the preset's in0 layout differs from x's
+    layout we have to reshard. Setting this frees ``x`` immediately after the
+    reshard, before ``ttnn.linear`` allocates its CBs — required when the old
+    and new ws shards both land on the same cores (e.g. ffn_down resharding
+    from the ffn_up output grid).
     """
     in0 = x
     if _needs_in0_prepare(preset):
         in0 = ttnn.to_memory_config(x, preset.in0_memory_config)
+        if deallocate_input and in0 is not x:
+            ttnn.deallocate(x)
 
     out = ttnn.linear(
         in0,
