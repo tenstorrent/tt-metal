@@ -1062,3 +1062,172 @@ def test_embedding_perf_h2d_forward_d2h_dp(mesh_device, per_device_batch):
         f"({global_batch * SEQ_LEN / (iter_avg / 1000):.0f} tokens/s)"
     )
     logger.info("=" * 100)
+
+
+# ==============================================================================
+# Prototype: per-chip submesh dispatch (parallelize FDMeshCommandQueue overhead)
+# ==============================================================================
+#
+# Splits a (1, 8) parent mesh into 8 independent (1, 1) submeshes, one model
+# instance per submesh, captures a separate trace per submesh, then runs three
+# Forward-only variants to measure the dispatch-overhead breakdown:
+#
+#   V0_one_mesh        : single (1,8) mesh + single trace
+#                        -> 1 execute_trace call walks 8 chips sequentially inside C++
+#   V1_submesh_seq     : 8 submeshes + 8 traces + sequential for-loop in Python
+#                        -> 8 execute_trace calls, each walks 1 chip inside C++
+#                        -> same total dispatch work, just split across calls
+#   V2_submesh_threaded: 8 submeshes + 8 traces + ThreadPoolExecutor
+#                        -> 8 execute_trace calls fired concurrently from threads
+#                        -> each submesh has its own FDMeshCommandQueue and lock,
+#                           so they don't serialize on each other.
+#
+# Per-device batch is hard-coded to 1 (per user request).
+#
+# To run:
+#   pytest perf.py::test_dispatch_submesh_prototype -sv
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(1, 8)],
+    indirect=True,
+    ids=["dp8"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 50_000_000, "num_command_queues": 1}],
+    indirect=True,
+)
+def test_dispatch_submesh_prototype(mesh_device):
+    """Prototype: parallelize FDMeshCommandQueue dispatch overhead via submeshes.
+
+    Measures Forward-only time (no H2D / D2H) for three dispatch variants on
+    a (1, 8) mesh with per-device batch 1. The point is to isolate the cost
+    of the sequential `for (device : get_devices()) issue_trace_commands()`
+    loop inside FDMeshCommandQueue::enqueue_trace.
+    """
+    import concurrent.futures as cf
+
+    dtype = ttnn.bfloat8_b
+    per_device_batch = 1
+    device_name = determine_device_name(mesh_device)[0]
+    num_devices = mesh_device.get_num_devices()
+    logger.info(
+        f"Building dispatch-submesh prototype: per_device_batch={per_device_batch} "
+        f"num_devices={num_devices} {device_name}"
+    )
+
+    # ── V0: single big mesh + single trace ────────────────────────────────
+    logger.info("Variant V0: single (1,8) mesh + single trace")
+    model_args, model_v0, shared_state_dict = create_tt_model(
+        mesh_device=mesh_device,
+        max_batch_size=per_device_batch,
+        max_seq_len=SEQ_LEN,
+        dtype=dtype,
+    )
+    host_inputs_v0 = prepare_inputs(
+        model_args.tokenizer, num_devices * per_device_batch, SEQ_LEN, model_args.pad_token_id
+    )
+    from models.demos.utils.common_demo_utils import get_mesh_mappers
+
+    mapper_v0, _, _ = get_mesh_mappers(mesh_device)
+    device_tensors_v0 = allocate_dp_device_tensors(host_inputs_v0, mesh_device, dtype, mapper_v0)
+
+    _ = model_v0.forward(**device_tensors_v0)
+    ttnn.synchronize_device(mesh_device)
+    model_v0.capture_trace(**device_tensors_v0, mesh_device=mesh_device, cq_id=0)
+
+    for _ in range(3):
+        model_v0.execute_trace(blocking=True)
+
+    v0_times = []
+    for _ in range(NUM_ITERATIONS):
+        t = time.perf_counter()
+        model_v0.execute_trace(blocking=True)
+        v0_times.append((time.perf_counter() - t) * 1000.0)
+    model_v0.release_trace()
+    # Don't deallocate weights/buffers — they live on the parent mesh and we
+    # still need them in scope below.
+
+    # ── V1 + V2: 8 submeshes, 8 models, 8 traces ──────────────────────────
+    logger.info("Building 8 submeshes (1,1) each + 8 model instances")
+    submeshes = mesh_device.create_submeshes(ttnn.MeshShape(1, 1))
+    assert len(submeshes) == num_devices
+
+    submodels = []
+    sub_device_tensors = []
+    for i, sub in enumerate(submeshes):
+        logger.info(f"  Submesh {i}: building model and capturing trace")
+        sub_mapper, _, _ = get_mesh_mappers(sub)
+        # Reuse the state_dict loaded for V0 — avoids 8x re-reading safetensors from disk
+        _, m, _ = create_tt_model(
+            mesh_device=sub,
+            max_batch_size=per_device_batch,
+            max_seq_len=SEQ_LEN,
+            dtype=dtype,
+            state_dict=shared_state_dict,
+        )
+        sub_inputs = prepare_inputs(model_args.tokenizer, per_device_batch, SEQ_LEN, model_args.pad_token_id)
+        sub_tensors = allocate_dp_device_tensors(sub_inputs, sub, dtype, sub_mapper)
+        _ = m.forward(**sub_tensors)
+        ttnn.synchronize_device(sub)
+        m.capture_trace(**sub_tensors, mesh_device=sub, cq_id=0)
+        submodels.append(m)
+        sub_device_tensors.append(sub_tensors)
+
+    # Warmup
+    for _ in range(3):
+        for m in submodels:
+            m.execute_trace(blocking=True)
+
+    # ── V1: sequential for-loop in Python, blocking=False, sync at end ────
+    logger.info("Variant V1: 8 submeshes + sequential for-loop (blocking=False)")
+    v1_times = []
+    for _ in range(NUM_ITERATIONS):
+        t = time.perf_counter()
+        for m in submodels:
+            m.execute_trace(blocking=False, synchronize=False)
+        for sub in submeshes:
+            ttnn.synchronize_device(sub)
+        v1_times.append((time.perf_counter() - t) * 1000.0)
+
+    # ── V2: ThreadPoolExecutor — fire all 8 execute_trace calls in parallel ─
+    logger.info("Variant V2: 8 submeshes + ThreadPoolExecutor (blocking=False)")
+    pool = cf.ThreadPoolExecutor(max_workers=num_devices)
+
+    def _kick(m):
+        m.execute_trace(blocking=False, synchronize=False)
+
+    v2_times = []
+    for _ in range(NUM_ITERATIONS):
+        t = time.perf_counter()
+        futs = [pool.submit(_kick, m) for m in submodels]
+        for f in futs:
+            f.result()
+        for sub in submeshes:
+            ttnn.synchronize_device(sub)
+        v2_times.append((time.perf_counter() - t) * 1000.0)
+    pool.shutdown()
+
+    for m in submodels:
+        m.release_trace()
+
+    # ── Report ─────────────────────────────────────────────────────────────
+    def _stats(samples):
+        s = sorted(samples)
+        n = len(s)
+        return s[0], s[n // 2], sum(s) / n, s[-1]
+
+    logger.info("")
+    logger.info("=" * 100)
+    logger.info(
+        f"  Dispatch-submesh prototype  |  per_device_batch=1  num_devices={num_devices}  S={SEQ_LEN}  {device_name}"
+    )
+    logger.info("=" * 100)
+    logger.info(f"  {'Variant':<25} | {'min ms':>10} | {'p50 ms':>10} | {'avg ms':>10} | {'max ms':>10}")
+    logger.info("-" * 100)
+    for name, t in (("V0_one_mesh", v0_times), ("V1_submesh_seq", v1_times), ("V2_submesh_threaded", v2_times)):
+        mn, p50, avg, mx = _stats(t)
+        logger.info(f"  {name:<25} | {mn:>10.3f} | {p50:>10.3f} | {avg:>10.3f} | {mx:>10.3f}")
+    logger.info("=" * 100)
