@@ -7,6 +7,7 @@
 #include <string>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -43,8 +44,8 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
 
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat in0_data_format = ttnn::operations::matmul::utilities::matmul_input_data_format(a.dtype());
+    tt::DataFormat in1_data_format = ttnn::operations::matmul::utilities::matmul_input_data_format(b.dtype());
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);

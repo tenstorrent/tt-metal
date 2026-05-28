@@ -906,8 +906,8 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
     auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile.get_tile_shape()[1]});
 
     // CB dataformats
-    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat in0_data_format = ttnn::operations::matmul::utilities::matmul_input_data_format(a.dtype());
+    tt::DataFormat in1_data_format = ttnn::operations::matmul::utilities::matmul_input_data_format(b.dtype());
     tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     tt::tt_metal::Buffer* bias_buffer = nullptr;

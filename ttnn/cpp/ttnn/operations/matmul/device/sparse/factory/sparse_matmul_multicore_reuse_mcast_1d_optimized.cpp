@@ -78,8 +78,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
 
     // CB dataformats
-    const auto in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    const auto in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    const auto in0_data_format = ttnn::operations::matmul::utilities::matmul_input_data_format(a.dtype());
+    const auto in1_data_format = ttnn::operations::matmul::utilities::matmul_input_data_format(b.dtype());
     const auto output_data_format = tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
 
     auto* const device = a.device();

@@ -9,6 +9,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_program_factory.hpp"
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt::constants;
@@ -37,8 +38,8 @@ ProgramDescriptor MatmulMultiCoreReuseProgramFactory::create_descriptor(
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
 
-    tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat in1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat in0_cb_data_format = ttnn::operations::matmul::utilities::matmul_input_data_format(a.dtype());
+    tt::DataFormat in1_cb_data_format = ttnn::operations::matmul::utilities::matmul_input_data_format(b.dtype());
     tt::DataFormat out_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 

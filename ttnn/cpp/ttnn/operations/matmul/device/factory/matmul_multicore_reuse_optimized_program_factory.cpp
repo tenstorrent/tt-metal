@@ -65,8 +65,8 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     auto in0_tile = operations::matmul::utilities::get_matmul_tile(a, transpose_a);
     auto in1_tile = operations::matmul::utilities::get_matmul_tile(b, transpose_b);
 
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat in0_data_format = ttnn::operations::matmul::utilities::matmul_input_data_format(a.dtype());
+    tt::DataFormat in1_data_format = ttnn::operations::matmul::utilities::matmul_input_data_format(b.dtype());
     tt::DataFormat output_data_format =
         tt_metal::datatype_to_dataformat_converter(operation_attributes.output_dtype.value());
 

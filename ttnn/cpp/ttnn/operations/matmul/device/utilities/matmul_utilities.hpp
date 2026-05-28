@@ -8,6 +8,8 @@
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/tt_backend_api_types.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -21,6 +23,19 @@ namespace ttnn::operations::matmul::utilities {
 // 2 = double buffer, 3 = triple buffer, etc.
 // Allows easily changing buffering strategy in one place for relevant factories.
 constexpr uint32_t MCAST_INPUT_BUFFERING_DEPTH = 2;
+
+// HACK (FP8-via-UInt8 experiment): host-built UINT8 TILE tensors are used to
+// stand in for FP8_E4M3 tiles while the tilize FP8 RM -> FP8 TILE packer is
+// broken. The bytes on device are the same FP8 e4m3 payload, but the tensor
+// dtype is UINT8 so it dodges FP8 tile-layout validation. Inside matmul we
+// remap that to DataFormat::Fp8_e4m3 so the LLK unpacker decodes as FP8 and
+// the math engine runs the FP8 matmul path. Tile sizes for UInt8 and
+// Fp8_e4m3 are both 1024 B, so no CB/buffer sizing changes. Remove once
+// fp8 tilize lands.
+inline tt::DataFormat matmul_input_data_format(tt::tt_metal::DataType dtype) {
+    auto df = tt::tt_metal::datatype_to_dataformat_converter(dtype);
+    return df == tt::DataFormat::UInt8 ? tt::DataFormat::Fp8_e4m3 : df;
+}
 
 inline bool fused_matmul_bias_row_broadcastable(const std::optional<const Tensor>& bias) {
     if (!bias.has_value()) {

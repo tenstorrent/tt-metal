@@ -344,13 +344,13 @@ def _to_tile_input(torch_input_f32, device, in_dtype):
 @pytest.mark.parametrize(
     "M, K, N",
     [
-        # (512, 512, 512),         # small_square
-        # (4096, 4096, 4096),      # large_square
-        # (32, 8192, 8192),        # decode_narrow_M
-        # (2048, 16384, 896),      # ds_v3_wo (long K, narrow N)
-        # (2048, 896, 2112),       # ds_v3_qkv_a-like (prefill projection)
-        (2, 2, 2),  # 2x2 tile grid
-        (32, 32, 32),
+        (512, 512, 512),  # small_square
+        (4096, 4096, 4096),  # large_square
+        (32, 8192, 8192),  # decode_narrow_M
+        (2048, 16384, 896),  # ds_v3_wo (long K, narrow N)
+        (2048, 896, 2112),  # ds_v3_qkv_a-like (prefill projection)
+        # (2, 2, 2),  # 2x2 tile grid
+        # (32, 32, 32),
     ],
     # ids=[
     #     "small_square",
@@ -366,14 +366,14 @@ def _to_tile_input(torch_input_f32, device, in_dtype):
         # bf16 baseline: feeds the same bmm.cpp kernel with DataFormat::Float16_b
         # CBs (and FP32 dest because we set fp32_dest_acc_en=True for parity with
         # the FP8 run). This is the reference number FP8 is being compared against.
-        (ttnn.bfloat16, ttnn.bfloat16),
+        # (ttnn.bfloat16, ttnn.bfloat16),
         # FP8 -> bf16: FP8 unpacker, FP32 dest, bf16 packer. Isolates the input-
         # side bandwidth & math win; output writeback is the same size as bf16.
         (ttnn.fp8_e4m3, ttnn.bfloat16),
         # FP8 -> FP8: full FP8 path including 1 B/element output writeback.
-        (ttnn.fp8_e4m3, ttnn.fp8_e4m3),
+        # (ttnn.fp8_e4m3, ttnn.fp8_e4m3),
     ],
-    ids=["bf16_to_bf16", "fp8_to_bf16", "fp8_to_fp8"],
+    # ids=["bf16_to_bf16", "fp8_to_bf16", "fp8_to_fp8"],
 )
 def test_fp8_matmul_perf(device, M, K, N, in_dtype, out_dtype):
     """Time matmul on Blackhole, FP8 vs bf16 inputs at matched shapes.
@@ -394,13 +394,18 @@ def test_fp8_matmul_perf(device, M, K, N, in_dtype, out_dtype):
     measure_iters = 2
 
     torch.manual_seed(0)
-    a_f32 = torch.empty(M, K, dtype=torch.float32).uniform_(-1.0, 1.0)
-    b_f32 = torch.empty(K, N, dtype=torch.float32).uniform_(-1.0, 1.0)
+    # a_f32 = torch.eye(M, K, dtype=torch.float32)
+    # b_f32 = torch.eye(K, N, dtype=torch.float32)
 
-    tt_a = _to_tile_input(a_f32, device, in_dtype)
-    tt_b = _to_tile_input(b_f32, device, in_dtype)
-    assert tt_a.dtype == in_dtype and tt_a.layout == ttnn.TILE_LAYOUT
-    assert tt_b.dtype == in_dtype and tt_b.layout == ttnn.TILE_LAYOUT
+    a_i8 = torch.ones(M, K, dtype=torch.uint8) * 56
+    b_i8 = torch.randint(0, 256, (K, N), dtype=torch.uint8)
+
+    # print(b_i8)
+
+    tt_a = _to_tile_input(a_i8, device, ttnn.uint8)
+    tt_b = _to_tile_input(b_i8, device, ttnn.uint8)
+    # assert tt_a.dtype == in_dtype and tt_a.layout == ttnn.TILE_LAYOUT
+    # assert tt_b.dtype == in_dtype and tt_b.layout == ttnn.TILE_LAYOUT
 
     compute_cfg = _default_compute_cfg(device)
 
@@ -412,6 +417,14 @@ def test_fp8_matmul_perf(device, M, K, N, in_dtype, out_dtype):
             compute_kernel_config=compute_cfg,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+        # Grab the output, convert to torch, print full tensor
+        # out_torch = ttnn.to_torch(out)
+        # torch.set_printoptions(profile='full')
+        # print("\nOutput tensor:")
+        # print(out_torch)
+        # torch.set_printoptions(profile='default')
+
         ttnn.deallocate(out)
     ttnn.synchronize_device(device)
 
@@ -424,6 +437,7 @@ def test_fp8_matmul_perf(device, M, K, N, in_dtype, out_dtype):
             compute_kernel_config=compute_cfg,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
         ttnn.deallocate(out)
     ttnn.synchronize_device(device)
     t1 = time.perf_counter()

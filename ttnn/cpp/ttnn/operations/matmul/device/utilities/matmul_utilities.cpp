@@ -33,8 +33,8 @@ uint32_t get_estimated_size_of_cbs(
     // bias   CB: per_core_N
     // Ignore optional intermediate CB because not needed when need to create a
     // program config.
-    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.dtype());
-    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype());
+    tt::DataFormat in0_data_format = matmul_input_data_format(input_tensor_a.dtype());
+    tt::DataFormat in1_data_format = matmul_input_data_format(input_tensor_b.dtype());
     uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);  // use as estimate for output as well
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = in0_single_tile_size;

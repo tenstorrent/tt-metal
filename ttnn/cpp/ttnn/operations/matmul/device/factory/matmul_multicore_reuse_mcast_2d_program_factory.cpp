@@ -3125,8 +3125,8 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
     const auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
 
     // CB dataformats
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());          // in0
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());          // in1
+    tt::DataFormat in0_data_format = ttnn::operations::matmul::utilities::matmul_input_data_format(a.dtype());  // in0
+    tt::DataFormat in1_data_format = ttnn::operations::matmul::utilities::matmul_input_data_format(b.dtype());  // in1
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());  // output
 
     const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, transpose_a);
@@ -3363,8 +3363,8 @@ ProgramDescriptor MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
     const auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
 
     // CB dataformats
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat in0_data_format = ttnn::operations::matmul::utilities::matmul_input_data_format(a.dtype());
+    tt::DataFormat in1_data_format = ttnn::operations::matmul::utilities::matmul_input_data_format(b.dtype());
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, transpose_a);

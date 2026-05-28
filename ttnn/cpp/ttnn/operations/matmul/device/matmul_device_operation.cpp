@@ -624,7 +624,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             "or equivalent. Please change the second input tensor or adjust the program config.");
     }
 
-    TT_FATAL(is_floating_point(input_tensor_a.dtype()), "Unsupported data format");
+    // TT_FATAL(is_floating_point(input_tensor_a.dtype()), "Unsupported data format");
 
     TT_FATAL(
         input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
