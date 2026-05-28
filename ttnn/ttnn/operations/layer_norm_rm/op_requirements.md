@@ -79,7 +79,7 @@
 - **Precision baseline** (see `verification_report.md`): PCC ≥ 0.9999996,
   rel_rms ≤ 1.8e-3, max_abs ≤ 2e-2 across 8 cells.
 
-### [ ] Refinement 1 — Numerical configurability expansion (precision + affine_dtype + compute_kernel_config wiring)
+### [x] Refinement 1 — Numerical configurability expansion (precision + affine_dtype + compute_kernel_config wiring)
 
 **Goal**: add the remaining 3 precision modes to `SUPPORTED["precision"]`
 (`bf16_hifi4_fp32acc`, `bf16_hifi4_bf16acc`, `bf8b_hifi4_bf16acc`) and add
