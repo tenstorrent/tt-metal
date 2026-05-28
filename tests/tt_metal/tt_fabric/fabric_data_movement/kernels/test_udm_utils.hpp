@@ -7,7 +7,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm.hpp"
 #include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm_impl.hpp"
-#include "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_traffic_gen.hpp"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_traffic_gen.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 

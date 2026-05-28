@@ -339,7 +339,8 @@ int main(int argc, char** argv) {
         test_context.setup_ci_artifacts();
     }
 
-    // Check if any tests failed validation and throw at the end
+    // Check if any tests failed validation and return non-zero to signal failure to CI.
+    // Devices are already closed above, so a clean exit is safe here.
     if (test_context.has_test_failures()) {
         const auto& failed_tests = test_context.get_all_failed_tests();
         log_error(tt::LogTest, "=== FINAL TEST SUMMARY ===");
@@ -348,7 +349,8 @@ int main(int argc, char** argv) {
         for (const auto& failed_test : failed_tests) {
             log_error(tt::LogTest, "  - {}", failed_test);
         }
-        TT_THROW("Some tests failed golden comparison validation. See summary above.");
+        log_error(tt::LogTest, "Some tests failed golden comparison validation. See summary above.");
+        return 1;
     }
 
     auto total_tests_count = raw_test_configs.size();

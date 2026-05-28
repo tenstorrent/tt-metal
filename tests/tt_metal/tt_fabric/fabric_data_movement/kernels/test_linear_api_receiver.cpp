@@ -6,7 +6,7 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_traffic_gen.hpp"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_traffic_gen.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tests/tt_metal/tt_fabric/common/test_host_kernel_common.hpp"
 using tt::tt_fabric::fabric_router_tests::NocPacketType;

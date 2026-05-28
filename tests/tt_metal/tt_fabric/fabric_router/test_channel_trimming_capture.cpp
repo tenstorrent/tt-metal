@@ -297,7 +297,7 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_1d_tx.cpp",
+        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_1d_tx.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -336,7 +336,7 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
     auto receiver_program = tt_metal::CreateProgram();
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
-        "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_1d_rx.cpp",
+        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_1d_rx.cpp",
         {receiver_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,

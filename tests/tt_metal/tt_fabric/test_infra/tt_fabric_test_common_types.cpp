@@ -4,7 +4,7 @@
 
 #include <tt_stl/reflection.hpp>
 #include <enchantum/enchantum.hpp>
-#include "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/tt_fabric_test_common_types.hpp"
+#include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp"
 
 #include "impl/context/metal_context.hpp"
 #include <experimental/fabric/control_plane.hpp>

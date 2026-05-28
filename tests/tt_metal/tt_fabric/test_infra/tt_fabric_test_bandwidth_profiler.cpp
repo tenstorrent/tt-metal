@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
-#include "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/tt_fabric_test_bandwidth_profiler.hpp"
+#include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_profiler.hpp"
 
 #include <algorithm>
 #include <numeric>
@@ -11,7 +11,7 @@
 #include <limits>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
-#include "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/tt_fabric_test_constants.hpp"
+#include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_constants.hpp"
 
 BandwidthProfiler::BandwidthProfiler(
     IDeviceInfoProvider& device_info, IRouteManager& route_manager, TestFixture& fixture) :

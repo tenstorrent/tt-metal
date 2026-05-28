@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
-#include "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/tt_fabric_test_context.hpp"
+#include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.hpp"
 
 #include <filesystem>
 #include <thread>

@@ -12,7 +12,6 @@ if [[ -z "$ARCH_NAME" ]]; then
     exit 1
 fi
 
-export TT_METAL_CLEAR_L1=1
 
 cd $TT_METAL_HOME
 
@@ -39,4 +38,4 @@ echo "Running fabric unit tests now...";
 #############################################
 echo "Running fabric sanity tests now...";
 
-./build/test/tt_metal/tt_fabric/tt_fabric_tests/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_fabric/tt_fabric_tests/test_yamls/test_fabric_sanity_common.yaml
+./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml

@@ -24,12 +24,10 @@
 #include "tt_fabric_test_memory_map.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
-const std::string default_sender_kernel_src =
-    "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_test_sender.cpp";
+const std::string default_sender_kernel_src = "tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp";
 const std::string default_receiver_kernel_src =
-    "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_test_receiver.cpp";
-const std::string default_sync_kernel_src =
-    "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_test_sync.cpp";
+    "tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_receiver.cpp";
+const std::string default_sync_kernel_src = "tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sync.cpp";
 const std::string default_mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;

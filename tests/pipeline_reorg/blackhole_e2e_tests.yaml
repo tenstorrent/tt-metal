@@ -30,9 +30,9 @@
 - id: bh-fabric-infra-integration
   name: fabric infra unit tests
   cmd: |
-    TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/tt_fabric/tt_fabric_tests/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_fabric/tt_fabric_tests/test_yamls/test_fabric_sanity_common.yaml
-    TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/tt_fabric/tt_fabric_tests/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_fabric/tt_fabric_tests/test_yamls/test_fabric_sanity_at_least_2x2_mesh.yaml
-    TT_FABRIC_PROFILE_RX_CH_FWD=1 TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/tt_fabric/tt_fabric_tests/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_fabric/tt_fabric_tests/test_yamls/test_fabric_code_profiling.yaml
+    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml
+    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_at_least_2x2_mesh.yaml
+    TT_FABRIC_PROFILE_RX_CH_FWD=1 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_code_profiling.yaml
   skus:
     bh_llmbox:
       timeout: 15
@@ -97,7 +97,7 @@
 # --- perf ---
 - id: bh-fabric-sanity-benchmark
   name: fabric sanity benchmark
-  cmd: ./build/test/tt_metal/tt_fabric/tt_fabric_tests/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_fabric/tt_fabric_tests/test_yamls/test_fabric_ubench_at_least_2x2_mesh.yaml
+  cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_ubench_at_least_2x2_mesh.yaml
   upload_fabric_data: true
   skus:
     bh_llmbox:
@@ -212,7 +212,7 @@
 # --- stress (continuous gate) ---
 - id: bh-fabric-stability-stress
   name: fabric stability nightly tests
-  cmd: TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/tt_fabric/tt_fabric_tests/routing/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/tt_fabric_tests/test_yamls/test_fabric_stability_short_running.yaml
+  cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability_short_running.yaml
   skus:
     bh_llmbox:
       timeout: 15

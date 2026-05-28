@@ -30,9 +30,9 @@
 
 const std::string mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
 const std::string drainer_kernel_src =
-    "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_mux_ubench_drainer.cpp";
+    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_mux_ubench_drainer.cpp";
 const std::string worker_kernel_src =
-    "tests/tt_metal/tt_fabric/tt_fabric_tests/routing/kernels/tt_fabric_mux_ubench_sender.cpp";
+    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_mux_ubench_sender.cpp";
 
 const uint32_t test_results_size_bytes = 128;
 const uint32_t noc_address_padding_bytes = 16;
