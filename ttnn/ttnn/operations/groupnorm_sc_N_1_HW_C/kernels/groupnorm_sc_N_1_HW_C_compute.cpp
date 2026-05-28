@@ -145,7 +145,9 @@ void kernel_main() {
                 for (uint32_t r = 0; r < Ht; ++r) {
                     if constexpr (INPUT_LAYOUT_CODE == 1) {
                         // RM input — tilize 32 sticks (one tile-row block) → 1 tile.
-                        ckl::tilize<1, CB_INPUT_RM_R, CB_INPUT_TILES_R>(1);
+                        // ASYMMETRIC: input CB has row-sized pages (64 bytes); pass
+                        // total_input_pages = 32 so the helper waits for 32 row pages.
+                        ckl::tilize<1, CB_INPUT_RM_R, CB_INPUT_TILES_R>(1, 32);
                     }
 
                     // mul<NONE>(cb_input_tiles_R, cb_mask_stream) → cb_scratch_a
@@ -360,12 +362,13 @@ void kernel_main() {
                 }
             }
 
-            // Tilize gamma / beta sticks for this T.
+            // Tilize gamma / beta sticks for this T. ASYMMETRIC mode — the RM CB
+            // holds 32 row-sized pages of 64 bytes each (one tile-column chunk).
             if constexpr (HAS_GAMMA) {
-                ckl::tilize<1, CB_GAMMA_RM, CB_GAMMA_TILE>(1);
+                ckl::tilize<1, CB_GAMMA_RM, CB_GAMMA_TILE>(1, 32);
             }
             if constexpr (HAS_BETA) {
-                ckl::tilize<1, CB_BETA_RM, CB_BETA_TILE>(1);
+                ckl::tilize<1, CB_BETA_RM, CB_BETA_TILE>(1, 32);
             }
 
             // ----- Apply loop -----
@@ -386,7 +389,8 @@ void kernel_main() {
             for (uint32_t r = 0; r < Ht; ++r) {
                 if constexpr (INPUT_LAYOUT_CODE == 1) {
                     // RM input — tilize 32 sticks → 1 tile in cb_input_tiles_A.
-                    ckl::tilize<1, CB_INPUT_RM_A, CB_INPUT_TILES_A>(1);
+                    // ASYMMETRIC: row-sized CB pages.
+                    ckl::tilize<1, CB_INPUT_RM_A, CB_INPUT_TILES_A>(1, 32);
                 }
 
                 // sub<NONE>(input, means_T) → cb_scratch_a
