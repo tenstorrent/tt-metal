@@ -98,14 +98,14 @@ bool print_snapshot(IDevice* device, DispatchTelemetry& telemetry) {
             "{:>3} {:<9} {:>8} {:>26} {:>24}\n",
             info.cq_id,
             "prefetch",
-            info.prefetch_waiting ? "yes" : "no",
+            info.prefetch_waiting_on_upstream ? "yes" : "no",
             info.prefetch_blocked_count_since_last_read,
             info.prefetch_command_count_since_last_read);
         fmt::print(
             "{:>3} {:<9} {:>8} {:>26} {:>24}\n",
             info.cq_id,
             "dispatch",
-            info.dispatch_waiting ? "yes" : "no",
+            info.dispatch_waiting_on_upstream ? "yes" : "no",
             info.dispatch_blocked_count_since_last_read,
             info.dispatch_program_count_since_last_read);
     }

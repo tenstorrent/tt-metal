@@ -271,9 +271,9 @@ TEST_F(DispatchTelemetryHostL1WaitTest, WorkerWaitReportsUpstreamBlockedState) {
     EXPECT_FALSE(while_waiting.empty());
     if (!while_waiting.empty()) {
         // Prefetch is waiting on upstream host for the next workload
-        EXPECT_TRUE(while_waiting.front().prefetch_waiting);
+        EXPECT_TRUE(while_waiting.front().prefetch_waiting_on_upstream);
         // Dispatch is waiting on upstream prefetch for the next workload
-        EXPECT_TRUE(while_waiting.front().dispatch_waiting);
+        EXPECT_TRUE(while_waiting.front().dispatch_waiting_on_upstream);
     }
 
     constexpr size_t num_blank_programs = 4;
@@ -284,15 +284,15 @@ TEST_F(DispatchTelemetryHostL1WaitTest, WorkerWaitReportsUpstreamBlockedState) {
     }
 
     // Worker still has the host blocked kernel in progress
-    // Dispatch has the work load enqueued
-    // Prefetch has work load enqueued
+    // Prefetch is stalled waiting on downstream sync
+    // Dispatch is waiting for worker progress
     auto after_enqueue = telemetry.read_info();
     EXPECT_FALSE(after_enqueue.empty());
     if (!after_enqueue.empty()) {
-        // Prefetch is waiting on downstream dispatch to free up
-        EXPECT_FALSE(after_enqueue.front().prefetch_waiting);
-        // Dispatch is waiting on downstreamworker to finish
-        EXPECT_FALSE(after_enqueue.front().dispatch_waiting);
+        // Prefetch is no longer waiting on upstream host
+        EXPECT_FALSE(after_enqueue.front().prefetch_waiting_on_upstream);
+        // Dispatch is no longer waiting on upstream prefetch
+        EXPECT_FALSE(after_enqueue.front().dispatch_waiting_on_upstream);
     }
 
     release_worker_and_finish();
@@ -304,9 +304,9 @@ TEST_F(DispatchTelemetryHostL1WaitTest, WorkerWaitReportsUpstreamBlockedState) {
     EXPECT_FALSE(after_finish.empty());
     if (!after_finish.empty()) {
         // Prefetch is waiting on upstream host for the next workload
-        EXPECT_TRUE(after_finish.front().prefetch_waiting);
+        EXPECT_TRUE(after_finish.front().prefetch_waiting_on_upstream);
         // Dispatch is waiting on upstream prefetch for the next workload
-        EXPECT_TRUE(after_finish.front().dispatch_waiting);
+        EXPECT_TRUE(after_finish.front().dispatch_waiting_on_upstream);
     }
 }
 

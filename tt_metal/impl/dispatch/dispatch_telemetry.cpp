@@ -196,7 +196,7 @@ public:
                 if (core.role == CoreRole::PREFETCH || core.role == CoreRole::PREFETCH_D) {
                     auto telemetry = read_prefetch_core_telemetry(chip_, core.virtual_core);
                     if (telemetry) {
-                        info.prefetch_waiting =
+                        info.prefetch_waiting_on_upstream =
                             (telemetry->upstream_blocked_count != telemetry->upstream_unblocked_count);
                         info.prefetch_blocked_count_since_last_read = calc_delta(
                             telemetry->upstream_blocked_count,
@@ -210,7 +210,7 @@ public:
                 if (core.role == CoreRole::DISPATCH || core.role == CoreRole::DISPATCH_D) {
                     auto telemetry = read_dispatch_core_telemetry(chip_, core.virtual_core);
                     if (telemetry) {
-                        info.dispatch_waiting =
+                        info.dispatch_waiting_on_upstream =
                             (telemetry->upstream_blocked_count != telemetry->upstream_unblocked_count);
                         info.dispatch_blocked_count_since_last_read = calc_delta(
                             telemetry->upstream_blocked_count,

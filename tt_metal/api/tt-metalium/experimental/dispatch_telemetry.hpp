@@ -14,10 +14,10 @@ namespace tt::tt_metal {
 
 struct DispatchTelemetryInfo {
     uint8_t cq_id = 0;
-    bool prefetch_waiting = false;
+    bool prefetch_waiting_on_upstream = false;
     uint64_t prefetch_blocked_count_since_last_read = 0;
     uint64_t prefetch_command_count_since_last_read = 0;
-    bool dispatch_waiting = false;
+    bool dispatch_waiting_on_upstream = false;
     uint64_t dispatch_blocked_count_since_last_read = 0;
     uint64_t dispatch_program_count_since_last_read = 0;
 };
