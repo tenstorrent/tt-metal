@@ -191,8 +191,14 @@ def test_cross_check_block_clean_returns_empty(tmp_path):
 
 
 def test_kind_required_kernels_shape():
-    """Each value must be a list of non-empty sets of strings."""
-    expected_kinds = {"norm", "linear", "attention", "mlp", "decoder_layer", "embedding"}
+    """Each value must be a list of (possibly empty) sets of strings.
+
+    The empty-list case (kind="other") is allowed: it expresses "no
+    traced-op requirement for this kind." See guard.py for the kinds
+    table; conv + other were added when speech / audio models needed
+    looser requirements.
+    """
+    expected_kinds = {"norm", "linear", "attention", "mlp", "decoder_layer", "embedding", "conv", "other"}
     assert set(KIND_REQUIRED_KERNELS.keys()) == expected_kinds
     for kind, options in KIND_REQUIRED_KERNELS.items():
         assert isinstance(options, list), kind
