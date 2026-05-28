@@ -264,8 +264,10 @@ def insert_py_nodes_and_refs(con: sqlite3.Connection, py_json: Path) -> dict:
 
     # Build resolution maps.
     by_pyname_cpp: dict[str, list[tuple[str, str]]] = {}
-    for row in con.execute("SELECT python_name, cpp_node_id, helper FROM bindings"):
+    by_pyname_cpp_full: dict[str, list[tuple[str, str, str]]] = {}  # python_name → [(cpp_id, cpp_qn, helper), ...]
+    for row in con.execute("SELECT python_name, cpp_node_id, helper, cpp_qualified_name FROM bindings"):
         by_pyname_cpp.setdefault(row[0], []).append((row[1], row[2]))
+        by_pyname_cpp_full.setdefault(row[0], []).append((row[1], row[3], row[2]))
 
     # ─── Typed-method resolver (Option 2) ──────────────────────────────
     # For each class binding (helper='class_'), collect its methods/fields
@@ -371,6 +373,8 @@ def insert_py_nodes_and_refs(con: sqlite3.Connection, py_json: Path) -> dict:
     resolved_via_pyreg = 0
     resolved_via_binding = 0
     resolved_via_receiver_type = 0
+    from collections import Counter
+    unresolved_chains: Counter = Counter()
     for r in py["refs"]:
         chain = r["target_chain"]
         kind = "binds" if r["kind"] == "attr_access" else "calls"
@@ -394,6 +398,8 @@ def insert_py_nodes_and_refs(con: sqlite3.Connection, py_json: Path) -> dict:
 
         if not chain or chain[0] != "ttnn" or len(chain) < 2:
             unresolved += 1
+            if chain:
+                unresolved_chains[".".join(chain[:3])] += 1
             continue
 
         # 1. Prefer py_registrations matched on the FULL dotted name OR any
@@ -420,9 +426,30 @@ def insert_py_nodes_and_refs(con: sqlite3.Connection, py_json: Path) -> dict:
                 matched_here = True
             elif impl_chain:
                 # Pass-through registration to a C++ binding (e.g. ttnn._ttnn.X).
-                # Try to resolve via bindings.
+                # The impl_chain like ['ttnn','_ttnn','operations','core','deallocate']
+                # corresponds to cpp namespace `operations::core::deallocate`. Filter
+                # the same-named bindings to those whose cpp_qualified_name *ends*
+                # with the impl_chain (modulo the leading `ttnn`/`_ttnn` python
+                # module wrappers). Without this, `deallocate` would fan out to
+                # 3 different cpp methods (Flaw 11).
                 candidate = impl_chain[-1]
-                for cpp_id, helper in by_pyname_cpp.get(candidate, []):
+                all_matches = by_pyname_cpp_full.get(candidate, [])
+                # Build expected cpp suffix by stripping python-side wrappers from
+                # the head and joining with `::`.
+                stripped = list(impl_chain)
+                while stripped and stripped[0] in ("ttnn", "_ttnn", "tt_metal"):
+                    stripped = stripped[1:]
+                suffix = "::".join(stripped) if stripped else candidate
+                filtered: list[tuple[str, str]] = []
+                for cpp_id, cpp_qn, helper in all_matches:
+                    if cpp_qn == suffix or cpp_qn.endswith("::" + suffix):
+                        filtered.append((cpp_id, helper))
+                # Fallback: if suffix matching found nothing (e.g. the impl_chain
+                # is too short or doesn't align), keep the old behaviour to
+                # preserve recall.
+                if not filtered:
+                    filtered = [(c, h) for c, _, h in all_matches]
+                for cpp_id, helper in filtered:
                     cross_rows.append((
                         r["src"], cpp_id, kind, r["site_file"], int(r["site_line"]),
                         1, label, helper, None,
@@ -434,10 +461,22 @@ def insert_py_nodes_and_refs(con: sqlite3.Connection, py_json: Path) -> dict:
 
         # 2. Fall back: try last-component match against C++ bindings.
         candidate = chain[-1]
-        matches = by_pyname_cpp.get(candidate, [])
-        if not matches:
+        all_matches_full = by_pyname_cpp_full.get(candidate, [])
+        if not all_matches_full:
             unresolved += 1
+            unresolved_chains[".".join(chain[:3])] += 1
             continue
+        # When chain starts with `ttnn`, prefer bindings whose cpp_qn is
+        # in the `ttnn::` namespace — exclude class methods of unrelated
+        # classes (Tensor::X, MeshDevice::X) which were causing fan-out
+        # (Flaw 11 path 2). If filtering kills all matches, fall back to
+        # the unfiltered set to preserve recall.
+        matches: list[tuple[str, str]]
+        if chain[0] == "ttnn":
+            filtered = [(c, h) for c, qn, h in all_matches_full if qn.startswith("ttnn::")]
+            matches = filtered if filtered else [(c, h) for c, _, h in all_matches_full]
+        else:
+            matches = [(c, h) for c, _, h in all_matches_full]
         for cpp_id, helper in matches:
             cross_rows.append((
                 r["src"], cpp_id, kind, r["site_file"], int(r["site_line"]),
@@ -451,6 +490,16 @@ def insert_py_nodes_and_refs(con: sqlite3.Connection, py_json: Path) -> dict:
             "crosses_language, via_decorator, via_helper, via_dispatch) "
             "VALUES (?,?,?,?,?,?,?,?,?)",
             cross_rows,
+        )
+
+    # Persist top unresolved chain prefixes so the report can read them
+    # without re-counting against the (misleading) full ref list.
+    con.execute("CREATE TABLE IF NOT EXISTS unresolved_top_refs (prefix TEXT PRIMARY KEY, count INTEGER)")
+    con.execute("DELETE FROM unresolved_top_refs")
+    if unresolved_chains:
+        con.executemany(
+            "INSERT INTO unresolved_top_refs (prefix, count) VALUES (?, ?)",
+            unresolved_chains.most_common(50),
         )
 
     return {

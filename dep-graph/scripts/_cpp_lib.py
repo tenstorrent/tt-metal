@@ -232,6 +232,8 @@ def load_db(db_path: Path) -> dict[str, TUEntry]:
 DEFAULT_IN_SCOPE_PREFIXES = (
     "/workspace/ttnn/cpp/",
     "/workspace/ttnn/api/",   # public ttnn headers (e.g. ttnn::Tensor alias)
+    "/workspace/ttnn/core/",  # ttnn impl + bindings (distributed_nanobind, graph_nanobind, tensor.cpp, …)
+    "/workspace/ttnn/examples/",  # ttnn host-program labs (add.cpp, lab_eltwise_binary.cpp, …)
     "/workspace/tt_metal/",
     "/workspace/tt_stl/",
     "/workspace/tests/",      # tests now in scope (per user direction)
@@ -292,16 +294,19 @@ FUNCTION_KINDS = {
 # for `.def_ro` / `.def_rw` (read-only / read-write attribute bindings).
 BINDABLE_KINDS = FUNCTION_KINDS | {
     cindex.CursorKind.FIELD_DECL,
-    cindex.CursorKind.VAR_DECL,  # static fields appear as VAR_DECL
+    cindex.CursorKind.VAR_DECL,            # static fields appear as VAR_DECL
+    cindex.CursorKind.ENUM_CONSTANT_DECL,  # nb::enum_<E>(...).value("X", E::X) target
 }
 
 # Class-like declarations. B2 records nodes for these and follows their base
-# specifiers to emit `inherits` edges.
+# specifiers to emit `inherits` edges. ENUM_DECL is included so `nb::enum_<E>`
+# class bindings have a real node to point at.
 CLASS_KINDS = {
     cindex.CursorKind.CLASS_DECL,
     cindex.CursorKind.STRUCT_DECL,
     cindex.CursorKind.CLASS_TEMPLATE,
     cindex.CursorKind.CLASS_TEMPLATE_PARTIAL_SPECIALIZATION,
+    cindex.CursorKind.ENUM_DECL,
 }
 
 
@@ -402,6 +407,7 @@ class Binding:
 _CLASS_DEF_METHODS = {
     "def", "def_ro", "def_rw", "def_prop_ro", "def_prop_rw",
     "def_static", "def_submodule", "def_readonly", "def_readwrite",
+    "value",  # nb::enum_<E>(...).value("NAME", E::NAME)
 }
 
 
@@ -436,6 +442,7 @@ BINDING_HELPERS = {
     "def_prop_ro",    # read-only property      cls.def_prop_ro("name", &T::getter)
     "def_prop_rw",    # read-write property     cls.def_prop_rw("name", &T::getter, &T::setter)
     "def_static",     # static method           cls.def_static("name", &T::static_fn)
+    "value",          # enum value              nb::enum_<E>(...).value("NAME", E::NAME)
 }
 
 
@@ -540,6 +547,17 @@ class Indexer:
                 self._record_class(cursor, tu_path)
             # Class bodies can contain methods (FUNCTION_KINDS), nested classes,
             # and call expressions in initializers. Recurse normally.
+            # For ENUM_DECL, also record each ENUM_CONSTANT_DECL child so that
+            # `nb::enum_<E>(...).value("X", E::X)` bindings have a real node to
+            # point at on the C++ side.
+            if kind == cindex.CursorKind.ENUM_DECL and in_scope(f):
+                for child in self._iter_children(cursor):
+                    try:
+                        ck = child.kind
+                    except ValueError:
+                        continue
+                    if ck == cindex.CursorKind.ENUM_CONSTANT_DECL:
+                        self._record_enum_constant(child, tu_path)
             for child in self._iter_children(cursor):
                 self._walk(child, current_function, tu_path)
             return
@@ -616,9 +634,9 @@ class Indexer:
                     site_file=f or "", site_line=l0,
                 ))
 
-    def _record_class(self, c: cindex.Cursor, tu_path: str) -> None:
-        """B2: record a class/struct/class-template node, and emit `inherits`
-        edges to its base classes via CXX_BASE_SPECIFIER children.
+    def _record_enum_constant(self, c: cindex.Cursor, tu_path: str) -> None:
+        """Record an ENUM_CONSTANT_DECL as a node so `nb::enum_<>.value(...)`
+        bindings have a valid cross-language edge target.
         """
         try:
             f, l0, l1 = cursor_loc(c)
@@ -629,7 +647,35 @@ class Indexer:
             self.nodes[nid] = Node(
                 id=nid,
                 language="cpp",
-                kind="class",
+                kind="ENUM_CONSTANT_DECL",
+                name=c.spelling,
+                qualified_name=qualified_name(c),
+                file=f or "",
+                line_start=l0,
+                line_end=l1,
+                signature=qualified_name(c),
+                is_definition=True,
+                is_template=False,
+                discovered_in=[tu_path],
+            )
+        elif tu_path not in self.nodes[nid].discovered_in:
+            self.nodes[nid].discovered_in.append(tu_path)
+
+    def _record_class(self, c: cindex.Cursor, tu_path: str) -> None:
+        """B2: record a class/struct/class-template node, and emit `inherits`
+        edges to its base classes via CXX_BASE_SPECIFIER children.
+        """
+        try:
+            f, l0, l1 = cursor_loc(c)
+        except Exception:
+            return
+        nid = node_id(c)
+        node_kind = "enum" if c.kind == cindex.CursorKind.ENUM_DECL else "class"
+        if nid not in self.nodes:
+            self.nodes[nid] = Node(
+                id=nid,
+                language="cpp",
+                kind=node_kind,
                 name=c.spelling,
                 qualified_name=qualified_name(c),
                 file=f or "",
@@ -642,6 +688,10 @@ class Indexer:
             )
         elif tu_path not in self.nodes[nid].discovered_in:
             self.nodes[nid].discovered_in.append(tu_path)
+
+        # ENUM_DECL doesn't have base classes / template instantiations.
+        if c.kind == cindex.CursorKind.ENUM_DECL:
+            return
 
         # B3 instantiates for class-template specializations.
         try:
@@ -976,6 +1026,10 @@ class Indexer:
             or spelling.startswith("nb::class_<")
             or spelling.startswith("nanobind::class_<")
             or spelling.startswith("pybind11::class_<")
+            or spelling.startswith("enum_<")
+            or spelling.startswith("nb::enum_<")
+            or spelling.startswith("nanobind::enum_<")
+            or spelling.startswith("pybind11::enum_<")
         )
 
     def _extract_class_binding(self, call: cindex.Cursor, tu_path: str) -> None:
@@ -1075,7 +1129,7 @@ class Indexer:
         site_line = call.location.line if call.location else 0
         callee_cursor = call.referenced
         helper_usr = callee_cursor.get_usr() if callee_cursor else None
-        for fn in self._find_referenced_decls(call, skip_usr=helper_usr):
+        for fn in self._find_referenced_decls(call, helper=helper, skip_usr=helper_usr):
             self.bindings.append(Binding(
                 python_name=python_name,
                 cpp_node_id=node_id(fn),
@@ -1159,7 +1213,7 @@ class Indexer:
 
     @staticmethod
     def _find_referenced_decls(
-        call: cindex.Cursor, skip_usr: str | None = None
+        call: cindex.Cursor, helper: str | None = None, skip_usr: str | None = None
     ) -> Iterator[cindex.Cursor]:
         """Yield C++ declaration cursors that look like bound symbols.
 
@@ -1186,18 +1240,54 @@ class Indexer:
             "std::",
             "__builtin_",
         )
+
+        def is_acceptable_ref(ref: cindex.Cursor) -> bool:
+            try:
+                ref_kind = ref.kind
+            except ValueError:
+                return False
+            if (
+                ref_kind not in BINDABLE_KINDS
+                or ref.spelling in BINDING_HELPERS
+                or ref.spelling.startswith("operator")
+                or ref.spelling.startswith("__builtin_")
+            ):
+                return False
+            # VAR_DECLs can be (a) static class members — legit binding
+            # targets — or (b) function-local variables like `const auto doc`
+            # that nanobind helpers pass through. Class-scoped vars stay.
+            if ref_kind == cindex.CursorKind.VAR_DECL:
+                try:
+                    parent_kind = ref.semantic_parent.kind if ref.semantic_parent else None
+                except ValueError:
+                    parent_kind = None
+                if parent_kind not in CLASS_KINDS:
+                    return False
+            # ENUM_CONSTANT_DECLs are only valid binding targets for `.value(...)`
+            # calls on `nb::enum_<T>` instances. In other contexts they appear
+            # as default-value arguments (`nb::arg("x") = SomeEnum::VAL`) and
+            # must not be treated as bind targets.
+            if ref_kind == cindex.CursorKind.ENUM_CONSTANT_DECL and helper != "value":
+                return False
+            qn = qualified_name(ref)
+            if any(qn.startswith(p) for p in FRAMEWORK_NAMESPACE_PREFIXES):
+                return False
+            return True
+
         # Iterative pre-order walk starting from each direct argument — NOT
         # the entire call subtree, which for chained calls
         # `obj.def(...).def_ro(...)` would descend through the receiver and
         # incorrectly attribute references from an unrelated outer call.
         # Lambda subtrees are still skipped inside arg walks.
         seen: set[str] = set()
+        lambda_subtrees: list[cindex.Cursor] = []  # collected for the fallback pass
         try:
             args = list(call.get_arguments())
         except Exception:
             args = []
         stack: list[cindex.Cursor] = list(reversed(args))
         first = True
+        yielded = False
         while stack:
             c = stack.pop()
             try:
@@ -1205,46 +1295,80 @@ class Indexer:
             except ValueError:
                 continue
             if not first and kind == cindex.CursorKind.LAMBDA_EXPR:
-                continue   # don't recurse into lambda body
+                lambda_subtrees.append(c)
+                continue   # don't recurse into lambda body on the primary pass
             first = False
             if kind == cindex.CursorKind.DECL_REF_EXPR:
                 ref = c.referenced
-                if ref is not None:
-                    try:
-                        ref_kind = ref.kind
-                    except ValueError:
-                        ref_kind = None
-                    if (
-                        ref_kind in BINDABLE_KINDS
-                        and ref.spelling not in BINDING_HELPERS
-                        and not ref.spelling.startswith("operator")
-                        and not ref.spelling.startswith("__builtin_")
-                    ):
-                        # VAR_DECLs can be (a) static class members — legit
-                        # binding targets — or (b) function-local variables
-                        # like `const auto doc = "..."` that nanobind helpers
-                        # pass through to `bind_function<...>`. We only want
-                        # (a). Filter by semantic_parent: class-scoped vars
-                        # stay, function-scoped vars drop.
-                        if ref_kind == cindex.CursorKind.VAR_DECL:
-                            try:
-                                parent_kind = ref.semantic_parent.kind if ref.semantic_parent else None
-                            except ValueError:
-                                parent_kind = None
-                            if parent_kind not in CLASS_KINDS:
-                                continue
-                        qn = qualified_name(ref)
-                        if not any(qn.startswith(p) for p in FRAMEWORK_NAMESPACE_PREFIXES):
-                            key = ref.get_usr() or qn
-                            if key != skip_usr and key not in seen:
-                                seen.add(key)
-                                yield ref
+                if ref is not None and is_acceptable_ref(ref):
+                    qn = qualified_name(ref)
+                    key = ref.get_usr() or qn
+                    if key != skip_usr and key not in seen:
+                        seen.add(key)
+                        yielded = True
+                        yield ref
             # Push children for further inspection.
             try:
                 children = list(c.get_children())
             except ValueError:
                 continue
             stack.extend(reversed(children))
+
+        # Flaw 8 fallback: if no direct function-pointer was found in the
+        # call args, the binding is likely a thin lambda wrapper:
+        #   mod.def("name", [args](...) { return target(...); })
+        # Walk lambda bodies, find the first CALL_EXPR whose callee is an
+        # acceptable bind target, and yield it. Only fires when the primary
+        # pass yielded nothing — otherwise lambdas inside argument
+        # expressions (call_guard etc.) would over-fire.
+        if not yielded and lambda_subtrees:
+            for lam in lambda_subtrees:
+                # Collect ALL acceptable call refs inside the lambda body, then
+                # pick the best one. Implicit-return-value constructors (`return
+                # self.method()` creates a hidden Shape::Shape constructor wrapping
+                # the actual `method()` call) appear FIRST in preorder, so taking
+                # the first match yields the wrong target (Flaw 12). Prefer the
+                # last non-CONSTRUCTOR CALL_EXPR, which is the innermost / real
+                # call. Falls back to constructors if no other call exists.
+                candidates: list[tuple[bool, cindex.Cursor]] = []  # (is_ctor, ref)
+                stack2: list[cindex.Cursor] = [lam]
+                while stack2:
+                    c = stack2.pop()
+                    try:
+                        ck = c.kind
+                    except ValueError:
+                        continue
+                    if ck == cindex.CursorKind.CALL_EXPR:
+                        ref = c.referenced
+                        if ref is not None and is_acceptable_ref(ref):
+                            try:
+                                is_ctor = ref.kind in (
+                                    cindex.CursorKind.CONSTRUCTOR,
+                                    cindex.CursorKind.DESTRUCTOR,
+                                )
+                            except ValueError:
+                                is_ctor = False
+                            candidates.append((is_ctor, ref))
+                    try:
+                        stack2.extend(reversed(list(c.get_children())))
+                    except ValueError:
+                        continue
+                # Pick the first non-constructor candidate (innermost call after
+                # skipping implicit return-value wrappers). If only constructors,
+                # take the first one.
+                chosen: cindex.Cursor | None = None
+                for is_ctor, ref in candidates:
+                    if not is_ctor:
+                        chosen = ref
+                        break
+                if chosen is None and candidates:
+                    chosen = candidates[0][1]
+                if chosen is not None:
+                    qn = qualified_name(chosen)
+                    key = chosen.get_usr() or qn
+                    if key != skip_usr and key not in seen:
+                        seen.add(key)
+                        yield chosen
 
 
 # ─── JSONL helpers ─────────────────────────────────────────────────────────

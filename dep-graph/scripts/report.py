@@ -14,7 +14,6 @@ import argparse
 import json
 import sqlite3
 import sys
-from collections import Counter
 from pathlib import Path
 
 
@@ -96,24 +95,81 @@ def gather(db_path: Path, py_index_path: Path | None) -> dict:
     summary["py_callables_with_incoming_edges"] = py_with_incoming
     summary["py_orphan_pct"] = round(100.0 * (py_callables - py_with_incoming) / py_callables, 1) if py_callables else 0.0
 
-    # Unresolved refs (from the py_index cache if present).
-    if py_index_path and py_index_path.exists():
-        py = json.loads(py_index_path.read_text())
-        refs = py.get("refs", [])
-        summary["unresolved_refs_total"] = len(refs)
-        # Resolution rate = resolved / (resolved + unresolved). Resolved = edges that came from refs.
-        # Approximate: cross-language edges + intra-python edges minus structural ones.
+    # Truly-unresolved refs come from the stitcher (it knows which refs
+    # didn't get a cross-language or intra-python edge). They're stored in
+    # `unresolved_top_refs` so we don't have to re-run resolution here.
+    has_table = con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='unresolved_top_refs'"
+    ).fetchone() is not None
+    if has_table:
+        total_unresolved = con.execute("SELECT IFNULL(SUM(count), 0) FROM unresolved_top_refs").fetchone()[0]
+        summary["unresolved_refs_total"] = int(total_unresolved)
         resolved_proxy = summary["edges_cross_language"] + summary["edges_by_direction"].get("py->py", 0)
         summary["resolution_rate_pct"] = round(
-            100.0 * resolved_proxy / (resolved_proxy + len(refs)), 1
-        ) if (resolved_proxy + len(refs)) else 0.0
-        # Top unresolved by leading-chain string.
-        c = Counter(".".join(r["target_chain"][:3]) for r in refs)
-        summary["top_unresolved_refs"] = c.most_common(20)
+            100.0 * resolved_proxy / (resolved_proxy + total_unresolved), 1
+        ) if (resolved_proxy + total_unresolved) else 0.0
+        summary["top_unresolved_refs"] = list(
+            con.execute("SELECT prefix, count FROM unresolved_top_refs ORDER BY count DESC LIMIT 20")
+        )
+        # In-scope unresolved: exclude obvious stdlib / external / builtin /
+        # exception prefixes. What's left is what we could plausibly resolve
+        # with more work on the indexer.
+        OUT_OF_SCOPE_HEADS = {
+            # third-party / external libs
+            "pytest","logger","torch","numpy","np","pandas","pd","matplotlib","plt",
+            "PIL","Image","scipy","sklearn","requests","tqdm","tabulate","HfApi",
+            "huggingface_hub","torchvision","torchaudio","librosa","torchtune",
+            "transformers","diffusers","tokenizers","wandb","lightning","accelerate",
+            "onnx","onnxruntime","sentencepiece","safetensors","rich","timm",
+            "sentence_transformers","model_tracer","tracy",
+            # python stdlib
+            "os","sys","re","time","json","random","math","collections","itertools",
+            "functools","tempfile","pathlib","unittest","typing","subprocess","enum",
+            "warnings","datetime","argparse","shutil","csv","pickle","copy","string",
+            "io","glob","hashlib","logging","inspect","traceback","gc","dataclasses",
+            "signal","asyncio","queue","threading","urllib","base64","contextlib",
+            "dis","tokenize","weakref","ssl","socket","operator","struct","Path",
+            # builtins
+            "len","range","print","isinstance","enumerate","zip","sorted","reversed",
+            "map","filter","min","max","sum","abs","any","all","tuple","list","dict",
+            "set","int","float","str","bool","bytes","type","hasattr","getattr",
+            "setattr","repr","vars","dir","iter","next","open","round","divmod","pow",
+            "id","super","partial","frozenset","bytearray","breakpoint","memoryview",
+            "classmethod","staticmethod","property","object","eval","exec","compile",
+            "hex","oct","bin","chr","ord","format","help","globals","locals","input",
+            "ascii","callable","delattr","complex",
+            # exceptions
+            "ValueError","KeyError","TypeError","IndexError","StopIteration",
+            "AssertionError","NotImplementedError","RuntimeError","OverflowError",
+            "AttributeError","ImportError","ZeroDivisionError","FileExistsError",
+            "FileNotFoundError","NameError","GeneratorExit","SystemExit",
+            "PermissionError","OSError","Exception","BaseException","Warning",
+            "DeprecationWarning",
+            # tt-metal in-scope but unresolvable without deeper type inference:
+            # `profiler = Profiler()` then `profiler.start()` — module-var of
+            # py-only class type; `parser = argparse.ArgumentParser()` then
+            # `parser.add_argument(...)` — argparse instance type.
+            "profiler","parser",
+        }
+        in_scope_unresolved: list[tuple[str, int]] = []
+        in_scope_total = 0
+        for prefix, count in con.execute(
+            "SELECT prefix, count FROM unresolved_top_refs ORDER BY count DESC"
+        ):
+            head = prefix.split(".", 1)[0]
+            if head in OUT_OF_SCOPE_HEADS:
+                continue
+            in_scope_total += count
+            if len(in_scope_unresolved) < 20:
+                in_scope_unresolved.append((prefix, count))
+        summary["in_scope_unresolved_total"] = in_scope_total
+        summary["top_in_scope_unresolved_refs"] = in_scope_unresolved
     else:
         summary["unresolved_refs_total"] = None
         summary["resolution_rate_pct"] = None
         summary["top_unresolved_refs"] = []
+        summary["in_scope_unresolved_total"] = None
+        summary["top_in_scope_unresolved_refs"] = []
 
     return summary
 
@@ -143,10 +199,17 @@ def render(s: dict) -> str:
     out.append(f"    Python orphan rate:       {s['py_callables'] - s['py_callables_with_incoming_edges']}/{s['py_callables']}  ({s['py_orphan_pct']}%)")
     if s["resolution_rate_pct"] is not None:
         out.append(f"    Ref resolution rate:      {s['resolution_rate_pct']}%  ({s['unresolved_refs_total']} refs still unresolved)")
+        if s.get("in_scope_unresolved_total") is not None:
+            out.append(f"    In-scope unresolved:      {s['in_scope_unresolved_total']}  (excluding stdlib / external / builtins / exceptions)")
     out.append("")
     if s["top_unresolved_refs"]:
-        out.append("  ── Top 20 unresolved ref prefixes ──")
+        out.append("  ── Top 20 unresolved ref prefixes (raw, includes out-of-scope) ──")
         for name, n in s["top_unresolved_refs"]:
+            out.append(f"    {n:>5d}  {name}")
+    out.append("")
+    if s.get("top_in_scope_unresolved_refs"):
+        out.append("  ── Top 20 in-scope unresolved ref prefixes (actionable) ──")
+        for name, n in s["top_in_scope_unresolved_refs"]:
             out.append(f"    {n:>5d}  {name}")
     out.append("")
     return "\n".join(out)

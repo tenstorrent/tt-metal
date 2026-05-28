@@ -200,18 +200,30 @@ class ImportEntry:
     line: int
 
 
-def _resolve_relative_module(current_module_dotted: str, level: int, module: str | None) -> str | None:
+def _resolve_relative_module(
+    current_module_dotted: str,
+    level: int,
+    module: str | None,
+    is_package: bool = False,
+) -> str | None:
     """Resolve a `from .foo import bar`-style relative module reference.
 
     `from . import x`           in pkg.sub.mod  → "pkg.sub"
     `from .core import x`       in pkg.sub.mod  → "pkg.sub.core"
     `from ..parent import x`    in pkg.sub.mod  → "pkg.parent"
+
+    When the importer is itself a package (`pkg/__init__.py`, where
+    module_dotted is already the package name `pkg.sub`), level=1 means
+    the current package — *don't* strip the trailing part:
+    `from .core import x` in pkg/sub/__init__.py → "pkg.sub.core" (not "pkg.core").
     """
     parts = current_module_dotted.split(".")
-    # `level` counts dots; level=1 means "current package" (drop the leaf module name).
-    if level > len(parts):
+    # For non-packages, level=1 means parent package (strip leaf module name).
+    # For packages (__init__.py), level=1 means the package itself (strip nothing).
+    strip = (level - 1) if is_package else level
+    if strip > len(parts):
         return None
-    base = parts[:-level] if level > 0 else parts
+    base = parts[:-strip] if strip > 0 else parts
     if module:
         return ".".join(base + module.split("."))
     return ".".join(base) if base else None
@@ -270,6 +282,7 @@ def _registration_decorator(call: ast.Call) -> tuple[str, str] | None:
 class FileIndexer(ast.NodeVisitor):
     def __init__(self, file_path: Path, module_dotted: str) -> None:
         self.file_path = str(file_path.resolve())
+        self.is_package = file_path.name == "__init__.py"
         self.module_dotted = module_dotted
         self.nodes: dict[str, Node] = {}
         self.edges: list[Edge] = []
@@ -304,6 +317,19 @@ class FileIndexer(ast.NodeVisitor):
         # visit_Attribute to attach `receiver_type` to refs so the stitcher
         # can resolve `obj.method()` through C++ class bindings.
         self.local_type_stack: list[dict[str, list[str]]] = []
+        # Stack of {local_name → alias_chain} maps. For patterns like
+        # `g = ttnn.get_golden_function(ttnn.gcd)` we record
+        # `g → ['ttnn','gcd','golden_function']` so later `g(...)` calls
+        # expand to that chain and resolve via the @attach_golden_function
+        # PyRegistrations (Flaw 9).
+        self.local_alias_stack: list[dict[str, list[str]]] = []
+        # Per-class field type map. Populated by scanning __init__ for
+        # `self.X = <typed_local>` assignments. Keyed by (class_qualname,
+        # field_name) → type_chain. Used in method bodies to resolve
+        # `self.X.method()` via the receiver_type mechanism.
+        self.class_field_types: dict[tuple[str, str], list[str]] = {}
+        # Stack of current class qualname (or "" when not in a class scope).
+        self.class_qn_stack: list[str] = []
 
     # ─ ids ─
 
@@ -419,8 +445,22 @@ class FileIndexer(ast.NodeVisitor):
                 cls_node = self.nodes[self.scope_stack[-1]]
                 local_types[first] = [cls_node.name]
         self.local_type_stack.append(local_types)
+        # Pre-scan body for `var = ttnn...get_golden_function(<op>)`-style
+        # alias assignments. This must happen before walking the body so
+        # subsequent `var(...)` calls see the alias.
+        local_aliases: dict[str, list[str]] = {}
+        for stmt in node.body:
+            if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+                if isinstance(stmt.value, ast.Call):
+                    fn_chain = attr_chain(stmt.value.func)
+                    if fn_chain and fn_chain[-1] == "get_golden_function" and stmt.value.args:
+                        op_chain = attr_chain(stmt.value.args[0])
+                        if op_chain:
+                            local_aliases[stmt.targets[0].id] = op_chain + ["golden_function"]
+        self.local_alias_stack.append(local_aliases)
         self.scope_stack.append(nid)
         self.qualname_stack.append(qualname)
+
         # Visit the function body for calls/refs.
         for stmt in node.body:
             self.visit(stmt)
@@ -449,6 +489,7 @@ class FileIndexer(ast.NodeVisitor):
         self.qualname_stack.pop()
         self.scope_stack.pop()
         self.local_type_stack.pop()
+        self.local_alias_stack.pop()
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         parent_qual = self.qualname_stack[-1]
@@ -477,6 +518,38 @@ class FileIndexer(ast.NodeVisitor):
             self.class_base_chains[nid] = base_chains
         self.scope_stack.append(nid)
         self.qualname_stack.append(qualname)
+        # Track current class qualname for __init__ scanning of `self.X` fields.
+        class_qn = f"{self.module_dotted}.{qualname}"
+        self.class_qn_stack.append(class_qn)
+        # Pre-pass: locate __init__ and scan it for `self.X = typed_local`
+        # assignments so OTHER methods in the same class can use the captured
+        # field types regardless of class-body ordering.
+        for stmt in node.body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name == "__init__":
+                init_local_types: dict[str, list[str]] = {}
+                args = stmt.args
+                for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+                    if arg.annotation is not None:
+                        rt = _peel_receiver_type(arg.annotation)
+                        if rt:
+                            init_local_types[arg.arg] = rt
+                for body_stmt in stmt.body:
+                    if isinstance(body_stmt, ast.Assign) and len(body_stmt.targets) == 1:
+                        tgt = body_stmt.targets[0]
+                        if (isinstance(tgt, ast.Attribute) and isinstance(tgt.value, ast.Name)
+                                and tgt.value.id == "self"):
+                            if isinstance(body_stmt.value, ast.Name):
+                                t = init_local_types.get(body_stmt.value.id)
+                                if t:
+                                    self.class_field_types[(class_qn, tgt.attr)] = t
+                    elif isinstance(body_stmt, ast.AnnAssign) and body_stmt.target is not None:
+                        tgt = body_stmt.target
+                        if (isinstance(tgt, ast.Attribute) and isinstance(tgt.value, ast.Name)
+                                and tgt.value.id == "self"):
+                            rt = _peel_receiver_type(body_stmt.annotation)
+                            if rt:
+                                self.class_field_types[(class_qn, tgt.attr)] = rt
+                break  # only one __init__ per class
         for stmt in node.body:
             self.visit(stmt)
         # Visit base-class expressions and decorator expressions so refs
@@ -491,6 +564,7 @@ class FileIndexer(ast.NodeVisitor):
                 self.visit(kw.value)
         for dec in node.decorator_list:
             self.visit(dec)
+        self.class_qn_stack.pop()
         self.qualname_stack.pop()
         self.scope_stack.pop()
 
@@ -499,6 +573,23 @@ class FileIndexer(ast.NodeVisitor):
     def _emit_ref(
         self, src: str, chain: list[str], site_line: int, kind: str, site_col: int = 0,
     ) -> None:
+        # Local alias expansion: `g = ttnn.get_golden_function(ttnn.gcd)` then
+        # `g(...)` — expand `chain=['g', ...]` to the recorded alias chain.
+        if self.local_alias_stack and chain:
+            alias = self.local_alias_stack[-1].get(chain[0])
+            if alias is not None:
+                chain = alias + chain[1:]
+        # Field-type expansion: `self.X.Y(...)` where X is a tracked field of
+        # the enclosing class. Drop the 'self' prefix and use the field's
+        # type as receiver_type so the stitcher resolves Y as a method on
+        # that type. Only fires when chain has at least 3 components.
+        receiver_type: list[str] | None = None
+        if (self.class_qn_stack and self.class_qn_stack[-1]
+                and len(chain) >= 3 and chain[0] == "self"):
+            field_t = self.class_field_types.get((self.class_qn_stack[-1], chain[1]))
+            if field_t:
+                chain = chain[1:]  # drop 'self'; chain[0] is now the field name
+                receiver_type = field_t
         # Dedup on (src, chain, line, kind) — avoids the common case where an
         # attribute appears both as a Call's func and as part of an arg walk.
         sig = (src, tuple(chain), site_line, kind)
@@ -509,8 +600,7 @@ class FileIndexer(ast.NodeVisitor):
         # is a known annotated local in the current function scope, record
         # the receiver's declared type so the stitcher can resolve chain[1]
         # against the class's method/field bindings.
-        receiver_type: list[str] | None = None
-        if len(chain) >= 2 and self.local_type_stack:
+        if receiver_type is None and len(chain) >= 2 and self.local_type_stack:
             receiver_type = self.local_type_stack[-1].get(chain[0])
         self.refs.append(PyRef(
             src=src,
@@ -565,9 +655,52 @@ class FileIndexer(ast.NodeVisitor):
                     site_line=node.lineno,
                     decorator_label=label + "(call-form)",
                 ))
+        # Flaw 9: `attach_golden_function(op, golden_function=impl)` attaches
+        # `impl` as `op.golden_function` at runtime. Capture as a PyRegistration
+        # under python_name="<op-chain>.golden_function" so later calls to
+        # `op.golden_function(...)` resolve via the existing pyreg path.
+        if chain and chain[-1] == "attach_golden_function" and len(node.args) >= 1:
+            self._capture_attach_golden_function(node)
         # Recurse normally into all children (func + args + keywords). visit_Attribute
         # will dedup the func-as-attribute against the call ref above.
         self.generic_visit(node)
+
+    def _capture_attach_golden_function(self, call: ast.Call) -> None:
+        # Positional: attach_golden_function(operation, golden_function=...)
+        # OR attach_golden_function(operation, golden_function_positional)
+        op_node = call.args[0]
+        op_chain = attr_chain(op_node)
+        if not op_chain:
+            return
+        # Find the golden_function value (kwarg or 2nd positional arg).
+        gf_expr = None
+        for kw in call.keywords:
+            if kw.arg == "golden_function":
+                gf_expr = kw.value
+                break
+        if gf_expr is None and len(call.args) >= 2:
+            gf_expr = call.args[1]
+        if gf_expr is None:
+            return
+        impl_chain = attr_chain(gf_expr)
+        impl_id: str | None = None
+        if impl_chain and len(impl_chain) == 1:
+            target_name = impl_chain[0]
+            for nid, n in self.nodes.items():
+                if n.kind in ("function", "method") and n.name == target_name:
+                    impl_id = nid
+                    break
+        # Register under "<op-chain>.golden_function" so any caller of
+        # `<op>.golden_function(...)` resolves through by_pyname_pyimpl.
+        python_name = ".".join(op_chain) + ".golden_function"
+        self.registrations.append(PyRegistration(
+            python_name=python_name,
+            impl_node_id=impl_id,
+            impl_chain=impl_chain if impl_id is None else None,
+            site_file=self.file_path,
+            site_line=call.lineno,
+            decorator_label="@attach_golden_function",
+        ))
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         # Attribute access. Captures things like the `ttnn.add` argument in
@@ -604,7 +737,9 @@ class FileIndexer(ast.NodeVisitor):
         if len(self.scope_stack) != 1:
             return
         if node.level:
-            target_module = _resolve_relative_module(self.module_dotted, node.level, node.module)
+            target_module = _resolve_relative_module(
+                self.module_dotted, node.level, node.module, is_package=self.is_package
+            )
         else:
             target_module = node.module
         if not target_module:

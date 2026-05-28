@@ -675,3 +675,149 @@ chains:
     query: |
       SELECT COUNT(*) FROM edges WHERE crosses_language = 1
     expect_min: 522
+
+  - name: "Wildcard re-export through __init__.py resolves (Flaw 5)"
+    description: >
+      `ttnn/ttnn/__init__.py` does `from ttnn.distributed import *`, where
+      ttnn/distributed/__init__.py in turn does `from .distributed import (...,
+      open_mesh_device, ...)`. Before Flaw 5 was fixed, the relative import
+      inside the package's __init__.py was resolved one level too high so the
+      re-export chain broke. After the fix, `ttnn.open_mesh_device` reaches
+      `ttnn.distributed.distributed.open_mesh_device` from many model callers.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE nd.qualified_name = 'ttnn.distributed.distributed.open_mesh_device'
+        AND nd.language = 'python'
+    expect_min: 3
+
+  - name: "nb::enum_ class binding extracted (Flaw 6)"
+    description: >
+      Before Flaw 6 was fixed, `nb::enum_<T>(mod, "Name")` did not match
+      `_call_returns_class_`, so the enum class binding was missed.
+      After the fix the bindings table should contain at least a handful of
+      enum class bindings (Topology, BinaryOpType, FabricConfig, …).
+    query: |
+      SELECT COUNT(*) FROM bindings b
+      JOIN nodes n ON n.id = b.cpp_node_id
+      WHERE b.helper = 'class_' AND n.kind = 'enum'
+    expect_min: 10
+
+  - name: "nb::enum_ .value() bindings extracted (Flaw 6)"
+    description: >
+      `.value("NAME", E::NAME)` calls on an `nb::enum_<E>` instance now
+      produce bindings keyed by helper='value' with cpp targets that are
+      ENUM_CONSTANT_DECL nodes.
+    query: |
+      SELECT COUNT(*) FROM bindings WHERE helper = 'value'
+    expect_min: 30
+
+  - name: "No `::doc` false-positive bindings (Flaw 1)"
+    description: >
+      Before Flaw 1 was fixed, `const auto doc = "..."` locals inside bind
+      helper functions were extracted as binding targets, producing 177
+      bogus bindings whose cpp_qualified_name ends in `::doc`.
+      After the fix, function-scoped VAR_DECLs are excluded.
+    query: |
+      SELECT COUNT(*) FROM bindings WHERE cpp_qualified_name LIKE '%::doc'
+    expect_exact: 0
+
+  - name: "FUNCTION_TEMPLATE callees get incoming calls edges (Flaw 2)"
+    description: >
+      Before Flaw 2 was fixed, calls to function templates like `ttnn::full(...)`
+      produced no edge because the callee's USR (instantiation form) didn't
+      match the indexed primary-template USR. After the fix, the primary
+      template node accumulates incoming calls.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE nd.kind = 'FUNCTION_TEMPLATE' AND e.kind = 'calls'
+    expect_min: 50
+
+  - name: "Lambda-wrapper bindings extracted (Flaw 8)"
+    description: >
+      `.def("name", [](...) { return target(...); })` was previously
+      missed because the extractor skipped lambda bodies entirely. The
+      fallback descends one lambda when the primary arg walk yielded
+      nothing. Trace ops (begin_trace_capture, end_trace_capture,
+      execute_trace, release_trace) are the canonical example — they
+      should all have bindings now.
+    query: |
+      SELECT COUNT(*) FROM bindings
+      WHERE python_name IN ('begin_trace_capture', 'end_trace_capture', 'execute_trace', 'release_trace')
+    expect_min: 4
+
+  - name: "ttnn/core directory in scope (Flaw 7)"
+    description: >
+      ttnn/core/ was previously outside DEFAULT_IN_SCOPE_PREFIXES so
+      bindings declared there (e.g. `distributed_nanobind.cpp`) were
+      missed. `get_device_tensors` is declared & bound there — its
+      binding must exist after the fix.
+    query: |
+      SELECT COUNT(*) FROM bindings WHERE python_name = 'get_device_tensors'
+    expect_min: 1
+
+  - name: "No enum-value default-arg false-positives (Flaw 10)"
+    description: >
+      `.def("sharded", lambda, nb::arg("orientation") = ShardOrientation::ROW_MAJOR, ...)`
+      previously emitted bindings like python_name='sharded' →
+      ShardOrientation::ROW_MAJOR because Flaw 6's ENUM_CONSTANT_DECL
+      addition to BINDABLE_KINDS caused default-arg enum values to be
+      treated as binding targets. After Flaw 10 was fixed,
+      ENUM_CONSTANT_DECL is accepted only when helper='value'.
+      Cross-check: no `def`-helper bindings should point at an
+      ENUM_CONSTANT_DECL node.
+    query: |
+      SELECT COUNT(*) FROM bindings b
+      JOIN nodes n ON n.id = b.cpp_node_id
+      WHERE b.helper IN ('def','def_ro','def_rw','def_prop_ro','def_prop_rw','def_static','bind_function')
+        AND n.kind = 'ENUM_CONSTANT_DECL'
+    expect_exact: 0
+
+  - name: "No fan-out from pyreg impl_chain to all same-named bindings (Flaw 11)"
+    description: >
+      `ttnn.deallocate` is a call-form registration pointing at
+      `ttnn._ttnn.operations.core.deallocate`. The stitcher used to
+      fan out to ALL bindings with python_name='deallocate' — 3 of
+      them (operations::core::deallocate, ComplexTensor::deallocate,
+      Tensor::deallocate). After Flaw 11, impl_chain suffix-matches
+      against cpp_qualified_name and ComplexTensor::deallocate should
+      have ZERO incoming Python edges (no real Python caller targets
+      it; uses go through Tensor.deallocate or the free function).
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE nd.qualified_name = 'ttnn::operations::complex::ComplexTensor::deallocate'
+        AND e.crosses_language = 1
+    expect_exact: 0
+
+  - name: "Binding fallback prefers ttnn:: namespace for ttnn.X chains (Flaw 11b)"
+    description: >
+      For chain=['ttnn','reshape'] with no pyreg registration, the
+      binding-fallback path used to fan out to MeshDevice::reshape +
+      Tensor::reshape + ttnn::reshape. Now it filters to bindings
+      whose cpp_qn starts with `ttnn::`. Cross-class fan-out should
+      be small: MeshDevice::reshape gets edges only from
+      receiver_type:MeshDevice resolution (typed locals), not from
+      bare `ttnn.reshape` callers.
+    query: |
+      SELECT COUNT(*) FROM edges e
+      JOIN nodes nd ON nd.id = e.dst
+      WHERE nd.qualified_name = 'tt::tt_metal::distributed::MeshDevice::reshape'
+        AND e.crosses_language = 1
+    expect_max: 50
+
+  - name: "Lambda fallback prefers method calls over implicit constructors (Flaw 12)"
+    description: >
+      For `.def_prop_ro("padded_shape", [](){ return self.padded_shape(); })`,
+      the lambda body's preorder-first CALL_EXPR is the implicit
+      Shape::Shape constructor (return-value construction), not the
+      user's intended Tensor::padded_shape() call. After Flaw 12 was
+      fixed, the lambda fallback prefers non-CONSTRUCTOR calls, so
+      `padded_shape` binding correctly points at Tensor::padded_shape.
+    query: |
+      SELECT COUNT(*) FROM bindings
+      WHERE python_name = 'padded_shape'
+        AND cpp_qualified_name = 'tt::tt_metal::Tensor::padded_shape'
+        AND helper = 'def_prop_ro'
+    expect_min: 1
