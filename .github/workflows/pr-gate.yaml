@@ -216,11 +216,13 @@ jobs:
     if: >-
       ${{ needs.find-changed-files.outputs.any-code-changed == 'true' ||
           needs.find-changed-files.outputs.docs-changed == 'true' }}
-    needs: [find-changed-files, asan-build]
+    needs: [find-changed-files, asan-build, build-docker-images]
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
+      # build-docs runs on ubuntu-latest (external runner) — no harbor access.
+      # Use raw GHCR tag from build-docker-images, not the harbor-prefixed ref from asan-build.
+      docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
       wheel-artifact-name: ${{ needs.asan-build.outputs.wheel-artifact-name }}
       build-type: 'ASan'
 
