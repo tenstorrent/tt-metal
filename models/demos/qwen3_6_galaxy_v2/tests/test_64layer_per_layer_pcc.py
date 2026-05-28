@@ -16,10 +16,13 @@ Run:
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import pathlib
 
 import pytest
+import requests
 import torch
 from safetensors.torch import load_file as load_st
 
@@ -29,8 +32,12 @@ _SNAPSHOT = pathlib.Path(
     "/home/tt-admin/.cache/huggingface/hub/models--Qwen--Qwen3.6-27B"
     "/snapshots/6a9e13bd6fc8f0983b9b99948120bc37f49c13e9"
 )
+_PROMPT_DIR = pathlib.Path("models/demos/llama3_70b_galaxy/demo/sample_prompts")
+_CONTEXT_CACHE_DIR = pathlib.Path("models/tt_transformers/demo/context_cache")
 
-_T_PREFILL = 128
+# Override via ``QWEN36_PCC_T_PREFILL=4096`` to find the layer at which long-T
+# trajectory diverges from CPU reference.
+_T_PREFILL = int(os.environ.get("QWEN36_PCC_T_PREFILL", "128"))
 _N_LAYERS = 64
 
 
@@ -67,6 +74,42 @@ def _load_state_dict_all_layers(snapshot_dir: pathlib.Path) -> dict:
             if k in shard:
                 sd[k] = shard[k]
     return sd
+
+
+def _load_and_cache_context(context_url: str, cache_dir: pathlib.Path, max_length: int | None = None) -> str:
+    """Identical to test_decode_perf_intrace.py — Gutenberg URL cache + char clip."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
+    if cache_file.exists():
+        context_text = cache_file.read_text()
+    else:
+        resp = requests.get(context_url, timeout=30)
+        resp.raise_for_status()
+        context_text = resp.text
+        cache_file.write_text(context_text)
+    if max_length:
+        context_text = context_text[:max_length]
+    return context_text
+
+
+def _load_prompt_for_isl(t_prefill: int) -> str:
+    """Same prompt-loader as test_decode_perf_intrace.py so the per-layer PCC
+    runs the SAME input the production perf test would see at this ISL."""
+    if t_prefill < 1024:
+        return "The capital of France is"
+    k = t_prefill // 1024
+    prompt_file = _PROMPT_DIR / f"input_data_long_{k}k.json"
+    with open(prompt_file) as f:
+        data = json.load(f)
+    entry = data[0]
+    prompt = entry["prompt"]
+    context_url = entry.get("context")
+    if context_url:
+        # 6 chars/token floor — see test_decode_perf_intrace.py for rationale.
+        max_length = max(entry.get("max_length") or 0, t_prefill * 6)
+        context_text = _load_and_cache_context(context_url, _CONTEXT_CACHE_DIR, max_length=max_length)
+        prompt = "```" + context_text + "```\n\n" + prompt
+    return prompt
 
 
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -217,11 +260,17 @@ def test_qwen36_64_layer_per_layer_pcc(bh_glx_mesh):
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(str(_SNAPSHOT), trust_remote_code=True)
-    prompt = "The capital of France is"
+    prompt = _load_prompt_for_isl(_T_PREFILL)
+    preview = prompt if len(prompt) <= 200 else f"{prompt[:120]!r}...{prompt[-80:]!r}"
+    print(f"[per-layer] prompt ({len(prompt)} chars): {preview}")
     input_ids = tokenizer(prompt, return_tensors="pt").input_ids
-    T_prompt = input_ids.shape[-1]
+    T_prompt = int(input_ids.shape[-1])
+    if T_prompt > _T_PREFILL:
+        input_ids = input_ids[:, :_T_PREFILL]
+        T_prompt = _T_PREFILL
     input_ids_padded = torch.zeros(1, _T_PREFILL, dtype=input_ids.dtype)
     input_ids_padded[0, :T_prompt] = input_ids[0]
+    print(f"[per-layer] T_prompt={T_prompt} T_PREFILL={_T_PREFILL}")
 
     embed_w = state_dict["model.language_model.embed_tokens.weight"].float()
     x_cpu_torch = embed_w[input_ids_padded[0]].unsqueeze(0)
