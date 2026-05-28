@@ -25,6 +25,9 @@
 #include <filesystem>
 #include <iostream>
 
+#include <mutex>
+#include <unordered_map>
+
 #include <tt_stl/assert.hpp>
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/data_collection.hpp"
@@ -69,8 +72,22 @@ kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 }
 
 void add_program_sub_device_meta_data(nlohmann::json& meta_data, tt::ChipId device_id, uint32_t runtime_id) {
-    const std::optional<tt::ProgramSubDeviceInfo> sub_device_info =
-        tt::GetProgramSubDevice(device_id, static_cast<uint16_t>(runtime_id));
+    using CacheKey = std::pair<tt::ChipId, uint32_t>;
+    static std::mutex cache_mutex;
+    static std::unordered_map<CacheKey, std::optional<tt::ProgramSubDeviceInfo>> sub_device_info_cache;
+
+    const CacheKey cache_key{device_id, runtime_id};
+    std::optional<tt::ProgramSubDeviceInfo> sub_device_info;
+    {
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        auto cache_it = sub_device_info_cache.find(cache_key);
+        if (cache_it == sub_device_info_cache.end()) {
+            cache_it = sub_device_info_cache
+                           .emplace(cache_key, tt::GetProgramSubDevice(device_id, static_cast<uint16_t>(runtime_id)))
+                           .first;
+        }
+        sub_device_info = cache_it->second;
+    }
     if (!sub_device_info.has_value()) {
         return;
     }

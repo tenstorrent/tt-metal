@@ -341,7 +341,10 @@ def get_dispatch_core_ops(timeseries):
             continue
         riscData[risc]["zone"].append(ts)
 
-        meta_data = parse_device_csv_meta_data(timerID.get("meta_data"))
+        raw_meta_data = timerID.get("meta_data")
+        meta_data = None
+        if raw_meta_data and ("workers_runtime_id" in raw_meta_data or "dispatch_command_type" in raw_meta_data):
+            meta_data = parse_device_csv_meta_data(raw_meta_data)
         if meta_data and "workers_runtime_id" in meta_data:
             riscData[risc]["opFinished"] = False
             riscData[risc]["opID"] = meta_data["workers_runtime_id"]

@@ -439,6 +439,22 @@ class test_dispatch_cores_extended_worker(test_dispatch_cores):
     pass
 
 
+class test_dispatch_cores_extended_worker_dispatch_ops:
+    riscs = default_setup.riscs
+    riscTypes = default_setup.riscTypes
+    timerAnalysis = {
+        "dispatch_total_cq_cmd_op_time": default_setup.timerAnalysis["dispatch_total_cq_cmd_op_time"],
+        "dispatch_go_send_wait_time": default_setup.timerAnalysis["dispatch_go_send_wait_time"],
+    }
+    displayStats = default_setup.displayStats
+    detectOps = True
+    outputFolder = default_setup.outputFolder
+    deviceInputLog = default_setup.deviceInputLog
+    deviceAnalysisData = default_setup.deviceAnalysisData
+    deviceStatsTXT = default_setup.deviceStatsTXT
+    deviceTarball = default_setup.deviceTarball
+
+
 class test_ethernet_dispatch_cores(default_setup):
     timerAnalysis = {
         "Ethernet CQ Dispatch": {
