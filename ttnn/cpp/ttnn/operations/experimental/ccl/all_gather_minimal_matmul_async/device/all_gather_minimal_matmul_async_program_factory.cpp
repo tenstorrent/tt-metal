@@ -370,19 +370,6 @@ all_gather_minimal_matmul_async_factory_helper(
             device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
             device->l1_size_per_core());
     }
-    auto lowest_occupied = device->lowest_occupied_compute_l1_address();
-    std::fprintf(
-        stderr,
-        "AGMM-L1: l1_size=%u alloc_base=%u lowest_occ=%lld lowest_occ-base=%lld l1_unreserved=%u BUDGET=%u\n",
-        (unsigned)device->l1_size_per_core(),
-        (unsigned)device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
-        (long long)(lowest_occupied.has_value() ? (int64_t)lowest_occupied.value() : -1),
-        (long long)(lowest_occupied.has_value()
-                        ? (int64_t)lowest_occupied.value() -
-                              (int64_t)device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1)
-                        : -1),
-        (unsigned)l1_unreserved,
-        (unsigned)L1_BUDGET_BYTES);
     const uint32_t base_fixed_bytes = out_block_num_tiles * out_tile_size                      // out (single)
                                       + out_block_num_tiles * intermediate_tile_size           // intermediate (single)
                                       + (use_bias ? in2_block_num_tiles * in2_tile_size : 0);  // bias (single)
