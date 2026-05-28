@@ -210,6 +210,10 @@ class LTXPipeline:
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        if ccl_manager.topology == ttnn.Topology.Linear:
+            self.vae_ccl_manager = ccl_manager
+        else:
+            self.vae_ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
         if vae_parallel_config is None:
             vae_parallel_config = VaeHWParallelConfig(
                 height_parallel=parallel_config.tensor_parallel,
@@ -492,7 +496,7 @@ class LTXPipeline:
                 base_channels=self._vae_base_channels,
                 mesh_device=self.mesh_device,
                 parallel_config=self.vae_parallel_config,
-                ccl_manager=self.ccl_manager,
+                ccl_manager=self.vae_ccl_manager,
                 num_frames=self._init_num_frames or None,
                 height=self._init_height or None,
                 width=self._init_width or None,
@@ -987,7 +991,7 @@ class LTXPipeline:
                 base_channels=base_channels,
                 mesh_device=self.mesh_device,
                 parallel_config=self.vae_parallel_config,
-                ccl_manager=self.ccl_manager,
+                ccl_manager=self.vae_ccl_manager,
             )
             self.vae_decoder.load_torch_state_dict(state_dict)
             logger.info("Loaded TTNN VAE decoder")
