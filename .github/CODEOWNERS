@@ -114,7 +114,8 @@ tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu @tenstorr
 tt_metal/impl/dispatch/ @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @tenstorrent/codeowner-bypass
 tt_metal/impl/event @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/impl/flatbuffer/ @cfjchu @kmabeeTT @nsmithtt @tenstorrent/codeowner-bypass
-tt_metal/impl/host_api/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @aliuTT @ayerofieiev-tt @tenstorrent/codeowner-bypass
+tt_metal/impl/host_api/ @abhullar-tt @jbaumanTT @akerteszTT @kstevensTT @tenstorrent/codeowner-bypass
+tt_metal/impl/host_api/tt_metal.cpp @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @aliuTT @ayerofieiev-tt @tenstorrent/codeowner-bypass
 tt_metal/impl/jit_server/ @ruizhangTT @tenstorrent/metalium-runtime @tenstorrent/codeowner-bypass
 tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @sagarwalTT @tenstorrent/codeowner-bypass
 tt_metal/impl/lightmetal/ @kmabeeTT @gsarabandoTT @tenstorrent/codeowner-bypass
