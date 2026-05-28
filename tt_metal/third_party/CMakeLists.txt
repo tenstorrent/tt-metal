@@ -8,7 +8,40 @@ if(TT_METAL_USE_EMULE)
 endif()
 
 add_subdirectory(umd)
+
+# Propagate the top-level ENABLE_TRACY option into Tracy's own TRACY_ENABLE option *before*
+# add_subdirectory(tracy). Tracy's CMakeLists.txt reads TRACY_ENABLE in tracy_set_option()
+# and, when ON, attaches `target_compile_definitions(TracyClient PUBLIC TRACY_ENABLE)`. That
+# PUBLIC define is what gates the runtime check in tt_metal/llrt/rtoptions.cpp
+# (`#if !defined(TRACY_ENABLE) TT_FATAL(...)` for TT_METAL_DEVICE_PROFILER) and every other
+# Tracy-instrumented call site in tt-metal. Without this propagation a build configured with
+# `-DENABLE_TRACY=ON` still produces binaries that abort the moment device profiling is
+# requested.
+# Seed as CACHE (FORCE) — Tracy's CMakeLists.txt uses `cmake_minimum_required(VERSION 3.10)`,
+# which keeps CMP0077 at OLD inside that scope. Under OLD, `option(TRACY_ENABLE ... OFF)`
+# wipes a normal variable of the same name and re-creates the cache entry at its default,
+# silently overriding `set(TRACY_ENABLE ON)`. Setting the cache value here is honored
+# by `option()` under both OLD and NEW policy.
+if(ENABLE_TRACY)
+    set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiling instrumentation" FORCE)
+else()
+    set(TRACY_ENABLE OFF CACHE BOOL "Enable Tracy profiling instrumentation" FORCE)
+endif()
+
+# Tracy will always be built with fallback timing enabled — avoids hard failures on systems
+# without invariant TSC (some VMs, older hardware) by falling back to OS clocks.
+set(TRACY_TIMER_FALLBACK ON CACHE BOOL "Tracy: use lower-resolution timer fallback" FORCE)
+
 add_subdirectory(tracy)
+
+# When Tracy is enabled, TracyClient consumers need frame pointers preserved (so backtrace
+# walking works) and `-rdynamic` on the final link line (so Tracy can resolve symbols from
+# the dynamic symbol table). Both must be PUBLIC so they propagate to anything linking
+# TracyClient — these used to live in the now-deleted cmake/tracy.cmake.
+if(ENABLE_TRACY AND TARGET TracyClient)
+    target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
+    target_link_options(TracyClient PUBLIC -rdynamic)
+endif()
 
 set(NO_FILESELECTOR ON)
 
