@@ -25,10 +25,10 @@ time_series_transformer/
     └── config_runtime.json   # gitignored — runtime environment versions
 ```
 
-## Setup
+## Setup: run commands in root.
 ```bash
-source python_env/bin/activate
-python_env/bin/python -m pip install -r models/demos/time_series_transformer/requirements.txt
+source .tenstorrent-venv/bin/activate
+pip install -r models/demos/time_series_transformer/requirements.txt
 ```
 
 ## Generate Reference Tensors
