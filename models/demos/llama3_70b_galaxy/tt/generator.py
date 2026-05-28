@@ -710,6 +710,7 @@ class Generator(WarmupForwardMixin):
 
             # Use batched list for batched prefill, persistent buffer for non-batched
             logits_source = self.tt_logits_accumulated_batched if use_batched_prefill else self.tt_logits_accumulated
+            concat_sub_core_grids = getattr(self.model_args, "sub_core_grids", None)
 
             # Sample using the sampling module. Logits are in sharded format
             # (before all-gather), same as decode.
@@ -765,7 +766,11 @@ class Generator(WarmupForwardMixin):
                     sampling_module.seed_manager.reset_seed(single_params.seed, [slot])
                     sampling_module.seed_manager.get_new_values([slot], replicate_seeds=True)
 
-                    single_logits_batch = ttnn.concat([logits_source[slot]] * max_batch, dim=2)
+                    single_logits_batch = ttnn.concat(
+                        [logits_source[slot]] * max_batch,
+                        dim=2,
+                        sub_core_grids=concat_sub_core_grids,
+                    )
                     tt_sampled, tt_log_probs = sampling_module.sample(
                         single_logits_batch,
                         tt_out_tok=None,
@@ -798,7 +803,7 @@ class Generator(WarmupForwardMixin):
                 sampling_module.reset_output_state(slot_output_tokens)
             else:
                 # Concatenate along slot dimension -> [1, 1, 32, vocab_shard]
-                tt_logits_batch = ttnn.concat(logits_source, dim=2)
+                tt_logits_batch = ttnn.concat(logits_source, dim=2, sub_core_grids=concat_sub_core_grids)
                 sampling_params = _scatter_params_to_slots(sampling_params, empty_slots)
                 # print("sampling_params_scattered", sampling_params, "empty_slots", empty_slots)
 
