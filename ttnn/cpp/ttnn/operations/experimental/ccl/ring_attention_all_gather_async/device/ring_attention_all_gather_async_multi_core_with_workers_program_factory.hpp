@@ -9,6 +9,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <cstdint>
+#include <tt-metalium/workload_descriptor.hpp>
 #include <optional>
 #include <vector>
 
@@ -21,11 +22,11 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
 
     using tensor_return_value_t = std::vector<Tensor>;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 }  // namespace ttnn::experimental::prim
 
