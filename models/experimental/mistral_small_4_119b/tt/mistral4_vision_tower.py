@@ -64,17 +64,19 @@ def _vision_rms_norm(x: ttnn.Tensor, weight: ttnn.Tensor, compute_kernel_config)
     )
 
 
-# ── Patch embedding (native ttnn.conv2d) ───────────────────────────────────
+# ── Patch embedding (folded as matmul) ─────────────────────────────────────
 
 
 class TtPixtralPatchConv:
     """
     Pixtral patch embedding: Conv2d(3, 1024, kernel=14, stride=14, bias=False).
 
-    Runs as a real ``ttnn.conv2d`` on device. The only host work is permuting
-    the input from NCHW [1, 3, H, W] to flat NHWC [1, 1, H*W, 3] before upload.
-    The reformatted weight returned by the first ``ttnn.conv2d`` call is cached
-    so subsequent calls (multi-image runs) skip the preprocessing step.
+    Because kernel == stride and there is no padding, the conv is equivalent
+    to a matmul with the per-patch 14×14×3 = 588 input values flattened into
+    the channel dim. We pre-fold the weight on host once and the image on host
+    per upload (``torch.nn.functional.unfold``), then run a single ``ttnn.linear``
+    on device — bypassing ``ttnn.conv2d``'s internal ``fold`` + tilize +
+    sharding setup that otherwise stalls ~3.6 ms per frame.
     """
 
     def __init__(
@@ -88,42 +90,48 @@ class TtPixtralPatchConv:
         self.compute_kernel_config = compute_kernel_config
         self.patch_size = VISION_PATCH_SIZE
         self.dtype = dtype
+        self.folded_in_channels = VISION_NUM_CHANNELS * self.patch_size * self.patch_size  # 588
 
-        # HF Conv2d weight: [out_channels, in_channels, kH, kW] = [1024, 3, 14, 14].
+        # HF Conv2d weight [out, in, kH, kW] = [1024, 3, 14, 14] → fold to
+        # [in*kH*kW, out] = [588, 1024] so ttnn.linear can consume it.
         w_4d = state_dict["vision_tower.patch_conv.weight"].to(torch.bfloat16)
         assert w_4d.shape == (VISION_HIDDEN_SIZE, VISION_NUM_CHANNELS, self.patch_size, self.patch_size)
-
-        self.weight = ttnn.from_torch(
-            w_4d,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+        w_folded = w_4d.reshape(VISION_HIDDEN_SIZE, self.folded_in_channels).T.contiguous()  # [588, 1024]
+        self.weight = ttnn.as_tensor(
+            w_folded,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-        self.conv_config = ttnn.Conv2dConfig(
-            weights_dtype=dtype,
-            activation=None,
-            deallocate_activation=True,
-        )
         self._image_input_tt: ttnn.Tensor | None = None
         self._image_input_shape: tuple[int, int] | None = None
 
+    def _fold_image_host(self, image: torch.Tensor) -> torch.Tensor:
+        """[1, 3, H, W] → [1, 1, num_patches, 588] (im2col with kernel==stride)."""
+        x = image.to(torch.bfloat16)
+        x = torch.nn.functional.unfold(x, kernel_size=self.patch_size, stride=self.patch_size)  # [1, 588, num_patches]
+        num_patches = x.shape[-1]
+        return x.transpose(1, 2).contiguous().reshape(1, 1, num_patches, self.folded_in_channels)
+
     def upload_image(self, image: torch.Tensor) -> Tuple[ttnn.Tensor, int, int]:
-        """Upload ``image`` to a persistent device buffer for trace replay."""
+        """Upload pre-folded image to a persistent device buffer for trace replay."""
         assert image.ndim == 4 and image.shape[1] == VISION_NUM_CHANNELS
         H, W = image.shape[2], image.shape[3]
         assert H % self.patch_size == 0 and W % self.patch_size == 0
         h_patches = H // self.patch_size
         w_patches = W // self.patch_size
 
-        x_host = image.to(torch.bfloat16).permute(0, 2, 3, 1).contiguous().reshape(1, 1, H * W, VISION_NUM_CHANNELS)
+        x_host = self._fold_image_host(image)
         if self._image_input_tt is None or self._image_input_shape != (H, W):
             self._image_input_tt = ttnn.from_torch(
                 x_host,
                 dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
             self._image_input_shape = (H, W)
@@ -131,47 +139,21 @@ class TtPixtralPatchConv:
             host_tt = ttnn.from_torch(
                 x_host,
                 dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
             ttnn.copy_host_to_device_tensor(host_tt, self._image_input_tt)
         return self._image_input_tt, h_patches, w_patches
 
     def forward_device(self, image_tt: ttnn.Tensor, h_patches: int, w_patches: int) -> Tuple[ttnn.Tensor, int, int]:
-        """Patch conv on a pre-uploaded NHWC image tensor (trace-compatible)."""
-        H = h_patches * self.patch_size
-        W = w_patches * self.patch_size
-
-        [out, [_out_h, _out_w], [self.weight, _]] = ttnn.conv2d(
-            input_tensor=image_tt,
-            weight_tensor=self.weight,
-            bias_tensor=None,
-            in_channels=VISION_NUM_CHANNELS,
-            out_channels=VISION_HIDDEN_SIZE,
-            device=self.mesh_device,
-            kernel_size=(self.patch_size, self.patch_size),
-            stride=(self.patch_size, self.patch_size),
-            padding=(0, 0),
-            dilation=(1, 1),
-            batch_size=1,
-            input_height=H,
-            input_width=W,
-            groups=1,
-            conv_config=self.conv_config,
-            compute_config=self.compute_kernel_config,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
-            return_output_dim=True,
-            return_weights_and_bias=True,
+        """Pre-folded patch embedding: one matmul, fully trace-compatible."""
+        out = ttnn.linear(
+            image_tt,
+            self.weight,
+            compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        if ttnn.is_sharded(out):
-            out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
-        if out.layout != ttnn.TILE_LAYOUT:
-            out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
-        num_patches = h_patches * w_patches
-        out = ttnn.reshape(out, [1, 1, num_patches, VISION_HIDDEN_SIZE])
         return out, h_patches, w_patches
 
     def forward(self, image: torch.Tensor) -> Tuple[ttnn.Tensor, int, int]:
