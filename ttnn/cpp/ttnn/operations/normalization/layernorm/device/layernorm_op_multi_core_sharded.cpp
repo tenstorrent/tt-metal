@@ -5,6 +5,7 @@
 #include <string>
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
@@ -57,12 +58,12 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     }
 
     // Extract from operation_attributes and tensor_args
-    const auto& a = tensor_args.input;
-    const auto& b = tensor_args.residual_input_tensor;
-    const auto& gamma = tensor_args.weight;
-    const auto& beta = tensor_args.bias;
-    const auto& stats = tensor_args.stats;
-    auto& output = tensor_return_value;
+    const auto& a = tensor_args.input.mesh_tensor();
+    const auto b = as_optional_mesh_tensor(tensor_args.residual_input_tensor);
+    const auto gamma = as_optional_mesh_tensor(tensor_args.weight);
+    const auto beta = as_optional_mesh_tensor(tensor_args.bias);
+    const auto stats = as_optional_mesh_tensor(tensor_args.stats);
+    const auto& output = tensor_return_value.mesh_tensor();
     bool rms_norm = operation_attributes.norm_type == LayerNormType::RMSNORM;
     bool is_pre_all_gather = operation_attributes.distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER;
     bool is_post_all_gather = operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER;
@@ -100,7 +101,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    IDevice* device = a.device();
+    IDevice* device = &a.mutable_device();
 
     // convert data format
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -152,10 +153,6 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         storage_core_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
         storage_core_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
     }
-
-    // get sharded addr
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().mesh_tensor().address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().mesh_tensor().address() : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -238,7 +235,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         use_welford,
         skip_write_back,
         operation_attributes.fused_activation,
-        tensor_return_value.dtype());
+        output.dtype());
 
     // Get kernel paths using helper
     bool use_row_major_kernel = (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) ||
@@ -277,15 +274,15 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .legacy_rsqrt = legacy_rsqrt,
         .gamma_cb_data_format = gamma_cb_data_format,
         .beta_cb_data_format = beta_cb_data_format,
-        .gamma_buffer = gamma.has_value() ? gamma.value().mesh_tensor().mesh_buffer().get_reference_buffer() : nullptr,
-        .beta_buffer = beta.has_value() ? beta.value().mesh_tensor().mesh_buffer().get_reference_buffer() : nullptr,
+        .gamma_tensor = gamma,
+        .beta_tensor = beta,
         .gamma_is_row_major = gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR,
         .beta_is_row_major = beta.has_value() && beta.value().layout() == Layout::ROW_MAJOR,
         .gamma_stick_size = gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR
-                                ? gamma.value().padded_shape()[-1] * gamma.value().element_size()
+                                ? static_cast<uint32_t>(gamma.value().padded_shape()[-1] * gamma.value().element_size())
                                 : 0,
         .beta_stick_size = beta.has_value() && beta.value().layout() == Layout::ROW_MAJOR
-                               ? beta.value().padded_shape()[-1] * beta.value().element_size()
+                               ? static_cast<uint32_t>(beta.value().padded_shape()[-1] * beta.value().element_size())
                                : 0,
         .eps = eps,
         .per_core_recip_lut_size = block_w,
@@ -330,8 +327,8 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .packed_cinv_value_one = pack_two_bfloat16_into_uint32({bfloat_cinv_one, bfloat_cinv_one}),
         .packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv, bfloat_winv}),
         .eps_u = eps_u,
-        .gamma_dram_addr = gamma_dram_addr,
-        .beta_dram_addr = beta_dram_addr,
+        .gamma_tensor = gamma,
+        .beta_tensor = beta,
         .single_tile_size = single_tile_size,
         .out_single_tile_size = out_single_tile_size,
         .block_wt = block_wt,
@@ -394,74 +391,71 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     //   CB 16 is intermediate (no buffer), CB 17 is the final resharded output
     // Otherwise:
     //   CB 16 is the output, CB 17 is not used
-    Buffer* output_buffer = nullptr;
-    Buffer* output_reshard_buffer = nullptr;
+    ttsl::optional_reference<const MeshTensor> output_tensor;
+    ttsl::optional_reference<const MeshTensor> output_reshard_tensor;
     if (is_post_all_gather && !skip_write_back) {
-        // Resharding case: CB 17 needs the output buffer
-        output_reshard_buffer = output.buffer();
+        // Resharding case: CB 17 needs the output tensor
+        output_reshard_tensor = output;
     } else {
-        // Normal case: CB 16 needs the output buffer
-        output_buffer = output.buffer();
+        // Normal case: CB 16 needs the output tensor
+        output_tensor = output;
     }
 
-    CBConfig cb_config;
-    cb_config.in0_CB_size = cb_sizes.in0_CB_size;
-    cb_config.in1_CB_size = cb_sizes.in1_CB_size;
-    cb_config.in2_CB_size = cb_sizes.in2_CB_size;
-    cb_config.in3_CB_size = cb_sizes.in3_CB_size;
-    cb_config.in5_CB_size = cb_sizes.in5_CB_size;
-    cb_config.in6_CB_size = cb_sizes.in6_CB_size;
-    cb_config.x_CB_size = cb_sizes.x_CB_size;
-    cb_config.xmm_CB_size = cb_sizes.xmm_CB_size;
-    cb_config.ex_partial_CB_size = cb_sizes.ex_partial_CB_size;
-    cb_config.ex_CB_size = cb_sizes.ex_CB_size;
-    cb_config.ex_external_CB_size = cb_sizes.ex_external_CB_size;
-    cb_config.ex_global_CB_size = cb_sizes.ex_global_CB_size;
-    cb_config.ex2pe_CB_size = cb_sizes.ex2pe_CB_size;
-    cb_config.out_CB_size = cb_sizes.out_CB_size;
-    cb_config.out_reshard_CB_size = cb_sizes.out_reshard_CB_size;
-    cb_config.stats_cb_size = cb_sizes.stats_cb_size;
-    cb_config.stats_reduced_cb_size = cb_sizes.stats_reduced_cb_size;
-    cb_config.reciprocal_CB_size_bytes = reciprocal_CB_size_bytes;
-    cb_config.in_data_format = in_data_format;
-    cb_config.cb_data_format = cb_data_format;
-    cb_config.out_data_format = out_data_format;
-    cb_config.gamma_cb_data_format = gamma_cb_data_format;
-    cb_config.beta_cb_data_format = beta_cb_data_format;
-    cb_config.stats_cb_data_format = stats_cb_data_format;
-    cb_config.reciprocal_cb_data_format = reciprocal_cb_data_format;
-    cb_config.in_single_tile_size = in_single_tile_size;
-    cb_config.single_tile_size = single_tile_size;
-    cb_config.out_single_tile_size = out_single_tile_size;
-    cb_config.gamma_single_tile_size = gamma_single_tile_size;
-    cb_config.beta_single_tile_size = beta_single_tile_size;
-    cb_config.stats_single_tile_size = stats_single_tile_size;
-    cb_config.bfloat16_tile_size = bfloat16_tile_size;
-    cb_config.a_buffer = a.buffer();
-    cb_config.b_buffer = b.has_value() ? b.value().mesh_tensor().mesh_buffer().get_reference_buffer() : nullptr;
-    cb_config.gamma_buffer =
-        gamma.has_value() ? gamma.value().mesh_tensor().mesh_buffer().get_reference_buffer() : nullptr;
-    cb_config.beta_buffer =
-        beta.has_value() ? beta.value().mesh_tensor().mesh_buffer().get_reference_buffer() : nullptr;
-    cb_config.stats_buffer =
-        stats.has_value() ? stats.value().mesh_tensor().mesh_buffer().get_reference_buffer() : nullptr;
-    cb_config.recip_buffer =
-        recip_tensor.has_value() ? recip_tensor.value().mesh_tensor().mesh_buffer().get_reference_buffer() : nullptr;
-    cb_config.output_buffer = output_buffer;
-    cb_config.output_reshard_buffer = output_reshard_buffer;
-    cb_config.has_b = b.has_value();
-    cb_config.has_gamma = gamma.has_value();
-    cb_config.has_beta = beta.has_value();
-    cb_config.rms_norm = rms_norm;
-    cb_config.use_welford = use_welford;
-    cb_config.is_pre_all_gather = is_pre_all_gather;
-    cb_config.is_post_all_gather = is_post_all_gather;
-    cb_config.skip_write_back = skip_write_back;
-    // Enable the welford-fp32 alias only when the SrcA-routed transpose_wh_tile would
-    // otherwise truncate Float32 input to TF32. Restricting to !rms_norm because
-    // RMSNorm doesn't use Welford in this kernel path.
-    cb_config.welford_fp32_alias =
-        use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en;
+    CBConfig cb_config{
+        .in0_CB_size = cb_sizes.in0_CB_size,
+        .in1_CB_size = cb_sizes.in1_CB_size,
+        .in2_CB_size = cb_sizes.in2_CB_size,
+        .in3_CB_size = cb_sizes.in3_CB_size,
+        .in5_CB_size = cb_sizes.in5_CB_size,
+        .in6_CB_size = cb_sizes.in6_CB_size,
+        .x_CB_size = cb_sizes.x_CB_size,
+        .xmm_CB_size = cb_sizes.xmm_CB_size,
+        .ex_partial_CB_size = cb_sizes.ex_partial_CB_size,
+        .ex_CB_size = cb_sizes.ex_CB_size,
+        .ex_external_CB_size = cb_sizes.ex_external_CB_size,
+        .ex_global_CB_size = cb_sizes.ex_global_CB_size,
+        .ex2pe_CB_size = cb_sizes.ex2pe_CB_size,
+        .out_CB_size = cb_sizes.out_CB_size,
+        .out_reshard_CB_size = cb_sizes.out_reshard_CB_size,
+        .stats_cb_size = cb_sizes.stats_cb_size,
+        .stats_reduced_cb_size = cb_sizes.stats_reduced_cb_size,
+        .reciprocal_CB_size_bytes = reciprocal_CB_size_bytes,
+        .in_data_format = in_data_format,
+        .cb_data_format = cb_data_format,
+        .out_data_format = out_data_format,
+        .gamma_cb_data_format = gamma_cb_data_format,
+        .beta_cb_data_format = beta_cb_data_format,
+        .stats_cb_data_format = stats_cb_data_format,
+        .reciprocal_cb_data_format = reciprocal_cb_data_format,
+        .in_single_tile_size = in_single_tile_size,
+        .single_tile_size = single_tile_size,
+        .out_single_tile_size = out_single_tile_size,
+        .gamma_single_tile_size = gamma_single_tile_size,
+        .beta_single_tile_size = beta_single_tile_size,
+        .stats_single_tile_size = stats_single_tile_size,
+        .bfloat16_tile_size = bfloat16_tile_size,
+        .a_tensor = a,
+        .b_tensor = b,
+        .gamma_tensor = gamma,
+        .beta_tensor = beta,
+        .stats_tensor = stats,
+        .recip_tensor = as_optional_mesh_tensor(recip_tensor),
+        .output_tensor = output_tensor,
+        .output_reshard_tensor = output_reshard_tensor,
+        .has_b = b.has_value(),
+        .has_gamma = gamma.has_value(),
+        .has_beta = beta.has_value(),
+        .rms_norm = rms_norm,
+        .use_welford = use_welford,
+        .is_pre_all_gather = is_pre_all_gather,
+        .is_post_all_gather = is_post_all_gather,
+        .skip_write_back = skip_write_back,
+        // Enable the welford-fp32 alias only when the SrcA-routed transpose_wh_tile would
+        // otherwise truncate Float32 input to TF32. Restricting to !rms_norm because
+        // RMSNorm doesn't use Welford in this kernel path.
+        .welford_fp32_alias =
+            use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en,
+    };
 
     add_cb_descriptors(program_descriptor, core_ranges, all_worker_and_storage_cores, cb_config);
 

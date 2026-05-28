@@ -544,8 +544,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
                    ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_welford.cpp"
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp");
 
-    // Build kernel descriptors up-front so we can register runtime args (with MeshTensor
-    // buffer bindings) directly inside the per-core loop via emplace_runtime_args.
     KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source = reader_kernel_path;
     reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;

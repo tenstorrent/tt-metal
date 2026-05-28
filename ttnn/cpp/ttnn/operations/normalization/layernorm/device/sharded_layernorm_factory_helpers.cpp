@@ -50,22 +50,19 @@ void assert_subblock_compute_config_compatible(bool dst_full_sync_en, bool fp32_
 
 std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat>
 get_cb_data_formats(
-    const Tensor& output,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& beta,
-    const std::optional<const Tensor>& stats,
+    const MeshTensor& output,
+    ttsl::optional_reference<const MeshTensor> gamma,
+    ttsl::optional_reference<const MeshTensor> beta,
+    ttsl::optional_reference<const MeshTensor> stats,
     bool fp32_dest_acc_en) {
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat gamma_cb_data_format = gamma.has_value()
-                                              ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
-                                              : tt::DataFormat::Float16_b;
-    tt::DataFormat beta_cb_data_format = beta.has_value()
-                                             ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
-                                             : tt::DataFormat::Float16_b;
-    tt::DataFormat stats_cb_data_format = stats.has_value()
-                                              ? tt::tt_metal::datatype_to_dataformat_converter(stats.value().dtype())
-                                              : tt::DataFormat::Float16_b;
+    tt::DataFormat gamma_cb_data_format =
+        gamma.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(gamma->dtype()) : tt::DataFormat::Float16_b;
+    tt::DataFormat beta_cb_data_format =
+        beta.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(beta->dtype()) : tt::DataFormat::Float16_b;
+    tt::DataFormat stats_cb_data_format =
+        stats.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(stats->dtype()) : tt::DataFormat::Float16_b;
     tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
     return {
         out_data_format,
@@ -109,7 +106,7 @@ uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const
 // Grid and worker distribution
 //////////////////////////////////////////////////////////////////////////////
 
-GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size) {
+GridParams GridParams::compute(const MeshTensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size) {
     auto spec = input.shard_spec().value();
     const uint32_t tile_height = input.tensor_spec().tile().get_height();
     uint32_t M = input.physical_volume() / input.padded_shape()[-1];
@@ -680,8 +677,8 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         (uint32_t)ctx.has_beta,
         ctx.block_wt,
         (uint32_t)ctx.use_welford};
-    tt::tt_metal::TensorAccessorArgs(ctx.gamma_buffer).append_to(args.writer_sender);
-    tt::tt_metal::TensorAccessorArgs(ctx.beta_buffer).append_to(args.writer_sender);
+    tt::tt_metal::TensorAccessorArgs(ctx.gamma_tensor).append_to(args.writer_sender);
+    tt::tt_metal::TensorAccessorArgs(ctx.beta_tensor).append_to(args.writer_sender);
 
     // Writer receiver compile time args
     args.writer_receiver = {
@@ -690,8 +687,8 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         (uint32_t)ctx.has_beta,
         ctx.block_wt,
         (uint32_t)ctx.use_welford};
-    tt::tt_metal::TensorAccessorArgs(ctx.gamma_buffer).append_to(args.writer_receiver);
-    tt::tt_metal::TensorAccessorArgs(ctx.beta_buffer).append_to(args.writer_receiver);
+    tt::tt_metal::TensorAccessorArgs(ctx.gamma_tensor).append_to(args.writer_receiver);
+    tt::tt_metal::TensorAccessorArgs(ctx.beta_tensor).append_to(args.writer_receiver);
 
     // Add stick size for row-major gamma/beta
     if (ctx.gamma_is_row_major) {
@@ -894,7 +891,9 @@ void add_kernel_descriptors(
     writer_sender_kernel_desc.compile_time_args = std::move(kernel_config.writer_sender_ct_args);
     writer_sender_kernel_desc.named_compile_time_args = writer_cb_named_args;
     writer_sender_kernel_desc.defines = kernel_config.writer_defines;
-    writer_sender_kernel_desc.runtime_args = std::move(kernel_config.writer_sender_rt_args);
+    for (auto& [core, args] : kernel_config.writer_sender_rt_args) {
+        writer_sender_kernel_desc.emplace_runtime_args(core, args);
+    }
     writer_sender_kernel_desc.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_1,
         .noc = kernel_config.writer_noc,
@@ -910,7 +909,9 @@ void add_kernel_descriptors(
         writer_receiver_kernel_desc.compile_time_args = std::move(kernel_config.writer_receiver_ct_args);
         writer_receiver_kernel_desc.named_compile_time_args = writer_cb_named_args;
         writer_receiver_kernel_desc.defines = std::move(kernel_config.writer_defines);
-        writer_receiver_kernel_desc.runtime_args = std::move(kernel_config.writer_receiver_rt_args);
+        for (auto& [core, args] : kernel_config.writer_receiver_rt_args) {
+            writer_receiver_kernel_desc.emplace_runtime_args(core, args);
+        }
         writer_receiver_kernel_desc.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = kernel_config.writer_noc,
@@ -981,13 +982,13 @@ void add_cb_descriptors(
                                  uint8_t buffer_index,
                                  tt::DataFormat data_format,
                                  uint32_t page_size,
-                                 Buffer* buffer = nullptr) {
+                                 ttsl::optional_reference<const MeshTensor> tensor = {}) {
         CBDescriptor cb_desc;
         cb_desc.total_size = total_size;
         cb_desc.core_ranges = core_ranges;
         cb_desc.format_descriptors.push_back(
             CBFormatDescriptor{.buffer_index = buffer_index, .data_format = data_format, .page_size = page_size});
-        cb_desc.buffer = buffer;
+        cb_desc.tensor = tensor.has_value() ? &*tensor : nullptr;
         return cb_desc;
     };
 
@@ -1003,7 +1004,7 @@ void add_cb_descriptors(
             tt::CBIndex::c_0,
             cb_config.in_data_format,
             cb_config.in_single_tile_size,
-            cb_config.a_buffer);
+            cb_config.a_tensor);
         if (cb_config.welford_fp32_alias && !cb_config.has_b) {
             cb0_desc.format_descriptors.push_back(CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
@@ -1021,7 +1022,7 @@ void add_cb_descriptors(
             tt::CBIndex::c_1,
             cb_config.in_data_format,
             cb_config.in_single_tile_size,
-            cb_config.b_buffer));
+            cb_config.b_tensor));
         if (cb_config.is_pre_all_gather) {
             program_descriptor.cbs.push_back(make_cb_descriptor(
                 cb_config.in1_CB_size,
@@ -1029,7 +1030,7 @@ void add_cb_descriptors(
                 tt::CBIndex::c_14,
                 cb_config.in_data_format,
                 cb_config.in_single_tile_size,
-                cb_config.a_buffer));
+                cb_config.a_tensor));
         }
     }
 
@@ -1182,7 +1183,7 @@ void add_cb_descriptors(
             .buffer_index = tt::CBIndex::c_25,
             .data_format = cb_config.reciprocal_cb_data_format,
             .page_size = cb_config.reciprocal_CB_size_bytes});
-        recip_cb_desc.buffer = cb_config.recip_buffer;
+        recip_cb_desc.tensor = cb_config.recip_tensor.has_value() ? &*cb_config.recip_tensor : nullptr;
         program_descriptor.cbs.push_back(std::move(recip_cb_desc));
     }
 
@@ -1195,7 +1196,7 @@ void add_cb_descriptors(
             .buffer_index = tt::CBIndex::c_7,
             .data_format = cb_config.stats_cb_data_format,
             .page_size = cb_config.stats_single_tile_size});
-        stats_cb_desc.buffer = cb_config.stats_buffer;
+        stats_cb_desc.tensor = cb_config.stats_tensor.has_value() ? &*cb_config.stats_tensor : nullptr;
         program_descriptor.cbs.push_back(std::move(stats_cb_desc));
 
         // CB 21: cb_stats_reduced
@@ -1223,7 +1224,7 @@ void add_cb_descriptors(
             tt::CBIndex::c_16,
             cb_config.out_data_format,
             cb_config.out_single_tile_size,
-            cb_config.output_buffer));
+            cb_config.output_tensor));
     } else {
         program_descriptor.cbs.push_back(make_cb_descriptor(
             cb_config.out_CB_size,
@@ -1231,7 +1232,7 @@ void add_cb_descriptors(
             tt::CBIndex::c_16,
             cb_config.out_data_format,
             cb_config.out_single_tile_size,
-            cb_config.output_buffer));
+            cb_config.output_tensor));
     }
 
     // CB 17: output reshard (if is_post_all_gather and not skip_write_back)
@@ -1242,7 +1243,7 @@ void add_cb_descriptors(
             tt::CBIndex::c_17,
             cb_config.out_data_format,
             cb_config.out_single_tile_size,
-            cb_config.output_reshard_buffer));
+            cb_config.output_reshard_tensor));
     }
 }
 
@@ -1480,12 +1481,12 @@ std::vector<uint32_t> build_write_back_args(
     return args;
 }
 
-std::vector<uint32_t> build_writer_args(
+KernelDescriptor::RTArgList build_writer_args(
     const CoreIndices& idx,
     const RuntimeArgsContext& ctx,
     const std::vector<uint32_t>& write_back_args,
     bool is_all_to_all) {
-    std::vector<uint32_t> args;
+    KernelDescriptor::RTArgList args;
 
     if (is_all_to_all) {
         if (ctx.grid.use_two_stage_reduce && idx.width_index >= ctx.workers.num_cores_all_to_all_first_stage) {
@@ -1498,11 +1499,19 @@ std::vector<uint32_t> build_writer_args(
     }
     args.push_back(ctx.packed_winv_value);
     args.push_back(ctx.eps_u);
-    args.push_back(ctx.gamma_dram_addr);
-    args.push_back(ctx.beta_dram_addr);
+    if (ctx.gamma_tensor.has_value()) {
+        args.push_back(*ctx.gamma_tensor);
+    } else {
+        args.push_back(0u);
+    }
+    if (ctx.beta_tensor.has_value()) {
+        args.push_back(*ctx.beta_tensor);
+    } else {
+        args.push_back(0u);
+    }
     args.push_back(idx.gamma_tile_start_id);
     args.push_back(idx.beta_tile_start_id);
-    args.insert(args.end(), write_back_args.begin(), write_back_args.end());
+    args.append(write_back_args);
     return args;
 }
 
