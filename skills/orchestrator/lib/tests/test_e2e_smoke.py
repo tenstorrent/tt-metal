@@ -139,9 +139,20 @@ def test_smoke_full_pipeline_decisions():
         "worker": "optimization",
     }
 
-    # Step 8: all optimization=done -> pipeline done
+    # Step 8: all optimization=done -> real_weights fan-out (RMSNorm first)
     for c in state["components"]:
         c["optimization"] = {"status": "done"}
+    assert eligible_blocks(state) == {
+        "phase": "device",
+        "block": "RMSNorm",
+        "worker": "real_weights",
+    }
+
+    # Step 9: all components real_weights=done, no use_cases -> done.
+    # No use_cases entries means the use_case half of the done check is
+    # vacuously satisfied; the per-component half drives completion.
+    for c in state["components"]:
+        c["real_weights"] = {"status": "done"}
     assert eligible_blocks(state) == {"phase": "done"}
 
 

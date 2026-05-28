@@ -2,18 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 """DAG candidate selection + deadlock detection for the bringup orchestrator.
 
-Implements SPEC.md §3 "Tick decision tree" as a pure function over the state
-dict. The orchestrator calls ``eligible_blocks(state)`` once per tick to learn
-what to do next; no I/O, no mutation. The returned dict is one of five shapes:
+Implements SPEC.md §3 "Tick decision tree" plus the post-bringup extensions
+defined in SPEC_post_bringup.md §Dispatch logic additions. Pure function over
+the state dict: the orchestrator calls ``eligible_blocks(state)`` once per
+tick to learn what to do next; no I/O, no mutation. The returned dict is one
+of the following shapes:
 
 - ``{"phase": "architecture"}``
 - ``{"phase": "reference", "blocks": [name, ...]}``
 - ``{"phase": "device", "block": name, "worker": "ttnn"|"debug"|"optimization"}``
+- ``{"phase": "device", "block": name, "worker": "real_weights"}`` (NEW)
+- ``{"phase": "device", "use_case": name, "worker": "generation"}`` (NEW;
+   note ``use_case`` key, not ``block``)
+- ``{"phase": "device", "use_case": name, "worker": "perf"}`` (NEW)
 - ``{"phase": "done"}``
 - ``{"phase": "deadlock", "blocking": [{"name": ..., "blocks_downstream": [...]}, ...]}``
 
 The rules are evaluated in order; the first matching rule's result is returned.
-See ``SPEC.md`` §3 for the canonical specification.
+See ``SPEC.md`` §3 and ``SPEC_post_bringup.md`` §Dispatch logic additions for
+the canonical specifications.
 """
 
 from __future__ import annotations
@@ -30,6 +37,13 @@ _FINISHED_STATUSES = frozenset({"done", "skipped"})
 # excluded — once a phase is blocked, the orchestrator stops dispatching it
 # and waits for ``--redo`` / ``--skip`` from the operator.
 _REFERENCE_PENDING_STATUSES = frozenset({"pending", "failing"})
+
+# Statuses that make a post-bringup phase (real_weights / generation / perf)
+# eligible for re-dispatch. Same shape as ``_REFERENCE_PENDING_STATUSES``
+# plus an explicit ``None`` sentinel handled at the call site: a phase dict
+# absent from the entry means "never run yet → pending". ``blocked`` is
+# intentionally excluded for the same reason as reference.
+_POST_BRINGUP_PENDING_STATUSES = frozenset({"pending", "failing"})
 
 
 def _phase_status(component: dict, phase: str) -> str | None:
@@ -208,24 +222,100 @@ def eligible_blocks(state: dict) -> dict:
         if ttnn_status in _FINISHED_STATUSES and opt_status in ("pending", None):
             return {"phase": "device", "block": c["name"], "worker": "optimization"}
 
-    # ---- Rule 4: done -----------------------------------------------------
-    if all(_ttnn_satisfied_for_completion(c) and _is_finished(c, "optimization") for c in components):
+    # ---- Rule 4: real_weights (post-bringup, per-component) ---------------
+    # Per SPEC_post_bringup.md §Dispatch logic additions step 3. Eligible when
+    # ttnn AND optimization are finished and real_weights itself is None /
+    # pending / failing (blocked excluded — operator must intervene).
+    # We do NOT route real_weights failures to a debug worker: they retry
+    # via the same real_weights worker.
+    for c in components:
+        rw_status = _phase_status(c, "real_weights")
+        if rw_status == "blocked":
+            continue
+        if rw_status is not None and rw_status not in _POST_BRINGUP_PENDING_STATUSES:
+            # Already finished (done/skipped) or in_progress (claimed by an
+            # active worker) — skip either way.
+            continue
+        if _is_finished(c, "ttnn") and _is_finished(c, "optimization"):
+            return {"phase": "device", "block": c["name"], "worker": "real_weights"}
+
+    # ---- Rule 5: generation (post-bringup, per-use_case) ------------------
+    # Per SPEC_post_bringup.md §Dispatch logic additions step 4. Eligible when
+    # every components_used entry has ttnn AND real_weights finished.
+    # ``components_used`` referring to an unknown component blocks dispatch
+    # for that use_case — symmetric with ``_deps_finished_for_ttnn``'s
+    # treatment of missing deps. The empty components_used case is vacuously
+    # satisfied (e.g. a pure-host use_case).
+    use_cases = state.get("use_cases", []) or []
+    by_comp_name = {c["name"]: c for c in components}
+    for uc in use_cases:
+        gen_status = _phase_status(uc, "generation")
+        if gen_status == "blocked":
+            continue
+        if gen_status is not None and gen_status not in _POST_BRINGUP_PENDING_STATUSES:
+            continue
+        deps_ok = True
+        for comp_name in uc.get("components_used", []):
+            dep = by_comp_name.get(comp_name)
+            if dep is None or not _is_finished(dep, "ttnn") or not _is_finished(dep, "real_weights"):
+                deps_ok = False
+                break
+        if deps_ok:
+            return {"phase": "device", "use_case": uc["name"], "worker": "generation"}
+
+    # ---- Rule 6: perf (post-bringup, per-use_case) ------------------------
+    # Per SPEC_post_bringup.md §Dispatch logic additions step 5. Eligible only
+    # after the use_case's generation phase is finished (done/skipped); perf
+    # itself must be None / pending / failing.
+    for uc in use_cases:
+        if not _is_finished(uc, "generation"):
+            continue
+        perf_status = _phase_status(uc, "perf")
+        if perf_status == "blocked":
+            continue
+        if perf_status is None or perf_status in _POST_BRINGUP_PENDING_STATUSES:
+            return {"phase": "device", "use_case": uc["name"], "worker": "perf"}
+
+    # ---- Rule 7: done -----------------------------------------------------
+    # Both axes must be complete: every component has optimization + real_weights
+    # finished, every use_case has generation + perf finished. The host_resident
+    # escape hatch satisfies the ttnn requirement (per Rule 4 of the original
+    # spec); real_weights is also satisfied by ``skipped``.
+    components_done = all(
+        _ttnn_satisfied_for_completion(c) and _is_finished(c, "optimization") and _is_finished(c, "real_weights")
+        for c in components
+    )
+    use_cases_done = all(_is_finished(uc, "generation") and _is_finished(uc, "perf") for uc in use_cases)
+    if components_done and use_cases_done:
         return {"phase": "done"}
 
-    # ---- Rule 5: deadlock -------------------------------------------------
-    # Anything blocked at any phase is a candidate to report. We list them
-    # in component order so the operator reads them top-down through the
-    # DAG, with each entry's downstream closure sorted for determinism.
+    # ---- Rule 8: deadlock -------------------------------------------------
+    # Anything blocked at any phase is a candidate to report. We list components
+    # first (in their list order), then use_cases — operators read top-down
+    # through the per-block DAG before reaching pipeline-level work. Each
+    # component entry's downstream closure is sorted alphabetically for
+    # determinism; use_cases have no downstream closure (they're leaves of
+    # the dispatch graph).
     blocking = []
     for c in components:
         is_blocked = any(
-            _phase_status(c, phase) == "blocked" for phase in ("reference", "ttnn", "debug", "optimization")
+            _phase_status(c, phase) == "blocked"
+            for phase in ("reference", "ttnn", "debug", "optimization", "real_weights")
         )
         if is_blocked:
             blocking.append(
                 {
                     "name": c["name"],
                     "blocks_downstream": _downstream_of(state, c["name"]),
+                }
+            )
+    for uc in use_cases:
+        is_blocked = any(_phase_status(uc, phase) == "blocked" for phase in ("generation", "perf"))
+        if is_blocked:
+            blocking.append(
+                {
+                    "name": uc["name"],
+                    "blocks_downstream": [],
                 }
             )
     return {"phase": "deadlock", "blocking": blocking}
