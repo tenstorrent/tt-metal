@@ -18,7 +18,7 @@ namespace ckernel {
  *
  * NOTE(ARCH_QUASAR): On Quasar, buffer descriptors are programmed into the unpack MOP at op init.
  * reconfig_data_format only reprograms THCON data formats (gasket), not the MOP. When operands or
- * DFB/buffer descriptors change, call the op init again (e.g. llk_unpack_AB_matmul_init) for the new
+ * DFB/buffer descriptors change, call the op init again for the new
  * operand pair before the next unpack operation.
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
@@ -128,10 +128,9 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
 template <bool is_tile_dim_reconfig_en = false>
 ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
 #ifdef ARCH_QUASAR
-    static_assert(!is_tile_dim_reconfig_en, "Quasar pack reconfig does not support tile-dimension changes");
-#endif
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE, is_tile_dim_reconfig_en>(new_cb_id)));
+#else
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_cb_id)));
-#ifndef ARCH_QUASAR
     if constexpr (is_tile_dim_reconfig_en) {
         PACK((llk_pack_init<PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(new_cb_id)));
     }
@@ -165,10 +164,9 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
 template <bool is_tile_dim_reconfig_en = false>
 ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new_cb_id) {
 #ifdef ARCH_QUASAR
-    static_assert(!is_tile_dim_reconfig_en, "Quasar pack reconfig does not support tile-dimension changes");
-#endif
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE, is_tile_dim_reconfig_en>(old_cb_id, new_cb_id)));
+#else
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_cb_id, new_cb_id)));
-#ifndef ARCH_QUASAR
     if constexpr (is_tile_dim_reconfig_en) {
         PACK((llk_pack_init<PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(new_cb_id)));
     }

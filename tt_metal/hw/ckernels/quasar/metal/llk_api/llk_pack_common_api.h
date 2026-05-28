@@ -55,18 +55,20 @@ inline bool should_reconfig_pack_in_data_format(const std::uint32_t old_output, 
 /**
  * Reprograms packer THCON IN_DATA_FORMAT only (gasket); L1 format stays in buffer descriptors.
  */
-template <[[maybe_unused]] bool is_fp32_dest_acc_en>
+template <[[maybe_unused]] bool EN_32BIT_DEST, bool is_tile_dim_reconfig_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
+    static_assert(!is_tile_dim_reconfig_en, "Quasar pack reconfig does not support tile-dimension changes");
     const std::uint32_t output_id = get_output_id(new_output);
     _llk_pack_reconfig_data_format_<p_pacr::PACK0>(pack_src_format[output_id], pack_dst_format[output_id]);
 }
 
-template <[[maybe_unused]] bool is_fp32_dest_acc_en>
+template <bool EN_32BIT_DEST, bool is_tile_dim_reconfig_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
+    static_assert(!is_tile_dim_reconfig_en, "Quasar pack reconfig does not support tile-dimension changes");
     if (!should_reconfig_pack_in_data_format(old_output, new_output)) {
         return;
     }
-    llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(new_output);
+    llk_pack_reconfig_data_format<EN_32BIT_DEST, is_tile_dim_reconfig_en>(new_output);
 }
 
 /**
