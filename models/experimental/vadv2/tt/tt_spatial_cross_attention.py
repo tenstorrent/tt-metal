@@ -33,6 +33,24 @@ class TtSpatialCrossAttention:
         self.num_cams = num_cams
         self.batch_first = batch_first
 
+        # Cache for batched-scatter & host-gather lookup tables. Built once per
+        # session, keyed by id(bev_mask). bev_mask is encoder-cached (see
+        # iter#1 `_ref_cache` in TtBEVFormerEncoder), so id() is stable across
+        # all 3 layer calls of every forward, giving 100% cache-hit rate after
+        # the first call.
+        # Entry: (indexes_long, max_len, all_idx_expanded_2d)
+        #   - indexes_long: list[torch.LongTensor] of per-camera valid query
+        #                   positions; consumed by the host gather that builds
+        #                   queries_rebatch (kept on host for now).
+        #   - max_len:      max over cameras of len(indexes[i]), used to size
+        #                   queries_rebatch.
+        #   - all_idx_expanded_2d: (num_cams * max_len, embed_dims) uint32
+        #                   indices for the batched device-side scatter_add.
+        #                   Padded positions hold sentinel = num_query so
+        #                   their contributions land in a sink row that is
+        #                   sliced off after scatter.
+        self._sca_cache = {}
+
     def __call__(
         self,
         query,
@@ -56,49 +74,120 @@ class TtSpatialCrossAttention:
 
         if residual is None:
             inp_residual = query
-            slots = ttnn.zeros_like(query)
-            slots = ttnn.to_torch(slots)
+            slots = ttnn.zeros_like(query)  # kept on device — old code went via to_torch
         if query_pos is not None:
             query = query + query_pos
 
         bs, num_query, _ = query.shape
 
-        D = reference_points_cam.size(3)
-        indexes = []
-        indexes = []
-        for i, mask_per_img in enumerate(bev_mask):
-            index_query_per_img = ttnn.sum(mask_per_img[0], -1)
-            index_query_per_img = ttnn.to_layout(index_query_per_img, ttnn.ROW_MAJOR_LAYOUT)
-            for _ in range(3):  # unsqueeze 3 times
-                index_query_per_img = ttnn.unsqueeze(index_query_per_img, 0)
-            output_tensor = ttnn.nonzero(index_query_per_img, queue_id=0, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(index_query_per_img)
+        D = reference_points_cam.shape[3]  # ttnn tensor since encoder no longer to_torch's it
 
-            no_of_non_zero_indices = output_tensor[0][..., 0].item()
-            index_query_per_img = output_tensor[1][:, :, :, :no_of_non_zero_indices]
+        # Build / look up the cached index tables. bev_mask is stable
+        # across layer calls + warm iterations (encoder ref-cache from iter#1),
+        # so id() works as a session-stable key.
+        cache_key = id(bev_mask)
+        cached = self._sca_cache.get(cache_key)
+        if cached is None:
+            indexes = []
+            for i, mask_per_img in enumerate(bev_mask):
+                index_query_per_img = ttnn.sum(mask_per_img[0], -1)
+                index_query_per_img = ttnn.to_layout(index_query_per_img, ttnn.ROW_MAJOR_LAYOUT)
+                for _ in range(3):  # unsqueeze 3 times
+                    index_query_per_img = ttnn.unsqueeze(index_query_per_img, 0)
+                output_tensor = ttnn.nonzero(index_query_per_img, queue_id=0, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(index_query_per_img)
 
-            for _ in range(3):  # squeeze back
-                index_query_per_img = ttnn.squeeze(index_query_per_img, 0)
-            indexes.append(index_query_per_img)
-            ttnn.deallocate(output_tensor[0])
+                no_of_non_zero_indices = output_tensor[0][..., 0].item()
+                index_query_per_img = output_tensor[1][:, :, :, :no_of_non_zero_indices]
 
-        max_len = max([each.shape[0] for each in indexes])
-        query = ttnn.to_torch(query)
-        # each camera only interacts with its corresponding BEV queries. This step can  greatly save GPU memory.
-        queries_rebatch = query.new_zeros([bs, self.num_cams, max_len, self.embed_dims])
-        reference_points_rebatch = reference_points_cam.new_zeros([bs, self.num_cams, max_len, D, 2])
+                for _ in range(3):  # squeeze back
+                    index_query_per_img = ttnn.squeeze(index_query_per_img, 0)
+                indexes.append(index_query_per_img)
+                ttnn.deallocate(output_tensor[0])
 
-        for j in range(bs):
-            for i, reference_points_per_img in enumerate(reference_points_cam):
-                index_query_per_img = indexes[i]
-                index_query_per_img = ttnn.to_torch(index_query_per_img).long()
-                queries_rebatch[j, i, : len(index_query_per_img)] = query[j, index_query_per_img]
-                reference_points_rebatch[j, i, : len(index_query_per_img)] = reference_points_per_img[
-                    j, index_query_per_img
-                ]
+            max_len = max([each.shape[0] for each in indexes])
 
-        queries_rebatch = ttnn.from_torch(queries_rebatch, dtype=ttnn.bfloat16, device=self.device)
-        reference_points_rebatch = ttnn.from_torch(reference_points_rebatch, dtype=ttnn.bfloat16, device=self.device)
+            # Build TWO padded-index variants. Per-camera valid indices stay
+            # the same; only the sentinel (padding) value differs:
+            #   scatter:  sentinel = num_query  -> routes padded src into the
+            #                                      sink slot in slots_extended
+            #   gather:   sentinel = 0          -> padded rows gather from
+            #                                      row 0 (a valid query); the
+            #                                      result is harmless because
+            #                                      the matching scatter
+            #                                      routes those rows to the
+            #                                      sink and they're sliced
+            #                                      off
+            scatter_parts = []
+            gather_parts = []
+            for i in range(self.num_cams):
+                len_i = indexes[i].shape[0]
+                idx_i = ttnn.typecast(indexes[i], ttnn.uint32)
+                pad_len = max_len - len_i
+                if pad_len > 0:
+                    sentinel_scatter = ttnn.full(
+                        [pad_len], num_query, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+                    )
+                    sentinel_gather = ttnn.full(
+                        [pad_len], 0, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+                    )
+                    idx_scatter = ttnn.concat([idx_i, sentinel_scatter], dim=0)
+                    idx_gather = ttnn.concat([idx_i, sentinel_gather], dim=0)
+                else:
+                    idx_scatter = idx_i
+                    idx_gather = idx_i
+                scatter_parts.append(idx_scatter)
+                gather_parts.append(idx_gather)
+            all_idx_padded = ttnn.concat(scatter_parts, dim=0)  # (num_cams * max_len,) sentinel=num_query
+            all_idx_for_gather_q = ttnn.concat(gather_parts, dim=0)  # (num_cams * max_len,) sentinel=0
+            # Expand to (num_cams * max_len, embed_dims) so it broadcasts as
+            # the index arg of scatter_add along dim=0 of an (N, embed_dims)
+            # slots tensor.
+            all_idx_expanded = ttnn.unsqueeze(all_idx_padded, 1)
+            all_idx_expanded = ttnn.expand(all_idx_expanded, [-1, self.embed_dims])
+
+            # For the reference_points_cam gather we need indices into a
+            # flattened (num_cams * num_query, D*2) embedding table, so add
+            # a cam offset c*num_query to each element of all_idx_for_gather_q.
+            cam_offset = ttnn.arange(0, self.num_cams, dtype=ttnn.uint32, device=self.device) * num_query  # (num_cams,)
+            cam_offset = ttnn.unsqueeze(cam_offset, -1)  # (num_cams, 1)
+            cam_offset = ttnn.expand(cam_offset, [-1, max_len])  # (num_cams, max_len)
+            cam_offset = ttnn.reshape(cam_offset, (self.num_cams * max_len,))
+            all_idx_for_gather_rc = all_idx_for_gather_q + cam_offset  # (num_cams * max_len,)
+
+            # Release device-side per-camera nonzero outputs; everything we
+            # need is now in the consolidated tensors above.
+            for idx in indexes:
+                ttnn.deallocate(idx)
+            self._sca_cache[cache_key] = (
+                max_len,
+                all_idx_expanded,
+                all_idx_for_gather_q,
+                all_idx_for_gather_rc,
+            )
+        else:
+            max_len, all_idx_expanded, all_idx_for_gather_q, all_idx_for_gather_rc = cached
+
+        # Device-side gather: build queries_rebatch and reference_points_rebatch
+        # via ttnn.embedding from the consolidated indices. Replaces the old
+        # `query = to_torch + queries_rebatch.new_zeros + per-camera torch
+        # advanced-indexing + from_torch(queries_rebatch) + from_torch(
+        # reference_points_rebatch)` chain.
+        query_2d = ttnn.squeeze(query, 0) if query.shape[0] == 1 else query[0]  # (num_query, embed_dims)
+        queries_gathered = ttnn.embedding(
+            all_idx_for_gather_q, query_2d, layout=ttnn.TILE_LAYOUT
+        )  # (num_cams * max_len, embed_dims)
+        queries_rebatch = ttnn.reshape(queries_gathered, (bs, self.num_cams, max_len, self.embed_dims))
+
+        # reference_points_cam is now on device (encoder no longer to_torch's
+        # it). Flatten to an embedding table of shape (num_cams * num_query,
+        # D*2) for the batched gather.
+        ref_cam_dev = ttnn.squeeze(reference_points_cam, 1)  # (num_cams, num_query, D, 2) — bs=1 squeezed
+        ref_cam_table = ttnn.reshape(ref_cam_dev, (self.num_cams * num_query, D * 2))
+        ref_cam_gathered = ttnn.embedding(
+            all_idx_for_gather_rc, ref_cam_table, layout=ttnn.TILE_LAYOUT
+        )  # (num_cams * max_len, D*2)
+        reference_points_rebatch = ttnn.reshape(ref_cam_gathered, (bs, self.num_cams, max_len, D, 2))
         num_cams, l, bs, embed_dims = key.shape
         num_cams, l, bs, embed_dims = key.shape
 
@@ -120,15 +209,24 @@ class TtSpatialCrossAttention:
 
         queries = ttnn.reshape(queries, (bs, self.num_cams, max_len, self.embed_dims))
 
-        queries = ttnn.to_torch(queries)
-        for j in range(bs):
-            for i, index_query_per_img in enumerate(indexes):
-                index_query_per_img = ttnn.to_torch(index_query_per_img).long()
-
-                slots[j, index_query_per_img] += queries[j, i, : len(index_query_per_img)]
-        for j in range(bs):
-            for i, index_query_per_img in enumerate(indexes):
-                ttnn.deallocate(index_query_per_img)
+        # Device-side batched scatter_add. Replaces the per-camera torch loop
+        # (`slots[j, indexes[i]] += queries[j, i, :len_i]`) and its bracketing
+        # to_torch(queries) / from_torch(slots) round trips. Padded src rows
+        # in `queries` (attention output for the zero-padded query slots
+        # past valid_len_i per camera) get routed to `slots_extended[num_query]`
+        # via the sentinel index in `all_idx_expanded`, then sliced off — no
+        # mask multiply needed.
+        assert bs == 1, "device-side scatter currently assumes bs=1"
+        queries_flat = ttnn.reshape(queries, (self.num_cams * max_len, self.embed_dims))
+        slots_2d = ttnn.squeeze(slots, 0)
+        slots_2d = ttnn.to_layout(slots_2d, ttnn.TILE_LAYOUT)
+        sentinel_row = ttnn.zeros(
+            (1, self.embed_dims), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
+        slots_extended = ttnn.concat([slots_2d, sentinel_row], dim=0)
+        slots_extended = ttnn.scatter_add(slots_extended, 0, all_idx_expanded, queries_flat)
+        slots = ttnn.slice(slots_extended, [0, 0], [num_query, self.embed_dims])
+        slots = ttnn.unsqueeze(slots, 0)
 
         count = ttnn.sum(bev_mask, -1) > 0
         count = ttnn.permute(count, (1, 2, 0))
@@ -136,7 +234,7 @@ class TtSpatialCrossAttention:
         count = ttnn.sum(count, -1)
         count = ttnn.clamp(count, min=1.0)
         count = ttnn.unsqueeze(count, -1)
-        slots = ttnn.from_torch(slots, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        slots = ttnn.to_layout(slots, layout=ttnn.TILE_LAYOUT)
         slots = ttnn.div(slots, count)
         slots = ttnn.linear(slots, self.params.output_proj.weight, bias=self.params.output_proj.bias)
         ttnn.deallocate(count)

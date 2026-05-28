@@ -284,7 +284,9 @@ class TtBEVFormerEncoder:
             hybird_ref_2d = ttnn.reshape(hybird_ref_2d, (bs * 2, len_bev, num_bev_level, 2))
         ttnn.deallocate(shift)
         ttnn.deallocate(shift_ref_2d)
-        reference_points_cam = ttnn.to_torch(reference_points_cam)
+        # reference_points_cam stays on device: the layer's spatial_cross_attention
+        # now does a device-side ttnn.embedding gather instead of the old torch
+        # advanced-indexing path, so the to_torch round trip is no longer needed.
         for lid, layer in enumerate(self.layers):
             output = layer(
                 bev_query,
