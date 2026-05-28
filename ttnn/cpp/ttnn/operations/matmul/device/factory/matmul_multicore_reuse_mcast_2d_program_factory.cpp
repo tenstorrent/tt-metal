@@ -1404,7 +1404,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     in1_sender_variant[0] = in1_tensor;
                     in1_sender_variant[7] = out_tensor;
                     if (bias_mesh.has_value()) {
-                        in1_sender_variant[18] = bias_mesh;
+                        in1_sender_variant[18] = *bias_mesh;
                     }
                     in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_sender_variant);
                 }
