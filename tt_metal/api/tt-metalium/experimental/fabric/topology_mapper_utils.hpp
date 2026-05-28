@@ -400,6 +400,14 @@ struct PhysicalMultiMeshGraph {
     std::map<MeshId, AdjacencyGraph<PhysicalExitNode>> mesh_exit_node_graphs_;
 };
 
+/** Physical mesh partitions preferred for a logical mesh from cross-partition QSFP connectivity (Step 5 input). */
+std::set<MeshId> compute_preferred_physical_meshes_for_logical_mesh(
+    MeshId logical_mesh,
+    const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
+    const PhysicalMultiMeshGraph& physical_graph,
+    const PortTypeLinkMap& port_type_links,
+    const std::set<MeshId>& bound_physical_mesh_ids);
+
 /**
  * @brief Build a physical multi-mesh adjacency graph from physical system descriptor
  *
