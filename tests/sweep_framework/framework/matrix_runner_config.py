@@ -51,7 +51,7 @@ VECTOR_LOAD_FILTER_POLICIES = {
     },
     "hw": {
         "kind": "hardware",
-        "enforce_mesh_capability": False,
+        "enforce_mesh_capability": True,
         "enforce_hardware_capability": True,
     },
 }
