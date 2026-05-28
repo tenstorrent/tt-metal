@@ -28,6 +28,7 @@ void kernel_main() {
     constexpr uint32_t final_indices_stick_size = get_arg(args::final_indices_stick_size);
     constexpr uint32_t ids_per_batch = get_arg(args::ids_per_batch);
     constexpr uint32_t num_cores = get_arg(args::num_cores);
+    constexpr uint32_t num_users = get_arg(args::num_users);
     const uint32_t core_id = get_arg(args::core_id);  // per-node RTA
 
     constexpr uint32_t cb_id_out = dfb::cb_out;
@@ -96,12 +97,13 @@ void kernel_main() {
     CoreLocalMem<volatile uint16_t> rand_values(cb_rand.get_read_ptr());
     uint16_t rand = rand_values[0];
 
-    cb_final_indices.wait_front(32);
+    // cb_final_indices.wait_front(32);
+    cb_final_indices.wait_front(num_users);
     cb_local_values.wait_front(1);
     cb_local_indices.wait_front(1);
 
     CoreLocalMem<volatile uint16_t> local_values(cb_local_values.get_read_ptr());
-    CoreLocalMem<volatile uint16_t> local_indices(cb_local_indices.get_read_ptr());
+    CoreLocalMem<volatile uint32_t> local_indices(cb_local_indices.get_read_ptr());
     CoreLocalMem<volatile uint32_t> final_indices(cb_final_indices.get_read_ptr() + core_id * final_indices_stick_size);
 
     uint32_t out_addr = cb_out.get_write_ptr();
@@ -183,7 +185,8 @@ void kernel_main() {
     cb_rand.pop_front(1);
     cb_local_values.pop_front(1);
     cb_local_indices.pop_front(1);
-    cb_final_indices.pop_front(32);
+    // cb_final_indices.pop_front(32);
+    cb_final_indices.pop_front(num_users);
 
     const auto s_out = TensorAccessor(ta::output);
     // `use<CircularBuffer::AddrSelector::WRITE_PTR>` takes a CircularBuffer&; construct a
