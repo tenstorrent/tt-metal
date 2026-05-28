@@ -435,9 +435,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
 
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
-        .source =
-
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_six_input.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_six_input.cpp",
         .num_threads = 1,
         .dfb_bindings =
             {dfb_binding(INP0_DFB, DFBEndpoint::PRODUCER),
@@ -488,9 +486,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
 
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_unpack_quasar.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_unpack_quasar.cpp",
         .num_threads = 1,
         .dfb_bindings =
             {dfb_binding(INP0_DFB, DFBEndpoint::CONSUMER),
@@ -790,9 +786,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     auto make_writer_spec = [&](const char* writer_id, const char* out_dfb) {
         return experimental::metal2_host_api::KernelSpec{
             .unique_id = writer_id,
-            .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp"},
+            .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
             .num_threads = 1,
             .dfb_bindings = {writer_binding(out_dfb)},
             .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
@@ -810,9 +804,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
 
     experimental::metal2_host_api::KernelSpec reader_spec{
         .unique_id = READER,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_six_input.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_six_input.cpp",
         .num_threads = 1,
         .dfb_bindings =
             {dfb_binding(INP0_DFB, DFBEndpoint::PRODUCER),
@@ -849,9 +841,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
 
     experimental::metal2_host_api::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_pack_quasar.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_pack_quasar.cpp",
         .num_threads = 1,
         .dfb_bindings =
             {dfb_binding(INP0_DFB, DFBEndpoint::CONSUMER),
