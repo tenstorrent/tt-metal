@@ -8,7 +8,9 @@
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -31,14 +33,16 @@ void push_padded_cb_pair(
     uint32_t output_single_tile_size,
     uint32_t num_tiles,
     tt::DataFormat input_cb_data_format,
-    tt::DataFormat output_cb_data_format) {
+    tt::DataFormat output_cb_data_format,
+    uint32_t dram_alignment) {
+    // dram_alignment is added to solve the mis-alignment problem when loading from DRAM to L1
     desc.cbs.push_back(CBDescriptor{
-        .total_size = input_single_tile_size + 64,
+        .total_size = input_single_tile_size + dram_alignment,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
             .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size + 64,
+            .page_size = input_single_tile_size + dram_alignment,
         }}},
     });
     desc.cbs.push_back(CBDescriptor{
@@ -121,6 +125,8 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create_d
     Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+
     ProgramDescriptor desc;
 
     if (!core_range.empty()) {
@@ -131,7 +137,8 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create_d
             output_single_tile_size,
             single_sub_block_size,
             input_cb_data_format,
-            output_cb_data_format);
+            output_cb_data_format,
+            dram_alignment);
     }
     if (has_cliff_col && has_cliff_row) {
         push_padded_cb_pair(
@@ -141,7 +148,8 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create_d
             output_single_tile_size,
             single_block_size_cliff_row,
             input_cb_data_format,
-            output_cb_data_format);
+            output_cb_data_format,
+            dram_alignment);
     }
     if (has_cliff_row) {
         push_padded_cb_pair(
@@ -151,7 +159,8 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create_d
             output_single_tile_size,
             single_block_size_cliff_row,
             input_cb_data_format,
-            output_cb_data_format);
+            output_cb_data_format,
+            dram_alignment);
     }
     if (has_cliff_col) {
         push_padded_cb_pair(
@@ -161,7 +170,8 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create_d
             output_single_tile_size,
             single_sub_block_size,
             input_cb_data_format,
-            output_cb_data_format);
+            output_cb_data_format,
+            dram_alignment);
     }
 
     // reader
@@ -187,7 +197,7 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create_d
     }
 
     std::vector<uint32_t> reader_compile_time_args = {
-        total_num_rows, third_dim, tile_height, a.element_size(), unpadded_row_size_bytes};
+        total_num_rows, third_dim, tile_height, a.element_size(), unpadded_row_size_bytes, dram_alignment};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;

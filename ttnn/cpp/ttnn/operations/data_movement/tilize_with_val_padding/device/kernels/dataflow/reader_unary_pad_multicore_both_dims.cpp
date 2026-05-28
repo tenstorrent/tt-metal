@@ -75,7 +75,10 @@ void kernel_main() {
     constexpr uint32_t tile_height = get_compile_time_arg_val(2);
     constexpr uint32_t element_size = get_compile_time_arg_val(3);
     constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(4);
-    constexpr auto src_args = TensorAccessorArgs<5>();
+    constexpr uint32_t dram_alignment = get_compile_time_arg_val(5);
+    constexpr uint64_t dram_align_mask = ~static_cast<uint64_t>(dram_alignment - 1);
+    constexpr uint64_t dram_align_offset = static_cast<uint64_t>(dram_alignment - 1);
+    constexpr auto src_args = TensorAccessorArgs<6>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t pad_value = get_arg_val<uint32_t>(1);
@@ -101,7 +104,8 @@ void kernel_main() {
         uint32_t original_addr = get_write_ptr(cb_id_in0);
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
             uint64_t src_noc_addr = s.get_noc_addr(size_2d + k);
-            if (((src_noc_addr + (uint64_t)start_column_id) & MASK_64) == ((uint64_t)l1_write_addr & MASK_64)) {
+            if (((src_noc_addr + (uint64_t)start_column_id) & dram_align_mask) ==
+                ((uint64_t)l1_write_addr & dram_align_mask)) {
                 // Read from DRAM to tmp buffer
                 noc_async_read(src_noc_addr + (uint64_t)start_column_id, (uint64_t)l1_write_addr, width_size);
 
@@ -118,7 +122,9 @@ void kernel_main() {
                 // If there is a mis-alignment, we first load the data to a middle L1 cb, then copy to the final cb
                 // buffer
                 noc_async_read(
-                    (src_noc_addr + (uint64_t)start_column_id) & MASK_64, (uint64_t)temp_addr, width_size + 64);
+                    (src_noc_addr + (uint64_t)start_column_id) & dram_align_mask,
+                    (uint64_t)temp_addr,
+                    width_size + dram_alignment);
 
                 // Block before copying data from tmp to cb buffer
                 noc_async_read_barrier();
@@ -128,14 +134,14 @@ void kernel_main() {
                 if (this_block_size < width_size) {
                     uint32_t to_pad = width_size - this_block_size;
                     fill_with_val<element_size>(
-                        temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & OFFSET_64) + this_block_size,
+                        temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset) + this_block_size,
                         to_pad,
                         pad_value);
                 }
 
                 tt_memmove<false, false, true, 0>(
                     (uint64_t)l1_write_addr,
-                    (uint64_t)temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & OFFSET_64),
+                    (uint64_t)temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset),
                     width_size);
             }
 
