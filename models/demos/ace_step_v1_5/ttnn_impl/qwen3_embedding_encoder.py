@@ -33,6 +33,7 @@ import ttnn
 
 from .math_perf_env import (
     ace_step_attn_qo_weight_dtype,
+    ace_step_cond_256x1024_width_sharded_memory_config,
     ace_step_cond_linear_program_config,
     ace_step_cond_mlp_gate_up_linear_program_config,
     ace_step_cond_rms_norm_kwargs,
@@ -40,12 +41,14 @@ from .math_perf_env import (
     ace_step_ensure_l1_activation,
     ace_step_ensure_tile_layout,
     ace_step_init_cond_linear_compute_kernel_config,
+    ace_step_init_cond_rmsnorm_compute_kernel_config,
     ace_step_init_cond_sdpa_compute_kernel_config,
     ace_step_linear_l1_memory_config,
     ace_step_linear_weight_dtype,
     ace_step_nlp_concat_heads,
     ace_step_permute_kwargs,
     ace_step_reshape_kwargs,
+    ace_step_rms_norm_width_sharded,
     ace_step_safe_deallocate,
     ace_step_sdpa_activation_kwargs,
     ace_step_sdpa_mask_memory_config,
@@ -465,6 +468,7 @@ class _TtQwen3EncoderLayer:
         self._use_cond_linear_pc = bool(use_cond_linear_program_config)
         # Keys: (batch, seq, in_dim, out_dim) — GQA makes q's N (nh*dh) wider than k/v (nkv*dh).
         self._attn_pc_cache: dict = {}
+        self._rms_norm_ck = ace_step_init_cond_rmsnorm_compute_kernel_config(device)
 
         def as_t(suffix: str, *, row_major: bool = False, proj: bool = False, qo: bool = False):
             key = f"{prefix}.{suffix}"
@@ -531,9 +535,19 @@ class _TtQwen3EncoderLayer:
         kw: dict = {}
         if self._linear_ck is not None:
             kw["compute_kernel_config"] = self._linear_ck
+        out_mc = ace_step_cond_256x1024_width_sharded_memory_config(
+            ttnn,
+            self.device,
+            seq_len=int(seq_len),
+            in_dim=int(in_dim),
+            out_dim=int(out_dim),
+            batch_size=int(batch_size),
+            for_output=True,
+        )
+        use_out_bs = False
         pc = None
         if self._use_cond_linear_pc:
-            key = (int(batch_size), int(seq_len), int(in_dim), int(out_dim))
+            key = (int(batch_size), int(seq_len), int(in_dim), int(out_dim), use_out_bs)
             pc = self._attn_pc_cache.get(key)
             if pc is None:
                 pc = ace_step_cond_linear_program_config(
@@ -542,6 +556,7 @@ class _TtQwen3EncoderLayer:
                     in_dim=int(in_dim),
                     out_dim=int(out_dim),
                     batch_size=int(batch_size),
+                    out_sharded=use_out_bs,
                 )
                 if pc is not None:
                     self._attn_pc_cache[key] = pc
@@ -549,14 +564,45 @@ class _TtQwen3EncoderLayer:
                 kw["program_config"] = pc
         if self._linear_out_l1 is not None:
             kw["memory_config"] = self._linear_out_l1
+        if out_mc is not None:
+            kw["memory_config"] = out_mc
         return kw
+
+    def _maybe_shard_attn_in0(self, x: ttnn.Tensor, *, batch_size: int, seq_len: int, in_dim: int, out_dim: int):
+        in0_mc = ace_step_cond_256x1024_width_sharded_memory_config(
+            ttnn,
+            self.device,
+            seq_len=int(seq_len),
+            in_dim=int(in_dim),
+            out_dim=int(out_dim),
+            batch_size=int(batch_size),
+            for_output=False,
+        )
+        if in0_mc is None:
+            return x
+        try:
+            return ttnn.to_memory_config(x, in0_mc)
+        except Exception:
+            return x
 
     def __call__(self, hidden_b1sh: ttnn.Tensor, cos_11sd: ttnn.Tensor, sin_11sd: ttnn.Tensor, attn_bias_b11ss):
         _l1_mc = self._linear_out_l1 or self.mem
         _rms_kw = ace_step_cond_rms_norm_kwargs(ttnn, _l1_mc, device=self.device)
         x = ace_step_ensure_tile_layout(ttnn, hidden_b1sh)
         res = x
-        x = ttnn.rms_norm(x, weight=self.input_ln_w, epsilon=self.eps, **_rms_kw)
+        # input_layernorm: WIDTH_SHARDED across hidden dim K=1024 ([1,1,256,1024], block_h=8).
+        _bf8 = self._proj_dtype
+        _ln_act_dtype = _bf8 if _bf8 != self.dtype else None
+        x = ace_step_rms_norm_width_sharded(
+            ttnn,
+            x,
+            self.input_ln_w,
+            self.eps,
+            device=self.device,
+            l1_mc=_l1_mc,
+            compute_kernel_config=self._rms_norm_ck,
+            activation_dtype=_ln_act_dtype,
+        )
 
         b = int(x.shape[0])
         s = int(x.shape[2])
@@ -568,15 +614,17 @@ class _TtQwen3EncoderLayer:
         kv_dim_o = int(kv_h * Dh)
         lin_q = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=hsz, out_dim=q_dim_o)
         lin_kv = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=hsz, out_dim=2 * kv_dim_o)
-        _bf8 = self._proj_dtype
-        _tc_kw = {"memory_config": _l1_mc} if _l1_mc is not None else {}
-        x_bf8 = ttnn.typecast(x, dtype=_bf8, **_tc_kw)
-        q = ttnn.linear(x_bf8, self.wq, bias=None, transpose_b=True, dtype=_bf8, **lin_q)
-        kv = ttnn.linear(x_bf8, self.wkv, bias=None, transpose_b=True, dtype=_bf8, **lin_kv)
-        ace_step_safe_deallocate(ttnn, x_bf8)
+        # Block-shard in0 once for q and wkv (same [B,1,M,K=1024]); avoids extra InterleavedToSharded on wkv.
+        x_attn = self._maybe_shard_attn_in0(x, batch_size=b, seq_len=s, in_dim=hsz, out_dim=q_dim_o)
+        q = ttnn.linear(x_attn, self.wq, bias=None, transpose_b=True, dtype=_bf8, **lin_q)
+        kv = ttnn.linear(x_attn, self.wkv, bias=None, transpose_b=True, dtype=_bf8, **lin_kv)
+        ace_step_safe_deallocate(ttnn, x_attn if x_attn is not x else None)
+        ace_step_safe_deallocate(ttnn, x)
 
         # BFP8 1D-mcast matmul can spill Q/KV to DRAM despite memory_config=L1; head-split
-        # inherits that placement. Force L1 before SDPA (no-op when already L1).
+        # inherits that placement. Force L1 interleaved before nlp_create_qkv_heads.
+        # (Block-sharded output from 2D-mcast is also converted here; nlp_create_qkv_heads
+        # does not yet support block-sharded input for the separate Q/KV case.)
         if _l1_mc is not None:
             q = ace_step_ensure_l1_activation(ttnn, q, _l1_mc)
             kv = ace_step_ensure_l1_activation(ttnn, kv, _l1_mc)
@@ -593,6 +641,11 @@ class _TtQwen3EncoderLayer:
             q, k, v = heads
             ace_step_safe_deallocate(ttnn, kv)
         else:
+            # Manual slice/reshape/permute path — these ops require interleaved L1.
+            # nlp_create_qkv_heads was unavailable or rejected the sharded layout; de-shard first.
+            if _l1_mc is not None:
+                q = ace_step_ensure_l1_activation(ttnn, q, _l1_mc)
+                kv = ace_step_ensure_l1_activation(ttnn, kv, _l1_mc)
             _sr = ace_step_reshape_kwargs(ttnn)
             _pk = ace_step_permute_kwargs(ttnn)
             k = ttnn.slice(kv, (0, 0, 0, 0), (b, 1, s, kv_dim_o))
@@ -645,7 +698,9 @@ class _TtQwen3EncoderLayer:
         ctx = ace_step_nlp_concat_heads(ttnn, ctx)
         ctx = self._l1_activation(ctx)
         lin_o = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=q_dim_o, out_dim=hsz)
-        attn_out = ttnn.linear(ctx, self.wo, bias=None, transpose_b=True, **lin_o)
+        ctx_o = self._maybe_shard_attn_in0(ctx, batch_size=b, seq_len=s, in_dim=q_dim_o, out_dim=hsz)
+        attn_out = ttnn.linear(ctx_o, self.wo, bias=None, transpose_b=True, **lin_o)
+        ace_step_safe_deallocate(ttnn, ctx_o if ctx_o is not ctx else None)
         ttnn.deallocate(ctx)
 
         h = ttnn.add(res, attn_out, memory_config=_l1_mc)
