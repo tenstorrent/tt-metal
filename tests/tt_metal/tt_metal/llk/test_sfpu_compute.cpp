@@ -241,6 +241,7 @@ bool run_sfpu_all_same_buffer(
     std::vector<uint32_t> packed_golden = pack_vector<uint32_t, bfloat16>(golden);
 
     std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
+    sfpu_defines["SFPU_UNARY_OP"] = "1";
     sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
@@ -517,7 +518,8 @@ bool run_sfpu_binary_two_input_buffer(
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {IN0_DFB, IN1_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec writer_spec{
@@ -539,7 +541,8 @@ bool run_sfpu_binary_two_input_buffer(
                     experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                        .disable_implicit_sync_for = {OUT_DFB}}},
     };
 
     experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines compute_defines;
@@ -577,7 +580,7 @@ bool run_sfpu_binary_two_input_buffer(
             {{"per_core_block_cnt", 1u}, {"per_core_block_size", static_cast<uint32_t>(test_config.num_tiles)}},
         .config_spec =
             experimental::metal2_host_api::ComputeConfiguration{
-                .fp32_dest_acc_en = true,
+                .fp32_dest_acc_en = false,
                 .math_approx_mode = test_config.approx_mode,
             },
     };
