@@ -6,7 +6,7 @@ import os
 
 import pytest
 import torch
-from genmo.mochi_preview.vae.models import ContextParallelConv3d as RefContextParallelConv3d
+from diffusers.models.autoencoders.autoencoder_kl_cogvideox import CogVideoXCausalConv3d as RefContextParallelConv3d
 from loguru import logger
 
 import ttnn
@@ -31,12 +31,23 @@ def create_random_models(
     **model_args,
 ):
     """Initialize both reference and TT models."""
-    # Create reference model
-    reference_model = RefContextParallelConv3d(**model_args)
+    # CogVideoXCausalConv3d takes a narrower kwarg set than genmo's class: no
+    # `causal`/`context_parallel`/`bias`/`groups` knobs (causality is always on;
+    # bias=True and groups=1 are hardcoded). Rename `padding_mode` -> `pad_mode`.
+    ref_args = {
+        "in_channels": model_args["in_channels"],
+        "out_channels": model_args["out_channels"],
+        "kernel_size": model_args["kernel_size"],
+        "stride": model_args["stride"],
+        "pad_mode": model_args["padding_mode"],
+    }
+    reference_model = RefContextParallelConv3d(**ref_args)
 
     # Create TT model
     tt_model = TtContextParallelConv3d(mesh_device=mesh_device, **model_args)
-    tt_model.load_torch_state_dict(reference_model.state_dict())
+    # Diffusers nests the conv at `self.conv`; flatten to TT's `weight`/`bias`.
+    ref_state = {k.removeprefix("conv."): v for k, v in reference_model.state_dict().items()}
+    tt_model.load_torch_state_dict(ref_state)
 
     return reference_model, tt_model
 
@@ -117,7 +128,7 @@ def test_context_parallel_conv3d_forward(mesh_device, input_shape, out_channels,
     # Get reference output
     logger.info("Run reference model forward")
     with torch.no_grad():
-        ref_output = reference_model(torch_input)
+        ref_output, _ = reference_model(torch_input)  # returns (output, new_conv_cache)
 
     # Compare shapes
     logger.info(f"TT output shape: {tt_output_torch.shape}, Ref output shape: {ref_output.shape}")
