@@ -184,7 +184,10 @@ def _extract_mesh_shape_from_vector(vector):
 def _format_hw_mesh_suffix(group_key):
     """Format a (hw_tuple, mesh_tuple) group key as a double suffix."""
     hw_tuple, mesh_tuple = group_key
-    suffix = format_hardware_suffix(*hw_tuple)
+    if hw_tuple is None:
+        suffix = ""
+    else:
+        suffix = format_hardware_suffix(*hw_tuple)
     if mesh_tuple and mesh_tuple != (1, 1):
         suffix += format_mesh_suffix(mesh_tuple)
     return suffix
@@ -204,7 +207,7 @@ def group_vectors_by_hardware_and_mesh(vectors):
         hw_tuples = get_all_hardware_from_vector(vector)
         mesh_shape = _extract_mesh_shape_from_vector(vector)
         if not hw_tuples:
-            grouped[(None, mesh_shape)].append(vector)
+            grouped[None].append(vector)
             continue
 
         if len(hw_tuples) == 1:
@@ -215,11 +218,7 @@ def group_vectors_by_hardware_and_mesh(vectors):
                 hw = _parse_hardware_entry(entry)
                 if hw is None:
                     continue
-                ms = entry.get("mesh_device_shape")
-                if isinstance(ms, list) and len(ms) == 2:
-                    entry_mesh = tuple(ms)
-                else:
-                    entry_mesh = (1, 1)
+                entry_mesh = _extract_mesh_shape_from_vector({"traced_machine_info": entry})
                 copy = dict(vector)
                 copy["traced_machine_info"] = entry
                 grouped[(hw, entry_mesh)].append(copy)
