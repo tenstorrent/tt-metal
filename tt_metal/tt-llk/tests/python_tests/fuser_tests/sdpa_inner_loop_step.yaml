@@ -1,5 +1,4 @@
 supported_archs: ["wormhole"]
-dest_acc: true
 
 # SDPA inner loop step — simplified single-iteration pipeline.
 # Models sdpa_inner_loop_step from compute_streaming.hpp without SALAD correction.
