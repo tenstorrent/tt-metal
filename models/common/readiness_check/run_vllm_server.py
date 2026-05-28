@@ -8,6 +8,11 @@ Launches a vLLM server using the TT plugin, runs the canonical sampling tests
 from `vllm-tt-plugin/tests/tt/`, then generates qualitative completions for a
 small set of prompts and saves them for manual review.
 
+To install vllm, if not already present:
+1. Clone `https://github.com/tenstorrent/vllm.git`
+2. Switch to the `dev` branch
+3. Follow installation instructions in `plugins/vllm-tt-plugin/README.md`
+
 This runner only exercises the *serving* path. Before invoking it, two things
 must already be true:
 
