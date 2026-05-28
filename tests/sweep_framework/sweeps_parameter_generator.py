@@ -162,6 +162,69 @@ def get_all_hardware_from_vector(vector):
     return result
 
 
+def _extract_mesh_shape_from_vector(vector):
+    """Extract mesh_device_shape from traced_machine_info."""
+    for entry in _get_traced_machine_entries(vector):
+        ms = entry.get("mesh_device_shape")
+        if ms:
+            if isinstance(ms, list) and len(ms) == 2:
+                return tuple(ms)
+            if isinstance(ms, str):
+                import ast
+
+                try:
+                    parsed = ast.literal_eval(ms)
+                    if isinstance(parsed, list) and len(parsed) == 2:
+                        return tuple(parsed)
+                except Exception:  # best-effort mesh extraction; fall through to default
+                    pass
+    return (1, 1)
+
+
+def _format_hw_mesh_suffix(group_key):
+    """Format a (hw_tuple, mesh_tuple) group key as a double suffix."""
+    hw_tuple, mesh_tuple = group_key
+    if hw_tuple is None:
+        suffix = ""
+    else:
+        suffix = format_hardware_suffix(*hw_tuple)
+    if mesh_tuple and mesh_tuple != (1, 1):
+        suffix += format_mesh_suffix(mesh_tuple)
+    return suffix
+
+
+def group_vectors_by_hardware_and_mesh(vectors):
+    """Group vectors by (hardware_tuple, mesh_device_shape).
+
+    Extends hardware grouping to also sub-group by mesh shape so that
+    N300 configs traced with [1,1] mesh get separate vector files from
+    those traced with [1,2].  This lets the validation pipeline spawn
+    separate batches per mesh topology, opening the device with the
+    exact mesh shape the config was traced with.
+    """
+    grouped = defaultdict(list)
+    for vector in vectors:
+        hw_tuples = get_all_hardware_from_vector(vector)
+        mesh_shape = _extract_mesh_shape_from_vector(vector)
+        if not hw_tuples:
+            grouped[None].append(vector)
+            continue
+
+        if len(hw_tuples) == 1:
+            grouped[(hw_tuples[0], mesh_shape)].append(vector)
+        else:
+            entries = _get_traced_machine_entries(vector)
+            for entry in entries:
+                hw = _parse_hardware_entry(entry)
+                if hw is None:
+                    continue
+                entry_mesh = _extract_mesh_shape_from_vector({"traced_machine_info": entry})
+                copy = dict(vector)
+                copy["traced_machine_info"] = entry
+                grouped[(hw, entry_mesh)].append(copy)
+    return grouped
+
+
 def group_vectors_by_hardware(vectors):
     """Group vectors by their traced hardware tuple.
 
@@ -476,8 +539,8 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
         vectors: List of vector dictionaries to export
     """
     if VECTOR_GROUPING_MODE == "hw":
-        grouped_vectors = group_vectors_by_hardware(vectors)
-        format_group_suffix = lambda group_key: format_hardware_suffix(*group_key)
+        grouped_vectors = group_vectors_by_hardware_and_mesh(vectors)
+        format_group_suffix = _format_hw_mesh_suffix
     else:
         grouped_vectors = group_vectors_by_mesh_shape(vectors)
         format_group_suffix = format_mesh_suffix

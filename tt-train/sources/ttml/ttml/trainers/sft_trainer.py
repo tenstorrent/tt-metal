@@ -177,7 +177,7 @@ class SFTTrainer:
         self._optimizer = self._build_optimizer(optimizer)
         self._lr_schedule = lr_schedule if lr_schedule is not None else self._build_lr_schedule()
         self._attention_mask = attention_mask
-        self._loss_fn = ttml.ops.loss.cross_entropy_loss
+        self._loss_fn = self._build_loss_fn()
         self._callbacks = callbacks or []
         self._compute_loss_override = compute_loss_func
         self._loss_composer = self._build_loss_composer(loss_composer)
@@ -387,6 +387,42 @@ class SFTTrainer:
             return loss_composer
         device = ttml.autograd.AutoContext.get_instance().get_device()
         return ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+
+    def _build_loss_fn(self):
+        """Pick the cross-entropy variant matching the LM head's logit sharding.
+
+        When the active mesh has a TP axis with size > 1 the conventional
+        SFTTrainer model shape (Llama with ``use_tp=True`` or
+        ``models.distributed.{llama,gpt2}``) emits vocab-sharded logits via
+        ``ColumnParallelLinear(gather_output=False)``.  Plain
+        ``cross_entropy_loss`` would compute its softmax denominator over each
+        TP shard instead of the full vocab — wrong by construction — so we
+        route through ``vocab_parallel_cross_entropy_loss`` with
+        ``cluster_axis`` bound to the TP axis.
+
+        The wrapper preserves the ``(logits, labels, reduce)`` signature of
+        ``cross_entropy_loss`` so the masked-CE flow in ``_compute_loss``
+        (``ReduceType.NONE`` per-token loss → ``* loss_mask`` → ``mean``) is
+        unchanged: the per-token shape ``[B, 1, T, 1]`` matches between the
+        two ops, and the upstream-grad broadcast in vocab-parallel CE handles
+        the ``loss_mask`` weighting in backward.
+
+        Pipeline-parallel models whose last stage gathers logits to the full
+        vocab fall outside this auto-detect rule (mesh has TP axis but the
+        loss should stay full-vocab CE); for those, pass ``compute_loss_func``
+        when constructing the trainer.
+        """
+        mesh = ttml.mesh()
+        if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
+            tp_cluster_axis = mesh.axis_index("tp")
+
+            def vocab_parallel_loss(logits, labels, reduce):
+                return ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+                    logits, labels, cluster_axis=tp_cluster_axis, reduce=reduce
+                )
+
+            return vocab_parallel_loss
+        return ttml.ops.loss.cross_entropy_loss
 
     @staticmethod
     def _enable_gradient_checkpointing(model: Any) -> None:

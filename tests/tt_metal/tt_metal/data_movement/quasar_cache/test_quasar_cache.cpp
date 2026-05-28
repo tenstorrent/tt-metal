@@ -55,8 +55,8 @@ bool run_l2_flush_test(
     experimental::metal2_host_api::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l2_flush_test.cpp"},
+
+            "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l2_flush_test.cpp",
         .num_threads = 1,
         .runtime_arguments_schema =
             {
@@ -147,8 +147,8 @@ bool run_l1_dcache_test(
     experimental::metal2_host_api::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l1_dcache_test.cpp"},
+
+            "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l1_dcache_test.cpp",
         .num_threads = 1,
         .runtime_arguments_schema =
             {

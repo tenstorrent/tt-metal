@@ -26,6 +26,9 @@ Optional:
                                             /data/scaleout_configs is mounted by default; each host path
                                             is mounted at the same path inside the container
     --rerun-on-retrain                      Rerun validation when Ethernet links are retrained
+    --mpi-if <interface>                    Network interface for MPI TCP transport (default: ens5f0np0)
+    --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
+                                            e.g. --mpi-args "--tag-output"
     --help                                  Display this help message and exit
 
 Example:
@@ -46,6 +49,8 @@ FACTORY_DESCRIPTOR_PATH=""
 OUTPUT_DIR="validation_output"
 EXTRA_VOLUMES=(/data/scaleout_configs)
 RERUN_ON_RETRAIN=false
+MPI_IF="ens5f0np0"
+MPI_EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -125,6 +130,23 @@ while [[ $# -gt 0 ]]; do
             RERUN_ON_RETRAIN=true
             shift
             ;;
+        --mpi-if)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --mpi-if requires a non-empty value"
+                exit 1
+            fi
+            MPI_IF="$2"
+            shift 2
+            ;;
+        --mpi-args)
+            if [[ -z "$2" ]]; then
+                echo "Error: --mpi-args requires a non-empty value"
+                exit 1
+            fi
+            read -ra _extra <<< "$2"
+            MPI_EXTRA_ARGS+=("${_extra[@]}")
+            shift 2
+            ;;
         --help)
             show_help
             exit 0
@@ -169,7 +191,8 @@ run_cluster_validation() {
 
     if [[ $DOCKER_IMAGE == "none" ]]; then
         mpirun --host "$HOSTS" \
-            --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
             --tag-output \
             ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
@@ -179,7 +202,9 @@ run_cluster_validation() {
     else
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
+            --mpi-interface "$MPI_IF" \
             "${volume_args[@]}" \
+            "${MPI_EXTRA_ARGS[@]}" \
             --host "$HOSTS" \
             ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
@@ -201,7 +226,8 @@ run_board_reset() {
 
     # Run reset
     mpirun --host "$host_list" \
-        --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+        --mca btl_tcp_if_include "$MPI_IF" \
+        "${MPI_EXTRA_ARGS[@]}" \
         --tag-output \
         bash -c 'tt-smi -glx_reset > /dev/null 2>&1; echo "RESET_EXIT_CODE=$?"' > "$output_file"
     mpirun_exit_code=$?
@@ -251,6 +277,10 @@ if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
 else
     echo "Cabling descriptor path: $CABLING_DESCRIPTOR_PATH"
     echo "Deployment descriptor path: $DEPLOYMENT_DESCRIPTOR_PATH"
+fi
+echo "MPI interface: $MPI_IF"
+if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
+    echo "MPI extra args: ${MPI_EXTRA_ARGS[*]}"
 fi
 echo "Number of iterations: $ITERATIONS"
 echo "Output directory: $OUTPUT_DIR"
