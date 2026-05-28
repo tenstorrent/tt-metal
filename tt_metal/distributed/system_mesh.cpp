@@ -131,7 +131,7 @@ SystemMesh::Impl::Impl(const tt::tt_fabric::ControlPlane& control_plane) :
         const bool is_exposed = user_exposed_chips.contains(chip_id);
         // #region agent log
         {
-            std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+            std::FILE* f = std::fopen("/data/rsong/tt-metal2/.cursor/debug-ae7d0a.log", "a");
             if (f) {
                 std::fprintf(
                     f,

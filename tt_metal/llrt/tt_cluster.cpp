@@ -350,7 +350,7 @@ void Cluster::initialize_device_drivers() {
     }
     // #region agent log H_RANK_CHIP_COLLISION
     {
-        std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+        std::FILE* f = std::fopen("/data/rsong/tt-metal2/.cursor/debug-ae7d0a.log", "a");
         if (f) {
             std::string driver_ids;
             for (const auto& id : this->driver_->get_target_device_ids()) {
@@ -1607,6 +1607,14 @@ void Cluster::register_sim_fabric_endpoint_direction(
         chip_id, static_cast<std::uint32_t>(eth_chan_id), static_cast<std::uint32_t>(direction));
 }
 #endif  // TT_UMD_BUILD_SIMULATION
+
+void Cluster::sim_arm_launch_watcher(ChipId chip_id, CoreCoord virtual_core, bool is_eth) const {
+    if (this->target_type_ != tt::TargetDevice::Simulator) {
+        return;
+    }
+    tt::umd::CoreCoord core_coord(virtual_core.x, virtual_core.y);
+    this->get_driver()->sim_arm_launch_watcher(chip_id, core_coord, is_eth);
+}
 
 }  // namespace tt
 

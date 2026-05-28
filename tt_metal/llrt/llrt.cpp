@@ -149,6 +149,11 @@ void write_launch_msg_to_core(
     tt_driver_atomics::sfence();
     if (send_go) {
         cluster.write_core_immediate(go_msg.data(), go_msg.size(), {static_cast<size_t>(chip), core}, go_addr);
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+            const bool is_eth = dispatch_core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH ||
+                                dispatch_core_type == tt_metal::HalProgrammableCoreType::IDLE_ETH;
+            cluster.sim_arm_launch_watcher(chip, core, is_eth);
+        }
     }
 }
 
@@ -303,30 +308,30 @@ void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual
     }
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const tt_cxy_pair target(device_id, virtual_core);
-    auto read_u32 = [&](uint32_t addr) {
-        uint32_t v = 0;
+    auto read_u32 = [&](std::uint32_t addr) {
+        std::uint32_t v = 0;
         cluster.read_reg(&v, target, addr);
         return v;
     };
 
     // Bracket all reads with heartbeat samples to detect whether base FW is alive during the dump
     const auto heartbeat_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::HEARTBEAT);
-    const uint32_t heartbeat_start = read_u32(heartbeat_addr);
+    const std::uint32_t heartbeat_start = read_u32(heartbeat_addr);
 
-    const uint32_t port_status = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::PORT_STATUS));
-    const uint32_t retrain_count = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::RETRAIN_COUNT));
-    const uint32_t rx_link_up = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::RX_LINK_UP));
-    const uint32_t train_status = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::TRAIN_STATUS));
-    const uint32_t serdes_reset_status =
+    const std::uint32_t port_status = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::PORT_STATUS));
+    const std::uint32_t retrain_count = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::RETRAIN_COUNT));
+    const std::uint32_t rx_link_up = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::RX_LINK_UP));
+    const std::uint32_t train_status = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::TRAIN_STATUS));
+    const std::uint32_t serdes_reset_status =
         read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::SERDES_RESET_STATUS));
-    const uint32_t postcode = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::POSTCODE));
-    const uint32_t pcs_status = read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::PCS_STATUS));
-    const uint32_t aerisc_reset_pc = read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::ERISC0_RESET_PC));
-    const uint32_t subordinate_aerisc_reset_pc =
+    const std::uint32_t postcode = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::POSTCODE));
+    const std::uint32_t pcs_status = read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::PCS_STATUS));
+    const std::uint32_t aerisc_reset_pc = read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::ERISC0_RESET_PC));
+    const std::uint32_t subordinate_aerisc_reset_pc =
         read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::ERISC1_RESET_PC));
-    const uint32_t risc_soft_reset = read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::RISC_SOFT_RESET));
+    const std::uint32_t risc_soft_reset = read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::RISC_SOFT_RESET));
 
-    const uint32_t heartbeat_end = read_u32(heartbeat_addr);
+    const std::uint32_t heartbeat_end = read_u32(heartbeat_addr);
 
     log_critical(
         tt::LogMetal,
@@ -469,13 +474,13 @@ void send_msg_to_eth_mailbox(
 
     // Check mailbox is empty/ready
     tt_cxy_pair target(device_id, virtual_core);
-    uint32_t initial_mailbox_val = 0;
+    std::uint32_t initial_mailbox_val = 0;
     tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&initial_mailbox_val, target, mailbox_addr);
-    uint32_t msg_status = initial_mailbox_val & status_mask;
+    std::uint32_t msg_status = initial_mailbox_val & status_mask;
     {
         const auto start_time = std::chrono::steady_clock::now();
         while (msg_status != done_message && msg_status != 0) {
-            uint32_t mailbox_val = 0;
+            std::uint32_t mailbox_val = 0;
             tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&mailbox_val, target, mailbox_addr);
             msg_status = mailbox_val & status_mask;
             const auto timenow = std::chrono::steady_clock::now();

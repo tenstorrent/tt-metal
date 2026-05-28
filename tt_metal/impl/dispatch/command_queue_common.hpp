@@ -7,12 +7,13 @@
 #include <stdint.h>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <cstdint>
 #include "device.hpp"
 #include "sub_device_types.hpp"
 
 namespace tt::tt_metal {
 
-enum class CommandQueueDeviceAddrType : uint8_t {
+enum class CommandQueueDeviceAddrType : std::uint8_t {
     PREFETCH_Q_RD = 0,
     // Used to notify host of how far device has gotten, doesn't need L1 alignment because it's only written locally by
     // prefetch kernel.
@@ -34,7 +35,7 @@ enum class CommandQueueDeviceAddrType : uint8_t {
 };
 
 // likely only used in impl
-enum class CommandQueueHostAddrType : uint8_t {
+enum class CommandQueueHostAddrType : std::uint8_t {
     ISSUE_Q_RD = 0,
     ISSUE_Q_WR = 1,
     COMPLETION_Q_WR = 2,
@@ -48,10 +49,10 @@ enum class CommandQueueHostAddrType : uint8_t {
 /// @param cq_id uint8_t ID the command queue
 /// @param cq_size uint32_t size of the command queue
 /// @return uint32_t relative offset
-uint32_t get_relative_cq_offset(uint8_t cq_id, uint32_t cq_size);
+std::uint32_t get_relative_cq_offset(std::uint8_t cq_id, std::uint32_t cq_size);
 
 // used in system_memory_manager and device
-uint16_t get_umd_channel(uint16_t channel);
+std::uint16_t get_umd_channel(std::uint16_t channel);
 
 // only used in impl
 
@@ -60,25 +61,32 @@ uint16_t get_umd_channel(uint16_t channel);
 /// @param cq_id uint8_t ID the command queue
 /// @param cq_size uint32_t size of the command queue
 /// @return uint32_t absolute offset
-uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_size, uint32_t base = 0);
+std::uint32_t get_absolute_cq_offset(
+    std::uint16_t channel, std::uint8_t cq_id, std::uint32_t cq_size, std::uint32_t base = 0);
 
 // mostly used in debug_tools
 template <bool addr_16B>
-uint32_t get_cq_issue_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+std::uint32_t get_cq_issue_rd_ptr(ChipId chip_id, std::uint8_t cq_id, std::uint32_t cq_size);
 
 template <bool addr_16B>
-uint32_t get_cq_issue_wr_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+std::uint32_t get_cq_issue_wr_ptr(ChipId chip_id, std::uint8_t cq_id, std::uint32_t cq_size);
 
 // has usage in system_memory_manager.cpp
 template <bool addr_16B>
-uint32_t get_cq_completion_wr_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+std::uint32_t get_cq_completion_wr_ptr(ChipId chip_id, std::uint8_t cq_id, std::uint32_t cq_size);
 
 template <bool addr_16B>
-uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+std::uint32_t get_cq_completion_rd_ptr(ChipId chip_id, std::uint8_t cq_id, std::uint32_t cq_size);
 
-uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id);
+std::uint32_t get_cq_dispatch_progress(ChipId chip_id, std::uint8_t cq_id);
+
+// Low byte of go_msg.signal on the dispatch core (RUN_MSG_* constants in dev_msgs.h).
+std::uint32_t get_cq_dispatch_go_signal(ChipId chip_id, std::uint8_t cq_id);
 
 // Return the expected number of workers to be in the finished state
-uint32_t calculate_expected_workers_to_finish(const tt::tt_metal::IDevice* device, const SubDeviceId& sub_device_id, tt::tt_metal::HalProgrammableCoreType core_type);
+std::uint32_t calculate_expected_workers_to_finish(
+    const tt::tt_metal::IDevice* device,
+    const SubDeviceId& sub_device_id,
+    tt::tt_metal::HalProgrammableCoreType core_type);
 
 }  // namespace tt::tt_metal

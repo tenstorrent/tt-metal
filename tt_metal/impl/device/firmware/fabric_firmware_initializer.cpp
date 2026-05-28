@@ -6,9 +6,13 @@
 #include "fabric_firmware_initializer.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstdio>
+#include <ctime>
 #include <optional>
 #include <string_view>
+#include <unistd.h>
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -20,6 +24,7 @@
 
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
+#include <cstdint>
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_builder_context.hpp"
@@ -32,11 +37,11 @@ namespace {
 using tt::tt_fabric::chan_id_t;
 using tt::tt_fabric::EDMStatus;
 
-static_assert(static_cast<uint32_t>(EDMStatus::STARTED) != 0);
-static_assert(static_cast<uint32_t>(EDMStatus::REMOTE_HANDSHAKE_COMPLETE) != 0);
-static_assert(static_cast<uint32_t>(EDMStatus::LOCAL_HANDSHAKE_COMPLETE) != 0);
-static_assert(static_cast<uint32_t>(EDMStatus::READY_FOR_TRAFFIC) != 0);
-static_assert(static_cast<uint32_t>(EDMStatus::TERMINATED) != 0);
+static_assert(static_cast<std::uint32_t>(EDMStatus::STARTED) != 0);
+static_assert(static_cast<std::uint32_t>(EDMStatus::REMOTE_HANDSHAKE_COMPLETE) != 0);
+static_assert(static_cast<std::uint32_t>(EDMStatus::LOCAL_HANDSHAKE_COMPLETE) != 0);
+static_assert(static_cast<std::uint32_t>(EDMStatus::READY_FOR_TRAFFIC) != 0);
+static_assert(static_cast<std::uint32_t>(EDMStatus::TERMINATED) != 0);
 
 // Progress stages observable at a router's edm_status_address during init.
 // Ordering is significant: declaration order of the first five enumerators
@@ -47,7 +52,7 @@ static_assert(static_cast<uint32_t>(EDMStatus::TERMINATED) != 0);
 // Sentinels that do not lie on the linear progress axis
 // (TerminatedIndeterminate, Unknown) must be declared AFTER all comparable
 // stages so has_comparable_progress() stays correct.
-enum class EdmInitProgress : uint8_t {
+enum class EdmInitProgress : std::uint8_t {
     NotStarted,
     Started,
     RemoteHandshakeComplete,
@@ -72,15 +77,16 @@ std::string_view progress_name(EdmInitProgress p) {
     return "UNKNOWN";
 }
 
-EdmInitProgress classify_edm_status(uint32_t raw_status) {
+EdmInitProgress classify_edm_status(std::uint32_t raw_status) {
     switch (raw_status) {
         case 0: return EdmInitProgress::NotStarted;
-        case static_cast<uint32_t>(EDMStatus::STARTED): return EdmInitProgress::Started;
-        case static_cast<uint32_t>(EDMStatus::REMOTE_HANDSHAKE_COMPLETE):
+        case static_cast<std::uint32_t>(EDMStatus::STARTED): return EdmInitProgress::Started;
+        case static_cast<std::uint32_t>(EDMStatus::REMOTE_HANDSHAKE_COMPLETE):
             return EdmInitProgress::RemoteHandshakeComplete;
-        case static_cast<uint32_t>(EDMStatus::LOCAL_HANDSHAKE_COMPLETE): return EdmInitProgress::LocalHandshakeComplete;
-        case static_cast<uint32_t>(EDMStatus::READY_FOR_TRAFFIC): return EdmInitProgress::ReadyForTraffic;
-        case static_cast<uint32_t>(EDMStatus::TERMINATED): return EdmInitProgress::TerminatedIndeterminate;
+        case static_cast<std::uint32_t>(EDMStatus::LOCAL_HANDSHAKE_COMPLETE):
+            return EdmInitProgress::LocalHandshakeComplete;
+        case static_cast<std::uint32_t>(EDMStatus::READY_FOR_TRAFFIC): return EdmInitProgress::ReadyForTraffic;
+        case static_cast<std::uint32_t>(EDMStatus::TERMINATED): return EdmInitProgress::TerminatedIndeterminate;
         default: return EdmInitProgress::Unknown;
     }
 }
@@ -88,7 +94,7 @@ EdmInitProgress classify_edm_status(uint32_t raw_status) {
 struct RouterStatusReport {
     chan_id_t chan;
     tt::umd::CoreCoord logical_core;
-    uint32_t raw_status;
+    std::uint32_t raw_status;
     EdmInitProgress stage;
     bool is_master;
 };
@@ -97,7 +103,7 @@ struct RouterStatusReport {
 // router stuck at the given init stage. Returns an empty string when no
 // stage-specific hint is available. Stages align with kernel writes to
 // *edm_status_ptr in fabric_erisc_router.cpp.
-std::string diagnostic_hint_for_stuck_stage(EdmInitProgress stuck_stage, uint32_t num_initialized_routers) {
+std::string diagnostic_hint_for_stuck_stage(EdmInitProgress stuck_stage, std::uint32_t num_initialized_routers) {
     switch (stuck_stage) {
         case EdmInitProgress::NotStarted:
             return "Hint: router(s) never reached kernel main loop. The ERISC kernel may have failed "
@@ -134,16 +140,16 @@ std::string diagnostic_hint_for_stuck_stage(EdmInitProgress stuck_stage, uint32_
     Device* dev,
     chan_id_t master_chan,
     const tt::umd::CoreCoord& master_core,
-    uint32_t master_raw_status,
-    uint32_t expected_status,
-    uint32_t router_sync_address,
-    uint32_t timeout_ms,
+    std::uint32_t master_raw_status,
+    std::uint32_t expected_status,
+    std::uint32_t router_sync_address,
+    std::uint32_t timeout_ms,
     tt::tt_fabric::ControlPlane& control_plane,
     Cluster& cluster) {
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev->id());
     const auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
     const auto& soc_desc = cluster.get_soc_desc(dev->id());
-    const uint32_t num_initialized_routers =
+    const std::uint32_t num_initialized_routers =
         control_plane.get_fabric_context().get_builder_context().get_num_fabric_initialized_routers(dev->id());
 
     std::vector<RouterStatusReport> reports;
@@ -163,7 +169,7 @@ std::string diagnostic_hint_for_stuck_stage(EdmInitProgress stuck_stage, uint32_
             continue;
         }
         auto core = soc_desc.get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
-        std::vector<uint32_t> status_buf{0};
+        std::vector<std::uint32_t> status_buf{0};
         detail::ReadFromDeviceL1(dev, core, router_sync_address, 4, status_buf, CoreType::ETH);
         reports.push_back({chan, core, status_buf[0], classify_edm_status(status_buf[0]), /*is_master=*/false});
     }
@@ -291,11 +297,11 @@ void FabricFirmwareInitializer::init(
             for (auto* dev : devices_) {
                 const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
                 cluster_.get_driver()->register_sim_fabric_node_id(
-                    dev->id(), uint32_t(fabric_node_id.mesh_id.get()), uint32_t(fabric_node_id.chip_id));
+                    dev->id(), std::uint32_t(fabric_node_id.mesh_id.get()), std::uint32_t(fabric_node_id.chip_id));
                 for (const auto& [eth_chan, direction] :
                      control_plane_.get_active_fabric_eth_channels(fabric_node_id)) {
                     cluster_.get_driver()->register_sim_fabric_endpoint_direction(
-                        dev->id(), uint32_t(eth_chan), uint32_t(direction));
+                        dev->id(), std::uint32_t(eth_chan), std::uint32_t(direction));
                 }
             }
         }
@@ -346,7 +352,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     const auto& fabric_context = control_plane_.get_fabric_context();
     const auto& builder_ctx = fabric_context.get_builder_context();
     auto [termination_signal_address, signal] = builder_ctx.get_fabric_router_termination_address_and_signal();
-    std::vector<uint32_t> termination_signal(1, signal);
+    std::vector<std::uint32_t> termination_signal(1, signal);
 
     // Terminate fabric tensix mux cores if enabled
     // TODO: issue #26855, move the termination process to device
@@ -365,7 +371,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 auto core_id = tensix_config.get_core_id_for_channel(dev->id(), eth_chan_id);
                 auto [tensix_termination_address, tensix_signal] =
                     tensix_config.get_termination_address_and_signal(core_id);
-                std::vector<uint32_t> tensix_termination_signal(1, tensix_signal);
+                std::vector<std::uint32_t> tensix_termination_signal(1, tensix_signal);
                 auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
 
                 detail::WriteToDeviceL1(
@@ -429,7 +435,7 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     log_info(tt::LogMetal, "Fabric initialized on {} devices", configured_count);
 }
 
-void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
+void FabricFirmwareInitializer::wait_for_fabric_router_sync(std::uint32_t timeout_ms) const {
     tt_fabric::FabricConfig fabric_config = descriptor_->fabric_config();
     if (!tt_fabric::is_tt_fabric_config(fabric_config)) {
         return;
@@ -454,8 +460,34 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
         std::vector<std::uint32_t> master_router_status{0};
         auto start_time = std::chrono::steady_clock::now();
         while (master_router_status[0] != expected_status) {
+            cluster_.advance_device_execution(dev->id());
             detail::ReadFromDeviceL1(
                 dev, master_router_logical_core, router_sync_address, 4, master_router_status, CoreType::ETH);
+            // #region agent log
+            {
+                static std::atomic<int> fab_poll_log{0};
+                const int n = fab_poll_log.fetch_add(1);
+                if (n == 0 || (n % 2000) == 0) {
+                    std::FILE* f = std::fopen("/data/rsong/tt-metal2/.cursor/debug-ae7d0a.log", "a");
+                    if (f) {
+                        std::fprintf(
+                            f,
+                            "{\"sessionId\":\"ae7d0a\",\"hypothesisId\":\"H_FAB_ROUTER_SYNC\","
+                            "\"location\":\"fabric_firmware_initializer.cpp:wait_for_handshake\","
+                            "\"message\":\"POLL\",\"data\":{\"device_id\":%u,\"master_chan\":%u,"
+                            "\"status\":%u,\"expected\":%u,\"poll\":%d,\"pid\":%d},\"timestamp\":%ld}\n",
+                            (unsigned)dev->id(),
+                            (unsigned)master_router_chan,
+                            (unsigned)master_router_status[0],
+                            (unsigned)expected_status,
+                            n,
+                            (int)getpid(),
+                            (long)std::time(nullptr));
+                        std::fclose(f);
+                    }
+                }
+            }
+            // #endregion
             if (master_router_status[0] == expected_status) {
                 break;
             }
@@ -477,7 +509,7 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
 
         auto ready_address_and_signal = builder_context.get_fabric_router_ready_address_and_signal();
         if (ready_address_and_signal) {
-            std::vector<uint32_t> ready_signal(1, ready_address_and_signal->second);
+            std::vector<std::uint32_t> ready_signal(1, ready_address_and_signal->second);
             detail::WriteToDeviceL1(
                 dev, master_router_logical_core, ready_address_and_signal->first, ready_signal, CoreType::ETH);
         }
@@ -505,7 +537,7 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
     }
 }
 
-uint32_t FabricFirmwareInitializer::get_fabric_router_sync_timeout_ms() const {
+std::uint32_t FabricFirmwareInitializer::get_fabric_router_sync_timeout_ms() const {
     auto timeout = rtoptions_.get_fabric_router_sync_timeout_ms();
     if (rtoptions_.get_simulator_enabled()) {
         return timeout.value_or(15000);

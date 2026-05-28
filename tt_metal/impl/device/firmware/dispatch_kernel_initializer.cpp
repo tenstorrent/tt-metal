@@ -185,7 +185,7 @@ void DispatchKernelInitializer::init_device_command_queues() {
     }
     // #region agent log
     {
-        std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+        std::FILE* f = std::fopen("/data/rsong/tt-metal2/.cursor/debug-ae7d0a.log", "a");
         if (f) {
             std::string visible_ids;
             for (auto* d : devices_) {
@@ -223,7 +223,7 @@ void DispatchKernelInitializer::init_device_command_queues() {
             dev->init_command_queue_device_with_topology(dispatch_topology_.get());
             // #region agent log
             {
-                std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+                std::FILE* f = std::fopen("/data/rsong/tt-metal2/.cursor/debug-ae7d0a.log", "a");
                 if (f) {
                     std::fprintf(
                         f,
@@ -247,7 +247,7 @@ void DispatchKernelInitializer::init_device_command_queues() {
                     });
                     // #region agent log
                     {
-                        std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+                        std::FILE* f = std::fopen("/data/rsong/tt-metal2/.cursor/debug-ae7d0a.log", "a");
                         if (f) {
                             std::fprintf(
                                 f,
@@ -268,7 +268,7 @@ void DispatchKernelInitializer::init_device_command_queues() {
                         (*it)->init_command_queue_device_with_topology(dispatch_topology_.get());
                         // #region agent log
                         {
-                            std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+                            std::FILE* f = std::fopen("/data/rsong/tt-metal2/.cursor/debug-ae7d0a.log", "a");
                             if (f) {
                                 std::fprintf(
                                     f,

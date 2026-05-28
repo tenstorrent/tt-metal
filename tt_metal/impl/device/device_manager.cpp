@@ -246,7 +246,7 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
             }
             // #region agent log
             {
-                std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+                std::FILE* f = std::fopen("/data/rsong/tt-metal2/.cursor/debug-ae7d0a.log", "a");
                 if (f) {
                     std::fprintf(
                         f,
