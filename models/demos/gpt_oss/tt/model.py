@@ -436,6 +436,26 @@ class Model:
             return ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape)
         return ttnn.ReplicateTensorToMesh(self.mesh_device)
 
+    def _pad_page_table_rows(self, pt: torch.Tensor) -> torch.Tensor:
+        """When ``users_row_sharded`` is active the page table must have
+        exactly ``max_batch_size`` rows so ``ShardTensor2dMesh`` can
+        split them evenly across the ``mesh_device.shape[0]`` mesh rows.
+
+        A prefill step may present fewer rows than ``max_batch_size``
+        (only the currently active sequences, no padding).  Padding with
+        zeros here is safe: the kernel only reads up to the per-user
+        block count, and the persistent device buffer was (or will be)
+        allocated at the full ``max_batch_size`` shape.
+        """
+        if not self.users_row_sharded:
+            return pt
+        num_rows = self.mesh_device.shape[0]
+        max_batch = self.max_local_batch_size * num_rows
+        if pt.shape[0] >= max_batch:
+            return pt
+        pad = torch.zeros(max_batch - pt.shape[0], pt.shape[1], dtype=pt.dtype)
+        return torch.cat([pt, pad], dim=0)
+
     def _page_tables_to_ttnn(self, page_tables_per_layer):
         """Resolve a per-layer torch list to *persistent* ttnn device
         tensors (allocate-only) — see
@@ -457,6 +477,7 @@ class Model:
                 if isinstance(pt, ttnn.Tensor):
                     persistent.append(pt)
                     continue
+                pt = self._pad_page_table_rows(pt)
                 persistent.append(
                     ttnn.from_torch(
                         pt,
@@ -482,6 +503,7 @@ class Model:
         for i, pt in enumerate(page_tables_per_layer):
             if pt is None or persistent[i] is None or isinstance(pt, ttnn.Tensor):
                 continue
+            pt = self._pad_page_table_rows(pt)
             host_pt = ttnn.from_torch(
                 pt,
                 device=None,
