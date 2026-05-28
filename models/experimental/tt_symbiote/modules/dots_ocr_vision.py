@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 
 import torch
+import torch.nn.functional as F
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
@@ -458,14 +459,16 @@ class TTNNDotsVision2DRoPE:
         self._padded_cache_rot_mats = None
         self._padded_cache_cu_seqlens = None
 
-    def build(
+    def _compute_cos_sin_torch(
         self,
         grid_thw: torch.Tensor,
         seq_len: int,
-    ) -> tuple[tuple[ttnn.Tensor, ttnn.Tensor], list[int]]:
-        """Build 2D RoPE cos/sin tables and cu_seqlens for vision attention.
+    ) -> tuple[torch.Tensor, torch.Tensor, list[int]]:
+        """Compute 2D RoPE cos/sin tables on CPU, returning (cos_full, sin_full, cu_seqlens).
 
-        Returns cu_seqlens as a Python list to avoid repeated device-to-host syncs.
+        Separates CPU computation from device upload so callers can optionally
+        pre-pad (CPU torch.cat) before a single from_torch, avoiding device
+        PadDeviceOperation / FillPadDeviceOperation on the critical path.
         """
         g = grid_thw.detach().cpu() if getattr(grid_thw, "is_cuda", False) else grid_thw
         if g.dim() != 2 or g.shape[1] != 3:
@@ -476,11 +479,8 @@ class TTNNDotsVision2DRoPE:
         if seq_len != expected:
             raise ValueError(f"seq_len={seq_len} != grid_thw total={expected}")
 
-        mem = ttnn.DRAM_MEMORY_CONFIG
-        mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
         sms = self.spatial_merge_size
-
-        inv_freq = self._inv_freq  # shape: [rotary_dim // 2]
+        inv_freq = self._inv_freq
 
         hpos_segments = []
         wpos_segments = []
@@ -495,15 +495,12 @@ class TTNNDotsVision2DRoPE:
             h_ids = torch.arange(h, dtype=torch.float32)
             w_ids = torch.arange(w, dtype=torch.float32)
 
-            # Build 2D grids: h_grid[i,j] = i, w_grid[i,j] = j
-            h_grid = h_ids.unsqueeze(1).expand(h, w)  # [h, w]
-            w_grid = w_ids.unsqueeze(0).expand(h, w)  # [h, w]
+            h_grid = h_ids.unsqueeze(1).expand(h, w)
+            w_grid = w_ids.unsqueeze(0).expand(h, w)
 
-            # Spatial merge reshuffling
             h_grid = h_grid.reshape(h // sms, sms, w // sms, sms).permute(0, 2, 1, 3).reshape(-1)
             w_grid = w_grid.reshape(h // sms, sms, w // sms, sms).permute(0, 2, 1, 3).reshape(-1)
 
-            # Repeat for temporal dimension
             if t > 1:
                 h_grid = h_grid.repeat(t)
                 w_grid = w_grid.repeat(t)
@@ -516,32 +513,30 @@ class TTNNDotsVision2DRoPE:
         hpos_all = torch.cat(hpos_segments) if len(hpos_segments) > 1 else hpos_segments[0]
         wpos_all = torch.cat(wpos_segments) if len(wpos_segments) > 1 else wpos_segments[0]
 
-        # Compute frequencies on CPU: [S] x [rotary_dim//2] -> [S, rotary_dim//2]
         freqs_h = hpos_all.unsqueeze(1) * inv_freq.unsqueeze(0)
         freqs_w = wpos_all.unsqueeze(1) * inv_freq.unsqueeze(0)
 
-        cos_h = torch.cos(freqs_h)
-        sin_h = torch.sin(freqs_h)
-        cos_w = torch.cos(freqs_w)
-        sin_w = torch.sin(freqs_w)
+        cos_half = torch.cat([torch.cos(freqs_h), torch.cos(freqs_w)], dim=-1)
+        sin_half = torch.cat([torch.sin(freqs_h), torch.sin(freqs_w)], dim=-1)
 
-        # Concat h and w: [S, rotary_dim]
-        cos_half = torch.cat([cos_h, cos_w], dim=-1)
-        sin_half = torch.cat([sin_h, sin_w], dim=-1)
+        cos_full = torch.cat([cos_half, cos_half], dim=-1).unsqueeze(0).unsqueeze(0).to(torch.bfloat16)
+        sin_full = torch.cat([sin_half, sin_half], dim=-1).unsqueeze(0).unsqueeze(0).to(torch.bfloat16)
 
-        # Repeat to full head_dim: [S, head_dim]
-        cos_full = torch.cat([cos_half, cos_half], dim=-1)
-        sin_full = torch.cat([sin_half, sin_half], dim=-1)
+        return cos_full, sin_full, cu
 
-        # Reshape to [1, 1, S, head_dim]. cos/sin stay in the native HF
-        # half-half head_dim layout (each half repeats), which is exactly
-        # the format ``ttnn.experimental.rotary_embedding`` (non-llama)
-        # expects -- no meta-style interleave conversion needed.
-        cos_full = cos_full.unsqueeze(0).unsqueeze(0)
-        sin_full = sin_full.unsqueeze(0).unsqueeze(0)
+    def build(
+        self,
+        grid_thw: torch.Tensor,
+        seq_len: int,
+    ) -> tuple[tuple[ttnn.Tensor, ttnn.Tensor], list[int]]:
+        """Build 2D RoPE cos/sin tables and cu_seqlens for vision attention.
 
-        cos_full = cos_full.to(torch.bfloat16)
-        sin_full = sin_full.to(torch.bfloat16)
+        Returns cu_seqlens as a Python list to avoid repeated device-to-host syncs.
+        """
+        cos_full, sin_full, cu = self._compute_cos_sin_torch(grid_thw, seq_len)
+
+        mem = ttnn.DRAM_MEMORY_CONFIG
+        mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
         cos_tt = ttnn.from_torch(
             cos_full,
@@ -560,9 +555,7 @@ class TTNNDotsVision2DRoPE:
             mesh_mapper=mapper,
         )
 
-        rot_mats = (cos_tt, sin_tt)
-
-        return rot_mats, cu
+        return (cos_tt, sin_tt), cu
 
     def build_padded(
         self,
@@ -570,19 +563,44 @@ class TTNNDotsVision2DRoPE:
         actual_seq_len: int,
         bucket_size: int,
     ) -> tuple[tuple, list[int]]:
-        """Build 2D RoPE cos/sin padded to bucket_size for trace compatibility."""
+        """Build 2D RoPE cos/sin padded to bucket_size for trace compatibility.
+
+        Pads cos/sin on CPU (torch.cat) before the single from_torch upload,
+        eliminating the two device PadDeviceOperation / FillPadDeviceOperation
+        that the original ttnn.pad calls generated on the critical path.
+        """
         g = grid_thw.detach().cpu() if getattr(grid_thw, "is_cuda", False) else grid_thw
         cache_key = (tuple(int(x) for x in g.reshape(-1).tolist()), int(actual_seq_len), int(bucket_size))
         if cache_key == self._padded_cache_key and self._padded_cache_rot_mats is not None:
             return self._padded_cache_rot_mats, self._padded_cache_cu_seqlens
 
-        rot_mats, cu_seqlens = self.build(grid_thw, actual_seq_len)
-        cos_tt, sin_tt = rot_mats
+        cos_full, sin_full, cu_seqlens = self._compute_cos_sin_torch(grid_thw, actual_seq_len)
 
         if actual_seq_len < bucket_size:
             pad_len = bucket_size - actual_seq_len
-            cos_tt = ttnn.pad(cos_tt, padding=((0, 0), (0, 0), (0, pad_len), (0, 0)), value=0.0)
-            sin_tt = ttnn.pad(sin_tt, padding=((0, 0), (0, 0), (0, pad_len), (0, 0)), value=0.0)
+            head_dim = cos_full.shape[-1]
+            zeros = torch.zeros(1, 1, pad_len, head_dim, dtype=cos_full.dtype)
+            cos_full = torch.cat([cos_full, zeros], dim=2)
+            sin_full = torch.cat([sin_full, zeros], dim=2)
+
+        mem = ttnn.DRAM_MEMORY_CONFIG
+        mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+        cos_tt = ttnn.from_torch(
+            cos_full,
+            device=self.device,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem,
+            mesh_mapper=mapper,
+        )
+        sin_tt = ttnn.from_torch(
+            sin_full,
+            device=self.device,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem,
+            mesh_mapper=mapper,
+        )
 
         self._padded_cache_key = cache_key
         self._padded_cache_rot_mats = (cos_tt, sin_tt)
@@ -834,7 +852,7 @@ class TTNNDotsVisionMLP(TTNNModule):
             hidden_states,
             self.tt_fc3_weight,
             bias=self.tt_fc3_bias,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat4_b,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
             program_config=gate_up_pc,
@@ -939,8 +957,19 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
 
     def preprocess_weights_impl(self):
         if self._proj_weight is not None:
+            # Pad the input-feature (K) dimension of the projection weight to the next
+            # tile multiple so that from_torch in forward() can upload x with an already
+            # tile-aligned last dimension, turning TilizeWithValPaddingDeviceOperation
+            # (which pads 588→608 on device every forward call) into a plain Tilize.
+            tile = 32
+            k = self._proj_weight.shape[-1]
+            k_padded = ((k + tile - 1) // tile) * tile
+            w = self._proj_weight.to(torch.bfloat16)
+            if k_padded != k:
+                w = F.pad(w, (0, k_padded - k))
+            self._proj_k_padded = k_padded
             self.tt_proj_weight = ttnn.from_torch(
-                self._proj_weight.to(torch.bfloat16),
+                w,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
             )
@@ -985,6 +1014,9 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
 
         if pixel_values.dim() == 2:
             x = pixel_values.to(torch.bfloat16).unsqueeze(0).unsqueeze(0)
+            k_padded = getattr(self, "_proj_k_padded", x.shape[-1])
+            if k_padded != x.shape[-1]:
+                x = F.pad(x, (0, k_padded - x.shape[-1]))
             x_tt = ttnn.from_torch(
                 x,
                 device=self.device,
@@ -1043,10 +1075,14 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         temporal_patch_size = temporal
         x = pixel_values.view(-1, C, temporal_patch_size, self.patch_size, self.patch_size)
         x = x[:, :, 0]
-        x = x.reshape(1, 1, num_patches, C * self.patch_size * self.patch_size)
+        x = x.reshape(1, 1, num_patches, C * self.patch_size * self.patch_size).to(torch.bfloat16)
+
+        k_padded = getattr(self, "_proj_k_padded", x.shape[-1])
+        if k_padded != x.shape[-1]:
+            x = F.pad(x, (0, k_padded - x.shape[-1]))
 
         x_tt = ttnn.from_torch(
-            x.to(torch.bfloat16),
+            x,
             device=self.device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -1532,25 +1568,30 @@ class TTNNDotsVisionBlock(TTNNModule):
             )
 
         residual = hidden_states
-        hidden_states = self.norm1(hidden_states)
-        hidden_states = self.attn(
-            hidden_states,
+        normed = self.norm1(hidden_states)
+        attn_out = self.attn(
+            normed,
             rot_mats=rot_mats,
             cu_seqlens=cu_seqlens,
             attention_mask=attention_mask,
             attention_logical_seq_len=attention_logical_seq_len,
         )
+        ttnn.deallocate(normed)
         # Force BFP8 output on the residual stream. Without this, when one
         # operand is BF16 (older path) and the other BFP8 the binary op
         # promotes to BF16, doubling the residual tile footprint going into
         # ``norm2``. Now both operands are BFP8 and so is the result, so the
         # whole layer (and the next one's norm input) stays in BFP8.
-        hidden_states = ttnn.add(residual, hidden_states, dtype=ttnn.bfloat8_b)
+        hidden_states = ttnn.add(residual, attn_out, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(attn_out)
 
         residual = hidden_states
-        hidden_states = self.norm2(hidden_states)
-        hidden_states = self.mlp(hidden_states)
-        hidden_states = ttnn.add(residual, hidden_states, dtype=ttnn.bfloat8_b)
+        normed = self.norm2(hidden_states)
+        mlp_out = self.mlp(normed)
+        ttnn.deallocate(normed)
+        hidden_states = ttnn.add(residual, mlp_out, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(mlp_out)
+        ttnn.deallocate(residual)
 
         return hidden_states
 
@@ -1894,6 +1935,7 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         self.head_dim = 128
         self.spatial_merge_size = 2
         self._bypass_tensor_wrapping = True
+        self._attn_mask_cache: dict = {}
 
     @classmethod
     def from_torch(cls, hf_vision_tower, hf_config=None):
@@ -2038,16 +2080,25 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         return num_patches
 
     def build_padded_attention_mask(self, actual_seq_len: int, bucket: int) -> ttnn.Tensor | None:
-        """Build the SDPA key mask for bucket-padded vision input outside trace capture."""
+        """Build the SDPA key mask for bucket-padded vision input outside trace capture.
+
+        Cached per (actual_seq_len, bucket) so the large TilizeDeviceOperation and
+        FillPadDeviceOperation only happen once per unique input shape.
+        """
         actual_seq_len = int(actual_seq_len)
         bucket = int(bucket)
         if bucket <= actual_seq_len:
             return None
 
+        cache_key = (actual_seq_len, bucket)
+        cached = self._attn_mask_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         mask = torch.zeros((1, 1, bucket, bucket), dtype=torch.float32)
         mask[..., actual_seq_len:] = -1e9
         mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
-        return ttnn.from_torch(
+        result = ttnn.from_torch(
             mask,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
@@ -2055,6 +2106,8 @@ class TTNNDotsOCRVisionTower(TTNNModule):
             mesh_mapper=mapper,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        self._attn_mask_cache[cache_key] = result
+        return result
 
     def forward_post_patch_embed(
         self,
