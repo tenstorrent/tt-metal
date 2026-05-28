@@ -375,7 +375,7 @@ def test_mla(
 )
 @pytest.mark.parametrize("num_chunks", [1, 2, 4, 5, 8, 10], ids=lambda n: f"N{n}")
 @pytest.mark.parametrize("q_chunk_size", [64], ids=lambda q: f"q{q}")
-@pytest.mark.parametrize("k_chunk_size", [32, 64, 128, 120, 256, 512], ids=lambda k: f"k{k}")
+@pytest.mark.parametrize("k_chunk_size", [32, 64, 128, 160, 256, 512], ids=lambda k: f"k{k}")
 @pytest.mark.timeout(0)
 def test_mla_chunked_prefill(
     request,
