@@ -14,11 +14,9 @@ from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import
     pixtral_effective_mm_seq_len,
     trim_seq_dim2,
     vision_nlp_concat_input_memcfg,
-    vision_nlp_qkv_shard_memcfgs,
     vision_rope_memcfg,
     vision_seq_memcfg,
     vision_use_sharded_nlp_concat,
-    vision_use_sharded_nlp_create_qkv,
 )
 
 
@@ -193,45 +191,15 @@ class TtMistralImageAttention(LightweightModule):
     def _nlp_create_qkv_heads(
         self, xqkv_fused: ttnn.Tensor, seq_len: int
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        """L1 sharded NlpCreateHeads when seq fits tile budget; else DRAM interleaved (SDPA input)."""
-        qkv_width = (self.n_local_heads + 2 * self.n_local_kv_heads) * self._padded_head_dim
-        sdpa_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
-
-        if vision_use_sharded_nlp_create_qkv(
-            seq_len, self.n_local_heads, self.n_local_kv_heads, self._padded_head_dim, qkv_width
-        ):
-            qkv_in_mem, qkv_out_mem = vision_nlp_qkv_shard_memcfgs(
-                seq_len, qkv_width, self.n_local_kv_heads, self.configuration
-            )
-            xqkv_sharded = ttnn.interleaved_to_sharded(xqkv_fused, qkv_in_mem)
-            ttnn.deallocate(xqkv_fused)
-            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-                xqkv_sharded,
-                num_heads=self.n_local_heads,
-                num_kv_heads=self.n_local_kv_heads,
-                transpose_k_heads=False,
-                memory_config=qkv_out_mem,
-            )
-            ttnn.deallocate(xqkv_sharded)
-            q = ttnn.to_memory_config(q, sdpa_mem_cfg)
-            k = ttnn.to_memory_config(k, sdpa_mem_cfg)
-            v = ttnn.to_memory_config(v, sdpa_mem_cfg)
-            return q, k, v
-
-        nlp_in_mem = xqkv_fused.memory_config()
-        if nlp_in_mem.is_sharded() or nlp_in_mem.buffer_type != ttnn.BufferType.L1:
-            nlp_in_mem = sdpa_mem_cfg
+        rope_mem_cfg = vision_rope_memcfg(seq_len, self._padded_head_dim)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             transpose_k_heads=False,
-            memory_config=nlp_in_mem,
+            memory_config=rope_mem_cfg,
         )
         ttnn.deallocate(xqkv_fused)
-        q = ttnn.to_memory_config(q, sdpa_mem_cfg)
-        k = ttnn.to_memory_config(k, sdpa_mem_cfg)
-        v = ttnn.to_memory_config(v, sdpa_mem_cfg)
         return q, k, v
 
     def _nlp_concat_heads(self, attn_output_1QSD: ttnn.Tensor, seq_len: int) -> ttnn.Tensor:
