@@ -20,6 +20,7 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     const auto& input_tensor = tensor_args.input.mesh_tensor();
     const auto& expert_mask_tensor = tensor_args.expert_mask.mesh_tensor();
     const auto& topk_mask_tensor = tensor_args.topk_mask.mesh_tensor();
+    const auto& out_tensor = output_tensor.mesh_tensor();
 
     const auto k = operation_attributes.k;
 
@@ -30,7 +31,6 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     tt::DataFormat topk_mask_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(topk_mask_tensor.dtype());
     tt::DataFormat expert_mask_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(expert_mask_tensor.dtype());
-    const auto& out_tensor = output_tensor.mesh_tensor();
     tt::DataFormat out_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(out_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;

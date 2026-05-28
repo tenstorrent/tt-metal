@@ -19,7 +19,7 @@ using namespace tt::tt_metal;
 tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::create_descriptor(
     const ProdNcParams& operation_attributes, const ProdNcInputs& tensor_args, Tensor& /*tensor_return_value*/) {
     const auto& input = tensor_args.input;
-    const MeshTensor& output = tensor_args.output.mesh_tensor();
+    const auto& output = tensor_args.output.mesh_tensor();
     const int64_t dim = operation_attributes.dim;
 
     TT_FATAL(dim == 0 || dim == 1, "Dimension ({}) must be either 0 or 1", dim);

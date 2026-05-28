@@ -29,7 +29,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgram
     const uint32_t tile_hw = a.tensor_spec().tile().get_tile_hw();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(a.mutable_device().arch(), operation_attributes.compute_kernel_config);
+        get_compute_kernel_config_args(a.device().arch(), operation_attributes.compute_kernel_config);
 
     uint32_t Wt = W / tile_width;
     uint32_t Ht = H / tile_height;

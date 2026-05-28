@@ -47,7 +47,7 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
     using namespace tt::tt_metal;
 
     const auto& input_tensor{tensor_args.input_tensor.mesh_tensor()};
-    const MeshTensor& output_tensor{tensor_return_value.mesh_tensor()};
+    const auto& output_tensor{tensor_return_value.mesh_tensor()};
     const auto& input_shape{input_tensor.padded_shape()};
 
     ProgramDescriptor desc;
