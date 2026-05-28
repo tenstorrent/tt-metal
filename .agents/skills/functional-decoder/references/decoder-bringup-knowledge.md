@@ -33,6 +33,7 @@ Use this reference while bringing up a TTNN decoder layer. It folds in relevant 
 - For each tensor used by the TTNN layer, store at least name, shape, dtype, mean, and std.
 - Generate synthetic weights deterministically from those stats in pytest.
 - Synthetic input activations should approximate the distribution entering the decoder layer after embeddings/norms, not arbitrary huge random values.
+- Do not create smaller configs - replicate the real config of the reference.
 - If full HF weight download is necessary to collect stats, record why partial shard loading was not practical.
 
 ## Paged KV Cache Checks
