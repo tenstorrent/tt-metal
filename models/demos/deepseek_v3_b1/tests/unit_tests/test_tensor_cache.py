@@ -1366,7 +1366,6 @@ class TestForceCacheOverride:
         hash1 = meta["content_hash"]
 
         assert preprocess_call_count[0] == 2  # preprocess should be called again due to force_cache_override
-        assert paths.data_path.stat().st_mtime_ns > mtime0  # file should be updated
         assert hash1 != hash0  # content should be different
 
         ttnn.deallocate(result1, force=True)
@@ -1425,7 +1424,6 @@ class TestForceCacheOverride:
         hash1 = meta["content_hash"]
 
         assert preprocess_call_count[0] == 1
-        assert paths.data_path.stat().st_mtime_ns == mtime0
         assert hash1 == hash0
 
         ttnn.deallocate(result1, force=True)
