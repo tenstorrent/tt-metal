@@ -24,6 +24,7 @@ Run:
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 
 import pytest
@@ -38,7 +39,9 @@ _SNAPSHOT = pathlib.Path(
 )
 
 _B = 1
-_T_PREFILL = 128  # must match TT_CCL prefill ``support_seqlens`` minimum
+# Override with ``QWEN36_PCC_T_PREFILL=4096`` (etc.) to PCC-check long-ISL
+# shapes. Default 128 matches TT_CCL prefill ``support_seqlens`` minimum.
+_T_PREFILL = int(os.environ.get("QWEN36_PCC_T_PREFILL", "128"))
 _H = 5120
 _PCC_THRESH = 0.99
 _LAYER_IDX = 0
@@ -327,7 +330,9 @@ def test_qwen36_layer0_deltanet_through_transformer_forward(bh_glx_mesh):
     print(f"[Layer0/forward] TT out shape: {tt_out_cpu.shape}")
 
     pcc = _pcc(tt_out_cpu, out_ref[:, :_T_PREFILL, :])
-    p99 = torch.quantile((tt_out_cpu.float() - out_ref[:, :_T_PREFILL, :].float()).abs().flatten(), 0.99).item()
+    # torch.quantile is capped at ~16M elements; use kthvalue for long-ISL shapes.
+    diff_flat = (tt_out_cpu.float() - out_ref[:, :_T_PREFILL, :].float()).abs().flatten()
+    p99 = torch.kthvalue(diff_flat, int(0.99 * diff_flat.numel())).values.item()
     print(f"[Layer0/forward] PCC = {pcc:.6f} (thresh={_PCC_THRESH})  |  p99 abs-diff = {p99:.4f}")
     assert pcc > _PCC_THRESH, f"Layer0/forward PCC {pcc:.4f} < {_PCC_THRESH} (p99={p99:.4f})"
     print("[Layer0/forward] PASSED")
