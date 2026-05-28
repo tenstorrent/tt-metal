@@ -2,19 +2,30 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Seamless M4T v2 Large — device performance test (per-task tokens/sec, wall-clock with trace).
+Seamless M4T v2 Large — device performance (per-op kernel time, tracy-measured, **no trace**).
 
-Mirrors the production ``generate()`` path on a 1×N mesh (TP + 2 CQ + decode-Trace) for each of
-the five inference tasks (T2TT, T2ST, S2TT, S2ST, ASR). For each task we:
+Measures the device-bound floor for each of the five inference tasks: how fast the device kernels
+can run, with all host overhead and trace-replay optimizations stripped out. This is what e2e
+perf approaches but cannot beat — the e2e test (``test_e2e_perf_2cq.py``) measures the production
+wall-clock (with trace + 2 CQ), so a healthy state has ``device tokens/sec ≥ e2e tokens/sec``.
 
-  1. Build the TT model.
-  2. Warmup one ``generate()`` call (compile + capture decode trace + warm prepared caches).
-  3. Time a single steady-state ``generate()`` call (the trace is already captured).
-  4. Report ``tokens/sec = max_new_tokens / inference_time``.
+How:
+  * Outer test (this file) does **not** import ttnn or open the cluster — tracy spawns the inner
+    pytest as a subprocess and opens devices itself. Touching UMD from the outer process makes
+    the subprocess deadlock waiting for ``CHIP_IN_USE_0_PCIe``.
+  * Inner ``test_device_perf_forwards.py::test_<task>`` runs **eager** (``use_decode_trace=False``,
+    ``use_2cq=False``) — tracy's per-op profiler can't reconcile host/device records across metal
+    trace replays, which is why traditional device perf disables trace.
+  * Tracy writes per-op kernel timings to ``cpp_device_perf_report.csv``. We sum kernel duration
+    across every row, then **divide by ``num_devices``** to get the per-device wall-clock-equivalent
+    kernel time (under TP all mesh devices run the same op in parallel; the sum is N× the
+    per-device floor).
+  * Throughput metric: tokens/sec for text outputs, samples/sec for speech outputs (sample count
+    side-channeled from the inner test via ``SAMPLES_PATH_FMT``).
 
-No tracy / no device profiler — pure wall-clock around ``ttnn.execute_trace`` is the canonical
-device-perf measurement once a trace is captured (host overhead is minimised, so wall-clock
-tracks the device kernel critical path). This matches the devstral2 ``test_perf.py`` pattern.
+The inner pytest occasionally segfaults during teardown after PASSED on speech-output paths
+(``ReadDeviceProfiler`` + ``clear_program_cache`` race). We use ``check_test_return_code=False``
+so the already-captured per-op CSV survives — the timings are valid regardless of exit code.
 
 Usage::
 
@@ -22,259 +33,135 @@ Usage::
         -v -m models_device_performance_bare_metal
 """
 
-from __future__ import annotations
-
+import json
 import os
-from typing import Any, Tuple
 
 import pytest
-import torch
-import ttnn
 from loguru import logger
-from transformers import AutoProcessor, AutoTokenizer
+from tracy.common import clear_profiler_runtime_artifacts
+from tracy.process_model_log import get_samples_per_s, post_process_ops_log, run_device_profiler
 
-from models.common.utility_functions import profiler, run_for_blackhole
-from models.experimental.seamless_m4t_v2_large.reference.torch_seamless_m4t_v2_model import (
-    load_pretrained_seamless_m4t_v2_model,
-)
-from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
-from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
-    MESH_DEVICE_PARAMETRIZE_E2E_2CQ_GENERATE,
-    mesh_default_device,
-)
-from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_seamless_m4t_v2_model_parameters
-from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import (
-    TTSeamlessM4Tv2GenerationOutput,
-    TTSeamlessM4Tv2GreedySearchOutput,
-    TTSeamlessM4Tv2Model,
-)
 from models.perf.device_perf_utils import prep_device_perf_report
 
-# Task table — parametrize over all 5 inference tasks.
-# (use_speech_input, tgt_lang, generate_speech)
-_TASKS = {
-    "t2tt": (False, "hin", False),  # eng text -> hin text
-    "t2st": (False, "hin", True),  # eng text -> hin speech
-    "s2tt": (True, "eng", False),  # hin speech -> eng text
-    "s2st": (True, "spa", True),  # hin speech -> spa speech
-    "asr": (True, "eng", False),  # speech -> same-lang text (rep-penalty=1.0)
+_FWD_TEST = "models/experimental/seamless_m4t_v2_large/tests/perf/test_device_perf_forwards.py"
+_SAMPLES_PATH_FMT = "/tmp/seamless_dperf_{task}_samples.txt"
+
+# Task definitions — mirror the inner forward tests' parametrization.
+# (task_id, generate_speech, max_new_tokens) — max_new_tokens must match ``_TEXT_KWARGS`` /
+# ``_SPEECH_KWARGS`` in ``test_device_perf_forwards.py``.
+_TASKS = (
+    ("t2tt", False, 10),
+    ("s2tt", False, 10),
+    ("t2st", True, 4),
+    ("s2st", True, 4),
+    ("asr", False, 10),
+)
+
+# Per-op profiler buffer budget (ops × mesh_devices). Speech-output paths run a smaller
+# ``max_new_tokens`` (see ``_MAX_NEW_TOKENS_SPEECH``) so a moderate buffer is enough — pushing
+# this too high stresses the per-device DRAM allocation and triggers segfaults inside
+# ``ReadDeviceProfiler``.
+_MAX_MESH_DEVICES = 4
+_TASK_OP_SUPPORT_COUNT = {
+    "t2tt": 20000,
+    "s2tt": 30000,
+    "t2st": 30000,
+    "s2st": 30000,
+    "asr": 30000,
 }
-_TASK_PARAMS = [(t,) + _TASKS[t] for t in _TASKS]
-_TASK_IDS = list(_TASKS.keys())
-
-_PROMPT = "Hello, my name is SeamlessM4T."
-_MAX_NEW_TOKENS = 10
 
 
-def _weights_dir_or_skip() -> str:
-    try:
-        return ensure_seamless_m4t_v2_large_weights()
-    except ImportError as e:
-        pytest.skip(str(e))
-        raise
-    except Exception as e:
-        pytest.skip(f"Could not prepare seamless-m4t-v2-large weights: {e}")
-        raise
+def _task_params():
+    return [pytest.param(t, gs, mnt, id=t) for (t, gs, mnt) in _TASKS]
 
 
-def _torch_ids_to_ttnn(device: ttnn.Device, t: torch.Tensor) -> ttnn.Tensor:
-    return ttnn.from_torch(
-        t.to(torch.int32).cpu(),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-
-def _torch_feats_to_ttnn(device: ttnn.Device, t: torch.Tensor) -> ttnn.Tensor:
-    return ttnn.from_torch(
-        t.to(torch.bfloat16).cpu().contiguous(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-
-
-def _make_tt_model(device: ttnn.Device, model: Any, cfg: Any, t2u_cfg: Any) -> TTSeamlessM4Tv2Model:
-    params = create_seamless_m4t_v2_model_parameters(model, device=device)
-    return TTSeamlessM4Tv2Model(
-        device,
-        params,
-        layer_norm_eps=cfg.layer_norm_eps,
-        encoder_layers=cfg.encoder_layers,
-        encoder_attention_heads=cfg.encoder_attention_heads,
-        decoder_layers=cfg.decoder_layers,
-        decoder_attention_heads=cfg.decoder_attention_heads,
-        hidden_size=cfg.hidden_size,
-        feature_projection_input_dim=cfg.feature_projection_input_dim,
-        speech_encoder_attention_heads=cfg.speech_encoder_attention_heads,
-        speech_encoder_intermediate_size=cfg.speech_encoder_intermediate_size,
-        speech_encoder_layers=cfg.speech_encoder_layers,
-        speech_encoder_chunk_size=cfg.speech_encoder_chunk_size,
-        speech_encoder_left_chunk_num=cfg.speech_encoder_left_chunk_num,
-        pad_token_id=cfg.pad_token_id,
-        decoder_start_token_id=cfg.decoder_start_token_id,
-        vocab_size=cfg.vocab_size,
-        adaptor_kernel_size=cfg.adaptor_kernel_size,
-        adaptor_stride=cfg.adaptor_stride,
-        t2u_eos_token_id=cfg.t2u_eos_token_id,
-        t2u_pad_token_id=t2u_cfg.pad_token_id,
-        vocoder_offset=cfg.vocoder_offset,
-        t2u_layer_norm_eps=t2u_cfg.layer_norm_eps,
-        t2u_encoder_layers=t2u_cfg.encoder_layers,
-        t2u_encoder_attention_heads=t2u_cfg.encoder_attention_heads,
-        t2u_decoder_layers=t2u_cfg.decoder_layers,
-        t2u_decoder_attention_heads=t2u_cfg.decoder_attention_heads,
-        variance_predictor_embed_dim=t2u_cfg.variance_predictor_embed_dim,
-        variance_predictor_hidden_dim=t2u_cfg.variance_predictor_hidden_dim,
-        variance_predictor_kernel_size=t2u_cfg.variance_predictor_kernel_size,
-        vocoder_config=cfg,
-        generation_config=model.generation_config,
-        hf_config=cfg,
-    )
-
-
-def _make_text_inputs(weights_dir: str) -> Tuple[torch.Tensor, torch.Tensor]:
-    tokenizer = AutoTokenizer.from_pretrained(os.fspath(weights_dir), local_files_only=True)
-    enc = tokenizer([_PROMPT], return_tensors="pt", padding=True)
-    return enc["input_ids"], enc["attention_mask"]
-
-
-def _make_speech_inputs(weights_dir: str) -> Tuple[torch.Tensor, torch.Tensor]:
-    """1-second 16 kHz waveform → processor input_features. Real audio shape, synthetic samples."""
-    torch.manual_seed(42)
-    processor = AutoProcessor.from_pretrained(os.fspath(weights_dir), local_files_only=True)
-    wav = (torch.randn(1, 16_000, dtype=torch.float32) * 0.01).numpy().reshape(-1)
-    audio_inputs = processor(audios=wav, sampling_rate=16_000, return_tensors="pt")
-    return audio_inputs["input_features"].to(torch.bfloat16), audio_inputs["attention_mask"]
-
-
-def _release_tt_out(tt_out: Any, generate_speech: bool) -> None:
-    if generate_speech:
-        if isinstance(tt_out, TTSeamlessM4Tv2GenerationOutput):
-            ttnn.deallocate(tt_out.waveform)
-            ttnn.deallocate(tt_out.waveform_lengths)
-        else:
-            wav_tt, lens_tt = tt_out
-            ttnn.deallocate(wav_tt)
-            ttnn.deallocate(lens_tt)
-    else:
-        seq = tt_out.sequences if isinstance(tt_out, TTSeamlessM4Tv2GreedySearchOutput) else tt_out
-        ttnn.deallocate(seq)
-
-
-@run_for_blackhole()
-@pytest.mark.models_device_performance_bare_metal
+# Do not open or touch ttnn in this process — tracy spawns the inner test as a subprocess.
+@pytest.mark.no_reset_default_device
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_E2E_2CQ_GENERATE, indirect=["mesh_device", "device_params"])
-@pytest.mark.parametrize("task,use_speech_input,tgt_lang,generate_speech", _TASK_PARAMS, ids=_TASK_IDS)
-def test_perf_device_bare_metal_seamless(
-    mesh_device,
-    device_params,
-    task: str,
-    use_speech_input: bool,
-    tgt_lang: str,
-    generate_speech: bool,
-):
-    """Wall-clock per-task device perf on TP=N + 2CQ + Trace.
-
-    Single warmup ``generate()`` call (compiles + captures decode trace + warms prepared caches),
-    then a single timed steady-state replay. Reports tokens/sec.
-    """
-    _ = device_params
-    weights_dir = _weights_dir_or_skip()
-
-    torch.manual_seed(0)
-    model, cfg = load_pretrained_seamless_m4t_v2_model(weights_dir, dtype=torch.bfloat16)
-    t2u_cfg = model.t2u_model.config
-
-    if use_speech_input:
-        input_features, enc_attn = _make_speech_inputs(weights_dir)
-        input_ids = None
-    else:
-        input_ids, enc_attn = _make_text_inputs(weights_dir)
-        input_features = None
-
-    common_kwargs = dict(
-        tgt_lang=tgt_lang,
-        do_sample=False,
-        num_beams=1,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        generate_speech=generate_speech,
-    )
-    # ASR (same-language transcription): disable rep-penalty so the decoder doesn't get pushed
-    # off the target language token (matches the demo).
-    if task == "asr":
-        common_kwargs["repetition_penalty"] = 1.0
-
-    with mesh_default_device(mesh_device):
-        tt_model = _make_tt_model(mesh_device, model, cfg, t2u_cfg)
-
-        def _call_generate() -> None:
-            if use_speech_input:
-                tt_out = tt_model.generate(
-                    input_features=_torch_feats_to_ttnn(mesh_device, input_features),
-                    attention_mask=_torch_ids_to_ttnn(mesh_device, enc_attn),
-                    use_kv_cache=True,
-                    use_decode_trace=True,
-                    use_2cq=True,
-                    speaker_id=0,
-                    **common_kwargs,
-                )
-            else:
-                tt_out = tt_model.generate(
-                    input_ids=_torch_ids_to_ttnn(mesh_device, input_ids),
-                    attention_mask=_torch_ids_to_ttnn(mesh_device, enc_attn),
-                    use_kv_cache=True,
-                    use_decode_trace=True,
-                    use_2cq=True,
-                    **common_kwargs,
-                )
-            _release_tt_out(tt_out, generate_speech=generate_speech)
-
-        # Warmup (compiles + captures decode trace + warms prepared caches).
-        profiler.clear()
-        profiler.start("warmup")
-        _call_generate()
-        profiler.end("warmup")
-
-        # Single steady-state measurement (the trace is already captured).
-        profiler.start("inference")
-        _call_generate()
-        profiler.end("inference")
-
-    num_devices = int(mesh_device.shape[0]) * int(mesh_device.shape[1])
+@pytest.mark.models_device_performance_bare_metal
+@pytest.mark.parametrize("task,generate_speech,max_new_tokens", _task_params())
+def test_perf_device_bare_metal_seamless(task: str, generate_speech: bool, max_new_tokens: int):
+    """Per-task device-bound perf via tracy on the eager (no-trace) forward."""
     batch_size = 1
-    warmup_time = profiler.get("warmup")
-    inference_time = profiler.get("inference")
-    tokens_per_sec = _MAX_NEW_TOKENS / inference_time
+    subdir = f"ttnn_seamless_m4t_v2_large_{task}"
+    command = f"pytest --timeout=0 {_FWD_TEST}::test_{task} -sv"
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
+    duration_cols = [c + " DURATION [ns]" for c in cols]
+    samples_cols = [c + " SAMPLES/S" for c in cols]
 
-    post_processed_results = {
-        "INFERENCE TIME [s]": inference_time,
-        "WARMUP TIME [s]": warmup_time,
-        "AVG TOKENS/S": tokens_per_sec,
-        "MAX_NEW_TOKENS": _MAX_NEW_TOKENS,
-    }
+    # Clear the side-channel file before the inner run so we don't pick up a stale sample count
+    # if the speech inner test failed early.
+    sample_path = _SAMPLES_PATH_FMT.format(task=task)
+    if generate_speech and os.path.exists(sample_path):
+        os.remove(sample_path)
+
+    # ``check_test_return_code=False``: the inner pytest occasionally segfaults during teardown
+    # on speech-output paths *after* the test reports PASSED — by then tracy has already written
+    # the per-op CSV, so we want the post-processing to proceed even on non-zero exit.
+    clear_profiler_runtime_artifacts()
+    run_device_profiler(
+        command,
+        subdir,
+        check_test_return_code=False,
+        device_analysis_types=["device_kernel_duration"],
+        op_support_count=_TASK_OP_SUPPORT_COUNT[task] * _MAX_MESH_DEVICES,
+    )
+
+    # Tracy's ``post_process_ops_log(sum_vals=True)`` sums kernel durations across *every row* in
+    # the OPs CSV — under TP all mesh devices run the same op in parallel, so the sum is N× the
+    # per-device wall-clock-equivalent kernel time. Divide by ``num_devices`` to get the floor.
+    raw = post_process_ops_log(subdir, duration_cols)
+    num_devices = _MAX_MESH_DEVICES
+    post_processed_results = {}
+    for s_col, d_col in zip(samples_cols, duration_cols):
+        per_device_ns = raw[d_col] / num_devices
+        post_processed_results[f"AVG {s_col}"] = get_samples_per_s(per_device_ns, batch_size)
+        post_processed_results[f"MIN {s_col}"] = get_samples_per_s(per_device_ns, batch_size)
+        post_processed_results[f"MAX {s_col}"] = get_samples_per_s(per_device_ns, batch_size)
+        post_processed_results[f"AVG {d_col}"] = per_device_ns
+        post_processed_results[f"MIN {d_col}"] = per_device_ns
+        post_processed_results[f"MAX {d_col}"] = per_device_ns
+
+    kernel_ns = post_processed_results.get("AVG DEVICE KERNEL DURATION [ns]", 0.0)
+    kernel_seconds = kernel_ns / 1e9
+
+    # Pick the right throughput unit per task type:
+    #   text outputs  → tokens/sec  = max_new_tokens / per-device kernel time
+    #   speech outputs → samples/sec = num_audio_samples / per-device kernel time
+    # ``num_audio_samples`` comes from the side-channel file written by the inner forward test.
+    if generate_speech:
+        try:
+            with open(sample_path) as f:
+                num_samples = int(f.read().strip())
+        except FileNotFoundError:
+            logger.warning(f"Speech sample-count side-channel missing at {sample_path}; reporting 0")
+            num_samples = 0
+        throughput = (num_samples / kernel_seconds) if kernel_seconds > 0 else 0.0
+        throughput_unit = "samples/s"
+        workload_str = f"{num_samples} audio samples"
+        post_processed_results["AVG SAMPLES/S"] = throughput
+        post_processed_results["NUM_AUDIO_SAMPLES"] = num_samples
+    else:
+        throughput = (max_new_tokens / kernel_seconds) if kernel_seconds > 0 else 0.0
+        throughput_unit = "tokens/s"
+        workload_str = f"{max_new_tokens} new tokens"
+        post_processed_results["AVG TOKENS/S"] = throughput
+        post_processed_results["MAX_NEW_TOKENS"] = max_new_tokens
+
+    logger.info(f"\nTest: {command}\n{json.dumps(post_processed_results, indent=4)}")
     print(f"\n{'='*60}")
     print(f"Seamless M4T v2 Large Device Performance ({task.upper()})")
     print(f"{'='*60}")
     print(
-        f"  Measured: {tokens_per_sec:.2f} tokens/s  "
-        f"({inference_time * 1000:.1f} ms wall-clock, {_MAX_NEW_TOKENS} new tokens, TP={num_devices})"
+        f"  Measured: {throughput:.2f} {throughput_unit}  "
+        f"({kernel_ns / 1e6:.2f} ms per-device kernel, {workload_str}, TP={num_devices})"
     )
     print(f"{'='*60}\n")
-    logger.info(
-        f"SeamlessM4Tv2 device-perf task={task} TP={num_devices} "
-        f"warmup={warmup_time:.2f}s inference={inference_time:.4f}s "
-        f"tokens_per_sec={tokens_per_sec:.2f}"
-    )
 
     prep_device_perf_report(
         model_name=f"ttnn_seamless_m4t_v2_large_batch{batch_size}_{task}",
         batch_size=batch_size,
         post_processed_results=post_processed_results,
         expected_results={},
-        comments=f"seamless_m4t_v2_large_{task}_TP{num_devices}_2cq_trace_max_new_tokens{_MAX_NEW_TOKENS}",
+        comments=f"seamless_m4t_v2_large_{task}_TP{num_devices}_eager_max_new_tokens{max_new_tokens}",
     )
