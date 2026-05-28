@@ -6,6 +6,7 @@
 #include "impl/context/metal_context.hpp"
 #include "system_memory_manager.hpp"
 #include <tt-metalium/tt_align.hpp>
+#include <dlfcn.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -42,6 +43,49 @@ namespace tt::tt_metal {
 void on_dispatch_timeout_detected();
 
 namespace {
+
+using TTSimClockAllDevicesFn = void (*)(uint32_t);
+
+void* open_ttsim_handle() {
+    void* handle = nullptr;
+    if (const char* sim_path = std::getenv("TT_METAL_SIMULATOR")) {
+#ifdef RTLD_NOLOAD
+        handle = dlopen(sim_path, RTLD_NOW | RTLD_NOLOAD);
+#endif
+    }
+    if (handle == nullptr) {
+        handle = RTLD_DEFAULT;
+    }
+    return handle;
+}
+
+TTSimClockAllDevicesFn get_ttsim_clock_all_devices() {
+    static TTSimClockAllDevicesFn fn = [] {
+        void* handle = open_ttsim_handle();
+        return reinterpret_cast<TTSimClockAllDevicesFn>(dlsym(handle, "libttsim_clock_all_devices"));
+    }();
+    return fn;
+}
+
+uint32_t get_ttsim_cq_wait_clock_cycles() {
+    static uint32_t cycles = [] {
+        if (const char* env = std::getenv("TT_METAL_SIMULATOR_CQ_WAIT_CLOCKS")) {
+            return static_cast<uint32_t>(std::stoul(env));
+        }
+        return 1000u;
+    }();
+    return cycles;
+}
+
+void pump_ttsim_clock_if_enabled(ContextId context_id) {
+    auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
+    if (!ctx.rtoptions().get_simulator_enabled()) {
+        return;
+    }
+    if (auto* clock_all_devices = get_ttsim_clock_all_devices()) {
+        clock_all_devices(get_ttsim_cq_wait_clock_cycles());
+    }
+}
 
 bool wrap_ge(uint32_t a, uint32_t b) {
     // Signed Diff uses 2's Complement to handle wrap
@@ -732,7 +776,6 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     // Handler for the timeout
     auto on_timeout = [this, &exit_condition]() {
         exit_condition.store(true);
-
         tt::tt_metal::MetalContext::instance(this->context_id).on_dispatch_timeout_detected();
 
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
