@@ -323,12 +323,14 @@ def vision_linear(
     dtype=ttnn.bfloat16,
     activation=None,
     keep_sharded: bool = False,
+    output_memory_config: ttnn.MemoryConfig | None = None,
 ) -> ttnn.Tensor:
     """Run ``ttnn.linear`` with a vision matmul preset (program + memory configs).
 
-    By default the output is converted back to DRAM interleaved (most downstream
-    vision ops expect that). Set ``keep_sharded=True`` to return the raw sharded
-    output if the next op can consume it directly.
+    By default the post-matmul interleaved output is DRAM (most downstream vision
+    ops expect that). Pass ``output_memory_config=ttnn.L1_MEMORY_CONFIG`` to keep
+    it in L1 instead — useful when the next op also lives in L1 (avoids DRAM
+    round-trips). ``keep_sharded=True`` returns the raw sharded output untouched.
     """
     in0 = x
     if _needs_in0_prepare(preset):
@@ -347,9 +349,9 @@ def vision_linear(
     if keep_sharded:
         return out
 
-    # Downstream vision ops (SDPA, norms, elementwise) expect interleaved DRAM.
+    target = output_memory_config if output_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
     if preset.out_memory_config.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-        out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
-    elif preset.out_memory_config != ttnn.DRAM_MEMORY_CONFIG:
-        out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.sharded_to_interleaved(out, target)
+    elif preset.out_memory_config != target:
+        out = ttnn.to_memory_config(out, target)
     return out
