@@ -57,6 +57,6 @@ Final multi-chip evidence should show:
 - Warmed trace replay for decode on the target mesh.
 - Determinism or stress coverage appropriate to the implementation risk.
 - Runtime fallback audit remains clean.
-- Watcher-clean run (if it has a false positive explain why it's a false positive)
+- Watcher-clean run (`export TT_METAL_WATCHER=10`). Iif it has a false positive explain why it's a false positive.
 - Warmed single-chip baseline and multi-chip latency, speedup, and efficiency.
 - `tt-perf-report` output with the main communication, DRAM, compute, and data-movement findings.

@@ -8,7 +8,7 @@ user_invocable: true
 
 ## Mission Context
 
-Read `.agents/notes/model-bringup-mission.md` first. This stage starts from a working decoder and turns it into a model that can be driven end-to-end on real weights! The important outcome is a full, working model with a generator.
+Read `.agents/notes/model-bringup-mission.md` first. This stage starts from a working decoder and turns it into a model that can be driven end-to-end on real weights! The important outcome is a full, working model with a generator and vLLM integration.
 
 ## Your Part
 
@@ -133,6 +133,8 @@ The first two are scored numerically (top-1 / top-5 / top-100). The third — `r
 You must also run and generate the following performance figures from warmed-up sessions with sampling on-device enabled:
 1. 128-token prefill time-to-first-token (ms)
 2. End-to-end decode t/s/u (average over next 32 tokens following above prefill, as observed at the host)
+
+Before treating productize as done, do a run with watcher enabled and record the status. Use `TT_METAL_WATCHER=10`. You can use `run_autoregressive`.
 
 ### vLLM Server Integration Test
 
