@@ -19,8 +19,13 @@ class TtSigLip2VisionEncoder:
         self.num_layers = config["num_hidden_layers"]
         
     def __call__(self, pixel_values):
+        # Tilize input
+        pixel_values = ttnn.to_layout(pixel_values, ttnn.TILE_LAYOUT)
         x = ttnn.linear(pixel_values, self.parameters.patch_embed.weight)
+        # Vision transformer layers should go here
         for i in range(self.num_layers):
+            # Placeholder for transformer block
+            # In a real implementation, this would call a TtSigLip2Block
             x = x 
         return x
 
@@ -59,12 +64,19 @@ class TtLfm2AttentionBlock:
         self.input_layernorm = TtLfm2RMSNorm(device, config["hidden_size"], config["norm_eps"], parameters.input_layernorm)
         self.post_attention_layernorm = TtLfm2RMSNorm(device, config["hidden_size"], config["norm_eps"], parameters.post_attention_layernorm)
 
-    def __call__(self, x):
+    def __call__(self, x, layer_past=None, use_cache=False):
         residual = x
         x = self.input_layernorm(x)
         query_states = ttnn.linear(x, self.parameters.self_attn.q_proj.weight)
         key_states = ttnn.linear(x, self.parameters.self_attn.k_proj.weight)
         value_states = ttnn.linear(x, self.parameters.self_attn.v_proj.weight)
+        
+        if use_cache and layer_past is not None:
+            # Infrastructure for KV caching
+            # k_cache, v_cache = layer_past
+            # ttnn.fill_cache or equivalent would be implemented here
+            pass
+
         attn_output = ttnn.linear(query_states, self.parameters.self_attn.o_proj.weight)
         x = ttnn.add(residual, attn_output)
         residual = x
@@ -89,11 +101,29 @@ class TtLfm2VlModel:
             else:
                 self.layers.append(TtLfm2AttentionBlock(device, config, parameters.layers[i]))
 
-    def __call__(self, pixel_values, input_ids):
+    def __call__(self, pixel_values, input_ids, layer_past=None, use_cache=False):
         img_embs = self.vision_encoder(pixel_values)
         img_tokens = self.projector(img_embs)
         text_tokens = ttnn.embedding(input_ids, self.parameters.embed_tokens.weight)
-        x = ttnn.concat([img_tokens, text_tokens], dim=1)
-        for layer in self.layers:
-            x = layer(x)
+        
+        # Interleaving logic: Replace placeholder tokens with image tokens
+        IMAGE_TOKEN_ID = 32000
+        input_ids_cpu = ttnn.to_torch(input_ids).to(torch.int32)
+        
+        mask = (input_ids_cpu == IMAGE_TOKEN_ID)
+        if mask.any():
+            text_tokens_cpu = ttnn.to_torch(text_tokens)
+            img_tokens_cpu = ttnn.to_torch(img_tokens)
+            # Replace placeholders in the text sequence with projected vision tokens
+            text_tokens_cpu[mask] = img_tokens_cpu.view(-1, img_tokens_cpu.shape[-1])
+            x = ttnn.from_torch(text_tokens_cpu, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        else:
+            # Fallback: simple concatenation if no placeholders found
+            x = ttnn.concat([img_tokens, text_tokens], dim=1)
+
+        for i, layer in enumerate(self.layers):
+            if isinstance(layer, TtLfm2AttentionBlock):
+                x = layer(x, layer_past=layer_past[i] if layer_past else None, use_cache=use_cache)
+            else:
+                x = layer(x)
         return x

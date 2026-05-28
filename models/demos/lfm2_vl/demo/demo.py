@@ -45,6 +45,9 @@ def run_lfm2_vl_demo():
     pixel_values = torch.randn(batch_size, config["vision_config"]["num_patches"], 3 * 16 * 16)
     tt_pixel_values = ttnn.from_torch(pixel_values, device=device)
     input_ids = torch.randint(0, config["vocab_size"], (batch_size, seq_len))
+    # Place image tokens (placeholder ID 32000) to test interleaving
+    num_image_tokens = config["vision_config"]["num_patches"]
+    input_ids[0, 10:10+num_image_tokens] = 32000
     tt_input_ids = ttnn.from_torch(input_ids, device=device)
     print("Running LFM2.5-VL Inference on Tenstorrent Device...")
     output = model(tt_pixel_values, tt_input_ids)
