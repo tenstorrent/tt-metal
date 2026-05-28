@@ -59,6 +59,7 @@ from ttml.common.utils import (
     round_up_to_tile,
     get_tt_metal_runtime_root,
     create_optimizer,
+    get_available_device_memory_in_bytes,
     get_loss_over_devices,
     summary,
 )
@@ -473,19 +474,29 @@ def train_step(
     # When mask is None, SDPA kernel uses native causal masking (AttentionMaskType::Causal)
     logits = model(input_tokens, mask)
 
-    # Compute loss
-    loss = ttml.ops.loss.cross_entropy_loss(logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN)
+    # Compute loss.  When TP is enabled the LM head returns vocab-sharded
+    # logits ([B,1,S,V/tp_size] per device), so route through
+    # vocab_parallel_cross_entropy_loss.
+    mesh = ttml.mesh()
+    if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
+        loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+            logits, target_tokens, cluster_axis=mesh.axis_index("tp")
+        )
+    else:
+        loss = ttml.ops.loss.cross_entropy_loss(logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN)
 
     # Scale loss for gradient accumulation
     loss = gradient_accumulator.scale(loss)
 
-    # Under DDP each rank produced loss on its own microbatch, so the
-    # printed/accumulated value must be the mean across the "dp" axis.
-    # get_loss_over_devices internally builds a concat_mesh_to_tensor
-    # composer and takes the mean, mirroring how the C++ trainer logs
-    # per-rank loss when DDP is on.
-    mesh = ttml.mesh()
-    if mesh.has_axis("dp") and mesh.axis_size("dp") > 1:
+    # Any multi-device mesh — DDP, TP, or DP+TP — produces a loss tensor
+    # with one host buffer per device (per-rank values under DDP; TP-reduced
+    # replicas under TP). Tensor.item() asserts buffers.size()==1, so we
+    # must compose across the mesh before reading to host.
+    # get_loss_over_devices builds a concat_mesh_to_tensor composer and
+    # takes the mean, mirroring the C++ trainer's IdentityComposer-then-
+    # average path in main.cpp::get_loss_value (works for replicas too,
+    # since mean of N identical values equals any one).
+    if mesh.num_devices() > 1:
         loss_float = float(get_loss_over_devices(loss))
     else:
         loss_float = get_loss_value(loss)
@@ -1651,6 +1662,10 @@ def main():
             num_devices = ttml.mesh().num_devices()
             peak_tflops = get_device_peak_tflops_bf16() * num_devices
             print(f"  - Mesh peak: {peak_tflops:.1f} TFLOPS (bf16, {num_devices} devices)")
+
+        # Get the available device DRAM
+        available_dram = get_available_device_memory_in_bytes()
+        print(f"  - Available Device Memory: {available_dram/(1024*1024):,.2f} MB")
 
         # Training loop
         start_time = time.time()

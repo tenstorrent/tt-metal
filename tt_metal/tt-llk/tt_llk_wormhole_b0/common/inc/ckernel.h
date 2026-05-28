@@ -594,9 +594,6 @@ inline void record_kernel_runtime(std::uint64_t kernel_runtime)
     debug_mailbox_base[mailbox_end - 1] = (kernel_runtime >> 48) & 0xffff;
 }
 
-void debug_dump(const std::uint8_t *data, std::uint32_t byte_size);
-void debug_dump_seek(std::uint8_t offset);
-
 inline void init_prng_seed(const std::uint32_t seed)
 {
     // The seed for PRNG should at least be initialized during chip boot-up time.

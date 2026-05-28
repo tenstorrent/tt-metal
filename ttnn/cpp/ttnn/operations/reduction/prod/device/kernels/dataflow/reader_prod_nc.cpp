@@ -6,9 +6,9 @@
 #include <cstring>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 
 void kernel_main() {
@@ -30,8 +30,8 @@ void kernel_main() {
     std::memcpy(&scaler, &one_f, sizeof(uint32_t));  // Alternative to std::bit_cast
     fill_cb_with_value(cb_id_in1, scaler);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(tt::CBIndex::c_0);
+    Noc noc;
+    CircularBuffer cb_in0(tt::CBIndex::c_0);
 
     uint32_t input_tile_bytes = get_tile_size(cb_in0.get_cb_id());
     const auto dram_input_addrg = TensorAccessor(dram_input_addrg_args, input_addr);

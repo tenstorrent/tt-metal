@@ -11,7 +11,7 @@
 
 #include <cstdint>
 
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 // batchnorm_bcast_tiles: For each output tile in [tile_start, freq), computes batch-norm on tiles from cb_other
 // (input) broadcast against cb_bcast (batch mean). First builds 1/sqrt(batch_var + eps) in cb_den, then per tile:
@@ -42,16 +42,16 @@ ALWI uint32_t batchnorm_bcast_tiles(
     auto cb_affine_or_out = (weight_has_value || bias_has_value) ? cb_tmp_1 : cb_output_0;
     auto cb_scaled_output = (bias_has_value) ? cb_tmp_1 : cb_output_0;
 
-    experimental::CircularBuffer cb_bcast_obj(cb_bcast);
-    experimental::CircularBuffer cb_other_obj(cb_other);
-    experimental::CircularBuffer cb_batch_var_obj(cb_batch_var);
-    experimental::CircularBuffer cb_den_obj(cb_den);
-    experimental::CircularBuffer cb_weight_obj(cb_weight);
-    experimental::CircularBuffer cb_bias_obj(cb_bias);
-    experimental::CircularBuffer cb_tmp_1_obj(cb_tmp_1);
-    experimental::CircularBuffer cb_output_0_obj(cb_output_0);
-    experimental::CircularBuffer cb_affine_or_out_obj(cb_affine_or_out);
-    experimental::CircularBuffer cb_scaled_output_obj(cb_scaled_output);
+    CircularBuffer cb_bcast_obj(cb_bcast);
+    CircularBuffer cb_other_obj(cb_other);
+    CircularBuffer cb_batch_var_obj(cb_batch_var);
+    CircularBuffer cb_den_obj(cb_den);
+    CircularBuffer cb_weight_obj(cb_weight);
+    CircularBuffer cb_bias_obj(cb_bias);
+    CircularBuffer cb_tmp_1_obj(cb_tmp_1);
+    CircularBuffer cb_output_0_obj(cb_output_0);
+    CircularBuffer cb_affine_or_out_obj(cb_affine_or_out);
+    CircularBuffer cb_scaled_output_obj(cb_scaled_output);
 
     // 1/(sqrt(batch_var + eps)) = cb_den
     cb_den_obj.reserve_back(onetile);
@@ -162,7 +162,7 @@ ALWI uint32_t batchnorm_bcast_tiles(
 
         if constexpr (NeedsOutputTypecast) {
             cb_output_0_obj.wait_front(onetile);
-            experimental::CircularBuffer cb_output_final_obj(cb_output_final);
+            CircularBuffer cb_output_final_obj(cb_output_final);
             cb_output_final_obj.reserve_back(onetile);
 
             tile_regs_acquire();
@@ -231,7 +231,7 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     constexpr uint32_t onetile = 1;
-    experimental::CircularBuffer cb_eps_obj(cb_eps);
+    CircularBuffer cb_eps_obj(cb_eps);
     cb_eps_obj.wait_front(onetile);
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {

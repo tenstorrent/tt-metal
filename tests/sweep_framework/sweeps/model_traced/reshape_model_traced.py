@@ -132,7 +132,9 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(
+        kwargs, exclude={"arg1", "arg2", "input_a_storage_type"}, output_memory_config=output_memory_config
+    )
 
     # v2 tracer puts target shape in arg1 or shape; arg2 may hold a
     # secondary shape (e.g. padded output shape) used by some internal paths.
@@ -189,11 +191,37 @@ def run(
     if arg2 is not None and not isinstance(arg2, tuple):
         arg2 = None
 
-    in_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
+    import json as _json_r
+
+    in_shape = (
+        tuple(input_a_shape)
+        if isinstance(input_a_shape, (list, tuple))
+        else (
+            tuple(_json_r.loads(input_a_shape.replace("(", "[").replace(")", "]")))
+            if isinstance(input_a_shape, str) and len(input_a_shape) < 200
+            else input_a_shape
+        )
+    )
 
     # Ensure shape is at least 2D for TILE_LAYOUT compatibility
     if len(in_shape) == 1 and input_a_layout == ttnn.TILE_LAYOUT:
         in_shape = (1, in_shape[0])
+
+    # Parse string dtype/layout if needed
+    if isinstance(input_a_dtype, str):
+        from tests.sweep_framework.master_config_loader_v2 import parse_dtype
+
+        input_a_dtype = parse_dtype(input_a_dtype) or ttnn.bfloat16
+    if isinstance(input_a_layout, str):
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        input_a_layout = parse_dict_value("layout", {"type": "Layout", "repr": input_a_layout}) or ttnn.TILE_LAYOUT
+
+    # Parse memory_config dict if needed
+    if isinstance(input_a_memory_config, dict):
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config
+
+        input_a_memory_config = dict_to_memory_config(input_a_memory_config) or ttnn.DRAM_MEMORY_CONFIG
 
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         in_shape
@@ -222,7 +250,10 @@ def run(
     except RuntimeError:
         torch_output = torch_input  # placeholder; trace still captured even if PCC fails
 
-    is_host = storage_type and "HOST" in str(storage_type)
+    _st = kwargs.get("input_a_storage_type", storage_type)
+    if _st == "__ABSENT__":
+        _st = storage_type
+    is_host = _st and "HOST" in str(_st)
 
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
@@ -254,7 +285,16 @@ def run(
                 memory_config=input_a_memory_config,
             )
     else:
-        input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
+            from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology
+
+            try:
+                apply_tensor_placement_topology(input_tensor, input_a_tensor_placement, (1, 2))
+            except Exception:
+                pass  # Intentionally ignored: topology application is best-effort, fallback to default
+        else:
+            input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
     # If master traced arg2 as a Shape object, wrap it back so the tracer

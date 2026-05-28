@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 
-from models.common.utility_functions import torch2tt_tensor
+from models.common.utility_functions import torch2tt_tensor, run_for_blackhole
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42
@@ -50,11 +50,6 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
             gamma = torch.rand(test_shape[3]) * 2 - 1
             beta = torch.rand(test_shape[3]) * 2.0 - 1.1
 
-        # Build gamma_t/beta_t with torch2tt_tensor so the ttnn tensors keep their original
-        # logical width and only tile padding is added. Can't use pad_by_zero here because it
-        # zero-pads in torch before constructing the ttnn tensors, expanding the ***logical***
-        # width to the tile boundary, producing gamma and beta whose logical widths don't match
-        # the input's logical width.
         gamma_t = torch2tt_tensor(gamma, device, tt_memory_config=in0_mem_config, tt_dtype=gamma_dtype)
         beta_t = torch2tt_tensor(beta, device, tt_memory_config=in0_mem_config, tt_dtype=gamma_dtype)
 
@@ -162,6 +157,12 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 compute_kernel_config=compute_kernel_config,
             )
 
+        # BFLOAT8_B tensors are TILE-only (shared exponent in 16-elem sub-blocks
+        # is undefined under ROW_MAJOR). Round-trip via BFLOAT16 for host inspection.
+        # Pre-PR #42770, fill_implicit_tile_padding leaked BFLOAT16 on rank-4 BFP8
+        # inputs, silently upcasting in0_t and producing BFLOAT16 layer_norm output.
+        if ttz.dtype == ttnn.bfloat8_b:
+            ttz = ttnn.typecast(ttz, ttnn.bfloat16)
         tt_got_back = ttz.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
         pt_in = in0 + in1 if test_id <= 5 else in0
@@ -172,13 +173,24 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
 
         ref_lnorm = ref_fn(pt_in, gamma.flatten(), beta.flatten(), epsf)
 
+        # BFLOAT8_B layer_norm uses a shared exponent per 16-element sub-block, so its
+        # accuracy on small inner dims (e.g. width=42 padded to tile=64, ~1k elements)
+        # is fundamentally lower than BFLOAT16/FLOAT32. Worst observed across the 12
+        # (test_id, shape) cases: ATOL=0.86, relFro=0.186, PCC=0.984. Pre-PR #42770
+        # these never triggered because the fill_implicit_tile_padding dtype leak
+        # silently ran the norm in BFLOAT16.
+        if in_dtype == ttnn.bfloat8_b:
+            pcc_threshold, atol, frobenius_threshold = 0.98, 1.0, 0.22
+        else:
+            pcc_threshold, atol, frobenius_threshold = 0.999, 0.098, 0.016
+
         assert_numeric_metrics(
             ref_lnorm,
             tt_got_back,
-            pcc_threshold=0.999,
+            pcc_threshold=pcc_threshold,
             rtol=3.266,
-            atol=0.098,
-            frobenius_threshold=0.016,
+            atol=atol,
+            frobenius_threshold=frobenius_threshold,
         )
 
 
@@ -231,6 +243,88 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
 def test_layernorm_mix_precision(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device):
     torch.manual_seed(0)
     run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device)
+
+
+@run_for_blackhole("blackhole specific test")
+@pytest.mark.parametrize(
+    "grid_end, shard_orientation",
+    [
+        ((7, 9), ttnn.ShardOrientation.ROW_MAJOR),
+        ((9, 7), ttnn.ShardOrientation.COL_MAJOR),
+    ],
+    ids=["row_major_8x10", "col_major_10x8"],
+)
+def test_layer_norm_block_sharded_height_pad(device, grid_end, shard_orientation):
+    """
+    Test for feature request issue #43801: block-sharded layer_norm where Mt (height in tiles)
+    is not evenly divisible by num_cores in the H direction, so the bottom row of
+    cores carries trailing shard-pad tiles.
+
+    Tensor [32, 1, 96, 512] (Mt=96, Kt=16) sharded [320, 64]:
+      - ROW_MAJOR on 8x10 grid: num_cores_r=10, block_h=10, 96/10=9 (4 trailing pad tiles).
+      - COL_MAJOR on 10x8 grid: num_cores_c=10, block_h=10, same 4-tile pad in H.
+    The op previously rejected both with a strict Mt/num_cores == block_h check;
+    relaxing to div_up is correct because the kernel processes block_h tile-rows
+    per core regardless of overall Mt.
+    """
+    torch.manual_seed(0)
+    channels = 512
+
+    x_torch = torch.randn(32, 1, 96, channels, dtype=torch.bfloat16)
+    weight_torch = torch.randn(channels, dtype=torch.bfloat16)
+    bias_torch = torch.randn(channels, dtype=torch.bfloat16)
+    epsilon = 1e-5
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_end[0], grid_end[1]))})
+    shard_spec = ttnn.ShardSpec(shard_grid, [320, 64], shard_orientation)
+    in_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    x = ttnn.from_torch(
+        x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mem_config
+    )
+    weight = ttnn.from_torch(
+        weight_torch.reshape(1, 1, channels // 32, 32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    bias = ttnn.from_torch(
+        bias_torch.reshape(1, 1, channels // 32, 32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+    )
+
+    out = ttnn.layer_norm(
+        x,
+        weight=weight,
+        bias=bias,
+        epsilon=epsilon,
+        compute_kernel_config=compute_kernel_config,
+    )
+    out_torch = ttnn.to_torch(out)
+
+    ref = torch.nn.functional.layer_norm(
+        x_torch.to(torch.float32), [channels], weight_torch.to(torch.float32), bias_torch.to(torch.float32), epsilon
+    ).to(torch.bfloat16)
+
+    assert_numeric_metrics(
+        ref,
+        out_torch,
+        pcc_threshold=0.999,
+        rtol=0.006,
+        atol=0.018,
+        frobenius_threshold=0.003,
+    )
 
 
 @pytest.mark.parametrize("h", [22, 1632, 8192, 16384])

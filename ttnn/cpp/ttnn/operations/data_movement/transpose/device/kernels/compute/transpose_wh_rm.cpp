@@ -9,7 +9,7 @@
 #include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 template <
     uint32_t Wt,
@@ -20,7 +20,7 @@ template <
     uint32_t pack_num_pages_last_col,
     uint32_t pack_num_pages_last_row_col,
     uint32_t cb_out>
-ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, experimental::CircularBuffer& cb_out_buf) {
+ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, CircularBuffer& cb_out_buf) {
     uint32_t tile_idx = 0;
 
     transpose_wh_init_short(cb_tilize);
@@ -66,7 +66,7 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
 }
 
 template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t cb_out>
-ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, experimental::CircularBuffer& cb_out_buf) {
+ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, CircularBuffer& cb_out_buf) {
     uint32_t tile_idx = 0;
 
     transpose_wh_init_short(cb_tilize);
@@ -134,8 +134,8 @@ void kernel_main() {
     constexpr auto cb_out_idx = tt::CBIndex::c_16;
 #endif
 
-    experimental::CircularBuffer cb_tilize_buf(cb_tilize);
-    experimental::CircularBuffer cb_out(cb_out_idx);
+    CircularBuffer cb_tilize_buf(cb_tilize);
+    CircularBuffer cb_out(cb_out_idx);
 
     unary_op_init_common(cb_in, cb_out_idx);
 

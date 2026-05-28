@@ -10,7 +10,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // SPLIT REDUCE across Cores
@@ -54,7 +54,7 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_in = cb_in0;
 #endif
-    experimental::CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_in_obj(cb_in);
     constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
     constexpr uint32_t cb_scaler_global = tt::CBIndex::c_4;
     constexpr uint32_t cb_x = tt::CBIndex::c_24;  // x minus mean
@@ -68,11 +68,11 @@ void kernel_main() {
     constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;  // E[x^2] partials received from other cores
     const uint32_t cb_reduction_out = (!use_two_stage_reduce or is_second_stage_reader) ? cb_out : cb_ex2;
 
-    experimental::CircularBuffer cb_scaler_obj(cb_scaler);
-    experimental::CircularBuffer cb_x2_obj(cb_x2);
-    experimental::CircularBuffer cb_ex_partial2_obj(cb_ex_partial2);
-    experimental::CircularBuffer cb_scaler_global_obj(cb_scaler_global);
-    experimental::CircularBuffer cb_ex_external2_obj(cb_ex_external2);
+    CircularBuffer cb_scaler_obj(cb_scaler);
+    CircularBuffer cb_x2_obj(cb_x2);
+    CircularBuffer cb_ex_partial2_obj(cb_ex_partial2);
+    CircularBuffer cb_scaler_global_obj(cb_scaler_global);
+    CircularBuffer cb_ex_external2_obj(cb_ex_external2);
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
@@ -190,7 +190,7 @@ void kernel_main() {
         reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_ex_external2, cb_scaler_global, cb_reduction_out);
         pack_reconfig_data_format(cb_reduction_out);
-        experimental::CircularBuffer(cb_reduction_out)
+        CircularBuffer(cb_reduction_out)
             .reserve_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height
@@ -216,7 +216,7 @@ void kernel_main() {
             tile_regs_release();
         }
         reduce_uninit();
-        experimental::CircularBuffer(cb_reduction_out)
+        CircularBuffer(cb_reduction_out)
             .push_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
     }
 }

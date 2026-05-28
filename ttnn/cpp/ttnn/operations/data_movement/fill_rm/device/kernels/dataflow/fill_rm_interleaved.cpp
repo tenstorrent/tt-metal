@@ -4,9 +4,9 @@
 
 #include <cstdlib>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // Kernel args
@@ -35,8 +35,8 @@ void kernel_main() {
     // DEVICE_PRINT("fill_rm_8bank: NC={} H={} W={} fillH={} fillW={}\n", NC, H, W, fillH, fillW);
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in1(cb_id_in1);
     // How many bytes along a row in the original tensor
     uint32_t num_bytes_per_tile = get_tile_size(cb_id_in0);
     uint32_t num_bytes_per_tile_row = 64;
@@ -63,7 +63,7 @@ void kernel_main() {
     cb_in0.push_back(16);
     cb_in1.push_back(16);
 
-    experimental::Noc noc;
+    Noc noc;
     uint32_t nch_dst = 0;
     // input is NCH(Wt*32) unpadded RM
     for (uint32_t nc = 0; nc < NC; nc++) {

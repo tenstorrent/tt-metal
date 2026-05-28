@@ -22,25 +22,52 @@
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 struct ComputeConfiguration {
-    // Tensix hardware resource configuration (configured by compute kernels)
-    // Gen1 and Gen2 configurations are currently identical.
+    // Tensix hardware resource configuration for compute kernels.
+    // Gen1 and Gen2 configurations are identical.
+    //
+    // The Tensix Engine is a 3-stage pipeline (Unpack → Math → Pack).
+    // There are two math engines:
+    //  - FPU reads operands from the SrcA / SrcB register files (~19-bit),
+    //    writes to the Dest register file (16- or 32-bit, configurable).
+    //  - SFPU runs SIMD transcendentals. It can only access Dest.
+    // The fields below configure this pipeline.
 
+    // Number of multiply passes the FPU runs to use more mantissa bits
     MathFidelity math_fidelity = MathFidelity::HiFi4;
+
+    // Configure Dest register to hold 32-bit elements (instead of the default 16-bit)
     bool fp32_dest_acc_en = false;
+
+    // Dest register sync mode:
+    //   false (Half) — Dest is split in half; math and pack pipeline (double-buffered)
+    //   true  (Full) — Dest is one buffer; twice the capacity, no math/pack overlap
     bool dst_full_sync_en = false;
+
+    // Pack-side precision tweak for the Bfp8 block-float format.
+    // (Affects how exponents are reconciled when converting Dest contents to Bfp8)
     bool bfp8_pack_precise = false;
+
+    // Select fast-and-approximate vs slow-and-precise variants of SFPU transcendentals
     bool math_approx_mode = false;
 
-    // "Unpack to dest" mode must be specified on a per-DFB basis
-    // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
+    // Per-DFB choice of how the unpacker delivers data into the math stage:
+    //   Default          — unpack via SrcA/B regs (~19-bit elements; full FPU access)
+    //   UnpackToDestFp32 — unpack via Dest regs with full FP32 precision (SFPU only)
+    //
+    // This choice matters only when ALL of the following hold for the DFB binding:
+    //   1. The kernel is the consumer endpoint (unpacking data into the kernel)
+    //   2. The DFB's data format is Float32.
+    //   3. fp32_dest_acc_en is true (Dest must be 32-bit-wide to hold FP32).
+    //
+    // You MUST provide an unpack_to_dest_mode entry for the DFB if these conditions hold;
+    // failing to do so will trigger an error. Otherwise, supplying an entry is optional
+    // and only Default is accepted.
     using UnpackToDestModeEntry = std::pair<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
     std::vector<UnpackToDestModeEntry> unpack_to_dest_mode;
 };
 
 struct DataMovementConfiguration {
     // The DM configuration is different for Gen1 and Gen2.
-    // You can provide either a Gen1 config, a Gen2 config, or both.
-    // If your host code is intended to be architecture-agnostic, provide both.
 
     struct Gen1DataMovementConfig {
         tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
@@ -50,8 +77,12 @@ struct DataMovementConfiguration {
     std::optional<Gen1DataMovementConfig> gen1_data_movement_config = std::nullopt;
 
     struct Gen2DataMovementConfig {
-        // Currently, no configuration is needed for Gen2!
-        // The empty struct is still used to express a Gen2 DM kernel.
+        // Opt-out of DFB implicit sync (on a per-DFB basis)
+        //  - Implicit sync enables streamlined kernel-side syntax, but triggers ISR handling.
+        //  - Use this control to revert to legacy explicit sync APIs (for specific bound DFBs).
+        //  - This feature is mainly for debug purposes, or for backwards-compatible code style.
+        // Any bound DFB not listed here will use implicit sync by default.
+        std::vector<DFBSpecName> disable_implicit_sync_for;
     };
     std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
 };
@@ -75,6 +106,11 @@ using KernelSpecName = std::string;
 //  - Kernel argument schema (for arguments specified when the Program is enqueued)
 //  - Kernel argument bindings (for compile-time constant arguments)
 //  - The configuration of any hardware resources controlled by the kernel
+//
+// Specialization: A single kernel source may be represented by multiple KernelSpecs in
+// the same ProgramSpec — for example with different CTA bindings, different DFB endpoint
+// bindings, different semaphore bindings, etc. Each KernelSpec compiles independently
+// and is placed independently via WorkUnitSpec membership.
 //
 // Instancing: A KernelSpec is a *per-node template*. At runtime, one independent
 // instance runs on each node where the kernel is placed, with its own runtime arguments.

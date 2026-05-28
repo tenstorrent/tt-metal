@@ -8,7 +8,7 @@ import torch
 import ttnn
 import math
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
 
 pytestmark = pytest.mark.use_module_device
 
@@ -1096,7 +1096,10 @@ def test_to_memory_config_tilized_interleaved_to_nd_sharded_dtype_conversion(
     check_mem_config(output_tensor, sharded_memory_config, is_nd_sharded=True)
 
     output_torch = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_input, output_torch, pcc=pcc)
+    if input_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
+        assert_allclose(torch_input, output_torch, rtol=0.05, atol=0.025)
+    else:
+        assert_equal(torch_input, output_torch)
 
 
 # ---------------------------------------------------------------------------
@@ -1232,7 +1235,10 @@ def test_to_memory_config_tilized_interleaved_to_nd_sharded_dram_dtype_conversio
     check_mem_config(output_tensor, sharded_memory_config, is_nd_sharded=True)
 
     output_torch = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_input, output_torch, pcc=pcc)
+    if input_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
+        assert_allclose(torch_input, output_torch, rtol=0.05, atol=0.025)
+    else:
+        assert_equal(torch_input, output_torch)
 
 
 # ---------------------------------------------------------------------------
@@ -2284,7 +2290,10 @@ def test_to_memory_config_tilized_nd_sharded_to_interleaved_dtype_conversion(
     assert not output_tensor.is_sharded(), "Output tensor should be interleaved, not sharded"
     assert output_tensor.dtype == output_dtype, f"Expected dtype {output_dtype}, got {output_tensor.dtype}"
     output_torch = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_input, output_torch, pcc=pcc)
+    if input_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
+        assert_allclose(torch_input, output_torch, rtol=0.05, atol=0.025)
+    else:
+        assert_equal(torch_input, output_torch)
 
 
 # ---------------------------------------------------------------------------
@@ -2447,7 +2456,10 @@ def test_to_memory_config_tilized_legacy_2d_sharded_to_interleaved_dtype_convers
     assert not output_tensor.is_sharded(), "Output tensor should be interleaved, not sharded"
     assert output_tensor.dtype == output_dtype, f"Expected dtype {output_dtype}, got {output_tensor.dtype}"
     output_torch = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_input, output_torch, pcc=pcc)
+    if input_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
+        assert_allclose(torch_input, output_torch, rtol=0.05, atol=0.025)
+    else:
+        assert_equal(torch_input, output_torch)
 
 
 @pytest.mark.parametrize(
@@ -2612,7 +2624,7 @@ def test_to_memory_config_tile_interleaved_to_width_sharded_bf8(device):
     output_tensor = ttnn.to_memory_config(input_tensor, memory_config=output_mem_config)
 
     output_torch = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_input, output_torch, 0.9999)
+    assert_allclose(torch_input, output_torch, rtol=0.05, atol=0.025)
 
 
 @pytest.mark.parametrize(

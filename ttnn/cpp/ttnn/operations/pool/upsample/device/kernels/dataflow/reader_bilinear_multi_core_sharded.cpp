@@ -298,8 +298,8 @@ void kernel_main() {
     experimental::CB halo_cb(halo_cb_id);
     experimental::CB tilize_reduce_cb(tilize_reduce_cb_id);
     experimental::CB scalar_cb(in_scalar_cb_id);
-    experimental::Noc noc;
-    experimental::UnicastEndpoint self_ep;
+    Noc noc;
+    UnicastEndpoint self_ep;
 
     uint32_t l1_read_addr = halo_cb.get_read_ptr();
 

@@ -11,9 +11,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);     // Source address in dram
@@ -34,8 +34,8 @@ void kernel_main() {
 
     const auto src_a = TensorAccessor(src_args, src_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_inp_buf(cb_inp);
+    Noc noc;
+    CircularBuffer cb_inp_buf(cb_inp);
 
 #if FUSE_PRE_ADD
     const uint32_t res_addr = get_arg_val<uint32_t>(4);  // Residual source address in dram
@@ -43,7 +43,7 @@ void kernel_main() {
     const uint32_t src1_tile_bytes = get_tile_size(cb_res);
     constexpr auto res_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     const auto src_b = TensorAccessor(res_args, res_addr);
-    experimental::CircularBuffer cb_res_buf(cb_res);
+    CircularBuffer cb_res_buf(cb_res);
 #endif
 
     uint32_t inp_tile_idx = tile_offset;

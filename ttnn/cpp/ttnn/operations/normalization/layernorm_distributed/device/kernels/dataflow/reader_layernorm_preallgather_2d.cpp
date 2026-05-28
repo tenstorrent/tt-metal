@@ -12,12 +12,12 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/tensor.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);     // Source address in dram
@@ -48,11 +48,11 @@ void kernel_main() {
 
     const auto src_a = TensorAccessor(src_args, src_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_inp_buf(cb_inp);
-    experimental::CircularBuffer cb_out_buf(cb_out);
-    experimental::CircularBuffer cb_x2_merge_buf(cb_x2_merge);
-    experimental::Semaphore<> reducer_sem(reducer_semaphore_id);
+    Noc noc;
+    CircularBuffer cb_inp_buf(cb_inp);
+    CircularBuffer cb_out_buf(cb_out);
+    CircularBuffer cb_x2_merge_buf(cb_x2_merge);
+    Semaphore<> reducer_sem(reducer_semaphore_id);
 
 #if FUSE_PRE_ADD
     const uint32_t res_addr = get_arg_val<uint32_t>(8);  // Residual source address in dram
@@ -60,7 +60,7 @@ void kernel_main() {
     const uint32_t src1_tile_bytes = get_tile_size(cb_res);
     constexpr auto res_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     const auto src_b = TensorAccessor(res_args, res_addr);
-    experimental::CircularBuffer cb_res_buf(cb_res);
+    CircularBuffer cb_res_buf(cb_res);
 #endif
 
     // Generate constant tiles for reduce scalar
@@ -118,9 +118,9 @@ void kernel_main() {
     uint32_t o_write_size = BF16_TILE_BYTES;
     uint32_t worker_offset = o_write_size * y;
 
-    experimental::UnicastEndpoint reduce_ep;
+    UnicastEndpoint reduce_ep;
     noc.async_write(
-        experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(cb_out_buf),
+        use<CircularBuffer::AddrSelector::READ_PTR>(cb_out_buf),
         reduce_ep,
         o_write_size,
         {.offset_bytes = 0},

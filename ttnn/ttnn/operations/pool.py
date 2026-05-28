@@ -83,6 +83,19 @@ def global_avg_pool2d(input_tensor, *, memory_config=None, dtype=None):
     else:
         raise ValueError(f"global_avg_pool2d expects rank 2, 3, or 4 input, got rank {rank}")
 
+    # The avg_pool2d reduction fast path opts out for sharded inputs (it would force a
+    # sharded→interleaved round-trip that erases the win for direct MobileNetV2-style
+    # callers). For the global_avg_pool2d wrapper specifically, falling through to the
+    # sliding-window path is wrong: it goes through halo, which needs L1_SMALL, and the
+    # legacy C++ global_avg_pool2d device op called pool_sum directly with no halo —
+    # so callers don't reserve L1_SMALL. Convert sharded inputs to interleaved here to
+    # match legacy behavior. Buffer type is preserved.
+    if input_tensor.memory_config().is_sharded():
+        input_tensor = ttnn.to_memory_config(
+            input_tensor,
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, input_tensor.memory_config().buffer_type),
+        )
+
     out_dtype = dtype if dtype is not None else ttnn.bfloat16
     result = ttnn.avg_pool2d(
         input_tensor=input_tensor,

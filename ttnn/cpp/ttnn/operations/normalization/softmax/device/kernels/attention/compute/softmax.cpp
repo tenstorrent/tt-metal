@@ -9,7 +9,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/softmax.h"
 #include "api/compute/reduce.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // for scale+mask+softmax:
@@ -21,9 +21,9 @@
 
 void calc_numeric_stable(
     uint32_t Wt, uint32_t ndst, uint32_t cb_in, uint32_t cb_max_scaler, uint32_t cb_max, uint32_t cb_out) {
-    auto cb_in_obj = experimental::CircularBuffer(cb_in);
-    auto cb_max_obj = experimental::CircularBuffer(cb_max);
-    auto cb_out_obj = experimental::CircularBuffer(cb_out);
+    auto cb_in_obj = CircularBuffer(cb_in);
+    auto cb_max_obj = CircularBuffer(cb_max);
+    auto cb_out_obj = CircularBuffer(cb_out);
 
     // calculate max val per row
     compute_kernel_lib::reduce<
@@ -84,24 +84,24 @@ void kernel_main() {
     constexpr auto cb_recipsumexps = tt::CBIndex::c_7;
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_out0 = tt::CBIndex::c_11;
-    experimental::CircularBuffer cb_max_scaler_obj(cb_max_scaler);
-    experimental::CircularBuffer cb_sum_scaler_obj(cb_sum_scaler);
-    experimental::CircularBuffer cb_fused_scale_obj(cb_fused_scale);
-    experimental::CircularBuffer cb_fused_attn_obj(cb_fused_attn);
-    experimental::CircularBuffer cb_mask_padded_obj(cb_mask_padded);
-    experimental::CircularBuffer cb_exps_obj(cb_exps);
-    experimental::CircularBuffer cb_scale_mask_obj(cb_scale_mask);
-    experimental::CircularBuffer cb_recipsumexps_obj(cb_recipsumexps);
-    experimental::CircularBuffer cb_in0_obj(cb_in0);
-    experimental::CircularBuffer cb_out0_obj(cb_out0);
+    CircularBuffer cb_max_scaler_obj(cb_max_scaler);
+    CircularBuffer cb_sum_scaler_obj(cb_sum_scaler);
+    CircularBuffer cb_fused_scale_obj(cb_fused_scale);
+    CircularBuffer cb_fused_attn_obj(cb_fused_attn);
+    CircularBuffer cb_mask_padded_obj(cb_mask_padded);
+    CircularBuffer cb_exps_obj(cb_exps);
+    CircularBuffer cb_scale_mask_obj(cb_scale_mask);
+    CircularBuffer cb_recipsumexps_obj(cb_recipsumexps);
+    CircularBuffer cb_in0_obj(cb_in0);
+    CircularBuffer cb_out0_obj(cb_out0);
 #ifdef NUMERIC_STABLE
     constexpr auto cb_max = tt::CBIndex::c_8;
     constexpr auto cb_x = tt::CBIndex::c_10;
-    experimental::CircularBuffer cb_max_obj(cb_max);
+    CircularBuffer cb_max_obj(cb_max);
 #else
     constexpr auto cb_x = cb_exps;
 #endif
-    experimental::CircularBuffer cb_x_obj(cb_x);
+    CircularBuffer cb_x_obj(cb_x);
 
     cb_max_scaler_obj.wait_front(1);  // comes from the reader
     cb_sum_scaler_obj.wait_front(1);  // comes from the reader

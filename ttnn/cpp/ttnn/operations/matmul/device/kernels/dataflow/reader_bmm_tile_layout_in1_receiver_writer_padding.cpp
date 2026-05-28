@@ -7,10 +7,10 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // READER
@@ -96,13 +96,13 @@ void kernel_main() {
     const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
     constexpr const uint32_t output_tile_hw = get_tile_hw(cb_id_out0);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in1(cb_id_in1);
-    experimental::CircularBuffer cb_out(cb_id_out0);
-    experimental::Semaphore<> sender_sem(get_compile_time_arg_val(4));
-    experimental::Semaphore<> receiver_sem(get_compile_time_arg_val(5));
+    Noc noc;
+    CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_out(cb_id_out0);
+    Semaphore<> sender_sem(get_compile_time_arg_val(4));
+    Semaphore<> receiver_sem(get_compile_time_arg_val(5));
 #ifdef FUSE_BIAS
-    experimental::CircularBuffer cb_in3(cb_id_in3);
+    CircularBuffer cb_in3(cb_id_in3);
 #endif
 
     // WRITER
@@ -185,7 +185,7 @@ void kernel_main() {
                             for (uint32_t w = 0; w < out_subblock_w_; ++w) {
                                 if (bh < num_blocks_h_dim_ && bw < num_blocks_w_dim_) {
                                     noc.async_write(
-                                        experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(cb_out),
+                                        use<CircularBuffer::AddrSelector::READ_PTR>(cb_out),
                                         s,
                                         output_single_tile_size_bytes,
                                         {.offset_bytes = out_read_offset},

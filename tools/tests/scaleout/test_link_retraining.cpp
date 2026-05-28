@@ -63,9 +63,10 @@ protected:
         }
 
         // Initialize physical system descriptor
-        auto& driver_ref = const_cast<tt::umd::Cluster&>(**driver_);
         auto psd = tt::tt_metal::run_physical_system_discovery(
-            driver_ref, distributed_context_, context_->rtoptions().get_target_device());
+            *(*driver_)->get_cluster_description(),
+            distributed_context_,
+            context_->rtoptions().get_target_device());
         physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
         // Populate asic_id_to_chip_id map
@@ -172,10 +173,13 @@ TEST_F(DirectedRetrainingFixture, TestActiveEthRetraining) {
         });
 
     // Re-run discovery
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*get_driver());
     get_physical_system_descriptor().clear();
     auto new_psd = tt::tt_metal::run_physical_system_discovery(
-        driver_ref, distributed_context_, context_->rtoptions().get_target_device(), true, true);
+        *get_driver()->get_cluster_description(),
+        distributed_context_,
+        context_->rtoptions().get_target_device(),
+        true,
+        true);
     get_physical_system_descriptor().merge(std::move(new_psd));
 
     // Validate connectivity after link reset
@@ -223,10 +227,13 @@ TEST_F(DirectedRetrainingFixture, DISABLED_TestExitNodeRetraining) {
 
     distributed_context_->barrier();
     // Re-run discovery
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*get_driver());
     get_physical_system_descriptor().clear();
     auto new_psd = tt::tt_metal::run_physical_system_discovery(
-        driver_ref, distributed_context_, context_->rtoptions().get_target_device(), true, true);
+        *get_driver()->get_cluster_description(),
+        distributed_context_,
+        context_->rtoptions().get_target_device(),
+        true,
+        true);
     get_physical_system_descriptor().merge(std::move(new_psd));
 }
 

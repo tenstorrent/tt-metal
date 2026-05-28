@@ -5,9 +5,9 @@
 #include "gather_common.hpp"
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include <cstdint>
 /*
 This kernel implements a parallel gather operation along the last dimension (Wt_index) of the tensor, enabling support
@@ -83,10 +83,10 @@ void kernel_main() {
     constexpr uint32_t output_tensor_data_format_size =
         get_tile_size(output_tensor_cb_index) / get_tile_hw(input_tensor_cb_index);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer input_index_cb(input_index_tensor_cb_index);
-    experimental::CircularBuffer input_cb(input_tensor_cb_index);
-    experimental::CircularBuffer output_cb(output_tensor_cb_index);
+    Noc noc;
+    CircularBuffer input_index_cb(input_index_tensor_cb_index);
+    CircularBuffer input_cb(input_tensor_cb_index);
+    CircularBuffer output_cb(output_tensor_cb_index);
 
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {

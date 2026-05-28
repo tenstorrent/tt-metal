@@ -7,9 +7,9 @@
 // independently resolve their names to the same underlying sem ID.
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc_semaphore.h"
+#include "api/dataflow/noc_semaphore.h"
 
 void kernel_main() {
-    experimental::Semaphore s(sem::waiter);
+    Semaphore s(sem::waiter);
     s.wait(1);
 }
