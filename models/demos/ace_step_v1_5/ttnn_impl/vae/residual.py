@@ -150,7 +150,13 @@ class TtOobleckResidualUnit:
         # already DRAM (typical after snake / conv_t / prior residual — avoids ~25 μs dispatch).
         dram_mc = ttnn.DRAM_MEMORY_CONFIG
         if x.memory_config() != dram_mc:
+            x_l1 = x
             x = ttnn.to_memory_config(x, dram_mc)
+            if x is not x_l1:
+                try:
+                    ttnn.deallocate(x_l1)
+                except Exception:
+                    pass
 
         y = self.snake1(x)
         # conv1→snake2 TILE contract: return_sharded tries HEIGHT_SHARDED L1 when
