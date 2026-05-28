@@ -249,8 +249,8 @@ void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos)
 
     cb_reserve_back(cb_mask_in, total_read_tiles);
 
-    uint64_t noc_read_addr_base = get_noc_addr(get_read_ptr(cb_mask_in));
-    uint32_t q_write_ptr_base = get_read_ptr(cb_mask_in);
+    uint64_t noc_read_addr_base = get_noc_addr(get_write_ptr(cb_mask_in));
+    uint32_t q_write_ptr_base = get_write_ptr(cb_mask_in);
     constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
 
     for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
@@ -314,8 +314,8 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
 
     cb_reserve_back(cb_mask_in, total_read_tiles);
 
-    uint64_t noc_read_addr_base = get_noc_addr(get_read_ptr(cb_mask_in));
-    uint32_t q_write_ptr_base = get_read_ptr(cb_mask_in);
+    uint64_t noc_read_addr_base = get_noc_addr(get_write_ptr(cb_mask_in));
+    uint32_t q_write_ptr_base = get_write_ptr(cb_mask_in);
     constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
 
     for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
@@ -377,8 +377,8 @@ void generate_block_padding_mask(uint32_t Sk_chunk_t, uint32_t block_size) {
         fill_tile_partial<tile_bytes>(cb_block_pad_mask, i, block_size - 1, NEG_INF);
 
         // Copy to all heads
-        uint64_t noc_read_addr_base = get_noc_addr(get_read_ptr(cb_block_pad_mask));
-        uint32_t write_ptr_base = get_read_ptr(cb_block_pad_mask);
+        uint64_t noc_read_addr_base = get_noc_addr(get_write_ptr(cb_block_pad_mask));
+        uint32_t write_ptr_base = get_write_ptr(cb_block_pad_mask);
         for (uint32_t j = 1; j < PNHt; ++j) {
             copy_tile<tile_bytes>(noc_read_addr_base, write_ptr_base, i, j * Sk_chunk_t + i);
             if (j == PNHt - 1) {

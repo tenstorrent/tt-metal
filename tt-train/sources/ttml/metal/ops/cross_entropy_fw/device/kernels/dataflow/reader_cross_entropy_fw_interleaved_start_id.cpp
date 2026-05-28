@@ -102,7 +102,7 @@ void kernel_main() {
         cb_reserve_back(cb_target_logits, onetile);
         uint32_t l1_target_logits_write_addr = get_write_ptr(cb_target_logits);
 
-        auto target_indexes_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_target_idx));
+        auto target_indexes_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_target_indexes_write_addr);
         for (uint32_t h = 0; h < TILE_HEIGHT; ++h) {
             uint32_t target_value_idx = h;  // only first row of the tile is used
 

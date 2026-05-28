@@ -18,8 +18,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
     constexpr uint32_t pad_cb = get_compile_time_arg_val(2);
 
-    cb_reserve_back(cb_id_in0, num_input_rows);
-
     cb_reserve_back(cb_id_in1, num_padded_tiles_per_batch);
 
     cb_reserve_back(pad_cb, 1);

@@ -80,7 +80,7 @@ void kernel_main() {
             DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
         constexpr uint8_t packet_worker_cores[num_packet_worker_cores][2] = PACKET_WORKER_CORES;
         cb_reserve_back(packet_header_cb_id, buffering_factor * num_packet_headers_storable);
-        const auto packet_header_buffer_addr = get_read_ptr(packet_header_cb_id);
+        const auto packet_header_buffer_addr = get_write_ptr(packet_header_cb_id);
         auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
         auto* sem_inc_packet_header =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr + packet_header_size);
